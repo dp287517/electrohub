@@ -250,3 +250,21 @@ model Equipement {
   tableau_id String?
   tableau    Tableau? @relation(fields: [tableau_id], references: [id])
 }
+</xaiArtifact>
+
+3. **Valider les modifications** :
+   - En bas, entrez un message de commit : "Corriger schema.prisma en supprimant la ligne 'fantasia' pour résoudre erreur P1012".
+   - Sélectionnez "Commit changes directly to the `main` branch".
+   - Cliquez sur "Commit changes".
+   - **Explication** :
+     - Supprime la ligne invalide `fantasia`.
+     - Conserve toutes les tables (`users`, `atex_equipments`, `tableaux`, `sites`, etc.) avec leurs structures exactes, basées sur vos données SQL (ex. `User.id` comme `BigInt`, `AtexEquipment.id` comme `Int`, `Tableau.disjoncteurs` comme `Json`).
+     - Les relations sont alignées (ex. `AtexEquipment.account_id` → `Account.id`, `Tableau.breakerChecklists` → `BreakerChecklist`).
+     - Les champs `site` et `department` dans `User` sont inclus pour l'isolation par site (ex. Nyon).
+     - Ce schéma devrait empêcher Prisma de vouloir supprimer les tables existantes.
+
+---
+
+### Étape 2 : Confirmer `package.json`
+Votre `package.json` est correct, comme confirmé dans les logs et mes réponses précédentes. Pour éviter tout doute, voici la version exacte :
+
