@@ -1,249 +1,253 @@
 generator client {
-  provider = "prisma-client-js"
-}
+     provider = "prisma-client-js"
+   }
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
+   datasource db {
+     provider = "postgresql"
+     url      = env("DATABASE_URL")
+   }
 
-model User {
-  id            BigInt       @id
-  email         String       @unique
-  name          String
-  password      String
-  created_at    DateTime     @default(now())
-  plan_tier     Int
-  site          String?      // ex. "Nyon"
-  department    String?      // ex. "Électrique"
-  accounts      Account[]
-  userAccounts  UserAccount[]
-  createdEquipments AtexEquipment[] @relation("CreatedBy")
-  userAppUsages UserAppUsage[]
-  subscriptions Subscription[]
-}
+   model User {
+     id                BigInt             @id
+     email             String             @unique
+     name              String
+     password          String
+     created_at        DateTime           @default(now())
+     plan_tier         Int
+     site              String?            // ex. "Nyon"
+     department        String?            // ex. "Électrique"
+     accounts          Account[]
+     userAccounts      UserAccount[]
+     createdEquipments AtexEquipment[]    @relation("CreatedBy")
+     userAppUsages     UserAppUsage[]
+     subscriptions     Subscription[]
+     sessions          Session[]
+     atexChatThreads   AtexChatThread[]
+   }
 
-model Account {
-  id                String  @id
-  userId            BigInt
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
-  parent_account_id String?
-  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  atexEquipments    AtexEquipment[]
-  userAppUsages     UserAppUsage[]
-  userAccounts      UserAccount[]
-  @@unique([provider, providerAccountId])
-}
+   model Account {
+     id                String             @id
+     userId            BigInt
+     type              String
+     provider          String
+     providerAccountId String
+     refresh_token     String?
+     access_token      String?
+     expires_at        Int?
+     token_type        String?
+     scope             String?
+     id_token          String?
+     session_state     String?
+     parent_account_id String?
+     user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+     atexEquipments    AtexEquipment[]
+     userAppUsages     UserAppUsage[]
+     userAccounts      UserAccount[]
+     @@unique([provider, providerAccountId])
+   }
 
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       BigInt
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
+   model Session {
+     id           String   @id @default(cuid())
+     sessionToken String   @unique
+     userId       BigInt
+     expires      DateTime
+     user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+   }
 
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-  @@unique([identifier, token])
-}
+   model VerificationToken {
+     identifier String
+     token      String   @unique
+     expires    DateTime
+     @@unique([identifier, token])
+   }
 
-model AtexEquipment {
-  id                  Int      @id
-  risque              Int?
-  secteur             String?
-  batiment            String?
-  local               String?
-  composant           String?
-  fournisseur         String?
-  type                String?
-  identifiant         String?
-  interieur           String?
-  exterieur           String?
-  categorie_minimum   String?
-  marquage_atex       String?
-  photo               String?
-  conformite          String?
-  comments            String?
-  last_inspection_date DateTime?
-  next_inspection_date DateTime?
-  risk_assessment     String?
-  grade               String?
-  frequence           Int?
-  zone_type           String?
-  zone_gaz            String?
-  zone_poussiere      String?
-  zone_poussieres     Int?
-  ia_history          Json?
-  attachments         Json?
-  account_id          BigInt
-  created_by          BigInt?
-  inspections         AtexInspection[]
-  epdDocs             AtexEpdDoc[]
-  exiLoops            AtexExiLoop[]
-  attachmentsAtex     AtexAttachment[]
-  account             Account @relation(fields: [account_id], references: [id])
-  createdBy           User?    @relation("CreatedBy", fields: [created_by], references: [id])
-}
+   model AtexEquipment {
+     id                  Int                @id
+     risque              Int?
+     secteur             String?
+     batiment            String?
+     local               String?
+     composant           String?
+     fournisseur         String?
+     type                String?
+     identifiant         String?
+     interieur           String?
+     exterieur           String?
+     categorie_minimum   String?
+     marquage_atex       String?
+     photo               String?
+     conformite          String?
+     comments            String?
+     last_inspection_date DateTime?
+     next_inspection_date DateTime?
+     risk_assessment     String?
+     grade               String?
+     frequence           Int?
+     zone_type           String?
+     zone_gaz            String?
+     zone_poussiere      String?
+     zone_poussieres     Int?
+     ia_history          Json?
+     attachments         Json?
+     account_id          String
+     created_by          BigInt?
+     inspections         AtexInspection[]
+     epdDocs             AtexEpdDoc[]
+     exiLoops            AtexExiLoop[]
+     attachmentsAtex     AtexAttachment[]
+     obsolescenceFactors ObsolescenceFactor[]
+     account             Account            @relation(fields: [account_id], references: [id])
+     createdBy           User?              @relation("CreatedBy", fields: [created_by], references: [id])
+   }
 
-model Tableau {
-  id          String
-  disjoncteurs Json?
-  issitemain  Boolean?
-  ishta       Boolean?
-  htadata     Json?  // Pour HTA : fault level (icn/ics), arc flash, selectivity
-  breakerChecklists BreakerChecklist[]
-  emergencyReports EmergencyReport[]
-  safetyActions SafetyAction[]
-  equipements Equipement[]
-}
+   model Tableau {
+     id                String             @id
+     disjoncteurs      Json?
+     issitemain        Boolean?
+     ishta             Boolean?
+     htadata           Json?              // Pour HTA : fault level (icn/ics), arc flash, selectivity
+     breakerChecklists BreakerChecklist[]
+     emergencyReports  EmergencyReport[]
+     safetyActions     SafetyAction[]
+     equipements       Equipement[]
+   }
 
-model Site {
-  id         Int      @id @default(autoincrement())
-  name       String
-  created_at DateTime?
-  atexSecteurs AtexSecteur[]
-  atexSectors AtexSector[]
-  projects   Project[]
-}
+   model Site {
+     id           Int          @id @default(autoincrement())
+     name         String
+     created_at   DateTime?
+     atexSecteurs AtexSecteur[]
+     atexSectors  AtexSector[]
+     projects     Project[]
+   }
 
-model Trade {
-  id         Int      @id @default(autoincrement())
-  name       String
-  created_at DateTime?
-}
+   model Trade {
+     id         Int      @id @default(autoincrement())
+     name       String
+     created_at DateTime?
+   }
 
-model AtexInspection {
-  id          String   @id @default(cuid())
-  equipment_id Int
-  date        DateTime?
-  status      String?
-  equipment   AtexEquipment @relation(fields: [equipment_id], references: [id])
-}
+   model AtexInspection {
+     id           String        @id @default(cuid())
+     equipment_id Int
+     date         DateTime?
+     status       String?
+     equipment    AtexEquipment @relation(fields: [equipment_id], references: [id])
+   }
 
-model AtexEpdDoc {
-  id          String   @id @default(cuid())
-  equipmentId Int
-  documentUrl String?
-  equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
-}
+   model AtexEpdDoc {
+     id          String        @id @default(cuid())
+     equipmentId Int
+     documentUrl String?
+     equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
+   }
 
-model AtexSecteur {
-  id      String @id @default(cuid())
-  site_id Int
-  name    String?
-  site    Site   @relation(fields: [site_id], references: [id])
-}
+   model AtexSecteur {
+     id      String @id @default(cuid())
+     site_id Int
+     name    String?
+     site    Site   @relation(fields: [site_id], references: [id])
+   }
 
-model AtexSector {
-  id      String @id @default(cuid())
-  name    String?
-  siteId  Int?
-  site    Site?  @relation(fields: [siteId], references: [id])
-}
+   model AtexSector {
+     id      String @id @default(cuid())
+     name    String?
+     siteId  Int?
+     site    Site?  @relation(fields: [siteId], references: [id])
+   }
 
-model AtexExiLoop {
-  id          String   @id @default(cuid())
-  equipmentId Int
-  details     String?
-  equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
-}
+   model AtexExiLoop {
+     id          String        @id @default(cuid())
+     equipmentId Int
+     details     String?
+     equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
+   }
 
-model AtexAttachment {
-  id          String   @id @default(cuid())
-  equipmentId Int
-  fileUrl     String?
-  equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
-}
+   model AtexAttachment {
+     id          String        @id @default(cuid())
+     equipmentId Int
+     fileUrl     String?
+     equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
+   }
 
-model BreakerChecklist {
-  id         String   @id @default(cuid())
-  tableau_id String
-  status     String?
-  date       DateTime?
-  tableau    Tableau  @relation(fields: [tableau_id], references: [id])
-}
+   model BreakerChecklist {
+     id         String  @id @default(cuid())
+     tableau_id String
+     status     String?
+     date       DateTime?
+     tableau    Tableau @relation(fields: [tableau_id], references: [id])
+   }
 
-model EmergencyReport {
-  id         String   @id @default(cuid())
-  description String?
-  tableau_id String?
-  tableau    Tableau? @relation(fields: [tableau_id], references: [id])
-}
+   model EmergencyReport {
+     id          String  @id @default(cuid())
+     description String?
+     tableau_id  String?
+     tableau     Tableau? @relation(fields: [tableau_id], references: [id])
+   }
 
-model MaintenanceOrg {
-  id         String @id @default(cuid())
-  name       String?
-  parent_id  String?
-  parent     MaintenanceOrg? @relation("MaintenanceOrgToParent", fields: [parent_id], references: [id])
-  children   MaintenanceOrg[] @relation("MaintenanceOrgToParent")
-}
+   model MaintenanceOrg {
+     id        String         @id @default(cuid())
+     name      String?
+     parent_id String?
+     parent    MaintenanceOrg? @relation("MaintenanceOrgToParent", fields: [parent_id], references: [id])
+     children  MaintenanceOrg[] @relation("MaintenanceOrgToParent")
+   }
 
-model ObsolescenceFactor {
-  id          String   @id @default(cuid())
-  equipmentId Int?
-  factor      String?
-  equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id])
-}
+   model ObsolescenceFactor {
+     id          String        @id @default(cuid())
+     equipmentId Int?
+     factor      String?
+     equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id])
+     obsolescenceFactors AtexEquipment[] @relation("ObsolescenceFactorToEquipment")
+   }
 
-model Project {
-  id      String @id @default(cuid())
-  name    String?
-  site_id Int
-  site    Site   @relation(fields: [site_id], references: [id])
-}
+   model Project {
+     id      String @id @default(cuid())
+     name    String?
+     site_id Int
+     site    Site   @relation(fields: [site_id], references: [id])
+   }
 
-model SafetyAction {
-  id         String   @id @default(cuid())
-  description String?
-  tableau_id String?
-  tableau    Tableau? @relation(fields: [tableau_id], references: [id])
-}
+   model SafetyAction {
+     id          String  @id @default(cuid())
+     description String?
+     tableau_id  String?
+     tableau     Tableau? @relation(fields: [tableau_id], references: [id])
+   }
 
-model UserAccount {
-  id        String  @id @default(cuid())
-  user_id   BigInt
-  account_id BigInt
-  user      User    @relation(fields: [user_id], references: [id])
-  account   Account @relation(fields: [account_id], references: [id])
-}
+   model UserAccount {
+     id         String  @id @default(cuid())
+     user_id    BigInt
+     account_id String
+     user       User    @relation(fields: [user_id], references: [id])
+     account    Account @relation(fields: [account_id], references: [id])
+   }
 
-model UserAppUsage {
-  id         String   @id @default(cuid())
-  user_id    BigInt
-  account_id BigInt?
-  usageDate  DateTime?
-  user       User     @relation(fields: [user_id], references: [id])
-  account    Account? @relation(fields: [account_id], references: [id])
-}
+   model UserAppUsage {
+     id         String   @id @default(cuid())
+     user_id    BigInt
+     account_id String?
+     usageDate  DateTime?
+     user       User     @relation(fields: [user_id], references: [id])
+     account    Account? @relation(fields: [account_id], references: [id])
+   }
 
-model Subscription {
-  id               String            @id @default(cuid())
-  user_id          BigInt?
-  user             User?             @relation(fields: [user_id], references: [id])
-}
+   model Subscription {
+     id      String  @id @default(cuid())
+     user_id BigInt?
+     user    User?   @relation(fields: [user_id], references: [id])
+   }
 
-model AtexChatThread {
-  id        String   @id @default(cuid())
-  userId    BigInt?
-  content   String?
-  createdAt DateTime? @default(now())
-  user      User?    @relation(fields: [userId], references: [id])
-}
+   model AtexChatThread {
+     id        String   @id @default(cuid())
+     userId    BigInt?
+     content   String?
+     createdAt DateTime? @default(now())
+     user      User?    @relation(fields: [userId], references: [id])
+   }
 
-model Equipement {
-  id         String  @id @default(cuid())
-  tableau_id String?
-  tableau    Tableau? @relation(fields: [tableau_id], references: [id])
-}
+   model Equipement {
+     id         String  @id @default(cuid())
+     tableau_id String?
+     tableau    Tableau? @relation(fields: [tableau_id], references: [id])
+   }
