@@ -63,7 +63,7 @@ model VerificationToken {
 
 model AtexEquipment {
   id                  Int                         @id
-  risque                Int?
+  risque              Int?
   secteur             String?
   batiment            String?
   local               String?
@@ -250,46 +250,3 @@ model Equipement {
   tableau_id String?
   tableau    Tableau? @relation(fields: [tableau_id], references: [id])
 }
-</xaiArtifact>
-
-3. **Valider les modifications** :
-   - En bas, entrez un message de commit : "Corriger obsolescenceFactors dans schema.prisma pour résoudre erreur P1012".
-   - Sélectionnez "Commit changes directly to the `main` branch".
-   - Cliquez sur "Commit changes".
-   - **Explication** :
-     - Dans `ObsolescenceFactor` : Suppression de la ligne erronée `obsolescenceFactors AtexEquipment[] @relation("ObsolescenceFactorToEquipment")` (c'était une typo ; la relation inverse est maintenant seulement dans `AtexEquipment`).
-     - Dans `AtexEquipment` : `obsolescenceFactors ObsolescenceFactor[]` est conservé pour la relation one-to-many (un équipement ATEX peut avoir plusieurs facteurs d'obsolescence).
-     - Cela résout l'erreur de relation inverse et permet à `prisma db push` de passer sans problème.
-
----
-
-### Étape 2 : Redéployer sur Render
-1. **Vérifier les paramètres** :
-   - Allez sur https://dashboard.render.com → Sélectionnez `autonomix-elec`.
-   - Confirmez :
-     - **Build Command** : `npm install && npm run build`
-     - **Start Command** : `npm start`
-     - **Root Directory** : Vide ("/").
-     - **Variables d'environnement** : `DATABASE_URL`, `AUTH_SECRET`, `NODE_ENV=production`, `NODE_VERSION=22.14.0`.
-2. **Nettoyer le cache et redéployer** :
-   - Dans "Settings" → Cliquez sur "Clear build cache & deploy".
-   - Dans "Deploys" → Cliquez sur "Manual Deploy" → "Deploy latest commit".
-   - Suivez les logs pour confirmer :
-     - `npm install` : Doit réussir.
-     - `npm run build` : Doit exécuter `prisma db push` (sans erreur), `prisma generate`, et `next build` (crée `.next`).
-     - `npm start` : Doit trouver `.next`.
-
----
-
-### Étape 3 : Tester l'application
-1. **Visiter l'application** :
-   - Allez sur `autonomix-elec.onrender.com` :
-     - **Page d'accueil** : "Bienvenue sur ElectroHub".
-     - **/signup** : Testez la création d'un utilisateur (ex. email : `test4@example.com`, mot de passe : `password123`, site : `Nyon`, département : `Électrique`).
-     - **/signin** : Connectez-vous (devrait rediriger vers `/dashboard`).
-2. **Vérifier Neon** :
-   - Dans https://console.neon.tech → Éditeur SQL :
-     ```sql
-     SELECT * FROM "User" LIMIT 5;
-     SELECT * FROM "AtexEquipment" LIMIT 5;
-     SELECT * FROM "Tableau" LIMIT 5;
