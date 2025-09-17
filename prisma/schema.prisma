@@ -222,8 +222,6 @@ model UserAccount {
   account    Account @relation(fields: [account_id], references: [id])
 }
 
- fantasia
-
 model UserAppUsage {
   id         String   @id @default(cuid())
   user_id    BigInt
