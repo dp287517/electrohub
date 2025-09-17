@@ -29,5 +29,8 @@
     "postcss": "^8",
     "prisma": "^5.20.0",
     "typescript": "^5"
+  },
+  "resolutions": {
+    "bcrypt": "^5.1.1"
   }
 }
