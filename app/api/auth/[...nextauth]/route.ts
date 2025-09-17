@@ -21,7 +21,7 @@ export const authOptions = {
         if (!user || !user.password) return null;
         const isValid = await bcrypt.compare(credentials.password, user.password);
         if (!isValid) return null;
-        return user;
+        return { id: user.id.toString(), name: user.name, email: user.email, site: user.site, department: user.department, plan_tier: user.plan_tier };
       },
     }),
   ],
@@ -30,6 +30,24 @@ export const authOptions = {
   },
   secret: process.env.AUTH_SECRET,
   session: { strategy: "jwt" },
+  callbacks: {
+    jwt: ({ token, user }) => {
+      if (user) {
+        token.site = user.site;
+        token.department = user.department;
+        token.plan_tier = user.plan_tier;
+      }
+      return token;
+    },
+    session: ({ session, token }) => {
+      if (token) {
+        session.user.site = token.site;
+        session.user.department = token.department;
+        session.user.plan_tier = token.plan_tier;
+      }
+      return session;
+    },
+  },
 };
 
 const handler = NextAuth(authOptions);
