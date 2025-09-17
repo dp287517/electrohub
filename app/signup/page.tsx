@@ -29,12 +29,12 @@ export default function SignUp() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
       <div className="bg-white p-8 rounded-lg shadow-lg max-w-md w-full">
-        <h1 className="text-2xl font-bold mb-6 text-center">Inscription à ElectroHub</h1>
+        <h1 className="text-2xl font-bold mb-6 text-center">Sign Up for ElectroHub</h1>
         {error && <p className="text-red-500 mb-4">{error}</p>}
         <form onSubmit={handleSubmit}>
           <input
             type="text"
-            placeholder="Nom"
+            placeholder="Name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
@@ -50,7 +50,7 @@ export default function SignUp() {
           />
           <input
             type="password"
-            placeholder="Mot de passe"
+            placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
@@ -58,7 +58,7 @@ export default function SignUp() {
           />
           <input
             type="text"
-            placeholder="Site (ex. Nyon)"
+            placeholder="Site (e.g., Nyon)"
             value={site}
             onChange={(e) => setSite(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
@@ -66,18 +66,18 @@ export default function SignUp() {
           />
           <input
             type="text"
-            placeholder="Département"
+            placeholder="Department"
             value={department}
             onChange={(e) => setDepartment(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
             required
           />
           <button type="submit" className="w-full bg-green-500 text-white p-3 rounded hover:bg-green-600">
-            S'inscrire
+            Sign Up
           </button>
         </form>
         <p className="mt-4 text-center">
-          Déjà un compte ? <a href="/signin" className="text-blue-500">Se connecter</a>
+          Have an account? <a href="/signin" className="text-blue-500">Sign In</a>
         </p>
       </div>
     </div>
