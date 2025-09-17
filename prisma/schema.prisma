@@ -8,24 +8,29 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  email         String?   @unique
-  emailVerified DateTime?
-  image         String?
-  password      String?   // For email/password auth
-  site          String?   // e.g., "Nyon"
-  department    String?   // e.g., "Electrical"
+  id            BigInt    @id @default(autoincrement())
+  email         String    @unique
+  name          String
+  password      String
+  created_at    DateTime  @default(now())
+  plan_tier     Int
+  site          String?   // ex. "Nyon"
+  department    String?   // ex. "Électrique"
   accounts      Account[]
-  sessions      Session[]
+  userAccounts  UserAccount[]
+  atexChatThreads AtexChatThread[]
+  atexEquipments AtexEquipment[] @relation("CreatedBy")
+  userAppUsage  UserAppUsage[]
+  subscriptions Subscription[]
+  licenseAssignments LicenseAssignment[]
 }
 
 model Account {
   id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
+  userId            BigInt?
+  type              String?
+  provider          String?
+  providerAccountId String?
   refresh_token     String?
   access_token      String?
   expires_at        Int?
@@ -33,24 +38,214 @@ model Account {
   scope             String?
   id_token          String?
   session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
+  parent_account_id String?
+  user              User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  parentAccount     Account? @relation("ParentAccount", fields: [parent_account_id], references: [id], onDelete: SetNull)
+  childAccounts     Account[] @relation("ParentAccount")
+  atexEquipments    AtexEquipment[]
+  userAccounts      UserAccount[]
 }
 
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+model UserAccount {
+  id          String   @id @default(cuid())
+  userId      BigInt
+  accountId   String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account     Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
 }
 
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
+model AtexEquipment {
+  id                Int      @id @default(autoincrement())
+  risque            Int?
+  secteur           String?
+  batiment          String?
+  local             String?
+  composant         String?
+  fournisseur       String?
+  type              String?
+  identifiant       String?
+  interieur         String?
+  exterieur         String?
+  categorie_minimum String?
+  marquage_atex     String?
+  photo             String?
+  conformite        String?
+  comments          String?
+  last_inspection_date DateTime?
+  next_inspection_date DateTime?
+  risk_assessment   String?
+  grade             String?
+  frequence         Int?
+  zone_type         String?
+  zone_gaz          String?
+  zone_poussieres   String?
+  zone_poussieres_flag Int?
+  ia_history        Json?
+  attachments       Json?
+  account_id        BigInt
+  created_by        BigInt?
+  account           Account  @relation(fields: [account_id], references: [id], onDelete: Cascade)
+  createdBy         User?    @relation("CreatedBy", fields: [created_by], references: [id], onDelete: SetNull)
+  inspections       AtexInspection[]
+  epdDocs           AtexEpdDoc[]
+  exiLoops          AtexExiLoop[]
+  attachmentsRel    AtexAttachment[]
+  obsolescenceFactors ObsolescenceFactor[]
+}
 
-  @@unique([identifier, token])
+model AtexInspection {
+  id          String   @id @default(cuid())
+  equipmentId Int?
+  date        DateTime?
+  status      String?
+  equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+}
+
+model AtexEpdDoc {
+  id          String   @id @default(cuid())
+  equipmentId Int?
+  documentUrl String?
+  equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+}
+
+model AtexExiLoop {
+  id          String   @id @default(cuid())
+  equipmentId Int?
+  details     String?
+  equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+}
+
+model AtexAttachment {
+  id          String   @id @default(cuid())
+  equipmentId Int?
+  fileUrl     String?
+  equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+}
+
+model AtexChatThread {
+  id          String   @id @default(cuid())
+  userId      BigInt?
+  content     String?
+  createdAt   DateTime? @default(now())
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model AtexSector {
+  id          String   @id @default(cuid())
+  name        String?
+  siteId      String?
+  site        Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+}
+
+model BreakerChecklist {
+  id          String   @id @default(cuid())
+  tableauId   String?
+  status      String?
+  date        DateTime?
+  tableau     Tableau? @relation(fields: [tableauId], references: [id], onDelete: SetNull)
+}
+
+model EmergencyReport {
+  id          String   @id @default(cuid())
+  description String?
+  siteId      String?
+  tableauId   String?
+  site        Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  tableau     Tableau? @relation(fields: [tableauId], references: [id], onDelete: SetNull)
+}
+
+model MaintenanceOrg {
+  id          String   @id @default(cuid())
+  name        String?
+  siteId      String?
+  parentId    String?
+  site        Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  parent      MaintenanceOrg? @relation("ParentOrg", fields: [parentId], references: [id], onDelete: SetNull)
+  children    MaintenanceOrg[] @relation("ParentOrg")
+}
+
+model ObsolescenceFactor {
+  id          String   @id @default(cuid())
+  equipmentId Int?
+  factor      String?
+  equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String?
+  siteId      String?
+  site        Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+}
+
+model SafetyAction {
+  id          String   @id @default(cuid())
+  description String?
+  siteId      String?
+  tableauId   String?
+  site        Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  tableau     Tableau? @relation(fields: [tableauId], references: [id], onDelete: SetNull)
+}
+
+model Site {
+  id          Int      @id @default(autoincrement())
+  name        String
+  created_at  DateTime? @default(now())
+  secteurs    AtexSector[]
+  equipments  AtexEquipment[]
+  maintenanceOrgs MaintenanceOrg[]
+  projects    Project[]
+  safetyActions SafetyAction[]
+  emergencyReports EmergencyReport[]
+  tableaux    Tableau[]
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  userId      BigInt?
+  licenseAssignments LicenseAssignment[]
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model Tableau {
+  id          String   @id @default(cuid())
+  disjoncteurs Json?
+  issitemain  Boolean?
+  ishtab      Boolean?
+  htadata     Json?
+  siteId      String?
+  checklists  BreakerChecklist[]
+  emergencyReports EmergencyReport[]
+  safetyActions SafetyAction[]
+  equipements Equipement[]
+  site        Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
+}
+
+model Trade {
+  id          String   @id @default(cuid())
+  name        String?
+}
+
+model UserAppUsage {
+  id          String   @id @default(cuid())
+  userId      BigInt
+  accountId   String?
+  usageDate   DateTime?
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account     Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+}
+
+model Equipement {
+  id          String   @id @default(cuid())
+  tableauId   String?
+  details     String?
+  tableau     Tableau? @relation(fields: [tableauId], references: [id], onDelete: SetNull)
+}
+
+model AtexEquipmentsV {
+  id          String   @id @default(cuid())
+  name        String?
+  type        String?
+  status      String?
+  siteId      String?
 }
