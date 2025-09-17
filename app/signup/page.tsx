@@ -1,10 +1,6 @@
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import bcrypt from "bcryptjs";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
 
 export default function SignUp() {
   const [email, setEmail] = useState("");
@@ -17,26 +13,28 @@ export default function SignUp() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const hashedPassword = await bcrypt.hash(password, 10);
     try {
-      await prisma.user.create({
-        data: { email, name, password: hashedPassword, site, department },
+      const res = await fetch("/api/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, name, site, department }),
       });
-      router.push("/signin");
+      if (res.ok) router.push("/signin");
+      else setError("Erreur lors de la création du compte");
     } catch (err) {
-      setError("Error creating account");
+      setError("Erreur lors de la création du compte");
     }
   };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100">
       <div className="bg-white p-8 rounded-lg shadow-lg max-w-md w-full">
-        <h1 className="text-2xl font-bold mb-6 text-center">Sign Up for ElectroHub</h1>
+        <h1 className="text-2xl font-bold mb-6 text-center">Inscription à ElectroHub</h1>
         {error && <p className="text-red-500 mb-4">{error}</p>}
         <form onSubmit={handleSubmit}>
           <input
             type="text"
-            placeholder="Name"
+            placeholder="Nom"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
@@ -52,7 +50,7 @@ export default function SignUp() {
           />
           <input
             type="password"
-            placeholder="Password"
+            placeholder="Mot de passe"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
@@ -60,7 +58,7 @@ export default function SignUp() {
           />
           <input
             type="text"
-            placeholder="Site (e.g., Nyon)"
+            placeholder="Site (ex. Nyon)"
             value={site}
             onChange={(e) => setSite(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
@@ -68,18 +66,18 @@ export default function SignUp() {
           />
           <input
             type="text"
-            placeholder="Department"
+            placeholder="Département"
             value={department}
             onChange={(e) => setDepartment(e.target.value)}
             className="w-full p-3 mb-4 border rounded"
             required
           />
           <button type="submit" className="w-full bg-green-500 text-white p-3 rounded hover:bg-green-600">
-            Sign Up
+            S'inscrire
           </button>
         </form>
         <p className="mt-4 text-center">
-          Have an account? <a href="/signin" className="text-blue-500">Sign In</a>
+          Déjà un compte ? <a href="/signin" className="text-blue-500">Se connecter</a>
         </p>
       </div>
     </div>
