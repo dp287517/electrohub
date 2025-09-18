@@ -1,54 +1,28 @@
-import NextAuth from "next-auth";
-import CredentialsProvider from "next-auth/providers/credentials";
-import { PrismaAdapter } from "@auth/prisma-adapter";
+import { NextResponse } from "next/server";
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { sign } from "jsonwebtoken";
 
 const prisma = new PrismaClient();
 
-export const authOptions = {
-  adapter: PrismaAdapter(prisma),
-  providers: [
-    CredentialsProvider({
-      name: "Credentials",
-      credentials: {
-        email: { label: "Email", type: "text" },
-        password: { label: "Password", type: "password" },
-      },
-      async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null;
-        const user = await prisma.user.findUnique({ where: { email: credentials.email } });
-        if (!user || !user.password) return null;
-        const isValid = await bcrypt.compare(credentials.password, user.password);
-        if (!isValid) return null;
-        return { id: user.id.toString(), name: user.name, email: user.email, site: user.site, department: user.department, plan_tier: user.plan_tier };
-      },
-    }),
-  ],
-  pages: {
-    signIn: "/signin",
-  },
-  secret: process.env.AUTH_SECRET,
-  session: { strategy: "jwt" },
-  callbacks: {
-    jwt: ({ token, user }) => {
-      if (user) {
-        token.site = user.site;
-        token.department = user.department;
-        token.plan_tier = user.plan_tier;
-      }
-      return token;
-    },
-    session: ({ session, token }) => {
-      if (token) {
-        session.user.site = token.site;
-        session.user.department = token.department;
-        session.user.plan_tier = token.plan_tier;
-      }
-      return session;
-    },
-  },
-};
-
-const handler = NextAuth(authOptions);
-export { handler as GET, handler as POST };
+export async function POST(request: Request) {
+  try {
+    const { email, password } = await request.json();
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user || !user.password) {
+      return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+    }
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+    }
+    const token = sign(
+      { id: user.id.toString(), email: user.email, site: user.site, department: user.department, plan_tier: user.plan_tier },
+      process.env.AUTH_SECRET || "super-secret-key",
+      { expiresIn: "1h" }
+    );
+    return NextResponse.json({ token, user: { id: user.id, email: user.email, site: user.site, department: user.department } });
+  } catch (error) {
+    return NextResponse.json({ error: "Erreur lors de la connexion" }, { status: 500 });
+  }
+}
