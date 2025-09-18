@@ -5,6 +5,7 @@ import SignIn from './pages/SignIn.jsx';
 import SignUp from './pages/SignUp.jsx';
 import LostPassword from './pages/LostPassword.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Atex from './pages/Atex.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 
 export default function App() {
@@ -19,6 +20,10 @@ export default function App() {
         <Route
           path="/dashboard"
           element={<ProtectedRoute><Dashboard /></ProtectedRoute>}
+        />
+        <Route
+          path="/app/atex"
+          element={<ProtectedRoute><Atex /></ProtectedRoute>}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
