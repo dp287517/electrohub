@@ -7,6 +7,9 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import pg from 'pg';
 
+// ✅ routes ATEX (nouveau)
+import atexRoutes from './server/routes/atex.js';
+
 dotenv.config();
 const { Pool } = pg;
 
@@ -50,6 +53,9 @@ app.post('/api/auth/lost-password', async (req, res) => {
   // TODO: send reset email / token
   return res.json({ message: 'Reset link sent (placeholder)' });
 });
+
+// ✅ Montage de l'API ATEX
+app.use('/api/atex', atexRoutes);
 
 // Serve frontend
 const distPath = path.join(__dirname, 'dist');
