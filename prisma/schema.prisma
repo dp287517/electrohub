@@ -8,109 +8,23 @@ datasource db {
 }
 
 model User {
-  id                BigInt             @id @default(autoincrement())
-  email             String             @unique
-  name              String
-  password          String
-  created_at        DateTime           @default(now()) @map("created_at")
-  plan_tier         Int                @map("plan_tier")
-  site              String?            // ex. "Nyon"
-  department        String?            // ex. "Électrique"
-  accounts          Account[]
-  userAccounts      UserAccount[]      @relation("UserToUserAccount")
-  createdEquipments AtexEquipment[]    @relation("CreatedBy")
-  userAppUsages     UserAppUsage[]
-  subscriptions     Subscription[]
-  sessions          Session[]
-  atexChatThreads   AtexChatThread[]
+  id         BigInt   @id @default(autoincrement())
+  email      String   @unique
+  name       String
+  password   String
+  created_at DateTime @default(now()) @map("created_at")
+  plan_tier  Int      @map("plan_tier")
+  site       String?  // ex. "Nyon"
+  department String?  // ex. "Électrique"
   @@map("users")
-}
-
-model Account {
-  id                String             @id
-  userId            BigInt             @map("user_id")
-  type              String
-  provider          String
-  providerAccountId String             @map("provider_account_id")
-  refresh_token     String?            @map("refresh_token")
-  access_token      String?            @map("access_token")
-  expires_at        Int?               @map("expires_at")
-  token_type        String?            @map("token_type")
-  scope             String?
-  id_token          String?            @map("id_token")
-  session_state     String?            @map("session_state")
-  parent_account_id String?            @map("parent_account_id")
-  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  atexEquipments    AtexEquipment[]
-  userAppUsages     UserAppUsage[]
-  userAccounts      UserAccount[]      @relation("AccountToUserAccount")
-  @@map("accounts")
-  @@unique([provider, providerAccountId])
-}
-
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique @map("session_token")
-  userId       BigInt   @map("user_id")
-  expires      DateTime
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@map("sessions")
-}
-
-model VerificationToken {
-  identifier String
-  token      String   @unique
-  expires    DateTime
-  @@map("verification_tokens")
-  @@unique([identifier, token])
-}
-
-model AtexEquipment {
-  id                  Int                         @id
-  risque              Int?
-  secteur             String?
-  batiment            String?
-  local               String?
-  composant           String?
-  fournisseur         String?
-  type                String?
-  identifiant         String?
-  interieur           String?
-  exterieur           String?
-  categorie_minimum   String?                     @map("categorie_minimum")
-  marquage_atex       String?                     @map("marquage_atex")
-  photo               String?
-  conformite          String?
-  comments            String?
-  last_inspection_date DateTime?                  @map("last_inspection_date")
-  next_inspection_date DateTime?                  @map("next_inspection_date")
-  risk_assessment     String?                    @map("risk_assessment")
-  grade               String?
-  frequence           Int?
-  zone_type           String?                    @map("zone_type")
-  zone_gaz            String?                    @map("zone_gaz")
-  zone_poussiere      String?                    @map("zone_poussiere")
-  zone_poussieres     Int?                       @map("zone_poussieres")
-  ia_history          Json?                      @map("ia_history")
-  attachments         Json?
-  account_id          String                     @map("account_id")
-  created_by          BigInt?                    @map("created_by")
-  inspections         AtexInspection[]
-  epdDocs             AtexEpdDoc[]
-  exiLoops            AtexExiLoop[]
-  attachmentsAtex     AtexAttachment[]
-  obsolescenceFactors ObsolescenceFactor[]
-  account             Account                    @relation(fields: [account_id], references: [id])
-  createdBy           User?                      @relation("CreatedBy", fields: [created_by], references: [id])
-  @@map("atex_equipments")
 }
 
 model Tableau {
   id                String             @id
-  disjoncteurs      Json?
+  disjoncteurs      Json?              @map("disjoncteurs") // Pour fault level (icn/ics), arc flash, selectivity
   issitemain        Boolean?           @map("issitemain")
   ishta             Boolean?           @map("ishta")
-  htadata           Json?              @map("htadata") // Pour HTA : fault level (icn/ics), arc flash, selectivity
+  htadata           Json?              @map("htadata")
   breakerChecklists BreakerChecklist[] @relation("BreakerChecklistToTableau")
   emergencyReports  EmergencyReport[]
   safetyActions     SafetyAction[]
@@ -118,13 +32,20 @@ model Tableau {
   @@map("tableaux")
 }
 
+model BreakerChecklist {
+  id         String   @id @default(cuid())
+  tableau_id String   @map("tableau_id")
+  status     String?
+  date       DateTime?
+  tableau    Tableau  @relation("BreakerChecklistToTableau", fields: [tableau_id], references: [id])
+  @@map("breaker_checklists")
+}
+
 model Site {
-  id           Int          @id @default(autoincrement())
-  name         String
-  created_at   DateTime?    @map("created_at")
-  atexSecteurs AtexSecteur[]
-  atexSectors  AtexSector[]
-  projects     Project[]
+  id         Int      @id @default(autoincrement())
+  name       String
+  created_at DateTime? @map("created_at")
+  projects   Project[]
   @@map("sites")
 }
 
@@ -135,72 +56,6 @@ model Trade {
   @@map("trades")
 }
 
-model AtexInspection {
-  id           String        @id @default(cuid())
-  equipment_id Int           @map("equipment_id")
-  date         DateTime?
-  status       String?
-  equipment    AtexEquipment @relation(fields: [equipment_id], references: [id])
-  @@map("atex_inspections")
-}
-
-model AtexEpdDoc {
-  id          String        @id @default(cuid())
-  equipmentId Int           @map("equipment_id")
-  documentUrl String?       @map("document_url")
-  equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
-  @@map("atex_epd_docs")
-}
-
-model AtexSecteur {
-  id      String @id @default(cuid())
-  site_id Int    @map("site_id")
-  name    String?
-  site    Site   @relation(fields: [site_id], references: [id])
-  @@map("atex_secteurs")
-}
-
-model AtexSector {
-  id      String @id @default(cuid())
-  name    String?
-  siteId  Int?   @map("site_id")
-  site    Site?  @relation(fields: [siteId], references: [id])
-  @@map("atex_sectors")
-}
-
-model AtexExiLoop {
-  id          String        @id @default(cuid())
-  equipmentId Int           @map("equipment_id")
-  details     String?
-  equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
-  @@map("atex_exi_loops")
-}
-
-model AtexAttachment {
-  id          String        @id @default(cuid())
-  equipmentId Int           @map("equipment_id")
-  fileUrl     String?       @map("file_url")
-  equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
-  @@map("atex_attachments")
-}
-
-model BreakerChecklist {
-  id         String  @id @default(cuid())
-  tableau_id String @map("tableau_id")
-  status     String?
-  date       DateTime?
-  tableau    Tableau @relation("BreakerChecklistToTableau", fields: [tableau_id], references: [id])
-  @@map("breaker_checklists")
-}
-
-model EmergencyReport {
-  id          String  @id @default(cuid())
-  description String?
-  tableau_id  String? @map("tableau_id")
-  tableau     Tableau? @relation(fields: [tableau_id], references: [id])
-  @@map("emergency_reports")
-}
-
 model MaintenanceOrg {
   id        String         @id @default(cuid())
   name      String?
@@ -208,14 +63,6 @@ model MaintenanceOrg {
   parent    MaintenanceOrg? @relation("MaintenanceOrgToParent", fields: [parent_id], references: [id])
   children  MaintenanceOrg[] @relation("MaintenanceOrgToParent")
   @@map("maintenance_org")
-}
-
-model ObsolescenceFactor {
-  id          String        @id @default(cuid())
-  equipmentId Int?          @map("equipment_id")
-  factor      String?
-  equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id])
-  @@map("obsolescence_factors")
 }
 
 model Project {
@@ -234,39 +81,12 @@ model SafetyAction {
   @@map("safety_actions")
 }
 
-model UserAccount {
-  id         String  @id @default(cuid())
-  user_id    BigInt  @map("user_id")
-  account_id String  @map("account_id")
-  user       User    @relation("UserToUserAccount", fields: [user_id], references: [id])
-  account    Account @relation("AccountToUserAccount", fields: [account_id], references: [id])
-  @@map("user_accounts")
-}
-
-model UserAppUsage {
-  id         String   @id @default(cuid())
-  user_id    BigInt   @map("user_id")
-  account_id String?  @map("account_id")
-  usageDate  DateTime? @map("usage_date")
-  user       User     @relation(fields: [user_id], references: [id])
-  account    Account? @relation(fields: [account_id], references: [id])
-  @@map("user_app_usage")
-}
-
-model Subscription {
-  id      String  @id @default(cuid())
-  user_id BigInt? @map("user_id")
-  user    User?   @relation(fields: [user_id], references: [id])
-  @@map("subscriptions")
-}
-
-model AtexChatThread {
-  id        String   @id @default(cuid())
-  userId    BigInt?  @map("user_id")
-  content   String?
-  createdAt DateTime? @default(now()) @map("created_at")
-  user      User?    @relation(fields: [userId], references: [id])
-  @@map("atex_chat_threads")
+model EmergencyReport {
+  id          String  @id @default(cuid())
+  description String?
+  tableau_id  String? @map("tableau_id")
+  tableau     Tableau? @relation(fields: [tableau_id], references: [id])
+  @@map("emergency_reports")
 }
 
 model Equipement {
@@ -274,4 +94,11 @@ model Equipement {
   tableau_id String? @map("tableau_id")
   tableau    Tableau? @relation(fields: [tableau_id], references: [id])
   @@map("equipements")
+}
+
+model ObsolescenceFactor {
+  id          String  @id @default(cuid())
+  equipmentId Int?    @map("equipment_id") // Plus de table atex_equipments, laissé pour compatibilité
+  factor      String?
+  @@map("obsolescence_factors")
 }
