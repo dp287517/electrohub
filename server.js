@@ -7,9 +7,6 @@ import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import pg from 'pg';
 
-// Import des routes ATEX
-import atexRoutes from './backend/atexRoutes.js';
-
 dotenv.config();
 const { Pool } = pg;
 
@@ -45,11 +42,7 @@ app.post('/api/auth/signup', async (req, res) => {
 
 app.post('/api/auth/signin', async (req, res) => {
   // TODO: verify user & issue JWT
-  const token = jwt.sign(
-    { uid: 'demo', site: 'Nyon', department: 'Maintenance' },
-    process.env.JWT_SECRET || 'dev',
-    { expiresIn: '2h' }
-  );
+  const token = jwt.sign({ uid: 'demo', site: 'Nyon', department: 'Maintenance' }, process.env.JWT_SECRET || 'dev', { expiresIn: '2h' });
   return res.json({ token });
 });
 
@@ -57,9 +50,6 @@ app.post('/api/auth/lost-password', async (req, res) => {
   // TODO: send reset email / token
   return res.json({ message: 'Reset link sent (placeholder)' });
 });
-
-// ================== ATEX ROUTES ==================
-app.use(atexRoutes);
 
 // Serve frontend
 const distPath = path.join(__dirname, 'dist');
