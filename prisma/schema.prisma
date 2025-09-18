@@ -8,56 +8,60 @@ datasource db {
 }
 
 model User {
-  id                BigInt             @id
+  id                BigInt             @id @default(autoincrement())
   email             String             @unique
   name              String
   password          String
-  created_at        DateTime           @default(now())
-  plan_tier         Int
+  created_at        DateTime           @default(now()) @map("created_at")
+  plan_tier         Int                @map("plan_tier")
   site              String?            // ex. "Nyon"
   department        String?            // ex. "Électrique"
   accounts          Account[]
-  userAccounts      UserAccount[]
+  userAccounts      UserAccount[]      @relation("UserToUserAccount")
   createdEquipments AtexEquipment[]    @relation("CreatedBy")
   userAppUsages     UserAppUsage[]
   subscriptions     Subscription[]
   sessions          Session[]
   atexChatThreads   AtexChatThread[]
+  @@map("users")
 }
 
 model Account {
   id                String             @id
-  userId            BigInt
+  userId            BigInt             @map("user_id")
   type              String
   provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
+  providerAccountId String             @map("provider_account_id")
+  refresh_token     String?            @map("refresh_token")
+  access_token      String?            @map("access_token")
+  expires_at        Int?               @map("expires_at")
+  token_type        String?            @map("token_type")
   scope             String?
-  id_token          String?
-  session_state     String?
-  parent_account_id String?
+  id_token          String?            @map("id_token")
+  session_state     String?            @map("session_state")
+  parent_account_id String?            @map("parent_account_id")
   user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   atexEquipments    AtexEquipment[]
   userAppUsages     UserAppUsage[]
-  userAccounts      UserAccount[]
+  userAccounts      UserAccount[]      @relation("AccountToUserAccount")
+  @@map("accounts")
   @@unique([provider, providerAccountId])
 }
 
 model Session {
   id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       BigInt
+  sessionToken String   @unique @map("session_token")
+  userId       BigInt   @map("user_id")
   expires      DateTime
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@map("sessions")
 }
 
 model VerificationToken {
   identifier String
   token      String   @unique
   expires    DateTime
+  @@map("verification_tokens")
   @@unique([identifier, token])
 }
 
@@ -73,180 +77,201 @@ model AtexEquipment {
   identifiant         String?
   interieur           String?
   exterieur           String?
-  categorie_minimum   String?
-  marquage_atex       String?
+  categorie_minimum   String?                     @map("categorie_minimum")
+  marquage_atex       String?                     @map("marquage_atex")
   photo               String?
   conformite          String?
   comments            String?
-  last_inspection_date DateTime?
-  next_inspection_date DateTime?
-  risk_assessment     String?
+  last_inspection_date DateTime?                  @map("last_inspection_date")
+  next_inspection_date DateTime?                  @map("next_inspection_date")
+  risk_assessment     String?                    @map("risk_assessment")
   grade               String?
   frequence           Int?
-  zone_type           String?
-  zone_gaz            String?
-  zone_poussiere      String?
-  zone_poussieres     Int?
-  ia_history          Json?
+  zone_type           String?                    @map("zone_type")
+  zone_gaz            String?                    @map("zone_gaz")
+  zone_poussiere      String?                    @map("zone_poussiere")
+  zone_poussieres     Int?                       @map("zone_poussieres")
+  ia_history          Json?                      @map("ia_history")
   attachments         Json?
-  account_id          String
-  created_by          BigInt?
+  account_id          String                     @map("account_id")
+  created_by          BigInt?                    @map("created_by")
   inspections         AtexInspection[]
   epdDocs             AtexEpdDoc[]
   exiLoops            AtexExiLoop[]
   attachmentsAtex     AtexAttachment[]
   obsolescenceFactors ObsolescenceFactor[]
-  account             Account            @relation(fields: [account_id], references: [id])
-  createdBy           User?              @relation("CreatedBy", fields: [created_by], references: [id])
+  account             Account                    @relation(fields: [account_id], references: [id])
+  createdBy           User?                      @relation("CreatedBy", fields: [created_by], references: [id])
+  @@map("atex_equipments")
 }
 
 model Tableau {
   id                String             @id
   disjoncteurs      Json?
-  issitemain        Boolean?
-  ishta             Boolean?
-  htadata           Json?              // Pour HTA : fault level (icn/ics), arc flash, selectivity
-  breakerChecklists BreakerChecklist[]
+  issitemain        Boolean?           @map("issitemain")
+  ishta             Boolean?           @map("ishta")
+  htadata           Json?              @map("htadata") // Pour HTA : fault level (icn/ics), arc flash, selectivity
+  breakerChecklists BreakerChecklist[] @relation("BreakerChecklistToTableau")
   emergencyReports  EmergencyReport[]
   safetyActions     SafetyAction[]
   equipements       Equipement[]
+  @@map("tableaux")
 }
 
 model Site {
   id           Int          @id @default(autoincrement())
   name         String
-  created_at   DateTime?
+  created_at   DateTime?    @map("created_at")
   atexSecteurs AtexSecteur[]
   atexSectors  AtexSector[]
   projects     Project[]
+  @@map("sites")
 }
 
 model Trade {
   id         Int      @id @default(autoincrement())
   name       String
-  created_at DateTime?
+  created_at DateTime? @map("created_at")
+  @@map("trades")
 }
 
 model AtexInspection {
   id           String        @id @default(cuid())
-  equipment_id Int
+  equipment_id Int           @map("equipment_id")
   date         DateTime?
   status       String?
   equipment    AtexEquipment @relation(fields: [equipment_id], references: [id])
+  @@map("atex_inspections")
 }
 
 model AtexEpdDoc {
   id          String        @id @default(cuid())
-  equipmentId Int
-  documentUrl String?
+  equipmentId Int           @map("equipment_id")
+  documentUrl String?       @map("document_url")
   equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
+  @@map("atex_epd_docs")
 }
 
 model AtexSecteur {
   id      String @id @default(cuid())
-  site_id Int
+  site_id Int    @map("site_id")
   name    String?
   site    Site   @relation(fields: [site_id], references: [id])
+  @@map("atex_secteurs")
 }
 
 model AtexSector {
   id      String @id @default(cuid())
   name    String?
-  siteId  Int?
+  siteId  Int?   @map("site_id")
   site    Site?  @relation(fields: [siteId], references: [id])
+  @@map("atex_sectors")
 }
 
 model AtexExiLoop {
   id          String        @id @default(cuid())
-  equipmentId Int
+  equipmentId Int           @map("equipment_id")
   details     String?
   equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
+  @@map("atex_exi_loops")
 }
 
 model AtexAttachment {
   id          String        @id @default(cuid())
-  equipmentId Int
-  fileUrl     String?
+  equipmentId Int           @map("equipment_id")
+  fileUrl     String?       @map("file_url")
   equipment   AtexEquipment @relation(fields: [equipmentId], references: [id])
+  @@map("atex_attachments")
 }
 
 model BreakerChecklist {
   id         String  @id @default(cuid())
-  tableau_id String
+  tableau_id String @map("tableau_id")
   status     String?
   date       DateTime?
-  tableau    Tableau @relation(fields: [tableau_id], references: [id])
+  tableau    Tableau @relation("BreakerChecklistToTableau", fields: [tableau_id], references: [id])
+  @@map("breaker_checklists")
 }
 
 model EmergencyReport {
   id          String  @id @default(cuid())
   description String?
-  tableau_id  String?
+  tableau_id  String? @map("tableau_id")
   tableau     Tableau? @relation(fields: [tableau_id], references: [id])
+  @@map("emergency_reports")
 }
 
 model MaintenanceOrg {
   id        String         @id @default(cuid())
   name      String?
-  parent_id String?
+  parent_id String?        @map("parent_id")
   parent    MaintenanceOrg? @relation("MaintenanceOrgToParent", fields: [parent_id], references: [id])
   children  MaintenanceOrg[] @relation("MaintenanceOrgToParent")
+  @@map("maintenance_org")
 }
 
 model ObsolescenceFactor {
   id          String        @id @default(cuid())
-  equipmentId Int?
+  equipmentId Int?          @map("equipment_id")
   factor      String?
   equipment   AtexEquipment? @relation(fields: [equipmentId], references: [id])
+  @@map("obsolescence_factors")
 }
 
 model Project {
   id      String @id @default(cuid())
   name    String?
-  site_id Int
-  site    Site @relation(fields: [site_id], references: [id])
+  site_id Int    @map("site_id")
+  site    Site   @relation(fields: [site_id], references: [id])
+  @@map("projects")
 }
 
 model SafetyAction {
   id          String  @id @default(cuid())
   description String?
-  tableau_id  String?
+  tableau_id  String? @map("tableau_id")
   tableau     Tableau? @relation(fields: [tableau_id], references: [id])
+  @@map("safety_actions")
 }
 
 model UserAccount {
   id         String  @id @default(cuid())
-  user_id    BigInt
-  account_id String
-  user       User    @relation(fields: [user_id], references: [id])
-  account    Account @relation(fields: [account_id], references: [id])
+  user_id    BigInt  @map("user_id")
+  account_id String  @map("account_id")
+  user       User    @relation("UserToUserAccount", fields: [user_id], references: [id])
+  account    Account @relation("AccountToUserAccount", fields: [account_id], references: [id])
+  @@map("user_accounts")
 }
 
 model UserAppUsage {
   id         String   @id @default(cuid())
-  user_id    BigInt
-  account_id String?
-  usageDate  DateTime?
+  user_id    BigInt   @map("user_id")
+  account_id String?  @map("account_id")
+  usageDate  DateTime? @map("usage_date")
   user       User     @relation(fields: [user_id], references: [id])
   account    Account? @relation(fields: [account_id], references: [id])
+  @@map("user_app_usage")
 }
 
 model Subscription {
   id      String  @id @default(cuid())
-  user_id BigInt?
+  user_id BigInt? @map("user_id")
   user    User?   @relation(fields: [user_id], references: [id])
+  @@map("subscriptions")
 }
 
 model AtexChatThread {
   id        String   @id @default(cuid())
-  userId    BigInt?
+  userId    BigInt?  @map("user_id")
   content   String?
-  createdAt DateTime? @default(now())
+  createdAt DateTime? @default(now()) @map("created_at")
   user      User?    @relation(fields: [userId], references: [id])
+  @@map("atex_chat_threads")
 }
 
 model Equipement {
   id         String  @id @default(cuid())
-  tableau_id String?
+  tableau_id String? @map("tableau_id")
   tableau    Tableau? @relation(fields: [tableau_id], references: [id])
+  @@map("equipements")
 }
