@@ -1,51 +1,36 @@
-import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import cookieParser from 'cookie-parser';
-import helmet from 'helmet';
-import dotenv from 'dotenv';
-import OpenAI from 'openai';
-import atexRoutes from './server_atex.js';
-
-dotenv.config();
+/**
+ * ElectroHub - Minimal Express server with ATEX routes
+ * NOTE: This file mounts the ATEX router from server_atex.js
+ */
+import express from "express";
+import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
+import atexRouter from "./server_atex.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-app.use(helmet());
-app.use(express.json());
-app.use(cookieParser());
+app.use(cors());
+app.use(express.json({ limit: "5mb" }));
 
-// ATEX routes
-app.use('/api/atex', atexRoutes);
+// Static (if you drop a build here)
+app.use(express.static(path.join(__dirname, "dist")));
 
-// OpenAI Chat endpoint
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Healthcheck
+app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
 
-app.post('/api/openai/chat', async (req, res) => {
-  try {
-    const { messages, context } = req.body;
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You are an ATEX compliance assistant.' },
-        ...(context ? [{ role: 'system', content: 'Context: ' + JSON.stringify(context) }] : []),
-        ...messages
-      ]
-    });
-    const reply = completion.choices[0].message.content;
-    res.json({ reply });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'OpenAI request failed' });
-  }
+// ATEX API
+app.use("/api/atex", atexRouter);
+
+// Fallback to SPA (optional)
+app.get("*", (req, res) => {
+  const indexPath = path.join(__dirname, "dist", "index.html");
+  res.sendFile(indexPath, (err) => {
+    if (err) res.status(200).send("ElectroHub ATEX API is running.");
+  });
 });
 
-// Serve frontend
-const distPath = path.join(__dirname, 'dist');
-app.use(express.static(distPath));
-app.get('*', (_, res) => res.sendFile(path.join(distPath, 'index.html')));
-
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`ElectroHub server listening on :${port}`));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`ElectroHub server listening on :${PORT}`));
