@@ -1,17 +1,13 @@
-import React from "react";
-import { createRoot } from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import AtexPage from "./pages/Atex.jsx";
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import App from './App.jsx';
+import './styles.css';
 
-function App() {
-  return (
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Navigate to="/atex" replace />} />
-        <Route path="/atex" element={<AtexPage />} />
-      </Routes>
+      <App />
     </BrowserRouter>
-  );
-}
-
-createRoot(document.getElementById("root")).render(<App />);
+  </React.StrictMode>
+);
