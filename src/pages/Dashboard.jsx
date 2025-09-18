@@ -1,40 +1,17 @@
-import AppCard from '../components/AppCard.jsx';
+import { Link } from 'react-router-dom';
 
-const apps = [
-  { label: 'ATEX', to: '/app/atex', description: 'Explosive atmospheres equipment management', icon: '🧯' },
-  { label: 'Obsolescence', to: '/app/obsolescence', description: 'Lifecycles, replacements, criticality', icon: '♻️' },
-  { label: 'Selectivity', to: '/app/selectivity', description: 'Protection coordination & settings', icon: '🧩' },
-  { label: 'Fault Level Assessment', to: '/app/fault-level', description: 'Short-circuit & fault current studies', icon: '📈' },
-  { label: 'Arc Flash', to: '/app/arc-flash', description: 'Incident energy & PPE categories', icon: '⚠️' },
-];
-
-export default function Dashboard() {
-  const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-
+export default function Dashboard(){
   return (
-    <section className="container-narrow py-10">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-3xl font-bold">Dashboard</h1>
-          <p className="text-gray-600">
-            Welcome{user?.name ? `, ${user.name}` : ''}! Access your tools below.
+    <div className="p-6 space-y-6">
+      <h1 className="text-2xl font-semibold">Tableau de bord</h1>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <Link to="/app/atex" className="rounded-lg border border-gray-200 p-4 hover:shadow transition">
+          <div className="text-lg font-medium">ATEX</div>
+          <p className="text-sm text-gray-600 mt-1">
+            Supervision, création, modification, import/export et analyses des équipements ATEX.
           </p>
-        </div>
-        <div className="card px-4 py-3">
-          <div className="text-sm text-gray-700">
-            <span className="font-medium">Site:</span> {user.site || '—'}
-          </div>
-          <div className="text-sm text-gray-700">
-            <span className="font-medium">Department:</span> {user.department || '—'}
-          </div>
-        </div>
+        </Link>
       </div>
-
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        {apps.map((a) => (
-          <AppCard key={a.label} {...a} />
-        ))}
-      </div>
-    </section>
+    </div>
   );
 }
