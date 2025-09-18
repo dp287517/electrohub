@@ -4,14 +4,10 @@ import { fileURLToPath } from 'url';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
-import jwt from 'jsonwebtoken';
-import pg from 'pg';
+import OpenAI from 'openai';
+import atexRoutes from './server_atex.js';
 
 dotenv.config();
-const { Pool } = pg;
-
-// Use env var on Render: NEON_DATABASE_URL
-const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,34 +17,29 @@ app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 
-// CORS (adjust if needed)
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
+// ATEX routes
+app.use('/api/atex', atexRoutes);
 
-// Health
-app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+// OpenAI Chat endpoint
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Placeholder auth (wire Neon later)
-app.post('/api/auth/signup', async (req, res) => {
-  // TODO: store user (email, password hash, name, site, department) in Neon
-  return res.status(201).json({ message: 'Sign up placeholder' });
-});
-
-app.post('/api/auth/signin', async (req, res) => {
-  // TODO: verify user & issue JWT
-  const token = jwt.sign({ uid: 'demo', site: 'Nyon', department: 'Maintenance' }, process.env.JWT_SECRET || 'dev', { expiresIn: '2h' });
-  return res.json({ token });
-});
-
-app.post('/api/auth/lost-password', async (req, res) => {
-  // TODO: send reset email / token
-  return res.json({ message: 'Reset link sent (placeholder)' });
+app.post('/api/openai/chat', async (req, res) => {
+  try {
+    const { messages, context } = req.body;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are an ATEX compliance assistant.' },
+        ...(context ? [{ role: 'system', content: 'Context: ' + JSON.stringify(context) }] : []),
+        ...messages
+      ]
+    });
+    const reply = completion.choices[0].message.content;
+    res.json({ reply });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'OpenAI request failed' });
+  }
 });
 
 // Serve frontend
