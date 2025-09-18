@@ -1,1 +1,0 @@
-If you see this, tell the assistant to rebuild the full patch.
