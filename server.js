@@ -1,4 +1,6 @@
 const express = require('express');
+const cors = require('cors');
+app.use(cors());
 const path = require('path');
 const { pool } = require('./src/utils/db');  // Import du pool
 
