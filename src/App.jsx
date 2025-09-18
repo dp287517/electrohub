@@ -7,9 +7,6 @@ import LostPassword from './pages/LostPassword.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 
-// Import de la nouvelle page ATEX
-import Atex from './pages/Atex.jsx';
-
 export default function App() {
   return (
     <div className="min-h-screen">
@@ -21,19 +18,7 @@ export default function App() {
         <Route path="/lost-password" element={<LostPassword />} />
         <Route
           path="/dashboard"
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/app/atex"
-          element={
-            <ProtectedRoute>
-              <Atex />
-            </ProtectedRoute>
-          }
+          element={<ProtectedRoute><Dashboard /></ProtectedRoute>}
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
