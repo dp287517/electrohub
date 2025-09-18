@@ -9,7 +9,12 @@ import { suggestForNonConformity } from '../services/openaiAssistant.js';
 import { buildTemplateBuffer, parseImportBuffer } from '../services/atexExcel.js';
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+// ✅ Déclaration unique
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
 
 router.use(authOptional, siteScope);
 
@@ -29,26 +34,35 @@ const eqSchema = z.object({
   comments: z.string().optional().nullable()
 });
 
+// CREATE
 router.post('/equipments', async (req,res)=>{
   try{
     const p = eqSchema.parse(req.body);
-    const site = req.site;
     const comp = computeCompliance(p);
     const q = `INSERT INTO atex_equipment
     (reference,brand,designation,atex_reference,marking,building,room,site,zone_gas,zone_dust,category_g,category_d,last_inspection_date,next_due_date,compliant,comments)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
     RETURNING *`;
-    const vals = [p.reference, p.brand, p.designation, p.atex_reference||null, p.marking||null, p.building, p.room||null, site, p.zone_gas??null, p.zone_dust??null, p.category_g??null, p.category_d??null, p.last_inspection_date||null, comp.next_due_date, comp.compliant, p.comments||null];
+    const vals = [
+      p.reference, p.brand, p.designation, p.atex_reference||null, p.marking||null,
+      p.building, p.room||null, req.site,
+      p.zone_gas ?? null, p.zone_dust ?? null, p.category_g ?? null, p.category_d ?? null,
+      p.last_inspection_date || null, comp.next_due_date, comp.compliant, p.comments || null
+    ];
     const { rows } = await pool.query(q, vals);
     res.json(rows[0]);
   }catch(e){ res.status(400).json({ error: e.message }); }
 });
 
+// UPDATE
 router.put('/equipments/:id', async (req,res)=>{
   try{
     const id = req.params.id;
     const p = eqSchema.partial().parse(req.body);
-    const { rows: curRows } = await pool.query('SELECT * FROM atex_equipment WHERE id=$1 AND site=$2', [id, req.site]);
+    const { rows: curRows } = await pool.query(
+      'SELECT * FROM atex_equipment WHERE id=$1 AND site=$2',
+      [id, req.site]
+    );
     if (!curRows.length) return res.status(404).json({ error: 'Not found' });
     const cur = curRows[0];
     const merged = { ...cur, ...p };
@@ -57,19 +71,27 @@ router.put('/equipments/:id', async (req,res)=>{
     const fields = Object.keys(patch);
     if (!fields.length) return res.status(400).json({ error: 'No fields' });
     const setSql = fields.map((k,i)=> `${k}=$${i+1}`).join(', ');
-    const { rows } = await pool.query(`UPDATE atex_equipment SET ${setSql}, updated_at=now() WHERE id=$${fields.length+1} AND site=$${fields.length+2} RETURNING *`, [...fields.map(k=>patch[k]), id, req.site]);
+    const { rows } = await pool.query(
+      `UPDATE atex_equipment SET ${setSql}, updated_at=now() WHERE id=$${fields.length+1} AND site=$${fields.length+2} RETURNING *`,
+      [...fields.map(k=>patch[k]), id, req.site]
+    );
     res.json(rows[0]);
   }catch(e){ res.status(400).json({ error: e.message }); }
 });
 
+// DELETE
 router.delete('/equipments/:id', async (req,res)=>{
   const id = req.params.id;
   await pool.query('DELETE FROM atex_files WHERE equipment_id=$1', [id]);
-  const { rowCount } = await pool.query('DELETE FROM atex_equipment WHERE id=$1 AND site=$2', [id, req.site]);
+  const { rowCount } = await pool.query(
+    'DELETE FROM atex_equipment WHERE id=$1 AND site=$2',
+    [id, req.site]
+  );
   if (!rowCount) return res.status(404).json({ error: 'Not found' });
   res.json({ ok: true });
 });
 
+// LIST + filtres/tri/pagination
 router.get('/equipments', async (req,res)=>{
   const { q, building, zone_gas, zone_dust, category_g, category_d, status, sort='updated_at:desc', page='1', pageSize='50' } = req.query;
   const where = ['site=$1']; const vals = [req.site];
@@ -78,9 +100,12 @@ router.get('/equipments', async (req,res)=>{
   if (zone_dust){ vals.push(+zone_dust); where.push(`zone_dust=$${vals.length}`); }
   if (category_g){ vals.push(category_g); where.push(`category_g=$${vals.length}`); }
   if (category_d){ vals.push(category_d); where.push(`category_d=$${vals.length}`); }
-  if (status === 'compliant'){ where.push('compliant=true'); }
-  if (status === 'noncompliant'){ where.push('compliant=false'); }
-  if (q){ vals.push('%'+q.toLowerCase()+'%'); where.push(`(lower(reference) LIKE $${vals.length} OR lower(brand) LIKE $${vals.length} OR lower(designation) LIKE $${vals.length})`); }
+  if (status === 'compliant') where.push('compliant=true');
+  if (status === 'noncompliant') where.push('compliant=false');
+  if (q){
+    vals.push('%'+q.toLowerCase()+'%');
+    where.push(`(lower(reference) LIKE $${vals.length} OR lower(brand) LIKE $${vals.length} OR lower(designation) LIKE $${vals.length})`);
+  }
   const [scol,sdir] = String(sort).split(':');
   const orderCol = ['reference','brand','building','updated_at','next_due_date','last_inspection_date','compliant'].includes(scol) ? scol : 'updated_at';
   const dir = sdir==='asc' ? 'ASC' : 'DESC';
@@ -91,8 +116,7 @@ router.get('/equipments', async (req,res)=>{
   res.json(rows);
 });
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
-
+// FILES
 router.post('/equipments/:id/files', upload.array('files', 10), async (req,res)=>{
   const id = req.params.id;
   if (!req.files?.length) return res.json([]);
@@ -108,7 +132,10 @@ router.post('/equipments/:id/files', upload.array('files', 10), async (req,res)=
 });
 
 router.get('/equipments/:id/files', async (req,res)=>{
-  const { rows } = await pool.query('SELECT id, filename, mime_type, uploaded_at FROM atex_files WHERE equipment_id=$1', [req.params.id]);
+  const { rows } = await pool.query(
+    'SELECT id, filename, mime_type, uploaded_at FROM atex_files WHERE equipment_id=$1',
+    [req.params.id]
+  );
   res.json(rows);
 });
 
@@ -128,6 +155,7 @@ router.delete('/files/:fileId', async (req,res)=>{
   res.json({ ok: true });
 });
 
+// TEMPLATE
 router.get('/template', async (_req,res)=>{
   const buf = await buildTemplateBuffer();
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -135,6 +163,7 @@ router.get('/template', async (_req,res)=>{
   res.send(buf);
 });
 
+// IMPORT (site depuis JWT/header via middleware)
 router.post('/import', upload.single('file'), async (req,res)=>{
   try{
     if (!req.file) throw new Error('Fichier Excel absent');
@@ -142,15 +171,23 @@ router.post('/import', upload.single('file'), async (req,res)=>{
     await pool.query('BEGIN');
     for (const p of items){
       const comp = computeCompliance(p);
-      await pool.query(`INSERT INTO atex_equipment
-      (reference,brand,designation,atex_reference,marking,building,room,site,zone_gas,zone_dust,category_g,category_d,last_inspection_date,next_due_date,compliant,comments)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-      ON CONFLICT (reference) DO UPDATE SET
-        brand=EXCLUDED.brand, designation=EXCLUDED.designation, atex_reference=EXCLUDED.atex_reference, marking=EXCLUDED.marking,
-        building=EXCLUDED.building, room=EXCLUDED.room, site=EXCLUDED.site, zone_gas=EXCLUDED.zone_gas, zone_dust=EXCLUDED.zone_dust,
-        category_g=EXCLUDED.category_g, category_d=EXCLUDED.category_d, last_inspection_date=EXCLUDED.last_inspection_date,
-        next_due_date=EXCLUDED.next_due_date, compliant=EXCLUDED.compliant, comments=EXCLUDED.comments, updated_at=now()
-      `, [p.reference, p.brand, p.designation, p.atex_reference||null, p.marking||null, p.building, p.room||null, 'Default', p.zone_gas??null, p.zone_dust??null, p.category_g??null, p.category_d??null, p.last_inspection_date||null, comp.next_due_date, comp.compliant, p.comments||null]);
+      await pool.query(
+        `INSERT INTO atex_equipment
+        (reference,brand,designation,atex_reference,marking,building,room,site,zone_gas,zone_dust,category_g,category_d,last_inspection_date,next_due_date,compliant,comments)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        ON CONFLICT (reference) DO UPDATE SET
+          brand=EXCLUDED.brand, designation=EXCLUDED.designation, atex_reference=EXCLUDED.atex_reference, marking=EXCLUDED.marking,
+          building=EXCLUDED.building, room=EXCLUDED.room, site=EXCLUDED.site, zone_gas=EXCLUDED.zone_gas, zone_dust=EXCLUDED.zone_dust,
+          category_g=EXCLUDED.category_g, category_d=EXCLUDED.category_d, last_inspection_date=EXCLUDED.last_inspection_date,
+          next_due_date=EXCLUDED.next_due_date, compliant=EXCLUDED.compliant, comments=EXCLUDED.comments, updated_at=now()
+        `,
+        [
+          p.reference, p.brand, p.designation, p.atex_reference||null, p.marking||null,
+          p.building, p.room||null, req.site,
+          p.zone_gas ?? null, p.zone_dust ?? null, p.category_g ?? null, p.category_d ?? null,
+          p.last_inspection_date || null, comp.next_due_date, comp.compliant, p.comments || null
+        ]
+      );
     }
     await pool.query('COMMIT');
     res.json({ inserted: items.length });
@@ -160,8 +197,12 @@ router.post('/import', upload.single('file'), async (req,res)=>{
   }
 });
 
+// EXPORT
 router.get('/export', async (req,res)=>{
-  const { rows } = await pool.query('SELECT * FROM atex_equipment WHERE site=$1 ORDER BY updated_at DESC', [req.site]);
+  const { rows } = await pool.query(
+    'SELECT * FROM atex_equipment WHERE site=$1 ORDER BY updated_at DESC',
+    [req.site]
+  );
   const wb = new (await import('exceljs')).Workbook();
   const ws = wb.addWorksheet('ATEX');
   const cols = Object.keys(rows[0] || { reference: '' });
@@ -173,8 +214,12 @@ router.get('/export', async (req,res)=>{
   res.send(Buffer.from(buf));
 });
 
+// ASSIST (IA)
 router.post('/assist/:id', async (req,res)=>{
-  const { rows } = await pool.query('SELECT * FROM atex_equipment WHERE id=$1 AND site=$2', [req.params.id, req.site]);
+  const { rows } = await pool.query(
+    'SELECT * FROM atex_equipment WHERE id=$1 AND site=$2',
+    [req.params.id, req.site]
+  );
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   const eq = rows[0];
   if (eq.compliant) return res.json({ message: 'Équipement conforme. Aucune action requise.' });
