@@ -19,86 +19,9 @@ model User {
   @@map("users")
 }
 
-model Tableau {
-  id                String             @id
-  disjoncteurs      Json?              @map("disjoncteurs") // Pour fault level (icn/ics), arc flash, selectivity
-  issitemain        Boolean?           @map("issitemain")
-  ishta             Boolean?           @map("ishta")
-  htadata           Json?              @map("htadata")
-  breakerChecklists BreakerChecklist[] @relation("BreakerChecklistToTableau")
-  emergencyReports  EmergencyReport[]
-  safetyActions     SafetyAction[]
-  equipements       Equipement[]
-  @@map("tableaux")
-}
-
-model BreakerChecklist {
-  id         String   @id @default(cuid())
-  tableau_id String   @map("tableau_id")
-  status     String?
-  date       DateTime?
-  tableau    Tableau  @relation("BreakerChecklistToTableau", fields: [tableau_id], references: [id])
-  @@map("breaker_checklists")
-}
-
 model Site {
   id         Int      @id @default(autoincrement())
   name       String
   created_at DateTime? @map("created_at")
-  projects   Project[]
   @@map("sites")
-}
-
-model Trade {
-  id         Int      @id @default(autoincrement())
-  name       String
-  created_at DateTime? @map("created_at")
-  @@map("trades")
-}
-
-model MaintenanceOrg {
-  id        String         @id @default(cuid())
-  name      String?
-  parent_id String?        @map("parent_id")
-  parent    MaintenanceOrg? @relation("MaintenanceOrgToParent", fields: [parent_id], references: [id])
-  children  MaintenanceOrg[] @relation("MaintenanceOrgToParent")
-  @@map("maintenance_org")
-}
-
-model Project {
-  id      String @id @default(cuid())
-  name    String?
-  site_id Int    @map("site_id")
-  site    Site   @relation(fields: [site_id], references: [id])
-  @@map("projects")
-}
-
-model SafetyAction {
-  id          String  @id @default(cuid())
-  description String?
-  tableau_id  String? @map("tableau_id")
-  tableau     Tableau? @relation(fields: [tableau_id], references: [id])
-  @@map("safety_actions")
-}
-
-model EmergencyReport {
-  id          String  @id @default(cuid())
-  description String?
-  tableau_id  String? @map("tableau_id")
-  tableau     Tableau? @relation(fields: [tableau_id], references: [id])
-  @@map("emergency_reports")
-}
-
-model Equipement {
-  id         String  @id @default(cuid())
-  tableau_id String? @map("tableau_id")
-  tableau    Tableau? @relation(fields: [tableau_id], references: [id])
-  @@map("equipements")
-}
-
-model ObsolescenceFactor {
-  id          String  @id @default(cuid())
-  equipmentId Int?    @map("equipment_id") // Plus de table atex_equipments, laissé pour compatibilité
-  factor      String?
-  @@map("obsolescence_factors")
 }
