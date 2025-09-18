@@ -15,7 +15,7 @@ export async function POST(request: Request) {
         password: hashedPassword, 
         site, 
         department,
-        plan_tier: 1  // Default pour nouveaux users
+        plan_tier: 1
       },
     });
     return NextResponse.json({ success: true, userId: user.id }, { status: 200 });
