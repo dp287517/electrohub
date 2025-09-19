@@ -12,18 +12,34 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 dotenv.config();
 const { Pool } = pg;
 
-// Render: NEON_DATABASE_URL
+// Connexion DB (utilisée si tu ajoutes des routes côté app principale)
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// ---- Sécurité de base
 app.use(helmet());
+
+// ---- PROXY ATEX AVANT TOUT PARSING DU CORPS (important pour éviter 408/aborted)
+const atexTarget = process.env.ATEX_BASE_URL || 'http://127.0.0.1:3001';
+app.use(
+  '/api/atex',
+  createProxyMiddleware({
+    target: atexTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
+// ---- Parsers (après le proxy)
 app.use(express.json());
 app.use(cookieParser());
 
-// CORS
+// ---- CORS (pour les routes servies par ce serveur-ci ;
+// les routes /api/atex gèrent déjà CORS côté server_atex)
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
@@ -33,24 +49,12 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- PROXY ATEX ---
-// Local par défaut, override possible via ATEX_BASE_URL
-const atexTarget = process.env.ATEX_BASE_URL || 'http://127.0.0.1:3001';
-app.use(
-  '/api/atex',
-  createProxyMiddleware({
-    target: atexTarget,
-    changeOrigin: true,
-    logLevel: 'warn'
-  })
-);
+// ---- Health (mets bien /api/health dans Render)
+app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// Health
-app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
-
-// Auth placeholders
-app.post('/api/auth/signup', async (req, res) => res.status(201).json({ message: 'Sign up placeholder' }));
-app.post('/api/auth/signin', async (req, res) => {
+// ---- Auth placeholders
+app.post('/api/auth/signup', async (_req, res) => res.status(201).json({ message: 'Sign up placeholder' }));
+app.post('/api/auth/signin', async (_req, res) => {
   const token = jwt.sign(
     { uid: 'demo', site: 'Nyon', department: 'Maintenance' },
     process.env.JWT_SECRET || 'dev',
@@ -58,12 +62,13 @@ app.post('/api/auth/signin', async (req, res) => {
   );
   res.json({ token });
 });
-app.post('/api/auth/lost-password', async (req, res) => res.json({ message: 'Reset link sent (placeholder)' }));
+app.post('/api/auth/lost-password', async (_req, res) => res.json({ message: 'Reset link sent (placeholder)' }));
 
-// Frontend
+// ---- Static frontend
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
-app.get('*', (_, res) => res.sendFile(path.join(distPath, 'index.html')));
+app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
 
+// ---- Start
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`ElectroHub server listening on :${port}`));
