@@ -37,6 +37,13 @@ function addMonths(dateStr, months = 36) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  const now = new Date();
+  return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
+}
+
 // Enhanced Conformité: Parse category from marking and check against zone
 function getCategoryFromMarking(ref, type) { // type: 'G' or 'D'
   const upper = (ref || '').toUpperCase();
@@ -376,6 +383,132 @@ Equipment:
   } catch (e) {
     console.error('[AI] error:', e?.message);
     res.status(500).json({ error: 'AI failed' });
+  }
+});
+
+// ------- ASSESMENT & ANALYTICS -------
+app.get('/api/atex/analytics', async (req, res) => {
+  try {
+    const now = new Date();
+    const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+    
+    // Stats de base
+    const stats = await pool.query(`
+      SELECT 
+        COUNT(*) as total,
+        COUNT(CASE WHEN status = 'Conforme' THEN 1 END) as compliant,
+        COUNT(CASE WHEN status = 'Non conforme' THEN 1 END) as non_compliant,
+        COUNT(CASE WHEN status = 'À vérifier' THEN 1 END) as to_review,
+        COUNT(CASE WHEN next_control < $1 THEN 1 END) as overdue,
+        COUNT(CASE WHEN next_control >= $1 AND next_control <= $2 THEN 1 END) as due_90_days,
+        COUNT(CASE WHEN next_control > $2 THEN 1 END) as future
+      FROM atex_equipments
+    `, [now.toISOString().slice(0,10), ninetyDaysFromNow.toISOString().slice(0,10)]);
+
+    // Répartition par zone
+    const zones = await pool.query(`
+      SELECT 
+        COALESCE(zone_gas, 0) as gas_zone,
+        COALESCE(zone_dust, 0) as dust_zone,
+        COUNT(*) as count
+      FROM atex_equipments 
+      GROUP BY zone_gas, zone_dust 
+      ORDER BY gas_zone, dust_zone
+    `);
+
+    // Répartition par type d'équipement
+    const byType = await pool.query(`
+      SELECT component_type, COUNT(*) as count
+      FROM atex_equipments 
+      GROUP BY component_type 
+      ORDER BY count DESC 
+      LIMIT 10
+    `);
+
+    // Répartition par bâtiment
+    const byBuilding = await pool.query(`
+      SELECT building, COUNT(*) as count
+      FROM atex_equipments 
+      WHERE building IS NOT NULL AND building <> ''
+      GROUP BY building 
+      ORDER BY count DESC 
+      LIMIT 10
+    `);
+
+    // Équipements à risque (overdue + due dans 90 jours)
+    const riskEquipment = await pool.query(`
+      SELECT id, component_type, building, room, zone_gas, zone_dust, status, next_control,
+             $1::date - next_control::date as days_overdue
+      FROM atex_equipments 
+      WHERE next_control < $2 OR (next_control >= $1 AND next_control <= $3)
+      ORDER BY next_control ASC
+      LIMIT 20
+    `, [now.toISOString().slice(0,10), now.toISOString().slice(0,10), ninetyDaysFromNow.toISOString().slice(0,10)]);
+
+    // Compliance par zone (détail)
+    const complianceByZone = await pool.query(`
+      SELECT 
+        COALESCE(zone_gas, 0) as zone,
+        COUNT(*) as total,
+        COUNT(CASE WHEN status = 'Conforme' THEN 1 END) as compliant,
+        COUNT(CASE WHEN status = 'Non conforme' THEN 1 END) as non_compliant,
+        COUNT(CASE WHEN status = 'À vérifier' THEN 1 END) as to_review
+      FROM atex_equipments 
+      WHERE zone_gas IS NOT NULL 
+      GROUP BY zone_gas 
+      ORDER BY zone_gas
+    `);
+
+    res.json({
+      stats: stats.rows[0],
+      zones: zones.rows,
+      byType: byType.rows,
+      byBuilding: byBuilding.rows,
+      riskEquipment: riskEquipment.rows,
+      complianceByZone: complianceByZone.rows,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error('[ANALYTICS] error:', e?.message);
+    res.status(500).json({ error: 'Analytics failed' });
+  }
+});
+
+// ------- EXPORT EXCEL -------
+app.get('/api/atex/export', async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT 
+        site, building, room, component_type, manufacturer, manufacturer_ref,
+        atex_ref, zone_gas, zone_dust, status, last_control, next_control, comments,
+        created_at, updated_at
+      FROM atex_equipments 
+      ORDER BY building, room, component_type
+    `);
+
+    // Format pour Excel
+    const exportData = rows.map(row => ({
+      site: row.site || '',
+      building: row.building || '',
+      room: row.room || '',
+      component_type: row.component_type || '',
+      manufacturer: row.manufacturer || '',
+      manufacturer_ref: row.manufacturer_ref || '',
+      atex_ref: row.atex_ref || '',
+      zone_gas: row.zone_gas || '',
+      zone_dust: row.zone_dust || '',
+      status: row.status || '',
+      last_control: row.last_control ? row.last_control.slice(0,10) : '',
+      next_control: row.next_control ? row.next_control.slice(0,10) : '',
+      comments: row.comments || '',
+      created_at: row.created_at ? row.created_at.slice(0,19) : '',
+      updated_at: row.updated_at ? row.updated_at.slice(0,19) : ''
+    }));
+
+    res.json({ data: exportData, columns: Object.keys(exportData[0] || {}) });
+  } catch (e) {
+    console.error('[EXPORT] error:', e?.message);
+    res.status(500).json({ error: 'Export failed' });
   }
 });
 
