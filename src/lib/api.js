@@ -2,26 +2,15 @@
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
 async function jsonFetch(url, options = {}) {
-  const token = localStorage.getItem('eh_token');
-  
-  // AJOUT AUTOMATIQUE DE L'AUTHORIZATION HEADER
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-    ...(options.headers || {})
-  };
-
   const res = await fetch(`${API_BASE}${url}`, {
     credentials: 'include',
-    headers,
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   });
-  
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
+    const text = await res.text().catch(()=>'');
     throw new Error(text || `HTTP ${res.status}`);
   }
-  
   const ct = res.headers.get('content-type') || '';
   return ct.includes('application/json') ? res.json() : null;
 }
@@ -43,18 +32,13 @@ export async function del(path) {
   return jsonFetch(path, { method: 'DELETE' });
 }
 
-// Upload multipart (ne **pas** définir Content-Type, mais ajoute quand même l'auth)
+// Upload multipart (ne **pas** définir Content-Type)
 export async function upload(path, formData) {
-  const token = localStorage.getItem('eh_token');
-  const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-  
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers,
     body: formData,
     credentials: 'include',
   });
-  
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
