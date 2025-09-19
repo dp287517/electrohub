@@ -5,7 +5,6 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import multer from 'multer';
-import jwt from 'jsonwebtoken';
 
 dotenv.config();
 const { Pool } = pg;
@@ -27,29 +26,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// MIDDLEWARE AUTH
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET || 'dev', (err, user) => {
-    if (err) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-    req.user = user;
-    next();
-  });
-}
-
-// Applique auth à /api/atex/*
-app.use('/api/atex', authenticateToken);
-
-// Health (publique)
-app.get('/api/atex/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
-
 // Utils
 function addMonths(dateStr, months = 36) {
   if (!dateStr) return null;
@@ -68,13 +44,14 @@ function daysUntil(dateStr) {
   return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
 }
 
-function getCategoryFromMarking(ref, type) {
+// Enhanced Conformité: Parse category from marking and check against zone
+function getCategoryFromMarking(ref, type) { // type: 'G' or 'D'
   const upper = (ref || '').toUpperCase();
   const match = upper.match(new RegExp(`II\\s*([1-3])${type}`, 'i'));
   return match ? parseInt(match[1]) : null;
 }
 
-function getRequiredCategory(zone, type) {
+function getRequiredCategory(zone, type) { // type: gas or dust
   const z = Number(zone);
   if (type === 'gas') {
     if (z === 0) return 1;
@@ -93,28 +70,31 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   const needsGas = [0,1,2].includes(Number(zone_gas));
   const needsDust = [20,21,22].includes(Number(zone_dust));
 
+  // Parse categories
   const catGas = getCategoryFromMarking(ref, 'G');
   const catDust = getCategoryFromMarking(ref, 'D');
 
   const problems = [];
 
+  // Gas check
   if (needsGas) {
     if (catGas === null) {
       problems.push('No gas category (G) in ATEX marking for gas zone.');
     } else {
       const reqGas = getRequiredCategory(zone_gas, 'gas');
-      if (reqGas && !reqGas.includes(catGas)) {
+      if (!reqGas.includes(catGas)) {
         problems.push(`Gas category ${catGas}G not suitable for zone ${zone_gas} (requires ${reqGas.join(' or ')}).`);
       }
     }
   }
 
+  // Dust check
   if (needsDust) {
     if (catDust === null) {
       problems.push('No dust category (D) in ATEX marking for dust zone.');
     } else {
       const reqDust = getRequiredCategory(zone_dust, 'dust');
-      if (reqDust && !reqDust.includes(catDust)) {
+      if (!reqDust.includes(catDust)) {
         problems.push(`Dust category ${catDust}D not suitable for zone ${zone_dust} (requires ${reqDust.join(' or ')}).`);
       }
     }
@@ -123,284 +103,349 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   return { status: problems.length ? 'Non conforme' : 'Conforme', problems };
 }
 
-// SUGGESTS - COMPATIBLE AVEC FRONTEND
+app.get('/api/atex/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// SUGGESTS
 app.get('/api/atex/suggests', async (req, res) => {
   try {
-    const userSite = req.user.site;
     const fields = ['building','room','component_type','manufacturer','manufacturer_ref','atex_ref'];
     const out = {};
-    
-    for (const field of fields) {
-      const { rows } = await pool.query(`
-        SELECT DISTINCT ${field} 
-        FROM atex_equipments 
-        WHERE site = $1 AND ${field} IS NOT NULL AND ${field} <> '' 
-        ORDER BY ${field} ASC 
-        LIMIT 200
-      `, [userSite]);
-      
-      out[field] = rows.map(row => row[field]).filter(Boolean);
+    for (const f of fields) {
+      const r = await pool.query(
+        `SELECT DISTINCT ${f} FROM atex_equipments WHERE ${f} IS NOT NULL AND ${f}<>'' ORDER BY ${f} ASC LIMIT 200`
+      );
+      out[f] = r.rows.map(x => x[f]);
     }
-    
     res.json(out);
   } catch (e) {
-    console.error('[SUGGESTS] error:', e);
-    res.status(500).json({ error: 'Suggests failed: ' + e.message });
+    console.error('[SUGGESTS] error:', e?.message);
+    res.status(500).json({ error: 'Suggests failed' });
   }
 });
 
-// LIST - COMPATIBLE AVEC FRONTEND
+// Helpers
+function asArray(v) { return v == null ? [] : (Array.isArray(v) ? v : [v]); }
+function addLikeIn(where, values, i, field, arr) {
+  if (!arr.length) return i;
+  const slots = arr.map((_,k)=> `$${i + k}`);
+  where.push(`${field} IN (${slots.join(',')})`);
+  values.push(...arr);
+  return i + arr.length;
+}
+
+// LIST
+async function runListQuery({ whereSql, values, sortSafe, dirSafe, limit, offset }) {
+  return pool.query(
+    `SELECT * FROM atex_equipments ${whereSql} ORDER BY ${sortSafe} ${dirSafe} LIMIT ${limit} OFFSET ${offset}`,
+    values
+  );
+}
+
 app.get('/api/atex/equipments', async (req, res) => {
   try {
-    const userSite = req.user.site;
-    const { sort = 'created_at', dir = 'DESC', limit = 100, offset = 0, search = '' } = req.query;
-    
-    let whereClause = `WHERE site = $1`;
-    let values = [userSite];
-    
-    if (search) {
-      const searchParam = `%${search}%`;
-      whereClause += ` AND (component_type ILIKE $2 OR building ILIKE $2 OR room ILIKE $2)`;
-      values.push(searchParam);
+    const { q, sort='id', dir='desc', page='1', pageSize='100' } = req.query;
+
+    const buildings = asArray(req.query.building).filter(Boolean);
+    const rooms     = asArray(req.query.room).filter(Boolean);
+    const types     = asArray(req.query.component_type).filter(Boolean);
+    const mans      = asArray(req.query.manufacturer).filter(Boolean);
+    const statuses  = asArray(req.query.status).filter(Boolean);
+    const gases     = asArray(req.query.zone_gas).filter(Boolean).map(Number);
+    const dusts     = asArray(req.query.zone_dust).filter(Boolean).map(Number);
+
+    const where = [];
+    const values = [];
+    let i = 1;
+
+    if (q) {
+      where.push(`(building ILIKE $${i} OR room ILIKE $${i} OR component_type ILIKE $${i} OR manufacturer ILIKE $${i} OR manufacturer_ref ILIKE $${i} OR atex_ref ILIKE $${i})`);
+      values.push(`%${q}%`); i++;
     }
-    
-    const paramLimit = values.length + 1;
-    const paramOffset = paramLimit + 1;
-    
-    const query = `
-      SELECT * FROM atex_equipments 
-      ${whereClause}
-      ORDER BY ${sort} ${dir.toUpperCase()}
-      LIMIT $${paramLimit} OFFSET $${paramOffset}
-    `;
-    
-    values.push(parseInt(limit), parseInt(offset));
-    
-    const { rows } = await pool.query(query, values);
-    res.json(rows);
-    
+    if (buildings.length) { i = addLikeIn(where, values, i, 'building', buildings); }
+    if (rooms.length)     { i = addLikeIn(where, values, i, 'room', rooms); }
+    if (types.length)     { i = addLikeIn(where, values, i, 'component_type', types); }
+    if (mans.length)      { i = addLikeIn(where, values, i, 'manufacturer', mans); }
+    if (statuses.length)  { i = addLikeIn(where, values, i, 'status', statuses); }
+    if (gases.length)     { where.push(`zone_gas = ANY($${i}::int[])`); values.push(gases); i++; }
+    if (dusts.length)     { where.push(`zone_dust = ANY($${i}::int[])`); values.push(dusts); i++; }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const whitelist = ['id','building','room','component_type','manufacturer','manufacturer_ref','atex_ref','zone_gas','zone_dust','status','last_control','next_control','created_at','updated_at'];
+    const sortSafe = whitelist.includes(sort) ? sort : 'id';
+    const dirSafe = (String(dir).toLowerCase()==='asc') ? 'ASC' : 'DESC';
+    const limit = Math.min(parseInt(pageSize,10)||100, 300);
+    const offset = ((parseInt(page,10)||1)-1) * limit;
+
+    try {
+      const { rows } = await runListQuery({ whereSql, values, sortSafe, dirSafe, limit, offset });
+      return res.json(rows);
+    } catch (e) {
+      // Fallback si colonne de tri inexistante (ex: updated_at pas migrée)
+      const isUnknownColumn = /column .* does not exist/i.test(e?.message || '');
+      if (isUnknownColumn && sortSafe !== 'id') {
+        console.warn(`[LIST] Unknown sort column "${sortSafe}", falling back to "id"`);
+        const { rows } = await runListQuery({ whereSql, values, sortSafe: 'id', dirSafe, limit, offset });
+        return res.json(rows);
+      }
+      throw e;
+    }
   } catch (e) {
-    console.error('[LIST] error:', e);
-    res.status(500).json({ error: 'List failed: ' + e.message });
+    console.error('[LIST] error:', e?.message);
+    res.status(500).json({ error: 'List failed' });
   }
 });
 
-// CREATE - VERSION ROBUSTE
+// CREATE
 app.post('/api/atex/equipments', async (req, res) => {
   try {
-    const userSite = req.user.site;
-    const { 
-      building, room, component_type, manufacturer, manufacturer_ref, 
-      atex_ref, zone_gas, zone_dust, last_control, comments 
+    const {
+      site, building, room, component_type, manufacturer, manufacturer_ref,
+      atex_ref, zone_gas, zone_dust, last_control, next_control,
+      comments, frequency_months
     } = req.body;
 
-    if (!building || !room || !component_type) {
-      return res.status(400).json({ error: 'Building, room, and component_type are required' });
-    }
+    const { status } = assessCompliance(atex_ref, zone_gas, zone_dust);
+    const nextCtrl = next_control || addMonths(last_control, frequency_months ? Number(frequency_months) : 36);
 
-    const zoneGasNum = zone_gas ? parseInt(zone_gas) : null;
-    const zoneDustNum = zone_dust ? parseInt(zone_dust) : null;
-
-    const next_control = last_control ? addMonths(last_control, 36) : null;
-    const compliance = assessCompliance(atex_ref || '', zoneGasNum, zoneDustNum);
-    
-    const { rows } = await pool.query(`
-      INSERT INTO atex_equipments (
-        site, building, room, component_type, manufacturer, manufacturer_ref, 
-        atex_ref, zone_gas, zone_dust, status, last_control, next_control, 
-        comments, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4, 
-        COALESCE($5, ''), COALESCE($6, ''), 
-        COALESCE($7, ''), $8, $9, $10, $11, $12, 
-        COALESCE($13, ''), NOW(), NOW()
-      )
-      RETURNING *
-    `, [
-      userSite, building, room, component_type, 
-      manufacturer, manufacturer_ref, atex_ref, 
-      zoneGasNum, zoneDustNum, compliance.status, 
-      last_control || null, next_control, comments
-    ]);
-
+    const { rows } = await pool.query(
+      `INSERT INTO atex_equipments
+       (site, building, room, component_type, manufacturer, manufacturer_ref, atex_ref,
+        zone_gas, zone_dust, status, last_control, next_control, comments)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       RETURNING *`,
+      [site, building, room, component_type, manufacturer, manufacturer_ref, atex_ref,
+       zone_gas ?? null, zone_dust ?? null, status, last_control || null, nextCtrl || null,
+       comments || null]
+    );
     res.status(201).json(rows[0]);
-    
   } catch (e) {
-    console.error('[CREATE] Full error:', e);
-    res.status(500).json({ error: 'Create failed: ' + e.message });
+    console.error('[CREATE] error:', e?.message);
+    res.status(500).json({ error: 'Create failed' });
   }
 });
 
-// UPDATE - VERSION ROBUSTE
+// UPDATE
 app.put('/api/atex/equipments/:id', async (req, res) => {
   try {
-    const userSite = req.user.site;
-    const equipmentId = req.params.id;
-    
-    if (!equipmentId || isNaN(parseInt(equipmentId))) {
-      return res.status(400).json({ error: 'Invalid equipment ID' });
+    const id = req.params.id;
+    const patch = { ...req.body };
+
+    if ('atex_ref' in patch || 'zone_gas' in patch || 'zone_dust' in patch) {
+      const cur = await pool.query('SELECT atex_ref, zone_gas, zone_dust FROM atex_equipments WHERE id=$1', [id]);
+      const merged = {
+        atex_ref: patch.atex_ref ?? cur.rows[0]?.atex_ref,
+        zone_gas: patch.zone_gas ?? cur.rows[0]?.zone_gas,
+        zone_dust: patch.zone_dust ?? cur.rows[0]?.zone_dust,
+      };
+      patch.status = assessCompliance(merged.atex_ref, merged.zone_gas, merged.zone_dust).status;
     }
 
-    const updates = { ...req.body };
-    
-    if (updates.zone_gas !== undefined) {
-      updates.zone_gas = updates.zone_gas ? parseInt(updates.zone_gas) : null;
-    }
-    if (updates.zone_dust !== undefined) {
-      updates.zone_dust = updates.zone_dust ? parseInt(updates.zone_dust) : null;
+    if (patch.last_control && !patch.next_control) {
+      const freq = Number(patch.frequency_months || 36);
+      patch.next_control = addMonths(patch.last_control, freq);
+      delete patch.frequency_months;
     }
 
-    if (updates.last_control !== undefined) {
-      updates.next_control = updates.last_control ? addMonths(updates.last_control, 36) : null;
-    }
+    const keys = Object.keys(patch);
+    if (!keys.length) return res.status(400).json({ error: 'No fields to update' });
 
-    const needsComplianceCheck = updates.atex_ref !== undefined || 
-                                updates.zone_gas !== undefined || 
-                                updates.zone_dust !== undefined;
-    
-    if (needsComplianceCheck) {
-      const current = await pool.query('SELECT atex_ref, zone_gas, zone_dust FROM atex_equipments WHERE id = $1', [equipmentId]);
-      if (current.rows.length === 0) {
-        return res.status(404).json({ error: 'Equipment not found' });
-      }
-      
-      const currentValues = current.rows[0];
-      const checkRef = updates.atex_ref !== undefined ? updates.atex_ref : currentValues.atex_ref;
-      const checkZoneGas = updates.zone_gas !== undefined ? updates.zone_gas : currentValues.zone_gas;
-      const checkZoneDust = updates.zone_dust !== undefined ? updates.zone_dust : currentValues.zone_dust;
-      
-      const compliance = assessCompliance(checkRef || '', checkZoneGas, checkZoneDust);
-      updates.status = compliance.status;
-    }
+    const set = keys.map((k,i)=> `${k}=$${i+1}`).join(', ');
+    const vals = keys.map(k => patch[k]); vals.push(id);
 
-    const setClauses = [];
-    const values = [equipmentId, userSite];
-    let valueIndex = 3;
-
-    const updatableFields = ['building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref', 
-                            'atex_ref', 'zone_gas', 'zone_dust', 'last_control', 'next_control', 
-                            'status', 'comments'];
-    
-    updatableFields.forEach(field => {
-      if (updates[field] !== undefined) {
-        const sqlField = ['manufacturer', 'manufacturer_ref', 'atex_ref', 'comments'].includes(field) 
-          ? `COALESCE($${valueIndex}, '')` 
-          : `$${valueIndex}`;
-        
-        setClauses.push(`${field} = ${sqlField}`);
-        values.push(updates[field]);
-        valueIndex++;
-      }
-    });
-
-    if (setClauses.length === 0) {
-      return res.status(400).json({ error: 'No fields to update' });
-    }
-
-    const { rows } = await pool.query(`
-      UPDATE atex_equipments 
-      SET ${setClauses.join(', ')}, updated_at = NOW()
-      WHERE id = $1 AND site = $2
-      RETURNING *
-    `, values);
-
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Equipment not found or access denied' });
-    }
-
+    const { rows } = await pool.query(`UPDATE atex_equipments SET ${set} WHERE id=$${keys.length+1} RETURNING *`, vals);
     res.json(rows[0]);
-    
   } catch (e) {
-    console.error('[UPDATE] Full error:', e);
-    res.status(500).json({ error: 'Update failed: ' + e.message });
+    console.error('[UPDATE] error:', e?.message);
+    res.status(500).json({ error: 'Update failed' });
   }
 });
 
-// DELETE - FILTRE PAR SITE
+// DELETE
 app.delete('/api/atex/equipments/:id', async (req, res) => {
   try {
-    const userSite = req.user.site;
-    const id = req.params.id;
-    const { rows } = await pool.query(
-      'DELETE FROM atex_equipments WHERE id = $1 AND site = $2 RETURNING id',
-      [id, userSite]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Equipment not found or access denied' });
-    }
-
-    res.json({ message: 'Deleted successfully' });
+    await pool.query('DELETE FROM atex_equipments WHERE id=$1', [req.params.id]);
+    res.json({ success: true });
   } catch (e) {
-    console.error('[DELETE] error:', e);
+    console.error('[DELETE] error:', e?.message);
     res.status(500).json({ error: 'Delete failed' });
   }
 });
 
-// ANALYTICS - FILTRE PAR SITE
+// ------- Pièces jointes (table atex_attachments) -------
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+app.get('/api/atex/equipments/:id/attachments', async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, filename, mimetype, size, created_at FROM atex_attachments WHERE equipment_id=$1 ORDER BY created_at DESC',
+      [req.params.id]
+    );
+    res.json(r.rows);
+  } catch (e) {
+    console.error('[ATTACH LIST] error:', e?.message);
+    res.status(500).json({ error: 'Attachments list failed' });
+  }
+});
+
+app.post('/api/atex/equipments/:id/attachments', upload.array('files', 12), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!req.files?.length) return res.status(400).json({ error: 'No files' });
+    const results = [];
+    for (const f of req.files) {
+      const q = await pool.query(
+        'INSERT INTO atex_attachments (equipment_id, filename, mimetype, size, data) VALUES ($1,$2,$3,$4,$5) RETURNING id, filename, mimetype, size, created_at',
+        [id, f.originalname, f.mimetype, f.size, f.buffer]
+      );
+      results.push(q.rows[0]);
+    }
+    res.status(201).json(results);
+  } catch (e) {
+    console.error('[ATTACH UPLOAD] error:', e?.message);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+app.get('/api/atex/attachments/:attId/download', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT filename, mimetype, size, data FROM atex_attachments WHERE id=$1', [req.params.attId]);
+    const row = r.rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    res.setHeader('Content-Type', row.mimetype || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(row.filename)}"`);
+    res.send(Buffer.from(row.data, 'binary'));
+  } catch (e) {
+    console.error('[ATTACH DL] error:', e?.message);
+    res.status(500).json({ error: 'Download failed' });
+  }
+});
+
+app.delete('/api/atex/attachments/:attId', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM atex_attachments WHERE id=$1', [req.params.attId]);
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[ATTACH DEL] error:', e?.message);
+    res.status(500).json({ error: 'Delete attachment failed' });
+  }
+});
+
+// ------- Chat IA -------
+app.post('/api/atex/ai/:id', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY manquant' });
+    const id = req.params.id;
+    const r = await pool.query('SELECT * FROM atex_equipments WHERE id=$1', [id]);
+    const eq = r.rows[0]; if (!eq) return res.status(404).json({ error: 'Not found' });
+
+    const prompt = `
+You are an ATEX compliance expert. Analyze the equipment's compliance with ATEX standards. Provide a structured response in English:
+
+1) Reasons for non-compliance (if applicable, be specific about marking vs. zone mismatch, protection levels, etc.)
+
+2) Preventive measures
+
+3) Palliative measures
+
+4) Corrective actions
+
+Be concise and accurate. Recall: Gas zones - 0 (most hazardous), 1, 2 (least); Equipment category 1 for all, 2 for 1-2, 3 for 2 only. Similar for dust.
+
+Equipment:
+- Building: ${eq.building}
+- Room: ${eq.room}
+- Type: ${eq.component_type}
+- Manufacturer: ${eq.manufacturer}
+- Manufacturer Ref: ${eq.manufacturer_ref}
+- ATEX Marking: ${eq.atex_ref}
+- Gas Zone: ${eq.zone_gas ?? '—'}
+- Dust Zone: ${eq.zone_dust ?? '—'}
+- Current Status: ${eq.status}
+- Last Control: ${eq.last_control ?? '—'}
+- Next Control: ${eq.next_control ?? '—'}
+`.trim();
+
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':`Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.2,
+        messages: [
+          { role:'system', content:'You are an ATEX compliance expert. Respond in English only.' },
+          { role:'user', content: prompt }
+        ]
+      })
+    });
+    if (!resp.ok) return res.status(500).json({ error: 'OpenAI error', details: await resp.text() });
+    const json = await resp.json();
+    res.json({ analysis: json.choices?.[0]?.message?.content?.trim() || '—' });
+  } catch (e) {
+    console.error('[AI] error:', e?.message);
+    res.status(500).json({ error: 'AI failed' });
+  }
+});
+
+// ------- ASSESMENT & ANALYTICS -------
 app.get('/api/atex/analytics', async (req, res) => {
   try {
-    const userSite = req.user.site;
     const now = new Date();
-    const ninetyDaysFromNow = new Date(now.getTime() + (90 * 24 * 60 * 60 * 1000));
-
+    const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
+    
+    // Stats de base
     const stats = await pool.query(`
       SELECT 
         COUNT(*) as total,
-        COUNT(CASE WHEN next_control < $1 THEN 1 END)::int as overdue,
-        COUNT(CASE WHEN next_control >= $1 AND next_control <= $2 THEN 1 END)::int as due_90_days,
-        COUNT(CASE WHEN next_control > $2 THEN 1 END)::int as future,
-        COUNT(CASE WHEN status = 'Conforme' THEN 1 END)::int as compliant,
-        COUNT(CASE WHEN status = 'Non conforme' THEN 1 END)::int as non_compliant
-      FROM atex_equipments 
-      WHERE site = $3
-    `, [
-      now.toISOString().slice(0,10), 
-      ninetyDaysFromNow.toISOString().slice(0,10),
-      userSite
-    ]);
+        COUNT(CASE WHEN status = 'Conforme' THEN 1 END) as compliant,
+        COUNT(CASE WHEN status = 'Non conforme' THEN 1 END) as non_compliant,
+        COUNT(CASE WHEN status = 'À vérifier' THEN 1 END) as to_review,
+        COUNT(CASE WHEN next_control < $1 THEN 1 END) as overdue,
+        COUNT(CASE WHEN next_control >= $1 AND next_control <= $2 THEN 1 END) as due_90_days,
+        COUNT(CASE WHEN next_control > $2 THEN 1 END) as future
+      FROM atex_equipments
+    `, [now.toISOString().slice(0,10), ninetyDaysFromNow.toISOString().slice(0,10)]);
 
+    // Répartition par zone
     const zones = await pool.query(`
       SELECT 
         COALESCE(zone_gas, 0) as gas_zone,
         COALESCE(zone_dust, 0) as dust_zone,
         COUNT(*) as count
       FROM atex_equipments 
-      WHERE site = $1
       GROUP BY zone_gas, zone_dust 
       ORDER BY gas_zone, dust_zone
-    `, [userSite]);
+    `);
 
+    // Répartition par type d'équipement
     const byType = await pool.query(`
       SELECT component_type, COUNT(*) as count
       FROM atex_equipments 
-      WHERE site = $1
       GROUP BY component_type 
       ORDER BY count DESC 
       LIMIT 10
-    `, [userSite]);
+    `);
 
+    // Répartition par bâtiment
     const byBuilding = await pool.query(`
       SELECT building, COUNT(*) as count
       FROM atex_equipments 
-      WHERE site = $1 AND building IS NOT NULL AND building <> ''
+      WHERE building IS NOT NULL AND building <> ''
       GROUP BY building 
       ORDER BY count DESC 
       LIMIT 10
-    `, [userSite]);
+    `);
 
+    // Équipements à risque (overdue + due dans 90 jours)
     const riskEquipment = await pool.query(`
-      SELECT id, component_type, building, room, zone_gas, zone_dust, status, next_control
+      SELECT id, component_type, building, room, zone_gas, zone_dust, status, next_control,
+             $1::date - next_control::date as days_overdue
       FROM atex_equipments 
-      WHERE site = $1 AND (next_control < $2 OR (next_control >= $2 AND next_control <= $3))
+      WHERE next_control < $2 OR (next_control >= $1 AND next_control <= $3)
       ORDER BY next_control ASC
       LIMIT 20
-    `, [
-      userSite,
-      now.toISOString().slice(0,10), 
-      ninetyDaysFromNow.toISOString().slice(0,10)
-    ]);
+    `, [now.toISOString().slice(0,10), now.toISOString().slice(0,10), ninetyDaysFromNow.toISOString().slice(0,10)]);
 
+    // Compliance par zone (détail)
     const complianceByZone = await pool.query(`
       SELECT 
         COALESCE(zone_gas, 0) as zone,
@@ -409,10 +454,10 @@ app.get('/api/atex/analytics', async (req, res) => {
         COUNT(CASE WHEN status = 'Non conforme' THEN 1 END) as non_compliant,
         COUNT(CASE WHEN status = 'À vérifier' THEN 1 END) as to_review
       FROM atex_equipments 
-      WHERE site = $1 AND zone_gas IS NOT NULL 
+      WHERE zone_gas IS NOT NULL 
       GROUP BY zone_gas 
       ORDER BY zone_gas
-    `, [userSite]);
+    `);
 
     res.json({
       stats: stats.rows[0],
@@ -424,15 +469,14 @@ app.get('/api/atex/analytics', async (req, res) => {
       generatedAt: new Date().toISOString()
     });
   } catch (e) {
-    console.error('[ANALYTICS] error:', e);
-    res.status(500).json({ error: 'Analytics failed: ' + e.message });
+    console.error('[ANALYTICS] error:', e?.message);
+    res.status(500).json({ error: 'Analytics failed' });
   }
 });
 
-// EXPORT - FILTRE PAR SITE
+// ------- EXPORT EXCEL -------
 app.get('/api/atex/export', async (req, res) => {
   try {
-    const userSite = req.user.site;
     const { rows } = await pool.query(`
       SELECT 
         COALESCE(site, '') as site,
@@ -451,10 +495,10 @@ app.get('/api/atex/export', async (req, res) => {
         CASE WHEN created_at IS NOT NULL THEN created_at::text ELSE '' END as created_at,
         CASE WHEN updated_at IS NOT NULL THEN updated_at::text ELSE '' END as updated_at
       FROM atex_equipments 
-      WHERE site = $1
       ORDER BY building, room, component_type
-    `, [userSite]);
+    `);
 
+    // Format pour Excel
     const exportData = rows.map(row => ({
       site: row.site,
       building: row.building,
@@ -475,7 +519,7 @@ app.get('/api/atex/export', async (req, res) => {
 
     res.json({ data: exportData, columns: Object.keys(exportData[0] || {}) });
   } catch (e) {
-    console.error('[EXPORT] error:', e);
+    console.error('[EXPORT] error:', e?.message);
     res.status(500).json({ error: 'Export failed: ' + e.message });
   }
 });
