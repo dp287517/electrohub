@@ -1,6 +1,6 @@
 // src/pages/Atex.jsx
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { get, post, put, del, upload } from '../lib/api.js';
+import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
 
 const SITE_OPTIONS = ['Nyon','Levice','Aprilia']; // keep in sync with SignUp
 
@@ -166,6 +166,7 @@ function FilterBar({
 
 export default function Atex() {
   const [tab, setTab] = useState('controls');
+  const [showFilters, setShowFilters] = useState(false);
 
   // data
   const [rows, setRows] = useState([]);
@@ -321,6 +322,21 @@ export default function Atex() {
     return d.toISOString().slice(0,10);
   }
 
+  // calendar helpers (Create)
+  const lastRef = useRef(null);
+  const nextRef = useRef(null);
+  function openPicker(ref) {
+    const el = ref.current;
+    if (!el) return;
+    // Modern Chrome/Edge
+    if (typeof el.showPicker === 'function') {
+      el.showPicker();
+      return;
+    }
+    // Fallback
+    el.focus(); el.click();
+  }
+
   async function onCreate(e) {
     e.preventDefault();
     const payload = { ...createForm };
@@ -359,7 +375,19 @@ export default function Atex() {
 
   return (
     <section className="container-narrow py-8">
-      <h1 className="text-3xl font-bold mb-4">ATEX</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-3xl font-bold">ATEX</h1>
+        {tab === 'controls' && (
+          <button
+            className="h-9 px-3 rounded-md border border-gray-300 bg-white text-sm flex items-center gap-2 hover:border-gray-400"
+            onClick={()=>setShowFilters(v=>!v)}
+            type="button"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18v2H3V5zm4 6h10v2H7v-2zm-2 6h14v2H5v-2z"/></svg>
+            Filters
+          </button>
+        )}
+      </div>
 
       <div className="flex gap-2 mb-6">
         {[
@@ -376,22 +404,24 @@ export default function Atex() {
 
       {tab === 'controls' && (
         <div className="space-y-4">
-          <FilterBar
-            q={q} setQ={setQ}
-            fBuilding={fBuilding} setFBuilding={setFBuilding}
-            fRoom={fRoom} setFRoom={setFRoom}
-            fType={fType} setFType={setFType}
-            fManufacturer={fManufacturer} setFManufacturer={setFManufacturer}
-            fStatus={fStatus} setFStatus={setFStatus}
-            fGas={fGas} setFGas={setFGas}
-            fDust={fDust} setFDust={setFDust}
-            uniques={uniques}
-            onSearch={load}
-            onReset={()=>{
-              setQ(''); setFBuilding([]); setFRoom([]); setFType([]); setFManufacturer([]); setFStatus([]); setFGas([]); setFDust([]);
-              setSort({by:'updated_at', dir:'desc'}); load();
-            }}
-          />
+          {showFilters && (
+            <FilterBar
+              q={q} setQ={setQ}
+              fBuilding={fBuilding} setFBuilding={setFBuilding}
+              fRoom={fRoom} setFRoom={setFRoom}
+              fType={fType} setFType={setFType}
+              fManufacturer={fManufacturer} setFManufacturer={setFManufacturer}
+              fStatus={fStatus} setFStatus={setFStatus}
+              fGas={fGas} setFGas={setFGas}
+              fDust={fDust} setFDust={setFDust}
+              uniques={uniques}
+              onSearch={load}
+              onReset={()=>{
+                setQ(''); setFBuilding([]); setFRoom([]); setFType([]); setFManufacturer([]); setFStatus([]); setFGas([]); setFDust([]);
+                setSort({by:'updated_at', dir:'desc'}); load();
+              }}
+            />
+          )}
 
           <div className="card p-0 overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -519,7 +549,8 @@ export default function Atex() {
                     <li key={a.id} className="flex items-center justify-between gap-2">
                       <div className="truncate">{a.filename} <span className="text-xs text-gray-500">({Math.round((a.size||0)/1024)} KB)</span></div>
                       <div className="flex gap-2">
-                        <a className="btn btn-primary" href={`/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Download</a>
+                        {/* IMPORTANT: prefix with API_BASE for prod to avoid 404 */}
+                        <a className="btn btn-primary" href={`${API_BASE}/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Download</a>
                         <button className="btn bg-gray-100" onClick={async()=>{
                           await del(`/api/atex/attachments/${a.id}`);
                           const list = await get(`/api/atex/equipments/${showAttach.id}/attachments`);
@@ -621,8 +652,12 @@ export default function Atex() {
 
             <div>
               <label className="label">Last inspection</label>
-              {/* native calendar date-picker */}
-              <input type="date" className="input mt-1" value={createForm.last_control} onChange={e=>cf('last_control', e.target.value)} />
+              <div className="flex gap-2">
+                <input ref={lastRef} type="date" className="input mt-1 flex-1" value={createForm.last_control} onChange={e=>cf('last_control', e.target.value)} />
+                <button type="button" className="btn bg-gray-100 mt-1" title="Pick date" onClick={()=>openPicker(lastRef)}>
+                  📅
+                </button>
+              </div>
             </div>
 
             <div>
@@ -632,7 +667,12 @@ export default function Atex() {
 
             <div>
               <label className="label">Next inspection</label>
-              <input type="date" className="input mt-1" value={createForm.next_control || ''} onChange={e=>cf('next_control', e.target.value)} placeholder="Auto if empty" />
+              <div className="flex gap-2">
+                <input ref={nextRef} type="date" className="input mt-1 flex-1" value={createForm.next_control || ''} onChange={e=>cf('next_control', e.target.value)} placeholder="Auto if empty" />
+                <button type="button" className="btn bg-gray-100 mt-1" title="Pick date" onClick={()=>openPicker(nextRef)}>
+                  📅
+                </button>
+              </div>
               <div className="text-xs text-gray-600 mt-1">Leave empty to auto-compute (Last inspection + Frequency).</div>
             </div>
 
