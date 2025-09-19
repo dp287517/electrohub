@@ -1,7 +1,7 @@
 // src/pages/Atex.jsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
-import * as XLSX from 'xlsx'; // Assume xlsx is installed: npm i xlsx
+import * as XLSX from 'xlsx';
 
 // Garder en phase avec SignUp si tu ajoutes des sites
 const SITE_OPTIONS = ['Nyon','Levice','Aprilia'];
@@ -165,6 +165,73 @@ function FilterBar({
   );
 }
 
+/* ---------- Simple Bar Chart Component ---------- */
+function SimpleBarChart({ data, title, yLabel = 'Count' }) {
+  const maxValue = Math.max(...data.map(d => d.value), 1);
+  const barWidth = 100 / data.length;
+
+  return (
+    <div className="bg-white p-4 rounded-lg shadow">
+      <h3 className="text-lg font-medium mb-3">{title}</h3>
+      <div className="space-y-2">
+        {data.map((item, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="flex-1 bg-gray-100 rounded-full h-3">
+              <div 
+                className="bg-blue-500 h-3 rounded-full" 
+                style={{ width: `${(item.value / maxValue) * 100}%` }}
+              />
+            </div>
+            <span className="text-sm font-medium text-gray-700 w-12">{item.value}</span>
+            <span className="text-sm text-gray-600 min-w-0 truncate">{item.label}</span>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-gray-500 mt-2">{yLabel}</p>
+    </div>
+  );
+}
+
+/* ---------- Simple Pie Chart Component ---------- */
+function SimplePieChart({ data, title }) {
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  
+  return (
+    <div className="bg-white p-4 rounded-lg shadow">
+      <h3 className="text-lg font-medium mb-3">{title}</h3>
+      <div className="relative h-48 flex items-center justify-center">
+        {data.map((item, i) => {
+          const angle = (item.value / total) * 360;
+          const colors = ['bg-green-500', 'bg-red-500', 'bg-yellow-500', 'bg-blue-500', 'bg-purple-500'];
+          return (
+            <div 
+              key={i}
+              className={`absolute rounded-full ${colors[i % colors.length]}`}
+              style={{ 
+                width: '80%', 
+                height: '80%', 
+                clipPath: `polygon(50% 50%, 50% 0%, ${Math.cos(angle * Math.PI / 180) * 50 + 50}% ${Math.sin(angle * Math.PI / 180) * 50 + 50}%)`
+              }}
+            />
+          );
+        })}
+        <div className="absolute text-center">
+          <div className="text-2xl font-bold text-gray-700">{total}</div>
+          <div className="text-xs text-gray-500">Total</div>
+        </div>
+      </div>
+      <div className="mt-4 space-y-1">
+        {data.map((item, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className={`w-3 h-3 rounded-full ${['bg-green-500', 'bg-red-500', 'bg-yellow-500'][i]}`} />
+            <span className="text-sm">{item.label}: {item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------ */
 
 export default function Atex() {
@@ -173,6 +240,8 @@ export default function Atex() {
 
   // data
   const [rows, setRows] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // filters (multi)
@@ -243,6 +312,19 @@ export default function Atex() {
     }
   }
 
+  async function loadAnalytics() {
+    setAnalyticsLoading(true);
+    try {
+      const data = await get('/api/atex/analytics');
+      setAnalytics(data);
+    } catch (e) {
+      console.error('Analytics load failed:', e);
+      setAnalytics(null);
+    } finally {
+      setAnalyticsLoading(false);
+    }
+  }
+
   async function loadSuggests() {
     try {
       const s = await get('/api/atex/suggests');
@@ -250,8 +332,9 @@ export default function Atex() {
     } catch { /* non-bloquant */ }
   }
 
-  useEffect(() => { load(); }, [sort]); // quand le tri change
+  useEffect(() => { load(); }, [sort, q, fBuilding, fRoom, fType, fManufacturer, fStatus, fGas, fDust]); // quand les filtres changent
   useEffect(() => { loadSuggests(); }, []); // au montage
+  useEffect(() => { if (tab === 'assessment') loadAnalytics(); }, [tab]); // analytics quand on va dans assessment
 
   const uniques = useMemo(() => {
     const u = (key) => Array.from(new Set(rows.map(r => r[key]).filter(Boolean))).sort();
@@ -404,18 +487,18 @@ export default function Atex() {
   }
 
   /* ---------- Import/Export helpers ---------- */
-  const EXCEL_COLUMNS = [
-    'site', 'building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref',
-    'atex_ref', 'zone_gas', 'zone_dust', 'comments', 'last_control', 'frequency_months', 'next_control'
-  ];
-
   async function exportToExcel() {
     try {
-      const data = await get('/api/atex/equipments');
+      const { data } = await get('/api/atex/export');
+      if (!data.length) {
+        alert('No data to export');
+        return;
+      }
+      
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'ATEX Equipment');
-      XLSX.writeFile(wb, 'atex_equipment.xlsx');
+      XLSX.writeFile(wb, `atex_equipment_${new Date().toISOString().slice(0,10)}.xlsx`);
     } catch (e) {
       alert('Export failed: ' + e.message);
     }
@@ -424,29 +507,52 @@ export default function Atex() {
   async function importFromExcel(e) {
     const file = e.target.files[0];
     if (!file) return;
+    
     const reader = new FileReader();
     reader.onload = async (event) => {
-      const data = new Uint8Array(event.target.result);
-      const workbook = XLSX.read(data, { type: 'array' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const jsonData = XLSX.utils.sheet_to_json(firstSheet);
-      
-      // Filter and map columns
-      const validData = jsonData.map(row => {
-        const payload = {};
-        EXCEL_COLUMNS.forEach(col => {
-          if (row[col] !== undefined) payload[col] = row[col];
-        });
-        payload.zone_gas = payload.zone_gas ? Number(payload.zone_gas) : null;
-        payload.zone_dust = payload.zone_dust ? Number(payload.zone_dust) : null;
-        return payload;
-      }).filter(row => row.component_type && row.building); // Basic validation
-
       try {
-        for (const payload of validData) {
-          await post('/api/atex/equipments', payload);
+        const data = new Uint8Array(event.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+        
+        // Filter and validate
+        const validData = jsonData
+          .filter(row => row.component_type && row.building && row.room)
+          .map(row => ({
+            site: row.site || '',
+            building: String(row.building || ''),
+            room: String(row.room || ''),
+            component_type: String(row.component_type || ''),
+            manufacturer: row.manufacturer || '',
+            manufacturer_ref: row.manufacturer_ref || '',
+            atex_ref: row.atex_ref || '',
+            zone_gas: row.zone_gas ? Number(row.zone_gas) : null,
+            zone_dust: row.zone_dust ? Number(row.zone_dust) : null,
+            comments: row.comments || '',
+            last_control: row.last_control || '',
+            frequency_months: row.frequency_months ? Number(row.frequency_months) : 36,
+            next_control: row.next_control || ''
+          }));
+
+        if (!validData.length) {
+          alert('No valid equipment data found. Required: building, room, component_type');
+          return;
         }
-        alert(`${validData.length} equipments imported.`);
+
+        // Batch import
+        const results = [];
+        for (const payload of validData) {
+          try {
+            const created = await post('/api/atex/equipments', payload);
+            results.push({ success: true, data: created });
+          } catch (err) {
+            results.push({ success: false, error: err.message, data: payload });
+          }
+        }
+
+        const successCount = results.filter(r => r.success).length;
+        alert(`${successCount}/${validData.length} equipments imported successfully.`);
         load();
       } catch (e) {
         alert('Import failed: ' + e.message);
@@ -691,7 +797,6 @@ export default function Atex() {
                     <li key={a.id} className="flex items-center justify-between gap-2">
                       <div className="truncate">{a.filename} <span className="text-xs text-gray-500">({Math.round((a.size||0)/1024)} KB)</span></div>
                       <div className="flex gap-2">
-                        {/* IMPORTANT: prefix with API_BASE pour prod */}
                         <a className="btn btn-primary text-xs px-2 py-1" href={`${API_BASE}/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Download</a>
                         <button className="btn bg-gray-100 text-xs px-2 py-1" onClick={async()=>{
                           await del(`/api/atex/attachments/${a.id}`);
@@ -862,16 +967,42 @@ export default function Atex() {
             <div>
               <h3 className="text-lg font-medium mb-2">Excel Template Instructions</h3>
               <p className="text-gray-700 mb-4">Use the following column order in your Excel file (first row headers):</p>
-              <ul className="list-disc pl-6 space-y-1 text-sm">
-                {EXCEL_COLUMNS.map(col => (
-                  <li key={col}>{col} (e.g., "Nyon" for site, "0" for zone_gas)</li>
-                ))}
-              </ul>
-              <p className="text-xs text-gray-500 mt-2">Required: building, room, component_type. Dates in YYYY-MM-DD format.</p>
+              <div className="overflow-x-auto">
+                <table className="min-w-full bg-white border">
+                  <thead>
+                    <tr className="bg-gray-50">
+                      <th className="px-4 py-2 text-left border">Column</th>
+                      <th className="px-4 py-2 text-left border">Example</th>
+                      <th className="px-4 py-2 text-left border">Required</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td className="px-4 py-2 border">site</td><td className="px-4 py-2 border">Nyon</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">building</td><td className="px-4 py-2 border">20</td><td className="px-4 py-2 border font-semibold">Yes</td></tr>
+                    <tr><td className="px-4 py-2 border">room</td><td className="px-4 py-2 border">112</td><td className="px-4 py-2 border font-semibold">Yes</td></tr>
+                    <tr><td className="px-4 py-2 border">component_type</td><td className="px-4 py-2 border">Compressor</td><td className="px-4 py-2 border font-semibold">Yes</td></tr>
+                    <tr><td className="px-4 py-2 border">manufacturer</td><td className="px-4 py-2 border">Schneider</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">manufacturer_ref</td><td className="px-4 py-2 border">218143RT</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">atex_ref</td><td className="px-4 py-2 border">II 2G Ex ib IIC T4 Gb</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">zone_gas</td><td className="px-4 py-2 border">2</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">zone_dust</td><td className="px-4 py-2 border">21</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">comments</td><td className="px-4 py-2 border">Installed 2023</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">last_control</td><td className="px-4 py-2 border">2025-09-19</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">frequency_months</td><td className="px-4 py-2 border">36</td><td className="px-4 py-2 border">No</td></tr>
+                    <tr><td className="px-4 py-2 border">next_control</td><td className="px-4 py-2 border">2028-09-19</td><td className="px-4 py-2 border">No</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-500 mt-3">Dates in YYYY-MM-DD format. Numbers for zones (0,1,2 for gas; 20,21,22 for dust).</p>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-4">
-              <button className="btn btn-primary flex-1" onClick={exportToExcel}>Download Current Data (XLSX)</button>
+              <button className="btn btn-primary flex-1" onClick={exportToExcel}>
+                <svg className="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Download Excel Template
+              </button>
               <div className="flex-1">
                 <label className="block text-sm font-medium mb-1">Upload Excel File</label>
                 <input className="input" type="file" accept=".xlsx,.xls" onChange={importFromExcel} />
@@ -883,86 +1014,155 @@ export default function Atex() {
 
       {/* ---- Onglet Assessment ---- */}
       {tab === 'assessment' && (
-        <div className="card p-6 space-y-6">
-          <h2 className="text-2xl font-semibold">Assessment & Analytics</h2>
-          
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
-            {/* Simple stats cards */}
-            <div className="bg-white p-4 rounded-lg shadow">
-              <h3 className="text-lg font-medium">Total Equipment</h3>
-              <p className="text-3xl font-bold text-blue-600">{rows.length}</p>
-            </div>
-            <div className="bg-white p-4 rounded-lg shadow">
-              <h3 className="text-lg font-medium">Compliant</h3>
-              <p className="text-3xl font-bold text-green-600">{rows.filter(r => r.status === 'Conforme').length}</p>
-            </div>
-            <div className="bg-white p-4 rounded-lg shadow">
-              <h3 className="text-lg font-medium">Overdue</h3>
-              <p className="text-3xl font-bold text-red-600">{rows.filter(r => daysUntil(r.next_control) < 0).length}</p>
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-semibold">Assessment & Analytics</h2>
+            <div className="text-sm text-gray-500">
+              Updated: {analytics?.generatedAt ? new Date(analytics.generatedAt).toLocaleString() : 'Loading...'}
             </div>
           </div>
 
-          {/* Placeholder graphs - Assume Chart.js or simple divs */}
-          <div className="grid md:grid-cols-2 gap-6">
-            <div className="bg-white p-4 rounded-lg shadow">
-              <h3 className="text-lg font-medium mb-4">Compliance by Status</h3>
-              <div className="h-64 bg-gray-100 rounded flex items-center justify-center">
-                <p className="text-gray-500">Pie Chart: Compliant 70%, Non-compliant 20%, To review 10%</p>
+          {/* Stats Cards */}
+          {analyticsLoading ? (
+            <div className="grid md:grid-cols-3 gap-6">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="bg-white p-4 rounded-lg shadow animate-pulse">
+                  <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
+                  <div className="h-8 bg-gray-200 rounded w-1/4"></div>
+                </div>
+              ))}
+            </div>
+          ) : analytics ? (
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="bg-white p-6 rounded-lg shadow border-l-4 border-blue-500">
+                <h3 className="text-lg font-medium text-gray-900">Total Equipment</h3>
+                <p className="text-3xl font-bold text-blue-600 mt-1">{analytics.stats.total}</p>
+                <p className="text-sm text-gray-500 mt-1">All ATEX equipment</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border-l-4 border-green-500">
+                <h3 className="text-lg font-medium text-gray-900">Compliant</h3>
+                <p className="text-3xl font-bold text-green-600 mt-1">{analytics.stats.compliant}</p>
+                <p className="text-sm text-gray-500 mt-1">{Math.round((analytics.stats.compliant / analytics.stats.total) * 100)}% compliance rate</p>
+              </div>
+              <div className="bg-white p-6 rounded-lg shadow border-l-4 border-red-500">
+                <h3 className="text-lg font-medium text-gray-900">Overdue Inspections</h3>
+                <p className="text-3xl font-bold text-red-600 mt-1">{analytics.stats.overdue}</p>
+                <p className="text-sm text-gray-500 mt-1">Immediate action required</p>
               </div>
             </div>
-            <div className="bg-white p-4 rounded-lg shadow">
-              <h3 className="text-lg font-medium mb-4">Inspections Due (Next 90 Days)</h3>
-              <div className="h-64 bg-gray-100 rounded flex items-center justify-center">
-                <p className="text-gray-500">Bar Chart: Low risk 15, Medium 8, High 3</p>
-              </div>
+          ) : (
+            <div className="text-center py-12 text-gray-500">Loading analytics...</div>
+          )}
+
+          {/* Charts */}
+          {analytics && (
+            <div className="grid lg:grid-cols-2 gap-6">
+              {/* Compliance Pie Chart */}
+              <SimplePieChart 
+                data={[
+                  { label: 'Compliant', value: analytics.stats.compliant },
+                  { label: 'Non-compliant', value: analytics.stats.non_compliant },
+                  { label: 'To review', value: analytics.stats.to_review }
+                ]} 
+                title="Compliance Status Distribution" 
+              />
+
+              {/* Top Equipment Types */}
+              <SimpleBarChart 
+                data={analytics.byType.map(item => ({
+                  label: item.component_type.slice(0, 20) + (item.component_type.length > 20 ? '...' : ''),
+                  value: parseInt(item.count)
+                }))} 
+                title="Top Equipment Types" 
+              />
+
+              {/* Inspections Due */}
+              <SimpleBarChart 
+                data={[
+                  { label: 'Overdue', value: analytics.stats.overdue },
+                  { label: 'Due 90 days', value: analytics.stats.due_90_days },
+                  { label: 'Future', value: analytics.stats.future }
+                ]} 
+                title="Inspection Timeline" 
+              />
+
+              {/* Compliance by Zone */}
+              <SimpleBarChart 
+                data={analytics.complianceByZone.map(item => ({
+                  label: `Zone ${item.zone}`,
+                  value: parseInt(item.compliant)
+                }))} 
+                title="Compliant Equipment by Gas Zone" 
+                yLabel="Compliant Count"
+              />
             </div>
-          </div>
+          )}
 
           {/* Risk Assessment Table */}
-          <div className="bg-white rounded-lg shadow">
-            <h3 className="text-lg font-medium p-4 border-b">Risk Assessment Table</h3>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-2 text-left">Equipment ID</th>
-                    <th className="px-4 py-2 text-left">Type</th>
-                    <th className="px-4 py-2 text-left">Zone Gas</th>
-                    <th className="px-4 py-2 text-left">Zone Dust</th>
-                    <th className="px-4 py-2 text-left">Status</th>
-                    <th className="px-4 py-2 text-left">Risk Level</th>
-                    <th className="px-4 py-2 text-left">Next Inspection</th>
-                    <th className="px-4 py-2 text-left">Days Until</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.slice(0, 10).map(r => { // Top 10 for demo
-                    const dleft = daysUntil(r.next_control) || 0;
-                    const risk = dleft < 0 ? 'High' : dleft <= 90 ? 'Medium' : 'Low';
-                    const riskColor = risk === 'High' ? 'bg-red-100' : risk === 'Medium' ? 'bg-yellow-100' : 'bg-green-100';
-                    return (
-                      <tr key={r.id} className="border-t">
-                        <td className="px-4 py-2">{r.id}</td>
-                        <td className="px-4 py-2">{r.component_type}</td>
-                        <td className="px-4 py-2">{r.zone_gas ?? '—'}</td>
-                        <td className="px-4 py-2">{r.zone_dust ?? '—'}</td>
-                        <td className="px-4 py-2">
-                          <span className={`px-2 py-1 rounded text-xs ${getStatusColor(r.status)}`}>
-                            {getStatusDisplay(r.status)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2">
-                          <span className={`px-2 py-1 rounded text-xs ${riskColor}`}>{risk}</span>
-                        </td>
-                        <td className="px-4 py-2">{formatDate(r.next_control)}</td>
-                        <td className="px-4 py-2">{dleft < 0 ? `${Math.abs(dleft)} late` : `${dleft} days`}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+          {analytics && analytics.riskEquipment.length > 0 && (
+            <div className="bg-white rounded-lg shadow">
+              <div className="px-6 py-4 border-b bg-gray-50">
+                <h3 className="text-lg font-medium">High Priority Equipment ({analytics.riskEquipment.length})</h3>
+                <p className="text-sm text-gray-600">Overdue inspections and due within next 90 days</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left font-medium">ID</th>
+                      <th className="px-4 py-2 text-left font-medium">Equipment</th>
+                      <th className="px-4 py-2 text-left font-medium">Location</th>
+                      <th className="px-4 py-2 text-left font-medium">Zones</th>
+                      <th className="px-4 py-2 text-left font-medium">Status</th>
+                      <th className="px-4 py-2 text-left font-medium">Next Inspection</th>
+                      <th className="px-4 py-2 text-left font-medium">Days</th>
+                      <th className="px-4 py-2 text-left font-medium">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {analytics.riskEquipment.map(r => {
+                      const dleft = daysUntil(r.next_control);
+                      const risk = dleft < 0 ? 'High' : 'Medium';
+                      const riskColor = risk === 'High' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800';
+                      return (
+                        <tr key={r.id} className="border-t">
+                          <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
+                          <td className="px-4 py-2">{r.component_type}</td>
+                          <td className="px-4 py-2">
+                            <div>{r.building}</div>
+                            <div className="text-xs text-gray-500">Room {r.room}</div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <div className="text-xs">Gas: {r.zone_gas || '—'}</div>
+                            <div className="text-xs">Dust: {r.zone_dust || '—'}</div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <span className={`px-2 py-1 rounded text-xs ${getStatusColor(r.status)}`}>
+                              {getStatusDisplay(r.status)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2">{formatDate(r.next_control)}</td>
+                          <td className="px-4 py-2">
+                            <span className={`px-2 py-1 rounded text-xs ${riskColor}`}>
+                              {dleft < 0 ? `${Math.abs(dleft)} days late` : `${dleft} days`}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2">
+                            <button 
+                              className="text-blue-600 hover:text-blue-800 text-xs font-medium"
+                              onClick={() => setTab('controls')}
+                            >
+                              View
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </section>
