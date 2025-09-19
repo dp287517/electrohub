@@ -184,7 +184,7 @@ export default function Atex() {
   const [fGas, setFGas] = useState([]);     // ['0','1','2']
   const [fDust, setFDust] = useState([]);   // ['20','21','22']
 
-  // sort  **CHANGÉ ICI**
+  // ✅ sort SÛR par défaut (évite 500 si "updated_at" n'existe pas encore en DB)
   const [sort, setSort] = useState({ by: 'id', dir: 'desc' });
 
   // modals/drawers
@@ -403,12 +403,311 @@ export default function Atex() {
       {/* ---- Onglet Controls ---- */}
       {tab === 'controls' && (
         <div className="space-y-4">
-          {/* … TOUT INCHANGÉ (table, modales, etc.) … */}
-          {/* (Section inchangée volontairement pour rester concise ici) */}
+          {showFilters && (
+            <FilterBar
+              q={q} setQ={setQ}
+              fBuilding={fBuilding} setFBuilding={setFBuilding}
+              fRoom={fRoom} setFRoom={setFRoom}
+              fType={fType} setFType={setFType}
+              fManufacturer={fManufacturer} setFManufacturer={setFManufacturer}
+              fStatus={fStatus} setFStatus={setFStatus}
+              fGas={fGas} setFGas={setFGas}
+              fDust={fDust} setFDust={setFDust}
+              uniques={uniques}
+              onSearch={load}
+              onReset={()=>{
+                setQ(''); setFBuilding([]); setFRoom([]); setFType([]); setFManufacturer([]); setFStatus([]); setFGas([]); setFDust([]);
+                setSort({by:'id', dir:'desc'}); load();
+              }}
+            />
+          )}
+
+          <div className="card p-0 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr className="text-left">
+                  {[
+                    ['building','Building'],['room','Room'],['component_type','Component'],
+                    ['manufacturer','Manufacturer'],['manufacturer_ref','Mfr Ref'],
+                    ['atex_ref','ATEX Ref'],['zone_gas','Gas Zone'],['zone_dust','Dust Zone'],
+                    ['status','Status'],['last_control','Last inspection'],['next_control','Next inspection']
+                  ].map(([key,label])=>(
+                    <th key={key} className="px-4 py-3 cursor-pointer select-none" onClick={()=>toggleSort(key)}>
+                      {label}{' '}{sort.by===key ? (sort.dir==='asc'?'▲':'▼') : ''}
+                    </th>
+                  ))}
+                  <th className="px-4 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
+                  <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-500">Loading…</td></tr>
+                ) : rows.length === 0 ? (
+                  <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-500">No equipment found</td></tr>
+                ) : rows.map(r=>{
+                  const dleft = daysUntil(r.next_control);
+                  const tone = dleft==null ? 'default' : dleft < 0 ? 'danger' : dleft <= 90 ? 'warn' : 'ok';
+                  return (
+                    <tr key={r.id} className="border-t">
+                      <td className="px-4 py-2">{r.building}</td>
+                      <td className="px-4 py-2">{r.room}</td>
+                      <td className="px-4 py-2">{r.component_type}</td>
+                      <td className="px-4 py-2">{r.manufacturer}</td>
+                      <td className="px-4 py-2">{r.manufacturer_ref}</td>
+                      <td className="px-4 py-2">{r.atex_ref}</td>
+                      <td className="px-4 py-2">{r.zone_gas ?? '—'}</td>
+                      <td className="px-4 py-2">{r.zone_dust ?? '—'}</td>
+                      <td className="px-4 py-2">{r.status}</td>
+                      <td className="px-4 py-2">{formatDate(r.last_control)}</td>
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2">
+                          <span>{formatDate(r.next_control)}</span>
+                          <Tag tone={tone}>{dleft==null?'—': dleft<0? `${Math.abs(dleft)} d late` : `${dleft} d`}</Tag>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="flex gap-1">
+                          <button className="btn bg-gray-100" title="Edit" onClick={()=>setEditItem(r)}>✏️</button>
+                          <button className="btn bg-gray-100" title="Delete" onClick={()=>setShowDelete(r)}>🗑️</button>
+                          <button className="btn bg-gray-100" title="Attachments" onClick={()=>openAttachments(r)}>📎</button>
+                          <button className="btn bg-gray-100" title="AI Check" onClick={()=>runAI(r)}>🤖</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Edit modal */}
+          {editItem && (
+            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
+              <div className="card p-6 w-full max-w-2xl">
+                <h3 className="text-xl font-semibold mb-4">Edit equipment #{editItem.id}</h3>
+                <form className="grid md:grid-cols-2 gap-4" onSubmit={onSaveEdit}>
+                  <input className="input" name="building" defaultValue={editItem.building} placeholder="Building" required/>
+                  <input className="input" name="room" defaultValue={editItem.room} placeholder="Room" required/>
+                  <input className="input" name="component_type" defaultValue={editItem.component_type} placeholder="Component type" required/>
+                  <input className="input" name="manufacturer" defaultValue={editItem.manufacturer} placeholder="Manufacturer"/>
+                  <input className="input" name="manufacturer_ref" defaultValue={editItem.manufacturer_ref} placeholder="Manufacturer ref"/>
+                  <input className="input" name="atex_ref" defaultValue={editItem.atex_ref} placeholder="ATEX marking"/>
+                  <select className="input" name="zone_gas" defaultValue={editItem.zone_gas ?? ''}>
+                    <option value="">Gas zone</option><option value="0">0</option><option value="1">1</option><option value="2">2</option>
+                  </select>
+                  <select className="input" name="zone_dust" defaultValue={editItem.zone_dust ?? ''}>
+                    <option value="">Dust zone</option><option value="20">20</option><option value="21">21</option><option value="22">22</option>
+                  </select>
+                  <select className="input" name="status" defaultValue={editItem.status}>
+                    <option>Conforme</option><option>Non conforme</option><option>À vérifier</option>
+                  </select>
+                  <div>
+                    <label className="label">Last inspection</label>
+                    <input className="input mt-1" type="date" name="last_control" defaultValue={formatDate(editItem.last_control)} />
+                  </div>
+                  <div>
+                    <label className="label">Next inspection</label>
+                    <input className="input mt-1" type="date" name="next_control" defaultValue={formatDate(editItem.next_control)} />
+                  </div>
+                  <textarea className="input md:col-span-2" name="comments" placeholder="Comments" defaultValue={editItem.comments||''}/>
+                  <div className="md:col-span-2 flex justify-end gap-2">
+                    <button type="button" className="btn bg-gray-100" onClick={()=>setEditItem(null)}>Cancel</button>
+                    <button type="submit" className="btn btn-primary">Save</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Delete pop-up */}
+          {showDelete && (
+            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
+              <div className="card p-6 w-full max-w-md">
+                <h3 className="text-xl font-semibold mb-3">Confirm deletion</h3>
+                <p className="text-gray-700 mb-6">
+                  Delete equipment <b>#{showDelete.id}</b> — {showDelete.component_type} ({showDelete.building}/{showDelete.room})?
+                </p>
+                <div className="flex justify-end gap-2">
+                  <button className="btn bg-gray-100" onClick={()=>setShowDelete(null)}>Cancel</button>
+                  <button className="btn btn-primary" onClick={()=>onDelete(showDelete.id)}>Delete</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Attachments drawer */}
+          {showAttach && (
+            <div className="fixed inset-0 bg-black/30 flex items-end md:items-center justify-center p-0 md:p-4">
+              <div className="card p-6 w-full md:max-w-xl md:mx-auto md:rounded-2xl rounded-t-2xl">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-xl font-semibold">Attachments — #{showAttach.id}</h3>
+                  <button className="btn bg-gray-100" onClick={()=>{ setShowAttach(null); setAttachments([]); }}>Close</button>
+                </div>
+                <ul className="space-y-2">
+                  {(attachments||[]).length ? attachments.map(a=>(
+                    <li key={a.id} className="flex items-center justify-between gap-2">
+                      <div className="truncate">{a.filename} <span className="text-xs text-gray-500">({Math.round((a.size||0)/1024)} KB)</span></div>
+                      <div className="flex gap-2">
+                        {/* IMPORTANT: prefix with API_BASE pour prod */}
+                        <a className="btn btn-primary" href={`${API_BASE}/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Download</a>
+                        <button className="btn bg-gray-100" onClick={async()=>{
+                          await del(`/api/atex/attachments/${a.id}`);
+                          const list = await get(`/api/atex/equipments/${showAttach.id}/attachments`);
+                          setAttachments(list||[]);
+                        }}>Remove</button>
+                      </div>
+                    </li>
+                  )) : (
+                    <li className="text-gray-600">No attachments.</li>
+                  )}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* AI modal */}
+          {aiItem && (
+            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
+              <div className="card p-6 w-full max-w-2xl">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-semibold">AI assessment — #{aiItem.id}</h3>
+                  <button className="btn bg-gray-100" onClick={()=>{ setAiItem(null); setAiText(''); }}>Close</button>
+                </div>
+                <div className="mt-3">
+                  {aiLoading ? (
+                    <div className="text-gray-600">Running analysis…</div>
+                  ) : (
+                    <pre className="text-sm whitespace-pre-wrap">{aiText || '—'}</pre>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Les autres onglets restent inchangés */}
+      {/* ---- Onglet Create ---- */}
+      {tab === 'create' && (
+        <div className="card p-6">
+          <form className="grid md:grid-cols-2 gap-4" onSubmit={onCreate}>
+            <div>
+              <label className="label">Site</label>
+              <select className="input mt-1" value={createForm.site} onChange={e=>cf('site', e.target.value)}>
+                <option value="">—</option>
+                {SITE_OPTIONS.map(s=><option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Building</label>
+              <input className="input mt-1" value={createForm.building} onChange={e=>cf('building', e.target.value)} list="buildings" placeholder="Bâtiment"/>
+              <datalist id="buildings">{suggests.building?.map(v=><option key={v} value={v}/>)}</datalist>
+            </div>
+            <div>
+              <label className="label">Room</label>
+              <input className="input mt-1" value={createForm.room} onChange={e=>cf('room', e.target.value)} list="rooms" placeholder="Salle/pièce"/>
+              <datalist id="rooms">{suggests.room?.map(v=><option key={v} value={v}/>)}</datalist>
+            </div>
+            <div>
+              <label className="label">Component type</label>
+              <input className="input mt-1" value={createForm.component_type} onChange={e=>cf('component_type', e.target.value)} list="types" placeholder="Type composant"/>
+              <datalist id="types">{suggests.component_type?.map(v=><option key={v} value={v}/>)}</datalist>
+            </div>
+            <div>
+              <label className="label">Manufacturer</label>
+              <input className="input mt-1" value={createForm.manufacturer} onChange={e=>cf('manufacturer', e.target.value)} list="mans" placeholder="Fabricant"/>
+              <datalist id="mans">{suggests.manufacturer?.map(v=><option key={v} value={v}/>)}</datalist>
+            </div>
+            <div>
+              <label className="label">Mfr Ref</label>
+              <input className="input mt-1" value={createForm.manufacturer_ref} onChange={e=>cf('manufacturer_ref', e.target.value)} list="mrefs" placeholder="Référence fabricant"/>
+              <datalist id="mrefs">{suggests.manufacturer_ref?.map(v=><option key={v} value={v}/>)}</datalist>
+            </div>
+            <div>
+              <label className="label">ATEX marking</label>
+              <input className="input mt-1" value={createForm.atex_ref} onChange={e=>cf('atex_ref', e.target.value)} list="arefs" placeholder="Ex: II 2G Ex ib IIC T4 Gb / 2D Ex tb IIIC T135°C Db"/>
+              <datalist id="arefs">{suggests.atex_ref?.map(v=><option key={v} value={v}/>)}</datalist>
+            </div>
+            <div>
+              <label className="label">Gas zone</label>
+              <select className="input mt-1" value={createForm.zone_gas} onChange={e=>cf('zone_gas', e.target.value)}>
+                <option value="">—</option><option value="0">0</option><option value="1">1</option><option value="2">2</option>
+              </select>
+            </div>
+            <div>
+              <label className="label">Dust zone</label>
+              <select className="input mt-1" value={createForm.zone_dust} onChange={e=>cf('zone_dust', e.target.value)}>
+                <option value="">—</option><option value="20">20</option><option value="21">21</option><option value="22">22</option>
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <label className="label">Comments</label>
+              <textarea className="input mt-1" rows={3} value={createForm.comments} onChange={e=>cf('comments', e.target.value)} />
+            </div>
+
+            <div>
+              <label className="label">Last inspection</label>
+              <div className="flex gap-2 mt-1">
+                <input ref={lastRef} className="input flex-1" type="date" value={createForm.last_control} onChange={e=>cf('last_control', e.target.value)} />
+                <button type="button" className="btn bg-gray-100" onClick={()=>openPicker(lastRef)}>📅</button>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Frequency (months)</label>
+              <input className="input mt-1" type="number" min="1" value={createForm.frequency_months} onChange={e=>cf('frequency_months', e.target.value)} />
+            </div>
+
+            <div>
+              <label className="label">Next inspection</label>
+              <div className="flex gap-2 mt-1">
+                <input ref={nextRef} className="input flex-1" type="date" value={createForm.next_control} onChange={e=>cf('next_control', e.target.value)} />
+                <button type="button" className="btn bg-gray-100" onClick={()=>{
+                  cf('next_control', computeNextControl());
+                }}>↻</button>
+                <button type="button" className="btn bg-gray-100" onClick={()=>openPicker(nextRef)}>📅</button>
+              </div>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="label">Attachments</label>
+              <input className="input mt-1" type="file" multiple onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
+              {!!files.length && (
+                <div className="text-xs text-gray-600 mt-1">
+                  {files.length} file(s) selected
+                </div>
+              )}
+            </div>
+
+            <div className="md:col-span-2 flex justify-end gap-2 mt-2">
+              <button type="button" className="btn bg-gray-100" onClick={()=>{
+                setCreateForm({
+                  site: defaultSite, building:'', room:'', component_type:'',
+                  manufacturer:'', manufacturer_ref:'', atex_ref:'',
+                  zone_gas:'', zone_dust:'', comments:'',
+                  last_control:'', frequency_months:36, next_control:'',
+                });
+                setFiles([]);
+              }}>Reset</button>
+              <button type="submit" className="btn btn-primary">Create</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ---- Onglet Import/Export (simple placeholders) ---- */}
+      {tab === 'import' && (
+        <div className="card p-6 space-y-3">
+          <p className="text-gray-700">Import CSV/XLSX à venir. En attendant, tu peux me fournir un fichier et je te donne un script d’import adapté.</p>
+          <button className="btn bg-gray-100" onClick={()=>alert('Export CSV coming soon')}>Export CSV</button>
+        </div>
+      )}
+
+      {/* ---- Onglet Assessment (placeholder) ---- */}
+      {tab === 'assessment' && (
+        <div className="card p-6">
+          <p className="text-gray-700">Sélectionne un équipement dans l’onglet Controls et clique sur 🤖 pour lancer l’analyse.</p>
+        </div>
+      )}
     </section>
   );
 }
