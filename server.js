@@ -21,29 +21,10 @@ const app = express();
 
 // Sécurité
 app.use(helmet());
-app.use(express.json());
 app.use(cookieParser());
+app.use(express.json({ limit: '20mb' }));
 
-// PROXY ATEX - TRANSMET L'AUTHORIZATION HEADER
-const atexTarget = process.env.ATEX_BASE_URL || 'http://127.0.0.1:3001';
-app.use('/api/atex', createProxyMiddleware({
-  target: atexTarget,
-  changeOrigin: true,
-  logLevel: 'warn',
-  onProxyReq: (proxyReq, req, res) => {
-    // Copie les headers d'auth et autres headers importants
-    const headersToCopy = ['authorization', 'content-type', 'accept'];
-    headersToCopy.forEach(header => {
-      if (req.headers[header]) {
-        proxyReq.setHeader(header, req.headers[header]);
-      }
-    });
-    console.log('[PROXY DEBUG] Forwarding Authorization to ATEX:', req.headers.authorization ? 'YES' : 'NO');
-  },
-  secure: false,
-}));
-
-// CORS
+// CORS - AVANT TOUT
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
@@ -52,6 +33,24 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
+// PROXY ATEX - APRÈS CORS
+const atexTarget = process.env.ATEX_BASE_URL || 'http://127.0.0.1:3001';
+app.use('/api/atex', createProxyMiddleware({
+  target: atexTarget,
+  changeOrigin: true,
+  logLevel: 'warn',
+  onProxyReq: (proxyReq, req, res) => {
+    console.log('[PROXY DEBUG] Request headers:', Object.keys(req.headers));
+    if (req.headers.authorization) {
+      proxyReq.setHeader('Authorization', req.headers.authorization);
+      console.log('[PROXY DEBUG] Forwarding Authorization to ATEX: YES');
+    } else {
+      console.log('[PROXY DEBUG] NO Authorization header from client');
+    }
+  },
+  secure: false,
+}));
 
 // Health
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
@@ -65,7 +64,7 @@ async function getIdByName(table, nameField, nameValue) {
 // Middleware pour vérifier token et ajouter user à req
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer token
+  const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
 
   jwt.verify(token, process.env.JWT_SECRET || 'dev', (err, user) => {
