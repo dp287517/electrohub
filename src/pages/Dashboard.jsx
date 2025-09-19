@@ -6,6 +6,7 @@ const apps = [
   { label: 'Selectivity', to: '/app/selectivity', description: 'Protection coordination & settings', icon: '🧩' },
   { label: 'Fault Level Assessment', to: '/app/fault-level', description: 'Short-circuit & fault current studies', icon: '📈' },
   { label: 'Arc Flash', to: '/app/arc-flash', description: 'Incident energy & PPE categories', icon: '⚠️' },
+  { label: 'Loop Calculation', to: '/app/loopcalc', description: 'Intrinsic safety loop calculations & compliance', icon: '🔄' },
 ];
 
 export default function Dashboard() {
