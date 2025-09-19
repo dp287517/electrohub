@@ -24,12 +24,23 @@ app.use(helmet());
 app.use(express.json());
 app.use(cookieParser());
 
-// PROXY ATEX (avant parsing)
+// PROXY ATEX - TRANSMET L'AUTHORIZATION HEADER
 const atexTarget = process.env.ATEX_BASE_URL || 'http://127.0.0.1:3001';
 app.use('/api/atex', createProxyMiddleware({
   target: atexTarget,
   changeOrigin: true,
   logLevel: 'warn',
+  onProxyReq: (proxyReq, req, res) => {
+    // Copie les headers d'auth et autres headers importants
+    const headersToCopy = ['authorization', 'content-type', 'accept'];
+    headersToCopy.forEach(header => {
+      if (req.headers[header]) {
+        proxyReq.setHeader(header, req.headers[header]);
+      }
+    });
+    console.log('[PROXY DEBUG] Forwarding Authorization to ATEX:', req.headers.authorization ? 'YES' : 'NO');
+  },
+  secure: false,
 }));
 
 // CORS
@@ -68,30 +79,25 @@ function authenticateToken(req, res, next) {
 app.post('/api/auth/signup', async (req, res) => {
   const { name, email, password, site, department } = req.body;
   
-  // Validation basique
   if (!name || !email || !password || !site || !department) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
   try {
-    // Vérifie si user existe
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existing.rows.length > 0) {
       return res.status(400).json({ error: 'Email already registered' });
     }
 
-    // Hash password
     const saltRounds = 10;
     const password_hash = await bcrypt.hash(password, saltRounds);
 
-    // Récupère IDs pour site et department
     const site_id = await getIdByName('sites', 'name', site);
     const department_id = await getIdByName('departments', 'name', department);
     
     if (!site_id) return res.status(400).json({ error: `Invalid site: ${site}` });
     if (!department_id) return res.status(400).json({ error: `Invalid department: ${department}` });
 
-    // Insère user
     const { rows } = await pool.query(
       `INSERT INTO users (email, password_hash, name, site_id, department_id, created_at, updated_at) 
        VALUES ($1, $2, $3, $4, $5, NOW(), NOW()) 
@@ -101,7 +107,6 @@ app.post('/api/auth/signup', async (req, res) => {
 
     const newUser = rows[0];
     
-    // Récupère les noms pour le token
     const siteRes = await pool.query('SELECT name FROM sites WHERE id = $1', [newUser.site_id]);
     const deptRes = await pool.query('SELECT name FROM departments WHERE id = $1', [newUser.department_id]);
     
@@ -115,7 +120,6 @@ app.post('/api/auth/signup', async (req, res) => {
       department_id: newUser.department_id
     };
 
-    // Token JWT
     const token = jwt.sign(userInfo, process.env.JWT_SECRET || 'dev', { expiresIn: '24h' });
     
     res.status(201).json({ 
@@ -138,7 +142,6 @@ app.post('/api/auth/signin', async (req, res) => {
   }
 
   try {
-    // Récupère user
     const { rows } = await pool.query(
       'SELECT id, email, password_hash, name, site_id, department_id FROM users WHERE email = $1', 
       [email]
@@ -149,13 +152,11 @@ app.post('/api/auth/signin', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Vérifie password
     const validPassword = await bcrypt.compare(password, user.password_hash);
     if (!validPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Récupère site et department names
     const siteRes = await pool.query('SELECT name FROM sites WHERE id = $1', [user.site_id]);
     const deptRes = await pool.query('SELECT name FROM departments WHERE id = $1', [user.department_id]);
     
@@ -169,7 +170,6 @@ app.post('/api/auth/signin', async (req, res) => {
       department_id: user.department_id
     };
 
-    // Token JWT
     const token = jwt.sign(userInfo, process.env.JWT_SECRET || 'dev', { expiresIn: '24h' });
     
     res.json({ 
