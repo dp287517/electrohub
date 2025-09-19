@@ -2,8 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
 
-const SITE_OPTIONS = ['Nyon','Levice','Aprilia']; // keep in sync with SignUp
+// Garder en phase avec SignUp si tu ajoutes des sites
+const SITE_OPTIONS = ['Nyon','Levice','Aprilia'];
 
+/* ---------- Petits utilitaires UI ---------- */
 function Tag({ children, tone='default' }) {
   const toneClass = {
     default: 'bg-gray-100 text-gray-800',
@@ -35,7 +37,7 @@ function useOutsideClose(ref, onClose) {
   }, [ref, onClose]);
 }
 
-// ---------- FilterBar (pro, compact, multi) ----------
+/* ---------- Filtres pro/compacts ---------- */
 function MultiSelect({ label, values, setValues, options }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -162,7 +164,7 @@ function FilterBar({
   );
 }
 
-// ------------------------------------------------------
+/* ------------------------------------------------------ */
 
 export default function Atex() {
   const [tab, setTab] = useState('controls');
@@ -214,7 +216,7 @@ export default function Atex() {
 
   function cf(k, v) { setCreateForm(s => ({ ...s, [k]: v })); }
 
-  // Load list & suggests
+  /* ---------- Chargement liste & suggests ---------- */
   async function load() {
     setLoading(true);
     try {
@@ -243,11 +245,11 @@ export default function Atex() {
     try {
       const s = await get('/api/atex/suggests');
       setSuggests(s || {});
-    } catch { /* non-blocking */ }
+    } catch { /* non-bloquant */ }
   }
 
-  useEffect(() => { load(); }, [sort]); // when sort changes
-  useEffect(() => { loadSuggests(); }, []); // on mount
+  useEffect(() => { load(); }, [sort]); // quand le tri change
+  useEffect(() => { loadSuggests(); }, []); // au montage
 
   const uniques = useMemo(() => {
     const u = (key) => Array.from(new Set(rows.map(r => r[key]).filter(Boolean))).sort();
@@ -263,7 +265,7 @@ export default function Atex() {
     setSort(prev => prev.by===col ? { by: col, dir: prev.dir==='asc'?'desc':'asc' } : { by: col, dir:'asc' });
   }
 
-  // actions
+  /* ---------- Actions ---------- */
   async function onDelete(id) {
     try {
       await del(`/api/atex/equipments/${id}`);
@@ -313,7 +315,7 @@ export default function Atex() {
     }
   }
 
-  // CREATE helpers
+  /* ---------- CREATE helpers ---------- */
   function computeNextControl() {
     const d = createForm.last_control ? new Date(createForm.last_control) : null;
     if (!d) return '';
@@ -328,12 +330,7 @@ export default function Atex() {
   function openPicker(ref) {
     const el = ref.current;
     if (!el) return;
-    // Modern Chrome/Edge
-    if (typeof el.showPicker === 'function') {
-      el.showPicker();
-      return;
-    }
-    // Fallback
+    if (typeof el.showPicker === 'function') { el.showPicker(); return; }
     el.focus(); el.click();
   }
 
@@ -373,6 +370,7 @@ export default function Atex() {
     }
   }
 
+  /* ---------- Rendu ---------- */
   return (
     <section className="container-narrow py-8">
       <div className="flex items-center justify-between mb-4">
@@ -402,6 +400,7 @@ export default function Atex() {
         ))}
       </div>
 
+      {/* ---- Onglet Controls ---- */}
       {tab === 'controls' && (
         <div className="space-y-4">
           {showFilters && (
@@ -549,7 +548,7 @@ export default function Atex() {
                     <li key={a.id} className="flex items-center justify-between gap-2">
                       <div className="truncate">{a.filename} <span className="text-xs text-gray-500">({Math.round((a.size||0)/1024)} KB)</span></div>
                       <div className="flex gap-2">
-                        {/* IMPORTANT: prefix with API_BASE for prod to avoid 404 */}
+                        {/* IMPORTANT: prefix with API_BASE for prod to avoid 404 via proxy */}
                         <a className="btn btn-primary" href={`${API_BASE}/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Download</a>
                         <button className="btn bg-gray-100" onClick={async()=>{
                           await del(`/api/atex/attachments/${a.id}`);
@@ -572,10 +571,14 @@ export default function Atex() {
               <div className="card p-6 w-full max-w-2xl">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xl font-semibold">AI assessment — #{aiItem.id}</h3>
-                  <button className="btn bg-gray-100" onClick={()=>setAiItem(null)}>Close</button>
+                  <button className="btn bg-gray-100" onClick={()=>{ setAiItem(null); setAiText(''); }}>Close</button>
                 </div>
-                <div className="mt-4 whitespace-pre-wrap text-gray-800">
-                  {aiLoading ? 'Analysing…' : (aiText || '—')}
+                <div className="mt-3">
+                  {aiLoading ? (
+                    <div className="text-gray-600">Running analysis…</div>
+                  ) : (
+                    <pre className="text-sm whitespace-pre-wrap">{aiText || '—'}</pre>
+                  )}
                 </div>
               </div>
             </div>
@@ -583,6 +586,7 @@ export default function Atex() {
         </div>
       )}
 
+      {/* ---- Onglet Create ---- */}
       {tab === 'create' && (
         <div className="card p-6">
           <form className="grid md:grid-cols-2 gap-4" onSubmit={onCreate}>
@@ -590,115 +594,118 @@ export default function Atex() {
               <label className="label">Site</label>
               <select className="input mt-1" value={createForm.site} onChange={e=>cf('site', e.target.value)}>
                 <option value="">—</option>
-                {SITE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                {SITE_OPTIONS.map(s=><option key={s} value={s}>{s}</option>)}
               </select>
-              <div className="text-xs text-gray-600 mt-1">Pre-filled from your session.</div>
             </div>
-
             <div>
               <label className="label">Building</label>
-              <input list="sug-building" className="input mt-1" value={createForm.building} onChange={e=>cf('building', e.target.value)} placeholder="Building" required/>
-              <datalist id="sug-building">{(suggests.building||[]).map(v=><option key={v} value={v}/>)}</datalist>
+              <input className="input mt-1" value={createForm.building} onChange={e=>cf('building', e.target.value)} list="buildings" placeholder="Bâtiment"/>
+              <datalist id="buildings">{suggests.building?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
-
             <div>
               <label className="label">Room</label>
-              <input list="sug-room" className="input mt-1" value={createForm.room} onChange={e=>cf('room', e.target.value)} placeholder="Room" required/>
-              <datalist id="sug-room">{(suggests.room||[]).map(v=><option key={v} value={v}/>)}</datalist>
+              <input className="input mt-1" value={createForm.room} onChange={e=>cf('room', e.target.value)} list="rooms" placeholder="Salle/pièce"/>
+              <datalist id="rooms">{suggests.room?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
-
             <div>
               <label className="label">Component type</label>
-              <input list="sug-type" className="input mt-1" value={createForm.component_type} onChange={e=>cf('component_type', e.target.value)} placeholder="e.g., Motor" required/>
-              <datalist id="sug-type">{(suggests.component_type||[]).map(v=><option key={v} value={v}/>)}</datalist>
+              <input className="input mt-1" value={createForm.component_type} onChange={e=>cf('component_type', e.target.value)} list="types" placeholder="Type composant"/>
+              <datalist id="types">{suggests.component_type?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
-
             <div>
               <label className="label">Manufacturer</label>
-              <input list="sug-man" className="input mt-1" value={createForm.manufacturer} onChange={e=>cf('manufacturer', e.target.value)} placeholder="Manufacturer"/>
-              <datalist id="sug-man">{(suggests.manufacturer||[]).map(v=><option key={v} value={v}/>)}</datalist>
+              <input className="input mt-1" value={createForm.manufacturer} onChange={e=>cf('manufacturer', e.target.value)} list="mans" placeholder="Fabricant"/>
+              <datalist id="mans">{suggests.manufacturer?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
-
             <div>
-              <label className="label">Manufacturer ref</label>
-              <input list="sug-manref" className="input mt-1" value={createForm.manufacturer_ref} onChange={e=>cf('manufacturer_ref', e.target.value)} placeholder="Reference"/>
-              <datalist id="sug-manref">{(suggests.manufacturer_ref||[]).map(v=><option key={v} value={v}/>)}</datalist>
+              <label className="label">Mfr Ref</label>
+              <input className="input mt-1" value={createForm.manufacturer_ref} onChange={e=>cf('manufacturer_ref', e.target.value)} list="mrefs" placeholder="Référence fabricant"/>
+              <datalist id="mrefs">{suggests.manufacturer_ref?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
-
-            <div className="md:col-span-2">
+            <div>
               <label className="label">ATEX marking</label>
-              <input list="sug-atex" className="input mt-1" value={createForm.atex_ref} onChange={e=>cf('atex_ref', e.target.value)} placeholder="e.g., II 2G Ex d IIB T4 Gb"/>
-              <datalist id="sug-atex">{(suggests.atex_ref||[]).map(v=><option key={v} value={v}/>)}</datalist>
+              <input className="input mt-1" value={createForm.atex_ref} onChange={e=>cf('atex_ref', e.target.value)} list="arefs" placeholder="Ex: II 2G Ex ib IIC T4 Gb / 2D Ex tb IIIC T135°C Db"/>
+              <datalist id="arefs">{suggests.atex_ref?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
-
             <div>
               <label className="label">Gas zone</label>
               <select className="input mt-1" value={createForm.zone_gas} onChange={e=>cf('zone_gas', e.target.value)}>
                 <option value="">—</option><option value="0">0</option><option value="1">1</option><option value="2">2</option>
               </select>
             </div>
-
             <div>
               <label className="label">Dust zone</label>
               <select className="input mt-1" value={createForm.zone_dust} onChange={e=>cf('zone_dust', e.target.value)}>
                 <option value="">—</option><option value="20">20</option><option value="21">21</option><option value="22">22</option>
               </select>
             </div>
-
             <div className="md:col-span-2">
               <label className="label">Comments</label>
-              <textarea className="input mt-1" value={createForm.comments} onChange={e=>cf('comments', e.target.value)} placeholder="Notes…" />
+              <textarea className="input mt-1" rows={3} value={createForm.comments} onChange={e=>cf('comments', e.target.value)} />
             </div>
 
             <div>
               <label className="label">Last inspection</label>
-              <div className="flex gap-2">
-                <input ref={lastRef} type="date" className="input mt-1 flex-1" value={createForm.last_control} onChange={e=>cf('last_control', e.target.value)} />
-                <button type="button" className="btn bg-gray-100 mt-1" title="Pick date" onClick={()=>openPicker(lastRef)}>
-                  📅
-                </button>
+              <div className="flex gap-2 mt-1">
+                <input ref={lastRef} className="input flex-1" type="date" value={createForm.last_control} onChange={e=>cf('last_control', e.target.value)} />
+                <button type="button" className="btn bg-gray-100" onClick={()=>openPicker(lastRef)}>📅</button>
               </div>
             </div>
 
             <div>
               <label className="label">Frequency (months)</label>
-              <input type="number" min="1" className="input mt-1" value={createForm.frequency_months} onChange={e=>cf('frequency_months', e.target.value)} />
+              <input className="input mt-1" type="number" min="1" value={createForm.frequency_months} onChange={e=>cf('frequency_months', e.target.value)} />
             </div>
 
             <div>
               <label className="label">Next inspection</label>
-              <div className="flex gap-2">
-                <input ref={nextRef} type="date" className="input mt-1 flex-1" value={createForm.next_control || ''} onChange={e=>cf('next_control', e.target.value)} placeholder="Auto if empty" />
-                <button type="button" className="btn bg-gray-100 mt-1" title="Pick date" onClick={()=>openPicker(nextRef)}>
-                  📅
-                </button>
+              <div className="flex gap-2 mt-1">
+                <input ref={nextRef} className="input flex-1" type="date" value={createForm.next_control} onChange={e=>cf('next_control', e.target.value)} />
+                <button type="button" className="btn bg-gray-100" onClick={()=>{
+                  cf('next_control', computeNextControl());
+                }}>↻</button>
+                <button type="button" className="btn bg-gray-100" onClick={()=>openPicker(nextRef)}>📅</button>
               </div>
-              <div className="text-xs text-gray-600 mt-1">Leave empty to auto-compute (Last inspection + Frequency).</div>
             </div>
 
             <div className="md:col-span-2">
               <label className="label">Attachments</label>
-              <input type="file" multiple className="input mt-1" onChange={(e)=>setFiles(Array.from(e.target.files||[]))} />
-              <div className="text-xs text-gray-600 mt-1">{files.length ? `${files.length} file(s) selected` : 'PDF, images… (max 25 MB/file)'}</div>
+              <input className="input mt-1" type="file" multiple onChange={e=>setFiles(Array.from(e.target.files||[]))}/>
+              {!!files.length && (
+                <div className="text-xs text-gray-600 mt-1">
+                  {files.length} file(s) selected
+                </div>
+              )}
             </div>
 
             <div className="md:col-span-2 flex justify-end gap-2 mt-2">
-              <button type="button" className="btn bg-gray-100" onClick={()=>setTab('controls')}>Cancel</button>
-              <button type="submit" className="btn btn-primary">Create equipment</button>
+              <button type="button" className="btn bg-gray-100" onClick={()=>{
+                setCreateForm({
+                  site: defaultSite, building:'', room:'', component_type:'',
+                  manufacturer:'', manufacturer_ref:'', atex_ref:'',
+                  zone_gas:'', zone_dust:'', comments:'',
+                  last_control:'', frequency_months:36, next_control:'',
+                });
+                setFiles([]);
+              }}>Reset</button>
+              <button type="submit" className="btn btn-primary">Create</button>
             </div>
           </form>
         </div>
       )}
 
+      {/* ---- Onglet Import/Export (simple placeholders) ---- */}
       {tab === 'import' && (
-        <div className="card p-6">
-          <p className="text-gray-600">Import/Export to be implemented in the next step.</p>
+        <div className="card p-6 space-y-3">
+          <p className="text-gray-700">Import CSV/XLSX à venir. En attendant, tu peux me fournir un fichier et je te donne un script d’import adapté.</p>
+          <button className="btn bg-gray-100" onClick={()=>alert('Export CSV coming soon')}>Export CSV</button>
         </div>
       )}
 
+      {/* ---- Onglet Assessment (placeholder) ---- */}
       {tab === 'assessment' && (
         <div className="card p-6">
-          <p className="text-gray-600">Risk charts and insights will come later.</p>
+          <p className="text-gray-700">Sélectionne un équipement dans l’onglet Controls et clique sur 🤖 pour lancer l’analyse.</p>
         </div>
       )}
     </section>
