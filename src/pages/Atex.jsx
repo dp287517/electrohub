@@ -455,7 +455,7 @@ export default function Atex() {
           )}
 
           <div className="card p-0 overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="min-w-full text-sm w-full">
               <thead className="bg-gray-50">
                 <tr className="text-left">
                   {[
@@ -485,30 +485,30 @@ export default function Atex() {
                     <tr key={r.id} className="border-t">
                       <td className="px-4 py-2">{r.building}</td>
                       <td className="px-4 py-2">{r.room}</td>
-                      <td className="px-4 py-2 truncate max-w-[8rem]" title={r.component_type}>{r.component_type}</td>
-                      <td className="px-4 py-2 truncate max-w-[8rem]" title={r.manufacturer}>{r.manufacturer}</td>
-                      <td className="px-4 py-2 truncate max-w-[6rem]" title={r.manufacturer_ref}>{r.manufacturer_ref}</td>
-                      <td className="px-4 py-2 truncate max-w-[10rem]" title={r.atex_ref}>{r.atex_ref}</td>
+                      <td className="px-4 py-2 truncate max-w-[12rem]" title={r.component_type}>{r.component_type}</td>
+                      <td className="px-4 py-2 truncate max-w-[12rem]" title={r.manufacturer}>{r.manufacturer}</td>
+                      <td className="px-4 py-2 truncate max-w-[10rem]" title={r.manufacturer_ref}>{r.manufacturer_ref}</td>
+                      <td className="px-4 py-2 truncate max-w-[14rem]" title={r.atex_ref}>{r.atex_ref}</td>
                       <td className="px-4 py-2">{r.zone_gas ?? '—'}</td>
                       <td className="px-4 py-2">{r.zone_dust ?? '—'}</td>
                       <td className="px-4 py-2">
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor}`}>
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor} whitespace-nowrap`}>
                           {statusDisplay}
                         </span>
                       </td>
                       <td className="px-4 py-2">{formatDate(r.last_control)}</td>
                       <td className="px-4 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate max-w-[6rem]" title={formatDate(r.next_control)}>{formatDate(r.next_control)}</span>
+                        <div className="flex items-center gap-2 flex-nowrap">
+                          <span className="truncate max-w-[8rem]" title={formatDate(r.next_control)}>{formatDate(r.next_control)}</span>
                           <Tag tone={tone}>{dleft==null?'—': dleft<0? `${Math.abs(dleft)} d late` : `${dleft} d`}</Tag>
                         </div>
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex gap-1">
-                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="Edit" onClick={()=>setEditItem(r)}>✏️</button>
-                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="Delete" onClick={()=>setShowDelete(r)}>🗑️</button>
-                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="Attachments" onClick={()=>openAttachments(r)}>📎</button>
-                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="AI Check" onClick={()=>runAI(r)}>🤖</button>
+                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="Edit" onClick={()=>setEditItem(r)}>Edit</button>
+                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="Delete" onClick={()=>setShowDelete(r)}>Delete</button>
+                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="Attachments" onClick={()=>openAttachments(r)}>Attach</button>
+                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="AI Check" onClick={()=>runAI(r)}>AI</button>
                         </div>
                       </td>
                     </tr>
