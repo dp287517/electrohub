@@ -350,7 +350,7 @@ export default function LoopCalc() {
                         title="Open professional PDF report"
                       >
                         PDF
-                      </button>
+                      </a>
                       <button
                         className="btn bg-red-500 hover:bg-red-600 text-white text-xs px-2 py-1 rounded transition-colors"
                         onClick={() => deleteCalculation(r.id)}
