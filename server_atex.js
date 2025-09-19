@@ -37,7 +37,7 @@ function addMonths(dateStr, months = 36) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// Conformité (case-insensitive)
+// Conformité
 function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   const ref = (atex_ref || '').toUpperCase();
   const needsG = [0,1,2].includes(Number(zone_gas));
@@ -54,7 +54,7 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
 
 app.get('/api/atex/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// SUGGESTS (auto-complétion)
+// SUGGESTS
 app.get('/api/atex/suggests', async (req, res) => {
   try {
     const fields = ['building','room','component_type','manufacturer','manufacturer_ref','atex_ref'];
@@ -72,11 +72,8 @@ app.get('/api/atex/suggests', async (req, res) => {
   }
 });
 
-// Helpers multi-filtres
-function asArray(v) {
-  if (v == null) return [];
-  return Array.isArray(v) ? v : [v];
-}
+// Helpers
+function asArray(v) { return v == null ? [] : (Array.isArray(v) ? v : [v]); }
 function addLikeIn(where, values, i, field, arr) {
   if (!arr.length) return i;
   const slots = arr.map((_,k)=> `$${i + k}`);
@@ -85,26 +82,27 @@ function addLikeIn(where, values, i, field, arr) {
   return i + arr.length;
 }
 
-// LIST avec filtres multiples & tri
+// LIST
 app.get('/api/atex/equipments', async (req, res) => {
   try {
-    const {
-      q, sort='updated_at', dir='desc', page='1', pageSize='100'
-    } = req.query;
+    const { q, sort='id', dir='desc', page='1', pageSize='100' } = req.query;
 
     const buildings = asArray(req.query.building).filter(Boolean);
-    const rooms = asArray(req.query.room).filter(Boolean);
-    const types = asArray(req.query.component_type).filter(Boolean);
-    const mans = asArray(req.query.manufacturer).filter(Boolean);
-    const statuses = asArray(req.query.status).filter(Boolean);
-    const gases = asArray(req.query.zone_gas).filter(Boolean).map(Number);
-    const dusts = asArray(req.query.zone_dust).filter(Boolean).map(Number);
+    const rooms     = asArray(req.query.room).filter(Boolean);
+    const types     = asArray(req.query.component_type).filter(Boolean);
+    const mans      = asArray(req.query.manufacturer).filter(Boolean);
+    const statuses  = asArray(req.query.status).filter(Boolean);
+    const gases     = asArray(req.query.zone_gas).filter(Boolean).map(Number);
+    const dusts     = asArray(req.query.zone_dust).filter(Boolean).map(Number);
 
     const where = [];
     const values = [];
     let i = 1;
 
-    if (q) { where.push(`(building ILIKE $${i} OR room ILIKE $${i} OR component_type ILIKE $${i} OR manufacturer ILIKE $${i} OR manufacturer_ref ILIKE $${i} OR atex_ref ILIKE $${i})`); values.push(`%${q}%`); i++; }
+    if (q) {
+      where.push(`(building ILIKE $${i} OR room ILIKE $${i} OR component_type ILIKE $${i} OR manufacturer ILIKE $${i} OR manufacturer_ref ILIKE $${i} OR atex_ref ILIKE $${i})`);
+      values.push(`%${q}%`); i++;
+    }
     if (buildings.length) { i = addLikeIn(where, values, i, 'building', buildings); }
     if (rooms.length)     { i = addLikeIn(where, values, i, 'room', rooms); }
     if (types.length)     { i = addLikeIn(where, values, i, 'component_type', types); }
@@ -114,7 +112,8 @@ app.get('/api/atex/equipments', async (req, res) => {
     if (dusts.length)     { where.push(`zone_dust = ANY($${i}::int[])`); values.push(dusts); i++; }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const sortSafe = ['building','room','component_type','manufacturer','manufacturer_ref','atex_ref','zone_gas','zone_dust','status','last_control','next_control','updated_at','created_at'].includes(sort) ? sort : 'updated_at';
+    const whitelist = ['id','building','room','component_type','manufacturer','manufacturer_ref','atex_ref','zone_gas','zone_dust','status','last_control','next_control','created_at','updated_at'];
+    const sortSafe = whitelist.includes(sort) ? sort : 'id';
     const dirSafe = (String(dir).toLowerCase()==='asc') ? 'ASC' : 'DESC';
     const limit = Math.min(parseInt(pageSize,10)||100, 300);
     const offset = ((parseInt(page,10)||1)-1) * limit;
@@ -130,13 +129,13 @@ app.get('/api/atex/equipments', async (req, res) => {
   }
 });
 
-// CREATE
+// CREATE (sans colonne attachments dans atex_equipments)
 app.post('/api/atex/equipments', async (req, res) => {
   try {
     const {
       site, building, room, component_type, manufacturer, manufacturer_ref,
       atex_ref, zone_gas, zone_dust, last_control, next_control,
-      comments, attachments, frequency_months
+      comments, frequency_months
     } = req.body;
 
     const { status } = assessCompliance(atex_ref, zone_gas, zone_dust);
@@ -145,12 +144,12 @@ app.post('/api/atex/equipments', async (req, res) => {
     const { rows } = await pool.query(
       `INSERT INTO atex_equipments
        (site, building, room, component_type, manufacturer, manufacturer_ref, atex_ref,
-        zone_gas, zone_dust, status, last_control, next_control, comments, attachments)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        zone_gas, zone_dust, status, last_control, next_control, comments)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [site, building, room, component_type, manufacturer, manufacturer_ref, atex_ref,
        zone_gas ?? null, zone_dust ?? null, status, last_control || null, nextCtrl || null,
-       comments || null, attachments || []]
+       comments || null]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -206,10 +205,9 @@ app.delete('/api/atex/equipments/:id', async (req, res) => {
   }
 });
 
-// ------- Pièces jointes -------
+// ------- Pièces jointes (table atex_attachments) -------
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
-// Liste pièces jointes d’un équipement
 app.get('/api/atex/equipments/:id/attachments', async (req, res) => {
   try {
     const r = await pool.query(
@@ -223,7 +221,6 @@ app.get('/api/atex/equipments/:id/attachments', async (req, res) => {
   }
 });
 
-// Upload (plusieurs fichiers)
 app.post('/api/atex/equipments/:id/attachments', upload.array('files', 12), async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -243,7 +240,6 @@ app.post('/api/atex/equipments/:id/attachments', upload.array('files', 12), asyn
   }
 });
 
-// Télécharger
 app.get('/api/atex/attachments/:attId/download', async (req, res) => {
   try {
     const r = await pool.query('SELECT filename, mimetype, size, data FROM atex_attachments WHERE id=$1', [req.params.attId]);
@@ -258,7 +254,6 @@ app.get('/api/atex/attachments/:attId/download', async (req, res) => {
   }
 });
 
-// Supprimer une PJ
 app.delete('/api/atex/attachments/:attId', async (req, res) => {
   try {
     await pool.query('DELETE FROM atex_attachments WHERE id=$1', [req.params.attId]);
@@ -269,7 +264,7 @@ app.delete('/api/atex/attachments/:attId', async (req, res) => {
   }
 });
 
-// ------- Chat IA (inchangé) -------
+// ------- Chat IA -------
 app.post('/api/atex/ai/:id', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY manquant' });
