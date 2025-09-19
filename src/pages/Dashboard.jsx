@@ -1,15 +1,13 @@
-import AppCard from '../components/AppCard.jsx';
-
-const apps = [
-  { label: 'ATEX', to: '/app/atex', description: 'Explosive atmospheres equipment management', icon: '🧯' },
-  { label: 'Obsolescence', to: '/app/obsolescence', description: 'Lifecycles, replacements, criticality', icon: '♻️' },
-  { label: 'Selectivity', to: '/app/selectivity', description: 'Protection coordination & settings', icon: '🧩' },
-  { label: 'Fault Level Assessment', to: '/app/fault-level', description: 'Short-circuit & fault current studies', icon: '📈' },
-  { label: 'Arc Flash', to: '/app/arc-flash', description: 'Incident energy & PPE categories', icon: '⚠️' },
-];
-
 export default function Dashboard() {
-  const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+  // Récupère user de localStorage avec fallback
+  let user;
+  try {
+    user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+    console.log('Dashboard user from localStorage:', user); // Debug
+  } catch (e) {
+    console.error('Error parsing user from localStorage:', e);
+    user = {};
+  }
 
   return (
     <section className="container-narrow py-10">
@@ -24,6 +22,7 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Reste du code inchangé */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {apps.map(a => (
           <AppCard key={a.label} {...a} />
