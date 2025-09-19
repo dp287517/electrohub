@@ -1,3 +1,14 @@
+import { Link } from 'react-router-dom';
+import AppCard from '../components/AppCard.jsx';
+
+const apps = [
+  { label: 'ATEX', to: '/app/atex', description: 'Explosive atmospheres equipment management', icon: '🧯' },
+  { label: 'Obsolescence', to: '/app/obsolescence', description: 'Lifecycles, replacements, criticality', icon: '♻️' },
+  { label: 'Selectivity', to: '/app/selectivity', description: 'Protection coordination & settings', icon: '🧩' },
+  { label: 'Fault Level Assessment', to: '/app/fault-level', description: 'Short-circuit & fault current studies', icon: '📈' },
+  { label: 'Arc Flash', to: '/app/arc-flash', description: 'Incident energy & PPE categories', icon: '⚠️' },
+];
+
 export default function Dashboard() {
   // Récupère user de localStorage avec fallback
   let user;
@@ -22,7 +33,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Reste du code inchangé */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {apps.map(a => (
           <AppCard key={a.label} {...a} />
@@ -32,7 +42,7 @@ export default function Dashboard() {
       <div className="mt-10 card p-6">
         <h2 className="text-xl font-semibold mb-2">Next steps</h2>
         <ol className="list-decimal ml-6 space-y-1 text-gray-700">
-          <li>Implement Neon-backed auth (sites & departments attached to users).</li>
+          <li>Implement Neon-backed auth (sites & departments attached to users). ✅</li>
           <li>Create per-app routes (ATEX, Obsolescence, etc.) with data filtered by <em>site</em>.</li>
           <li>Integrate OpenAI assistants for guided forms & calculations.</li>
         </ol>
