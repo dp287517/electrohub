@@ -1,3 +1,4 @@
+// src/pages/SignIn.jsx
 import { Link, useNavigate } from 'react-router-dom';
 import { post } from '../lib/api.js';
 import AuthCard from '../components/AuthCard.jsx';
@@ -11,10 +12,9 @@ export default function SignIn() {
     const email = form.get('email');
     const password = form.get('password');
     try {
-      const { token } = await post('/api/auth/signin', { email, password });
+      const { token, user } = await post('/api/auth/signin', { email, password });
       localStorage.setItem('eh_token', token);
-      // Demo user payload (replace when backend ready)
-      localStorage.setItem('eh_user', JSON.stringify({ email, site: 'Nyon', department: 'Maintenance' }));
+      localStorage.setItem('eh_user', JSON.stringify(user));  // ✅ Vrai user avec son site
       navigate('/dashboard');
     } catch (err) {
       alert('Sign in failed: ' + err.message);
