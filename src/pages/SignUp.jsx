@@ -1,3 +1,4 @@
+// src/pages/SignUp.jsx
 import { Link, useNavigate } from 'react-router-dom';
 import { post } from '../lib/api.js';
 import AuthCard from '../components/AuthCard.jsx';
@@ -12,12 +13,14 @@ export default function SignUp() {
       name: form.get('name'),
       email: form.get('email'),
       password: form.get('password'),
-      site: form.get('site'),
+      site: form.get('site'),        // ✅ Le site choisi par l'utilisateur
       department: form.get('department')
     };
     try {
-      await post('/api/auth/signup', payload);
-      navigate('/signin');
+      const { token, user } = await post('/api/auth/signup', payload);
+      localStorage.setItem('eh_token', token);
+      localStorage.setItem('eh_user', JSON.stringify(user));  // ✅ Vrai user avec son site
+      navigate('/dashboard');
     } catch (err) {
       alert('Sign up failed: ' + err.message);
     }
