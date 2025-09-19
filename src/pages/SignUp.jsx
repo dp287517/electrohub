@@ -16,10 +16,18 @@ export default function SignUp() {
       department: form.get('department')
     };
     try {
-      await post('/api/auth/signup', payload);
-      navigate('/signin');
+      // Appelle le vrai endpoint signup
+      const response = await post('/api/auth/signup', payload);
+      
+      // Stocke directement le token et l'user (auto-login après signup)
+      localStorage.setItem('eh_token', response.token);
+      localStorage.setItem('eh_user', JSON.stringify(response.user));
+      
+      console.log('User created and logged in:', response.user); // Pour debug
+      navigate('/dashboard');
     } catch (err) {
-      alert('Sign up failed: ' + err.message);
+      console.error('Signup error:', err); // Pour debug
+      alert('Sign up failed: ' + (err.message || 'Unknown error'));
     }
   }
 
