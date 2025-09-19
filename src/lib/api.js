@@ -11,7 +11,6 @@ async function jsonFetch(url, options = {}) {
     const text = await res.text().catch(()=>'');
     throw new Error(text || `HTTP ${res.status}`);
   }
-  // Peut être no-content
   const ct = res.headers.get('content-type') || '';
   return ct.includes('application/json') ? res.json() : null;
 }
@@ -31,6 +30,17 @@ export async function put(path, body) {
 
 export async function del(path) {
   return jsonFetch(path, { method: 'DELETE' });
+}
+
+// Upload multipart (ne **pas** définir Content-Type)
+export async function upload(path, formData) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    body: formData,
+    credentials: 'include',
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 export { API_BASE };
