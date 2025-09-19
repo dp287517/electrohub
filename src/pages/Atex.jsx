@@ -192,6 +192,7 @@ export default function Atex() {
   const [showDelete, setShowDelete] = useState(null);
   const [showAttach, setShowAttach] = useState(null);
   const [attachments, setAttachments] = useState([]); // list for drawer
+  const [newAttachFiles, setNewAttachFiles] = useState([]); // for adding new attachments
   const [aiItem, setAiItem] = useState(null);
   const [aiText, setAiText] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -265,6 +266,21 @@ export default function Atex() {
     setSort(prev => prev.by===col ? { by: col, dir: prev.dir==='asc'?'desc':'asc' } : { by: col, dir:'asc' });
   }
 
+  // Status mapping for display and color
+  const statusMap = {
+    'Conforme': { display: 'Compliant', color: 'bg-green-100 text-green-800' },
+    'Non conforme': { display: 'Non-compliant', color: 'bg-red-100 text-red-800' },
+    'À vérifier': { display: 'To review', color: 'bg-yellow-100 text-yellow-800' },
+  };
+
+  function getStatusDisplay(status) {
+    return statusMap[status]?.display || status;
+  }
+
+  function getStatusColor(status) {
+    return statusMap[status]?.color || '';
+  }
+
   /* ---------- Actions ---------- */
   async function onDelete(id) {
     try {
@@ -307,11 +323,27 @@ export default function Atex() {
   // Attachments drawer
   async function openAttachments(item) {
     setShowAttach(item);
+    setNewAttachFiles([]);
     try {
       const list = await get(`/api/atex/equipments/${item.id}/attachments`);
       setAttachments(list || []);
     } catch (e) {
       setAttachments([]);
+    }
+  }
+
+  async function uploadNewAttachments() {
+    if (!newAttachFiles.length) return;
+    try {
+      const fd = new FormData();
+      for (const f of newAttachFiles) fd.append('files', f);
+      await upload(`/api/atex/equipments/${showAttach.id}/attachments`, fd);
+      setNewAttachFiles([]);
+      const list = await get(`/api/atex/equipments/${showAttach.id}/attachments`);
+      setAttachments(list || []);
+      alert('Attachments uploaded.');
+    } catch (e) {
+      alert('Upload failed: ' + e.message);
     }
   }
 
@@ -447,30 +479,36 @@ export default function Atex() {
                 ) : rows.map(r=>{
                   const dleft = daysUntil(r.next_control);
                   const tone = dleft==null ? 'default' : dleft < 0 ? 'danger' : dleft <= 90 ? 'warn' : 'ok';
+                  const statusDisplay = getStatusDisplay(r.status);
+                  const statusColor = getStatusColor(r.status);
                   return (
                     <tr key={r.id} className="border-t">
                       <td className="px-4 py-2">{r.building}</td>
                       <td className="px-4 py-2">{r.room}</td>
-                      <td className="px-4 py-2">{r.component_type}</td>
-                      <td className="px-4 py-2">{r.manufacturer}</td>
-                      <td className="px-4 py-2">{r.manufacturer_ref}</td>
-                      <td className="px-4 py-2">{r.atex_ref}</td>
+                      <td className="px-4 py-2 truncate max-w-[8rem]" title={r.component_type}>{r.component_type}</td>
+                      <td className="px-4 py-2 truncate max-w-[8rem]" title={r.manufacturer}>{r.manufacturer}</td>
+                      <td className="px-4 py-2 truncate max-w-[6rem]" title={r.manufacturer_ref}>{r.manufacturer_ref}</td>
+                      <td className="px-4 py-2 truncate max-w-[10rem]" title={r.atex_ref}>{r.atex_ref}</td>
                       <td className="px-4 py-2">{r.zone_gas ?? '—'}</td>
                       <td className="px-4 py-2">{r.zone_dust ?? '—'}</td>
-                      <td className="px-4 py-2">{r.status}</td>
+                      <td className="px-4 py-2">
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor}`}>
+                          {statusDisplay}
+                        </span>
+                      </td>
                       <td className="px-4 py-2">{formatDate(r.last_control)}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-2">
-                          <span>{formatDate(r.next_control)}</span>
+                          <span className="truncate max-w-[6rem]" title={formatDate(r.next_control)}>{formatDate(r.next_control)}</span>
                           <Tag tone={tone}>{dleft==null?'—': dleft<0? `${Math.abs(dleft)} d late` : `${dleft} d`}</Tag>
                         </div>
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex gap-1">
-                          <button className="btn bg-gray-100" title="Edit" onClick={()=>setEditItem(r)}>✏️</button>
-                          <button className="btn bg-gray-100" title="Delete" onClick={()=>setShowDelete(r)}>🗑️</button>
-                          <button className="btn bg-gray-100" title="Attachments" onClick={()=>openAttachments(r)}>📎</button>
-                          <button className="btn bg-gray-100" title="AI Check" onClick={()=>runAI(r)}>🤖</button>
+                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="Edit" onClick={()=>setEditItem(r)}>✏️</button>
+                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="Delete" onClick={()=>setShowDelete(r)}>🗑️</button>
+                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="Attachments" onClick={()=>openAttachments(r)}>📎</button>
+                          <button className="w-6 h-6 rounded border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 flex items-center justify-center text-xs" title="AI Check" onClick={()=>runAI(r)}>🤖</button>
                         </div>
                       </td>
                     </tr>
@@ -480,27 +518,54 @@ export default function Atex() {
             </table>
           </div>
 
-          {/* Edit modal */}
+          {/* Edit modal - Responsive */}
           {editItem && (
-            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-              <div className="card p-6 w-full max-w-2xl">
+            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
+              <div className={`card p-6 w-full max-w-2xl ${window.innerWidth < 768 ? 'h-full overflow-auto' : ''}`}>
                 <h3 className="text-xl font-semibold mb-4">Edit equipment #{editItem.id}</h3>
                 <form className="grid md:grid-cols-2 gap-4" onSubmit={onSaveEdit}>
-                  <input className="input" name="building" defaultValue={editItem.building} placeholder="Building" required/>
-                  <input className="input" name="room" defaultValue={editItem.room} placeholder="Room" required/>
-                  <input className="input" name="component_type" defaultValue={editItem.component_type} placeholder="Component type" required/>
-                  <input className="input" name="manufacturer" defaultValue={editItem.manufacturer} placeholder="Manufacturer"/>
-                  <input className="input" name="manufacturer_ref" defaultValue={editItem.manufacturer_ref} placeholder="Manufacturer ref"/>
-                  <input className="input" name="atex_ref" defaultValue={editItem.atex_ref} placeholder="ATEX marking"/>
-                  <select className="input" name="zone_gas" defaultValue={editItem.zone_gas ?? ''}>
-                    <option value="">Gas zone</option><option value="0">0</option><option value="1">1</option><option value="2">2</option>
-                  </select>
-                  <select className="input" name="zone_dust" defaultValue={editItem.zone_dust ?? ''}>
-                    <option value="">Dust zone</option><option value="20">20</option><option value="21">21</option><option value="22">22</option>
-                  </select>
-                  <select className="input" name="status" defaultValue={editItem.status}>
-                    <option>Conforme</option><option>Non conforme</option><option>À vérifier</option>
-                  </select>
+                  <div>
+                    <label className="label">Building</label>
+                    <input className="input mt-1" name="building" defaultValue={editItem.building} placeholder="Building" required/>
+                  </div>
+                  <div>
+                    <label className="label">Room</label>
+                    <input className="input mt-1" name="room" defaultValue={editItem.room} placeholder="Room" required/>
+                  </div>
+                  <div>
+                    <label className="label">Component type</label>
+                    <input className="input mt-1" name="component_type" defaultValue={editItem.component_type} placeholder="Component type" required/>
+                  </div>
+                  <div>
+                    <label className="label">Manufacturer</label>
+                    <input className="input mt-1" name="manufacturer" defaultValue={editItem.manufacturer} placeholder="Manufacturer"/>
+                  </div>
+                  <div>
+                    <label className="label">Manufacturer ref</label>
+                    <input className="input mt-1" name="manufacturer_ref" defaultValue={editItem.manufacturer_ref} placeholder="Manufacturer ref"/>
+                  </div>
+                  <div>
+                    <label className="label">ATEX marking</label>
+                    <input className="input mt-1" name="atex_ref" defaultValue={editItem.atex_ref} placeholder="ATEX marking"/>
+                  </div>
+                  <div>
+                    <label className="label">Gas zone</label>
+                    <select className="input mt-1" name="zone_gas" defaultValue={editItem.zone_gas ?? ''}>
+                      <option value="">Gas zone</option><option value="0">0</option><option value="1">1</option><option value="2">2</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Dust zone</label>
+                    <select className="input mt-1" name="zone_dust" defaultValue={editItem.zone_dust ?? ''}>
+                      <option value="">Dust zone</option><option value="20">20</option><option value="21">21</option><option value="22">22</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">Status</label>
+                    <select className="input mt-1" name="status" defaultValue={editItem.status}>
+                      <option>Conforme</option><option>Non conforme</option><option>À vérifier</option>
+                    </select>
+                  </div>
                   <div>
                     <label className="label">Last inspection</label>
                     <input className="input mt-1" type="date" name="last_control" defaultValue={formatDate(editItem.last_control)} />
@@ -509,7 +574,10 @@ export default function Atex() {
                     <label className="label">Next inspection</label>
                     <input className="input mt-1" type="date" name="next_control" defaultValue={formatDate(editItem.next_control)} />
                   </div>
-                  <textarea className="input md:col-span-2" name="comments" placeholder="Comments" defaultValue={editItem.comments||''}/>
+                  <div className="md:col-span-2">
+                    <label className="label">Comments</label>
+                    <textarea className="input mt-1" name="comments" placeholder="Comments" defaultValue={editItem.comments||''}/>
+                  </div>
                   <div className="md:col-span-2 flex justify-end gap-2">
                     <button type="button" className="btn bg-gray-100" onClick={()=>setEditItem(null)}>Cancel</button>
                     <button type="submit" className="btn btn-primary">Save</button>
@@ -519,10 +587,10 @@ export default function Atex() {
             </div>
           )}
 
-          {/* Delete pop-up */}
+          {/* Delete pop-up - Responsive */}
           {showDelete && (
-            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-              <div className="card p-6 w-full max-w-md">
+            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50">
+              <div className={`card p-6 w-full max-w-md ${window.innerWidth < 768 ? 'h-full max-h-full overflow-auto' : ''}`}>
                 <h3 className="text-xl font-semibold mb-3">Confirm deletion</h3>
                 <p className="text-gray-700 mb-6">
                   Delete equipment <b>#{showDelete.id}</b> — {showDelete.component_type} ({showDelete.building}/{showDelete.room})?
@@ -535,13 +603,25 @@ export default function Atex() {
             </div>
           )}
 
-          {/* Attachments drawer */}
+          {/* Attachments drawer - Responsive */}
           {showAttach && (
-            <div className="fixed inset-0 bg-black/30 flex items-end md:items-center justify-center p-0 md:p-4">
-              <div className="card p-6 w-full md:max-w-xl md:mx-auto md:rounded-2xl rounded-t-2xl">
+            <div className="fixed inset-0 bg-black/30 flex items-end md:items-center justify-center p-0 md:p-4 z-50">
+              <div className={`card p-6 w-full md:max-w-xl md:mx-auto md:rounded-2xl rounded-t-2xl ${window.innerWidth < 768 ? 'h-[90vh] overflow-auto' : ''}`}>
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-xl font-semibold">Attachments — #{showAttach.id}</h3>
-                  <button className="btn bg-gray-100" onClick={()=>{ setShowAttach(null); setAttachments([]); }}>Close</button>
+                  <button className="btn bg-gray-100" onClick={()=>{ setShowAttach(null); setAttachments([]); setNewAttachFiles([]); }}>Close</button>
+                </div>
+                <div className="mb-4">
+                  <label className="label block">Add attachments</label>
+                  <input className="input mt-1" type="file" multiple onChange={e=>setNewAttachFiles(Array.from(e.target.files||[]))}/>
+                  {!!newAttachFiles.length && (
+                    <div className="text-xs text-gray-600 mt-1">
+                      {newAttachFiles.length} file(s) selected
+                    </div>
+                  )}
+                  {!!newAttachFiles.length && (
+                    <button className="btn btn-primary mt-2 text-xs" onClick={uploadNewAttachments} type="button">Upload</button>
+                  )}
                 </div>
                 <ul className="space-y-2">
                   {(attachments||[]).length ? attachments.map(a=>(
@@ -549,8 +629,8 @@ export default function Atex() {
                       <div className="truncate">{a.filename} <span className="text-xs text-gray-500">({Math.round((a.size||0)/1024)} KB)</span></div>
                       <div className="flex gap-2">
                         {/* IMPORTANT: prefix with API_BASE pour prod */}
-                        <a className="btn btn-primary" href={`${API_BASE}/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Download</a>
-                        <button className="btn bg-gray-100" onClick={async()=>{
+                        <a className="btn btn-primary text-xs px-2 py-1" href={`${API_BASE}/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Download</a>
+                        <button className="btn bg-gray-100 text-xs px-2 py-1" onClick={async()=>{
                           await del(`/api/atex/attachments/${a.id}`);
                           const list = await get(`/api/atex/equipments/${showAttach.id}/attachments`);
                           setAttachments(list||[]);
@@ -565,22 +645,38 @@ export default function Atex() {
             </div>
           )}
 
-          {/* AI modal */}
+          {/* AI modal - Lateral on PC, full on mobile */}
           {aiItem && (
-            <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4">
-              <div className="card p-6 w-full max-w-2xl">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-semibold">AI assessment — #{aiItem.id}</h3>
-                  <button className="btn bg-gray-100" onClick={()=>{ setAiItem(null); setAiText(''); }}>Close</button>
+            <div className={`fixed bg-black/30 z-50 ${window.innerWidth >= 768 ? 'right-0 top-0 h-full w-96' : 'inset-0 flex items-center justify-center p-4'}`}>
+              {window.innerWidth >= 768 ? (
+                <div className="card p-6 h-full overflow-auto">
+                  <div className="flex items-center justify-between mb-3 sticky top-0 bg-white z-10">
+                    <h3 className="text-xl font-semibold">AI assessment — #{aiItem.id}</h3>
+                    <button className="btn bg-gray-100" onClick={()=>{ setAiItem(null); setAiText(''); }}>Close</button>
+                  </div>
+                  <div className="mt-3">
+                    {aiLoading ? (
+                      <div className="text-gray-600">Running analysis…</div>
+                    ) : (
+                      <pre className="text-sm whitespace-pre-wrap">{aiText || '—'}</pre>
+                    )}
+                  </div>
                 </div>
-                <div className="mt-3">
-                  {aiLoading ? (
-                    <div className="text-gray-600">Running analysis…</div>
-                  ) : (
-                    <pre className="text-sm whitespace-pre-wrap">{aiText || '—'}</pre>
-                  )}
+              ) : (
+                <div className="card p-6 w-full max-w-2xl h-[80vh] overflow-auto">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-xl font-semibold">AI assessment — #{aiItem.id}</h3>
+                    <button className="btn bg-gray-100" onClick={()=>{ setAiItem(null); setAiText(''); }}>Close</button>
+                  </div>
+                  <div className="mt-3">
+                    {aiLoading ? (
+                      <div className="text-gray-600">Running analysis…</div>
+                    ) : (
+                      <pre className="text-sm whitespace-pre-wrap">{aiText || '—'}</pre>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>
@@ -599,27 +695,27 @@ export default function Atex() {
             </div>
             <div>
               <label className="label">Building</label>
-              <input className="input mt-1" value={createForm.building} onChange={e=>cf('building', e.target.value)} list="buildings" placeholder="Bâtiment"/>
+              <input className="input mt-1" value={createForm.building} onChange={e=>cf('building', e.target.value)} list="buildings" placeholder="Building"/>
               <datalist id="buildings">{suggests.building?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
             <div>
               <label className="label">Room</label>
-              <input className="input mt-1" value={createForm.room} onChange={e=>cf('room', e.target.value)} list="rooms" placeholder="Salle/pièce"/>
+              <input className="input mt-1" value={createForm.room} onChange={e=>cf('room', e.target.value)} list="rooms" placeholder="Room"/>
               <datalist id="rooms">{suggests.room?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
             <div>
               <label className="label">Component type</label>
-              <input className="input mt-1" value={createForm.component_type} onChange={e=>cf('component_type', e.target.value)} list="types" placeholder="Type composant"/>
+              <input className="input mt-1" value={createForm.component_type} onChange={e=>cf('component_type', e.target.value)} list="types" placeholder="Component type"/>
               <datalist id="types">{suggests.component_type?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
             <div>
               <label className="label">Manufacturer</label>
-              <input className="input mt-1" value={createForm.manufacturer} onChange={e=>cf('manufacturer', e.target.value)} list="mans" placeholder="Fabricant"/>
+              <input className="input mt-1" value={createForm.manufacturer} onChange={e=>cf('manufacturer', e.target.value)} list="mans" placeholder="Manufacturer"/>
               <datalist id="mans">{suggests.manufacturer?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
             <div>
               <label className="label">Mfr Ref</label>
-              <input className="input mt-1" value={createForm.manufacturer_ref} onChange={e=>cf('manufacturer_ref', e.target.value)} list="mrefs" placeholder="Référence fabricant"/>
+              <input className="input mt-1" value={createForm.manufacturer_ref} onChange={e=>cf('manufacturer_ref', e.target.value)} list="mrefs" placeholder="Manufacturer ref"/>
               <datalist id="mrefs">{suggests.manufacturer_ref?.map(v=><option key={v} value={v}/>)}</datalist>
             </div>
             <div>
