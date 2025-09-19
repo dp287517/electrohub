@@ -1,6 +1,8 @@
 // src/pages/Atex.jsx
 import { useEffect, useMemo, useState } from 'react';
-import { get, post, put, del } from '../lib/api.js';
+import { get, post, put, del, upload } from '../lib/api.js';
+
+const SITE_OPTIONS = ['Nyon','Levice','Aprilia']; // mêmes valeurs que SignUp.jsx:contentReference[oaicite:6]{index=6}
 
 function Tag({ children, tone='default' }) {
   const toneClass = {
@@ -18,12 +20,16 @@ function formatDate(d) {
   if (isNaN(dt)) return String(d);
   return dt.toISOString().slice(0,10);
 }
-
 function daysUntil(d) {
   if (!d) return null;
   const target = new Date(d);
   const now = new Date();
   return Math.ceil((target - now) / (1000*60*60*24));
+}
+
+// util multi-select
+function getSelectedValues(selectEl) {
+  return Array.from(selectEl.selectedOptions).map(o => o.value).filter(Boolean);
 }
 
 export default function Atex() {
@@ -33,15 +39,15 @@ export default function Atex() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // filters
+  // filters (multi)
   const [q, setQ] = useState('');
-  const [fBuilding, setFBuilding] = useState('');
-  const [fRoom, setFRoom] = useState('');
-  const [fType, setFType] = useState('');
-  const [fManufacturer, setFManufacturer] = useState('');
-  const [fStatus, setFStatus] = useState('');
-  const [fGas, setFGas] = useState('');
-  const [fDust, setFDust] = useState('');
+  const [fBuilding, setFBuilding] = useState([]);
+  const [fRoom, setFRoom] = useState([]);
+  const [fType, setFType] = useState([]);
+  const [fManufacturer, setFManufacturer] = useState([]);
+  const [fStatus, setFStatus] = useState([]);
+  const [fGas, setFGas] = useState([]);     // [0,1,2]
+  const [fDust, setFDust] = useState([]);   // [20,21,22]
 
   // sort
   const [sort, setSort] = useState({ by: 'updated_at', dir: 'desc' });
@@ -50,14 +56,17 @@ export default function Atex() {
   const [editItem, setEditItem] = useState(null);
   const [showDelete, setShowDelete] = useState(null);
   const [showAttach, setShowAttach] = useState(null);
+  const [attachments, setAttachments] = useState([]); // list for drawer
   const [aiItem, setAiItem] = useState(null);
   const [aiText, setAiText] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
 
   // CREATE form
+  const user = JSON.parse(localStorage.getItem('eh_user') || '{}'); // site dispo depuis SignIn:contentReference[oaicite:7]{index=7}
+  const defaultSite = user?.site || '';
   const [suggests, setSuggests] = useState({ building:[], room:[], component_type:[], manufacturer:[], manufacturer_ref:[], atex_ref:[] });
   const [createForm, setCreateForm] = useState({
-    site: '',
+    site: defaultSite,
     building: '', room: '',
     component_type: '',
     manufacturer: '', manufacturer_ref: '',
@@ -67,10 +76,8 @@ export default function Atex() {
     last_control: '',
     frequency_months: 36,
     next_control: '',
-    attachments: [],
   });
-  const [attName, setAttName] = useState('');
-  const [attUrl, setAttUrl] = useState('');
+  const [files, setFiles] = useState([]); // FileList -> Array<File>
 
   function cf(k, v) { setCreateForm(s => ({ ...s, [k]: v })); }
 
@@ -80,13 +87,13 @@ export default function Atex() {
     try {
       const params = {};
       if (q) params.q = q;
-      if (fBuilding) params.building = fBuilding;
-      if (fRoom) params.room = fRoom;
-      if (fType) params.component_type = fType;
-      if (fManufacturer) params.manufacturer = fManufacturer;
-      if (fStatus) params.status = fStatus;
-      if (fGas) params.zone_gas = fGas;
-      if (fDust) params.zone_dust = fDust;
+      fBuilding.forEach(v => (params.building = [...(params.building||[]), v]));
+      fRoom.forEach(v => (params.room = [...(params.room||[]), v]));
+      fType.forEach(v => (params.component_type = [...(params.component_type||[]), v]));
+      fManufacturer.forEach(v => (params.manufacturer = [...(params.manufacturer||[]), v]));
+      fStatus.forEach(v => (params.status = [...(params.status||[]), v]));
+      fGas.forEach(v => (params.zone_gas = [...(params.zone_gas||[]), v]));
+      fDust.forEach(v => (params.zone_dust = [...(params.zone_dust||[]), v]));
       if (sort.by) { params.sort = sort.by; params.dir = sort.dir; }
       const data = await get('/api/atex/equipments', params);
       setRows(data || []);
@@ -105,7 +112,7 @@ export default function Atex() {
   }
 
   useEffect(() => { load(); }, [sort]); // tri
-  useEffect(() => { loadSuggests(); }, []); // au mount
+  useEffect(() => { loadSuggests(); }, []); // mount
 
   const unique = useMemo(() => {
     const u = (key) => Array.from(new Set(rows.map(r => r[key]).filter(Boolean))).sort();
@@ -160,6 +167,17 @@ export default function Atex() {
     }
   }
 
+  // Attachments drawer
+  async function openAttachments(item) {
+    setShowAttach(item);
+    try {
+      const list = await get(`/api/atex/equipments/${item.id}/attachments`);
+      setAttachments(list || []);
+    } catch (e) {
+      setAttachments([]);
+    }
+  }
+
   // CREATE helpers
   function computeNextControl() {
     const d = createForm.last_control ? new Date(createForm.last_control) : null;
@@ -172,16 +190,21 @@ export default function Atex() {
   async function onCreate(e) {
     e.preventDefault();
     const payload = { ...createForm };
-    // cast
     payload.zone_gas = payload.zone_gas ? Number(payload.zone_gas) : null;
     payload.zone_dust = payload.zone_dust ? Number(payload.zone_dust) : null;
     if (!payload.next_control) payload.next_control = computeNextControl();
 
     try {
-      await post('/api/atex/equipments', payload);
-      // reset simple
+      const created = await post('/api/atex/equipments', payload);
+      // upload files si présents
+      if (files.length) {
+        const fd = new FormData();
+        for (const f of files) fd.append('files', f);
+        await upload(`/api/atex/equipments/${created.id}/attachments`, fd);
+      }
+      // reset
       setCreateForm({
-        site: '',
+        site: defaultSite,
         building: '', room: '',
         component_type: '',
         manufacturer: '', manufacturer_ref: '',
@@ -191,9 +214,8 @@ export default function Atex() {
         last_control: '',
         frequency_months: 36,
         next_control: '',
-        attachments: [],
       });
-      setAttName(''); setAttUrl('');
+      setFiles([]);
       await load();
       setTab('controls');
       alert('Équipement créé.');
@@ -202,16 +224,7 @@ export default function Atex() {
     }
   }
 
-  function addAttachment() {
-    if (!attUrl) return;
-    cf('attachments', [...(createForm.attachments||[]), { name: attName || attUrl, url: attUrl }]);
-    setAttName(''); setAttUrl('');
-  }
-  function removeAttachment(i) {
-    const cp = [...(createForm.attachments||[])];
-    cp.splice(i,1); cf('attachments', cp);
-  }
-
+  // rendu
   return (
     <section className="container-narrow py-8">
       <h1 className="text-3xl font-bold mb-4">ATEX</h1>
@@ -231,44 +244,41 @@ export default function Atex() {
 
       {tab === 'controls' && (
         <div className="space-y-4">
-          {/* Filtres */}
-          <div className="card p-4 grid md:grid-cols-4 gap-3">
+          {/* Filtres multi */}
+          <div className="card p-4 grid md:grid-cols-3 gap-3">
             <input className="input" placeholder="Recherche textuelle…" value={q} onChange={e=>setQ(e.target.value)} />
-            <select className="input" value={fBuilding} onChange={e=>setFBuilding(e.target.value)}>
-              <option value="">Bâtiment (tous)</option>
+            <select multiple className="input h-28" value={fBuilding} onChange={e=>setFBuilding(getSelectedValues(e.target))}>
+              <option disabled>— Bâtiments —</option>
               {unique.buildings.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select className="input" value={fRoom} onChange={e=>setFRoom(e.target.value)}>
-              <option value="">Local (tous)</option>
+            <select multiple className="input h-28" value={fRoom} onChange={e=>setFRoom(getSelectedValues(e.target))}>
+              <option disabled>— Locaux —</option>
               {unique.rooms.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select className="input" value={fType} onChange={e=>setFType(e.target.value)}>
-              <option value="">Type de composant (tous)</option>
+            <select multiple className="input h-28" value={fType} onChange={e=>setFType(getSelectedValues(e.target))}>
+              <option disabled>— Types —</option>
               {unique.types.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select className="input" value={fManufacturer} onChange={e=>setFManufacturer(e.target.value)}>
-              <option value="">Fabricant (tous)</option>
+            <select multiple className="input h-28" value={fManufacturer} onChange={e=>setFManufacturer(getSelectedValues(e.target))}>
+              <option disabled>— Fabricants —</option>
               {unique.manufacturers.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select className="input" value={fStatus} onChange={e=>setFStatus(e.target.value)}>
-              <option value="">Statut (tous)</option>
-              <option>Conforme</option>
-              <option>Non conforme</option>
-              <option>À vérifier</option>
+            <select multiple className="input h-28" value={fStatus} onChange={e=>setFStatus(getSelectedValues(e.target))}>
+              <option disabled>— Statuts —</option>
+              {['Conforme','Non conforme','À vérifier'].map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select className="input" value={fGas} onChange={e=>setFGas(e.target.value)}>
-              <option value="">Zone gaz</option>
-              <option value="0">0</option><option value="1">1</option><option value="2">2</option>
+            <select multiple className="input h-28" value={fGas} onChange={e=>setFGas(getSelectedValues(e.target))}>
+              <option disabled>— Zones gaz —</option>
+              {['0','1','2'].map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            <select className="input" value={fDust} onChange={e=>setFDust(e.target.value)}>
-              <option value="">Zone poussières</option>
-              <option value="20">20</option><option value="21">21</option><option value="22">22</option>
+            <select multiple className="input h-28" value={fDust} onChange={e=>setFDust(getSelectedValues(e.target))}>
+              <option disabled>— Zones poussières —</option>
+              {['20','21','22'].map(v => <option key={v} value={v}>{v}</option>)}
             </select>
             <div className="flex gap-2">
               <button className="btn btn-primary" onClick={load}>Rechercher</button>
               <button className="btn bg-gray-100" onClick={()=>{
-                setQ(''); setFBuilding(''); setFRoom(''); setFType('');
-                setFManufacturer(''); setFStatus(''); setFGas(''); setFDust('');
+                setQ(''); setFBuilding([]); setFRoom([]); setFType([]); setFManufacturer([]); setFStatus([]); setFGas([]); setFDust([]);
                 setSort({by:'updated_at', dir:'desc'}); load();
               }}>Réinitialiser</button>
             </div>
@@ -322,7 +332,7 @@ export default function Atex() {
                         <div className="flex gap-1">
                           <button className="btn bg-gray-100" title="Modifier" onClick={()=>setEditItem(r)}>✏️</button>
                           <button className="btn bg-gray-100" title="Supprimer" onClick={()=>setShowDelete(r)}>🗑️</button>
-                          <button className="btn bg-gray-100" title="Pièces jointes" onClick={()=>setShowAttach(r)}>📎</button>
+                          <button className="btn bg-gray-100" title="Pièces jointes" onClick={()=>openAttachments(r)}>📎</button>
                           <button className="btn bg-gray-100" title="Chat IA" onClick={()=>runAI(r)}>🤖</button>
                         </div>
                       </td>
@@ -382,23 +392,28 @@ export default function Atex() {
             </div>
           )}
 
-          {/* Drawer Pièces jointes */}
+          {/* Drawer Pièces jointes (list + download + delete) */}
           {showAttach && (
             <div className="fixed inset-0 bg-black/30 flex items-end md:items-center justify-center p-0 md:p-4">
               <div className="card p-6 w-full md:max-w-xl md:mx-auto md:rounded-2xl rounded-t-2xl">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-xl font-semibold">Pièces jointes – #{showAttach.id}</h3>
-                  <button className="btn bg-gray-100" onClick={()=>setShowAttach(null)}>Fermer</button>
+                  <button className="btn bg-gray-100" onClick={()=>{ setShowAttach(null); setAttachments([]); }}>Fermer</button>
                 </div>
                 <ul className="space-y-2">
-                  {(showAttach.attachments || []).length ? (
-                    (showAttach.attachments || []).map((a,i)=>(
-                      <li key={i} className="flex items-center justify-between">
-                        <div className="truncate">{a.name || a.url || `Pièce ${i+1}`}</div>
-                        <a className="btn btn-primary" href={a.url} download> Télécharger </a>
-                      </li>
-                    ))
-                  ) : (
+                  {(attachments||[]).length ? attachments.map(a=>(
+                    <li key={a.id} className="flex items-center justify-between gap-2">
+                      <div className="truncate">{a.filename} <span className="text-xs text-gray-500">({Math.round((a.size||0)/1024)} Ko)</span></div>
+                      <div className="flex gap-2">
+                        <a className="btn btn-primary" href={`/api/atex/attachments/${a.id}/download`} target="_blank" rel="noreferrer">Télécharger</a>
+                        <button className="btn bg-gray-100" onClick={async()=>{
+                          await del(`/api/atex/attachments/${a.id}`);
+                          const list = await get(`/api/atex/equipments/${showAttach.id}/attachments`);
+                          setAttachments(list||[]);
+                        }}>Supprimer</button>
+                      </div>
+                    </li>
+                  )) : (
                     <li className="text-gray-600">Aucune pièce jointe.</li>
                   )}
                 </ul>
@@ -426,7 +441,14 @@ export default function Atex() {
       {tab === 'create' && (
         <div className="card p-6">
           <form className="grid md:grid-cols-2 gap-4" onSubmit={onCreate}>
-            <input className="input" placeholder="Site" value={createForm.site} onChange={e=>cf('site', e.target.value)} />
+            <div>
+              <label className="label">Site</label>
+              <select className="input mt-1" value={createForm.site} onChange={e=>cf('site', e.target.value)}>
+                <option value="">—</option>
+                {SITE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <div className="text-xs text-gray-600 mt-1">Prérempli depuis votre session.</div>
+            </div>
 
             <div>
               <label className="label">Bâtiment</label>
@@ -500,20 +522,9 @@ export default function Atex() {
             </div>
 
             <div className="md:col-span-2">
-              <label className="label">Pièces jointes (URL)</label>
-              <div className="flex gap-2 mt-1">
-                <input className="input flex-1" placeholder="Nom (optionnel)" value={attName} onChange={e=>setAttName(e.target.value)} />
-                <input className="input flex-[2]" placeholder="https://… (pdf, photo)" value={attUrl} onChange={e=>setAttUrl(e.target.value)} />
-                <button type="button" className="btn bg-gray-100" onClick={addAttachment}>Ajouter</button>
-              </div>
-              <ul className="mt-2 space-y-1">
-                {(createForm.attachments||[]).map((a,i)=>(
-                  <li key={i} className="flex items-center justify-between text-sm">
-                    <span className="truncate">{a.name || a.url}</span>
-                    <button type="button" className="text-red-600" onClick={()=>removeAttachment(i)}>supprimer</button>
-                  </li>
-                ))}
-              </ul>
+              <label className="label">Pièces jointes</label>
+              <input type="file" multiple className="input mt-1" onChange={(e)=>setFiles(Array.from(e.target.files||[]))} />
+              <div className="text-xs text-gray-600 mt-1">{files.length ? `${files.length} fichier(s) sélectionné(s)` : 'PDF, images… (max 25 Mo/fichier)'}</div>
             </div>
 
             <div className="md:col-span-2 flex justify-end gap-2 mt-2">
