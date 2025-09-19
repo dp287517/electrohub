@@ -479,28 +479,40 @@ app.get('/api/atex/export', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT 
-        site, building, room, component_type, manufacturer, manufacturer_ref,
-        atex_ref, zone_gas, zone_dust, status, last_control, next_control, comments,
-        created_at, updated_at
+        COALESCE(site, '') as site,
+        COALESCE(building, '') as building,
+        COALESCE(room, '') as room,
+        COALESCE(component_type, '') as component_type,
+        COALESCE(manufacturer, '') as manufacturer,
+        COALESCE(manufacturer_ref, '') as manufacturer_ref,
+        COALESCE(atex_ref, '') as atex_ref,
+        zone_gas,
+        zone_dust,
+        COALESCE(status, '') as status,
+        CASE WHEN last_control IS NOT NULL THEN last_control::text ELSE '' END as last_control,
+        CASE WHEN next_control IS NOT NULL THEN next_control::text ELSE '' END as next_control,
+        COALESCE(comments, '') as comments,
+        CASE WHEN created_at IS NOT NULL THEN created_at::text ELSE '' END as created_at,
+        CASE WHEN updated_at IS NOT NULL THEN updated_at::text ELSE '' END as updated_at
       FROM atex_equipments 
       ORDER BY building, room, component_type
     `);
 
     // Format pour Excel
     const exportData = rows.map(row => ({
-      site: row.site || '',
-      building: row.building || '',
-      room: row.room || '',
-      component_type: row.component_type || '',
-      manufacturer: row.manufacturer || '',
-      manufacturer_ref: row.manufacturer_ref || '',
-      atex_ref: row.atex_ref || '',
+      site: row.site,
+      building: row.building,
+      room: row.room,
+      component_type: row.component_type,
+      manufacturer: row.manufacturer,
+      manufacturer_ref: row.manufacturer_ref,
+      atex_ref: row.atex_ref,
       zone_gas: row.zone_gas || '',
       zone_dust: row.zone_dust || '',
-      status: row.status || '',
+      status: row.status,
       last_control: row.last_control ? row.last_control.slice(0,10) : '',
       next_control: row.next_control ? row.next_control.slice(0,10) : '',
-      comments: row.comments || '',
+      comments: row.comments,
       created_at: row.created_at ? row.created_at.slice(0,19) : '',
       updated_at: row.updated_at ? row.updated_at.slice(0,19) : ''
     }));
@@ -508,7 +520,7 @@ app.get('/api/atex/export', async (req, res) => {
     res.json({ data: exportData, columns: Object.keys(exportData[0] || {}) });
   } catch (e) {
     console.error('[EXPORT] error:', e?.message);
-    res.status(500).json({ error: 'Export failed' });
+    res.status(500).json({ error: 'Export failed: ' + e.message });
   }
 });
 
