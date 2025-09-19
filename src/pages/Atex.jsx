@@ -192,39 +192,76 @@ function SimpleBarChart({ data, title, yLabel = 'Count' }) {
   );
 }
 
-/* ---------- Simple Pie Chart Component ---------- */
-function SimplePieChart({ data, title }) {
+/* ---------- Doughnut Chart Component ---------- */
+function DoughnutChart({ data, title }) {
   const total = data.reduce((sum, item) => sum + item.value, 0);
+  const radius = 60;
+  const centerRadius = 30;
+  const colors = ['#10B981', '#EF4444', '#F59E0B', '#3B82F6', '#8B5CF6'];
   
+  // Calculate cumulative angles
+  const cumulativeAngles = data.reduce((acc, item, i) => {
+    const startAngle = acc[i-1]?.endAngle || 0;
+    const endAngle = startAngle + (item.value / total) * 2 * Math.PI;
+    acc[i] = { startAngle, endAngle, ...item };
+    return acc;
+  }, []);
+
   return (
     <div className="bg-white p-4 rounded-lg shadow">
       <h3 className="text-lg font-medium mb-3">{title}</h3>
-      <div className="relative h-48 flex items-center justify-center">
-        {data.map((item, i) => {
-          const angle = (item.value / total) * 360;
-          const colors = ['bg-green-500', 'bg-red-500', 'bg-yellow-500', 'bg-blue-500', 'bg-purple-500'];
-          return (
-            <div 
-              key={i}
-              className={`absolute rounded-full ${colors[i % colors.length]}`}
-              style={{ 
-                width: '80%', 
-                height: '80%', 
-                clipPath: `polygon(50% 50%, 50% 0%, ${Math.cos(angle * Math.PI / 180) * 50 + 50}% ${Math.sin(angle * Math.PI / 180) * 50 + 50}%)`
-              }}
-            />
-          );
-        })}
-        <div className="absolute text-center">
-          <div className="text-2xl font-bold text-gray-700">{total}</div>
-          <div className="text-xs text-gray-500">Total</div>
-        </div>
+      <div className="relative flex justify-center">
+        <svg width="200" height="200" viewBox="0 0 200 200">
+          {/* Center circle */}
+          <circle 
+            cx="100" 
+            cy="100" 
+            r={centerRadius} 
+            fill="white" 
+            stroke="white" 
+            strokeWidth="2"
+          />
+          
+          {/* Doughnut segments */}
+          {cumulativeAngles.map((segment, i) => {
+            const x1 = 100 + centerRadius * Math.cos(segment.startAngle - Math.PI/2);
+            const y1 = 100 + centerRadius * Math.sin(segment.startAngle - Math.PI/2);
+            const x2 = 100 + centerRadius * Math.cos(segment.endAngle - Math.PI/2);
+            const y2 = 100 + centerRadius * Math.sin(segment.endAngle - Math.PI/2);
+            const largeArc = segment.endAngle - segment.startAngle > Math.PI ? 1 : 0;
+            
+            return (
+              <path
+                key={i}
+                d={`M ${x1} ${y1} A ${centerRadius} ${centerRadius} 0 ${largeArc} 1 ${x2} ${y2} L 100 100 Z`}
+                fill={colors[i % colors.length]}
+                stroke="white"
+                strokeWidth="1"
+              />
+            );
+          })}
+          
+          {/* Center text */}
+          <text x="100" y="95" textAnchor="middle" className="font-bold text-lg fill-gray-700">
+            {total}
+          </text>
+          <text x="100" y="115" textAnchor="middle" className="text-xs fill-gray-500">
+            Total
+          </text>
+        </svg>
       </div>
+      
+      {/* Legend */}
       <div className="mt-4 space-y-1">
         {data.map((item, i) => (
           <div key={i} className="flex items-center gap-2">
-            <div className={`w-3 h-3 rounded-full ${['bg-green-500', 'bg-red-500', 'bg-yellow-500'][i]}`} />
-            <span className="text-sm">{item.label}: {item.value}</span>
+            <div 
+              className="w-3 h-3 rounded-full" 
+              style={{ backgroundColor: colors[i % colors.length] }}
+            />
+            <span className="text-sm">
+              {item.label}: {item.value} ({Math.round((item.value / total) * 100)}%)
+            </span>
           </div>
         ))}
       </div>
@@ -363,6 +400,13 @@ export default function Atex() {
 
   function getStatusColor(status) {
     return statusMap[status]?.color || '';
+  }
+
+  function getDateColor(dateStr) {
+    if (!dateStr) return '';
+    const days = daysUntil(dateStr);
+    if (days === null || days < 0) return 'bg-red-100 text-red-800';
+    return 'bg-green-100 text-green-800';
   }
 
   /* ---------- Actions ---------- */
@@ -637,11 +681,9 @@ export default function Atex() {
                   <tr><td colSpan={12} className="px-4 py-8 text-center text-gray-500">No equipment found</td></tr>
                 ) : rows.map(r=>{
                   const dleft = daysUntil(r.next_control);
-                  const tone = dleft==null ? 'default' : dleft < 0 ? 'danger' : dleft <= 90 ? 'warn' : 'ok';
                   const statusDisplay = getStatusDisplay(r.status);
                   const statusColor = getStatusColor(r.status);
-                  const nextDate = formatDate(r.next_control);
-                  const daysText = dleft==null?'—': dleft<0? `${Math.abs(dleft)} d late` : `${dleft} d`;
+                  const nextDateColor = getDateColor(r.next_control);
                   return (
                     <tr key={r.id} className="border-t">
                       <td className="px-4 py-2">{r.building}</td>
@@ -659,10 +701,9 @@ export default function Atex() {
                       </td>
                       <td className="px-4 py-2">{formatDate(r.last_control)}</td>
                       <td className="px-4 py-2">
-                        <div className="flex items-center gap-1 min-w-0">
-                          <span className="truncate text-xs min-w-0" title={nextDate}>{nextDate}</span>
-                          <Tag tone={tone} className="whitespace-nowrap flex-shrink-0">{daysText}</Tag>
-                        </div>
+                        <span className={`px-3 py-1 rounded-full text-sm font-medium ${nextDateColor} whitespace-nowrap`}>
+                          {formatDate(r.next_control)}
+                        </span>
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex gap-1">
@@ -996,15 +1037,15 @@ export default function Atex() {
               <p className="text-xs text-gray-500 mt-3">Dates in YYYY-MM-DD format. Numbers for zones (0,1,2 for gas; 20,21,22 for dust).</p>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-4">
-              <button className="btn btn-primary flex-1" onClick={exportToExcel}>
+            <div className="grid md:grid-cols-2 gap-4">
+              <button className="btn btn-primary" onClick={exportToExcel}>
                 <svg className="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                Download Excel Template
+                Export Current Equipment Data
               </button>
-              <div className="flex-1">
-                <label className="block text-sm font-medium mb-1">Upload Excel File</label>
+              <div>
+                <label className="block text-sm font-medium mb-1">Import Equipment Data</label>
                 <input className="input" type="file" accept=".xlsx,.xls" onChange={importFromExcel} />
               </div>
             </div>
@@ -1057,8 +1098,8 @@ export default function Atex() {
           {/* Charts */}
           {analytics && (
             <div className="grid lg:grid-cols-2 gap-6">
-              {/* Compliance Pie Chart */}
-              <SimplePieChart 
+              {/* Compliance Doughnut Chart */}
+              <DoughnutChart 
                 data={[
                   { label: 'Compliant', value: analytics.stats.compliant },
                   { label: 'Non-compliant', value: analytics.stats.non_compliant },
