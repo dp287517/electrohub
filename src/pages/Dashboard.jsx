@@ -1,4 +1,3 @@
-import { Link } from 'react-router-dom';
 import AppCard from '../components/AppCard.jsx';
 
 const apps = [
@@ -10,15 +9,7 @@ const apps = [
 ];
 
 export default function Dashboard() {
-  // Récupère user de localStorage avec fallback
-  let user;
-  try {
-    user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-    console.log('Dashboard user from localStorage:', user); // Debug
-  } catch (e) {
-    console.error('Error parsing user from localStorage:', e);
-    user = {};
-  }
+  const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
 
   return (
     <section className="container-narrow py-10">
@@ -42,7 +33,7 @@ export default function Dashboard() {
       <div className="mt-10 card p-6">
         <h2 className="text-xl font-semibold mb-2">Next steps</h2>
         <ol className="list-decimal ml-6 space-y-1 text-gray-700">
-          <li>Implement Neon-backed auth (sites & departments attached to users). ✅</li>
+          <li>Implement Neon-backed auth (sites & departments attached to users).</li>
           <li>Create per-app routes (ATEX, Obsolescence, etc.) with data filtered by <em>site</em>.</li>
           <li>Integrate OpenAI assistants for guided forms & calculations.</li>
         </ol>

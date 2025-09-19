@@ -11,18 +11,13 @@ export default function SignIn() {
     const email = form.get('email');
     const password = form.get('password');
     try {
-      // Appelle le vrai endpoint signin
-      const response = await post('/api/auth/signin', { email, password });
-      
-      // Stocke le token ET l'user du serveur
-      localStorage.setItem('eh_token', response.token);
-      localStorage.setItem('eh_user', JSON.stringify(response.user));
-      
-      console.log('User logged in:', response.user); // Pour debug
+      const { token } = await post('/api/auth/signin', { email, password });
+      localStorage.setItem('eh_token', token);
+      // Demo user payload (replace when backend ready)
+      localStorage.setItem('eh_user', JSON.stringify({ email, site: 'Nyon', department: 'Maintenance' }));
       navigate('/dashboard');
     } catch (err) {
-      console.error('Signin error:', err); // Pour debug
-      alert('Sign in failed: ' + (err.message || 'Unknown error'));
+      alert('Sign in failed: ' + err.message);
     }
   }
 
