@@ -68,7 +68,7 @@ function daysUntil(dateStr) {
   return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
 }
 
-// Enhanced Conformité
+// Enhanced Conformité: Parse category from marking and check against zone
 function getCategoryFromMarking(ref, type) { // type: 'G' or 'D'
   const upper = (ref || '').toUpperCase();
   const match = upper.match(new RegExp(`II\\s*([1-3])${type}`, 'i'));
@@ -106,7 +106,7 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
       problems.push('No gas category (G) in ATEX marking for gas zone.');
     } else {
       const reqGas = getRequiredCategory(zone_gas, 'gas');
-      if (!reqGas.includes(catGas)) {
+      if (reqGas && !reqGas.includes(catGas)) {
         problems.push(`Gas category ${catGas}G not suitable for zone ${zone_gas} (requires ${reqGas.join(' or ')}).`);
       }
     }
@@ -118,7 +118,7 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
       problems.push('No dust category (D) in ATEX marking for dust zone.');
     } else {
       const reqDust = getRequiredCategory(zone_dust, 'dust');
-      if (!reqDust.includes(catDust)) {
+      if (reqDust && !reqDust.includes(catDust)) {
         problems.push(`Dust category ${catDust}D not suitable for zone ${zone_dust} (requires ${reqDust.join(' or ')}).`);
       }
     }
@@ -127,89 +127,83 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   return { status: problems.length ? 'Non conforme' : 'Conforme', problems };
 }
 
-// Helpers
-function asArray(v) { return v == null ? [] : Array.isArray(v) ? v : [v]; }
-
-// Fonction pour queries list (avec filtre site auto)
-async function runListQuery({ whereSql = [], values = [], sortSafe = 'created_at', dirSafe = 'DESC', limit = 100, offset = 0, userSite }) {
-  // Ajoute auto le filtre site
-  const siteIndex = values.length + 1;
-  whereSql.push(`site = $${siteIndex}`);
-  values.push(userSite);
-
-  const whereClause = whereSql.length ? 'WHERE ' + whereSql.join(' AND ') : '';
-  const limitClause = limit ? `LIMIT $${values.length + 1}` : '';
-  const offsetClause = offset ? `OFFSET $${values.length + 2}` : '';
-
-  const queryValues = [...values];
-  if (limit !== undefined) queryValues.push(limit);
-  if (offset !== undefined) queryValues.push(offset);
-
-  const query = `
-    SELECT * FROM atex_equipments 
-    ${whereClause}
-    ORDER BY ${sortSafe} ${dirSafe}
-    ${limitClause}
-    ${offsetClause}
-  `;
-
-  const { rows } = await pool.query(query, queryValues);
-  return rows;
-}
-
 // SUGGESTS - FILTRE PAR SITE
 app.get('/api/atex/suggests', async (req, res) => {
   try {
     const userSite = req.user.site;
     const fields = ['building','room','component_type','manufacturer','manufacturer_ref','atex_ref'];
     const out = {};
-    for (const f of fields) {
-      const r = await pool.query(
-        `SELECT DISTINCT ${f} FROM atex_equipments WHERE site = $1 AND ${f} IS NOT NULL AND ${f}<>'' ORDER BY ${f} ASC LIMIT 200`,
-        [userSite]
-      );
-      out[f] = r.rows.map(x => x[f]);
+    
+    for (const field of fields) {
+      const { rows } = await pool.query(`
+        SELECT DISTINCT ${field} 
+        FROM atex_equipments 
+        WHERE site = $1 AND ${field} IS NOT NULL AND ${field} <> '' 
+        ORDER BY ${field} ASC 
+        LIMIT 200
+      `, [userSite]);
+      
+      out[field] = rows.map(row => row[field]).filter(Boolean);
     }
+    
     res.json(out);
   } catch (e) {
-    console.error('[SUGGESTS] error:', e?.message);
-    res.status(500).json({ error: 'Suggests failed' });
+    console.error('[SUGGESTS] error:', e);
+    res.status(500).json({ error: 'Suggests failed: ' + e.message });
   }
 });
 
-// LIST - Utilise runListQuery avec filtres
+// LIST - VERSION SIMPLIFIÉE ET ROBUSTE AVEC FILTRE SITE
 app.get('/api/atex/equipments', async (req, res) => {
   try {
     const userSite = req.user.site;
     const { sort = 'created_at', dir = 'DESC', limit = 100, offset = 0, search = '' } = req.query;
-    const whereSql = [];
-    const values = [];
-
+    
+    // Construction simple de la query
+    let whereClause = `WHERE site = $1`;
+    let values = [userSite];
+    let countValues = [userSite];
+    
+    // Ajoute le filtre search si présent
     if (search) {
-      whereSql.push('(component_type ILIKE $1 OR building ILIKE $1 OR room ILIKE $1)');
-      values.push(`%${search}%`);
+      const searchParam = `%${search}%`;
+      whereClause += ` AND (component_type ILIKE $2 OR building ILIKE $2 OR room ILIKE $2)`;
+      values.push(searchParam);
+      countValues.push(searchParam);
     }
-
-    const rows = await runListQuery({
-      whereSql,
-      values,
-      sortSafe: sort,
-      dirSafe: dir,
-      limit: parseInt(limit),
-      offset: parseInt(offset),
+    
+    // Query pour les données (paramètres ajustés pour search)
+    const paramOffset = values.length + 1;
+    const paramLimit = paramOffset + 1;
+    const dataQuery = `
+      SELECT * FROM atex_equipments 
+      ${whereClause}
+      ORDER BY ${sort} ${dir.toUpperCase()}
+      LIMIT $${paramLimit} OFFSET $${paramOffset}
+    `;
+    
+    values.push(parseInt(limit), parseInt(offset));
+    
+    const { rows: dataRows } = await pool.query(dataQuery, values);
+    
+    // Query pour le total (paramètres ajustés)
+    const countParamOffset = countValues.length + 1;
+    const countQuery = `
+      SELECT COUNT(*) as total FROM atex_equipments 
+      ${whereClause.replace(/\$2/g, '$1').replace(/\$1/g, '$1')}  -- Ajuste pour count (pas de search double)
+    `;
+    
+    const { rows: countRows } = await pool.query(countQuery, countValues);
+    
+    res.json({ 
+      data: dataRows, 
+      total: parseInt(countRows[0].total),
       userSite
     });
-
-    // Compte total
-    const totalRes = await pool.query(
-      `SELECT COUNT(*) as total FROM atex_equipments WHERE site = $1 ${whereSql.length ? 'AND ' + whereSql.join(' AND ') : ''}`,
-      [userSite, ...values]
-    );
-
-    res.json({ data: rows, total: parseInt(totalRes.rows[0].total), userSite });
+    
   } catch (e) {
-    console.error('[LIST] error:', e?.message);
-    res.status(500).json({ error: 'List failed' });
+    console.error('[LIST] error:', e);
+    res.status(500).json({ error: 'List failed: ' + e.message });
   }
 });
 
@@ -257,7 +251,6 @@ app.put('/api/atex/equipments/:id', async (req, res) => {
     // Calcule next_control si last_control changé
     if (updates.last_control !== undefined) {
       updates.next_control = addMonths(updates.last_control, 36);
-      delete updates.last_control; // On l'ajoute après
     }
 
     // Évalue conformité si zones ou atex_ref changés
@@ -402,8 +395,7 @@ app.get('/api/atex/analytics', async (req, res) => {
       byBuilding: byBuilding.rows,
       riskEquipment: riskEquipment.rows,
       complianceByZone: complianceByZone.rows,
-      generatedAt: new Date().toISOString(),
-      userSite: userSite // Pour debug, enlève si tu veux
+      generatedAt: new Date().toISOString()
     });
   } catch (e) {
     console.error('[ANALYTICS] error:', e?.message);
@@ -411,7 +403,7 @@ app.get('/api/atex/analytics', async (req, res) => {
   }
 });
 
-// EXPORT - FILTRE PAR SITE
+// ------- EXPORT EXCEL -------
 app.get('/api/atex/export', async (req, res) => {
   try {
     const userSite = req.user.site;
@@ -456,7 +448,7 @@ app.get('/api/atex/export', async (req, res) => {
       updated_at: row.updated_at ? row.updated_at.slice(0,19) : ''
     }));
 
-    res.json({ data: exportData, columns: Object.keys(exportData[0] || {}), userSite: userSite });
+    res.json({ data: exportData, columns: Object.keys(exportData[0] || {}) });
   } catch (e) {
     console.error('[EXPORT] error:', e?.message);
     res.status(500).json({ error: 'Export failed: ' + e.message });
