@@ -193,8 +193,7 @@ app.patch('/api/loopcalc/calculations/:id', async (req, res) => {
          distance = $7, 
          max_current = $8, 
          safety_factor = $9, 
-         compliance = $10,
-         updated_at = NOW()
+         compliance = $10
        WHERE id = $11
        RETURNING *`,
       [
