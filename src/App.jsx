@@ -8,6 +8,7 @@ import LostPassword from './pages/LostPassword.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import Atex from './pages/Atex.jsx';
+import LoopCalc from './pages/LoopCalc.jsx'; // <-- AJOUT
 
 export default function App() {
   return (
@@ -20,7 +21,7 @@ export default function App() {
         <Route path="/lost-password" element={<LostPassword />} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/app/atex" element={<ProtectedRoute><Atex /></ProtectedRoute>} />
-        <Route path="/app/loopcalc" element={<ProtectedRoute><LoopCalc /></ProtectedRoute>} />
+        <Route path="/app/loopcalc" element={<ProtectedRoute><LoopCalc /></ProtectedRoute>} /> {/* <-- AJOUT */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
