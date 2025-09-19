@@ -37,6 +37,35 @@ function assessCompliance({ voltage, resistance, distance, maxCurrent, safetyFac
   return { compliance: compliant ? 'Compliant' : 'Non-compliant', loopResistance, loopCurrent };
 }
 
+// ---- SINGLE GET (for edit)
+app.get('/api/loopcalc/calculations/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rows } = await pool.query(
+      'SELECT * FROM loop_calcs WHERE id=$1',
+      [id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    
+    const row = rows[0];
+    const calc = assessCompliance({
+      voltage: row.voltage,
+      resistance: row.resistance,
+      distance: row.distance,
+      maxCurrent: row.max_current,
+      safetyFactor: row.safety_factor
+    });
+    
+    // Enrich with computed fields
+    row.loop_resistance = calc.loopResistance;
+    row.loop_current = calc.loopCurrent;
+    res.json(row);
+  } catch (e) {
+    console.error('[LOOP GET] error:', e.message);
+    res.status(500).json({ error: 'Get failed' });
+  }
+});
+
 // ---- LIST with filters/sort/pagination
 // query: q, compliance, project, sort=created_at|project|voltage|distance|compliance , dir=asc|desc , page=1 , pageSize=20
 app.get('/api/loopcalc/calculations', async (req, res) => {
@@ -125,6 +154,84 @@ app.post('/api/loopcalc/calculations', async (req, res) => {
   } catch (e) {
     console.error('[LOOP CREATE] error:', e.message);
     res.status(500).json({ error: 'Create failed' });
+  }
+});
+
+// ---- UPDATE (compute + store)
+app.patch('/api/loopcalc/calculations/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const payload = {
+      project: req.body.project || null,
+      voltage: Number(req.body.voltage),
+      cable_type: String(req.body.cableType || ''),
+      resistance: Number(req.body.resistance),
+      capacitance: Number(req.body.capacitance),
+      inductance: Number(req.body.inductance),
+      distance: Number(req.body.distance),
+      max_current: Number(req.body.maxCurrent),
+      safety_factor: Number(req.body.safetyFactor)
+    };
+    
+    const calc = assessCompliance({
+      voltage: payload.voltage,
+      resistance: payload.resistance,
+      distance: payload.distance,
+      maxCurrent: payload.max_current,
+      safetyFactor: payload.safety_factor
+    });
+
+    const { rows } = await pool.query(
+      `UPDATE loop_calcs 
+       SET 
+         project = $1, 
+         voltage = $2, 
+         cable_type = $3, 
+         resistance = $4, 
+         capacitance = $5, 
+         inductance = $6, 
+         distance = $7, 
+         max_current = $8, 
+         safety_factor = $9, 
+         compliance = $10,
+         updated_at = NOW()
+       WHERE id = $11
+       RETURNING *`,
+      [
+        payload.project, payload.voltage, payload.cable_type, payload.resistance,
+        payload.capacitance, payload.inductance, payload.distance,
+        payload.max_current, payload.safety_factor, calc.compliance, id
+      ]
+    );
+    
+    if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    
+    const row = rows[0];
+    // enrich with computed fields for client convenience
+    row.loop_resistance = calc.loopResistance;
+    row.loop_current = calc.loopCurrent;
+    res.json(row);
+  } catch (e) {
+    console.error('[LOOP UPDATE] error:', e.message);
+    res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// ---- DELETE
+app.delete('/api/loopcalc/calculations/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rowCount } = await pool.query(
+      'DELETE FROM loop_calcs WHERE id=$1',
+      [id]
+    );
+    
+    if (rowCount === 0) return res.status(404).json({ error: 'Not found' });
+    
+    res.json({ success: true, deleted: id });
+  } catch (e) {
+    console.error('[LOOP DELETE] error:', e.message);
+    res.status(500).json({ error: 'Delete failed' });
   }
 });
 
