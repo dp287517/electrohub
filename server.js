@@ -34,21 +34,17 @@ app.use((req, res, next) => {
 });
 
 // --- PROXY ATEX ---
-// ATEX_BASE_URL = URL publique du service ATEX, ex: https://ton-atex.onrender.com
-if (!process.env.ATEX_BASE_URL) {
-  console.warn('ATEX_BASE_URL is not set; /api/atex/* will 404');
-} else {
-  app.use(
-    '/api/atex',
-    createProxyMiddleware({
-      target: process.env.ATEX_BASE_URL, // ne PAS ajouter de slash final
-      changeOrigin: true,
-      // on garde exactement le path /api/atex/* car server_atex l’expose avec ce préfixe
-      // pas de pathRewrite ici
-      logLevel: 'warn',
-    })
-  );
-}
+// Par défaut, on route en local vers server_atex.js (port 3001).
+// Optionnel: si ATEX_BASE_URL est défini, on l'utilise à la place.
+const atexTarget = process.env.ATEX_BASE_URL || 'http://127.0.0.1:3001';
+app.use(
+  '/api/atex',
+  createProxyMiddleware({
+    target: atexTarget,           // ne PAS ajouter de slash final
+    changeOrigin: true,
+    logLevel: 'warn'
+  })
+);
 
 // Health
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
