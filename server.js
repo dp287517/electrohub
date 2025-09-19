@@ -84,7 +84,7 @@ async function ensureUsersTable() {
 }
 ensureUsersTable();
 
-// ---- Auth routes
+// ---- Auth routes avec fallback pour anciens comptes
 app.post('/api/auth/signup', async (req, res) => {
   try {
     const { name, email, password, site, department } = req.body;
@@ -120,12 +120,29 @@ app.post('/api/auth/signin', async (req, res) => {
       return res.status(400).json({ error: 'Email and password required' });
     }
 
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
-    const user = rows[0];
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-
-    const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    // Cherche d'abord dans la nouvelle table users
+    let { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
+    let user = rows[0];
+    
+    // Fallback pour anciens comptes (demo)
+    if (!user) {
+      // Utilise les anciennes credentials demo
+      if (email === 'demo@electrohub.com' && password === 'demo123') {
+        user = {
+          id: 'demo',
+          name: 'Demo User',
+          email: email,
+          site: 'Nyon',  // Fallback
+          department: 'Maintenance'
+        };
+      } else {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+    } else {
+      // Vérifie le mot de passe pour les nouveaux comptes
+      const valid = await bcrypt.compare(password, user.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const token = jwt.sign(
       { uid: user.id, name: user.name, email: user.email, site: user.site, department: user.department },
