@@ -288,20 +288,30 @@ app.post('/api/atex/ai/:id', async (req, res) => {
     const eq = r.rows[0]; if (!eq) return res.status(404).json({ error: 'Not found' });
 
     const prompt = `
-Tu es expert ATEX. Analyse la conformité, puis liste: 1) Pourquoi non conforme (si applicable), 2) Mesures préventives, 3) Palliatives, 4) Correctives. Reste concis.
+You are an ATEX compliance expert. Analyze the equipment's compliance with ATEX standards. Provide a structured response in English:
 
-Équipement:
-- Bâtiment: ${eq.building}
-- Local: ${eq.room}
+1) Reasons for non-compliance (if applicable, be specific about marking vs. zone mismatch, protection levels, etc.)
+
+2) Preventive measures
+
+3) Palliative measures
+
+4) Corrective actions
+
+Be concise and accurate. Recall: Gas zones - 0 (most hazardous), 1, 2 (least); Equipment category 1 for all, 2 for 1-2, 3 for 2 only. Similar for dust.
+
+Equipment:
+- Building: ${eq.building}
+- Room: ${eq.room}
 - Type: ${eq.component_type}
-- Fabricant: ${eq.manufacturer}
-- Réf fabricant: ${eq.manufacturer_ref}
-- Marquage ATEX: ${eq.atex_ref}
-- Zone gaz: ${eq.zone_gas ?? '—'}
-- Zone poussières: ${eq.zone_dust ?? '—'}
-- Statut: ${eq.status}
-- Dernier contrôle: ${eq.last_control ?? '—'}
-- Prochain contrôle: ${eq.next_control ?? '—'}
+- Manufacturer: ${eq.manufacturer}
+- Manufacturer Ref: ${eq.manufacturer_ref}
+- ATEX Marking: ${eq.atex_ref}
+- Gas Zone: ${eq.zone_gas ?? '—'}
+- Dust Zone: ${eq.zone_dust ?? '—'}
+- Current Status: ${eq.status}
+- Last Control: ${eq.last_control ?? '—'}
+- Next Control: ${eq.next_control ?? '—'}
 `.trim();
 
     const resp = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -311,7 +321,7 @@ Tu es expert ATEX. Analyse la conformité, puis liste: 1) Pourquoi non conforme 
         model: 'gpt-4o-mini',
         temperature: 0.2,
         messages: [
-          { role:'system', content:'Tu es un expert en conformité ATEX.' },
+          { role:'system', content:'You are an ATEX compliance expert. Respond in English only.' },
           { role:'user', content: prompt }
         ]
       })
