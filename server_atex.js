@@ -37,17 +37,61 @@ function addMonths(dateStr, months = 36) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// Conformité
+// Enhanced Conformité: Parse category from marking and check against zone
+function getCategoryFromMarking(ref, type) { // type: 'G' or 'D'
+  const upper = (ref || '').toUpperCase();
+  const match = upper.match(new RegExp(`II\\s*([1-3])${type}`, 'i'));
+  return match ? parseInt(match[1]) : null;
+}
+
+function getRequiredCategory(zone, type) { // type: gas or dust
+  const z = Number(zone);
+  if (type === 'gas') {
+    if (z === 0) return 1;
+    if (z === 1) return [1, 2];
+    if (z === 2) return [1, 2, 3];
+  } else if (type === 'dust') {
+    if (z === 20) return 1;
+    if (z === 21) return [1, 2];
+    if (z === 22) return [1, 2, 3];
+  }
+  return null;
+}
+
 function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   const ref = (atex_ref || '').toUpperCase();
-  const needsG = [0,1,2].includes(Number(zone_gas));
-  const needsD = [20,21,22].includes(Number(zone_dust));
-  const hasG = /\bG\b/.test(ref);
-  const hasD = /\bD\b/.test(ref);
+  const needsGas = [0,1,2].includes(Number(zone_gas));
+  const needsDust = [20,21,22].includes(Number(zone_dust));
+
+  // Parse categories
+  const catGas = getCategoryFromMarking(ref, 'G');
+  const catDust = getCategoryFromMarking(ref, 'D');
 
   const problems = [];
-  if (needsG && !hasG) problems.push('Marquage gaz (G) manquant pour une zone gaz.');
-  if (needsD && !hasD) problems.push('Marquage poussières (D) manquant pour une zone poussières.');
+
+  // Gas check
+  if (needsGas) {
+    if (catGas === null) {
+      problems.push('No gas category (G) in ATEX marking for gas zone.');
+    } else {
+      const reqGas = getRequiredCategory(zone_gas, 'gas');
+      if (!reqGas.includes(catGas)) {
+        problems.push(`Gas category ${catGas}G not suitable for zone ${zone_gas} (requires ${reqGas.join(' or ')}).`);
+      }
+    }
+  }
+
+  // Dust check
+  if (needsDust) {
+    if (catDust === null) {
+      problems.push('No dust category (D) in ATEX marking for dust zone.');
+    } else {
+      const reqDust = getRequiredCategory(zone_dust, 'dust');
+      if (!reqDust.includes(catDust)) {
+        problems.push(`Dust category ${catDust}D not suitable for zone ${zone_dust} (requires ${reqDust.join(' or ')}).`);
+      }
+    }
+  }
 
   return { status: problems.length ? 'Non conforme' : 'Conforme', problems };
 }
