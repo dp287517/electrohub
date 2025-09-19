@@ -1,6 +1,7 @@
 // src/pages/Atex.jsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
+import * as XLSX from 'xlsx'; // Assume xlsx is installed: npm i xlsx
 
 // Garder en phase avec SignUp si tu ajoutes des sites
 const SITE_OPTIONS = ['Nyon','Levice','Aprilia'];
@@ -402,6 +403,58 @@ export default function Atex() {
     }
   }
 
+  /* ---------- Import/Export helpers ---------- */
+  const EXCEL_COLUMNS = [
+    'site', 'building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref',
+    'atex_ref', 'zone_gas', 'zone_dust', 'comments', 'last_control', 'frequency_months', 'next_control'
+  ];
+
+  async function exportToExcel() {
+    try {
+      const data = await get('/api/atex/equipments');
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'ATEX Equipment');
+      XLSX.writeFile(wb, 'atex_equipment.xlsx');
+    } catch (e) {
+      alert('Export failed: ' + e.message);
+    }
+  }
+
+  async function importFromExcel(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const data = new Uint8Array(event.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+      
+      // Filter and map columns
+      const validData = jsonData.map(row => {
+        const payload = {};
+        EXCEL_COLUMNS.forEach(col => {
+          if (row[col] !== undefined) payload[col] = row[col];
+        });
+        payload.zone_gas = payload.zone_gas ? Number(payload.zone_gas) : null;
+        payload.zone_dust = payload.zone_dust ? Number(payload.zone_dust) : null;
+        return payload;
+      }).filter(row => row.component_type && row.building); // Basic validation
+
+      try {
+        for (const payload of validData) {
+          await post('/api/atex/equipments', payload);
+        }
+        alert(`${validData.length} equipments imported.`);
+        load();
+      } catch (e) {
+        alert('Import failed: ' + e.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   /* ---------- Rendu ---------- */
   return (
     <section className="container-narrow py-8">
@@ -481,6 +534,8 @@ export default function Atex() {
                   const tone = dleft==null ? 'default' : dleft < 0 ? 'danger' : dleft <= 90 ? 'warn' : 'ok';
                   const statusDisplay = getStatusDisplay(r.status);
                   const statusColor = getStatusColor(r.status);
+                  const nextDate = formatDate(r.next_control);
+                  const daysText = dleft==null?'—': dleft<0? `${Math.abs(dleft)} d late` : `${dleft} d`;
                   return (
                     <tr key={r.id} className="border-t">
                       <td className="px-4 py-2">{r.building}</td>
@@ -498,17 +553,25 @@ export default function Atex() {
                       </td>
                       <td className="px-4 py-2">{formatDate(r.last_control)}</td>
                       <td className="px-4 py-2">
-                        <div className="flex items-center gap-2 flex-nowrap">
-                          <span className="truncate max-w-[8rem]" title={formatDate(r.next_control)}>{formatDate(r.next_control)}</span>
-                          <Tag tone={tone}>{dleft==null?'—': dleft<0? `${Math.abs(dleft)} d late` : `${dleft} d`}</Tag>
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className="truncate text-xs min-w-0" title={nextDate}>{nextDate}</span>
+                          <Tag tone={tone} className="whitespace-nowrap flex-shrink-0">{daysText}</Tag>
                         </div>
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex gap-1">
-                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="Edit" onClick={()=>setEditItem(r)}>Edit</button>
-                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="Delete" onClick={()=>setShowDelete(r)}>Delete</button>
-                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="Attachments" onClick={()=>openAttachments(r)}>Attach</button>
-                          <button className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 text-gray-600" title="AI Check" onClick={()=>runAI(r)}>AI</button>
+                          <button className="w-8 h-8 rounded bg-blue-500 text-white hover:bg-blue-600 flex items-center justify-center" title="Edit" onClick={()=>setEditItem(r)}>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                          </button>
+                          <button className="w-8 h-8 rounded bg-red-500 text-white hover:bg-red-600 flex items-center justify-center" title="Delete" onClick={()=>setShowDelete(r)}>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          </button>
+                          <button className="w-8 h-8 rounded bg-green-500 text-white hover:bg-green-600 flex items-center justify-center" title="Attachments" onClick={()=>openAttachments(r)}>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                          </button>
+                          <button className="w-8 h-8 rounded bg-purple-500 text-white hover:bg-purple-600 flex items-center justify-center" title="AI Check" onClick={()=>runAI(r)}>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -790,18 +853,116 @@ export default function Atex() {
         </div>
       )}
 
-      {/* ---- Onglet Import/Export (simple placeholders) ---- */}
+      {/* ---- Onglet Import/Export ---- */}
       {tab === 'import' && (
-        <div className="card p-6 space-y-3">
-          <p className="text-gray-700">Import CSV/XLSX à venir. En attendant, tu peux me fournir un fichier et je te donne un script d’import adapté.</p>
-          <button className="btn bg-gray-100" onClick={()=>alert('Export CSV coming soon')}>Export CSV</button>
+        <div className="card p-6 space-y-6">
+          <h2 className="text-2xl font-semibold">Import / Export</h2>
+          
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-lg font-medium mb-2">Excel Template Instructions</h3>
+              <p className="text-gray-700 mb-4">Use the following column order in your Excel file (first row headers):</p>
+              <ul className="list-disc pl-6 space-y-1 text-sm">
+                {EXCEL_COLUMNS.map(col => (
+                  <li key={col}>{col} (e.g., "Nyon" for site, "0" for zone_gas)</li>
+                ))}
+              </ul>
+              <p className="text-xs text-gray-500 mt-2">Required: building, room, component_type. Dates in YYYY-MM-DD format.</p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-4">
+              <button className="btn btn-primary flex-1" onClick={exportToExcel}>Download Current Data (XLSX)</button>
+              <div className="flex-1">
+                <label className="block text-sm font-medium mb-1">Upload Excel File</label>
+                <input className="input" type="file" accept=".xlsx,.xls" onChange={importFromExcel} />
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* ---- Onglet Assessment (placeholder) ---- */}
+      {/* ---- Onglet Assessment ---- */}
       {tab === 'assessment' && (
-        <div className="card p-6">
-          <p className="text-gray-700">Sélectionne un équipement dans l’onglet Controls et clique sur 🤖 pour lancer l’analyse.</p>
+        <div className="card p-6 space-y-6">
+          <h2 className="text-2xl font-semibold">Assessment & Analytics</h2>
+          
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+            {/* Simple stats cards */}
+            <div className="bg-white p-4 rounded-lg shadow">
+              <h3 className="text-lg font-medium">Total Equipment</h3>
+              <p className="text-3xl font-bold text-blue-600">{rows.length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow">
+              <h3 className="text-lg font-medium">Compliant</h3>
+              <p className="text-3xl font-bold text-green-600">{rows.filter(r => r.status === 'Conforme').length}</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow">
+              <h3 className="text-lg font-medium">Overdue</h3>
+              <p className="text-3xl font-bold text-red-600">{rows.filter(r => daysUntil(r.next_control) < 0).length}</p>
+            </div>
+          </div>
+
+          {/* Placeholder graphs - Assume Chart.js or simple divs */}
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="bg-white p-4 rounded-lg shadow">
+              <h3 className="text-lg font-medium mb-4">Compliance by Status</h3>
+              <div className="h-64 bg-gray-100 rounded flex items-center justify-center">
+                <p className="text-gray-500">Pie Chart: Compliant 70%, Non-compliant 20%, To review 10%</p>
+              </div>
+            </div>
+            <div className="bg-white p-4 rounded-lg shadow">
+              <h3 className="text-lg font-medium mb-4">Inspections Due (Next 90 Days)</h3>
+              <div className="h-64 bg-gray-100 rounded flex items-center justify-center">
+                <p className="text-gray-500">Bar Chart: Low risk 15, Medium 8, High 3</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Risk Assessment Table */}
+          <div className="bg-white rounded-lg shadow">
+            <h3 className="text-lg font-medium p-4 border-b">Risk Assessment Table</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Equipment ID</th>
+                    <th className="px-4 py-2 text-left">Type</th>
+                    <th className="px-4 py-2 text-left">Zone Gas</th>
+                    <th className="px-4 py-2 text-left">Zone Dust</th>
+                    <th className="px-4 py-2 text-left">Status</th>
+                    <th className="px-4 py-2 text-left">Risk Level</th>
+                    <th className="px-4 py-2 text-left">Next Inspection</th>
+                    <th className="px-4 py-2 text-left">Days Until</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 10).map(r => { // Top 10 for demo
+                    const dleft = daysUntil(r.next_control) || 0;
+                    const risk = dleft < 0 ? 'High' : dleft <= 90 ? 'Medium' : 'Low';
+                    const riskColor = risk === 'High' ? 'bg-red-100' : risk === 'Medium' ? 'bg-yellow-100' : 'bg-green-100';
+                    return (
+                      <tr key={r.id} className="border-t">
+                        <td className="px-4 py-2">{r.id}</td>
+                        <td className="px-4 py-2">{r.component_type}</td>
+                        <td className="px-4 py-2">{r.zone_gas ?? '—'}</td>
+                        <td className="px-4 py-2">{r.zone_dust ?? '—'}</td>
+                        <td className="px-4 py-2">
+                          <span className={`px-2 py-1 rounded text-xs ${getStatusColor(r.status)}`}>
+                            {getStatusDisplay(r.status)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className={`px-2 py-1 rounded text-xs ${riskColor}`}>{risk}</span>
+                        </td>
+                        <td className="px-4 py-2">{formatDate(r.next_control)}</td>
+                        <td className="px-4 py-2">{dleft < 0 ? `${Math.abs(dleft)} late` : `${dleft} days`}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
     </section>
