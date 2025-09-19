@@ -149,7 +149,7 @@ app.get('/api/atex/suggests', async (req, res) => {
   }
 });
 
-// LIST - COMPATIBLE AVEC FRONTEND (retourne directement tableau)
+// LIST - COMPATIBLE AVEC FRONTEND
 app.get('/api/atex/equipments', async (req, res) => {
   try {
     const userSite = req.user.site;
@@ -177,8 +177,6 @@ app.get('/api/atex/equipments', async (req, res) => {
     values.push(parseInt(limit), parseInt(offset));
     
     const { rows } = await pool.query(query, values);
-    
-    // RETOURNE DIRECTEMENT LE TABLEAU (pas d'objet wrapper)
     res.json(rows);
     
   } catch (e) {
@@ -187,7 +185,7 @@ app.get('/api/atex/equipments', async (req, res) => {
   }
 });
 
-// CREATE - SITE AUTO
+// CREATE - VERSION ROBUSTE
 app.post('/api/atex/equipments', async (req, res) => {
   try {
     const userSite = req.user.site;
@@ -196,51 +194,108 @@ app.post('/api/atex/equipments', async (req, res) => {
       atex_ref, zone_gas, zone_dust, last_control, comments 
     } = req.body;
 
+    if (!building || !room || !component_type) {
+      return res.status(400).json({ error: 'Building, room, and component_type are required' });
+    }
+
+    const zoneGasNum = zone_gas ? parseInt(zone_gas) : null;
+    const zoneDustNum = zone_dust ? parseInt(zone_dust) : null;
+
     const next_control = last_control ? addMonths(last_control, 36) : null;
-    const compliance = assessCompliance(atex_ref, zone_gas, zone_dust);
+    const compliance = assessCompliance(atex_ref || '', zoneGasNum, zoneDustNum);
     
     const { rows } = await pool.query(`
       INSERT INTO atex_equipments (
         site, building, room, component_type, manufacturer, manufacturer_ref, 
         atex_ref, zone_gas, zone_dust, status, last_control, next_control, 
         comments, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+      ) VALUES (
+        $1, $2, $3, $4, 
+        COALESCE($5, ''), COALESCE($6, ''), 
+        COALESCE($7, ''), $8, $9, $10, $11, $12, 
+        COALESCE($13, ''), NOW(), NOW()
+      )
       RETURNING *
     `, [
-      userSite, building, room, component_type, manufacturer, manufacturer_ref, 
-      atex_ref, zone_gas, zone_dust, compliance.status, last_control, next_control, 
-      comments
+      userSite, building, room, component_type, 
+      manufacturer, manufacturer_ref, atex_ref, 
+      zoneGasNum, zoneDustNum, compliance.status, 
+      last_control || null, next_control, comments
     ]);
 
     res.status(201).json(rows[0]);
+    
   } catch (e) {
-    console.error('[CREATE] error:', e);
+    console.error('[CREATE] Full error:', e);
     res.status(500).json({ error: 'Create failed: ' + e.message });
   }
 });
 
-// UPDATE - FILTRE PAR SITE
+// UPDATE - VERSION ROBUSTE
 app.put('/api/atex/equipments/:id', async (req, res) => {
   try {
     const userSite = req.user.site;
-    const id = req.params.id;
-    const updates = { ...req.body };
-    const setClauses = [];
-    const values = [id, userSite];
-
-    if (updates.last_control !== undefined) {
-      updates.next_control = addMonths(updates.last_control, 36);
+    const equipmentId = req.params.id;
+    
+    if (!equipmentId || isNaN(parseInt(equipmentId))) {
+      return res.status(400).json({ error: 'Invalid equipment ID' });
     }
 
-    if (updates.atex_ref !== undefined || updates.zone_gas !== undefined || updates.zone_dust !== undefined) {
-      const compliance = assessCompliance(updates.atex_ref || '', updates.zone_gas, updates.zone_dust);
+    const updates = { ...req.body };
+    
+    if (updates.zone_gas !== undefined) {
+      updates.zone_gas = updates.zone_gas ? parseInt(updates.zone_gas) : null;
+    }
+    if (updates.zone_dust !== undefined) {
+      updates.zone_dust = updates.zone_dust ? parseInt(updates.zone_dust) : null;
+    }
+
+    if (updates.last_control !== undefined) {
+      updates.next_control = updates.last_control ? addMonths(updates.last_control, 36) : null;
+    }
+
+    const needsComplianceCheck = updates.atex_ref !== undefined || 
+                                updates.zone_gas !== undefined || 
+                                updates.zone_dust !== undefined;
+    
+    if (needsComplianceCheck) {
+      const current = await pool.query('SELECT atex_ref, zone_gas, zone_dust FROM atex_equipments WHERE id = $1', [equipmentId]);
+      if (current.rows.length === 0) {
+        return res.status(404).json({ error: 'Equipment not found' });
+      }
+      
+      const currentValues = current.rows[0];
+      const checkRef = updates.atex_ref !== undefined ? updates.atex_ref : currentValues.atex_ref;
+      const checkZoneGas = updates.zone_gas !== undefined ? updates.zone_gas : currentValues.zone_gas;
+      const checkZoneDust = updates.zone_dust !== undefined ? updates.zone_dust : currentValues.zone_dust;
+      
+      const compliance = assessCompliance(checkRef || '', checkZoneGas, checkZoneDust);
       updates.status = compliance.status;
     }
 
-    Object.keys(updates).forEach((key, index) => {
-      setClauses.push(`${key} = $${index + 3}`);
-      values.push(updates[key]);
+    const setClauses = [];
+    const values = [equipmentId, userSite];
+    let valueIndex = 3;
+
+    const updatableFields = ['building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref', 
+                            'atex_ref', 'zone_gas', 'zone_dust', 'last_control', 'next_control', 
+                            'status', 'comments'];
+    
+    updatableFields.forEach(field => {
+      if (updates[field] !== undefined) {
+        const sqlField = ['manufacturer', 'manufacturer_ref', 'atex_ref', 'comments'].includes(field) 
+          ? `COALESCE($${valueIndex}, '')` 
+          : `$${valueIndex}`;
+        
+        setClauses.push(`${field} = ${sqlField}`);
+        values.push(updates[field]);
+        valueIndex++;
+      }
     });
+
+    if (setClauses.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
 
     const { rows } = await pool.query(`
       UPDATE atex_equipments 
@@ -254,8 +309,9 @@ app.put('/api/atex/equipments/:id', async (req, res) => {
     }
 
     res.json(rows[0]);
+    
   } catch (e) {
-    console.error('[UPDATE] error:', e);
+    console.error('[UPDATE] Full error:', e);
     res.status(500).json({ error: 'Update failed: ' + e.message });
   }
 });
