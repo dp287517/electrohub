@@ -67,7 +67,7 @@ app.get('/api/atex/suggests', async (req, res) => {
     }
     res.json(out);
   } catch (e) {
-    console.error(e);
+    console.error('[SUGGESTS] error:', e?.message);
     res.status(500).json({ error: 'Suggests failed' });
   }
 });
@@ -83,6 +83,13 @@ function addLikeIn(where, values, i, field, arr) {
 }
 
 // LIST
+async function runListQuery({ whereSql, values, sortSafe, dirSafe, limit, offset }) {
+  return pool.query(
+    `SELECT * FROM atex_equipments ${whereSql} ORDER BY ${sortSafe} ${dirSafe} LIMIT ${limit} OFFSET ${offset}`,
+    values
+  );
+}
+
 app.get('/api/atex/equipments', async (req, res) => {
   try {
     const { q, sort='id', dir='desc', page='1', pageSize='100' } = req.query;
@@ -118,18 +125,26 @@ app.get('/api/atex/equipments', async (req, res) => {
     const limit = Math.min(parseInt(pageSize,10)||100, 300);
     const offset = ((parseInt(page,10)||1)-1) * limit;
 
-    const { rows } = await pool.query(
-      `SELECT * FROM atex_equipments ${whereSql} ORDER BY ${sortSafe} ${dirSafe} LIMIT ${limit} OFFSET ${offset}`,
-      values
-    );
-    res.json(rows);
+    try {
+      const { rows } = await runListQuery({ whereSql, values, sortSafe, dirSafe, limit, offset });
+      return res.json(rows);
+    } catch (e) {
+      // Fallback si colonne de tri inexistante (ex: updated_at pas migrée)
+      const isUnknownColumn = /column .* does not exist/i.test(e?.message || '');
+      if (isUnknownColumn && sortSafe !== 'id') {
+        console.warn(`[LIST] Unknown sort column "${sortSafe}", falling back to "id"`);
+        const { rows } = await runListQuery({ whereSql, values, sortSafe: 'id', dirSafe, limit, offset });
+        return res.json(rows);
+      }
+      throw e;
+    }
   } catch (e) {
-    console.error(e);
+    console.error('[LIST] error:', e?.message);
     res.status(500).json({ error: 'List failed' });
   }
 });
 
-// CREATE (sans colonne attachments dans atex_equipments)
+// CREATE
 app.post('/api/atex/equipments', async (req, res) => {
   try {
     const {
@@ -153,7 +168,7 @@ app.post('/api/atex/equipments', async (req, res) => {
     );
     res.status(201).json(rows[0]);
   } catch (e) {
-    console.error(e);
+    console.error('[CREATE] error:', e?.message);
     res.status(500).json({ error: 'Create failed' });
   }
 });
@@ -189,7 +204,7 @@ app.put('/api/atex/equipments/:id', async (req, res) => {
     const { rows } = await pool.query(`UPDATE atex_equipments SET ${set} WHERE id=$${keys.length+1} RETURNING *`, vals);
     res.json(rows[0]);
   } catch (e) {
-    console.error(e);
+    console.error('[UPDATE] error:', e?.message);
     res.status(500).json({ error: 'Update failed' });
   }
 });
@@ -200,7 +215,7 @@ app.delete('/api/atex/equipments/:id', async (req, res) => {
     await pool.query('DELETE FROM atex_equipments WHERE id=$1', [req.params.id]);
     res.json({ success: true });
   } catch (e) {
-    console.error(e);
+    console.error('[DELETE] error:', e?.message);
     res.status(500).json({ error: 'Delete failed' });
   }
 });
@@ -216,7 +231,7 @@ app.get('/api/atex/equipments/:id/attachments', async (req, res) => {
     );
     res.json(r.rows);
   } catch (e) {
-    console.error(e);
+    console.error('[ATTACH LIST] error:', e?.message);
     res.status(500).json({ error: 'Attachments list failed' });
   }
 });
@@ -235,7 +250,7 @@ app.post('/api/atex/equipments/:id/attachments', upload.array('files', 12), asyn
     }
     res.status(201).json(results);
   } catch (e) {
-    console.error(e);
+    console.error('[ATTACH UPLOAD] error:', e?.message);
     res.status(500).json({ error: 'Upload failed' });
   }
 });
@@ -249,7 +264,7 @@ app.get('/api/atex/attachments/:attId/download', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(row.filename)}"`);
     res.send(Buffer.from(row.data, 'binary'));
   } catch (e) {
-    console.error(e);
+    console.error('[ATTACH DL] error:', e?.message);
     res.status(500).json({ error: 'Download failed' });
   }
 });
@@ -259,7 +274,7 @@ app.delete('/api/atex/attachments/:attId', async (req, res) => {
     await pool.query('DELETE FROM atex_attachments WHERE id=$1', [req.params.attId]);
     res.json({ success: true });
   } catch (e) {
-    console.error(e);
+    console.error('[ATTACH DEL] error:', e?.message);
     res.status(500).json({ error: 'Delete attachment failed' });
   }
 });
@@ -305,7 +320,7 @@ Tu es expert ATEX. Analyse la conformité, puis liste: 1) Pourquoi non conforme 
     const json = await resp.json();
     res.json({ analysis: json.choices?.[0]?.message?.content?.trim() || '—' });
   } catch (e) {
-    console.error(e);
+    console.error('[AI] error:', e?.message);
     res.status(500).json({ error: 'AI failed' });
   }
 });
