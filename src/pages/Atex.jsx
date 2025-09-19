@@ -501,10 +501,6 @@ export default function Atex() {
     payload.zone_dust = payload.zone_dust ? Number(payload.zone_dust) : null;
     if (!payload.next_control) payload.next_control = computeNextControl();
 
-    // ✅ AUTO-REMPLIT LE SITE de l'utilisateur connecté
-    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-    payload.site = user.site || defaultSite;  // Utilise le site de l'utilisateur ou fallback
-
     try {
       const created = await post('/api/atex/equipments', payload);
       if (files.length) {
@@ -514,7 +510,7 @@ export default function Atex() {
       }
       // reset
       setCreateForm({
-        site: user.site || defaultSite,  // ✅ Reset avec le bon site utilisateur
+        site: defaultSite,
         building: '', room: '',
         component_type: '',
         manufacturer: '', manufacturer_ref: '',
