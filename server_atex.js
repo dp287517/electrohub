@@ -27,7 +27,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// MIDDLEWARE AUTH - S'APPLIQUE À TOUTES LES ROUTES ATEX (SAUF HEALTH)
+// MIDDLEWARE AUTH
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -47,7 +47,7 @@ function authenticateToken(req, res, next) {
 // Applique auth à /api/atex/*
 app.use('/api/atex', authenticateToken);
 
-// Health (publique, sans auth)
+// Health (publique)
 app.get('/api/atex/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // Utils
@@ -68,14 +68,13 @@ function daysUntil(dateStr) {
   return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
 }
 
-// Enhanced Conformité: Parse category from marking and check against zone
-function getCategoryFromMarking(ref, type) { // type: 'G' or 'D'
+function getCategoryFromMarking(ref, type) {
   const upper = (ref || '').toUpperCase();
   const match = upper.match(new RegExp(`II\\s*([1-3])${type}`, 'i'));
   return match ? parseInt(match[1]) : null;
 }
 
-function getRequiredCategory(zone, type) { // type: gas or dust
+function getRequiredCategory(zone, type) {
   const z = Number(zone);
   if (type === 'gas') {
     if (z === 0) return 1;
@@ -94,13 +93,11 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   const needsGas = [0,1,2].includes(Number(zone_gas));
   const needsDust = [20,21,22].includes(Number(zone_dust));
 
-  // Parse categories
   const catGas = getCategoryFromMarking(ref, 'G');
   const catDust = getCategoryFromMarking(ref, 'D');
 
   const problems = [];
 
-  // Gas check
   if (needsGas) {
     if (catGas === null) {
       problems.push('No gas category (G) in ATEX marking for gas zone.');
@@ -112,7 +109,6 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
     }
   }
 
-  // Dust check
   if (needsDust) {
     if (catDust === null) {
       problems.push('No dust category (D) in ATEX marking for dust zone.');
@@ -127,7 +123,7 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   return { status: problems.length ? 'Non conforme' : 'Conforme', problems };
 }
 
-// SUGGESTS - FILTRE PAR SITE
+// SUGGESTS - COMPATIBLE AVEC FRONTEND
 app.get('/api/atex/suggests', async (req, res) => {
   try {
     const userSite = req.user.site;
@@ -153,29 +149,25 @@ app.get('/api/atex/suggests', async (req, res) => {
   }
 });
 
-// LIST - VERSION SIMPLIFIÉE ET ROBUSTE AVEC FILTRE SITE
+// LIST - COMPATIBLE AVEC FRONTEND (retourne directement tableau)
 app.get('/api/atex/equipments', async (req, res) => {
   try {
     const userSite = req.user.site;
     const { sort = 'created_at', dir = 'DESC', limit = 100, offset = 0, search = '' } = req.query;
     
-    // Construction simple de la query
     let whereClause = `WHERE site = $1`;
     let values = [userSite];
-    let countValues = [userSite];
     
-    // Ajoute le filtre search si présent
     if (search) {
       const searchParam = `%${search}%`;
       whereClause += ` AND (component_type ILIKE $2 OR building ILIKE $2 OR room ILIKE $2)`;
       values.push(searchParam);
-      countValues.push(searchParam);
     }
     
-    // Query pour les données (paramètres ajustés pour search)
-    const paramOffset = values.length + 1;
-    const paramLimit = paramOffset + 1;
-    const dataQuery = `
+    const paramLimit = values.length + 1;
+    const paramOffset = paramLimit + 1;
+    
+    const query = `
       SELECT * FROM atex_equipments 
       ${whereClause}
       ORDER BY ${sort} ${dir.toUpperCase()}
@@ -184,22 +176,10 @@ app.get('/api/atex/equipments', async (req, res) => {
     
     values.push(parseInt(limit), parseInt(offset));
     
-    const { rows: dataRows } = await pool.query(dataQuery, values);
+    const { rows } = await pool.query(query, values);
     
-    // Query pour le total (paramètres ajustés)
-    const countParamOffset = countValues.length + 1;
-    const countQuery = `
-      SELECT COUNT(*) as total FROM atex_equipments 
-      ${whereClause.replace(/\$2/g, '$1').replace(/\$1/g, '$1')}  -- Ajuste pour count (pas de search double)
-    `;
-    
-    const { rows: countRows } = await pool.query(countQuery, countValues);
-    
-    res.json({ 
-      data: dataRows, 
-      total: parseInt(countRows[0].total),
-      userSite
-    });
+    // RETOURNE DIRECTEMENT LE TABLEAU (pas d'objet wrapper)
+    res.json(rows);
     
   } catch (e) {
     console.error('[LIST] error:', e);
@@ -234,7 +214,7 @@ app.post('/api/atex/equipments', async (req, res) => {
 
     res.status(201).json(rows[0]);
   } catch (e) {
-    console.error('[CREATE] error:', e?.message);
+    console.error('[CREATE] error:', e);
     res.status(500).json({ error: 'Create failed: ' + e.message });
   }
 });
@@ -248,12 +228,10 @@ app.put('/api/atex/equipments/:id', async (req, res) => {
     const setClauses = [];
     const values = [id, userSite];
 
-    // Calcule next_control si last_control changé
     if (updates.last_control !== undefined) {
       updates.next_control = addMonths(updates.last_control, 36);
     }
 
-    // Évalue conformité si zones ou atex_ref changés
     if (updates.atex_ref !== undefined || updates.zone_gas !== undefined || updates.zone_dust !== undefined) {
       const compliance = assessCompliance(updates.atex_ref || '', updates.zone_gas, updates.zone_dust);
       updates.status = compliance.status;
@@ -277,7 +255,7 @@ app.put('/api/atex/equipments/:id', async (req, res) => {
 
     res.json(rows[0]);
   } catch (e) {
-    console.error('[UPDATE] error:', e?.message);
+    console.error('[UPDATE] error:', e);
     res.status(500).json({ error: 'Update failed: ' + e.message });
   }
 });
@@ -298,7 +276,7 @@ app.delete('/api/atex/equipments/:id', async (req, res) => {
 
     res.json({ message: 'Deleted successfully' });
   } catch (e) {
-    console.error('[DELETE] error:', e?.message);
+    console.error('[DELETE] error:', e);
     res.status(500).json({ error: 'Delete failed' });
   }
 });
@@ -310,7 +288,6 @@ app.get('/api/atex/analytics', async (req, res) => {
     const now = new Date();
     const ninetyDaysFromNow = new Date(now.getTime() + (90 * 24 * 60 * 60 * 1000));
 
-    // Stats générales
     const stats = await pool.query(`
       SELECT 
         COUNT(*) as total,
@@ -327,7 +304,6 @@ app.get('/api/atex/analytics', async (req, res) => {
       userSite
     ]);
 
-    // Répartition par zone
     const zones = await pool.query(`
       SELECT 
         COALESCE(zone_gas, 0) as gas_zone,
@@ -339,7 +315,6 @@ app.get('/api/atex/analytics', async (req, res) => {
       ORDER BY gas_zone, dust_zone
     `, [userSite]);
 
-    // Répartition par type
     const byType = await pool.query(`
       SELECT component_type, COUNT(*) as count
       FROM atex_equipments 
@@ -349,7 +324,6 @@ app.get('/api/atex/analytics', async (req, res) => {
       LIMIT 10
     `, [userSite]);
 
-    // Répartition par bâtiment
     const byBuilding = await pool.query(`
       SELECT building, COUNT(*) as count
       FROM atex_equipments 
@@ -359,22 +333,18 @@ app.get('/api/atex/analytics', async (req, res) => {
       LIMIT 10
     `, [userSite]);
 
-    // Équipements à risque
     const riskEquipment = await pool.query(`
-      SELECT id, component_type, building, room, zone_gas, zone_dust, status, next_control,
-             $1::date - next_control::date as days_overdue
+      SELECT id, component_type, building, room, zone_gas, zone_dust, status, next_control
       FROM atex_equipments 
-      WHERE site = $4 AND (next_control < $2 OR (next_control >= $1 AND next_control <= $3))
+      WHERE site = $1 AND (next_control < $2 OR (next_control >= $2 AND next_control <= $3))
       ORDER BY next_control ASC
       LIMIT 20
     `, [
+      userSite,
       now.toISOString().slice(0,10), 
-      now.toISOString().slice(0,10), 
-      ninetyDaysFromNow.toISOString().slice(0,10),
-      userSite
+      ninetyDaysFromNow.toISOString().slice(0,10)
     ]);
 
-    // Compliance par zone
     const complianceByZone = await pool.query(`
       SELECT 
         COALESCE(zone_gas, 0) as zone,
@@ -398,12 +368,12 @@ app.get('/api/atex/analytics', async (req, res) => {
       generatedAt: new Date().toISOString()
     });
   } catch (e) {
-    console.error('[ANALYTICS] error:', e?.message);
-    res.status(500).json({ error: 'Analytics failed' });
+    console.error('[ANALYTICS] error:', e);
+    res.status(500).json({ error: 'Analytics failed: ' + e.message });
   }
 });
 
-// ------- EXPORT EXCEL -------
+// EXPORT - FILTRE PAR SITE
 app.get('/api/atex/export', async (req, res) => {
   try {
     const userSite = req.user.site;
@@ -429,7 +399,6 @@ app.get('/api/atex/export', async (req, res) => {
       ORDER BY building, room, component_type
     `, [userSite]);
 
-    // Format pour Excel
     const exportData = rows.map(row => ({
       site: row.site,
       building: row.building,
@@ -450,7 +419,7 @@ app.get('/api/atex/export', async (req, res) => {
 
     res.json({ data: exportData, columns: Object.keys(exportData[0] || {}) });
   } catch (e) {
-    console.error('[EXPORT] error:', e?.message);
+    console.error('[EXPORT] error:', e);
     res.status(500).json({ error: 'Export failed: ' + e.message });
   }
 });
