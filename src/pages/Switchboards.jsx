@@ -83,6 +83,7 @@ export default function Switchboards() {
   const [editingDevice, setEditingDevice] = useState(null);
   const [deviceForm, setDeviceForm] = useState(emptyDeviceForm);
   const [currentPanelId, setCurrentPanelId] = useState(null);
+  const [deviceSearchBusy, setDeviceSearchBusy] = useState(false);
 
   // Chat sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -236,6 +237,32 @@ export default function Switchboards() {
   const setMainDevice = async (id, panelId, isMain) => {
     await put(`/api/switchboard/devices/${id}/set-main`, { is_main_incoming: isMain });
     await loadDevices(panelId);
+  };
+
+  // Search and auto-fill for device reference
+  const searchDeviceReference = async () => {
+    setDeviceSearchBusy(true);
+    try {
+      const data = await post('/api/switchboard/search-device', { query: deviceForm.reference });
+      if (data.manufacturer) {
+        setDeviceForm(prev => ({
+          ...prev,
+          manufacturer: data.manufacturer || prev.manufacturer,
+          device_type: data.device_type || prev.device_type,
+          in_amps: data.in_amps || prev.in_amps,
+          icu_kA: data.icu_kA || prev.icu_kA,
+          ics_kA: data.ics_kA || prev.ics_kA,
+          poles: data.poles || prev.poles,
+          voltage_V: data.voltage_V || prev.voltage_V,
+          trip_unit: data.trip_unit || prev.trip_unit,
+          settings: { ...prev.settings, ...data.settings }
+        }));
+      }
+    } catch (e) {
+      console.error('Device search failed:', e);
+    } finally {
+      setDeviceSearchBusy(false);
+    }
   };
 
   // Build tree from flat list (recursive)
@@ -475,7 +502,7 @@ export default function Switchboards() {
           </div>
         </div>
         <div className="mt-4 flex justify-end gap-2">
-          <button className="btn bg-gray-500 text-white" onClick={()=>setOpenSwitchboard(false)}>Cancel</button>
+          <button className="btn" onClick={()=>setOpenSwitchboard(false)}>Cancel</button>
           <button className="btn btn-primary" disabled={busy || !switchboardForm.name || !switchboardForm.code} onClick={saveSwitchboard}>{busy ? 'Saving…' : 'Save'}</button>
         </div>
       </Modal>
@@ -497,9 +524,12 @@ export default function Switchboards() {
             <label className="label">Manufacturer</label>
             <input className="input mt-1" value={deviceForm.manufacturer} onChange={e=>setDeviceForm(f=>({ ...f, manufacturer:e.target.value }))} />
           </div>
-          <div>
+          <div className="relative">
             <label className="label">Reference</label>
             <input className="input mt-1" value={deviceForm.reference} onChange={e=>setDeviceForm(f=>({ ...f, reference:e.target.value }))} />
+            <button className="absolute right-2 top-8 btn bg-indigo-500 text-white text-xs px-2 py-1 rounded" disabled={deviceSearchBusy || !deviceForm.reference} onClick={searchDeviceReference}>
+              {deviceSearchBusy ? 'Searching...' : 'Search & Fill'}
+            </button>
           </div>
           <div>
             <label className="label">In (A)</label>
