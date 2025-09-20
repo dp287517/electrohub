@@ -9,14 +9,35 @@ dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
-// OpenAI - avec fallback
+// OpenAI - avec fallback si pas disponible
 let openai = null;
-try {
-  const OpenAI = await import('openai').default;
-  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  console.log('[SWITCHBOARD] OpenAI initialized');
-} catch (e) {
-  console.warn('[SWITCHBOARD] OpenAI not available:', e.message);
+let openaiError = null;
+
+if (process.env.OPENAI_API_KEY) {
+  try {
+    const OpenAI = await import('openai').default;
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    console.log('[SWITCHBOARD] OpenAI initialized with key');
+    
+    // Test rapide de l'API
+    try {
+      const test = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'Say hello' }],
+        max_tokens: 5
+      });
+      console.log('[SWITCHBOARD] OpenAI test OK');
+    } catch (testError) {
+      console.error('[SWITCHBOARD] OpenAI test failed:', testError.message);
+      openaiError = testError.message;
+    }
+  } catch (e) {
+    console.warn('[SWITCHBOARD] OpenAI import failed:', e.message);
+    openaiError = e.message;
+  }
+} else {
+  console.warn('[SWITCHBOARD] No OPENAI_API_KEY found');
+  openaiError = 'No API key';
 }
 
 const app = express();
@@ -96,7 +117,7 @@ async function ensureSchema() {
 }
 ensureSchema().catch(e=>console.error('[SWITCHBOARD SCHEMA]', e.message));
 
-// LIST Switchboards (inchangé, mais ajoute is_principal dans select si besoin)
+// LIST Switchboards
 app.get('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -130,7 +151,7 @@ app.get('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// GET ONE Switchboard (ajoute is_principal)
+// GET ONE Switchboard
 app.get('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -154,7 +175,7 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// CREATE Switchboard (ajoute is_principal)
+// CREATE Switchboard
 app.post('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -192,7 +213,7 @@ app.post('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// UPDATE Switchboard (ajoute is_principal)
+// UPDATE Switchboard
 app.put('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -232,7 +253,7 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// DUPLICATE Switchboard (inchangé)
+// DUPLICATE Switchboard
 app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -259,7 +280,7 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
   }
 });
 
-// DELETE Switchboard (inchangé)
+// DELETE Switchboard
 app.delete('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -273,7 +294,7 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// LIST Devices (aligné, select tous les champs)
+// LIST Devices
 app.get('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -314,7 +335,7 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// CREATE Device (aligné aux champs)
+// CREATE Device
 app.post('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -343,7 +364,7 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// UPDATE Device (aligné)
+// UPDATE Device
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -370,7 +391,7 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// DUPLICATE Device (aligné)
+// DUPLICATE Device
 app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -394,7 +415,7 @@ app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
   }
 });
 
-// DELETE Device (inchangé)
+// DELETE Device
 app.delete('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
