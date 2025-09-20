@@ -83,6 +83,7 @@ export default function Switchboards() {
   const [editingDevice, setEditingDevice] = useState(null);
   const [deviceForm, setDeviceForm] = useState(emptyDeviceForm);
   const [currentPanelId, setCurrentPanelId] = useState(null);
+  const [deviceReferences, setDeviceReferences] = useState([]);
   const [deviceSearchBusy, setDeviceSearchBusy] = useState(false);
 
   // Chat sidebar
@@ -103,7 +104,16 @@ export default function Switchboards() {
     setDevices(prev => ({ ...prev, [panelId]: data?.data || [] }));
   };
 
-  useEffect(() => { loadSwitchboards(); /* eslint-disable-next-line */ }, [q.page, q.sort, q.dir, q.q, q.building, q.floor, q.room]);
+  const loadDeviceReferences = async () => {
+    const data = await get('/api/switchboard/device-references');
+    setDeviceReferences(data.data || []);
+  };
+
+  useEffect(() => { 
+    loadSwitchboards(); 
+    loadDeviceReferences(); 
+    /* eslint-disable-next-line */ 
+  }, [q.page, q.sort, q.dir, q.q, q.building, q.floor, q.room]);
 
   const toggleExpand = async (panelId) => {
     setExpandedPanels(prev => ({ ...prev, [panelId]: !prev[panelId] }));
@@ -220,6 +230,7 @@ export default function Switchboards() {
       }
       setOpenDevice(false);
       await loadDevices(currentPanelId);
+      await loadDeviceReferences(); // Refresh list
     } finally { setBusy(false); }
   };
 
@@ -243,11 +254,12 @@ export default function Switchboards() {
   const searchDeviceReference = async () => {
     setDeviceSearchBusy(true);
     try {
-      const data = await post('/api/switchboard/search-device', { query: deviceForm.reference });
+      const data = await post('/api/switchboard/search-device', { query: `${deviceForm.manufacturer} ${deviceForm.reference}` });
       if (data.manufacturer) {
         setDeviceForm(prev => ({
           ...prev,
           manufacturer: data.manufacturer || prev.manufacturer,
+          reference: data.reference || prev.reference,
           device_type: data.device_type || prev.device_type,
           in_amps: data.in_amps || prev.in_amps,
           icu_kA: data.icu_kA || prev.icu_kA,
@@ -503,7 +515,7 @@ export default function Switchboards() {
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button className="btn" onClick={()=>setOpenSwitchboard(false)}>Cancel</button>
-          <button className="btn btn-primary" disabled={busy || !switchboardForm.name || !switchboardForm.code} onClick={saveSwitchboard}>{busy ? 'Saving…' : 'Save'}</button>
+          <button className="btn btn-primary" disabled={busy || !switchboardForm.name || !switchboardForm.code} onClick={saveSwitchboard}>{busy ? 'Saving…’ : 'Save'}</button>
         </div>
       </Modal>
 
@@ -530,6 +542,20 @@ export default function Switchboards() {
             <button className="absolute right-2 top-8 btn bg-indigo-500 text-white text-xs px-2 py-1 rounded" disabled={deviceSearchBusy || !deviceForm.reference} onClick={searchDeviceReference}>
               {deviceSearchBusy ? 'Searching...' : 'Search & Fill'}
             </button>
+          </div>
+          <div className="md:col-span-2">
+            <label className="label">Quick Select Existing</label>
+            <select className="input mt-1" onChange={e => {
+              if (!e.target.value) return;
+              const [manufacturer, reference] = e.target.value.split('|');
+              setDeviceForm(f => ({ ...f, manufacturer, reference }));
+              searchDeviceReference();  // Auto-search to fill
+            }}>
+              <option value="">Select to auto-fill</option>
+              {deviceReferences.map((r, idx) => (
+                <option key={idx} value={`${r.manufacturer}|${r.reference}`}>{r.manufacturer} - {r.reference}</option>
+              ))}
+            </select>
           </div>
           <div>
             <label className="label">In (A)</label>
