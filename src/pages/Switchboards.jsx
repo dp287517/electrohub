@@ -246,7 +246,7 @@ export default function Switchboards() {
   };
 
   const setMainDevice = async (id, panelId, isMain) => {
-    await put(`/api/switchboard/devices/${id}/set-main`, { is_main_incoming: isMain });
+    await put('/api/switchboard/devices/${id}/set-main', { is_main_incoming: isMain });
     await loadDevices(panelId);
   };
 
@@ -515,7 +515,7 @@ export default function Switchboards() {
         </div>
         <div className="mt-4 flex justify-end gap-2">
           <button className="btn" onClick={()=>setOpenSwitchboard(false)}>Cancel</button>
-          <button className="btn btn-primary" disabled={busy || !switchboardForm.name || !switchboardForm.code} onClick={saveSwitchboard}>{busy ? 'Saving…’ : 'Save'}</button>
+          <button className="btn btn-primary" disabled={busy || !switchboardForm.name || !switchboardForm.code} onClick={saveSwitchboard}>{busy ? 'Saving...' : 'Save'}</button>
         </div>
       </Modal>
 
@@ -653,7 +653,7 @@ export default function Switchboards() {
 
         <div className="mt-4 flex justify-end gap-2">
           <button className="btn" onClick={()=>setOpenDevice(false)}>Cancel</button>
-          <button className="btn btn-primary" disabled={busy || !deviceForm.name || deviceForm.in_amps <= 0} onClick={saveDevice}>{busy ? 'Saving…' : 'Save'}</button>
+          <button className="btn btn-primary" disabled={busy || !deviceForm.name || deviceForm.in_amps <= 0} onClick={saveDevice}>{busy ? 'Saving...' : 'Save'}</button>
         </div>
       </Modal>
     </section>
