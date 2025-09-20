@@ -45,6 +45,17 @@ app.use(
   })
 );
 
+// --- PROXY SWITCHBOARD (place BEFORE body parsing like /api/atex & /api/loopcalc) ---
+const switchboardTarget = process.env.SWITCHBOARD_BASE_URL || 'http://127.0.0.1:3003';
+app.use(
+  '/api/switchboard',
+  createProxyMiddleware({
+    target: switchboardTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
