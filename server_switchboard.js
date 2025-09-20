@@ -4,13 +4,20 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
-import OpenAI from 'openai';  // Add dependency: npm install openai
 
 dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// OpenAI - avec fallback
+let openai = null;
+try {
+  const OpenAI = await import('openai').default;
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  console.log('[SWITCHBOARD] OpenAI initialized');
+} catch (e) {
+  console.warn('[SWITCHBOARD] OpenAI not available:', e.message);
+}
 
 const app = express();
 app.use(helmet());
@@ -39,7 +46,7 @@ const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// SQL bootstrap (idempotent)
+// SQL bootstrap (aligné avec tes tables)
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS switchboards (
@@ -51,6 +58,7 @@ async function ensureSchema() {
       floor TEXT,
       room TEXT,
       regime_neutral TEXT,
+      is_principal BOOLEAN DEFAULT FALSE,
       modes JSONB DEFAULT '{}'::jsonb,
       quality JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
@@ -58,73 +66,225 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_switchboards_site ON switchboards(site);
     CREATE INDEX IF NOT EXISTS idx_switchboards_building ON switchboards(building_code);
     CREATE INDEX IF NOT EXISTS idx_switchboards_code ON switchboards(code);
-    
-    CREATE TABLE IF NOT EXISTS protective_devices (
+
+    CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
       switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
-      parent_id INTEGER REFERENCES protective_devices(id) ON DELETE SET NULL,
-      name TEXT NOT NULL,
-      type TEXT NOT NULL,
-      rating NUMERIC NOT NULL,
-      voltage_level TEXT NOT NULL DEFAULT 'LV',
-      icu NUMERIC,
-      ics NUMERIC,
+      parent_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+      device_type TEXT NOT NULL,
+      manufacturer TEXT,
+      reference TEXT,
+      in_amps NUMERIC,
+      icu_kA NUMERIC,
+      ics_kA NUMERIC,
+      poles INTEGER,
+      voltage_V NUMERIC,
+      trip_unit TEXT,
       settings JSONB DEFAULT '{}'::jsonb,
-      is_main BOOLEAN DEFAULT FALSE,
+      is_main_incoming BOOLEAN DEFAULT FALSE,
       pv_tests BYTEA,
       photos BYTEA[],
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     );
-    CREATE INDEX IF NOT EXISTS idx_devices_switchboard ON protective_devices(switchboard_id);
-    CREATE INDEX IF NOT EXISTS idx_devices_parent ON protective_devices(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_devices_switchboard ON devices(switchboard_id);
+    CREATE INDEX IF NOT EXISTS idx_devices_parent ON devices(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(site);
+    CREATE INDEX IF NOT EXISTS idx_devices_reference ON devices(reference);
   `);
 }
 ensureSchema().catch(e=>console.error('[SWITCHBOARD SCHEMA]', e.message));
 
-// LIST Switchboards
+// LIST Switchboards (inchangé, mais ajoute is_principal dans select si besoin)
 app.get('/api/switchboard/boards', async (req, res) => {
-  // ... (same as before)
+  try {
+    const site = siteOf(req);
+    const { q, building, floor, room, sort='created_at', dir='desc', page='1', pageSize='18' } = req.query;
+    const where = ['site = $1']; const vals = [site]; let i = 2;
+    if (q) { where.push(`(name ILIKE $${i} OR code ILIKE $${i})`); vals.push(`%${q}%`); i++; }
+    if (building) { where.push(`building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
+    if (floor) { where.push(`floor ILIKE $${i}`); vals.push(`%${floor}%`); i++; }
+    if (room) { where.push(`room ILIKE $${i}`); vals.push(`%${room}%`); i++; }
+    const limit = Math.min(parseInt(pageSize,10) || 18, 100);
+    const offset = ((parseInt(page,10) || 1) - 1) * limit;
+
+    const sql = `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at
+                 FROM switchboards
+                 WHERE ${where.join(' AND ')}
+                 ORDER BY ${sortSafe(sort)} ${dirSafe(dir)}
+                 LIMIT ${limit} OFFSET ${offset}`;
+    const rows = await pool.query(sql, vals);
+    const count = await pool.query(`SELECT COUNT(*)::int AS total FROM switchboards WHERE ${where.join(' AND ')}`, vals);
+    const data = rows.rows.map(r => ({
+      id: r.id,
+      meta: { site: r.site, building_code: r.building_code, floor: r.floor, room: r.room },
+      name: r.name, code: r.code, regime_neutral: r.regime_neutral,
+      is_principal: r.is_principal,
+      modes: r.modes || {}, quality: r.quality || {}, created_at: r.created_at
+    }));
+    res.json({ data, total: count.rows[0].total, page: Number(page), pageSize: limit });
+  } catch (e) {
+    console.error('[SWITCHBOARD LIST] error:', e);
+    res.status(500).json({ error: 'List failed' });
+  }
 });
 
-// GET ONE Switchboard
+// GET ONE Switchboard (ajoute is_principal)
 app.get('/api/switchboard/boards/:id', async (req, res) => {
-  // ... (same as before)
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const r = await pool.query(
+      `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at
+       FROM switchboards WHERE id=$1 AND site=$2`, [id, site]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const sb = r.rows[0];
+    res.json({
+      id: sb.id,
+      meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
+      is_principal: sb.is_principal,
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
+    });
+  } catch (e) {
+    console.error('[SWITCHBOARD GET] error:', e);
+    res.status(500).json({ error: 'Get failed' });
+  }
 });
 
-// CREATE Switchboard
+// CREATE Switchboard (ajoute is_principal)
 app.post('/api/switchboard/boards', async (req, res) => {
-  // ... (same as before)
+  try {
+    const site = siteOf(req);
+    const b = req.body || {};
+    const name = String(b.name||'').trim();
+    const code = String(b.code||'').trim();
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    if (!name || !code) return res.status(400).json({ error: 'Missing name/code' });
+
+    const building = b?.meta?.building_code || null;
+    const floor = b?.meta?.floor || null;
+    const room = b?.meta?.room || null;
+    const regime = b?.regime_neutral || null;
+    const is_principal = !!b?.is_principal;
+    const modes = b?.modes || {};
+    const quality = b?.quality || {};
+
+    const r = await pool.query(
+      `INSERT INTO switchboards (site,name,code,building_code,floor,room,regime_neutral,is_principal,modes,quality)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at`,
+      [site, name, code, building, floor, room, regime, is_principal, modes, quality]
+    );
+    const sb = r.rows[0];
+    res.status(201).json({
+      id: sb.id,
+      meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
+      is_principal: sb.is_principal,
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
+    });
+  } catch (e) {
+    console.error('[SWITCHBOARD CREATE] error:', e);
+    res.status(500).json({ error: 'Create failed' });
+  }
 });
 
-// UPDATE Switchboard
+// UPDATE Switchboard (ajoute is_principal)
 app.put('/api/switchboard/boards/:id', async (req, res) => {
-  // ... (same as before)
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const b = req.body || {};
+    const name = String(b.name||'').trim();
+    const code = String(b.code||'').trim();
+    if (!name || !code) return res.status(400).json({ error: 'Missing name/code' });
+
+    const building = b?.meta?.building_code || null;
+    const floor = b?.meta?.floor || null;
+    const room = b?.meta?.room || null;
+    const regime = b?.regime_neutral || null;
+    const is_principal = !!b?.is_principal;
+    const modes = b?.modes || {};
+    const quality = b?.quality || {};
+
+    const r = await pool.query(
+      `UPDATE switchboards SET
+        name=$1, code=$2, building_code=$3, floor=$4, room=$5, regime_neutral=$6, is_principal=$7, modes=$8, quality=$9
+       WHERE id=$10 AND site=$11
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at`,
+      [name, code, building, floor, room, regime, is_principal, modes, quality, id, site]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const sb = r.rows[0];
+    res.json({
+      id: sb.id,
+      meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
+      is_principal: sb.is_principal,
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
+    });
+  } catch (e) {
+    console.error('[SWITCHBOARD UPDATE] error:', e);
+    res.status(500).json({ error: 'Update failed' });
+  }
 });
 
-// DUPLICATE Switchboard
+// DUPLICATE Switchboard (inchangé)
 app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
-  // ... (same as before, but also duplicate devices if needed - for simplicity, not duplicating devices here)
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const r = await pool.query(
+      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality)
+       SELECT site, name || ' (copy)', code || '_C', building_code, floor, room, regime_neutral, FALSE, modes, quality
+       FROM switchboards WHERE id=$1 AND site=$2
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at`,
+      [id, site]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const sb = r.rows[0];
+    res.status(201).json({
+      id: sb.id,
+      meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
+      is_principal: sb.is_principal,
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
+    });
+  } catch (e) {
+    console.error('[SWITCHBOARD DUPLICATE] error:', e);
+    res.status(500).json({ error: 'Duplicate failed' });
+  }
 });
 
-// DELETE Switchboard
+// DELETE Switchboard (inchangé)
 app.delete('/api/switchboard/boards/:id', async (req, res) => {
-  // ... (same as before)
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const r = await pool.query(`DELETE FROM switchboards WHERE id=$1 AND site=$2`, [id, site]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+    res.json({ success: true, deleted: id });
+  } catch (e) {
+    console.error('[SWITCHBOARD DELETE] error:', e);
+    res.status(500).json({ error: 'Delete failed' });
+  }
 });
 
-// LIST Devices for a switchboard
+// LIST Devices (aligné, select tous les champs)
 app.get('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
     const switchboard_id = Number(req.query.switchboard_id);
     if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
 
-    // Verify switchboard belongs to site
     const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
     const { rows } = await pool.query(
-      `SELECT * FROM protective_devices WHERE switchboard_id=$1 ORDER BY created_at DESC`,
+      `SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY created_at DESC`,
       [switchboard_id]
     );
     res.json({ data: rows });
@@ -141,9 +301,9 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     const r = await pool.query(
-      `SELECT pd.* FROM protective_devices pd
-       JOIN switchboards sb ON pd.switchboard_id = sb.id
-       WHERE pd.id=$1 AND sb.site=$2`,
+      `SELECT d.* FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE d.id=$1 AND sb.site=$2`,
       [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -154,7 +314,7 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// CREATE Device
+// CREATE Device (aligné aux champs)
 app.post('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -162,18 +322,18 @@ app.post('/api/switchboard/devices', async (req, res) => {
     const switchboard_id = Number(b.switchboard_id);
     if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
 
-    // Verify switchboard
-    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
+    const sbCheck = await pool.query('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
+    const device_site = sbCheck.rows[0].site;  // Utilise site du switchboard
 
     const { rows } = await pool.query(
-      `INSERT INTO protective_devices (
-        switchboard_id, parent_id, name, type, rating, voltage_level, icu, ics, settings, is_main, pv_tests, photos
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `INSERT INTO devices (
+        site, switchboard_id, parent_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
-        switchboard_id, b.parent_id || null, b.name, b.type, b.rating, b.voltage_level, b.icu, b.ics,
-        b.settings || {}, b.is_main || false, b.pv_tests || null, b.photos || []
+        device_site, switchboard_id, b.parent_id || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA,
+        b.poles, b.voltage_V, b.trip_unit, b.settings || {}, b.is_main_incoming || false, b.pv_tests || null, b.photos || []
       ]
     );
     res.status(201).json(rows[0]);
@@ -183,7 +343,7 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// UPDATE Device
+// UPDATE Device (aligné)
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -191,15 +351,15 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     const b = req.body;
 
     const r = await pool.query(
-      `UPDATE protective_devices pd
-       SET name=$1, type=$2, rating=$3, voltage_level=$4, icu=$5, ics=$6, settings=$7, is_main=$8,
-           parent_id=$9, pv_tests=$10, photos=$11, updated_at=NOW()
+      `UPDATE devices d
+       SET device_type=$1, manufacturer=$2, reference=$3, in_amps=$4, icu_kA=$5, ics_kA=$6, poles=$7, voltage_V=$8, trip_unit=$9,
+           settings=$10, is_main_incoming=$11, parent_id=$12, pv_tests=$13, photos=$14, updated_at=NOW()
        FROM switchboards sb
-       WHERE pd.id=$12 AND pd.switchboard_id = sb.id AND sb.site=$13
-       RETURNING pd.*`,
+       WHERE d.id=$15 AND d.switchboard_id = sb.id AND sb.site=$16
+       RETURNING d.*`,
       [
-        b.name, b.type, b.rating, b.voltage_level, b.icu, b.ics, b.settings || {}, b.is_main,
-        b.parent_id || null, b.pv_tests || null, b.photos || [], id, site
+        b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA, b.poles, b.voltage_V, b.trip_unit,
+        b.settings || {}, b.is_main_incoming, b.parent_id || null, b.pv_tests || null, b.photos || [], id, site
       ]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -210,19 +370,19 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// DUPLICATE Device
+// DUPLICATE Device (aligné)
 app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
 
     const r = await pool.query(
-      `INSERT INTO protective_devices (
-        switchboard_id, parent_id, name, type, rating, voltage_level, icu, ics, settings, is_main, pv_tests, photos
-      ) SELECT switchboard_id, parent_id, name || ' (copy)', type, rating, voltage_level, icu, ics, settings, FALSE, pv_tests, photos
-        FROM protective_devices pd
-        JOIN switchboards sb ON pd.switchboard_id = sb.id
-        WHERE pd.id=$1 AND sb.site=$2
+      `INSERT INTO devices (
+        site, switchboard_id, parent_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
+      ) SELECT site, switchboard_id, parent_id, device_type, manufacturer, reference || ' (copy)', in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, FALSE, pv_tests, photos
+        FROM devices d
+        JOIN switchboards sb ON d.switchboard_id = sb.id
+        WHERE d.id=$1 AND sb.site=$2
         RETURNING *`,
       [id, site]
     );
@@ -234,16 +394,16 @@ app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
   }
 });
 
-// DELETE Device
+// DELETE Device (inchangé)
 app.delete('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
 
     const r = await pool.query(
-      `DELETE FROM protective_devices pd
+      `DELETE FROM devices d
        USING switchboards sb
-       WHERE pd.id=$1 AND pd.switchboard_id = sb.id AND sb.site=$2`,
+       WHERE d.id=$1 AND d.switchboard_id = sb.id AND sb.site=$2`,
       [id, site]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
@@ -254,20 +414,20 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// Set Main for Device (quick update)
+// Set Main Incoming for Device
 app.put('/api/switchboard/devices/:id/set-main', async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
-    const is_main = !!req.body.is_main;
+    const is_main_incoming = !!req.body.is_main_incoming;
 
     const r = await pool.query(
-      `UPDATE protective_devices pd
-       SET is_main=$1, updated_at=NOW()
+      `UPDATE devices d
+       SET is_main_incoming=$1, updated_at=NOW()
        FROM switchboards sb
-       WHERE pd.id=$2 AND pd.switchboard_id = sb.id AND sb.site=$3
-       RETURNING pd.*`,
-      [is_main, id, site]
+       WHERE d.id=$2 AND d.switchboard_id = sb.id AND sb.site=$3
+       RETURNING d.*`,
+      [is_main_incoming, id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(r.rows[0]);
@@ -277,30 +437,36 @@ app.put('/api/switchboard/devices/:id/set-main', async (req, res) => {
   }
 });
 
-// Search Device References (using OpenAI for intelligent search/summary)
+// Search Device References (enhanced for structured JSON output + trip curves)
 app.post('/api/switchboard/search-device', async (req, res) => {
   try {
     const query = req.body.query;
     if (!query) return res.status(400).json({ error: 'Missing query' });
 
+    if (!openai) {
+      return res.json({ 
+        error: 'OpenAI not available',
+        suggestion: 'Install "openai" package or check API key'
+      });
+    }
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: 'You are an expert in electrical protective devices. Provide references, brands, specifications for the query, focusing on Icu, Ics, TCC, LSIG settings for selectivity, fault level, arc flash.' },
+        { 
+          role: 'system', 
+          content: 'You are an expert in electrical protective devices. For the query (brand + reference), return structured JSON with fields: manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings (LSIG params + curve_type if applicable e.g. "B", "C", "D" for MCB or detailed TCC data), is_main_incoming (guess), other specs. If chat-like, continue conversation. Output ONLY valid JSON.' 
+        },
         { role: 'user', content: query }
       ],
+      response_format: { type: 'json_object' }
     });
 
-    const results = completion.choices[0].message.content.split('\n').map(line => ({
-      title: line.split(':')[0],
-      snippet: line,
-      link: ''  // Could web search for links
-    }));
-
-    res.json({ results });
+    const jsonResponse = JSON.parse(completion.choices[0].message.content);
+    res.json(jsonResponse);
   } catch (e) {
     console.error('[SEARCH DEVICE] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
+    res.status(500).json({ error: 'Search failed', details: e.message });
   }
 });
 
