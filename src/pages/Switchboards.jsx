@@ -415,70 +415,119 @@ export default function Switchboards() {
         </div>
       </div>
 
-      {/* Switchboard Modal (ajoute is_principal) */}
+      {/* Switchboard Modal */}
       <Modal open={openSwitchboard} onClose={()=>setOpenSwitchboard(false)} title={editingSwitchboard ? 'Edit switchboard' : 'Create switchboard'}>
         <div className="grid md:grid-cols-2 gap-3">
-          {/* ... (champs inchangés) */}
+          <div>
+            <label className="label">Name</label>
+            <input className="input mt-1" value={switchboardForm.name} onChange={e=>setSwitchboardForm(f=>({ ...f, name:e.target.value }))} />
+          </div>
+          <div>
+            <label className="label">Code</label>
+            <input className="input mt-1" value={switchboardForm.code} onChange={e=>setSwitchboardForm(f=>({ ...f, code:e.target.value }))} />
+          </div>
+          <div>
+            <label className="label">Building code</label>
+            <input className="input mt-1" value={switchboardForm.meta.building_code} onChange={e=>setSwitchboardForm(f=>({ ...f, meta:{...f.meta, building_code:e.target.value} }))} />
+          </div>
+          <div>
+            <label className="label">Floor</label>
+            <input className="input mt-1" value={switchboardForm.meta.floor} onChange={e=>setSwitchboardForm(f=>({ ...f, meta:{...f.meta, floor:e.target.value} }))} />
+          </div>
+          <div>
+            <label className="label">Room</label>
+            <input className="input mt-1" value={switchboardForm.meta.room} onChange={e=>setSwitchboardForm(f=>({ ...f, meta:{...f.meta, room:e.target.value} }))} />
+          </div>
+          <div>
+            <label className="label">Neutral regime</label>
+            <select className="input mt-1" value={switchboardForm.regime_neutral} onChange={e=>setSwitchboardForm(f=>({ ...f, regime_neutral:e.target.value }))}>
+              {regimes.map(r=><option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
           <div className="flex items-center gap-2">
             <input type="checkbox" checked={switchboardForm.is_principal} onChange={e=>setSwitchboardForm(f=>({ ...f, is_principal:e.target.checked }))} />
             <label>Principal Switchboard</label>
           </div>
-          {/* ... */}
+          <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-3 gap-3">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={switchboardForm.modes.bypass} onChange={e=>setSwitchboardForm(f=>({ ...f, modes:{...f.modes, bypass:e.target.checked} }))} /> Bypass
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={switchboardForm.modes.maintenance_mode} onChange={e=>setSwitchboardForm(f=>({ ...f, modes:{...f.modes, maintenance_mode:e.target.checked} }))} /> Maintenance mode
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={switchboardForm.modes.bus_coupling} onChange={e=>setSwitchboardForm(f=>({ ...f, modes:{...f.modes, bus_coupling:e.target.checked} }))} /> Bus coupling
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={switchboardForm.modes.genset_backup} onChange={e=>setSwitchboardForm(f=>({ ...f, modes:{...f.modes, genset_backup:e.target.checked} }))} /> GEN backup
+            </label>
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={switchboardForm.modes.ups_backup} onChange={e=>setSwitchboardForm(f=>({ ...f, modes:{...f.modes, ups_backup:e.target.checked} }))} /> UPS backup
+            </label>
+          </div>
+          <div>
+            <label className="label">THD (%)</label>
+            <input className="input mt-1" type="number" step="0.1" value={switchboardForm.quality.thd} onChange={e=>setSwitchboardForm(f=>({ ...f, quality:{...f.quality, thd:e.target.value} }))} />
+          </div>
+          <div>
+            <label className="label">Flicker</label>
+            <input className="input mt-1" type="number" step="0.1" value={switchboardForm.quality.flicker} onChange={e=>setSwitchboardForm(f=>({ ...f, quality:{...f.quality, flicker:e.target.value} }))} />
+          </div>
         </div>
         <div className="mt-4 flex justify-end gap-2">
-          <button className="btn" onClick={()=>setOpenSwitchboard(false)}>Cancel</button>
+          <button className="btn bg-gray-500 text-white" onClick={()=>setOpenSwitchboard(false)}>Cancel</button>
           <button className="btn btn-primary" disabled={busy || !switchboardForm.name || !switchboardForm.code} onClick={saveSwitchboard}>{busy ? 'Saving…' : 'Save'}</button>
         </div>
       </Modal>
 
-      {/* Device Modal (aligné champs, add curve_type) */}
+      {/* Device Modal */}
       <Modal open={openDevice} onClose={()=>setOpenDevice(false)} title={editingDevice ? 'Edit Device' : 'Create Device'}>
         <div className="grid md:grid-cols-2 gap-3">
           <div>
             <label className="label">Name</label>
-            <input className="input" value={deviceForm.name} onChange={e=>setDeviceForm(f=>({ ...f, name:e.target.value }))} />
+            <input className="input mt-1" value={deviceForm.name} onChange={e=>setDeviceForm(f=>({ ...f, name:e.target.value }))} />
           </div>
           <div>
             <label className="label">Type</label>
-            <select className="input" value={deviceForm.device_type} onChange={e=>setDeviceForm(f=>({ ...f, device_type:e.target.value }))}>
+            <select className="input mt-1" value={deviceForm.device_type} onChange={e=>setDeviceForm(f=>({ ...f, device_type:e.target.value }))}>
               {deviceTypes.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>
             <label className="label">Manufacturer</label>
-            <input className="input" value={deviceForm.manufacturer} onChange={e=>setDeviceForm(f=>({ ...f, manufacturer:e.target.value }))} />
+            <input className="input mt-1" value={deviceForm.manufacturer} onChange={e=>setDeviceForm(f=>({ ...f, manufacturer:e.target.value }))} />
           </div>
           <div>
             <label className="label">Reference</label>
-            <input className="input" value={deviceForm.reference} onChange={e=>setDeviceForm(f=>({ ...f, reference:e.target.value }))} />
+            <input className="input mt-1" value={deviceForm.reference} onChange={e=>setDeviceForm(f=>({ ...f, reference:e.target.value }))} />
           </div>
           <div>
             <label className="label">In (A)</label>
-            <input type="number" className="input" value={deviceForm.in_amps} onChange={e=>setDeviceForm(f=>({ ...f, in_amps:Number(e.target.value) }))} />
+            <input type="number" className="input mt-1" value={deviceForm.in_amps} onChange={e=>setDeviceForm(f=>({ ...f, in_amps:Number(e.target.value) }))} />
           </div>
           <div>
             <label className="label">Icu (kA)</label>
-            <input type="number" className="input" value={deviceForm.icu_kA} onChange={e=>setDeviceForm(f=>({ ...f, icu_kA:Number(e.target.value) }))} />
+            <input type="number" className="input mt-1" value={deviceForm.icu_kA} onChange={e=>setDeviceForm(f=>({ ...f, icu_kA:Number(e.target.value) }))} />
           </div>
           <div>
             <label className="label">Ics (kA)</label>
-            <input type="number" className="input" value={deviceForm.ics_kA} onChange={e=>setDeviceForm(f=>({ ...f, ics_kA:Number(e.target.value) }))} />
+            <input type="number" className="input mt-1" value={deviceForm.ics_kA} onChange={e=>setDeviceForm(f=>({ ...f, ics_kA:Number(e.target.value) }))} />
           </div>
           <div>
             <label className="label">Poles</label>
-            <input type="number" className="input" min="1" max="4" value={deviceForm.poles} onChange={e=>setDeviceForm(f=>({ ...f, poles:Number(e.target.value) }))} />
+            <input type="number" className="input mt-1" min="1" max="4" value={deviceForm.poles} onChange={e=>setDeviceForm(f=>({ ...f, poles:Number(e.target.value) }))} />
           </div>
           <div>
             <label className="label">Voltage (V)</label>
-            <input type="number" className="input" value={deviceForm.voltage_V} onChange={e=>setDeviceForm(f=>({ ...f, voltage_V:Number(e.target.value) }))} />
+            <input type="number" className="input mt-1" value={deviceForm.voltage_V} onChange={e=>setDeviceForm(f=>({ ...f, voltage_V:Number(e.target.value) }))} />
           </div>
           <div>
             <label className="label">Trip Unit</label>
-            <input className="input" value={deviceForm.trip_unit} onChange={e=>setDeviceForm(f=>({ ...f, trip_unit:e.target.value }))} />
+            <input className="input mt-1" value={deviceForm.trip_unit} onChange={e=>setDeviceForm(f=>({ ...f, trip_unit:e.target.value }))} />
           </div>
           <div className="md:col-span-2">
             <label className="label">Parent Device</label>
-            <select className="input" value={deviceForm.parent_id || ''} onChange={e=>setDeviceForm(f=>({ ...f, parent_id:e.target.value ? Number(e.target.value) : null }))}>
+            <select className="input mt-1" value={deviceForm.parent_id || ''} onChange={e=>setDeviceForm(f=>({ ...f, parent_id:e.target.value ? Number(e.target.value) : null }))}>
               <option value="">None (Top Level)</option>
               {(devices[currentPanelId] || []).map(d => <option key={d.id} value={d.id}>{d.name} ({d.device_type})</option>)}
             </select>
@@ -491,11 +540,46 @@ export default function Switchboards() {
           {/* Settings with curve_type */}
           <div className="md:col-span-2 space-y-2">
             <h4 className="font-medium">Protection Settings (LSIG + Curve)</h4>
-            <div className="grid md:grid-cols-2 gap-2 text-sm">
-              {/* ... (LSIG fields inchangés) */}
+            <div className="grid md:grid-cols-2 gap-2">
+              <div>
+                <label className="label text-xs">Ir (Long Delay Pickup, x In)</label>
+                <input type="number" step="0.1" className="input mt-1 text-sm" value={deviceForm.settings.ir} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, ir:Number(e.target.value)} }))} />
+              </div>
+              <div>
+                <label className="label text-xs">tr (Long Delay Time, s)</label>
+                <input type="number" step="0.1" className="input mt-1 text-sm" value={deviceForm.settings.tr} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, tr:Number(e.target.value)} }))} />
+              </div>
+              <div>
+                <label className="label text-xs">Isd (Short Delay Pickup, x Ir)</label>
+                <input type="number" step="0.1" className="input mt-1 text-sm" value={deviceForm.settings.isd} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, isd:Number(e.target.value)} }))} />
+              </div>
+              <div>
+                <label className="label text-xs">tsd (Short Delay Time, s)</label>
+                <input type="number" step="0.01" className="input mt-1 text-sm" value={deviceForm.settings.tsd} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, tsd:Number(e.target.value)} }))} />
+              </div>
+              <div>
+                <label className="label text-xs">Ii (Instantaneous Pickup, x In)</label>
+                <input type="number" step="0.1" className="input mt-1 text-sm" value={deviceForm.settings.ii} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, ii:Number(e.target.value)} }))} />
+              </div>
+              <div>
+                <label className="label text-xs">Ig (Ground Fault Pickup, x In)</label>
+                <input type="number" step="0.1" className="input mt-1 text-sm" value={deviceForm.settings.ig} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, ig:Number(e.target.value)} }))} />
+              </div>
+              <div>
+                <label className="label text-xs">tg (Ground Fault Time, s)</label>
+                <input type="number" step="0.01" className="input mt-1 text-sm" value={deviceForm.settings.tg} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, tg:Number(e.target.value)} }))} />
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={deviceForm.settings.zsi} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, zsi:e.target.checked} }))} />
+                <label className="text-xs">ZSI (Zone Selective Interlocking)</label>
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={deviceForm.settings.erms} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, erms:e.target.checked} }))} />
+                <label className="text-xs">ERMS (Energy Reducing Maintenance Switch)</label>
+              </div>
               <div className="md:col-span-2">
                 <label className="label text-xs">Curve Type (e.g. B/C/D or TCC description)</label>
-                <input className="input text-sm" value={deviceForm.settings.curve_type} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, curve_type:e.target.value} }))} />
+                <input className="input mt-1 text-sm" value={deviceForm.settings.curve_type} onChange={e=>setDeviceForm(f=>({ ...f, settings:{...f.settings, curve_type:e.target.value} }))} />
               </div>
             </div>
           </div>
@@ -503,15 +587,15 @@ export default function Switchboards() {
           {/* Files */}
           <div className="md:col-span-2">
             <label className="label">PV Tests (Upload)</label>
-            <input type="file" className="input" onChange={e => setDeviceForm(f => ({ ...f, pv_tests: e.target.files[0] }))} />
+            <input type="file" className="input mt-1" onChange={e => setDeviceForm(f => ({ ...f, pv_tests: e.target.files[0] }))} />
           </div>
           <div className="md:col-span-2">
             <label className="label">Photos (Multiple)</label>
-            <input type="file" multiple className="input" onChange={e => setDeviceForm(f => ({ ...f, photos: Array.from(e.target.files) }))} />
+            <input type="file" multiple className="input mt-1" onChange={e => setDeviceForm(f => ({ ...f, photos: Array.from(e.target.files) }))} />
           </div>
         </div>
 
-        <div className="mt-4 flex justify-end gap-2 flex-wrap">
+        <div className="mt-4 flex justify-end gap-2">
           <button className="btn" onClick={()=>setOpenDevice(false)}>Cancel</button>
           <button className="btn btn-primary" disabled={busy || !deviceForm.name || deviceForm.in_amps <= 0} onClick={saveDevice}>{busy ? 'Saving…' : 'Save'}</button>
         </div>
