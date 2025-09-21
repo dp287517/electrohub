@@ -1,7 +1,7 @@
 // src/pages/Switchboards.jsx
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { get, post, put, del } from '../lib/api.js';
-import { Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle, ChevronDown, ChevronRight, ChevronLeft, X } from 'lucide-react';
 
 /** Utilities */
 const regimes = ['TN-S', 'TN-C-S', 'IT', 'TT'];
