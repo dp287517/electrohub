@@ -1,12 +1,12 @@
 // src/pages/Switchboards.jsx
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-/* ================= API HELPERS (avec X-Site) ================= */
+/* ================= API HELPERS (with X-Site) ================= */
 const API = import.meta.env.VITE_API_BASE || '';
 
 function makeHeaders(site) {
   const h = { 'Content-Type': 'application/json' };
-  if (site) h['X-Site'] = site;           // <<< important pour voir tes tableaux
+  if (site) h['X-Site'] = site; // required to scope data per site
   return h;
 }
 async function apiGet(path, site) {
@@ -47,7 +47,7 @@ async function apiDelete(path, site) {
   return res.json();
 }
 
-/* ================= PETITS UI HELPERS ================= */
+/* ================= Small UI helpers ================= */
 function Info({ text }) {
   return (
     <span className="inline-flex items-center gap-1 text-gray-500 text-xs ml-2" title={text}>
@@ -63,16 +63,13 @@ function useDebounced(value, delay = 300) {
 
 /* ================= PAGE ================= */
 export default function SwitchboardsPage() {
-  // -------- Site courant
+  // Current site from local storage
   const [site, setSite] = useState(() => {
-    try {
-      const u = localStorage.getItem('eh_user');
-      return u ? JSON.parse(u).site || '' : '';
-    } catch { return ''; }
+    try { return JSON.parse(localStorage.getItem('eh_user') || '{}').site || ''; } catch { return ''; }
   });
   const siteLabel = site || 'Nyon';
 
-  // -------- Liste des switchboards (homepage)
+  // Boards list (homepage)
   const [boards, setBoards] = useState([]);
   const [totalBoards, setTotalBoards] = useState(0);
   const [page, setPage] = useState(1);
@@ -82,7 +79,7 @@ export default function SwitchboardsPage() {
   const [sort, setSort] = useState('created_at');
   const [dir, setDir] = useState('desc');
 
-  // -------- Formulaire switchboard (dans un panneau togglable)
+  // Board form (toggle panel)
   const [boardOpen, setBoardOpen] = useState(false);
   const [boardForm, setBoardForm] = useState({
     id: null,
@@ -96,15 +93,19 @@ export default function SwitchboardsPage() {
   });
   const editingBoard = boardForm.id !== null;
 
-  // -------- Devices du switchboard actif
+  // Active board & devices
   const [activeBoardId, setActiveBoardId] = useState(null);
   const [devices, setDevices] = useState([]);
   const [selectedDeviceIds, setSelectedDeviceIds] = useState([]);
 
-  // -------- Formulaire device
+  // Devices search (text) + client-side filter
+  const [devQuery, setDevQuery] = useState('');
+  const dDevQuery = useDebounced(devQuery, 250);
+
+  // Device form — settings split into explicit fields (no JSON textarea anymore)
   const [devForm, setDevForm] = useState({
     id: null,
-    device_number: '', // on le pousse vers settings.position pour s’aligner backend
+    device_number: '',
     name: '',
     device_type: '',
     manufacturer: '',
@@ -115,30 +116,42 @@ export default function SwitchboardsPage() {
     poles: '',
     voltage_V: '',
     trip_unit: '',
-    settings: {},  // { position: number, ... }
+    // split settings:
+    curve_type: '', // e.g., B/C/D for MCB or other curve code
+    L_long_delay: '', // LSIG parameters
+    S_short_delay: '',
+    I_instantaneous: '',
+    G_ground: '',
+    // relations:
     is_main_incoming: false,
     parent_id: null,
     downstream_switchboard_id: null,
+    // raw settings object kept internally for submission
+    settings: {},
     photos: [],
     pv_tests: null,
   });
   const editingDevice = devForm.id !== null;
 
-  // -------- Quick Select (autocomplete)
+  // Quick Select (existing refs) + AI autofill
   const [refQuery, setRefQuery] = useState('');
   const dRefQuery = useDebounced(refQuery, 300);
   const [refOptions, setRefOptions] = useState([]);
   const [refOpen, setRefOpen] = useState(false);
 
-  // -------- Global search drawer (optionnel, protégé si endpoint absent)
+  // Global search drawer (unchanged)
   const [searchOpen, setSearchOpen] = useState(false);
   const [globalQuery, setGlobalQuery] = useState('');
   const dGlobalQuery = useDebounced(globalQuery, 350);
   const [globalResults, setGlobalResults] = useState({ boards: [], devices: [] });
 
-  // -------- Photo → IA
+  // Photo → AI
   const photoInputRef = useRef(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+
+  // Pickers for parent / downstream
+  const [allBoards, setAllBoards] = useState([]);
+  const [boardDevices, setBoardDevices] = useState([]);
 
   /* ================= LOADERS ================= */
   async function loadBoards() {
@@ -153,10 +166,17 @@ export default function SwitchboardsPage() {
     const data = await apiGet(`/api/switchboard/devices?switchboard_id=${boardId}`, site);
     setDevices(data.data || []);
     setSelectedDeviceIds([]);
+    setBoardDevices(data.data || []);
+  }
+  async function loadAllBoardsLight() {
+    // Just enough for dropdown (multiple pages if needed)
+    const data = await apiGet(`/api/switchboard/boards?page=1&pageSize=100&sort=name&dir=asc`, site);
+    setAllBoards(data.data || []);
   }
 
   useEffect(() => { loadBoards(); /* eslint-disable-next-line */ }, [dq, sort, dir, page, pageSize, site]);
-  useEffect(() => { if (activeBoardId) loadDevices(activeBoardId); }, [activeBoardId, site]);
+  useEffect(() => { if (activeBoardId) { loadDevices(activeBoardId); } }, [activeBoardId, site]);
+  useEffect(() => { loadAllBoardsLight(); }, [site]);
 
   /* ================= HANDLERS ================= */
   // --- Board
@@ -194,22 +214,29 @@ export default function SwitchboardsPage() {
     if (activeBoardId === id) {
       setActiveBoardId(null);
       setDevices([]);
+      setBoardDevices([]);
     }
     await loadBoards();
   }
 
-  // --- Device
+  // --- Device helpers
   function df(k, v) { setDevForm(s => ({ ...s, [k]: v })); }
 
-  function withSettingsPosition(payload) {
-    // pousse device_number vers settings.position pour respecter l’ordre du PDF côté serveur
-    const out = { ...payload };
-    if (!out.settings || typeof out.settings !== 'object') out.settings = {};
-    if (out.device_number !== '' && out.device_number !== null && out.device_number !== undefined) {
-      const n = Number(out.device_number);
-      if (!Number.isNaN(n)) out.settings.position = n;
+  // Keep settings object in sync with split fields for submission
+  function buildSettingsFromForm(form) {
+    const settings = { ...(form.settings || {}) };
+    // Position from device_number
+    if (form.device_number !== '' && form.device_number !== null && form.device_number !== undefined) {
+      const n = Number(form.device_number);
+      if (!Number.isNaN(n)) settings.position = n;
     }
-    return out;
+    // Curve + LSIG params only if provided
+    if (form.curve_type) settings.curve_type = form.curve_type;
+    if (form.L_long_delay !== '') settings.L = Number(form.L_long_delay) || form.L_long_delay;
+    if (form.S_short_delay !== '') settings.S = Number(form.S_short_delay) || form.S_short_delay;
+    if (form.I_instantaneous !== '') settings.I = Number(form.I_instantaneous) || form.I_instantaneous;
+    if (form.G_ground !== '') settings.G = Number(form.G_ground) || form.G_ground;
+    return settings;
   }
 
   async function createDevice() {
@@ -218,9 +245,9 @@ export default function SwitchboardsPage() {
       if (payload[n] !== '' && payload[n] !== null && payload[n] !== undefined) payload[n] = Number(payload[n]);
       if (Number.isNaN(payload[n])) payload[n] = null;
     });
-    payload = withSettingsPosition(payload);
+    payload.settings = buildSettingsFromForm(payload);
     await apiPost('/api/switchboard/devices', payload, site);
-    setDevForm({ id: null, device_number: '', name: '', device_type: '', manufacturer: '', reference: '', in_amps: '', icu_kA: '', ics_kA: '', poles: '', voltage_V: '', trip_unit: '', settings: {}, is_main_incoming: false, parent_id: null, downstream_switchboard_id: null, photos: [], pv_tests: null });
+    resetDeviceForm();
     await loadDevices(activeBoardId);
   }
 
@@ -230,10 +257,38 @@ export default function SwitchboardsPage() {
       if (payload[n] !== '' && payload[n] !== null && payload[n] !== undefined) payload[n] = Number(payload[n]);
       if (Number.isNaN(payload[n])) payload[n] = null;
     });
-    payload = withSettingsPosition(payload);
+    payload.settings = buildSettingsFromForm(payload);
     await apiPut(`/api/switchboard/devices/${devForm.id}`, payload, site);
-    setDevForm({ id: null, device_number: '', name: '', device_type: '', manufacturer: '', reference: '', in_amps: '', icu_kA: '', ics_kA: '', poles: '', voltage_V: '', trip_unit: '', settings: {}, is_main_incoming: false, parent_id: null, downstream_switchboard_id: null, photos: [], pv_tests: null });
+    resetDeviceForm();
     await loadDevices(activeBoardId);
+  }
+
+  function resetDeviceForm() {
+    setDevForm({
+      id: null,
+      device_number: '',
+      name: '',
+      device_type: '',
+      manufacturer: '',
+      reference: '',
+      in_amps: '',
+      icu_kA: '',
+      ics_kA: '',
+      poles: '',
+      voltage_V: '',
+      trip_unit: '',
+      curve_type: '',
+      L_long_delay: '',
+      S_short_delay: '',
+      I_instantaneous: '',
+      G_ground: '',
+      is_main_incoming: false,
+      parent_id: null,
+      downstream_switchboard_id: null,
+      settings: {},
+      photos: [],
+      pv_tests: null,
+    });
   }
 
   async function deleteDevice(id) {
@@ -247,7 +302,6 @@ export default function SwitchboardsPage() {
     await loadDevices(activeBoardId);
   }
 
-  // --- Bulk (si back étendues)
   async function bulkDelete() {
     if (selectedDeviceIds.length === 0) return;
     if (!confirm(`Delete ${selectedDeviceIds.length} devices?`)) return;
@@ -260,12 +314,11 @@ export default function SwitchboardsPage() {
     await loadDevices(activeBoardId);
   }
 
-  // --- Quick Select (autocomplete) + autofill immédiat
+  // Quick select (existing)
   useEffect(() => {
     let closed = false;
     async function run() {
       if (!dRefQuery) { setRefOptions([]); return; }
-      // le back renvoie toutes les refs ; côté front on filtre pour l’instant
       const r = await apiGet(`/api/switchboard/device-references`, site);
       const all = r.data || [];
       const q = dRefQuery.toLowerCase();
@@ -281,26 +334,39 @@ export default function SwitchboardsPage() {
   async function applyRefOption(opt) {
     setRefOpen(false);
     setRefQuery(`${opt.manufacturer} ${opt.reference}`);
+    await autofillFromAI(`${opt.manufacturer} ${opt.reference}`);
+  }
+
+  // AI autofill from text
+  async function autofillFromAI(query) {
     try {
-      const ai = await apiPost('/api/switchboard/search-device', { query: `${opt.manufacturer} ${opt.reference}` }, site);
-      // auto-fill
-      df('manufacturer', ai.manufacturer || opt.manufacturer || '');
-      df('reference', ai.reference || opt.reference || '');
-      df('device_type', ai.device_type || '');
+      const ai = await apiPost('/api/switchboard/search-device', { query }, site);
+      // Main fields
+      if (ai.manufacturer) df('manufacturer', ai.manufacturer);
+      if (ai.reference) df('reference', ai.reference);
+      if (ai.device_type) df('device_type', ai.device_type);
       if (ai.in_amps != null) df('in_amps', ai.in_amps);
       if (ai.icu_kA != null) df('icu_kA', ai.icu_kA);
       if (ai.ics_kA != null) df('ics_kA', ai.ics_kA);
       if (ai.poles != null) df('poles', ai.poles);
       if (ai.voltage_V != null) df('voltage_V', ai.voltage_V);
       if (ai.trip_unit) df('trip_unit', ai.trip_unit);
-      if (ai.settings) df('settings', ai.settings);
+
+      // Split settings
+      const s = ai.settings || {};
+      if (s.curve_type) df('curve_type', s.curve_type);
+      if (s.L != null) df('L_long_delay', s.L);
+      if (s.S != null) df('S_short_delay', s.S);
+      if (s.I != null) df('I_instantaneous', s.I);
+      if (s.G != null) df('G_ground', s.G);
+
       if (typeof ai.is_main_incoming === 'boolean') df('is_main_incoming', ai.is_main_incoming);
     } catch (e) {
       console.warn('Auto-fill failed', e);
     }
   }
 
-  // --- Global search (protégé si endpoint manquant)
+  // Global search (guarded if endpoint missing)
   useEffect(() => {
     let closed = false;
     async function run() {
@@ -316,7 +382,7 @@ export default function SwitchboardsPage() {
     return () => { closed = true; };
   }, [dGlobalQuery, site]);
 
-  // --- Photo → IA
+  // Photo → AI
   async function handlePhoto(e) {
     const f = e.target.files?.[0];
     if (!f) return;
@@ -338,7 +404,14 @@ export default function SwitchboardsPage() {
       if (ai.poles != null) df('poles', ai.poles);
       if (ai.voltage_V != null) df('voltage_V', ai.voltage_V);
       if (ai.trip_unit) df('trip_unit', ai.trip_unit);
-      if (ai.settings) df('settings', ai.settings);
+
+      const s = ai.settings || {};
+      if (s.curve_type) df('curve_type', s.curve_type);
+      if (s.L != null) df('L_long_delay', s.L);
+      if (s.S != null) df('S_short_delay', s.S);
+      if (s.I != null) df('I_instantaneous', s.I);
+      if (s.G != null) df('G_ground', s.G);
+
       if (typeof ai.is_main_incoming === 'boolean') df('is_main_incoming', ai.is_main_incoming);
       if (ai.match && ai.match.id) {
         if (confirm(`Link to existing device #${ai.match.id} as parent?`)) df('parent_id', ai.match.id);
@@ -351,7 +424,31 @@ export default function SwitchboardsPage() {
     }
   }
 
+  // parent selector uses devices of the active board
+  const parentOptions = useMemo(() => {
+    return (boardDevices || []).slice().sort((a, b) => {
+      const ap = Number(a?.settings?.position ?? 1e9);
+      const bp = Number(b?.settings?.position ?? 1e9);
+      if (ap !== bp) return ap - bp;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [boardDevices]);
+
   const totalPages = useMemo(() => Math.max(1, Math.ceil(totalBoards / pageSize)), [totalBoards, pageSize]);
+
+  // filtered devices by text
+  const filteredDevices = useMemo(() => {
+    const q = dDevQuery.trim().toLowerCase();
+    if (!q) return devices;
+    return devices.filter(d => {
+      const hay = [
+        d?.settings?.position ?? d?.settings?.number ?? '',
+        d.name, d.device_type, d.manufacturer, d.reference,
+        d.in_amps, d.icu_kA, d.ics_kA, d.poles, d.voltage_V, d.trip_unit
+      ].map(x => `${x ?? ''}`.toLowerCase()).join(' ');
+      return hay.includes(q);
+    });
+  }, [devices, dDevQuery]);
 
   /* ================= RENDER ================= */
   return (
@@ -373,7 +470,7 @@ export default function SwitchboardsPage() {
         </div>
       </div>
 
-      {/* Filtres / recherche boards */}
+      {/* Board filters */}
       <div className="card p-4 mb-4">
         <div className="flex flex-col md:flex-row gap-3">
           <input className="input" placeholder="Search boards (name, code, building, floor, room…)" value={q} onChange={e => { setQ(e.target.value); setPage(1); }} />
@@ -392,7 +489,7 @@ export default function SwitchboardsPage() {
         </div>
       </div>
 
-      {/* Grille des switchboards (ACCUEIL) */}
+      {/* Boards grid */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         {boards.map(b => (
           <div key={b.id} className="card p-4 hover:-translate-y-0.5 transition">
@@ -443,7 +540,7 @@ export default function SwitchboardsPage() {
         </div>
       </div>
 
-      {/* Formulaire Switchboard (dans un panneau togglable) */}
+      {/* Board form (toggle) */}
       {boardOpen && (
         <div className="card p-6 mb-8">
           <div className="flex items-center justify-between mb-4">
@@ -452,23 +549,23 @@ export default function SwitchboardsPage() {
           </div>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
-              <label className="label">Name<Info text="Nom court du tableau (ex: TGBT B11)" /></label>
+              <label className="label">Name<Info text="Short board name (e.g., TGBT B11)" /></label>
               <input className="input mt-1" value={boardForm.name} onChange={e => bf('name', e.target.value)} />
             </div>
             <div>
-              <label className="label">Code<Info text="Identifiant unique du tableau (ex: TGBT-B11-01)" /></label>
+              <label className="label">Code<Info text="Unique ID (e.g., TGBT-B11-01)" /></label>
               <input className="input mt-1" value={boardForm.code} onChange={e => bf('code', e.target.value)} />
             </div>
             <div>
-              <label className="label">Building<Info text="Code bâtiment (ex: B11)" /></label>
+              <label className="label">Building<Info text="e.g., B11" /></label>
               <input className="input mt-1" value={boardForm.meta.building_code} onChange={e => bf('meta.building_code', e.target.value)} />
             </div>
             <div>
-              <label className="label">Floor<Info text="Niveau (ex: 1, -1, RDC)" /></label>
+              <label className="label">Floor<Info text="e.g., 1, -1, G" /></label>
               <input className="input mt-1" value={boardForm.meta.floor} onChange={e => bf('meta.floor', e.target.value)} />
             </div>
             <div>
-              <label className="label">Room<Info text="Local (ex: Local Elec 02)" /></label>
+              <label className="label">Room<Info text="e.g., Electrical Room 02" /></label>
               <input className="input mt-1" value={boardForm.meta.room} onChange={e => bf('meta.room', e.target.value)} />
             </div>
             <div>
@@ -476,7 +573,7 @@ export default function SwitchboardsPage() {
               <input className="input mt-1" value={boardForm.regime_neutral} onChange={e => bf('regime_neutral', e.target.value)} />
             </div>
             <div className="flex items-center gap-2">
-              <label className="label">Principal switchboard<Info text="Arrivée principale (plusieurs possibles)" /></label>
+              <label className="label">Principal switchboard<Info text="Main incomer (multiple allowed)" /></label>
               <input type="checkbox" className="mt-1" checked={boardForm.is_principal} onChange={e => bf('is_principal', e.target.checked)} />
             </div>
           </div>
@@ -487,7 +584,7 @@ export default function SwitchboardsPage() {
         </div>
       )}
 
-      {/* Panneau Devices */}
+      {/* DEVICES PANEL */}
       {activeBoardId && (
         <div className="card p-6">
           <div className="flex items-center justify-between mb-4">
@@ -502,39 +599,45 @@ export default function SwitchboardsPage() {
             </div>
           </div>
 
-          {/* Quick Select Existing — searchable */}
-          <div className="mb-4 relative">
-            <label className="label">Quick Select Existing<Info text="Tape quelques lettres de la marque ou de la référence, puis choisis pour pré-remplir" /></label>
-            <input
-              className="input mt-1"
-              placeholder="Ex: Schneider NSX100F…"
-              value={refQuery}
-              onFocus={() => setRefOpen(true)}
-              onChange={e => { setRefQuery(e.target.value); setRefOpen(true); }}
-            />
-            {refOpen && refOptions.length > 0 && (
-              <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-soft max-h-72 overflow-auto">
-                {refOptions.map((opt, i) => (
-                  <button key={`${opt.manufacturer}-${opt.reference}-${i}`}
-                          className="w-full text-left px-3 py-2 hover:bg-gray-50"
-                          onClick={() => applyRefOption(opt)}>
-                    <div className="text-sm font-medium">{opt.manufacturer} <span className="text-gray-500">{opt.reference}</span></div>
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* Top tools: Quick select + search */}
+          <div className="grid lg:grid-cols-3 gap-4 mb-4">
+            <div className="lg:col-span-2 relative">
+              <label className="label">Quick Select Existing<Info text="Type some letters of the brand or reference, then choose to auto-fill" /></label>
+              <input
+                className="input mt-1"
+                placeholder="e.g., Schneider NSX100F…"
+                value={refQuery}
+                onFocus={() => setRefOpen(true)}
+                onChange={e => { setRefQuery(e.target.value); setRefOpen(true); }}
+              />
+              {refOpen && refOptions.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-soft max-h-72 overflow-auto">
+                  {refOptions.map((opt, i) => (
+                    <button key={`${opt.manufacturer}-${opt.reference}-${i}`}
+                            className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                            onClick={() => applyRefOption(opt)}>
+                      <div className="text-sm font-medium">{opt.manufacturer} <span className="text-gray-500">{opt.reference}</span></div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <label className="label">Search devices (text)</label>
+              <input className="input mt-1" placeholder="Type, brand, ref, In, Icu/Ics…" value={devQuery} onChange={e => setDevQuery(e.target.value)} />
+            </div>
           </div>
 
-          {/* Device form */}
+          {/* DEVICE FORM */}
           <div className="grid lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 card p-4">
               <div className="grid md:grid-cols-3 gap-4">
                 <div>
-                  <label className="label">Device #<Info text="Numéro pour l’ordre PDF et la liste" /></label>
-                  <input className="input mt-1" value={devForm.device_number} onChange={e => df('device_number', e.target.value)} placeholder="ex: 1, 2, 3…" />
+                  <label className="label">Device #<Info text="Ordering number for PDF and list" /></label>
+                  <input className="input mt-1" value={devForm.device_number} onChange={e => df('device_number', e.target.value)} placeholder="1, 2, 3…" />
                 </div>
                 <div>
-                  <label className="label">Name<Info text="Nom affiché (ex: QF1, Arrivée BT…)" /></label>
+                  <label className="label">Name<Info text="Display name (e.g., QF1, Main Incomer…)" /></label>
                   <input className="input mt-1" value={devForm.name} onChange={e => df('name', e.target.value)} />
                 </div>
                 <div>
@@ -553,17 +656,7 @@ export default function SwitchboardsPage() {
                     onChange={async e => {
                       df('reference', e.target.value);
                       if (e.target.value.length >= 4 && devForm.manufacturer) {
-                        try {
-                          const ai = await apiPost('/api/switchboard/search-device', { query: `${devForm.manufacturer} ${e.target.value}` }, site);
-                          if (ai.device_type && !devForm.device_type) df('device_type', ai.device_type);
-                          if (ai.in_amps != null && !devForm.in_amps) df('in_amps', ai.in_amps);
-                          if (ai.icu_kA != null && !devForm.icu_kA) df('icu_kA', ai.icu_kA);
-                          if (ai.ics_kA != null && !devForm.ics_kA) df('ics_kA', ai.ics_kA);
-                          if (ai.poles != null && !devForm.poles) df('poles', ai.poles);
-                          if (ai.voltage_V != null && !devForm.voltage_V) df('voltage_V', ai.voltage_V);
-                          if (ai.trip_unit && !devForm.trip_unit) df('trip_unit', ai.trip_unit);
-                          if (ai.settings && (!devForm.settings || Object.keys(devForm.settings).length === 0)) df('settings', ai.settings);
-                        } catch {}
+                        await autofillFromAI(`${devForm.manufacturer} ${e.target.value}`);
                       }
                     }}
                   />
@@ -592,23 +685,64 @@ export default function SwitchboardsPage() {
                   <label className="label">Trip unit</label>
                   <input className="input mt-1" value={devForm.trip_unit} onChange={e => df('trip_unit', e.target.value)} />
                 </div>
-                <div className="md:col-span-3">
-                  <label className="label">Settings (JSON)<Info text="LSIG, courbes B/C/D…" /></label>
-                  <textarea className="input mt-1 min-h-24" value={JSON.stringify(devForm.settings || {}, null, 2)} onChange={e => {
-                    try { df('settings', JSON.parse(e.target.value)); } catch { /* ignore */ }
-                  }} />
+
+                {/* Split settings (no JSON) */}
+                <div>
+                  <label className="label">Curve type<Info text="e.g., B / C / D for MCB" /></label>
+                  <input className="input mt-1" value={devForm.curve_type} onChange={e => df('curve_type', e.target.value)} />
                 </div>
+                <div>
+                  <label className="label">L (long delay)</label>
+                  <input className="input mt-1" value={devForm.L_long_delay} onChange={e => df('L_long_delay', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">S (short delay)</label>
+                  <input className="input mt-1" value={devForm.S_short_delay} onChange={e => df('S_short_delay', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">I (instantaneous)</label>
+                  <input className="input mt-1" value={devForm.I_instantaneous} onChange={e => df('I_instantaneous', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">G (ground)</label>
+                  <input className="input mt-1" value={devForm.G_ground} onChange={e => df('G_ground', e.target.value)} />
+                </div>
+
                 <div className="flex items-center gap-2">
                   <label className="label">Main incoming</label>
                   <input type="checkbox" className="mt-1" checked={devForm.is_main_incoming} onChange={e => df('is_main_incoming', e.target.checked)} />
                 </div>
+
+                {/* Parent selector */}
                 <div>
-                  <label className="label">Parent device ID<Info text="Pour l’arborescence interne" /></label>
-                  <input className="input mt-1" value={devForm.parent_id || ''} onChange={e => df('parent_id', e.target.value ? Number(e.target.value) : null)} />
+                  <label className="label">Parent device<Info text="Build the internal hierarchy" /></label>
+                  <select className="input mt-1" value={devForm.parent_id || ''} onChange={e => df('parent_id', e.target.value ? Number(e.target.value) : null)}>
+                    <option value="">None</option>
+                    {parentOptions.map(d => (
+                      <option key={d.id} value={d.id}>
+                        #{d?.settings?.position ?? d?.settings?.number ?? '—'} · {d.manufacturer || ''} {d.reference || d.name || d.device_type || `Device #${d.id}`}
+                      </option>
+                    ))}
+                  </select>
                 </div>
+
+                {/* Downstream board selector */}
                 <div>
-                  <label className="label">Downstream board ID<Info text="Lien vers un tableau aval" /></label>
-                  <input className="input mt-1" value={devForm.downstream_switchboard_id || ''} onChange={e => df('downstream_switchboard_id', e.target.value ? Number(e.target.value) : null)} />
+                  <label className="label">Downstream board<Info text="Link to a downstream switchboard" /></label>
+                  <select
+                    className="input mt-1"
+                    value={devForm.downstream_switchboard_id || ''}
+                    onChange={e => df('downstream_switchboard_id', e.target.value ? Number(e.target.value) : null)}
+                  >
+                    <option value="">None</option>
+                    {allBoards
+                      .filter(b => b.id !== activeBoardId)
+                      .map(b => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} ({b.code})
+                        </option>
+                      ))}
+                  </select>
                 </div>
               </div>
 
@@ -623,7 +757,7 @@ export default function SwitchboardsPage() {
                   {!editingDevice && <button className="btn btn-primary" onClick={createDevice}>Add device</button>}
                   {editingDevice && (
                     <>
-                      <button className="btn bg-gray-100" onClick={() => setDevForm({ id: null, device_number: '', name: '', device_type: '', manufacturer: '', reference: '', in_amps: '', icu_kA: '', ics_kA: '', poles: '', voltage_V: '', trip_unit: '', settings: {}, is_main_incoming: false, parent_id: null, downstream_switchboard_id: null, photos: [], pv_tests: null })}>Cancel</button>
+                      <button className="btn bg-gray-100" onClick={resetDeviceForm}>Cancel</button>
                       <button className="btn btn-primary" onClick={updateDevice}>Update</button>
                     </>
                   )}
@@ -631,26 +765,46 @@ export default function SwitchboardsPage() {
               </div>
             </div>
 
-            {/* Liste des devices, tri visuel par numéro (settings.position) */}
-            <div className="card p-4">
-              <div className="flex items-center justify-between mb-2">
+            {/* DEVICES TABLE */}
+            <div className="card p-4 overflow-hidden">
+              <div className="flex items-center justify-between mb-3">
                 <h3 className="font-semibold">Devices</h3>
-                <div className="text-xs text-gray-500">{devices.length} items</div>
+                <div className="text-xs text-gray-500">{filteredDevices.length} items</div>
               </div>
-              <div className="max-h-[560px] overflow-auto divide-y">
-                {devices
-                  .slice()
-                  .sort((a, b) => {
-                    const ap = Number(a?.settings?.position ?? a?.settings?.number ?? 1e9);
-                    const bp = Number(b?.settings?.position ?? b?.settings?.number ?? 1e9);
-                    if (ap !== bp) return ap - bp;
-                    return new Date(a.created_at) - new Date(b.created_at);
-                  })
-                  .map(d => (
-                    <div key={d.id} className="py-3">
-                      <div className="flex items-start justify-between">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
+              <div className="overflow-auto max-h-[560px]">
+                <table className="min-w-full text-sm">
+                  <thead className="sticky top-0 bg-gray-50">
+                    <tr className="text-left text-gray-600">
+                      <th className="px-3 py-2">Sel</th>
+                      <th className="px-3 py-2">#</th>
+                      <th className="px-3 py-2">Name</th>
+                      <th className="px-3 py-2">Type</th>
+                      <th className="px-3 py-2">Manufacturer</th>
+                      <th className="px-3 py-2">Reference</th>
+                      <th className="px-3 py-2">In (A)</th>
+                      <th className="px-3 py-2">Icu</th>
+                      <th className="px-3 py-2">Ics</th>
+                      <th className="px-3 py-2">Poles</th>
+                      <th className="px-3 py-2">Voltage</th>
+                      <th className="px-3 py-2">Trip</th>
+                      <th className="px-3 py-2">Parent</th>
+                      <th className="px-3 py-2">Downstream</th>
+                      <th className="px-3 py-2">Main</th>
+                      <th className="px-3 py-2 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {filteredDevices
+                      .slice()
+                      .sort((a, b) => {
+                        const ap = Number(a?.settings?.position ?? a?.settings?.number ?? 1e9);
+                        const bp = Number(b?.settings?.position ?? b?.settings?.number ?? 1e9);
+                        if (ap !== bp) return ap - bp;
+                        return new Date(a.created_at) - new Date(b.created_at);
+                      })
+                      .map(d => (
+                        <tr key={d.id} className="hover:bg-gray-50">
+                          <td className="px-3 py-2">
                             <input
                               type="checkbox"
                               checked={selectedDeviceIds.includes(d.id)}
@@ -658,58 +812,76 @@ export default function SwitchboardsPage() {
                                 setSelectedDeviceIds(s => e.target.checked ? [...new Set([...s, d.id])] : s.filter(x => x !== d.id));
                               }}
                             />
-                            <div className="font-medium truncate">{d.name || d.reference || `Device #${d.id}`}</div>
-                            {d.is_main_incoming && <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-blue-50 text-blue-700">⭐ Main</span>}
-                            {d.downstream_switchboard_id && <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded bg-amber-50 text-amber-700">🔗 SB→{d.downstream_switchboard_id}</span>}
-                          </div>
-                          <div className="text-xs text-gray-600 mt-1">
-                            #{d?.settings?.position ?? d?.settings?.number ?? '—'} · {d.device_type || '—'} · {d.manufacturer || '—'} {d.reference || ''} · In {d.in_amps ?? '—'}A · Icu {d.icu_kA ?? '—'}kA · Ics {d.ics_kA ?? '—'}kA · {d.poles ?? '—'}P · {d.voltage_V ?? '—'}V
-                          </div>
-                          {d.parent_id && <div className="text-[11px] text-gray-500 mt-0.5">Parent: {d.parent_id}</div>}
-                        </div>
-                        <div className="flex gap-1 shrink-0">
-                          <button
-                            className="btn bg-blue-500 hover:bg-blue-600 text-white text-xs"
-                            title="Edit"
-                            onClick={() => setDevForm({
-                              id: d.id,
-                              device_number: d?.settings?.position ?? d?.settings?.number ?? '',
-                              name: d.name || '',
-                              device_type: d.device_type || '',
-                              manufacturer: d.manufacturer || '',
-                              reference: d.reference || '',
-                              in_amps: d.in_amps ?? '',
-                              icu_kA: d.icu_kA ?? '',
-                              ics_kA: d.ics_kA ?? '',
-                              poles: d.poles ?? '',
-                              voltage_V: d.voltage_V ?? '',
-                              trip_unit: d.trip_unit || '',
-                              settings: d.settings || {},
-                              is_main_incoming: !!d.is_main_incoming,
-                              parent_id: d.parent_id || null,
-                              downstream_switchboard_id: d.downstream_switchboard_id || null,
-                              photos: [],
-                              pv_tests: null
-                            })}
-                          >✏️</button>
-                          <button className="btn bg-emerald-500 hover:bg-emerald-600 text-white text-xs" title="Toggle main" onClick={() => setMainIncoming(d.id, !d.is_main_incoming)}>⭐</button>
-                          <button className="btn bg-purple-500 hover:bg-purple-600 text-white text-xs" title="Duplicate" onClick={async () => {
-                            await apiPost(`/api/switchboard/devices/${d.id}/duplicate`, {}, site);
-                            await loadDevices(activeBoardId);
-                          }}>📑</button>
-                          <button className="btn bg-red-500 hover:bg-red-600 text-white text-xs" title="Delete" onClick={() => deleteDevice(d.id)}>🗑</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                {devices.length === 0 && <div className="text-sm text-gray-500 py-8 text-center">No devices</div>}
+                          </td>
+                          <td className="px-3 py-2">{d?.settings?.position ?? d?.settings?.number ?? '—'}</td>
+                          <td className="px-3 py-2 truncate max-w-[140px]">{d.name || '—'}</td>
+                          <td className="px-3 py-2">{d.device_type || '—'}</td>
+                          <td className="px-3 py-2">{d.manufacturer || '—'}</td>
+                          <td className="px-3 py-2 truncate max-w-[140px]">{d.reference || '—'}</td>
+                          <td className="px-3 py-2">{d.in_amps ?? '—'}</td>
+                          <td className="px-3 py-2">{d.icu_kA ?? '—'}</td>
+                          <td className="px-3 py-2">{d.ics_kA ?? '—'}</td>
+                          <td className="px-3 py-2">{d.poles ?? '—'}</td>
+                          <td className="px-3 py-2">{d.voltage_V ?? '—'}</td>
+                          <td className="px-3 py-2">{d.trip_unit ?? '—'}</td>
+                          <td className="px-3 py-2 text-xs text-gray-600">{d.parent_id ? (d.parent_name || d.parent_reference || `#${d.parent_id}`) : '—'}</td>
+                          <td className="px-3 py-2 text-xs text-gray-600">{d.downstream_switchboard_id ? `SB ${d.downstream_switchboard_id}` : '—'}</td>
+                          <td className="px-3 py-2">{d.is_main_incoming ? '⭐' : '—'}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex justify-end gap-1">
+                              <button
+                                className="btn bg-blue-500 hover:bg-blue-600 text-white text-xs"
+                                title="Edit"
+                                onClick={() => setDevForm({
+                                  id: d.id,
+                                  device_number: d?.settings?.position ?? d?.settings?.number ?? '',
+                                  name: d.name || '',
+                                  device_type: d.device_type || '',
+                                  manufacturer: d.manufacturer || '',
+                                  reference: d.reference || '',
+                                  in_amps: d.in_amps ?? '',
+                                  icu_kA: d.icu_kA ?? '',
+                                  ics_kA: d.ics_kA ?? '',
+                                  poles: d.poles ?? '',
+                                  voltage_V: d.voltage_V ?? '',
+                                  trip_unit: d.trip_unit || '',
+                                  curve_type: d?.settings?.curve_type || '',
+                                  L_long_delay: d?.settings?.L ?? '',
+                                  S_short_delay: d?.settings?.S ?? '',
+                                  I_instantaneous: d?.settings?.I ?? '',
+                                  G_ground: d?.settings?.G ?? '',
+                                  is_main_incoming: !!d.is_main_incoming,
+                                  parent_id: d.parent_id || null,
+                                  downstream_switchboard_id: d.downstream_switchboard_id || null,
+                                  settings: d.settings || {},
+                                  photos: [],
+                                  pv_tests: null
+                                })}
+                              >✏️</button>
+                              <button className="btn bg-emerald-500 hover:bg-emerald-600 text-white text-xs" title="Toggle main" onClick={() => setMainIncoming(d.id, !d.is_main_incoming)}>⭐</button>
+                              <button className="btn bg-purple-500 hover:bg-purple-600 text-white text-xs" title="Duplicate" onClick={async () => {
+                                await apiPost(`/api/switchboard/devices/${d.id}/duplicate`, {}, site);
+                                await loadDevices(activeBoardId);
+                              }}>📑</button>
+                              <button className="btn bg-red-500 hover:bg-red-600 text-white text-xs" title="Delete" onClick={() => deleteDevice(d.id)}>🗑</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    {filteredDevices.length === 0 && (
+                      <tr>
+                        <td className="px-3 py-6 text-center text-gray-500" colSpan={16}>No devices</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Global search drawer */}
+      {/* Global search drawer (protected if endpoint absent) */}
       {searchOpen && (
         <div className="fixed inset-0 bg-black/30 z-40" onClick={() => setSearchOpen(false)}>
           <div className="absolute top-0 right-0 h-full w-full max-w-xl bg-white shadow-xl p-5 overflow-auto" onClick={e => e.stopPropagation()}>
@@ -751,10 +923,15 @@ export default function SwitchboardsPage() {
                         poles: d.poles ?? '',
                         voltage_V: d.voltage_V ?? '',
                         trip_unit: d.trip_unit || '',
-                        settings: d.settings || {},
+                        curve_type: d?.settings?.curve_type || '',
+                        L_long_delay: d?.settings?.L ?? '',
+                        S_short_delay: d?.settings?.S ?? '',
+                        I_instantaneous: d?.settings?.I ?? '',
+                        G_ground: d?.settings?.G ?? '',
                         is_main_incoming: !!d.is_main_incoming,
                         parent_id: d.parent_id || null,
                         downstream_switchboard_id: d.downstream_switchboard_id || null,
+                        settings: d.settings || {},
                         photos: [],
                         pv_tests: null
                       }), 250);
