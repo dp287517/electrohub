@@ -374,15 +374,11 @@ app.post('/api/switchboard/devices', async (req, res) => {
     const safePhotos = coercePhotos(b.photos);
 
     const { rows } = await pool.query(
-      `INSERT INTO devices (
-        site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
-      [
-        device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null,
-        b.name || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA,
-        b.poles, b.voltage_V, b.trip_unit, b.settings || {}, b.is_main_incoming || false, safePV, safePhotos
-      ]
+      [device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
+       b.in_amps || null, b.icu_kA || null, b.ics_kA || null, b.poles || null, b.voltage_V || null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -398,47 +394,41 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     const b = req.body || {};
-
     const safePV = coercePVTests(b.pv_tests);
     const safePhotos = coercePhotos(b.photos);
 
-    const r = await pool.query(
-      `UPDATE devices d
-       SET name=$1, device_type=$2, manufacturer=$3, reference=$4, in_amps=$5, icu_kA=$6, ics_kA=$7, poles=$8, voltage_V=$9, trip_unit=$10,
-           settings=$11, is_main_incoming=$12, parent_id=$13, downstream_switchboard_id=$14, pv_tests=$15, photos=$16, updated_at=NOW()
+    const { rows } = await pool.query(
+      `UPDATE devices SET
+        parent_id=$1, downstream_switchboard_id=$2, name=$3, device_type=$4, manufacturer=$5, reference=$6, in_amps=$7, icu_kA=$8, ics_kA=$9, poles=$10, voltage_V=$11, trip_unit=$12, settings=$13, is_main_incoming=$14, pv_tests=$15, photos=$16, updated_at=NOW()
        FROM switchboards sb
-       WHERE d.id=$17 AND d.switchboard_id = sb.id AND sb.site=$18
-       RETURNING d.*`,
-      [
-        b.name || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA, b.poles, b.voltage_V, b.trip_unit,
-        b.settings || {}, !!b.is_main_incoming, b.parent_id || null, b.downstream_switchboard_id || null, safePV, safePhotos, id, site
-      ]
+       WHERE devices.id=$17 AND devices.switchboard_id = sb.id AND sb.site=$18
+       RETURNING devices.*`,
+      [b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
+       b.in_amps || null, b.icu_kA || null, b.ics_kA || null, b.poles || null, b.voltage_V || null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos, id, site]
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
-    res.json(r.rows[0]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
   } catch (e) {
     console.error('[DEVICES UPDATE] error:', e.message);
     res.status(500).json({ error: 'Update failed' });
   }
 });
 
-// DUPLICATE Device - FIXED append (copy) to reference
+// DUPLICATE Device
 app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
-
     const r = await pool.query(
-      `INSERT INTO devices (
-        site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
-      ) SELECT sb.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
-               COALESCE(d.name, d.reference) || ' (copy)', d.device_type, d.manufacturer, COALESCE(d.reference, 'Device') || ' (copy)',
-               d.in_amps, d.icu_kA, d.ics_kA, d.poles, d.voltage_V, d.trip_unit, d.settings, FALSE, d.pv_tests, d.photos
-        FROM devices d
-        JOIN switchboards sb ON d.switchboard_id = sb.id
-        WHERE d.id=$1 AND sb.site=$2
-        RETURNING *`,
+      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos)
+       SELECT sb.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
+              COALESCE(d.name, d.reference) || ' (copy)', d.device_type, d.manufacturer, COALESCE(d.reference, 'Device') || ' (copy)',
+              d.in_amps, d.icu_kA, d.ics_kA, d.poles, d.voltage_V, d.trip_unit, d.settings, FALSE, d.pv_tests, d.photos
+       FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE d.id=$1 AND sb.site=$2
+       RETURNING *`,
       [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -659,11 +649,32 @@ app.get('/api/switchboard/search-references', async (req, res) => {
 });
 
 // ---- PHOTO ANALYSIS ----
+function safeJsonParse(raw) {
+  if (typeof raw !== 'string') return raw;
+  let s = raw.trim();
+  // strip fences ```json ... ```
+  if (s.startsWith('```')) {
+    s = s.replace(/^```(?:json)?\s*/i, '').replace(/```$/,'').trim();
+  }
+  // si un JSON est noyé dans du texte, on récupère le premier bloc {...}
+  const m = s.match(/\{[\s\S]*\}$/);
+  if (m) s = m[0];
+  return JSON.parse(s);
+}
+
 app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     if (!openai || !req.file) return res.status(400).json({ error: 'OpenAI or file missing' });
+
+    const switchboardId = req.query.switchboard_id ? Number(req.query.switchboard_id) : null;
+    let deviceSite = site;
+    if (switchboardId) {
+      const chk = await pool.query('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboardId, site]);
+      if (!chk.rows.length) return res.status(404).json({ error: 'Switchboard not found for photo attach' });
+      deviceSite = chk.rows[0].site;
+    }
 
     const buffer = req.file.buffer;
     const base64Image = buffer.toString('base64');
@@ -674,6 +685,10 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       model: 'gpt-4o',
       messages: [
         {
+          role: 'system',
+          content: 'You output ONLY valid JSON. No markdown fences, no prose.'
+        },
+        {
           role: 'user',
           content: [
             { type: 'text', text: 'Analyze this electrical device image. Extract: manufacturer, reference, device_type, in_amps, poles, voltage_V, description. JSON only.' },
@@ -681,12 +696,13 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
           ]
         }
       ],
+      response_format: { type: 'json_object' },
       max_tokens: 300
     });
 
     let description;
     try {
-      description = JSON.parse(descriptionResponse.choices[0].message.content);
+      description = safeJsonParse(descriptionResponse.choices[0].message.content);
     } catch (parseErr) {
       console.error('[PHOTO] Parse error:', parseErr);
       return res.status(500).json({ error: 'Failed to parse photo description' });
@@ -708,7 +724,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       const createResponse = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
-          { role: 'system', content: 'Generate full device specs JSON from description. Defaults if missing.' },
+          { role: 'system', content: 'Generate full device specs JSON from description. Defaults if missing. Output ONLY valid JSON.' },
           { role: 'user', content: JSON.stringify(description) }
         ],
         response_format: { type: 'json_object' }
@@ -716,20 +732,23 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
 
       let specs;
       try {
-        specs = JSON.parse(createResponse.choices[0].message.content);
+        specs = safeJsonParse(createResponse.choices[0].message.content);
       } catch (parseErr) {
         console.error('[PHOTO] Specs parse error:', parseErr);
         return res.status(500).json({ error: 'Failed to parse device specs' });
       }
 
-      const { rows: [newDevice] } = await pool.query(
-        `INSERT INTO devices (site, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         RETURNING *`,
-        [site, specs.device_type || 'Low Voltage Circuit Breaker', specs.manufacturer, specs.reference, specs.in_amps || 0, specs.icu_kA || 0, specs.ics_kA || 0, specs.poles || 3, specs.voltage_V || 400, specs.trip_unit || '', specs.settings || {}]
-      );
-
-      result = { ...newDevice, created: true, photo_description: description.description };
+      if (switchboardId) {
+        const { rows: [newDevice] } = await pool.query(
+          `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           RETURNING *`,
+          [deviceSite, switchboardId, specs.device_type || 'Low Voltage Circuit Breaker', specs.manufacturer, specs.reference, specs.in_amps || 0, specs.icu_kA || 0, specs.ics_kA || 0, specs.poles || 3, specs.voltage_V || 400, specs.trip_unit || '', specs.settings || {}]
+        );
+        result = { ...newDevice, created: true, photo_description: description.description };
+      } else {
+        result = { ...specs, created: false, requires_switchboard: true, photo_description: description.description };
+      }
     }
 
     res.json(result);
