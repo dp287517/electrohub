@@ -67,7 +67,7 @@ const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// SQL bootstrap (aligné avec tes tables)
+// SQL bootstrap (aligné avec tes tables, ajouté downstream_switchboard_id)
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS switchboards (
@@ -93,6 +93,7 @@ async function ensureSchema() {
       site TEXT NOT NULL,
       switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
       parent_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
+      downstream_switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE SET NULL,
       device_type TEXT NOT NULL,
       manufacturer TEXT,
       reference TEXT,
@@ -349,11 +350,11 @@ app.post('/api/switchboard/devices', async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO devices (
-        site, switchboard_id, parent_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        site, switchboard_id, parent_id, downstream_switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`,
       [
-        device_site, switchboard_id, b.parent_id || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA,
+        device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA,
         b.poles, b.voltage_V, b.trip_unit, b.settings || {}, b.is_main_incoming || false, b.pv_tests || null, b.photos || []
       ]
     );
@@ -374,13 +375,13 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     const r = await pool.query(
       `UPDATE devices d
        SET device_type=$1, manufacturer=$2, reference=$3, in_amps=$4, icu_kA=$5, ics_kA=$6, poles=$7, voltage_V=$8, trip_unit=$9,
-           settings=$10, is_main_incoming=$11, parent_id=$12, pv_tests=$13, photos=$14, updated_at=NOW()
+           settings=$10, is_main_incoming=$11, parent_id=$12, downstream_switchboard_id=$13, pv_tests=$14, photos=$15, updated_at=NOW()
        FROM switchboards sb
-       WHERE d.id=$15 AND d.switchboard_id = sb.id AND sb.site=$16
+       WHERE d.id=$16 AND d.switchboard_id = sb.id AND sb.site=$17
        RETURNING d.*`,
       [
         b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA, b.poles, b.voltage_V, b.trip_unit,
-        b.settings || {}, b.is_main_incoming, b.parent_id || null, b.pv_tests || null, b.photos || [], id, site
+        b.settings || {}, b.is_main_incoming, b.parent_id || null, b.downstream_switchboard_id || null, b.pv_tests || null, b.photos || [], id, site
       ]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -399,8 +400,8 @@ app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
 
     const r = await pool.query(
       `INSERT INTO devices (
-        site, switchboard_id, parent_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
-      ) SELECT site, switchboard_id, parent_id, device_type, manufacturer, reference || ' (copy)', in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, FALSE, pv_tests, photos
+        site, switchboard_id, parent_id, downstream_switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
+      ) SELECT sb.site, switchboard_id, parent_id, downstream_switchboard_id, device_type, manufacturer, reference || ' (copy)', in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, FALSE, pv_tests, photos
         FROM devices d
         JOIN switchboards sb ON d.switchboard_id = sb.id
         WHERE d.id=$1 AND sb.site=$2
@@ -506,5 +507,5 @@ app.post('/api/switchboard/search-device', async (req, res) => {
   }
 });
 
-const port = process.env.SWITCHBOARD_PORT || 3003;
+const port = process.env.PORT || 3003;  // Use Render's PORT
 app.listen(port, () => console.log(`Switchboard service running on :${port}`));
