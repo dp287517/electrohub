@@ -18,8 +18,7 @@ if (process.env.OPENAI_API_KEY) {
   try {
     openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     console.log('[SWITCHBOARD] OpenAI initialized with key');
-    
-    // Test rapide de l'API
+    // Test rapide (tolerant aux erreurs)
     try {
       const test = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -67,7 +66,7 @@ const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// SQL bootstrap (aligné avec tes tables, ajouté downstream_switchboard_id)
+// SQL bootstrap (ajout downstream_switchboard_id + name pour devices)
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS switchboards (
@@ -94,6 +93,7 @@ async function ensureSchema() {
       switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
       parent_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
       downstream_switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE SET NULL,
+      name TEXT,  -- <== ajouté
       device_type TEXT NOT NULL,
       manufacturer TEXT,
       reference TEXT,
@@ -115,6 +115,9 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(site);
     CREATE INDEX IF NOT EXISTS idx_devices_reference ON devices(reference);
   `);
+
+  // si la table devices existait déjà sans 'name', on l'ajoute
+  await pool.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS name TEXT;`);
 }
 ensureSchema().catch(e=>console.error('[SWITCHBOARD SCHEMA]', e.message));
 
@@ -336,26 +339,50 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
+// Helpers robustesse fichiers (évite 500 si front envoie File/objet)
+function coercePVTests(pv_tests) {
+  if (typeof pv_tests === 'string' && pv_tests.length > 0) {
+    try { return Buffer.from(pv_tests, 'base64'); } catch { return null; }
+  }
+  return null;
+}
+function coercePhotos(photos) {
+  if (Array.isArray(photos)) {
+    const out = [];
+    for (const p of photos) {
+      if (typeof p === 'string') {
+        try { out.push(Buffer.from(p, 'base64')); } catch { /* ignore */ }
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
 // CREATE Device
 app.post('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
-    const b = req.body;
+    const b = req.body || {};
     const switchboard_id = Number(b.switchboard_id);
     if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
 
     const sbCheck = await pool.query('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
-    const device_site = sbCheck.rows[0].site;  // Utilise site du switchboard
+    const device_site = sbCheck.rows[0].site;
+
+    const safePV = coercePVTests(b.pv_tests);
+    const safePhotos = coercePhotos(b.photos);
 
     const { rows } = await pool.query(
       `INSERT INTO devices (
-        site, switchboard_id, parent_id, downstream_switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [
-        device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA,
-        b.poles, b.voltage_V, b.trip_unit, b.settings || {}, b.is_main_incoming || false, b.pv_tests || null, b.photos || []
+        device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null,
+        b.name || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA,
+        b.poles, b.voltage_V, b.trip_unit, b.settings || {}, b.is_main_incoming || false, safePV, safePhotos
       ]
     );
     res.status(201).json(rows[0]);
@@ -370,18 +397,21 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
-    const b = req.body;
+    const b = req.body || {};
+
+    const safePV = coercePVTests(b.pv_tests);
+    const safePhotos = coercePhotos(b.photos);
 
     const r = await pool.query(
       `UPDATE devices d
-       SET device_type=$1, manufacturer=$2, reference=$3, in_amps=$4, icu_kA=$5, ics_kA=$6, poles=$7, voltage_V=$8, trip_unit=$9,
-           settings=$10, is_main_incoming=$11, parent_id=$12, downstream_switchboard_id=$13, pv_tests=$14, photos=$15, updated_at=NOW()
+       SET name=$1, device_type=$2, manufacturer=$3, reference=$4, in_amps=$5, icu_kA=$6, ics_kA=$7, poles=$8, voltage_V=$9, trip_unit=$10,
+           settings=$11, is_main_incoming=$12, parent_id=$13, downstream_switchboard_id=$14, pv_tests=$15, photos=$16, updated_at=NOW()
        FROM switchboards sb
-       WHERE d.id=$16 AND d.switchboard_id = sb.id AND sb.site=$17
+       WHERE d.id=$17 AND d.switchboard_id = sb.id AND sb.site=$18
        RETURNING d.*`,
       [
-        b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA, b.poles, b.voltage_V, b.trip_unit,
-        b.settings || {}, b.is_main_incoming, b.parent_id || null, b.downstream_switchboard_id || null, b.pv_tests || null, b.photos || [], id, site
+        b.name || null, b.device_type, b.manufacturer, b.reference, b.in_amps, b.icu_kA, b.ics_kA, b.poles, b.voltage_V, b.trip_unit,
+        b.settings || {}, !!b.is_main_incoming, b.parent_id || null, b.downstream_switchboard_id || null, safePV, safePhotos, id, site
       ]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -400,8 +430,9 @@ app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
 
     const r = await pool.query(
       `INSERT INTO devices (
-        site, switchboard_id, parent_id, downstream_switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
-      ) SELECT sb.site, switchboard_id, parent_id, downstream_switchboard_id, device_type, manufacturer, reference || ' (copy)', in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, FALSE, pv_tests, photos
+        site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos
+      ) SELECT sb.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
+               COALESCE(d.name, d.reference) || ' (copy)', d.device_type, d.manufacturer, d.reference || ' (copy)', d.in_amps, d.icu_kA, d.ics_kA, d.poles, d.voltage_V, d.trip_unit, d.settings, FALSE, d.pv_tests, d.photos
         FROM devices d
         JOIN switchboards sb ON d.switchboard_id = sb.id
         WHERE d.id=$1 AND sb.site=$2
@@ -474,7 +505,7 @@ app.get('/api/switchboard/device-references', async (req, res) => {
   }
 });
 
-// Search Device References (enhanced for structured JSON output + trip curves)
+// Search Device References (OpenAI)
 app.post('/api/switchboard/search-device', async (req, res) => {
   try {
     const query = req.body.query;
@@ -507,5 +538,38 @@ app.post('/api/switchboard/search-device', async (req, res) => {
   }
 });
 
-const port = process.env.SWITCHBOARD_PORT || 3003; // Use Render's PORT
+// GRAPH endpoint (hiérarchie récursive + liaisons downstream)
+app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const rootId = Number(req.params.id);
+    const sb = await pool.query('SELECT * FROM switchboards WHERE id=$1 AND site=$2', [rootId, site]);
+    if (!sb.rows.length) return res.status(404).json({ error: 'Not found' });
+
+    const buildTree = async (switchboardId) => {
+      const { rows: devs } = await pool.query('SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY created_at ASC', [switchboardId]);
+      const byId = new Map(devs.map(d => [d.id, { ...d, children: [], downstream: null }]));
+      const roots = [];
+      for (const d of devs) {
+        const node = byId.get(d.id);
+        if (d.parent_id && byId.has(d.parent_id)) byId.get(d.parent_id).children.push(node);
+        else roots.push(node);
+      }
+      for (const node of byId.values()) {
+        if (node.downstream_switchboard_id) {
+          node.downstream = await buildTree(node.downstream_switchboard_id);
+        }
+      }
+      return { switchboard_id: switchboardId, devices: roots };
+    };
+
+    const graph = await buildTree(rootId);
+    res.json(graph);
+  } catch (e) {
+    console.error('[SWITCHBOARD GRAPH] error:', e.message);
+    res.status(500).json({ error: 'Graph failed' });
+  }
+});
+
+const port = process.env.SWITCHBOARD_PORT || process.env.PORT || 3003;
 app.listen(port, () => console.log(`Switchboard service running on :${port}`));
