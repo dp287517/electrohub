@@ -42,25 +42,6 @@ function Tooltip({ children, content }) {
   );
 }
 
-function Popover({ trigger, content, isOpen, onClose }) {
-  return (
-    <div className="relative inline-block">
-      <div onClick={() => !isOpen && setIsOpen(true)} className="cursor-pointer">{trigger}</div>
-      {isOpen && (
-        <div className="absolute z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-72 mt-2 right-0">
-          <div className="text-sm text-gray-700 mb-3 whitespace-pre-wrap">{content}</div>
-          <button 
-            className="text-xs text-gray-500 hover:text-gray-700 w-full text-left" 
-            onClick={() => onClose && onClose()}
-          >
-            Close tip
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Modal({ open, onClose, children, title }) {
   if (!open) return null;
   
@@ -151,6 +132,10 @@ export default function Switchboards() {
   const [showDownstreamSuggestions, setShowDownstreamSuggestions] = useState(false);
   const [showReferenceSuggestions, setShowReferenceSuggestions] = useState(false);
 
+  // Search inputs
+  const [parentSearchInput, setParentSearchInput] = useState('');
+  const [downstreamSearchInput, setDownstreamSearchInput] = useState('');
+
   // Chat sidebar
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -165,10 +150,17 @@ export default function Switchboards() {
   // Debounce hook
   const useDebounce = (value, delay) => {
     const [debouncedValue, setDebouncedValue] = useState(value);
+    
     useEffect(() => {
-      const handler = setTimeout(() => setDebouncedValue(value), delay);
-      return () => clearTimeout(handler);
+      const handler = setTimeout(() => {
+        setDebouncedValue(value);
+      }, delay);
+      
+      return () => {
+        clearTimeout(handler);
+      };
     }, [value, delay]);
+    
     return debouncedValue;
   };
 
@@ -176,11 +168,9 @@ export default function Switchboards() {
   const debouncedParentQuery = useDebounce(parentSearchInput, 300);
   const debouncedDownstreamQuery = useDebounce(downstreamSearchInput, 300);
 
-  const [parentSearchInput, setParentSearchInput] = useState('');
-  const [downstreamSearchInput, setDownstreamSearchInput] = useState('');
-
   const loadSwitchboards = async () => {
     try {
+      if (!site) return;
       const params = new URLSearchParams({ ...q, pageSize, site }).toString();
       const data = await get(`/api/switchboard/boards?${params}`);
       setRows(data?.data || []);
@@ -193,6 +183,7 @@ export default function Switchboards() {
 
   const loadAllSwitchboards = async () => {
     try {
+      if (!site) return;
       const params = new URLSearchParams({ site, pageSize: 1000 }).toString();
       const data = await get(`/api/switchboard/boards?${params}`);
       setAllSwitchboards(data?.data || []);
@@ -203,6 +194,7 @@ export default function Switchboards() {
 
   const loadDevices = async (panelId) => {
     try {
+      if (!site) return;
       const params = new URLSearchParams({ switchboard_id: panelId, site }).toString();
       const data = await get(`/api/switchboard/devices?${params}`);
       setDevices(prev => ({ ...prev, [panelId]: data?.data || [] }));
@@ -213,6 +205,7 @@ export default function Switchboards() {
 
   const loadDeviceReferences = async () => {
     try {
+      if (!site) return;
       const params = new URLSearchParams({ site }).toString();
       const data = await get(`/api/switchboard/device-references?${params}`);
       setDeviceReferences(data.data || []);
@@ -230,8 +223,10 @@ export default function Switchboards() {
   }, [q.page, q.sort, q.dir, q.q, q.building, q.floor, q.room, site]);
 
   const toggleExpand = async (panelId) => {
-    setExpandedPanels(prev => ({ ...prev, [panelId]: !prev[panelId] }));
-    if (!devices[panelId] && !expandedPanels[panelId]) {
+    const isExpanded = expandedPanels[panelId];
+    setExpandedPanels(prev => ({ ...prev, [panelId]: !isExpanded }));
+    
+    if (!isExpanded && !devices[panelId]) {
       await loadDevices(panelId);
     }
   };
@@ -325,10 +320,12 @@ export default function Switchboards() {
   const resetDeviceModal = (panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(null);
-    setDeviceForm({ ...emptyDeviceForm, name: '' }); // Name remains empty for manual entry
+    setDeviceForm({ ...emptyDeviceForm, name: '' });
     setPhotoFile(null);
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
+    setParentSearchInput('');
+    setDownstreamSearchInput('');
     setOpenDevice(true);
   };
 
@@ -336,10 +333,9 @@ export default function Switchboards() {
     setCurrentPanelId(panelId);
     setEditingDevice(device);
     
-    // Robust loading with fallbacks for ALL fields
     const safeSettings = device.settings || {};
     setDeviceForm({
-      name: device.name || '', // Keep manual name
+      name: device.name || '',
       device_type: device.device_type || 'Low Voltage Circuit Breaker',
       manufacturer: device.manufacturer || '',
       reference: device.reference || '',
@@ -367,6 +363,9 @@ export default function Switchboards() {
       pv_tests: null,
       photos: []
     });
+    
+    setParentSearchInput(device.name || '');
+    setDownstreamSearchInput('');
     setPhotoFile(null);
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
@@ -418,7 +417,7 @@ export default function Switchboards() {
     try {
       await post(`/api/switchboard/devices/${id}/duplicate`);
       await loadDevices(panelId);
-      await loadDeviceReferences(); // Refresh to avoid duplicate suggestions
+      await loadDeviceReferences();
       alert('Device duplicated successfully!');
     } catch (e) {
       console.error('Duplicate device failed:', e);
@@ -442,14 +441,14 @@ export default function Switchboards() {
     try {
       await put(`/api/switchboard/devices/${id}/set-main`, { is_main_incoming: isMain });
       await loadDevices(panelId);
-      getAiTip(`User set device as main incoming: ${isMain ? 'true' : 'false'}. Suggest next steps for board hierarchy.`);
+      getAiTip(`User set device as main incoming: ${isMain ? 'enabled' : 'disabled'}.`);
     } catch (e) {
       console.error('Set main failed:', e);
       alert('Failed to update main incoming status');
     }
   };
 
-  // CRITICAL: Fixed Reference Search - DB suggestions + OpenAI full fill
+  // Reference Search - FIXED
   const searchDeviceReference = async () => {
     if (!deviceForm.reference.trim()) {
       return alert('Please enter a reference to search');
@@ -457,12 +456,10 @@ export default function Switchboards() {
     
     setDeviceSearchBusy(true);
     try {
-      // First try OpenAI for full specs (fills EVERYTHING except name)
       const query = `${deviceForm.manufacturer || ''} ${deviceForm.reference}`.trim();
       const data = await post('/api/switchboard/search-device', { query });
       
       if (data && data.manufacturer) {
-        // Fill ALL fields except name (manual)
         setDeviceForm(prev => ({
           ...prev,
           manufacturer: data.manufacturer || prev.manufacturer,
@@ -482,25 +479,22 @@ export default function Switchboards() {
             curve_type: data.settings?.curve_type || prev.settings.curve_type
           },
           is_main_incoming: Boolean(data.is_main_incoming)
-          // name stays manual/empty
         }));
         setShowReferenceSuggestions(false);
         alert(`✅ AI filled all fields for ${data.manufacturer} ${data.reference}!`);
-        return; // Don't show DB suggestions if AI succeeded
+        return;
       }
       
-      // Fallback: Show DB suggestions if OpenAI didn't find anything
-      alert('AI search completed. Showing database matches below...');
+      alert('AI search completed. No exact match found.');
       
     } catch (e) {
       console.error('AI device search failed:', e);
-      alert('AI search failed, falling back to database search...');
-      // Continue to DB search even if AI fails
+      alert('AI search failed, trying database search...');
     } finally {
       setDeviceSearchBusy(false);
     }
     
-    // Always show DB suggestions for manual selection
+    // Fallback to DB search
     await searchReferencesDB(deviceForm.reference);
   };
 
@@ -517,7 +511,6 @@ export default function Switchboards() {
       setReferenceSuggestions(data.suggestions || []);
       setShowReferenceSuggestions(true);
       
-      // Auto-fill if exact match found in DB
       if (data.auto_fill) {
         const autoFill = data.auto_fill;
         setDeviceForm(prev => ({
@@ -540,7 +533,7 @@ export default function Switchboards() {
     }
   };
 
-  // FIXED: Photo analysis with proper site param
+  // Photo analysis - FIXED
   const analyzePhoto = async () => {
     if (!photoFile) {
       return alert('Please select a photo first');
@@ -567,7 +560,6 @@ export default function Switchboards() {
       
       if (data.existing_id) {
         alert(`✅ Matched existing device #${data.existing_id}! Fields auto-filled.`);
-        setDeviceForm(prev => ({ ...prev, parent_id: data.existing_id })); // Auto-link as child
       } else if (data.created) {
         alert(`🎉 New device #${data.id} created from photo analysis!`);
       } else {
@@ -642,22 +634,17 @@ export default function Switchboards() {
     }
   };
 
+  // Effects for debounced searches
   useEffect(() => {
-    if (debouncedReferenceQuery) {
-      searchReferencesDB(debouncedReferenceQuery);
-    }
+    searchReferencesDB(debouncedReferenceQuery);
   }, [debouncedReferenceQuery]);
 
   useEffect(() => {
-    if (debouncedParentQuery) {
-      searchParents(debouncedParentQuery);
-    }
+    searchParents(debouncedParentQuery);
   }, [debouncedParentQuery]);
 
   useEffect(() => {
-    if (debouncedDownstreamQuery) {
-      searchDownstreams(debouncedDownstreamQuery);
-    }
+    searchDownstreams(debouncedDownstreamQuery);
   }, [debouncedDownstreamQuery]);
 
   const selectReference = (ref) => {
@@ -678,7 +665,7 @@ export default function Switchboards() {
 
   const selectParent = (parent) => {
     setDeviceForm(prev => ({ ...prev, parent_id: parent.id }));
-    setParentSearchInput(parent.name || `${parent.manufacturer} ${parent.reference}` || '');
+    setParentSearchInput(parent.name || `${parent.manufacturer || ''} ${parent.reference || ''}`.trim() || '');
     setShowParentSuggestions(false);
   };
 
@@ -688,7 +675,7 @@ export default function Switchboards() {
     setShowDownstreamSuggestions(false);
   };
 
-  // Chat functions - for advanced questions
+  // Chat functions
   const sendChatMessage = async () => {
     if (!chatInput.trim()) return;
     
@@ -699,18 +686,17 @@ export default function Switchboards() {
     setChatBusy(true);
     
     try {
-      // For advanced questions, use OpenAI directly
       const data = await post('/api/switchboard/search-device', { query: currentInput });
       const assistantMessage = { 
         role: 'assistant', 
-        content: `I found information about: ${data.manufacturer || 'No specific device'} ${data.reference || ''}\n\n**Key Specs:**\n• Type: ${data.device_type || 'N/A'}\n• Rating: ${data.in_amps || 'N/A'}A\n• Icu: ${data.icu_kA || 'N/A'}kA\n• Poles: ${data.poles || 'N/A'}\n\n**Protection Settings:**\n${JSON.stringify(data.settings || {}, null, 2)}\n\nNeed more details? Ask me about standards, calculations, or configurations!` 
+        content: `I found information about: ${data.manufacturer || 'No specific device'} ${data.reference || ''}\n\n**Key Specifications:**\n• Type: ${data.device_type || 'N/A'}\n• Rating: ${data.in_amps || 'N/A'}A\n• Icu: ${data.icu_kA || 'N/A'}kA\n• Poles: ${data.poles || 'N/A'}\n• Voltage: ${data.voltage_V || 'N/A'}V\n\n**Protection Settings:**\n${JSON.stringify(data.settings || {}, null, 2)}\n\nNeed more details or have questions about standards or configurations?` 
       };
       setChatMessages(prev => [...prev, assistantMessage]);
     } catch (e) {
       console.error('Chat failed:', e);
       setChatMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: `Sorry, I couldn't process that request. Try asking about specific devices like "Schneider NSX100 specs" or electrical standards. Error: ${e.message}` 
+        content: `Sorry, I couldn't process that request. Try asking about specific devices like "Schneider NSX100 specifications" or electrical standards. Error: ${e.message}` 
       }]);
     } finally {
       setChatBusy(false);
@@ -931,813 +917,821 @@ export default function Switchboards() {
         )}
 
         {/* Empty State */}
-        {rows.length === 0 && !q.q && !q.building && !q.floor && !q.room && (
-          <div className="text-center py-16">
-            <div className="text-gray-400 mb-6">
-              <svg className="w-20 h-20 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-            </div>
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">No Switchboards Yet</h3>
-            <p className="text-gray-600 mb-6 max-w-md mx-auto">
-              Start by creating your first switchboard to manage electrical distribution panels and devices.
-            </p>
-            <button 
-              className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-8 py-3 rounded-lg flex items-center gap-2 mx-auto shadow-lg hover:shadow-xl transition-all"
-              onClick={resetSwitchboardModal}
-            >
-              <Plus size={18} /> Create First Switchboard
-            </button>
-          </div>
-        )}
-
-        {rows.length === 0 && (q.q || q.building || q.floor || q.room) && (
-          <div className="text-center py-12">
-            <Search size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No Results Found</h3>
-            <p className="text-gray-500 mb-4">Try adjusting your search criteria</p>
-            <button 
-              className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-              onClick={() => setQ({ q: '', building: '', floor: '', room: '', page: 1 })}
-            >
-              Clear Filters
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Switchboard Modal */}
-      <Modal open={openSwitchboard} onClose={() => setOpenSwitchboard(false)} title={editingSwitchboard ? 'Edit Switchboard' : 'New Switchboard'}>
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Switchboard Name</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Unique descriptive name for identification (e.g., 'Main Distribution Panel')">
-                <input 
-                  className="input w-full pr-10" 
-                  value={switchboardForm.name} 
-                  onChange={e => setSwitchboardForm(f => ({ ...f, name: e.target.value }))} 
-                  placeholder="e.g., Main Distribution Panel"
-                />
-              </Tooltip>
-            </div>
-            
-            <div>
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Code</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Short unique identifier for quick reference (e.g., 'MDB-01')">
-                <input 
-                  className="input w-full pr-10" 
-                  value={switchboardForm.code} 
-                  onChange={e => setSwitchboardForm(f => ({ ...f, code: e.target.value }))} 
-                  placeholder="e.g., MDB-01"
-                />
-              </Tooltip>
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Location</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Physical location details for maintenance and documentation">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <input 
-                    className="input" 
-                    placeholder="Building (e.g., Block A)" 
-                    value={switchboardForm.meta.building_code} 
-                    onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, building_code: e.target.value } }))} 
-                  />
-                  <input 
-                    className="input" 
-                    placeholder="Floor (e.g., 2nd)" 
-                    value={switchboardForm.meta.floor} 
-                    onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, floor: e.target.value } }))} 
-                  />
-                  <input 
-                    className="input" 
-                    placeholder="Room (e.g., Electrical Room)" 
-                    value={switchboardForm.meta.room} 
-                    onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, room: e.target.value } }))} 
-                  />
-                </div>
-              </Tooltip>
-            </div>
-
-            <div>
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Neutral Regime</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Grounding system type according to electrical standards">
-                <select 
-                  className="input w-full" 
-                  value={switchboardForm.regime_neutral} 
-                  onChange={e => setSwitchboardForm(f => ({ ...f, regime_neutral: e.target.value }))}
-                >
-                  {regimes.map(regime => (
-                    <option key={regime} value={regime}>
-                      {regime} {regime === 'TN-S' && '(Recommended)'}
-                    </option>
-                  ))}
-                </select>
-              </Tooltip>
-            </div>
-
-            <div className="flex items-center">
-              <label className="label flex items-center gap-2 cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  checked={switchboardForm.is_principal} 
-                  onChange={e => setSwitchboardForm(f => ({ ...f, is_principal: e.target.checked }))} 
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
-                />
-                <span className="font-medium text-gray-700">Main Distribution Board</span>
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Mark as the primary incoming board for the facility">
-                <div className="ml-2 invisible group-hover:visible">
-                  <div className="absolute z-10 bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 right-0 whitespace-nowrap">
-                    Primary incoming board
-                  </div>
-                </div>
-              </Tooltip>
-            </div>
-          </div>
-
-          {/* Operating Modes */}
-          <div>
-            <label className="label flex items-center gap-1 mb-3 block font-medium">
-              Operating Modes <HelpCircle size={14} className="text-gray-400" />
-            </label>
-            <Tooltip content="Configure special operating modes for maintenance or backup">
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
-                {[
-                  { key: 'bypass', label: 'Bypass Mode' },
-                  { key: 'maintenance_mode', label: 'Maintenance' },
-                  { key: 'bus_coupling', label: 'Bus Coupling' },
-                  { key: 'genset_backup', label: 'Genset Backup' },
-                  { key: 'ups_backup', label: 'UPS Backup' }
-                ].map(({ key, label }) => (
-                  <label key={key} className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      checked={switchboardForm.modes[key]} 
-                      onChange={e => setSwitchboardForm(f => ({ 
-                        ...f, 
-                        modes: { ...f.modes, [key]: e.target.checked } 
-                      }))} 
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
-                    />
-                    <span className="text-gray-700">{label}</span>
-                  </label>
-                ))}
-              </div>
-            </Tooltip>
-          </div>
-        </div>
-
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <div className="flex justify-end gap-3">
-            <button 
-              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-              onClick={() => setOpenSwitchboard(false)}
-              disabled={busy}
-            >
-              Cancel
-            </button>
-            <button 
-              className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
-              disabled={busy || !switchboardForm.name.trim() || !switchboardForm.code.trim()}
-              onClick={saveSwitchboard}
-            >
-              {busy ? (
-                <span className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Saving...
-                </span>
-              ) : editingSwitchboard ? 'Update Switchboard' : 'Create Switchboard'}
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Device Modal - FIXED */}
-      <Modal open={openDevice} onClose={() => setOpenDevice(false)} title={editingDevice ? 'Edit Device' : 'New Device'}>
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Device Name - Always Manual */}
-            <div>
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Device Name</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Manual descriptive name (AI won't override this)">
-                <input 
-                  className="input w-full" 
-                  value={deviceForm.name} 
-                  onChange={e => setDeviceForm(f => ({ ...f, name: e.target.value }))} 
-                  placeholder="e.g., Main Incoming Breaker, Feeder 1, Lighting Circuit"
-                />
-              </Tooltip>
-            </div>
-
-            {/* Device Type */}
-            <div>
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Device Type</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Category of protective device">
-                <select 
-                  className="input w-full" 
-                  value={deviceForm.device_type} 
-                  onChange={e => setDeviceForm(f => ({ ...f, device_type: e.target.value }))}
-                >
-                  {deviceTypes.map(type => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-              </Tooltip>
-            </div>
-
-            {/* CRITICAL: Fixed Reference Field - DB + OpenAI */}
-            <div className="md:col-span-2">
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Reference / Manufacturer</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Enter reference for AI auto-fill (fills all specs) or select from database">
-                <div className="space-y-2">
-                  <div className="flex gap-3">
-                    <input 
-                      className="input flex-1" 
-                      value={deviceForm.reference} 
-                      onChange={e => setDeviceForm(f => ({ ...f, reference: e.target.value }))} 
-                      placeholder="e.g., NSX100N, Compact NSX, Schneider"
-                    />
+                {rows.length === 0 && !q.q && !q.building && !q.floor && !q.room && (
+                  <div className="text-center py-16">
+                    <div className="text-gray-400 mb-6">
+                      <svg className="w-20 h-20 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </div>
+                    <h3 className="text-xl font-semibold text-gray-900 mb-2">No Switchboards Yet</h3>
+                    <p className="text-gray-600 mb-6 max-w-md mx-auto">
+                      Start by creating your first switchboard to manage electrical distribution panels and devices.
+                    </p>
                     <button 
-                      className={`px-4 py-2 text-sm rounded-lg font-medium transition-all shadow-sm ${
-                        deviceSearchBusy 
-                          ? 'bg-gray-300 cursor-not-allowed' 
-                          : 'bg-gradient-to-r from-indigo-500 to-indigo-600 text-white hover:from-indigo-600 hover:to-indigo-700'
-                      }`}
-                      disabled={deviceSearchBusy || !deviceForm.reference.trim()}
-                      onClick={searchDeviceReference}
+                      className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-8 py-3 rounded-lg flex items-center gap-2 mx-auto shadow-lg hover:shadow-xl transition-all"
+                      onClick={resetSwitchboardModal}
                     >
-                      {deviceSearchBusy ? (
-                        <span className="flex items-center gap-2">
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                          AI...
-                        </span>
-                      ) : 'AI Fill'}
+                      <Plus size={18} /> Create First Switchboard
                     </button>
                   </div>
-                  
-                  {/* Database Suggestions */}
-                  {showReferenceSuggestions && referenceSuggestions.length > 0 && (
-                    <div className="relative">
-                      <div className="bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto z-10">
-                        {referenceSuggestions.map((suggestion, idx) => (
-                          <div 
-                            key={idx}
-                            className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
-                            onClick={() => selectReference(suggestion)}
-                          >
-                            <div className="font-medium text-sm text-gray-900">
-                              {suggestion.manufacturer} - {suggestion.reference}
-                            </div>
-                            <div className="text-xs text-gray-500 flex gap-4">
-                              <span>{suggestion.device_type}</span>
-                              <span>{suggestion.in_amps}A</span>
-                              <span>{suggestion.poles}P</span>
-                            </div>
+                )}
+
+                {rows.length === 0 && (q.q || q.building || q.floor || q.room) && (
+                  <div className="text-center py-12">
+                    <Search size={48} className="mx-auto text-gray-300 mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Results Found</h3>
+                    <p className="text-gray-500 mb-4">Try adjusting your search criteria</p>
+                    <button 
+                      className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+                      onClick={() => setQ({ q: '', building: '', floor: '', room: '', page: 1 })}
+                    >
+                      Clear Filters
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Switchboard Modal */}
+              <Modal open={openSwitchboard} onClose={() => setOpenSwitchboard(false)} title={editingSwitchboard ? 'Edit Switchboard' : 'New Switchboard'}>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Switchboard Name</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Unique descriptive name for identification (e.g., 'Main Distribution Panel')">
+                        <input 
+                          className="input w-full pr-10" 
+                          value={switchboardForm.name} 
+                          onChange={e => setSwitchboardForm(f => ({ ...f, name: e.target.value }))} 
+                          placeholder="e.g., Main Distribution Panel"
+                        />
+                      </Tooltip>
+                    </div>
+                    
+                    <div>
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Code</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Short unique identifier for quick reference (e.g., 'MDB-01')">
+                        <input 
+                          className="input w-full pr-10" 
+                          value={switchboardForm.code} 
+                          onChange={e => setSwitchboardForm(f => ({ ...f, code: e.target.value }))} 
+                          placeholder="e.g., MDB-01"
+                        />
+                      </Tooltip>
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Location</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Physical location details for maintenance and documentation">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <input 
+                            className="input" 
+                            placeholder="Building (e.g., Block A)" 
+                            value={switchboardForm.meta.building_code} 
+                            onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, building_code: e.target.value } }))} 
+                          />
+                          <input 
+                            className="input" 
+                            placeholder="Floor (e.g., 2nd)" 
+                            value={switchboardForm.meta.floor} 
+                            onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, floor: e.target.value } }))} 
+                          />
+                          <input 
+                            className="input" 
+                            placeholder="Room (e.g., Electrical Room)" 
+                            value={switchboardForm.meta.room} 
+                            onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, room: e.target.value } }))} 
+                          />
+                        </div>
+                      </Tooltip>
+                    </div>
+
+                    <div>
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Neutral Regime</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Grounding system type according to electrical standards">
+                        <select 
+                          className="input w-full" 
+                          value={switchboardForm.regime_neutral} 
+                          onChange={e => setSwitchboardForm(f => ({ ...f, regime_neutral: e.target.value }))}
+                        >
+                          {regimes.map(regime => (
+                            <option key={regime} value={regime}>
+                              {regime} {regime === 'TN-S' && '(Recommended)'}
+                            </option>
+                          ))}
+                        </select>
+                      </Tooltip>
+                    </div>
+
+                    <div className="flex items-center">
+                      <label className="label flex items-center gap-2 cursor-pointer">
+                        <input 
+                          type="checkbox" 
+                          checked={switchboardForm.is_principal} 
+                          onChange={e => setSwitchboardForm(f => ({ ...f, is_principal: e.target.checked }))} 
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                        />
+                        <span className="font-medium text-gray-700">Main Distribution Board</span>
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Mark as the primary incoming board for the facility">
+                        <div className="ml-2 invisible group-hover:visible">
+                          <div className="absolute z-10 bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 right-0 whitespace-nowrap">
+                            Primary incoming board
                           </div>
+                        </div>
+                      </Tooltip>
+                    </div>
+                  </div>
+
+                  {/* Operating Modes */}
+                  <div>
+                    <label className="label flex items-center gap-1 mb-3 block font-medium">
+                      Operating Modes <HelpCircle size={14} className="text-gray-400" />
+                    </label>
+                    <Tooltip content="Configure special operating modes for maintenance or backup">
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                        {[
+                          { key: 'bypass', label: 'Bypass Mode' },
+                          { key: 'maintenance_mode', label: 'Maintenance' },
+                          { key: 'bus_coupling', label: 'Bus Coupling' },
+                          { key: 'genset_backup', label: 'Genset Backup' },
+                          { key: 'ups_backup', label: 'UPS Backup' }
+                        ].map(({ key, label }) => (
+                          <label key={key} className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                            <input 
+                              type="checkbox" 
+                              checked={switchboardForm.modes[key]} 
+                              onChange={e => setSwitchboardForm(f => ({ 
+                                ...f, 
+                                modes: { ...f.modes, [key]: e.target.checked } 
+                              }))} 
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                            />
+                            <span className="text-gray-700">{label}</span>
+                          </label>
                         ))}
                       </div>
-                    </div>
-                  )}
+                    </Tooltip>
+                  </div>
                 </div>
-              </Tooltip>
-            </div>
 
-            {/* Photo Analysis */}
-            <div className="md:col-span-2">
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Photo Analysis</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Upload device photo - AI extracts specs and matches existing devices">
-                <div className="space-y-2">
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                    onChange={e => setPhotoFile(e.target.files[0])}
-                  />
-                  <button 
-                    className={`w-full py-2.5 rounded-lg text-sm font-medium transition-all shadow-sm ${
-                      deviceSearchBusy || !photoFile
-                        ? 'bg-gray-300 cursor-not-allowed' 
-                        : 'bg-gradient-to-r from-purple-500 to-purple-600 text-white hover:from-purple-600 hover:to-purple-700'
-                    }`}
-                    disabled={deviceSearchBusy || !photoFile}
-                    onClick={analyzePhoto}
-                  >
-                    {deviceSearchBusy ? (
-                      <span className="flex items-center gap-2 justify-center">
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                        Analyzing Photo...
-                      </span>
-                    ) : '🔍 Analyze Photo & Auto-Fill'}
-                  </button>
-                  {photoFile && (
-                    <p className="text-xs text-gray-500 text-center">
-                      Selected: {photoFile.name}
-                    </p>
-                  )}
-                </div>
-              </Tooltip>
-            </div>
-
-            {/* Electrical Ratings */}
-            <div>
-              <label className="label mb-2 block font-medium">Rated Current (A)</label>
-              <input 
-                type="number" 
-                className="input w-full" 
-                value={deviceForm.in_amps} 
-                onChange={e => setDeviceForm(f => ({ ...f, in_amps: Number(e.target.value) || 0 }))} 
-                placeholder="e.g., 100"
-                min="0"
-                step="1"
-              />
-            </div>
-
-            <div>
-              <label className="label mb-2 block font-medium">Icu Breaking Capacity (kA)</label>
-              <input 
-                type="number" 
-                step="0.1" 
-                className="input w-full" 
-                value={deviceForm.icu_kA} 
-                onChange={e => setDeviceForm(f => ({ ...f, icu_kA: Number(e.target.value) || 0 }))} 
-                placeholder="e.g., 25"
-                min="0"
-                step="0.1"
-              />
-            </div>
-
-            <div>
-              <label className="label mb-2 block font-medium">Ics Service Capacity (kA)</label>
-              <input 
-                type="number" 
-                step="0.1" 
-                className="input w-full" 
-                value={deviceForm.ics_kA} 
-                onChange={e => setDeviceForm(f => ({ ...f, ics_kA: Number(e.target.value) || 0 }))} 
-                placeholder="e.g., 20"
-                min="0"
-                step="0.1"
-              />
-            </div>
-
-            <div>
-              <label className="label mb-2 block font-medium">Number of Poles</label>
-              <input 
-                type="number" 
-                min="1" 
-                max="4" 
-                className="input w-full" 
-                value={deviceForm.poles} 
-                onChange={e => setDeviceForm(f => ({ ...f, poles: Math.max(1, Math.min(4, Number(e.target.value) || 3)) }))} 
-              />
-            </div>
-
-            <div>
-              <label className="label mb-2 block font-medium">Voltage Rating (V)</label>
-              <input 
-                type="number" 
-                className="input w-full" 
-                value={deviceForm.voltage_V} 
-                onChange={e => setDeviceForm(f => ({ ...f, voltage_V: Number(e.target.value) || 400 }))} 
-                placeholder="e.g., 400"
-                min="0"
-                step="10"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="label mb-2 block font-medium">Trip Unit / Relay Type</label>
-              <input 
-                className="input w-full" 
-                value={deviceForm.trip_unit} 
-                onChange={e => setDeviceForm(f => ({ ...f, trip_unit: e.target.value }))} 
-                placeholder="e.g., Micrologic 2.2, Thermal-Magnetic, Electronic"
-              />
-            </div>
-
-            {/* Parent Device Search */}
-            <div className="md:col-span-2 relative">
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Parent Device</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Search for upstream device (leave empty for top-level)">
-                <div className="relative">
-                  <input 
-                    className="input w-full pr-10" 
-                    placeholder="Search parent device by name or reference..."
-                    value={parentSearchInput}
-                    onChange={e => setParentSearchInput(e.target.value)}
-                  />
-                  <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                </div>
-              </Tooltip>
-              
-              {showParentSuggestions && parentSuggestions.length > 0 && (
-                <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                  {parentSuggestions.map((parent, idx) => (
-                    <div 
-                      key={idx}
-                      className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
-                      onClick={() => selectParent(parent)}
+                <div className="mt-6 pt-4 border-t border-gray-200">
+                  <div className="flex justify-end gap-3">
+                    <button 
+                      className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+                      onClick={() => setOpenSwitchboard(false)}
+                      disabled={busy}
                     >
-                      <div className="font-medium text-sm">
-                        {parent.name || `${parent.manufacturer || ''} ${parent.reference || ''}`.trim() || 'Unnamed'}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {parent.device_type} • {parent.in_amps}A
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Downstream Switchboard Search */}
-            <div className="md:col-span-2 relative">
-              <label className="label flex items-center gap-1 mb-2">
-                <span className="font-medium">Downstream Switchboard</span> 
-                <HelpCircle size={14} className="text-gray-400" />
-              </label>
-              <Tooltip content="Link to downstream board for hierarchy (optional)">
-                <div className="relative">
-                  <input 
-                    className="input w-full pr-10" 
-                    placeholder="Search downstream switchboard..."
-                    value={downstreamSearchInput}
-                    onChange={e => setDownstreamSearchInput(e.target.value)}
-                  />
-                  <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                </div>
-              </Tooltip>
-              
-              {showDownstreamSuggestions && downstreamSuggestions.length > 0 && (
-                <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                  {downstreamSuggestions.map((sb, idx) => (
-                    <div 
-                      key={idx}
-                      className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
-                      onClick={() => selectDownstream(sb)}
+                      Cancel
+                    </button>
+                    <button 
+                      className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
+                      disabled={busy || !switchboardForm.name.trim() || !switchboardForm.code.trim()}
+                      onClick={saveSwitchboard}
                     >
-                      <div className="font-medium text-sm">{sb.name}</div>
-                      <div className="text-xs text-gray-500 flex gap-2">
-                        <span className="bg-gray-100 px-2 py-0.5 rounded text-xs">{sb.code}</span>
-                        <span>{sb.building_code}</span>
-                      </div>
-                    </div>
-                  ))}
+                      {busy ? (
+                        <span className="flex items-center gap-2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          Saving...
+                        </span>
+                      ) : editingSwitchboard ? 'Update Switchboard' : 'Create Switchboard'}
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
+              </Modal>
 
-            {/* Main Incoming with AI Tip */}
-            <div className="md:col-span-2">
-              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                <Popover 
-                  trigger={
-                    <label className="flex items-center gap-2 cursor-pointer flex-1">
+              {/* Device Modal */}
+              <Modal open={openDevice} onClose={() => setOpenDevice(false)} title={editingDevice ? 'Edit Device' : 'New Device'}>
+                <div className="space-y-6">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Device Name - Always Manual */}
+                    <div>
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Device Name</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Manual descriptive name (AI won't override this)">
+                        <input 
+                          className="input w-full" 
+                          value={deviceForm.name} 
+                          onChange={e => setDeviceForm(f => ({ ...f, name: e.target.value }))} 
+                          placeholder="e.g., Main Incoming Breaker, Feeder 1, Lighting Circuit"
+                        />
+                      </Tooltip>
+                    </div>
+
+                    {/* Device Type */}
+                    <div>
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Device Type</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Category of protective device">
+                        <select 
+                          className="input w-full" 
+                          value={deviceForm.device_type} 
+                          onChange={e => setDeviceForm(f => ({ ...f, device_type: e.target.value }))}
+                        >
+                          {deviceTypes.map(type => (
+                            <option key={type} value={type}>{type}</option>
+                          ))}
+                        </select>
+                      </Tooltip>
+                    </div>
+
+                    {/* Reference Search - FIXED */}
+                    <div className="md:col-span-2">
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Reference / Manufacturer</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Enter reference for AI auto-fill (fills all specs) or select from database">
+                        <div className="space-y-2">
+                          <div className="flex gap-3">
+                            <input 
+                              className="input flex-1" 
+                              value={deviceForm.reference} 
+                              onChange={e => setDeviceForm(f => ({ ...f, reference: e.target.value }))} 
+                              placeholder="e.g., NSX100N, Compact NSX, Schneider"
+                            />
+                            <button 
+                              className={`px-4 py-2 text-sm rounded-lg font-medium transition-all shadow-sm ${
+                                deviceSearchBusy 
+                                  ? 'bg-gray-300 cursor-not-allowed' 
+                                  : 'bg-gradient-to-r from-indigo-500 to-indigo-600 text-white hover:from-indigo-600 hover:to-indigo-700'
+                              }`}
+                              disabled={deviceSearchBusy || !deviceForm.reference.trim()}
+                              onClick={searchDeviceReference}
+                            >
+                              {deviceSearchBusy ? (
+                                <span className="flex items-center gap-2">
+                                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                  AI...
+                                </span>
+                              ) : 'AI Fill'}
+                            </button>
+                          </div>
+                          
+                          {/* Database Suggestions */}
+                          {showReferenceSuggestions && referenceSuggestions.length > 0 && (
+                            <div className="bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto z-10">
+                              {referenceSuggestions.map((suggestion, idx) => (
+                                <div 
+                                  key={idx}
+                                  className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                                  onClick={() => selectReference(suggestion)}
+                                >
+                                  <div className="font-medium text-sm text-gray-900">
+                                    {suggestion.manufacturer} - {suggestion.reference}
+                                  </div>
+                                  <div className="text-xs text-gray-500 flex gap-4">
+                                    <span>{suggestion.device_type}</span>
+                                    <span>{suggestion.in_amps}A</span>
+                                    <span>{suggestion.poles}P</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </Tooltip>
+                    </div>
+
+                    {/* Photo Analysis */}
+                    <div className="md:col-span-2">
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Photo Analysis</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Upload device photo - AI extracts specs and matches existing devices">
+                        <div className="space-y-2">
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                            onChange={e => setPhotoFile(e.target.files[0])}
+                          />
+                          <button 
+                            className={`w-full py-2.5 rounded-lg text-sm font-medium transition-all shadow-sm ${
+                              deviceSearchBusy || !photoFile
+                                ? 'bg-gray-300 cursor-not-allowed' 
+                                : 'bg-gradient-to-r from-purple-500 to-purple-600 text-white hover:from-purple-600 hover:to-purple-700'
+                            }`}
+                            disabled={deviceSearchBusy || !photoFile}
+                            onClick={analyzePhoto}
+                          >
+                            {deviceSearchBusy ? (
+                              <span className="flex items-center gap-2 justify-center">
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                Analyzing Photo...
+                              </span>
+                            ) : '🔍 Analyze Photo & Auto-Fill'}
+                          </button>
+                          {photoFile && (
+                            <p className="text-xs text-gray-500 text-center">
+                              Selected: {photoFile.name}
+                            </p>
+                          )}
+                        </div>
+                      </Tooltip>
+                    </div>
+
+                    {/* Electrical Ratings */}
+                    <div>
+                      <label className="label mb-2 block font-medium">Rated Current (A)</label>
                       <input 
-                        type="checkbox" 
-                        checked={deviceForm.is_main_incoming} 
-                        onChange={e => {
-                          const isMain = e.target.checked;
-                          setDeviceForm(f => ({ ...f, is_main_incoming: isMain }));
-                          getAiTip(`User selected main incoming for device: ${isMain ? 'enabled' : 'disabled'}. Provide advice on next steps like adding downstream devices or checking coordination.`);
-                        }} 
-                        className="rounded border-blue-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                        type="number" 
+                        className="input w-full" 
+                        value={deviceForm.in_amps} 
+                        onChange={e => setDeviceForm(f => ({ ...f, in_amps: Number(e.target.value) || 0 }))} 
+                        placeholder="e.g., 100"
+                        min="0"
+                        step="1"
                       />
-                      <span className="font-medium text-blue-900">Main Incoming Device</span>
-                    </label>
-                  } 
-                  content={aiTipLoading ? 'Loading AI advice...' : aiTip}
-                  isOpen={aiTipOpen}
-                  onClose={() => setAiTipOpen(false)}
-                />
-              </div>
-            </div>
+                    </div>
 
-            {/* Quick Protection Settings */}
-            <div className="md:col-span-2">
-              <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-1">
-                Protection Settings 
-                <HelpCircle size={14} className="text-gray-400" />
-              </h4>
-              <Tooltip content="Basic LSIG protection parameters">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div>
-                    <label className="text-xs text-gray-500 mb-1 block">Ir (xIn)</label>
-                    <input 
-                      type="number" 
-                      step="0.1" 
-                      min="0.1"
-                      className="input text-sm" 
-                      value={deviceForm.settings.ir} 
-                      onChange={e => setDeviceForm(f => ({ 
-                        ...f, 
-                        settings: { ...f.settings, ir: Number(e.target.value) || 1 } 
-                      }))} 
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 mb-1 block">Tr (s)</label>
-                    <input 
-                      type="number" 
-                      step="0.1" 
-                      min="0"
-                      className="input text-sm" 
-                      value={deviceForm.settings.tr} 
-                      onChange={e => setDeviceForm(f => ({ 
-                        ...f, 
-                        settings: { ...f.settings, tr: Number(e.target.value) || 10 } 
-                      }))} 
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 mb-1 block">Isd (xIr)</label>
-                    <input 
-                      type="number" 
-                      step="0.1" 
-                      min="1"
-                      className="input text-sm" 
-                      value={deviceForm.settings.isd} 
-                      onChange={e => setDeviceForm(f => ({ 
-                        ...f, 
-                        settings: { ...f.settings, isd: Number(e.target.value) || 6 } 
-                      }))} 
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs text-gray-500 mb-1 block">Curve Type</label>
-                    <input 
-                      className="input text-sm" 
-                      value={deviceForm.settings.curve_type} 
-                      onChange={e => setDeviceForm(f => ({ 
-                        ...f, 
-                        settings: { ...f.settings, curve_type: e.target.value } 
-                      }))} 
-                      placeholder="B/C/D"
-                    />
-                  </div>
-                </div>
-              </Tooltip>
-            </div>
-          </div>
-        </div>
+                    <div>
+                      <label className="label mb-2 block font-medium">Icu Breaking Capacity (kA)</label>
+                      <input 
+                        type="number" 
+                        className="input w-full" 
+                        value={deviceForm.icu_kA} 
+                        onChange={e => setDeviceForm(f => ({ ...f, icu_kA: Number(e.target.value) || 0 }))} 
+                        placeholder="e.g., 25"
+                        min="0"
+                        step="0.1"
+                      />
+                    </div>
 
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <div className="flex justify-end gap-3">
-            <button 
-              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-              onClick={() => setOpenDevice(false)}
-              disabled={busy}
-            >
-              Cancel
-            </button>
-            <button 
-              className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
-              disabled={busy || !deviceForm.name.trim() || deviceForm.in_amps <= 0}
-              onClick={saveDevice}
-            >
-              {busy ? (
-                <span className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Saving...
-                </span>
-              ) : editingDevice ? 'Update Device' : 'Create Device'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+                    <div>
+                      <label className="label mb-2 block font-medium">Ics Service Capacity (kA)</label>
+                      <input 
+                        type="number" 
+                        className="input w-full" 
+                        value={deviceForm.ics_kA} 
+                        onChange={e => setDeviceForm(f => ({ ...f, ics_kA: Number(e.target.value) || 0 }))} 
+                        placeholder="e.g., 20"
+                        min="0"
+                        step="0.1"
+                      />
+                    </div>
 
-      {/* AI Assistant Sidebar */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setSidebarOpen(false)}>
-          <div 
-            className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl transform transition-transform duration-300"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gradient-to-r from-indigo-50 to-purple-50">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-100 rounded-lg">
-                  <Search size={20} className="text-indigo-600" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900">AI Assistant</h3>
-                  <p className="text-xs text-gray-500">Ask about devices & standards</p>
-                </div>
-              </div>
-              <button 
-                onClick={() => setSidebarOpen(false)}
-                className="p-1 rounded-lg hover:bg-gray-100 transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-            
-            <div className="p-4 overflow-y-auto h-[calc(100vh-140px)] space-y-4">
-              {chatMessages.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">
-                  <Search size={48} className="mx-auto mb-4 opacity-30" />
-                  <p className="text-sm mb-2">Ask me anything about electrical engineering</p>
-                  <div className="text-xs text-gray-400 space-y-1">
-                    <div>"Find Schneider 100A MCCB specs"</div>
-                    <div>"What is TN-S grounding?"</div>
-                    <div>"MCB vs MCCB differences"</div>
+                    <div>
+                      <label className="label mb-2 block font-medium">Number of Poles</label>
+                      <input 
+                        type="number" 
+                        min="1" 
+                        max="4" 
+                        className="input w-full" 
+                        value={deviceForm.poles} 
+                        onChange={e => setDeviceForm(f => ({ ...f, poles: Math.max(1, Math.min(4, Number(e.target.value) || 3)) }))} 
+                      />
+                    </div>
+
+                    <div>
+                      <label className="label mb-2 block font-medium">Voltage Rating (V)</label>
+                      <input 
+                        type="number" 
+                        className="input w-full" 
+                        value={deviceForm.voltage_V} 
+                        onChange={e => setDeviceForm(f => ({ ...f, voltage_V: Number(e.target.value) || 400 }))} 
+                        placeholder="e.g., 400"
+                        min="0"
+                        step="10"
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="label mb-2 block font-medium">Trip Unit / Relay Type</label>
+                      <input 
+                        className="input w-full" 
+                        value={deviceForm.trip_unit} 
+                        onChange={e => setDeviceForm(f => ({ ...f, trip_unit: e.target.value }))} 
+                        placeholder="e.g., Micrologic 2.2, Thermal-Magnetic, Electronic"
+                      />
+                    </div>
+
+                    {/* Parent Device Search */}
+                    <div className="md:col-span-2 relative">
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Parent Device</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Search for upstream device (leave empty for top-level)">
+                        <div className="relative">
+                          <input 
+                            className="input w-full pr-10" 
+                            placeholder="Search parent device by name or reference..."
+                            value={parentSearchInput}
+                            onChange={e => setParentSearchInput(e.target.value)}
+                          />
+                          <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                        </div>
+                      </Tooltip>
+                      
+                      {showParentSuggestions && parentSuggestions.length > 0 && (
+                        <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
+                          {parentSuggestions.map((parent, idx) => (
+                            <div 
+                              key={idx}
+                              className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                              onClick={() => selectParent(parent)}
+                            >
+                              <div className="font-medium text-sm">
+                                {parent.name || `${parent.manufacturer || ''} ${parent.reference || ''}`.trim() || 'Unnamed'}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                {parent.device_type} • {parent.in_amps}A
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Downstream Switchboard Search */}
+                    <div className="md:col-span-2 relative">
+                      <label className="label flex items-center gap-1 mb-2">
+                        <span className="font-medium">Downstream Switchboard</span> 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </label>
+                      <Tooltip content="Link to downstream board for hierarchy (optional)">
+                        <div className="relative">
+                          <input 
+                            className="input w-full pr-10" 
+                            placeholder="Search downstream switchboard..."
+                            value={downstreamSearchInput}
+                            onChange={e => setDownstreamSearchInput(e.target.value)}
+                          />
+                          <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                        </div>
+                      </Tooltip>
+                      
+                      {showDownstreamSuggestions && downstreamSuggestions.length > 0 && (
+                        <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
+                          {downstreamSuggestions.map((sb, idx) => (
+                            <div 
+                              key={idx}
+                              className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                              onClick={() => selectDownstream(sb)}
+                            >
+                              <div className="font-medium text-sm">{sb.name}</div>
+                              <div className="text-xs text-gray-500 flex gap-2">
+                                <span className="bg-gray-100 px-2 py-0.5 rounded text-xs">{sb.code}</span>
+                                <span>{sb.building_code}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Main Incoming with AI Tip */}
+                    <div className="md:col-span-2">
+                      <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                        <div className="flex items-center gap-2 cursor-pointer flex-1" onClick={() => {
+                          const isMain = !deviceForm.is_main_incoming;
+                          setDeviceForm(f => ({ ...f, is_main_incoming: isMain }));
+                          getAiTip(`User set device as main incoming: ${isMain ? 'enabled' : 'disabled'}. Provide advice on next steps.`);
+                        }}>
+                          <input 
+                            type="checkbox" 
+                            checked={deviceForm.is_main_incoming} 
+                            onChange={() => {}} // Handled by parent div click
+                            className="rounded border-blue-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                          />
+                          <span className="font-medium text-blue-900">Main Incoming Device</span>
+                        </div>
+                        {aiTip && (
+                          <button 
+                            className="text-blue-600 hover:text-blue-700 text-sm ml-auto"
+                            onClick={() => setAiTipOpen(!aiTipOpen)}
+                          >
+                            {aiTipOpen ? 'Hide' : 'AI Tip'}
+                          </button>
+                        )}
+                        {aiTipOpen && (
+                          <div className="ml-auto bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-72 absolute right-0 mt-2 z-10">
+                            <p className="text-sm text-gray-700 mb-3 whitespace-pre-wrap">{aiTip}</p>
+                            <button 
+                              className="text-xs text-gray-500 hover:text-gray-700 w-full text-left" 
+                              onClick={() => setAiTipOpen(false)}
+                            >
+                              Close tip
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quick Protection Settings */}
+                    <div className="md:col-span-2">
+                      <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-1">
+                        Protection Settings 
+                        <HelpCircle size={14} className="text-gray-400" />
+                      </h4>
+                      <Tooltip content="Basic LSIG protection parameters">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div>
+                            <label className="text-xs text-gray-500 mb-1 block">Ir (xIn)</label>
+                            <input 
+                              type="number" 
+                              step="0.1" 
+                              min="0.1"
+                              className="input text-sm" 
+                              value={deviceForm.settings.ir} 
+                              onChange={e => setDeviceForm(f => ({ 
+                                ...f, 
+                                settings: { ...f.settings, ir: Number(e.target.value) || 1 } 
+                              }))} 
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 mb-1 block">Tr (s)</label>
+                            <input 
+                              type="number" 
+                              step="0.1" 
+                              min="0"
+                              className="input text-sm" 
+                              value={deviceForm.settings.tr} 
+                              onChange={e => setDeviceForm(f => ({ 
+                                ...f, 
+                                settings: { ...f.settings, tr: Number(e.target.value) || 10 } 
+                              }))} 
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 mb-1 block">Isd (xIr)</label>
+                            <input 
+                              type="number" 
+                              step="0.1" 
+                              min="1"
+                              className="input text-sm" 
+                              value={deviceForm.settings.isd} 
+                              onChange={e => setDeviceForm(f => ({ 
+                                ...f, 
+                                settings: { ...f.settings, isd: Number(e.target.value) || 6 } 
+                              }))} 
+                            />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 mb-1 block">Curve Type</label>
+                            <input 
+                              className="input text-sm" 
+                              value={deviceForm.settings.curve_type} 
+                              onChange={e => setDeviceForm(f => ({ 
+                                ...f, 
+                                settings: { ...f.settings, curve_type: e.target.value } 
+                              }))} 
+                              placeholder="B/C/D"
+                            />
+                          </div>
+                        </div>
+                      </Tooltip>
+                    </div>
                   </div>
                 </div>
-              ) : (
-                chatMessages.map((message, idx) => (
-                  <div 
-                    key={idx} 
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div 
-                      className={`max-w-[85%] p-3 rounded-xl ${
-                        message.role === 'user' 
-                          ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white' 
-                          : 'bg-gray-100 text-gray-900'
-                      }`}
+
+                <div className="mt-6 pt-4 border-t border-gray-200">
+                  <div className="flex justify-end gap-3">
+                    <button 
+                      className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+                      onClick={() => setOpenDevice(false)}
+                      disabled={busy}
                     >
-                      <div className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</div>
-                    </div>
+                      Cancel
+                    </button>
+                    <button 
+                      className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
+                      disabled={busy || !deviceForm.name.trim() || deviceForm.in_amps <= 0}
+                      onClick={saveDevice}
+                    >
+                      {busy ? (
+                        <span className="flex items-center gap-2">
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          Saving...
+                        </span>
+                      ) : editingDevice ? 'Update Device' : 'Create Device'}
+                    </button>
                   </div>
-                ))
-              )}
-              
-              {chatBusy && (
-                <div className="flex justify-start">
-                  <div className="bg-gray-100 p-3 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
-                      <span className="text-sm text-gray-500">AI Assistant is thinking...</span>
+                </div>
+              </Modal>
+
+              {/* AI Assistant Sidebar */}
+              {sidebarOpen && (
+                <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setSidebarOpen(false)}>
+                  <div 
+                    className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl transform transition-transform duration-300"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gradient-to-r from-indigo-50 to-purple-50">
+                      <div className="flex items-center gap-2">
+                        <div className="p-2 bg-indigo-100 rounded-lg">
+                          <Search size={20} className="text-indigo-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-gray-900">AI Assistant</h3>
+                          <p className="text-xs text-gray-500">Ask about devices & standards</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => setSidebarOpen(false)}
+                        className="p-1 rounded-lg hover:bg-gray-100 transition-colors"
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
+                    
+                    <div className="p-4 overflow-y-auto h-[calc(100vh-140px)] space-y-4">
+                      {chatMessages.length === 0 ? (
+                        <div className="text-center text-gray-500 py-8">
+                          <Search size={48} className="mx-auto mb-4 opacity-30" />
+                          <p className="text-sm mb-2">Ask me anything about electrical engineering</p>
+                          <div className="text-xs text-gray-400 space-y-1">
+                            <div>"Find Schneider 100A MCCB specs"</div>
+                            <div>"What is TN-S grounding?"</div>
+                            <div>"MCB vs MCCB differences"</div>
+                          </div>
+                        </div>
+                      ) : (
+                        chatMessages.map((message, idx) => (
+                          <div 
+                            key={idx} 
+                            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                          >
+                            <div 
+                              className={`max-w-[85%] p-3 rounded-xl ${
+                                message.role === 'user' 
+                                  ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white' 
+                                  : 'bg-gray-100 text-gray-900'
+                              }`}
+                            >
+                              <div className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      
+                      {chatBusy && (
+                        <div className="flex justify-start">
+                          <div className="bg-gray-100 p-3 rounded-xl">
+                            <div className="flex items-center gap-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
+                              <span className="text-sm text-gray-500">AI Assistant is thinking...</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-4 border-t border-gray-200">
+                      <div className="flex gap-2">
+                        <input 
+                          className="input flex-1 pr-10" 
+                          value={chatInput} 
+                          onChange={e => setChatInput(e.target.value)}
+                          onKeyPress={e => e.key === 'Enter' && !chatBusy && sendChatMessage()}
+                          placeholder="Ask about devices, standards, configurations..."
+                          disabled={chatBusy}
+                        />
+                        <Search size={16} className="absolute right-12 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        <button 
+                          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
+                            chatBusy || !chatInput.trim()
+                              ? 'bg-gray-300 cursor-not-allowed' 
+                              : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white'
+                          }`}
+                          disabled={chatBusy || !chatInput.trim()}
+                          onClick={sendChatMessage}
+                        >
+                          {chatBusy ? '...' : 'Send'}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
               )}
-            </div>
+            </section>
+          );
+        }
 
-            <div className="p-4 border-t border-gray-200">
-              <div className="flex gap-2">
-                <input 
-                  className="input flex-1 pr-10" 
-                  value={chatInput} 
-                  onChange={e => setChatInput(e.target.value)}
-                  onKeyPress={e => e.key === 'Enter' && !chatBusy && sendChatMessage()}
-                  placeholder="Ask about devices, standards, configurations..."
-                  disabled={chatBusy}
-                />
-                <Search size={16} className="absolute right-12 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <button 
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
-                    chatBusy || !chatInput.trim()
-                      ? 'bg-gray-300 cursor-not-allowed' 
-                      : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white'
-                  }`}
-                  disabled={chatBusy || !chatInput.trim()}
-                  onClick={sendChatMessage}
-                >
-                  {chatBusy ? '...' : 'Send'}
-                </button>
-              </div>
+        // DeviceTree Component
+        function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain, level = 0, site }) {
+          return (
+            <div className={`space-y-3 ${level > 0 ? 'ml-6 border-l border-gray-200 pl-4' : ''}`}>
+              {devices.map(device => (
+                <div key={device.id} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-sm transition-all">
+                  <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
+                        <span className="font-semibold text-gray-900 text-sm truncate max-w-[200px] sm:max-w-none">
+                          {device.name || `${device.manufacturer || '—'} ${device.reference || ''}`.trim() || 'Unnamed Device'}
+                        </span>
+                        <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full whitespace-nowrap">
+                          {device.device_type}
+                        </span>
+                        {device.is_main_incoming && (
+                          <Pill color="green">MAIN INCOMING</Pill>
+                        )}
+                        {device.downstream_switchboard_id && (
+                          <Pill color="blue">SB #{device.downstream_switchboard_id}</Pill>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500 flex flex-wrap gap-3">
+                        <span className="flex items-center gap-1">
+                          <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                          {device.in_amps || '—'}A
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                          Icu: {device.icu_kA || '—'}kA
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                          {device.poles || '—'}P
+                        </span>
+                        {device.settings?.curve_type && (
+                          <span className="flex items-center gap-1">
+                            <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                            {device.settings.curve_type}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button 
+                        onClick={() => onEdit(device, panelId)}
+                        className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                        title="Edit Device"
+                      >
+                        <Edit size={16} />
+                      </button>
+                      <button 
+                        onClick={() => onDuplicate(device.id, panelId)}
+                        className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                        title="Duplicate Device"
+                      >
+                        <Copy size={16} />
+                      </button>
+                      <button 
+                        onClick={() => onDelete(device.id, panelId)}
+                        className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Delete Device"
+                      >
+                        <Trash size={16} />
+                      </button>
+                      <button 
+                        onClick={() => onSetMain(device.id, panelId, !device.is_main_incoming)}
+                        className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
+                          device.is_main_incoming 
+                            ? 'bg-red-100 text-red-700 hover:bg-red-200' 
+                            : 'bg-green-100 text-green-700 hover:bg-green-200'
+                        }`}
+                      >
+                        {device.is_main_incoming ? 'Unset Main' : 'Set Main'}
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Children */}
+                  {device.children && device.children.length > 0 && (
+                    <div className={`mt-4 pt-3 border-t border-gray-100 ${level > 1 ? 'ml-4 pl-4 border-l border-gray-300' : ''}`}>
+                      <DeviceTree 
+                        devices={device.children} 
+                        panelId={panelId} 
+                        onEdit={onEdit} 
+                        onDuplicate={onDuplicate} 
+                        onDelete={onDelete} 
+                        onSetMain={onSetMain} 
+                        level={level + 1}
+                        site={site}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+              
+              {devices.length === 0 && (
+                <div className="text-center py-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+                  <Plus size={24} className="mx-auto text-gray-400 mb-2" />
+                  <p className="text-sm text-gray-500">No devices yet</p>
+                  <p className="text-xs text-gray-400">Add your first device above</p>
+                </div>
+              )}
             </div>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-// DeviceTree Component - Updated
-function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain, level = 0, site }) {
-  return (
-    <div className={`space-y-3 ${level > 0 ? 'ml-6 border-l border-gray-200 pl-4' : ''}`}>
-      {devices.map(device => (
-        <div key={device.id} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-sm transition-all">
-          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
-                <span className="font-semibold text-gray-900 text-sm truncate max-w-[200px] sm:max-w-none">
-                  {device.name || `${device.manufacturer || '—'} ${device.reference || ''}`.trim() || 'Unnamed Device'}
-                </span>
-                <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  {device.device_type}
-                </span>
-                {device.is_main_incoming && (
-                  <Pill color="green">MAIN INCOMING</Pill>
-                )}
-                {device.downstream_switchboard_id && (
-                  <Pill color="blue">SB #{device.downstream_switchboard_id}</Pill>
-                )}
-              </div>
-              <div className="text-xs text-gray-500 flex flex-wrap gap-3">
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.in_amps || '—'}A
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  Icu: {device.icu_kA || '—'}kA
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.poles || '—'}P
-                </span>
-                {device.settings?.curve_type && (
-                  <span className="flex items-center gap-1">
-                    <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                    {device.settings.curve_type}
-                  </span>
-                )}
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <button 
-                onClick={() => onEdit(device, panelId)}
-                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                title="Edit Device"
-              >
-                <Edit size={16} />
-              </button>
-              <button 
-                onClick={() => onDuplicate(device.id, panelId)}
-                className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                title="Duplicate Device"
-              >
-                <Copy size={16} />
-              </button>
-              <button 
-                onClick={() => onDelete(device.id, panelId)}
-                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                title="Delete Device"
-              >
-                <Trash size={16} />
-              </button>
-              <button 
-                onClick={() => onSetMain(device.id, panelId, !device.is_main_incoming)}
-                className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
-                  device.is_main_incoming 
-                    ? 'bg-red-100 text-red-700 hover:bg-red-200' 
-                    : 'bg-green-100 text-green-700 hover:bg-green-200'
-                }`}
-              >
-                {device.is_main_incoming ? 'Unset Main' : 'Set Main'}
-              </button>
-            </div>
-          </div>
-          
-          {/* Children */}
-          {device.children && device.children.length > 0 && (
-            <div className={`mt-4 pt-3 border-t border-gray-100 ${level > 1 ? 'ml-4 pl-4 border-l border-gray-300' : ''}`}>
-              <DeviceTree 
-                devices={device.children} 
-                panelId={panelId} 
-                onEdit={onEdit} 
-                onDuplicate={onDuplicate} 
-                onDelete={onDelete} 
-                onSetMain={onSetMain} 
-                level={level + 1}
-                site={site}
-              />
-            </div>
-          )}
-        </div>
-      ))}
-      
-      {devices.length === 0 && (
-        <div className="text-center py-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
-          <Plus size={24} className="mx-auto text-gray-400 mb-2" />
-          <p className="text-sm text-gray-500">No devices yet</p>
-          <p className="text-xs text-gray-400">Add your first device above</p>
-        </div>
-      )}
-    </div>
-  );
-}
+          );
+        }
