@@ -1,7 +1,10 @@
 // src/pages/Switchboards.jsx
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { get, post, put, del } from '../lib/api.js';
-import { Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle, ChevronDown, ChevronRight, ChevronLeft, X } from 'lucide-react';
+import { 
+  Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle, 
+  ChevronDown, ChevronRight, ChevronLeft, X 
+} from 'lucide-react';
 
 /** Utilities */
 const regimes = ['TN-S', 'TN-C-S', 'IT', 'TT'];
@@ -912,6 +915,17 @@ export default function Switchboards() {
               </div>
             </div>
             
+            {/* Add Device Button */}
+            <div className="border-t border-gray-200 bg-gray-50">
+              <button 
+                onClick={() => resetDeviceModal(row.id)}
+                className="w-full flex items-center justify-center gap-2 px-6 py-3 text-left hover:bg-gray-100 transition-colors text-sm font-medium text-blue-600"
+              >
+                <Plus size={16} />
+                Add Device to {row.name}
+              </button>
+            </div>
+            
             <div className="border-t border-gray-200">
               <button 
                 onClick={() => toggleExpand(row.id)}
@@ -1123,7 +1137,7 @@ export default function Switchboards() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div>
+            <div className="relative">
               <label className="block text-sm font-medium text-gray-700 mb-2">Manufacturer</label>
               <input 
                 type="text" 
@@ -1135,7 +1149,7 @@ export default function Switchboards() {
               <button 
                 onClick={searchDeviceReference}
                 disabled={deviceSearchBusy || !deviceForm.reference.trim()}
-                className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50"
+                className="absolute right-2 top-9 transform -translate-y-1/2 p-1 text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50"
                 title="AI Search"
               >
                 <Search size={14} />
@@ -1535,6 +1549,15 @@ export default function Switchboards() {
 function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain, level = 0, site }) {
   return (
     <div className={`space-y-3 ${level > 0 ? 'ml-6 border-l border-gray-200 pl-4' : ''}`}>
+      {/* Add Device Button in Tree */}
+      <button 
+        onClick={() => resetDeviceModal(panelId)}
+        className="w-full flex items-center justify-center gap-2 p-3 bg-blue-50 border-2 border-dashed border-blue-200 rounded-lg text-blue-600 hover:bg-blue-100 transition-colors mb-3"
+      >
+        <Plus size={16} />
+        <span className="text-sm font-medium">Add Device</span>
+      </button>
+      
       {devices.map(device => (
         <div key={device.id} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-sm transition-all">
           <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
