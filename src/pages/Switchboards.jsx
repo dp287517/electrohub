@@ -46,6 +46,7 @@ const emptySwitchboardForm = {
 };
 
 const emptyDeviceForm = {
+  name: '',             // <== ajouté pour coller au serveur
   device_type: 'Disjoncteur BT',
   manufacturer: '',
   reference: '',
@@ -198,6 +199,7 @@ export default function Switchboards() {
     setCurrentPanelId(panelId);
     setEditingDevice(device);
     setDeviceForm({
+      name: device.name || '',
       device_type: device.device_type || 'Disjoncteur BT',
       manufacturer: device.manufacturer || '',
       reference: device.reference || '',
@@ -222,16 +224,22 @@ export default function Switchboards() {
       is_main_incoming: !!device.is_main_incoming,
       parent_id: device.parent_id || null,
       downstream_switchboard_id: device.downstream_switchboard_id || null,
-      pv_tests: device.pv_tests || null,
-      photos: device.photos || []
+      pv_tests: null,     // on n'édite pas les blobs ici
+      photos: []
     });
     setOpenDevice(true);
+  };
+
+  // *** Neutralisation upload: on n’envoie jamais File/Blob tant que l’upload n’est pas prêt ***
+  const safeUploadStrip = (form) => {
+    const { pv_tests, photos, ...rest } = form;
+    return { ...rest, pv_tests: null, photos: [] };
   };
 
   const saveDevice = async () => {
     setBusy(true);
     try {
-      const payload = { ...deviceForm, switchboard_id: currentPanelId };
+      const payload = { ...safeUploadStrip(deviceForm), switchboard_id: currentPanelId };
       if (editingDevice) {
         await put(`/api/switchboard/devices/${editingDevice.id}`, payload);
       } else {
@@ -353,6 +361,15 @@ export default function Switchboards() {
 
   return (
     <section className="container-narrow py-6 space-y-4 relative">
+      {/* Poignée flottante (toujours visible) pour ouvrir/fermer l’AI */}
+      <button
+        onClick={() => setSidebarOpen(s => !s)}
+        className="fixed right-0 top-1/2 -translate-y-1/2 z-50 bg-indigo-600 text-white px-3 py-2 rounded-l-lg shadow hover:bg-indigo-700"
+        aria-label={sidebarOpen ? 'Close AI sidebar' : 'Open AI sidebar'}
+      >
+        {sidebarOpen ? '✕' : 'AI'}
+      </button>
+
       {/* Sidebar for chat */}
       <div className={`fixed right-0 top-0 h-full bg-white shadow-lg p-4 overflow-y-auto transition-transform duration-300 ${sidebarOpen ? 'translate-x-0 w-full md:w-96' : 'translate-x-full w-0'}`}>
         <button className="btn mb-4" onClick={() => setSidebarOpen(false)}>Close Sidebar</button>
@@ -594,7 +611,7 @@ export default function Switchboards() {
             <label className="label">Parent Device</label>
             <select className="input mt-1" value={deviceForm.parent_id || ''} onChange={e=>setDeviceForm(f=>({ ...f, parent_id:e.target.value ? Number(e.target.value) : null }))}>
               <option value="">None (Top Level)</option>
-              {(devices[currentPanelId] || []).map(d => <option key={d.id} value={d.id}>{d.name} ({d.device_type})</option>)}
+              {(devices[currentPanelId] || []).map(d => <option key={d.id} value={d.id}>{(d.name && d.name.trim()) || `${d.manufacturer || '—'} ${d.reference || ''}`.trim()} ({d.device_type})</option>)}
             </select>
           </div>
           <div className="md:col-span-2">
@@ -656,7 +673,7 @@ export default function Switchboards() {
             </div>
           </div>
 
-          {/* Files */}
+          {/* Files (désactivé côté transport pour éviter 500) */}
           <div className="md:col-span-2">
             <label className="label">PV Tests (Upload)</label>
             <input type="file" className="input mt-1" onChange={e => setDeviceForm(f => ({ ...f, pv_tests: e.target.files[0] }))} />
@@ -676,7 +693,7 @@ export default function Switchboards() {
   );
 }
 
-// DeviceTree (ajouté is_main_incoming)
+// DeviceTree (ajouté is_main_incoming + fallback nom)
 function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain, level = 0 }) {
   return (
     <ul className={`space-y-2 ${level > 0 ? 'ml-6 border-l pl-4' : ''}`}>
@@ -684,8 +701,10 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
         <li key={d.id}>
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between bg-gray-50 p-2 rounded gap-2">
             <div>
-              <span className="font-medium">{d.name} ({d.device_type})</span>
-              <span className="text-sm text-gray-500 ml-2">In: {d.in_amps}A, Icu: {d.icu_kA}kA, Ics: {d.ics_kA}kA, {d.manufacturer} {d.reference}</span>
+              <span className="font-medium">
+                {(d.name && d.name.trim()) || `${d.manufacturer || '—'} ${d.reference || ''}`.trim()} ({d.device_type})
+              </span>
+              <span className="text-sm text-gray-500 ml-2">In: {d.in_amps}A, Icu: {d.icu_kA}kA, Ics: {d.ics_kA}kA</span>
               {d.is_main_incoming && <Pill>Main Incoming</Pill>}
               {d.downstream_switchboard_id && <Pill>Links to SB #{d.downstream_switchboard_id}</Pill>}
             </div>
