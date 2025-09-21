@@ -61,6 +61,7 @@ const emptyDeviceForm = {
   },
   is_main_incoming: false,
   parent_id: null,
+  downstream_switchboard_id: null,
   pv_tests: null,
   photos: []
 };
@@ -68,6 +69,7 @@ const emptyDeviceForm = {
 export default function Switchboards() {
   const site = useUserSite();
   const [rows, setRows] = useState([]);
+  const [allSwitchboards, setAllSwitchboards] = useState([]); // For downstream select
   const [q, setQ] = useState({ q:'', building:'', floor:'', room:'', sort:'created_at', dir:'desc', page:1 });
   const [openSwitchboard, setOpenSwitchboard] = useState(false);
   const [editingSwitchboard, setEditingSwitchboard] = useState(null);
@@ -99,6 +101,11 @@ export default function Switchboards() {
     setTotal(data?.total || 0);
   };
 
+  const loadAllSwitchboards = async () => {
+    const data = await get('/api/switchboard/boards', { site, pageSize: 1000 }); // Load all for select
+    setAllSwitchboards(data?.data || []);
+  };
+
   const loadDevices = async (panelId) => {
     const data = await get('/api/switchboard/devices', { switchboard_id: panelId });
     setDevices(prev => ({ ...prev, [panelId]: data?.data || [] }));
@@ -111,6 +118,7 @@ export default function Switchboards() {
 
   useEffect(() => { 
     loadSwitchboards(); 
+    loadAllSwitchboards();
     loadDeviceReferences(); 
     /* eslint-disable-next-line */ 
   }, [q.page, q.sort, q.dir, q.q, q.building, q.floor, q.room]);
@@ -213,6 +221,7 @@ export default function Switchboards() {
       },
       is_main_incoming: !!device.is_main_incoming,
       parent_id: device.parent_id || null,
+      downstream_switchboard_id: device.downstream_switchboard_id || null,
       pv_tests: device.pv_tests || null,
       photos: device.photos || []
     });
@@ -246,7 +255,7 @@ export default function Switchboards() {
   };
 
   const setMainDevice = async (id, panelId, isMain) => {
-    await put('/api/switchboard/devices/${id}/set-main', { is_main_incoming: isMain });
+    await put(`/api/switchboard/devices/${id}/set-main`, { is_main_incoming: isMain });
     await loadDevices(panelId);
   };
 
@@ -588,6 +597,13 @@ export default function Switchboards() {
               {(devices[currentPanelId] || []).map(d => <option key={d.id} value={d.id}>{d.name} ({d.device_type})</option>)}
             </select>
           </div>
+          <div className="md:col-span-2">
+            <label className="label">Downstream Switchboard</label>
+            <select className="input mt-1" value={deviceForm.downstream_switchboard_id || ''} onChange={e=>setDeviceForm(f=>({ ...f, downstream_switchboard_id:e.target.value ? Number(e.target.value) : null }))}>
+              <option value="">None</option>
+              {allSwitchboards.map(sb => <option key={sb.id} value={sb.id}>{sb.name} ({sb.code})</option>)}
+            </select>
+          </div>
           <div className="flex items-center gap-2 md:col-span-2">
             <input type="checkbox" checked={deviceForm.is_main_incoming} onChange={e=>setDeviceForm(f=>({ ...f, is_main_incoming:e.target.checked }))} />
             <label>Main Incoming</label>
@@ -671,6 +687,7 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
               <span className="font-medium">{d.name} ({d.device_type})</span>
               <span className="text-sm text-gray-500 ml-2">In: {d.in_amps}A, Icu: {d.icu_kA}kA, Ics: {d.ics_kA}kA, {d.manufacturer} {d.reference}</span>
               {d.is_main_incoming && <Pill>Main Incoming</Pill>}
+              {d.downstream_switchboard_id && <Pill>Links to SB #{d.downstream_switchboard_id}</Pill>}
             </div>
             <div className="flex flex-wrap gap-1">
               <button className="text-xs text-blue-500" onClick={() => onEdit(d, panelId)}>Edit</button>
