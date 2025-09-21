@@ -507,5 +507,5 @@ app.post('/api/switchboard/search-device', async (req, res) => {
   }
 });
 
-const port = process.env.PORT || 3003;  // Use Render's PORT
+const port = process.env.SWITCHBOARD_PORT || 3003; // Use Render's PORT
 app.listen(port, () => console.log(`Switchboard service running on :${port}`));
