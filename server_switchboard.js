@@ -1,4 +1,4 @@
-// server_switchboard.js
+// server_switchboard.js (FULL)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -11,7 +11,7 @@ dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
-// OpenAI - avec fallback si pas disponible
+/* ========================= OpenAI (facultatif) ========================= */
 let openai = null;
 let openaiError = null;
 
@@ -20,17 +20,19 @@ if (process.env.OPENAI_API_KEY) {
     openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     console.log('[SWITCHBOARD] OpenAI initialized with key');
     // Test rapide (tolérant aux erreurs)
-    try {
-      const test = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [{ role: 'user', content: 'Say hello' }],
-        max_tokens: 5
-      });
-      console.log('[SWITCHBOARD] OpenAI test OK');
-    } catch (testError) {
-      console.error('[SWITCHBOARD] OpenAI test failed:', testError.message);
-      openaiError = testError.message;
-    }
+    (async () => {
+      try {
+        await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: [{ role: 'user', content: 'Hello' }],
+          max_tokens: 5
+        });
+        console.log('[SWITCHBOARD] OpenAI test OK');
+      } catch (testError) {
+        console.error('[SWITCHBOARD] OpenAI test failed:', testError.message);
+        openaiError = testError.message;
+      }
+    })();
   } catch (e) {
     console.warn('[SWITCHBOARD] OpenAI init failed:', e.message);
     openaiError = e.message;
@@ -40,6 +42,7 @@ if (process.env.OPENAI_API_KEY) {
   openaiError = 'No API key';
 }
 
+/* ========================= App & middlewares ========================= */
 const app = express();
 app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
@@ -62,13 +65,11 @@ app.get('/api/switchboard/health', (_req, res) => res.json({ ok: true, ts: Date.
 function siteOf(req) {
   return (req.header('X-Site') || req.query.site || '').toString();
 }
-
 const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// SQL bootstrap (ajout downstream_switchboard_id + name pour devices)
-// + colonne optionnelle position_number pour trier par "numéro" si besoin.
+/* ========================= Schema (safe-migrations) ========================= */
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS switchboards (
@@ -109,7 +110,7 @@ async function ensureSchema() {
       is_main_incoming BOOLEAN DEFAULT FALSE,
       pv_tests BYTEA,
       photos BYTEA[],
-      position_number TEXT,  -- facultatif: pour trier par numéro si besoin explicite
+      position_number TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     );
@@ -118,8 +119,6 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(site);
     CREATE INDEX IF NOT EXISTS idx_devices_reference ON devices(reference);
   `);
-
-  // si la table devices existait déjà sans 'name' / 'position_number', on les ajoute
   await pool.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS name TEXT;`);
   await pool.query(`ALTER TABLE devices ADD COLUMN IF NOT EXISTS position_number TEXT;`);
 }
@@ -306,68 +305,7 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
 
 /* ========================= DEVICES ========================= */
 
-// LIST Devices (tri “par numéro” prioritaire si présent)
-app.get('/api/switchboard/devices', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const switchboard_id = Number(req.query.switchboard_id);
-    if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
-
-    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
-    if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
-
-    // Tri: settings.position (num), sinon settings.number (num), sinon position_number (texte tri naturel), sinon created_at
-    const { rows } = await pool.query(
-      `
-      SELECT *
-      FROM devices
-      WHERE switchboard_id=$1
-      ORDER BY
-        /* position numérique depuis settings.position */
-        CASE
-          WHEN (settings->>'position') ~ '^[0-9]+$' THEN (settings->>'position')::int
-          ELSE NULL
-        END ASC NULLS LAST,
-        /* fallback numéro depuis settings.number */
-        CASE
-          WHEN (settings->>'number') ~ '^[0-9]+$' THEN (settings->>'number')::int
-          ELSE NULL
-        END ASC NULLS LAST,
-        /* fallback colonne position_number si fournie */
-        position_number ASC NULLS LAST,
-        /* dernier fallback stable */
-        created_at ASC
-      `,
-      [switchboard_id]
-    );
-    res.json({ data: rows });
-  } catch (e) {
-    console.error('[DEVICES LIST] error:', e.message);
-    res.status(500).json({ error: 'List failed' });
-  }
-});
-
-// GET ONE Device
-app.get('/api/switchboard/devices/:id', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const id = Number(req.params.id);
-
-    const r = await pool.query(
-      `SELECT d.* FROM devices d
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE d.id=$1 AND sb.site=$2`,
-      [id, site]
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
-    res.json(r.rows[0]);
-  } catch (e) {
-    console.error('[DEVICES GET] error:', e.message);
-    res.status(500).json({ error: 'Get failed' });
-  }
-});
-
-// Helpers robustesse fichiers (évite 500 si front envoie File/objet)
+// Robust file coercion
 function coercePVTests(pv_tests) {
   if (typeof pv_tests === 'string' && pv_tests.length > 0) {
     try { return Buffer.from(pv_tests, 'base64'); } catch { return null; }
@@ -386,6 +324,60 @@ function coercePhotos(photos) {
   }
   return [];
 }
+
+// LIST Devices (tri par numéro, avec infos parent/downstream)
+app.get('/api/switchboard/devices', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const switchboard_id = Number(req.query.switchboard_id);
+    if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
+
+    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
+    if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
+
+    const { rows } = await pool.query(
+      `
+      SELECT d.*,
+             parent.reference AS parent_reference,
+             parent.name      AS parent_name,
+             dsb.code         AS downstream_code
+      FROM devices d
+      LEFT JOIN devices parent ON parent.id = d.parent_id
+      LEFT JOIN switchboards dsb ON dsb.id = d.downstream_switchboard_id
+      WHERE d.switchboard_id=$1
+      ORDER BY
+        CASE WHEN (d.settings->>'position') ~ '^[0-9]+$' THEN (d.settings->>'position')::int ELSE NULL END ASC NULLS LAST,
+        CASE WHEN (d.settings->>'number')  ~ '^[0-9]+$' THEN (d.settings->>'number')::int  ELSE NULL END ASC NULLS LAST,
+        d.position_number ASC NULLS LAST,
+        d.created_at ASC
+      `,
+      [switchboard_id]
+    );
+    res.json({ data: rows });
+  } catch (e) {
+    console.error('[DEVICES LIST] error:', e.message);
+    res.status(500).json({ error: 'List failed' });
+  }
+});
+
+// GET ONE Device
+app.get('/api/switchboard/devices/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const r = await pool.query(
+      `SELECT d.* FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE d.id=$1 AND sb.site=$2`,
+      [id, site]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error('[DEVICES GET] error:', e.message);
+    res.status(500).json({ error: 'Get failed' });
+  }
+});
 
 // CREATE Device
 app.post('/api/switchboard/devices', async (req, res) => {
@@ -536,6 +528,56 @@ app.get('/api/switchboard/device-references', async (req, res) => {
   }
 });
 
+/* ======= NEW: Bulk operations ======= */
+
+// Bulk Delete
+app.post('/api/switchboard/devices/bulk-delete', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(n => Number(n)).filter(Boolean) : [];
+    if (ids.length === 0) return res.status(400).json({ error: 'No ids' });
+
+    const r = await pool.query(
+      `DELETE FROM devices d USING switchboards sb
+       WHERE d.switchboard_id = sb.id AND sb.site=$1 AND d.id = ANY($2::int[])`,
+      [site, ids]
+    );
+    res.json({ success: true, deleted: r.rowCount });
+  } catch (e) {
+    console.error('[BULK DELETE] error:', e.message);
+    res.status(500).json({ error: 'Bulk delete failed' });
+  }
+});
+
+// Bulk Duplicate
+app.post('/api/switchboard/devices/bulk-duplicate', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(n => Number(n)).filter(Boolean) : [];
+    if (ids.length === 0) return res.status(400).json({ error: 'No ids' });
+
+    const r = await pool.query(
+      `INSERT INTO devices (
+        site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos, position_number
+      )
+      SELECT sb.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
+             COALESCE(d.name, d.reference) || ' (copy)', d.device_type, d.manufacturer, d.reference || ' (copy)', d.in_amps, d.icu_kA, d.ics_kA,
+             d.poles, d.voltage_V, d.trip_unit, d.settings, FALSE, d.pv_tests, d.photos, d.position_number
+      FROM devices d
+      JOIN switchboards sb ON d.switchboard_id = sb.id
+      WHERE d.id = ANY($1::int[]) AND sb.site=$2
+      RETURNING id`,
+      [ids, site]
+    );
+    res.json({ success: true, created: r.rowCount, ids: r.rows.map(r => r.id) });
+  } catch (e) {
+    console.error('[BULK DUPLICATE] error:', e.message);
+    res.status(500).json({ error: 'Bulk duplicate failed' });
+  }
+});
+
+/* ======= AI search ======= */
+
 // Search Device References (OpenAI - texte)
 app.post('/api/switchboard/search-device', async (req, res) => {
   try {
@@ -543,7 +585,7 @@ app.post('/api/switchboard/search-device', async (req, res) => {
     if (!query) return res.status(400).json({ error: 'Missing query' });
 
     if (!openai) {
-      return res.json({ 
+      return res.json({
         error: 'OpenAI not available',
         suggestion: 'Install "openai" package or check API key'
       });
@@ -552,9 +594,10 @@ app.post('/api/switchboard/search-device', async (req, res) => {
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { 
-          role: 'system', 
-          content: 'You are an expert in electrical protective devices. For the query (brand + reference), return structured JSON with fields: manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings (LSIG params + curve_type if applicable e.g. "B", "C", "D" for MCB or detailed TCC data), is_main_incoming (guess), position_number (if inferred), other specs. Output ONLY valid JSON.' 
+        {
+          role: 'system',
+          content:
+            'You are an expert in electrical protective devices. For the query (brand + reference), return structured JSON with fields: manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings (LSIG params + curve_type if applicable), is_main_incoming (guess), position_number (if inferred). Output ONLY valid JSON.'
         },
         { role: 'user', content: query }
       ],
@@ -576,7 +619,7 @@ app.post('/api/switchboard/search-photo', async (req, res) => {
     if (!image_base64) return res.status(400).json({ error: 'Missing image_base64' });
 
     if (!openai) {
-      return res.json({ 
+      return res.json({
         error: 'OpenAI not available',
         suggestion: 'Install "openai" package or check API key'
       });
@@ -586,7 +629,8 @@ app.post('/api/switchboard/search-photo', async (req, res) => {
     const messages = [
       {
         role: 'system',
-        content: 'You are an expert in identifying electrical protective devices from a photo. Return ONLY JSON with fields: manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming (guess), position_number (if visible), confidence (0-1).'
+        content:
+          'You are an expert in identifying electrical protective devices from a photo. Return ONLY JSON with fields: manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming (guess), position_number (if visible), confidence (0-1).'
       },
       {
         role: 'user',
@@ -622,9 +666,54 @@ app.post('/api/switchboard/search-photo', async (req, res) => {
   }
 });
 
+/* ======= NEW: Global text search (boards + devices) ======= */
+app.get('/api/switchboard/search', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json({ boards: [], devices: [] });
+
+    const qb = `%${q}%`;
+    const boards = await pool.query(
+      `SELECT id, site, name, code, building_code, floor, room
+       FROM switchboards
+       WHERE site=$1 AND (name ILIKE $2 OR code ILIKE $2 OR building_code ILIKE $2 OR floor ILIKE $2 OR room ILIKE $2)
+       ORDER BY name ASC
+       LIMIT 50`,
+      [site, qb]
+    );
+
+    const devs = await pool.query(
+      `SELECT d.id, d.switchboard_id, d.device_type, d.manufacturer, d.reference, d.in_amps, d.settings
+       FROM devices d
+       JOIN switchboards sb ON sb.id = d.switchboard_id
+       WHERE sb.site=$1 AND (
+         d.manufacturer ILIKE $2 OR d.reference ILIKE $2 OR d.device_type ILIKE $2
+         OR d.trip_unit ILIKE $2 OR (d.settings::text ILIKE $2)
+       )
+       ORDER BY d.created_at DESC
+       LIMIT 100`,
+      [site, qb]
+    );
+
+    res.json({
+      boards: boards.rows.map(b => ({
+        id: b.id,
+        name: b.name,
+        code: b.code,
+        meta: { building_code: b.building_code, floor: b.floor, room: b.room }
+      })),
+      devices: devs.rows
+    });
+  } catch (e) {
+    console.error('[GLOBAL SEARCH] error:', e.message);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
 /* ========================= GRAPH / REPORT ========================= */
 
-// GRAPH endpoint (hiérarchie récursive + liaisons downstream)
+// GRAPH (hiérarchie + downstream)
 app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -657,21 +746,16 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
   }
 });
 
-// REPORT (PDF) – même logique que LoopCalc: route /report, PDFKit, inline
+// REPORT (PDF)
 app.get('/api/switchboard/boards/:id/report', async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
 
-    // Switchboard
-    const rsb = await pool.query(
-      `SELECT * FROM switchboards WHERE id=$1 AND site=$2`,
-      [id, site]
-    );
+    const rsb = await pool.query(`SELECT * FROM switchboards WHERE id=$1 AND site=$2`, [id, site]);
     if (!rsb.rows.length) return res.status(404).json({ error: 'Not found' });
     const sb = rsb.rows[0];
 
-    // Devices triés par "numéro"
     const rdev = await pool.query(
       `
       SELECT d.*,
@@ -692,7 +776,6 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
     );
     const devices = rdev.rows;
 
-    // Génération PDF
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="switchboard_${sb.code || sb.name || id}.pdf"`);
 
@@ -701,11 +784,10 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
 
     // Bandeau
     doc.rect(0, 0, doc.page.width, 70).fill('#eef7ff');
-    doc.fill('#0f3e99').fontSize(20).font('Helvetica-Bold')
-      .text('ElectroHub – Switchboard Report', 50, 25);
+    doc.fill('#0f3e99').fontSize(20).font('Helvetica-Bold').text('ElectroHub – Switchboard Report', 50, 25);
     doc.fill('#333').font('Helvetica');
 
-    // Meta Switchboard
+    // Meta
     const y0 = 90;
     doc.fontSize(10)
       .text(`Report date: ${new Date().toLocaleString()}`, 50, y0)
@@ -715,77 +797,49 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
       .text(`Neutral regime: ${sb.regime_neutral || '—'}`, 50, y0 + 56)
       .text(`Principal: ${sb.is_principal ? 'Yes' : 'No'}`, 50, y0 + 70);
 
-    // Titre Devices
+    // Devices
     let yy = y0 + 100;
     doc.fontSize(12).font('Helvetica-Bold').text('Devices (ordered by number)', 50, yy);
     yy += 14;
 
-    // En-tête tableau
     doc.font('Helvetica').fontSize(10);
     const headers = ['#', 'Type', 'Manufacturer', 'Reference', 'In (A)', 'Icu (kA)', 'Ics (kA)', 'Poles', 'Voltage (V)', 'Trip', 'Parent', 'Downstream'];
-    const colX = [50, 70, 120, 210, 300, 345, 390, 435, 465, 505, 545, 610]; // positions relatives (format A4 nécessite ajustements)
-    // Adapter largeur à A4 (max 545 env). On resserre:
     const X = [50, 80, 140, 210, 270, 310, 350, 385, 420, 455, 490, 525];
     const drawRow = (vals, y, shaded=false) => {
       if (shaded) doc.rect(45, y-2, 500, 16).fill('#f8fafc').fill('#333');
       vals.forEach((v, i) => doc.text(String(v ?? '—'), X[i], y, { width: (X[i+1] ?? 545) - X[i] - 6, ellipsis: true }));
     };
+    drawRow(headers, yy, true); yy += 16;
 
-    // Header
-    drawRow(headers, yy, true);
-    yy += 16;
-
-    // Lignes
     devices.forEach((d, idx) => {
       if (yy > 760) { doc.addPage(); yy = 50; }
-      const num =
-        (d.settings && (d.settings.position ?? d.settings.number)) ? (d.settings.position ?? d.settings.number)
-        : (d.position_number ?? '');
+      const num = (d.settings && (d.settings.position ?? d.settings.number)) ? (d.settings.position ?? d.settings.number) : (d.position_number ?? '');
       const vals = [
-        num || '',
-        d.device_type || '',
-        d.manufacturer || '',
-        d.reference || '',
-        d.in_amps ?? '',
-        d.icu_kA ?? '',
-        d.ics_kA ?? '',
-        d.poles ?? '',
-        d.voltage_V ?? '',
-        d.trip_unit ?? '',
-        d.parent_name || d.parent_reference || '',
-        d.downstream_code || ''
+        num || '', d.device_type || '', d.manufacturer || '', d.reference || '',
+        d.in_amps ?? '', d.icu_kA ?? '', d.ics_kA ?? '', d.poles ?? '', d.voltage_V ?? '',
+        d.trip_unit ?? '', d.parent_name || d.parent_reference || '', d.downstream_code || ''
       ];
-      drawRow(vals, yy, idx % 2 === 0);
-      yy += 16;
+      drawRow(vals, yy, idx % 2 === 0); yy += 16;
     });
 
-    // Arbre simple (relations)
+    // Hierarchy
     yy += 20;
     if (yy > 740) { doc.addPage(); yy = 50; }
     doc.font('Helvetica-Bold').fontSize(12).text('Hierarchy (Parent → Children)', 50, yy);
     yy += 16;
     doc.font('Helvetica').fontSize(10);
 
-    // construire une carte parent -> enfants pour affichage textuel
-    const byId = new Map(devices.map(d => [d.id, d]));
     const children = new Map();
-    devices.forEach(d => {
-      if (d.parent_id) {
-        if (!children.has(d.parent_id)) children.set(d.parent_id, []);
-        children.get(d.parent_id).push(d);
-      }
-    });
+    devices.forEach(d => { if (d.parent_id) { if (!children.has(d.parent_id)) children.set(d.parent_id, []); children.get(d.parent_id).push(d); } });
     const roots = devices.filter(d => !d.parent_id);
 
     const printNode = (node, depth=0) => {
       const bullet = '• '.padStart(depth*2 + 2, ' ');
       const line = `${bullet}${node.reference || node.name || node.device_type || 'Device'}  ${node.downstream_code ? `(→ SB ${node.downstream_code})` : ''}`;
-      doc.text(line, 50, yy, { width: 500 });
-      yy += 14;
+      doc.text(line, 50, yy, { width: 500 }); yy += 14;
       const kids = children.get(node.id) || [];
       kids.forEach(k => { if (yy > 780) { doc.addPage(); yy = 50; } printNode(k, depth+1); });
     };
-
     roots.forEach(r => { if (yy > 780) { doc.addPage(); yy = 50; } printNode(r, 0); });
 
     // Footer
@@ -802,6 +856,5 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
 });
 
 /* ========================= START ========================= */
-
 const port = process.env.SWITCHBOARD_PORT || 3003; // Use Render's PORT
 app.listen(port, () => console.log(`Switchboard service running on :${port}`));
