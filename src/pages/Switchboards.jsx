@@ -357,13 +357,14 @@ export default function Switchboards() {
     setShowReferenceSuggestions(false);
     setParentSearchInput('');
     setDownstreamSearchInput('');
+    setQuickAiQuery('');
     setOpenDevice(true);
   };
 
   const onEditDevice = (device, panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(device);
-    
+   
     const safeSettings = device.settings || {};
     setDeviceForm({
       name: device.name || '',
@@ -394,10 +395,11 @@ export default function Switchboards() {
       pv_tests: null,
       photos: []
     });
-    
+   
     setParentSearchInput(device.name || '');
     setDownstreamSearchInput('');
     setPhotoFile(null);
+    setQuickAiQuery('');
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
     setOpenDevice(true);
@@ -418,11 +420,11 @@ export default function Switchboards() {
 
     setBusy(true);
     try {
-      const payload = { 
-        ...safeUploadStrip(deviceForm), 
-        switchboard_id: currentPanelId 
+      const payload = {
+        ...safeUploadStrip(deviceForm),
+        switchboard_id: currentPanelId
       };
-      
+     
       if (editingDevice) {
         await put(`/api/switchboard/devices/${editingDevice.id}?site=${encodeURIComponent(site)}`, payload);
         notify('Device updated successfully!', 'success');
@@ -430,7 +432,7 @@ export default function Switchboards() {
         await post(`/api/switchboard/devices?site=${encodeURIComponent(site)}`, payload);
         notify('Device created successfully!', 'success');
       }
-      
+     
       setOpenDevice(false);
       setPhotoFile(null);
       await loadDevices(currentPanelId);
@@ -438,8 +440,8 @@ export default function Switchboards() {
     } catch (e) {
       console.error('Save device failed:', e);
       notify('Failed to save device: ' + (e.message || 'Unknown error'), 'error');
-    } finally { 
-      setBusy(false); 
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -501,8 +503,8 @@ export default function Switchboards() {
           poles: Number(data.poles) || prev.poles,
           voltage_V: Number(data.voltage_V) || prev.voltage_V,
           trip_unit: data.trip_unit || prev.trip_unit,
-          settings: { 
-            ...prev.settings, 
+          settings: {
+            ...prev.settings,
             ...data.settings,
             ir: Number(data.settings?.ir) || prev.settings.ir,
             tr: Number(data.settings?.tr) || prev.settings.tr,
@@ -660,13 +662,6 @@ export default function Switchboards() {
           settings: { ...prev.settings, ...data.settings }
         }));
         notify(`✅ Photo analyzed! Form pre-filled with: ${data.manufacturer} ${data.reference}. Ready to save.`, 'success');
-      }
-
-      // Remplissage Quick AI Search sans auto-search
-      const aiQuery = `${data.manufacturer || ''} ${data.reference || ''}`.trim();
-      if (aiQuery) {
-        setQuickAiQuery(aiQuery);
-        notify('Vérifiez et ajustez le query AI, puis cliquez Search (AI)', 'info');
       }
      
       setPhotoFile(null);
@@ -1154,13 +1149,13 @@ export default function Switchboards() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Device Name *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Device Name</label>
               <input
                 type="text"
                 value={deviceForm.name}
                 onChange={e => setDeviceForm(f => ({ ...f, name: e.target.value }))}
                 className="input w-full"
-                placeholder="Device name"
+                placeholder="Device name (optional)"
               />
             </div>
             <div>
@@ -1622,15 +1617,15 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
               <div className="text-xs text-gray-500 flex flex-wrap gap-3">
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.in_amps ?? '—'}A
+                  {device.in_amps || '—'}A
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  Icu: {device.icu_kA ?? '—'}kA
+                  Icu: {device.icu_kA || '—'}kA
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.poles ?? '—'}P
+                  {device.poles || '—'}P
                 </span>
                 {device.settings?.curve_type && (
                   <span className="flex items-center gap-1">
