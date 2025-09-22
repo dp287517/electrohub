@@ -171,7 +171,7 @@ export default function Switchboards() {
       const handler = setTimeout(() => {
         setDebouncedValue(value);
       }, delay);
-     
+      
       return () => {
         clearTimeout(handler);
       };
@@ -598,7 +598,7 @@ export default function Switchboards() {
     }
   };
 
-  // Photo analysis - FIXED
+  // Photo analysis - FIXED (avec auto Quick AI Search)
   const analyzePhoto = async () => {
     if (!photoFile) {
       return notify('Please select a photo first', 'info');
@@ -662,6 +662,30 @@ export default function Switchboards() {
           settings: { ...prev.settings, ...data.settings }
         }));
         notify(`✅ Photo analyzed! Form pre-filled with: ${data.manufacturer} ${data.reference}. Ready to save.`, 'success');
+      }
+
+      // Nouvelle amélioration : Auto Quick AI Search si manufacturer/reference présents
+      const aiQuery = `${data.manufacturer || ''} ${data.reference || ''}`.trim();
+      if (aiQuery) {
+        setQuickAiQuery(aiQuery);
+        // Appel auto pour completer les champs
+        const searchData = await post(`/api/switchboard/search-device?site=${encodeURIComponent(site)}`, { query: aiQuery });
+        if (searchData && searchData.manufacturer) {
+          setDeviceForm(prev => ({
+            ...prev,
+            manufacturer: searchData.manufacturer || prev.manufacturer,
+            reference: searchData.reference || prev.reference,
+            device_type: searchData.device_type || prev.device_type,
+            in_amps: Number(searchData.in_amps) || prev.in_amps,
+            icu_kA: Number(searchData.icu_kA) || prev.icu_kA,
+            ics_kA: Number(searchData.ics_kA) || prev.ics_kA,
+            poles: Number(searchData.poles) || prev.poles,
+            voltage_V: Number(searchData.voltage_V) || prev.voltage_V,
+            trip_unit: searchData.trip_unit || prev.trip_unit,
+            settings: { ...prev.settings, ...searchData.settings }
+          }));
+          notify(`AI auto-filled additional specs from reference!`, 'success');
+        }
       }
      
       setPhotoFile(null);
