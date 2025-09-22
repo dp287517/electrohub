@@ -685,7 +685,7 @@ app.get('/api/switchboard/search-references', async (req, res) => {
   }
 });
 
-// ---- PHOTO ANALYSIS (amélioration 5 : enrichissement systématique) ----
+// ---- PHOTO ANALYSIS ----
 function safeJsonParse(raw) {
   if (typeof raw !== 'string') return raw;
   let s = raw.trim();
@@ -745,7 +745,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       return res.status(500).json({ error: 'Failed to parse photo description' });
     }
 
-    // Amélioration 5 : Search existing (manufacturer/reference) + ALWAYS ask AI to produce full specs
+    // Search existing (manufacturer/reference)
     const { rows: existing } = await pool.query(
       `SELECT * FROM devices WHERE site = $1 
        AND (manufacturer ILIKE $2 OR reference ILIKE $3) 
@@ -772,7 +772,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     }
 
     if (existing.length > 0) {
-      // Amélioration 5 : merge missing fields into existing record for the response
+      // merge missing fields into existing record for the response
       const cur = existing[0];
       const merged = {
         ...cur,
@@ -839,17 +839,45 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
     const id = Number(req.params.id);
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const r = await pool.query('SELECT * FROM switchboards WHERE id=$1 AND site=$2', [id, site]);
-    const row = r.rows[0];
+    
+    // Switchboard details
+    const sbR = await pool.query('SELECT * FROM switchboards WHERE id=$1 AND site=$2', [id, site]);
+    const row = sbR.rows[0];
     if (!row) return res.status(404).json({ error: 'Switchboard not found' });
 
-    // Get devices
-    const devsR = await pool.query('SELECT * FROM devices WHERE switchboard_id=$1', [id]);
-    const devices = devsR.rows;
+    // Build device tree with relationships
+    const buildDeviceTree = async (switchboardId) => {
+      const { rows: devs } = await pool.query('SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY created_at ASC', [switchboardId]);
+      const byId = new Map(devs.map(d => [d.id, { ...d, children: [], parent: null }]));
+      
+      // Build parent-child relationships
+      for (const d of devs) {
+        const node = byId.get(d.id);
+        if (d.parent_id && byId.has(d.parent_id)) {
+          byId.get(d.parent_id).children.push(node);
+          node.parent = byId.get(d.parent_id);
+        }
+      }
+      
+      // Roots are devices without parents
+      const roots = devs.filter(d => !d.parent_id).map(d => byId.get(d.id));
+      
+      // Add downstream switchboards if any
+      for (const node of byId.values()) {
+        if (node.downstream_switchboard_id) {
+          const downstreamTree = await buildDeviceTree(node.downstream_switchboard_id);
+          node.downstream = downstreamTree;
+        }
+      }
+      
+      return { switchboard_id: switchboardId, devices: roots };
+    };
+
+    const tree = await buildDeviceTree(id);
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="switchboard_${id}.pdf"`);
-    
+    res.setHeader('Content-Disposition', `inline; filename="switchboard_${id}_report.pdf"`);
+
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
     doc.pipe(res);
 
@@ -877,17 +905,37 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
     });
 
     y += 30;
-    doc.font('Helvetica-Bold').fontSize(14).text('Devices', 50, y);
+    doc.font('Helvetica-Bold').fontSize(14).text('Devices Hierarchy', 50, y);
     y += 20;
-    if (devices.length === 0) {
+
+    if (tree.devices.length === 0) {
       doc.text('No devices', 50, y);
     } else {
-      devices.forEach(d => {
-        doc.font('Helvetica-Bold').fontSize(12).text(d.name || 'Unnamed', 50, y);
-        y += 15;
-        doc.fontSize(11).text(`Type: ${d.device_type} | Reference: ${d.reference} | Amps: ${d.in_amps}`, 50, y);
-        y += 20;
-      });
+      // Recursive function to draw tree
+      const drawTree = (devices, level = 0) => {
+        for (const device of devices) {
+          doc.font('Helvetica-Bold').fontSize(12).text(device.name || 'Unnamed', 50 + level * 20, y);
+          y += 15;
+          doc.fontSize(11).text(`Type: ${device.device_type} | Reference: ${device.reference} | Amps: ${device.in_amps}`, 50 + level * 20, y);
+          y += 15;
+          doc.text(`Poles: ${device.poles} | Voltage: ${device.voltage_V}V | Icu: ${device.icu_kA}kA | Ics: ${device.ics_kA}kA`, 50 + level * 20, y);
+          y += 20;
+          
+          if (device.children.length > 0) {
+            doc.text('Children:', 50 + level * 20, y);
+            y += 15;
+            drawTree(device.children, level + 1);
+          }
+          
+          if (device.downstream) {
+            doc.text('Downstream Switchboard:', 50 + level * 20, y);
+            y += 15;
+            drawTree(device.downstream.devices, level + 1);
+          }
+        }
+      };
+
+      drawTree(tree.devices);
     }
 
     doc.end();
