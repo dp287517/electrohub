@@ -293,6 +293,43 @@ app.delete('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
+// Amélioration 1 : endpoint pour compter les devices par switchboard
+app.get('/api/switchboard/devices-count', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const idsParam = (req.query.ids || '').toString().trim();
+    if (!idsParam) {
+      // counts for all boards of the site
+      const { rows } = await pool.query(
+        `SELECT switchboard_id, COUNT(*)::int AS count
+         FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id
+         WHERE sb.site = $1 GROUP BY switchboard_id`, [site]
+      );
+      const map = {};
+      rows.forEach(r => map[r.switchboard_id] = r.count);
+      return res.json({ counts: map });
+    }
+
+    const ids = idsParam.split(',').map(s => Number(s)).filter(Boolean);
+    if (!ids.length) return res.json({ counts: {} });
+
+    const { rows } = await pool.query(
+      `SELECT switchboard_id, COUNT(*)::int AS count
+       FROM devices d
+       WHERE switchboard_id = ANY($1::int[])
+       GROUP BY switchboard_id`, [ids]
+    );
+    const map = {};
+    rows.forEach(r => map[r.switchboard_id] = r.count);
+    res.json({ counts: map });
+  } catch (e) {
+    console.error('[DEVICES COUNT] error:', e.message);
+    res.status(500).json({ error: 'Count failed' });
+  }
+});
+
 // LIST Devices
 app.get('/api/switchboard/devices', async (req, res) => {
   try {
@@ -648,7 +685,7 @@ app.get('/api/switchboard/search-references', async (req, res) => {
   }
 });
 
-// ---- PHOTO ANALYSIS ----
+// ---- PHOTO ANALYSIS (amélioration 5 : enrichissement systématique) ----
 function safeJsonParse(raw) {
   if (typeof raw !== 'string') return raw;
   let s = raw.trim();
@@ -708,7 +745,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       return res.status(500).json({ error: 'Failed to parse photo description' });
     }
 
-    // Search existing
+    // Amélioration 5 : Search existing (manufacturer/reference) + ALWAYS ask AI to produce full specs
     const { rows: existing } = await pool.query(
       `SELECT * FROM devices WHERE site = $1 
        AND (manufacturer ILIKE $2 OR reference ILIKE $3) 
@@ -716,42 +753,55 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       [site, `%${description.manufacturer || ''}%`, `%${description.reference || ''}%`]
     );
 
-    let result;
-    if (existing.length > 0) {
-      result = { ...existing[0], existing_id: existing[0].id, matched: true, photo_description: description.description };
-    } else {
-      // Create new
-      const createResponse = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'system', content: 'Generate full device specs JSON from description. Defaults if missing. Output ONLY valid JSON.' },
-          { role: 'user', content: JSON.stringify(description) }
-        ],
-        response_format: { type: 'json_object' }
-      });
+    // Always ask AI to produce full specs from description
+    const createResponse = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'Generate full device specs JSON from description. Include device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings {ir,tr,isd,curve_type}. Output ONLY valid JSON.' },
+        { role: 'user', content: JSON.stringify(description) }
+      ],
+      response_format: { type: 'json_object' }
+    });
 
-      let specs;
-      try {
-        specs = safeJsonParse(createResponse.choices[0].message.content);
-      } catch (parseErr) {
-        console.error('[PHOTO] Specs parse error:', parseErr);
-        return res.status(500).json({ error: 'Failed to parse device specs' });
-      }
-
-      if (switchboardId) {
-        const { rows: [newDevice] } = await pool.query(
-          `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-           RETURNING *`,
-          [deviceSite, switchboardId, specs.device_type || 'Low Voltage Circuit Breaker', specs.manufacturer, specs.reference, specs.in_amps || 0, specs.icu_kA || 0, specs.ics_kA || 0, specs.poles || 3, specs.voltage_V || 400, specs.trip_unit || '', specs.settings || {}]
-        );
-        result = { ...newDevice, created: true, photo_description: description.description };
-      } else {
-        result = { ...specs, created: false, requires_switchboard: true, photo_description: description.description };
-      }
+    let specs;
+    try {
+      specs = safeJsonParse(createResponse.choices[0].message.content);
+    } catch (parseErr) {
+      console.error('[PHOTO] Specs parse error:', parseErr);
+      return res.status(500).json({ error: 'Failed to parse device specs' });
     }
 
-    res.json(result);
+    if (existing.length > 0) {
+      // Amélioration 5 : merge missing fields into existing record for the response
+      const cur = existing[0];
+      const merged = {
+        ...cur,
+        device_type: cur.device_type || specs.device_type || 'Low Voltage Circuit Breaker',
+        in_amps: cur.in_amps ?? specs.in_amps ?? 0,
+        icu_kA: cur.icu_kA ?? specs.icu_kA ?? 0,
+        ics_kA: cur.ics_kA ?? specs.ics_kA ?? 0,
+        poles: cur.poles ?? specs.poles ?? 3,
+        voltage_V: cur.voltage_V ?? specs.voltage_V ?? 400,
+        trip_unit: cur.trip_unit || specs.trip_unit || '',
+        settings: { ...(cur.settings || {}), ...(specs.settings || {}) }
+      };
+      return res.json({ ...merged, existing_id: cur.id, matched: true, photo_description: description.description });
+    }
+
+    if (switchboardId) {
+      const { rows: [newDevice] } = await pool.query(
+        `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING *`,
+        [deviceSite, switchboardId, specs.device_type || 'Low Voltage Circuit Breaker', 
+         specs.manufacturer || description.manufacturer, specs.reference || description.reference,
+         specs.in_amps || 0, specs.icu_kA || 0, specs.ics_kA || 0, specs.poles || 3, 
+         specs.voltage_V || 400, specs.trip_unit || '', specs.settings || {}]
+      );
+      return res.json({ ...newDevice, created: true, photo_description: description.description });
+    } else {
+      return res.json({ ...specs, created: false, requires_switchboard: true, photo_description: description.description });
+    }
   } catch (e) {
     console.error('[PHOTO ANALYSIS] error:', e.message);
     res.status(500).json({ error: 'Photo analysis failed', details: e.message });
