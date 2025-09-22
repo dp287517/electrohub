@@ -904,19 +904,18 @@ export default function Switchboards() {
             <div className="flex gap-2">
               <input
                 type="text"
-                value={q.floor}
-                onChange={e => setQ(prev => ({ ...prev, floor: e.target.value, page: 1 }))}
-                placeholder="Floor..."
-                className="input flex-1"
-              />
-              <input
-                type="text"
-                value={q.room}
-                onChange={e => setQ(prev => ({ ...prev, room: e.target.value, page: 1 }))}
-                placeholder="Room..."
-                className="input flex-1"
-              />
-            </div>
+              value={q.floor}
+              onChange={e => setQ(prev => ({ ...prev, floor: e.target.value, page: 1 }))}
+              placeholder="Floor..."
+              className="input flex-1"
+            />
+            <input
+              type="text"
+              value={q.room}
+              onChange={e => setQ(prev => ({ ...prev, room: e.target.value, page: 1 }))}
+              placeholder="Room..."
+              className="input flex-1"
+            />
           </div>
         </div>
       </div>
@@ -979,13 +978,23 @@ export default function Switchboards() {
                   <span className="font-medium">{deviceCounts[row.id] || 0}</span>
                 </div>
               </div>
-              <button
-                onClick={() => toggleExpand(row.id)}
-                className="w-full mt-4 p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium"
-              >
-                {expandedPanels[row.id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                {expandedPanels[row.id] ? 'Hide Devices' : 'Show Devices'}
-              </button>
+              
+              {/* CORRECTION MAJEURE: Bouton Add Device + Toggle Expand */}
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => resetDeviceModal(row.id)}
+                  className="flex-1 p-3 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium text-blue-700"
+                >
+                  <Plus size={16} /> Add Device
+                </button>
+                <button
+                  onClick={() => toggleExpand(row.id)}
+                  className="px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+                >
+                  {expandedPanels[row.id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  {expandedPanels[row.id] ? 'Hide' : 'Show'} Devices
+                </button>
+              </div>
             </div>
             
             {/* Devices Panel */}
@@ -1761,7 +1770,7 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
         <div className="text-center py-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
           <Plus size={24} className="mx-auto text-gray-400 mb-2" />
           <p className="text-sm text-gray-500">No devices yet</p>
-          <p className="text-xs text-gray-400">Add your first device above</p>
+          <p className="text-xs text-gray-400">Add your first device using the button above</p>
         </div>
       )}
     </div>
