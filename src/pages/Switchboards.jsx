@@ -163,9 +163,6 @@ export default function Switchboards() {
   // Quick AI Search (amélioration 4)
   const [quickAiQuery, setQuickAiQuery] = useState('');
 
-  // Confirmation modales for duplicate/delete
-  const [confirmModal, setConfirmModal] = useState({ open: false, title: '', action: null, id: null, type: '' });
-
   // Debounce hook
   const useDebounce = (value, delay) => {
     const [debouncedValue, setDebouncedValue] = useState(value);
@@ -327,41 +324,27 @@ export default function Switchboards() {
   };
 
   const duplicateSwitchboard = async (id) => {
-    setConfirmModal({
-      open: true,
-      title: 'Duplicate Switchboard',
-      action: async () => {
-        try {
-          await post(`/api/switchboard/boards/${id}/duplicate?site=${encodeURIComponent(site)}`);
-          await loadSwitchboards();
-          notify('Switchboard duplicated successfully!', 'success');
-        } catch (e) {
-          console.error('Duplicate failed:', e);
-          notify('Failed to duplicate switchboard', 'error');
-        }
-      },
-      id,
-      type: 'duplicate'
-    });
+    if (!confirm('Duplicate this switchboard and all its devices?')) return;
+    try {
+      await post(`/api/switchboard/boards/${id}/duplicate?site=${encodeURIComponent(site)}`);
+      await loadSwitchboards();
+      notify('Switchboard duplicated successfully!', 'success');
+    } catch (e) {
+      console.error('Duplicate failed:', e);
+      notify('Failed to duplicate switchboard', 'error');
+    }
   };
 
   const removeSwitchboard = async (id) => {
-    setConfirmModal({
-      open: true,
-      title: 'Delete Switchboard',
-      action: async () => {
-        try {
-          await del(`/api/switchboard/boards/${id}?site=${encodeURIComponent(site)}`);
-          await loadSwitchboards();
-          notify('Switchboard deleted successfully!', 'success');
-        } catch (e) {
-          console.error('Delete failed:', e);
-          notify('Failed to delete switchboard', 'error');
-        }
-      },
-      id,
-      type: 'delete'
-    });
+    if (!confirm('Delete this switchboard and all its devices? This cannot be undone.')) return;
+    try {
+      await del(`/api/switchboard/boards/${id}?site=${encodeURIComponent(site)}`);
+      await loadSwitchboards();
+      notify('Switchboard deleted successfully!', 'success');
+    } catch (e) {
+      console.error('Delete failed:', e);
+      notify('Failed to delete switchboard', 'error');
+    }
   };
 
   // Device functions
@@ -374,14 +357,13 @@ export default function Switchboards() {
     setShowReferenceSuggestions(false);
     setParentSearchInput('');
     setDownstreamSearchInput('');
-    setQuickAiQuery('');
     setOpenDevice(true);
   };
 
   const onEditDevice = (device, panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(device);
-   
+    
     const safeSettings = device.settings || {};
     setDeviceForm({
       name: device.name || '',
@@ -412,11 +394,10 @@ export default function Switchboards() {
       pv_tests: null,
       photos: []
     });
-   
+    
     setParentSearchInput(device.name || '');
     setDownstreamSearchInput('');
     setPhotoFile(null);
-    setQuickAiQuery('');
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
     setOpenDevice(true);
@@ -437,11 +418,11 @@ export default function Switchboards() {
 
     setBusy(true);
     try {
-      const payload = {
-        ...safeUploadStrip(deviceForm),
-        switchboard_id: currentPanelId
+      const payload = { 
+        ...safeUploadStrip(deviceForm), 
+        switchboard_id: currentPanelId 
       };
-     
+      
       if (editingDevice) {
         await put(`/api/switchboard/devices/${editingDevice.id}?site=${encodeURIComponent(site)}`, payload);
         notify('Device updated successfully!', 'success');
@@ -449,7 +430,7 @@ export default function Switchboards() {
         await post(`/api/switchboard/devices?site=${encodeURIComponent(site)}`, payload);
         notify('Device created successfully!', 'success');
       }
-     
+      
       setOpenDevice(false);
       setPhotoFile(null);
       await loadDevices(currentPanelId);
@@ -457,48 +438,34 @@ export default function Switchboards() {
     } catch (e) {
       console.error('Save device failed:', e);
       notify('Failed to save device: ' + (e.message || 'Unknown error'), 'error');
-    } finally {
-      setBusy(false);
+    } finally { 
+      setBusy(false); 
     }
   };
 
   const duplicateDevice = async (id, panelId) => {
-    setConfirmModal({
-      open: true,
-      title: 'Duplicate Device',
-      action: async () => {
-        try {
-          await post(`/api/switchboard/devices/${id}/duplicate?site=${encodeURIComponent(site)}`);
-          await loadDevices(panelId);
-          await loadDeviceReferences();
-          notify('Device duplicated successfully!', 'success');
-        } catch (e) {
-          console.error('Duplicate device failed:', e);
-          notify('Failed to duplicate device', 'error');
-        }
-      },
-      id,
-      type: 'duplicate'
-    });
+    if (!confirm('Duplicate this device?')) return;
+    try {
+      await post(`/api/switchboard/devices/${id}/duplicate?site=${encodeURIComponent(site)}`);
+      await loadDevices(panelId);
+      await loadDeviceReferences();
+      notify('Device duplicated successfully!', 'success');
+    } catch (e) {
+      console.error('Duplicate device failed:', e);
+      notify('Failed to duplicate device', 'error');
+    }
   };
 
   const removeDevice = async (id, panelId) => {
-    setConfirmModal({
-      open: true,
-      title: 'Delete Device',
-      action: async () => {
-        try {
-          await del(`/api/switchboard/devices/${id}?site=${encodeURIComponent(site)}`);
-          await loadDevices(panelId);
-          notify('Device deleted successfully!', 'success');
-        } catch (e) {
-          console.error('Delete device failed:', e);
-          notify('Failed to delete device', 'error');
-        }
-      },
-      id,
-      type: 'delete'
-    });
+    if (!confirm('Delete this device? This cannot be undone.')) return;
+    try {
+      await del(`/api/switchboard/devices/${id}?site=${encodeURIComponent(site)}`);
+      await loadDevices(panelId);
+      notify('Device deleted successfully!', 'success');
+    } catch (e) {
+      console.error('Delete device failed:', e);
+      notify('Failed to delete device', 'error');
+    }
   };
 
   const setMainDevice = async (id, panelId, isMain) => {
@@ -534,8 +501,8 @@ export default function Switchboards() {
           poles: Number(data.poles) || prev.poles,
           voltage_V: Number(data.voltage_V) || prev.voltage_V,
           trip_unit: data.trip_unit || prev.trip_unit,
-          settings: {
-            ...prev.settings,
+          settings: { 
+            ...prev.settings, 
             ...data.settings,
             ir: Number(data.settings?.ir) || prev.settings.ir,
             tr: Number(data.settings?.tr) || prev.settings.tr,
@@ -629,7 +596,7 @@ export default function Switchboards() {
     }
   };
 
-  // Photo analysis - FIXED (avec remplissage Quick AI sans auto-search)
+  // Photo analysis - FIXED
   const analyzePhoto = async () => {
     if (!photoFile) {
       return notify('Please select a photo first', 'info');
@@ -919,17 +886,6 @@ export default function Switchboards() {
                     className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                   >
                     <Trash size={16} />
-                  </button>
-                  {/* Bouton PDF */}
-                  <button
-                    onClick={() => {
-                      window.open(`/api/switchboard/boards/${row.id}/report?site=${encodeURIComponent(site)}`, '_blank');
-                      notify('Generating PDF report...', 'info');
-                    }}
-                    className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                    title="Download PDF Report"
-                  >
-                    <Download size={16} />
                   </button>
                 </div>
               </div>
@@ -1532,32 +1488,6 @@ export default function Switchboards() {
         </div>
       </Modal>
 
-      {/* Confirmation Modal */}
-      <Modal open={confirmModal.open} onClose={() => setConfirmModal({ ...confirmModal, open: false })} title={confirmModal.title}>
-        <p className="text-gray-700 mb-6">
-          Are you sure you want to {confirmModal.type} this {confirmModal.type === 'duplicate' ? 'switchboard' : 'item'}? This action cannot be undone.
-        </p>
-        <div className="flex justify-end gap-3">
-          <button
-            className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-            onClick={() => setConfirmModal({ ...confirmModal, open: false })}
-          >
-            Cancel
-          </button>
-          <button
-            className={`px-6 py-2 text-sm font-medium rounded-lg transition-colors shadow-sm ${
-              confirmModal.type === 'delete' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-green-600 text-white hover:bg-green-700'
-            }`}
-            onClick={() => {
-              confirmModal.action();
-              setConfirmModal({ ...confirmModal, open: false });
-            }}
-          >
-            Confirm
-          </button>
-        </div>
-      </Modal>
-
       {/* AI Assistant Sidebar - amélioration 6 */}
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setSidebarOpen(false)}>
@@ -1692,15 +1622,15 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
               <div className="text-xs text-gray-500 flex flex-wrap gap-3">
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.in_amps || '—'}A
+                  {device.in_amps ?? '—'}A
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  Icu: {device.icu_kA || '—'}kA
+                  Icu: {device.icu_kA ?? '—'}kA
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.poles || '—'}P
+                  {device.poles ?? '—'}P
                 </span>
                 {device.settings?.curve_type && (
                   <span className="flex items-center gap-1">
@@ -1720,14 +1650,14 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
                 <Edit size={16} />
               </button>
               <button
-                onClick={() => duplicateDevice(device.id, panelId)}
+                onClick={() => onDuplicate(device.id, panelId)}
                 className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                 title="Duplicate Device"
               >
                 <Copy size={16} />
               </button>
               <button
-                onClick={() => removeDevice(device.id, panelId)}
+                onClick={() => onDelete(device.id, panelId)}
                 className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                 title="Delete Device"
               >
