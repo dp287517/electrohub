@@ -415,7 +415,7 @@ app.post('/api/switchboard/devices', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
-       b.in_amps || null, b.icu_kA || null, b.ics_kA || null, b.poles || null, b.voltage_V || null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos]
+       b.in_amps ?? null, b.icu_kA ?? null, b.ics_kA ?? null, b.poles ?? null, b.voltage_V ?? null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -441,7 +441,7 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
        WHERE devices.id=$17 AND devices.switchboard_id = sb.id AND sb.site=$18
        RETURNING devices.*`,
       [b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
-       b.in_amps || null, b.icu_kA || null, b.ics_kA || null, b.poles || null, b.voltage_V || null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos, id, site]
+       b.in_amps ?? null, b.icu_kA ?? null, b.ics_kA ?? null, b.poles ?? null, b.voltage_V ?? null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos, id, site]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(rows[0]);
