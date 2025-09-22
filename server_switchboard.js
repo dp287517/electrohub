@@ -59,7 +59,7 @@ const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema
+// Schema - AMÉLIORATION: Meilleure gestion des NULL et defaults
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS switchboards (
@@ -108,7 +108,22 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(site);
     CREATE INDEX IF NOT EXISTS idx_devices_reference ON devices(reference);
 
-    ALTER TABLE devices ADD COLUMN IF NOT EXISTS name TEXT;
+    -- AMÉLIORATION: Ajout de colonnes manquantes si elles n'existent pas
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT FROM information_schema.columns 
+        WHERE table_name = 'devices' AND column_name = 'name'
+      ) THEN
+        ALTER TABLE devices ADD COLUMN name TEXT;
+      END IF;
+      
+      -- AMÉLIORATION: Assurer que settings a les clés par défaut
+      UPDATE devices 
+      SET settings = COALESCE(settings, '{}'::jsonb) || 
+        '{"ir": 1, "tr": 10, "isd": 6, "tsd": 0.1, "ii": 10, "ig": 0.5, "tg": 0.2, "zsi": false, "erms": false, "curve_type": ""}'::jsonb
+      WHERE settings IS NULL OR settings = '{}'::jsonb;
+    END $$;
   `);
 }
 ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA]', e.message));
@@ -330,7 +345,7 @@ app.get('/api/switchboard/devices-count', async (req, res) => {
   }
 });
 
-// LIST Devices
+// LIST Devices - AMÉLIORATION: Retour plus complet pour l'édition
 app.get('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -342,17 +357,41 @@ app.get('/api/switchboard/devices', async (req, res) => {
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
     const { rows } = await pool.query(
-      `SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY created_at DESC`,
+      `SELECT d.*, 
+       COALESCE(s.name, '') as switchboard_name,
+       COALESCE(p.name, '') as parent_name,
+       COALESCE(p.manufacturer, '') as parent_manufacturer,
+       COALESCE(p.reference, '') as parent_reference
+       FROM devices d
+       LEFT JOIN switchboards s ON d.switchboard_id = s.id
+       LEFT JOIN devices p ON d.parent_id = p.id
+       WHERE d.switchboard_id=$1 
+       ORDER BY d.created_at DESC`,
       [switchboard_id]
     );
-    res.json({ data: rows });
+    
+    // AMÉLIORATION: Enrichir les devices avec des infos parent/downstream
+    const enriched = rows.map(d => ({
+      ...d,
+      // Conserver les NULL réels pour persistance
+      in_amps: d.in_amps,
+      icu_kA: d.icu_kA,
+      ics_kA: d.ics_kA,
+      poles: d.poles,
+      voltage_V: d.voltage_V,
+      settings: d.settings || {
+        ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: ''
+      }
+    }));
+    
+    res.json({ data: enriched });
   } catch (e) {
     console.error('[DEVICES LIST] error:', e.message);
     res.status(500).json({ error: 'List failed' });
   }
 });
 
-// GET ONE Device
+// GET ONE Device - AMÉLIORATION: Retour complet avec parent/downstream info
 app.get('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -360,20 +399,44 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     const r = await pool.query(
-      `SELECT d.* FROM devices d
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE d.id=$1 AND sb.site=$2`,
+      `SELECT d.*, 
+       s.name as switchboard_name,
+       p.name as parent_name,
+       p.manufacturer as parent_manufacturer,
+       p.reference as parent_reference,
+       ds.name as downstream_name,
+       ds.code as downstream_code
+       FROM devices d
+       JOIN switchboards s ON d.switchboard_id = s.id
+       LEFT JOIN devices p ON d.parent_id = p.id
+       LEFT JOIN switchboards ds ON d.downstream_switchboard_id = ds.id
+       WHERE d.id=$1 AND s.site=$2`,
       [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
-    res.json(r.rows[0]);
+    
+    const device = r.rows[0];
+    const enriched = {
+      ...device,
+      // Conserver les NULL réels pour persistance
+      in_amps: device.in_amps,
+      icu_kA: device.icu_kA,
+      ics_kA: device.ics_kA,
+      poles: device.poles,
+      voltage_V: device.voltage_V,
+      settings: device.settings || {
+        ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: ''
+      }
+    };
+    
+    res.json(enriched);
   } catch (e) {
     console.error('[DEVICES GET] error:', e.message);
     res.status(500).json({ error: 'Get failed' });
   }
 });
 
-// Coerce helpers
+// Coerce helpers - AMÉLIORATION: Meilleure gestion des valeurs NULL
 function coercePVTests(pv_tests) {
   if (typeof pv_tests === 'string' && pv_tests.length > 0) {
     try { return Buffer.from(pv_tests, 'base64'); } catch { return null; }
@@ -394,7 +457,7 @@ function coercePhotos(photos) {
   return [];
 }
 
-// CREATE Device
+// CREATE Device - AMÉLIORATION: Préservation des NULL et meilleure gestion settings
 app.post('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -409,13 +472,35 @@ app.post('/api/switchboard/devices', async (req, res) => {
 
     const safePV = coercePVTests(b.pv_tests);
     const safePhotos = coercePhotos(b.photos);
+    
+    // AMÉLIORATION: Gestion fine des NULL et merge des settings
+    const settings = b.settings || {};
+    const mergedSettings = {
+      ir: settings.ir !== undefined ? Number(settings.ir) : null,
+      tr: settings.tr !== undefined ? Number(settings.tr) : null,
+      isd: settings.isd !== undefined ? Number(settings.isd) : null,
+      tsd: settings.tsd !== undefined ? Number(settings.tsd) : null,
+      ii: settings.ii !== undefined ? Number(settings.ii) : null,
+      ig: settings.ig !== undefined ? Number(settings.ig) : null,
+      tg: settings.tg !== undefined ? Number(settings.tg) : null,
+      zsi: settings.zsi !== undefined ? Boolean(settings.zsi) : null,
+      erms: settings.erms !== undefined ? Boolean(settings.erms) : null,
+      curve_type: settings.curve_type || null
+    };
 
     const { rows } = await pool.query(
       `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
-       b.in_amps || null, b.icu_kA || null, b.ics_kA || null, b.poles || null, b.voltage_V || null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos]
+       b.in_amps !== undefined ? Number(b.in_amps) : null, 
+       b.icu_kA !== undefined ? Number(b.icu_kA) : null,
+       b.ics_kA !== undefined ? Number(b.ics_kA) : null, 
+       b.poles !== undefined ? Number(b.poles) : null,
+       b.voltage_V !== undefined ? Number(b.voltage_V) : null,
+       b.trip_unit || null, 
+       mergedSettings,
+       !!b.is_main_incoming, safePV, safePhotos]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -424,7 +509,7 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// UPDATE Device
+// UPDATE Device - AMÉLIORATION: Préservation des NULL et mise à jour settings
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -433,15 +518,51 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     const b = req.body || {};
     const safePV = coercePVTests(b.pv_tests);
     const safePhotos = coercePhotos(b.photos);
+    
+    // AMÉLIORATION: Gestion fine des NULL et merge des settings
+    const settings = b.settings || {};
+    const mergedSettings = {
+      ir: settings.ir !== undefined ? Number(settings.ir) : null,
+      tr: settings.tr !== undefined ? Number(settings.tr) : null,
+      isd: settings.isd !== undefined ? Number(settings.isd) : null,
+      tsd: settings.tsd !== undefined ? Number(settings.tsd) : null,
+      ii: settings.ii !== undefined ? Number(settings.ii) : null,
+      ig: settings.ig !== undefined ? Number(settings.ig) : null,
+      tg: settings.tg !== undefined ? Number(settings.tg) : null,
+      zsi: settings.zsi !== undefined ? Boolean(settings.zsi) : null,
+      erms: settings.erms !== undefined ? Boolean(settings.erms) : null,
+      curve_type: settings.curve_type !== undefined ? settings.curve_type : null,
+      ...settings // Merge avec tout autre paramètre personnalisé
+    };
 
     const { rows } = await pool.query(
       `UPDATE devices SET
-        parent_id=$1, downstream_switchboard_id=$2, name=$3, device_type=$4, manufacturer=$5, reference=$6, in_amps=$7, icu_kA=$8, ics_kA=$9, poles=$10, voltage_V=$11, trip_unit=$12, settings=$13, is_main_incoming=$14, pv_tests=$15, photos=$16, updated_at=NOW()
+        parent_id=$1, downstream_switchboard_id=$2, name=$3, device_type=$4, manufacturer=$5, reference=$6, 
+        in_amps=$7, icu_kA=$8, ics_kA=$9, poles=$10, voltage_V=$11, trip_unit=$12, settings=$13, is_main_incoming=$14, 
+        pv_tests=$15, photos=$16, updated_at=NOW()
        FROM switchboards sb
        WHERE devices.id=$17 AND devices.switchboard_id = sb.id AND sb.site=$18
        RETURNING devices.*`,
-      [b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
-       b.in_amps || null, b.icu_kA || null, b.ics_kA || null, b.poles || null, b.voltage_V || null, b.trip_unit || null, b.settings || {}, !!b.is_main_incoming, safePV, safePhotos, id, site]
+      [
+        b.parent_id !== undefined ? b.parent_id : null, 
+        b.downstream_switchboard_id !== undefined ? b.downstream_switchboard_id : null,
+        b.name !== undefined ? b.name : null, 
+        b.device_type, 
+        b.manufacturer !== undefined ? b.manufacturer : null,
+        b.reference !== undefined ? b.reference : null,
+        b.in_amps !== undefined ? Number(b.in_amps) : null,
+        b.icu_kA !== undefined ? Number(b.icu_kA) : null,
+        b.ics_kA !== undefined ? Number(b.ics_kA) : null,
+        b.poles !== undefined ? Number(b.poles) : null,
+        b.voltage_V !== undefined ? Number(b.voltage_V) : null,
+        b.trip_unit !== undefined ? b.trip_unit : null,
+        mergedSettings,
+        !!b.is_main_incoming, 
+        safePV, 
+        safePhotos, 
+        id, 
+        site
+      ]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     res.json(rows[0]);
@@ -527,7 +648,10 @@ app.get('/api/switchboard/device-references', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { rows } = await pool.query(
-      `SELECT DISTINCT manufacturer, reference FROM devices WHERE site=$1 AND manufacturer IS NOT NULL AND reference IS NOT NULL ORDER BY manufacturer, reference`,
+      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings
+       FROM devices 
+       WHERE site=$1 AND manufacturer IS NOT NULL AND reference IS NOT NULL 
+       ORDER BY manufacturer, reference`,
       [site]
     );
     res.json({ data: rows });
@@ -537,7 +661,155 @@ app.get('/api/switchboard/device-references', async (req, res) => {
   }
 });
 
-// Search Device (OpenAI)
+// AMÉLIORATION: Recherche parents enrichie avec plus d'infos
+app.get('/api/switchboard/search-parents', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { query = '', switchboard_id } = req.query;
+    if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
+
+    const { rows } = await pool.query(
+      `SELECT DISTINCT d.id, d.name, d.device_type, d.manufacturer, d.reference, d.in_amps,
+       CASE 
+         WHEN d.is_main_incoming THEN 'MAIN'
+         WHEN d.parent_id IS NOT NULL THEN 'CHILD'
+         ELSE 'STANDALONE'
+       END as hierarchy_type
+       FROM devices d 
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE sb.id = $1 AND sb.site = $2 
+       AND ($3 = '' OR 
+            d.name ILIKE $3 OR 
+            d.reference ILIKE $3 OR 
+            d.manufacturer ILIKE $3 OR
+            (d.manufacturer || ' ' || d.reference) ILIKE $3)
+       ORDER BY 
+         CASE WHEN d.is_main_incoming THEN 0 ELSE 1 END,
+         d.name NULLS LAST, 
+         d.reference NULLS LAST 
+       LIMIT 15`,
+      [switchboard_id, site, `%${query}%`]
+    );
+    res.json({ suggestions: rows });
+  } catch (e) {
+    console.error('[SEARCH PARENTS] error:', e.message);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// AMÉLIORATION: Recherche downstreams enrichie
+app.get('/api/switchboard/search-downstreams', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { query = '' } = req.query;
+
+    const { rows } = await pool.query(
+      `SELECT id, name, code, building_code, floor, room, is_principal,
+       COUNT(d.id) as device_count
+       FROM switchboards sb
+       LEFT JOIN devices d ON sb.id = d.switchboard_id
+       WHERE site = $1 
+       AND ($2 = '' OR 
+            name ILIKE $2 OR 
+            code ILIKE $2 OR 
+            building_code ILIKE $2 OR
+            (building_code || ' ' || floor || ' ' || room) ILIKE $2)
+       GROUP BY sb.id, sb.name, sb.code, sb.building_code, sb.floor, sb.room, sb.is_principal
+       ORDER BY 
+         CASE WHEN is_principal THEN 0 ELSE 1 END,
+         name, code 
+       LIMIT 15`,
+      [site, `%${query}%`]
+    );
+    res.json({ suggestions: rows });
+  } catch (e) {
+    console.error('[SEARCH DOWNSTREAMS] error:', e.message);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// AMÉLIORATION: Recherche références avec auto-fill plus intelligent
+app.get('/api/switchboard/search-references', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { query = '' } = req.query;
+
+    if (!query.trim()) return res.json({ suggestions: [], auto_fill: null });
+
+    const { rows } = await pool.query(
+      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings
+       FROM devices 
+       WHERE site = $1 
+       AND (LOWER(COALESCE(manufacturer, '')) LIKE LOWER($2) OR 
+            LOWER(COALESCE(reference, '')) LIKE LOWER($2) OR
+            LOWER(COALESCE(manufacturer || ' ' || reference, '')) LIKE LOWER($2))
+       ORDER BY 
+         CASE WHEN manufacturer ILIKE $2 OR reference ILIKE $2 THEN 0 ELSE 1 END,
+         manufacturer NULLS LAST, 
+         reference NULLS LAST
+       LIMIT 15`,
+      [site, `%${query}%`]
+    );
+
+    // Auto-fill si match exact ou très proche
+    let exactMatch = null;
+    const queryLower = query.toLowerCase().trim();
+    
+    for (const row of rows) {
+      const refLower = (row.reference || '').toLowerCase();
+      const mfgLower = (row.manufacturer || '').toLowerCase();
+      const fullLower = `${mfgLower} ${refLower}`.trim().toLowerCase();
+      
+      // Match exact sur reference OU manufacturer OU full string
+      if (refLower === queryLower || mfgLower === queryLower || fullLower === queryLower) {
+        exactMatch = row;
+        break;
+      }
+      
+      // Match partiel très proche (premier 4+ chars)
+      if (queryLower.length >= 4 && 
+          (refLower.startsWith(queryLower) || mfgLower.startsWith(queryLower) || fullLower.startsWith(queryLower))) {
+        exactMatch = row;
+        break;
+      }
+    }
+
+    const suggestions = rows.map(r => ({
+      ...r,
+      // Conserver les valeurs réelles (pas de fallback)
+      in_amps: r.in_amps,
+      icu_kA: r.icu_kA,
+      ics_kA: r.ics_kA,
+      poles: r.poles,
+      voltage_V: r.voltage_V,
+      settings: r.settings || {}
+    }));
+
+    res.json({ 
+      suggestions,
+      auto_fill: exactMatch ? {
+        manufacturer: exactMatch.manufacturer,
+        reference: exactMatch.reference,
+        device_type: exactMatch.device_type || 'Low Voltage Circuit Breaker',
+        in_amps: exactMatch.in_amps,
+        icu_kA: exactMatch.icu_kA,
+        ics_kA: exactMatch.ics_kA,
+        poles: exactMatch.poles,
+        voltage_V: exactMatch.voltage_V,
+        trip_unit: exactMatch.trip_unit || '',
+        settings: exactMatch.settings || { curve_type: '' }
+      } : null 
+    });
+  } catch (e) {
+    console.error('[SEARCH REFERENCES] error:', e.message);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Search Device (OpenAI) - AMÉLIORATION: Meilleure prompt pour specs complètes
 app.post('/api/switchboard/search-device', async (req, res) => {
   try {
     const { query } = req.body;
@@ -552,18 +824,72 @@ app.post('/api/switchboard/search-device', async (req, res) => {
       messages: [
         { 
           role: 'system', 
-          content: 'You are an expert in electrical protective devices. For the query, return structured JSON with fields: manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings (LSIG params + curve_type). Output ONLY valid JSON.' 
+          content: `You are an expert in electrical protective devices. For the query "${query}", extract and return structured JSON with ALL relevant fields for a complete device specification. 
+
+Required fields (use realistic values based on manufacturer standards):
+- manufacturer: string (e.g. "Schneider", "ABB", "Siemens")
+- reference: string (specific model number)
+- device_type: string (e.g. "MCCB", "ACB", "MCB", "Low Voltage Circuit Breaker")
+- in_amps: number (rated current in Amps)
+- icu_kA: number (ultimate breaking capacity in kA) 
+- ics_kA: number (service breaking capacity in kA, usually 0.75-1.0 × Icu)
+- poles: number (1-4 poles)
+- voltage_V: number (rated voltage in Volts, typically 400 for LV)
+- trip_unit: string (e.g. "Thermal Magnetic", "Electronic", "Micrologic")
+
+Settings object (LSIG protection parameters - use realistic defaults):
+- ir: number (long-time pickup current, multiple of In)
+- tr: number (long-time delay in seconds)
+- isd: number (short-time pickup current, multiple of Ir)
+- tsd: number (short-time delay in seconds)
+- ii: number (instantaneous pickup current, multiple of In)
+- ig: number (ground fault pickup current, multiple of In)
+- tg: number (ground fault delay in seconds)
+- zsi: boolean (Zone Selective Interlocking)
+- erms: boolean (Energy Reducing Maintenance System)
+- curve_type: string (e.g. "C", "D", "K" for MCBs)
+
+Output ONLY valid JSON. If uncertain about a value, use null. Base values on electrical engineering standards.` 
         },
-        { role: 'user', content: query }
+        { role: 'user', content: `Extract device specifications: ${query}` }
       ],
-      response_format: { type: 'json_object' }
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+      max_tokens: 800
     });
 
     const jsonResponse = JSON.parse(completion.choices[0].message.content);
-    res.json(jsonResponse);
+    
+    // AMÉLIORATION: Validation et defaults intelligents
+    const validated = {
+      manufacturer: jsonResponse.manufacturer || null,
+      reference: jsonResponse.reference || null,
+      device_type: jsonResponse.device_type || 'Low Voltage Circuit Breaker',
+      in_amps: jsonResponse.in_amps ? Number(jsonResponse.in_amps) : null,
+      icu_kA: jsonResponse.icu_kA ? Number(jsonResponse.icu_kA) : null,
+      ics_kA: jsonResponse.ics_kA ? Number(jsonResponse.ics_kA) : (jsonResponse.icu_kA ? Number(jsonResponse.icu_kA) * 0.75 : null),
+      poles: jsonResponse.poles ? Number(jsonResponse.poles) : 3,
+      voltage_V: jsonResponse.voltage_V ? Number(jsonResponse.voltage_V) : 400,
+      trip_unit: jsonResponse.trip_unit || null,
+      settings: {
+        ir: jsonResponse.settings?.ir ? Number(jsonResponse.settings.ir) : 1,
+        tr: jsonResponse.settings?.tr ? Number(jsonResponse.settings.tr) : 10,
+        isd: jsonResponse.settings?.isd ? Number(jsonResponse.settings.isd) : 6,
+        tsd: jsonResponse.settings?.tsd ? Number(jsonResponse.settings.tsd) : 0.1,
+        ii: jsonResponse.settings?.ii ? Number(jsonResponse.settings.ii) : 10,
+        ig: jsonResponse.settings?.ig ? Number(jsonResponse.settings.ig) : 0.5,
+        tg: jsonResponse.settings?.tg ? Number(jsonResponse.settings.tg) : 0.2,
+        zsi: jsonResponse.settings?.zsi !== undefined ? Boolean(jsonResponse.settings.zsi) : false,
+        erms: jsonResponse.settings?.erms !== undefined ? Boolean(jsonResponse.settings.erms) : false,
+        curve_type: jsonResponse.settings?.curve_type || 'C',
+        ...jsonResponse.settings // Merge avec tout autre paramètre
+      }
+    };
+
+    res.json(validated);
   } catch (e) {
     console.error('[SEARCH DEVICE] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
+    res.status(500).json({ error: 'Search failed', details: e.message });
   }
 });
 
@@ -599,93 +925,7 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
   }
 });
 
-// ---- SEARCH ENDPOINTS ----
-app.get('/api/switchboard/search-parents', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { query = '', switchboard_id } = req.query;
-    if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
-
-    const { rows } = await pool.query(
-      `SELECT id, name, device_type, manufacturer, reference, in_amps
-       FROM devices 
-       WHERE switchboard_id = $1 AND site = $2 
-       AND ($3 = '' OR name ILIKE $3 OR reference ILIKE $3 OR manufacturer ILIKE $3)
-       ORDER BY name, reference 
-       LIMIT 10`,
-      [switchboard_id, site, `%${query}%`]
-    );
-    res.json({ suggestions: rows });
-  } catch (e) {
-    console.error('[SEARCH PARENTS] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-app.get('/api/switchboard/search-downstreams', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { query = '' } = req.query;
-
-    const { rows } = await pool.query(
-      `SELECT id, name, code, building_code 
-       FROM switchboards 
-       WHERE site = $1 AND ($2 = '' OR name ILIKE $2 OR code ILIKE $2 OR building_code ILIKE $2)
-       ORDER BY name 
-       LIMIT 10`,
-      [site, `%${query}%`]
-    );
-    res.json({ suggestions: rows });
-  } catch (e) {
-    console.error('[SEARCH DOWNSTREAMS] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-app.get('/api/switchboard/search-references', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { query = '' } = req.query;
-
-    if (!query.trim()) return res.json({ suggestions: [], auto_fill: null });
-
-    const { rows } = await pool.query(
-      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings
-       FROM devices 
-       WHERE site = $1 AND (manufacturer ILIKE $2 OR reference ILIKE $2)
-       ORDER BY manufacturer, reference 
-       LIMIT 10`,
-      [site, `%${query}%`]
-    );
-
-    // Auto-fill if exact match
-    const exactMatch = rows.find(r => r.reference?.toLowerCase() === query.toLowerCase() || r.manufacturer?.toLowerCase() === query.toLowerCase());
-
-    res.json({ 
-      suggestions: rows,
-      auto_fill: exactMatch ? {
-        manufacturer: exactMatch.manufacturer,
-        reference: exactMatch.reference,
-        device_type: exactMatch.device_type,
-        in_amps: exactMatch.in_amps,
-        icu_kA: exactMatch.icu_kA,
-        ics_kA: exactMatch.ics_kA,
-        poles: exactMatch.poles,
-        voltage_V: exactMatch.voltage_V,
-        trip_unit: exactMatch.trip_unit,
-        settings: exactMatch.settings || { curve_type: 'C' }
-      } : null 
-    });
-  } catch (e) {
-    console.error('[SEARCH REFERENCES] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-// ---- PHOTO ANALYSIS (amélioration 5 : enrichissement systématique) ----
+// ---- PHOTO ANALYSIS (amélioration 5 : enrichissement systématique + flux Quick AI) ----
 function safeJsonParse(raw) {
   if (typeof raw !== 'string') return raw;
   let s = raw.trim();
@@ -717,24 +957,36 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     const base64Image = buffer.toString('base64');
     const mimeType = req.file.mimetype;
 
-    // Vision description
+    // Vision description - AMÉLIORATION: Prompt plus précis
     const descriptionResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: 'You output ONLY valid JSON. No markdown fences, no prose.'
+          content: 'You output ONLY valid JSON. No markdown fences, no prose. Focus on electrical device identification.'
         },
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Analyze this electrical device image. Extract: manufacturer, reference, device_type, in_amps, poles, voltage_V, description. JSON only.' },
+            { 
+              type: 'text', 
+              text: `Analyze this electrical device image. Extract with high precision: 
+              - manufacturer: brand name (Schneider, ABB, Siemens, etc.)
+              - reference: exact model number visible on the device
+              - device_type: type (Circuit Breaker, MCCB, ACB, MCB, Switch, Fuse, etc.)
+              - in_amps: rated current if visible
+              - poles: number of poles if visible
+              - voltage_V: voltage rating if visible
+              - description: brief technical description of what you see
+
+              Be specific with model numbers. If text is unclear, use "unknown". JSON only.` 
+            },
             { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
           ]
         }
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 300
+      max_tokens: 400
     });
 
     let description;
@@ -745,62 +997,95 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       return res.status(500).json({ error: 'Failed to parse photo description' });
     }
 
-    // Amélioration 5 : Search existing (manufacturer/reference) + ALWAYS ask AI to produce full specs
+    if (!description.manufacturer && !description.reference) {
+      return res.json({ 
+        error: 'Could not identify manufacturer or reference from photo',
+        description: description.description || 'Device visible but identification unclear',
+        manufacturer: null, 
+        reference: null 
+      });
+    }
+
+    // AMÉLIORATION: Recherche existant plus précise
     const { rows: existing } = await pool.query(
-      `SELECT * FROM devices WHERE site = $1 
-       AND (manufacturer ILIKE $2 OR reference ILIKE $3) 
-       LIMIT 1`,
-      [site, `%${description.manufacturer || ''}%`, `%${description.reference || ''}%`]
+      `SELECT d.*, sb.name as switchboard_name
+       FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE d.site = $1 
+       AND (LOWER(COALESCE(d.manufacturer, '')) = LOWER($2) OR LOWER(d.reference) = LOWER($3))
+       ORDER BY d.updated_at DESC
+       LIMIT 3`,
+      [site, description.manufacturer || '', description.reference || '']
     );
 
-    // Always ask AI to produce full specs from description
-    const createResponse = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'Generate full device specs JSON from description. Include device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings {ir,tr,isd,curve_type}. Output ONLY valid JSON.' },
-        { role: 'user', content: JSON.stringify(description) }
-      ],
-      response_format: { type: 'json_object' }
-    });
-
-    let specs;
-    try {
-      specs = safeJsonParse(createResponse.choices[0].message.content);
-    } catch (parseErr) {
-      console.error('[PHOTO] Specs parse error:', parseErr);
-      return res.status(500).json({ error: 'Failed to parse device specs' });
-    }
-
+    let responseData;
+    
     if (existing.length > 0) {
-      // Amélioration 5 : merge missing fields into existing record for the response
-      const cur = existing[0];
-      const merged = {
-        ...cur,
-        device_type: cur.device_type || specs.device_type || 'Low Voltage Circuit Breaker',
-        in_amps: cur.in_amps ?? specs.in_amps ?? 0,
-        icu_kA: cur.icu_kA ?? specs.icu_kA ?? 0,
-        ics_kA: cur.ics_kA ?? specs.ics_kA ?? 0,
-        poles: cur.poles ?? specs.poles ?? 3,
-        voltage_V: cur.voltage_V ?? specs.voltage_V ?? 400,
-        trip_unit: cur.trip_unit || specs.trip_unit || '',
-        settings: { ...(cur.settings || {}), ...(specs.settings || {}) }
+      // AMÉLIORATION: Meilleur merge existant + AI specs
+      const bestMatch = existing[0];
+      const aiSpecs = await getAiDeviceSpecs(description);
+      
+      responseData = {
+        ...bestMatch,
+        // Priorité: DB > AI specs > defaults, mais conserve NULL si pas de valeur
+        device_type: bestMatch.device_type || aiSpecs.device_type,
+        in_amps: bestMatch.in_amps !== null ? bestMatch.in_amps : aiSpecs.in_amps,
+        icu_kA: bestMatch.icu_kA !== null ? bestMatch.icu_kA : aiSpecs.icu_kA,
+        ics_kA: bestMatch.ics_kA !== null ? bestMatch.ics_kA : aiSpecs.ics_kA,
+        poles: bestMatch.poles !== null ? bestMatch.poles : aiSpecs.poles,
+        voltage_V: bestMatch.voltage_V !== null ? bestMatch.voltage_V : aiSpecs.voltage_V,
+        trip_unit: bestMatch.trip_unit || aiSpecs.trip_unit,
+        settings: {
+          ...(bestMatch.settings || {}),
+          ...(aiSpecs.settings || {})
+        },
+        existing_id: bestMatch.id,
+        matched: true,
+        photo_description: description.description || `Identified: ${description.manufacturer} ${description.reference}`,
+        quick_ai_query: `${description.manufacturer} ${description.reference}`.trim() // Pour le frontend
       };
-      return res.json({ ...merged, existing_id: cur.id, matched: true, photo_description: description.description });
-    }
-
-    if (switchboardId) {
-      const { rows: [newDevice] } = await pool.query(
-        `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-         RETURNING *`,
-        [deviceSite, switchboardId, specs.device_type || 'Low Voltage Circuit Breaker', 
-         specs.manufacturer || description.manufacturer, specs.reference || description.reference,
-         specs.in_amps || 0, specs.icu_kA || 0, specs.ics_kA || 0, specs.poles || 3, 
-         specs.voltage_V || 400, specs.trip_unit || '', specs.settings || {}]
-      );
-      return res.json({ ...newDevice, created: true, photo_description: description.description });
+      
+      res.json(responseData);
+      
     } else {
-      return res.json({ ...specs, created: false, requires_switchboard: true, photo_description: description.description });
+      // Pas d'existant, générer specs AI complètes
+      const aiSpecs = await getAiDeviceSpecs(description);
+      
+      if (switchboardId) {
+        // Créer directement le device
+        const { rows: [newDevice] } = await pool.query(
+          `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, name)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+           RETURNING *`,
+          [deviceSite, switchboardId, 
+           aiSpecs.device_type || description.device_type || 'Low Voltage Circuit Breaker', 
+           description.manufacturer,
+           description.reference,
+           aiSpecs.in_amps, aiSpecs.icu_kA, aiSpecs.ics_kA, aiSpecs.poles, aiSpecs.voltage_V,
+           aiSpecs.trip_unit, aiSpecs.settings,
+           `${description.manufacturer} ${description.reference}`]
+        );
+        
+        res.json({ 
+          ...newDevice, 
+          created: true, 
+          photo_description: description.description || `Created: ${description.manufacturer} ${description.reference}`,
+          quick_ai_query: `${description.manufacturer} ${description.reference}`.trim()
+        });
+        
+      } else {
+        // Retourner specs pour pré-remplissage manuel
+        res.json({ 
+          ...aiSpecs,
+          manufacturer: description.manufacturer,
+          reference: description.reference,
+          name: `${description.manufacturer} ${description.reference}`,
+          created: false, 
+          requires_switchboard: true,
+          photo_description: description.description || `Ready to create: ${description.manufacturer} ${description.reference}`,
+          quick_ai_query: `${description.manufacturer} ${description.reference}`.trim()
+        });
+      }
     }
   } catch (e) {
     console.error('[PHOTO ANALYSIS] error:', e.message);
@@ -808,21 +1093,95 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
   }
 });
 
-// ---- AI TIP ----
+// NOUVELLE FONCTION: Génération specs AI à partir de description photo
+async function getAiDeviceSpecs(description) {
+  if (!openai) return {};
+  
+  try {
+    const prompt = `Based on this device description: "${JSON.stringify(description)}"
+    
+    Generate complete technical specifications for this electrical device. Use realistic values based on the identified manufacturer and type.
+    
+    Return JSON with:
+    - device_type: specific type
+    - in_amps: realistic rated current
+    - icu_kA: ultimate breaking capacity (kA)
+    - ics_kA: service breaking capacity (typically 75% of Icu)
+    - poles: number of poles (1-4)
+    - voltage_V: rated voltage (typically 400V for LV)
+    - trip_unit: type of trip unit
+    - settings: object with {ir, tr, isd, tsd, ii, ig, tg, zsi, erms, curve_type}
+    
+    Use engineering standards for this manufacturer. JSON only.`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are an electrical engineering expert. Generate realistic device specifications.' },
+        { role: 'user', content: prompt }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_tokens: 600
+    });
+
+    const specs = safeJsonParse(completion.choices[0].message.content);
+    
+    return {
+      device_type: specs.device_type || 'Low Voltage Circuit Breaker',
+      in_amps: specs.in_amps ? Number(specs.in_amps) : null,
+      icu_kA: specs.icu_kA ? Number(specs.icu_kA) : null,
+      ics_kA: specs.ics_kA ? Number(specs.ics_kA) : null,
+      poles: specs.poles ? Number(specs.poles) : 3,
+      voltage_V: specs.voltage_V ? Number(specs.voltage_V) : 400,
+      trip_unit: specs.trip_unit || null,
+      settings: {
+        ir: specs.settings?.ir ? Number(specs.settings.ir) : 1,
+        tr: specs.settings?.tr ? Number(specs.settings.tr) : 10,
+        isd: specs.settings?.isd ? Number(specs.settings.isd) : 6,
+        tsd: specs.settings?.tsd ? Number(specs.settings.tsd) : 0.1,
+        ii: specs.settings?.ii ? Number(specs.settings.ii) : 10,
+        ig: specs.settings?.ig ? Number(specs.settings.ig) : 0.5,
+        tg: specs.settings?.tg ? Number(specs.settings.tg) : 0.2,
+        zsi: specs.settings?.zsi !== undefined ? Boolean(specs.settings.zsi) : false,
+        erms: specs.settings?.erms !== undefined ? Boolean(specs.settings.erms) : false,
+        curve_type: specs.settings?.curve_type || 'C',
+        ...specs.settings
+      }
+    };
+  } catch (e) {
+    console.error('[AI SPECS] error:', e);
+    return {
+      device_type: 'Low Voltage Circuit Breaker',
+      settings: { ir: 1, tr: 10, isd: 6, curve_type: 'C' }
+    };
+  }
+}
+
+// ---- AI TIP - AMÉLIORATION: Réponses plus contextuelles ----
 app.post('/api/switchboard/ai-tip', async (req, res) => {
   try {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
 
     const { query } = req.body;
-    const context = query || 'General advice';
+    const context = query || 'General electrical engineering advice';
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: 'Provide short, helpful electrical engineering advice (1-2 sentences).' },
+        { 
+          role: 'system', 
+          content: `You are an expert electrical engineer providing concise, practical advice. 
+          
+          Context: "${context}"
+          
+          Respond in 1-2 sentences with actionable advice. Be specific about standards (IEC, NEC), safety, or best practices. 
+          Keep it professional and helpful. No fluff.` 
+        },
         { role: 'user', content: context }
       ],
-      max_tokens: 100
+      max_tokens: 120,
+      temperature: 0.3
     });
 
     const tip = completion.choices[0].message.content.trim();
@@ -833,7 +1192,7 @@ app.post('/api/switchboard/ai-tip', async (req, res) => {
   }
 });
 
-// ---- REPORT (PDF) ----
+// ---- REPORT (PDF) - AMÉLIORATION: Rapport plus complet ----
 app.get('/api/switchboard/boards/:id/report', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -843,53 +1202,114 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
     const row = r.rows[0];
     if (!row) return res.status(404).json({ error: 'Switchboard not found' });
 
-    // Get devices
-    const devsR = await pool.query('SELECT * FROM devices WHERE switchboard_id=$1', [id]);
+    // Get devices avec infos enrichies
+    const devsR = await pool.query(`
+      SELECT d.*, p.name as parent_name
+      FROM devices d
+      LEFT JOIN devices p ON d.parent_id = p.id
+      WHERE d.switchboard_id=$1 
+      ORDER BY d.is_main_incoming DESC, d.created_at ASC
+    `, [id]);
     const devices = devsR.rows;
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="switchboard_${id}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="switchboard_${row.code || id}_report.pdf"`);
     
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
     doc.pipe(res);
 
-    // Header
-    doc.rect(0, 0, doc.page.width, 80).fill('#eef7ff');
-    doc.fill('#0f3e99').fontSize(24).font('Helvetica-Bold').text('ElectroHub Switchboard Report', 50, 25);
-    doc.fontSize(12).text(`ID: ${id} | Date: ${new Date().toLocaleString()}`, 50, 55);
+    // Header amélioré
+    doc.rect(0, 0, doc.page.width, 90).fill('#1e3a8a');
+    doc.fill('white').fontSize(24).font('Helvetica-Bold').text('ElectroHub', 50, 25);
+    doc.fontSize(16).text('Switchboard Technical Report', 50, 50);
+    doc.fontSize(10).text(`Site: ${site} | ID: ${id} | Generated: ${new Date().toLocaleString()}`, 50, 70);
     doc.fill('#333');
 
-    let y = 100;
-    doc.fontSize(14).font('Helvetica-Bold').text('Switchboard Details', 50, y);
-    y += 20;
-    doc.font('Helvetica').fontSize(11);
+    let y = 110;
+    
+    // Switchboard Details
+    doc.fontSize(14).font('Helvetica-Bold').fill('#1e3a8a').text('📋 Switchboard Information', 50, y);
+    y += 25;
+    doc.font('Helvetica').fontSize(11).fill('#333');
+    
     const sbDetails = [
       ['Name', row.name],
       ['Code', row.code],
-      ['Building/Floor/Room', `${row.building_code || '—'} / ${row.floor || '—'} / ${row.room || '—'}`],
-      ['Neutral Regime', row.regime_neutral],
-      ['Principal', row.is_principal ? 'Yes' : 'No']
+      ['Location', `${row.building_code || 'N/A'} / ${row.floor || 'N/A'} / ${row.room || 'N/A'}`],
+      ['Neutral Regime', row.regime_neutral || 'N/A'],
+      ['Type', row.is_principal ? 'Principal' : 'Distribution'],
+      ['Total Devices', devices.length]
     ];
-    sbDetails.forEach(([k, v], idx) => {
-      doc.text(k, 50, y, { width: 150 });
-      doc.text(v, 200, y);
-      y += 15;
+    
+    sbDetails.forEach(([k, v]) => {
+      doc.text(`${k}:`, 60, y, { width: 120, continued: true });
+      doc.text(v, 180, y);
+      y += 18;
     });
 
     y += 30;
-    doc.font('Helvetica-Bold').fontSize(14).text('Devices', 50, y);
-    y += 20;
+    doc.fontSize(14).font('Helvetica-Bold').fill('#1e3a8a').text('🔌 Connected Devices', 50, y);
+    y += 25;
+    
     if (devices.length === 0) {
-      doc.text('No devices', 50, y);
+      doc.fontSize(11).text('No devices configured', 60, y);
     } else {
-      devices.forEach(d => {
-        doc.font('Helvetica-Bold').fontSize(12).text(d.name || 'Unnamed', 50, y);
-        y += 15;
-        doc.fontSize(11).text(`Type: ${d.device_type} | Reference: ${d.reference} | Amps: ${d.in_amps}`, 50, y);
+      // Group by main incoming vs regular
+      const mains = devices.filter(d => d.is_main_incoming);
+      const regulars = devices.filter(d => !d.is_main_incoming);
+      
+      if (mains.length > 0) {
+        y += 5;
+        doc.fontSize(12).font('Helvetica-Bold').text('Main Incoming Devices', 60, y);
         y += 20;
-      });
+        
+        mains.forEach(d => {
+          doc.fontSize(11).font('Helvetica-Bold').text(`• ${d.manufacturer || 'N/A'} ${d.reference || 'N/A'}`, 60, y);
+          y += 15;
+          doc.font('Helvetica').text(`  Type: ${d.device_type} | Rating: ${d.in_amps || 'N/A'}A | Poles: ${d.poles || 'N/A'}`, 60, y);
+          if (d.parent_name) {
+            doc.text(`  Upstream: ${d.parent_name}`, 60, y + 15);
+            y += 15;
+          }
+          y += 10;
+        });
+      }
+      
+      if (regulars.length > 0) {
+        y += 10;
+        doc.fontSize(12).font('Helvetica-Bold').text('Protection & Distribution Devices', 60, y);
+        y += 20;
+        
+        regulars.forEach((d, idx) => {
+          if (y > 750) { doc.addPage(); y = 50; } // Pagination
+          
+          doc.fontSize(10).font('Helvetica').text(`${idx + 1}. ${d.manufacturer || 'N/A'} ${d.reference || 'N/A'}`, 60, y);
+          y += 12;
+          doc.text(`   ${d.device_type} | ${d.in_amps || 'N/A'}A | Icu: ${d.icu_kA || 'N/A'}kA | ${d.poles || 'N/A'}P`, 70, y);
+          
+          if (d.settings && (d.settings.ir || d.settings.curve_type)) {
+            y += 12;
+            const settingsStr = [
+              d.settings.curve_type ? `Curve: ${d.settings.curve_type}` : null,
+              d.settings.ir ? `Ir: ${d.settings.ir}xIn` : null,
+              d.settings.isd ? `Isd: ${d.settings.isd}xIr` : null
+            ].filter(Boolean).join(' | ');
+            
+            if (settingsStr) {
+              doc.text(`   Settings: ${settingsStr}`, 70, y);
+              y += 12;
+            }
+          }
+          
+          if (idx < regulars.length - 1) y += 5;
+        });
+      }
     }
 
+    // Footer
+    y = doc.page.height - 60;
+    doc.fontSize(8).fill('#666').text('Generated by ElectroHub • For internal use only', 50, y);
+    
     doc.end();
   } catch (e) {
     console.error('[REPORT] error:', e.message);
