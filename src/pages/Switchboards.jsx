@@ -163,6 +163,9 @@ export default function Switchboards() {
   // Quick AI Search (amélioration 4)
   const [quickAiQuery, setQuickAiQuery] = useState('');
 
+  // Confirmation modales for duplicate/delete
+  const [confirmModal, setConfirmModal] = useState({ open: false, title: '', action: null, id: null, type: '' });
+
   // Debounce hook
   const useDebounce = (value, delay) => {
     const [debouncedValue, setDebouncedValue] = useState(value);
@@ -171,7 +174,7 @@ export default function Switchboards() {
       const handler = setTimeout(() => {
         setDebouncedValue(value);
       }, delay);
-      
+     
       return () => {
         clearTimeout(handler);
       };
@@ -324,27 +327,41 @@ export default function Switchboards() {
   };
 
   const duplicateSwitchboard = async (id) => {
-    if (!confirm('Duplicate this switchboard and all its devices?')) return;
-    try {
-      await post(`/api/switchboard/boards/${id}/duplicate?site=${encodeURIComponent(site)}`);
-      await loadSwitchboards();
-      notify('Switchboard duplicated successfully!', 'success');
-    } catch (e) {
-      console.error('Duplicate failed:', e);
-      notify('Failed to duplicate switchboard', 'error');
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Duplicate Switchboard',
+      action: async () => {
+        try {
+          await post(`/api/switchboard/boards/${id}/duplicate?site=${encodeURIComponent(site)}`);
+          await loadSwitchboards();
+          notify('Switchboard duplicated successfully!', 'success');
+        } catch (e) {
+          console.error('Duplicate failed:', e);
+          notify('Failed to duplicate switchboard', 'error');
+        }
+      },
+      id,
+      type: 'duplicate'
+    });
   };
 
   const removeSwitchboard = async (id) => {
-    if (!confirm('Delete this switchboard and all its devices? This cannot be undone.')) return;
-    try {
-      await del(`/api/switchboard/boards/${id}?site=${encodeURIComponent(site)}`);
-      await loadSwitchboards();
-      notify('Switchboard deleted successfully!', 'success');
-    } catch (e) {
-      console.error('Delete failed:', e);
-      notify('Failed to delete switchboard', 'error');
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Delete Switchboard',
+      action: async () => {
+        try {
+          await del(`/api/switchboard/boards/${id}?site=${encodeURIComponent(site)}`);
+          await loadSwitchboards();
+          notify('Switchboard deleted successfully!', 'success');
+        } catch (e) {
+          console.error('Delete failed:', e);
+          notify('Failed to delete switchboard', 'error');
+        }
+      },
+      id,
+      type: 'delete'
+    });
   };
 
   // Device functions
@@ -446,28 +463,42 @@ export default function Switchboards() {
   };
 
   const duplicateDevice = async (id, panelId) => {
-    if (!confirm('Duplicate this device?')) return;
-    try {
-      await post(`/api/switchboard/devices/${id}/duplicate?site=${encodeURIComponent(site)}`);
-      await loadDevices(panelId);
-      await loadDeviceReferences();
-      notify('Device duplicated successfully!', 'success');
-    } catch (e) {
-      console.error('Duplicate device failed:', e);
-      notify('Failed to duplicate device', 'error');
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Duplicate Device',
+      action: async () => {
+        try {
+          await post(`/api/switchboard/devices/${id}/duplicate?site=${encodeURIComponent(site)}`);
+          await loadDevices(panelId);
+          await loadDeviceReferences();
+          notify('Device duplicated successfully!', 'success');
+        } catch (e) {
+          console.error('Duplicate device failed:', e);
+          notify('Failed to duplicate device', 'error');
+        }
+      },
+      id,
+      type: 'duplicate'
+    });
   };
 
   const removeDevice = async (id, panelId) => {
-    if (!confirm('Delete this device? This cannot be undone.')) return;
-    try {
-      await del(`/api/switchboard/devices/${id}?site=${encodeURIComponent(site)}`);
-      await loadDevices(panelId);
-      notify('Device deleted successfully!', 'success');
-    } catch (e) {
-      console.error('Delete device failed:', e);
-      notify('Failed to delete device', 'error');
-    }
+    setConfirmModal({
+      open: true,
+      title: 'Delete Device',
+      action: async () => {
+        try {
+          await del(`/api/switchboard/devices/${id}?site=${encodeURIComponent(site)}`);
+          await loadDevices(panelId);
+          notify('Device deleted successfully!', 'success');
+        } catch (e) {
+          console.error('Delete device failed:', e);
+          notify('Failed to delete device', 'error');
+        }
+      },
+      id,
+      type: 'delete'
+    });
   };
 
   const setMainDevice = async (id, panelId, isMain) => {
@@ -598,7 +629,7 @@ export default function Switchboards() {
     }
   };
 
-  // Photo analysis - FIXED (avec auto Quick AI Search)
+  // Photo analysis - FIXED (avec remplissage Quick AI sans auto-search)
   const analyzePhoto = async () => {
     if (!photoFile) {
       return notify('Please select a photo first', 'info');
@@ -664,28 +695,11 @@ export default function Switchboards() {
         notify(`✅ Photo analyzed! Form pre-filled with: ${data.manufacturer} ${data.reference}. Ready to save.`, 'success');
       }
 
-      // Nouvelle amélioration : Auto Quick AI Search si manufacturer/reference présents
+      // Remplissage Quick AI Search sans auto-search
       const aiQuery = `${data.manufacturer || ''} ${data.reference || ''}`.trim();
       if (aiQuery) {
         setQuickAiQuery(aiQuery);
-        // Appel auto pour completer les champs
-        const searchData = await post(`/api/switchboard/search-device?site=${encodeURIComponent(site)}`, { query: aiQuery });
-        if (searchData && searchData.manufacturer) {
-          setDeviceForm(prev => ({
-            ...prev,
-            manufacturer: searchData.manufacturer || prev.manufacturer,
-            reference: searchData.reference || prev.reference,
-            device_type: searchData.device_type || prev.device_type,
-            in_amps: Number(searchData.in_amps) || prev.in_amps,
-            icu_kA: Number(searchData.icu_kA) || prev.icu_kA,
-            ics_kA: Number(searchData.ics_kA) || prev.ics_kA,
-            poles: Number(searchData.poles) || prev.poles,
-            voltage_V: Number(searchData.voltage_V) || prev.voltage_V,
-            trip_unit: searchData.trip_unit || prev.trip_unit,
-            settings: { ...prev.settings, ...searchData.settings }
-          }));
-          notify(`AI auto-filled additional specs from reference!`, 'success');
-        }
+        notify('Vérifiez et ajustez le query AI, puis cliquez Search (AI)', 'info');
       }
      
       setPhotoFile(null);
@@ -905,6 +919,17 @@ export default function Switchboards() {
                     className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                   >
                     <Trash size={16} />
+                  </button>
+                  {/* Bouton PDF */}
+                  <button
+                    onClick={() => {
+                      window.open(`/api/switchboard/boards/${row.id}/report?site=${encodeURIComponent(site)}`, '_blank');
+                      notify('Generating PDF report...', 'info');
+                    }}
+                    className="p-2 text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                    title="Download PDF Report"
+                  >
+                    <Download size={16} />
                   </button>
                 </div>
               </div>
@@ -1173,13 +1198,13 @@ export default function Switchboards() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Device Name</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Device Name *</label>
               <input
                 type="text"
                 value={deviceForm.name}
                 onChange={e => setDeviceForm(f => ({ ...f, name: e.target.value }))}
                 className="input w-full"
-                placeholder="Device name (optional)"
+                placeholder="Device name"
               />
             </div>
             <div>
@@ -1507,6 +1532,32 @@ export default function Switchboards() {
         </div>
       </Modal>
 
+      {/* Confirmation Modal */}
+      <Modal open={confirmModal.open} onClose={() => setConfirmModal({ ...confirmModal, open: false })} title={confirmModal.title}>
+        <p className="text-gray-700 mb-6">
+          Are you sure you want to {confirmModal.type} this {confirmModal.type === 'duplicate' ? 'switchboard' : 'item'}? This action cannot be undone.
+        </p>
+        <div className="flex justify-end gap-3">
+          <button
+            className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+            onClick={() => setConfirmModal({ ...confirmModal, open: false })}
+          >
+            Cancel
+          </button>
+          <button
+            className={`px-6 py-2 text-sm font-medium rounded-lg transition-colors shadow-sm ${
+              confirmModal.type === 'delete' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-green-600 text-white hover:bg-green-700'
+            }`}
+            onClick={() => {
+              confirmModal.action();
+              setConfirmModal({ ...confirmModal, open: false });
+            }}
+          >
+            Confirm
+          </button>
+        </div>
+      </Modal>
+
       {/* AI Assistant Sidebar - amélioration 6 */}
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setSidebarOpen(false)}>
@@ -1669,14 +1720,14 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
                 <Edit size={16} />
               </button>
               <button
-                onClick={() => onDuplicate(device.id, panelId)}
+                onClick={() => duplicateDevice(device.id, panelId)}
                 className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                 title="Duplicate Device"
               >
                 <Copy size={16} />
               </button>
               <button
-                onClick={() => onDelete(device.id, panelId)}
+                onClick={() => removeDevice(device.id, panelId)}
                 className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
                 title="Delete Device"
               >
