@@ -904,18 +904,19 @@ export default function Switchboards() {
             <div className="flex gap-2">
               <input
                 type="text"
-              value={q.floor}
-              onChange={e => setQ(prev => ({ ...prev, floor: e.target.value, page: 1 }))}
-              placeholder="Floor..."
-              className="input flex-1"
-            />
-            <input
-              type="text"
-              value={q.room}
-              onChange={e => setQ(prev => ({ ...prev, room: e.target.value, page: 1 }))}
-              placeholder="Room..."
-              className="input flex-1"
-            />
+                value={q.floor}
+                onChange={e => setQ(prev => ({ ...prev, floor: e.target.value, page: 1 }))}
+                placeholder="Floor..."
+                className="input flex-1"
+              />
+              <input
+                type="text"
+                value={q.room}
+                onChange={e => setQ(prev => ({ ...prev, room: e.target.value, page: 1 }))}
+                placeholder="Room..."
+                className="input flex-1"
+              />
+            </div>
           </div>
         </div>
       </div>
