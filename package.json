@@ -34,7 +34,7 @@
     "chartjs-plugin-annotation": "^3.0.1",
     "react-confetti": "^6.1.0",
     "html2canvas": "^1.4.1",
-    "framer-motion": "^11.3.24" // Ajouté
+    "framer-motion": "^11.3.24"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
