@@ -1,259 +1,212 @@
-/**
- * server_selectivity.js — compatible avec ton schéma Neon "devices"
- * Colonnes utilisées: id, switchboard_id, parent_id, device_type, manufacturer, reference,
- * in_amps (In), icu_ka, ics_ka, poles, voltage_v, trip_unit, settings (JSON: Ii, Isd, ts, curve).
- */
-import express from "express";
+// server_selectivity.js
+import express from 'express';
+import helmet from 'helmet';
+import dotenv from 'dotenv';
+import pg from 'pg';
+import cors from 'cors';
 
-export function buildSelectivityRouter(deps = {}) {
-  const router = express.Router();
-  const pool = deps.pool;
+dotenv.config();
+const { Pool } = pg;
+const app = express();
+app.use(helmet());
+app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
+app.use(express.json());
 
-  const need = (v) => v !== undefined && v !== null && v !== "" && !Number.isNaN(v);
-  const toNum = (v) => {
-    const n = typeof v === "string" ? parseFloat(v) : v;
-    return Number.isFinite(n) ? n : undefined;
-  };
+const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
-  function curveFromTripUnit(dev) {
-    // Try explicit curve in settings; else infer from trip_unit (B/C/D/MCCB/ACB)
-    const s = dev.settings || {};
-    if (s.curve) return String(s.curve).toUpperCase();
-    const tu = (dev.trip_unit || "").toUpperCase();
-    if (["B","C","D"].includes(tu)) return tu;
-    if (tu.includes("ACB")) return "ACB";
-    if (tu.includes("MCCB")) return "MCCB";
-    return "C"; // default
+// -- util: site depuis l'en-tête ajouté par ton client (voir lib/api.js)
+function siteOf(req) {
+  return req.get('X-Site') || req.query.site || null;
+}
+
+// -- util: conversion/lectures sûres
+const num = (v) => (v === null || v === undefined ? null : Number(v));
+const has = (o, k) => o && Object.prototype.hasOwnProperty.call(o, k);
+
+// -- seuils typiques MCB
+const MCB_INSTANT = { B: 4, C: 8, D: 13 };
+
+// -- calcule les seuils utiles pour un appareil
+function thresholds(dev) {
+  const In = num(dev.in_amps) || null;
+  const settings = dev.settings || {};
+  const curve = (settings.curve_type || dev.trip_unit || '').toUpperCase();
+
+  let multInst = null;
+  if (settings.ii) multInst = Number(settings.ii);
+  else if (settings.isd) multInst = Number(settings.isd);
+  else if (curve in MCB_INSTANT) multInst = MCB_INSTANT[curve];
+
+  const Iinst = In && multInst ? multInst * In : null;
+
+  const isd = settings.isd ? Number(settings.isd) : null;
+  const tsd = settings.tsd ? Number(settings.tsd) : null;
+
+  return { In, Iinst, isd, tsd, curve };
+}
+
+function verdict(up, down) {
+  const upT = thresholds(up);
+  const dnT = thresholds(down);
+  const missing = [];
+
+  if (!dnT.In) missing.push(`In (downstream #${down.id})`);
+  if (!upT.In) missing.push(`In (upstream #${up.id})`);
+  if (!dnT.Iinst) missing.push(`Iinst / courbe (downstream #${down.id})`);
+  if (!upT.Iinst && !upT.isd) missing.push(`Iinst/ISD (upstream #${up.id})`);
+
+  let status = 'OK';
+  let reason = 'Likely selective';
+  if (missing.length) {
+    status = 'Missing data';
+    reason = missing.join(', ');
+  } else {
+    const guard = 1.25; // marge simple
+    const okInst = upT.Iinst && dnT.Iinst && upT.Iinst >= guard * dnT.Iinst;
+    const okSd = upT.isd && upT.tsd && upT.tsd > 0 && (upT.isd * upT.In) >= guard * dnT.Iinst;
+
+    if (okInst || okSd) {
+      status = okInst ? 'OK (inst)' : 'OK (short-time)';
+      reason = okInst ? 'Upstream instantaneous above downstream' : 'Short-time delay provides selectivity';
+    } else {
+      status = 'Conflict';
+      reason = 'Instantaneous/short-time overlap';
+    }
   }
 
-  function pickSettings(dev) {
-    const s = dev.settings || {};
-    return {
-      Ii: toNum(s.Ii),            // instantaneous pickup (A), if provided
-      Isd: toNum(s.Isd),          // short-time pickup (A)
-      ts: toNum(s.ts),            // short-time delay (s)
-    };
+  return { status, reason, upT, dnT, missing };
+}
+
+// ------ API ------
+
+// 1) bootstrap: listes pour l’UI (tableaux + appareils)
+app.get('/api/selectivity/bootstrap', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const boards = await pool.query(
+      `SELECT id, name, code, building_code, floor, room 
+       FROM switchboards WHERE site=$1 ORDER BY created_at DESC LIMIT 200`,
+      [site]
+    );
+
+    const devices = await pool.query(
+      `SELECT id, switchboard_id, parent_id, downstream_switchboard_id, device_type, manufacturer, reference,
+              in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, name
+       FROM devices WHERE site=$1 ORDER BY created_at ASC`,
+      [site]
+    );
+
+    res.json({ boards: boards.rows, devices: devices.rows });
+  } catch (e) {
+    console.error('[SELECTIVITY bootstrap]', e);
+    res.status(500).json({ error: 'Bootstrap failed' });
   }
+});
 
-  function makeTCC(dev) {
-    const In = toNum(dev.in_amps);
-    if (!need(In)) return null;
+// 2) scan: calcule les paires et verdicts
+app.get('/api/selectivity/scan', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
 
-    const curve = curveFromTripUnit(dev);
-    const { Ii, Isd, ts } = pickSettings(dev);
+    const boardId = req.query.switchboard_id ? Number(req.query.switchboard_id) : null;
+    const isc = req.query.isc_ka ? Number(req.query.isc_ka) : null;
 
-    const Ir = In; // long-time set approx
-    let instMinMult = 5, instMaxMult = 10;
-    if (curve === "B") { instMinMult = 3; instMaxMult = 5; }
-    else if (curve === "C") { instMinMult = 5; instMaxMult = 10; }
-    else if (curve === "D") { instMinMult = 10; instMaxMult = 20; }
+    // charge appareils du tableau (ou de tout le site si board non fourni — limité)
+    const devSql = boardId
+      ? `SELECT * FROM devices WHERE site=$1 AND switchboard_id=$2 ORDER BY is_main_incoming DESC, created_at ASC`
+      : `SELECT * FROM devices WHERE site=$1 ORDER BY is_main_incoming DESC, created_at ASC LIMIT 2000`;
+    const vals = boardId ? [site, boardId] : [site];
+    const { rows: devs } = await pool.query(devSql, vals);
 
-    const IiEff = Ii || instMinMult * In;
-    const IsdEff = Isd || 6 * In;
-    const tsEff = need(ts) ? ts : 0.15;
+    const byId = new Map(devs.map(d => [d.id, d]));
 
-    const pts = [];
-    pts.push({ i: 1.05 * Ir, t: 100 });
-    pts.push({ i: 1.5 * Ir, t: 10 });
-    pts.push({ i: 6 * Ir, t: 1.5 });
-    pts.push({ i: IsdEff, t: Math.max(0.1, tsEff) });
-    pts.push({ i: IiEff, t: 0.02 });
-    pts.push({ i: Math.max(IiEff * 1.2, IsdEff * 1.2), t: 0.005 });
-    return pts;
-  }
-
-  function checkPair(up, dn, faultKA) {
-    const missing = [];
-    const reasons = [];
-    const hints = [];
-
-    const InUp = toNum(up.in_amps);
-    const InDn = toNum(dn.in_amps);
-    if (!need(InUp)) missing.push("upstream.in_amps");
-    if (!need(InDn)) missing.push("downstream.in_amps");
-
-    const sUp = pickSettings(up), sDn = pickSettings(dn);
-    const IiUp = sUp.Ii, IiDn = sDn.Ii;
-
-    const cu = makeTCC(up);
-    const cd = makeTCC(dn);
-    if (!cu) missing.push("upstream.tcc");
-    if (!cd) missing.push("downstream.tcc");
-    if (missing.length) return { verdict: "UNKNOWN", limit_kA: null, reasons, missing, hints };
-
-    const Imin = Math.max(1.1 * InDn, 0.5 * (InUp || InDn));
-    const Imax = 20 * InDn;
-    const samples = [];
-    for (let k = 0; k < 20; k++) {
-      const f = k / 19;
-      const i = Imin * Math.pow(Imax / Imin, f);
-      samples.push(i);
-    }
-
-    function tAt(c, i) {
-      for (let s = 0; s < c.length - 1; s++) {
-        const a = c[s], b = c[s + 1];
-        if ((i >= a.i && i <= b.i) || (i >= b.i && i <= a.i)) {
-          const li = Math.log(i), la = Math.log(a.i), lb = Math.log(b.i);
-          const lt = Math.log(a.t) + (Math.log(b.t) - Math.log(a.t)) * (li - la) / (lb - la);
-          return Math.exp(lt);
-        }
-      }
-      return c[c.length - 1].t;
-    }
-
-    let okCount = 0, total = 0;
-    for (const i of samples) {
-      const tUp = tAt(cu, i);
-      const tDn = tAt(cd, i);
-      if (tDn < tUp * 0.8) okCount++;
-      total++;
-    }
-    const ratio = okCount / total;
-
-    let limitA = null;
-    for (const i of samples) {
-      const tUp = tAt(cu, i);
-      const tDn = tAt(cd, i);
-      if (tDn >= tUp) { limitA = i; break; }
-    }
-    const limit_kA = limitA ? limitA / 1000 : null;
-
-    if (need(IiUp) && need(IiDn) && IiUp <= IiDn) {
-      reasons.push("Upstream instantaneous pickup should exceed downstream.");
-    }
-
-    let verdict = "PARTIAL";
-    if (ratio > 0.9) verdict = "TOTAL";
-    if (ratio < 0.5) verdict = "POOR";
-
-    if (faultKA && limit_kA && faultKA > limit_kA) {
-      reasons.push(`Prospective Isc (${faultKA.toFixed(2)} kA) exceeds estimated selectivity limit (${limit_kA.toFixed(2)} kA).`);
-      verdict = "NOT SELECTIVE";
-    }
-
-    if (!need(IiUp)) hints.push("Set upstream instantaneous pickup (Ii) in device settings.");
-    if (!need(IiDn)) hints.push("Set downstream instantaneous pickup (Ii) in device settings.");
-
-    return { verdict, limit_kA, reasons, missing, hints };
-  }
-
-  async function loadBoardDevices(switchboardId) {
-    if (!pool) return [];
-    const q = `
-      SELECT id, switchboard_id, parent_id, device_type, manufacturer, reference,
-             in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, name
-      FROM devices
-      WHERE switchboard_id = $1
-      ORDER BY COALESCE(position_number, 'z'), id
-    `;
-    const { rows } = await pool.query(q, [switchboardId]);
-    // settings is jsonb; ensure parsed object
-    return rows.map(r => ({
-      ...r,
-      settings: typeof r.settings === "string" ? JSON.parse(r.settings || "{}") : (r.settings || {}),
-    }));
-  }
-
-  function makePairs(devs) {
+    // paires amont/aval par parent_id (dans un même tableau)
     const pairs = [];
-    const sorted = [...devs].sort((a,b)=> (parseFloat(b.in_amps||0) - parseFloat(a.in_amps||0)));
-    for (let i=0;i<sorted.length;i++) {
-      for (let j=i+1;j<sorted.length;j++) {
-        pairs.push({ upstream: sorted[i], downstream: sorted[j], relation: "same_board_heuristic" });
+    for (const d of devs) {
+      if (d.parent_id && byId.has(d.parent_id)) {
+        const up = byId.get(d.parent_id);
+        const dn = d;
+
+        // check Icu/Ics vs Isc si fourni
+        const issues = [];
+        if (isc !== null) {
+          if (dn.ics_ka && Number(dn.ics_ka) < isc) issues.push(`Downstream Ics ${dn.ics_ka}kA < Isc ${isc}kA`);
+          if (dn.icu_ka && Number(dn.icu_ka) < isc) issues.push(`Downstream Icu ${dn.icu_ka}kA < Isc ${isc}kA`);
+          if (up.ics_ka && Number(up.ics_ka) < isc) issues.push(`Upstream Ics ${up.ics_ka}kA < Isc ${isc}kA`);
+        }
+
+        const v = verdict(up, dn);
+        if (issues.length) {
+          v.status = v.status === 'OK' ? 'Non-compliant' : v.status;
+          v.reason = [v.reason, ...issues].join(' — ');
+        }
+
+        pairs.push({
+          upstream: { id: up.id, name: up.name, ref: up.reference, mfr: up.manufacturer, in_amps: up.in_amps, trip_unit: up.trip_unit, settings: up.settings },
+          downstream: { id: dn.id, name: dn.name, ref: dn.reference, mfr: dn.manufacturer, in_amps: dn.in_amps, trip_unit: dn.trip_unit, settings: dn.settings },
+          verdict: v.status,
+          reason: v.reason,
+          missing: v.missing,
+          suggestions: v.status.startsWith('OK') ? [] : [
+            'Augmenter le seuil instantané amont ou activer un délai court (si possible)',
+            'Réduire le seuil instantané aval (si sécurité/charge le permet)',
+            'Envisager ZSI (zone selective interlocking) si équipements compatibles'
+          ]
+        });
       }
     }
-    return pairs;
+
+    res.json({ board_id: boardId, isc_ka: isc, count: pairs.length, pairs });
+  } catch (e) {
+    console.error('[SELECTIVITY scan]', e);
+    res.status(500).json({ error: 'Scan failed' });
   }
+});
 
-  router.get("/pairs", async (req, res) => {
-    try {
-      const switchboardId = req.query.switchboard_id;
-      if (!switchboardId) return res.status(400).json({ error: "switchboard_id required" });
-      const devs = await loadBoardDevices(switchboardId);
-      const pairs = makePairs(devs).map(p => ({
-        upstream_id: p.upstream.id,
-        downstream_id: p.downstream.id,
-        upstream_name: p.upstream.name || `${p.upstream.manufacturer || ""} ${p.upstream.reference || ""}`.trim(),
-        downstream_name: p.downstream.name || `${p.downstream.manufacturer || ""} ${p.downstream.reference || ""}`.trim(),
-        relation: p.relation
-      }));
-      return res.json({ pairs });
-    } catch (e) {
-      console.error("[SELECTIVITY /pairs] error:", e);
-      res.status(500).json({ error: "pairs_failed" });
+// 3) courbes simplifiées (pour le bouton Graph)
+app.get('/api/selectivity/curves', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const upId = Number(req.query.up_id);
+    const dnId = Number(req.query.down_id);
+    if (!upId || !dnId) return res.status(400).json({ error: 'Need up_id & down_id' });
+
+    const q = await pool.query(`SELECT * FROM devices WHERE site=$1 AND id IN ($2,$3)`, [site, upId, dnId]);
+    const up = q.rows.find(r => r.id === upId);
+    const dn = q.rows.find(r => r.id === dnId);
+    if (!up || !dn) return res.status(404).json({ error: 'Devices not found' });
+
+    const upT = thresholds(up);
+    const dnT = thresholds(dn);
+
+    // très simple esquisse de TCC (log-log) : trois points par appareil
+    function tcc(t) {
+      const In = t.In || 100;
+      const I1 = In;
+      const I2 = t.isd ? t.isd * In : (t.Iinst || 10 * In) * 0.8;
+      const I3 = t.Iinst || (t.isd ? t.isd * In * 1.2 : 12 * In);
+      return [
+        { I: I1, t: (t.tr || 10) },             // long-time (placeholder)
+        { I: I2, t: (t.tsd || 0.2) },           // short-time
+        { I: I3, t: 0.02 }                      // instantané
+      ];
     }
-  });
 
-  router.post("/check", express.json(), async (req, res) => {
-    try {
-      const { upstream_id, downstream_id, prospective_short_circuit_kA } = req.body || {};
-      if (!pool) return res.status(501).json({ error: "db_not_configured" });
-      const { rows } = await pool.query(`
-        SELECT id, switchboard_id, parent_id, device_type, manufacturer, reference,
-               in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, name
-        FROM devices WHERE id = ANY($1)
-      `, [[upstream_id, downstream_id]]);
-      const norm = (r)=>({...r, settings: typeof r.settings==="string" ? JSON.parse(r.settings||"{}") : (r.settings||{})});
-      const up = norm(rows.find(r=>r.id===upstream_id));
-      const dn = norm(rows.find(r=>r.id===downstream_id));
-      if (!up || !dn) return res.status(404).json({ error: "device_not_found" });
-      const faultKA = prospective_short_circuit_kA ? parseFloat(prospective_short_circuit_kA) : undefined;
-      const result = checkPair(up, dn, faultKA);
-      return res.json({
-        upstream: {id: up.id, name: up.name || `${up.manufacturer||""} ${up.reference||""}`.trim()},
-        downstream: {id: dn.id, name: dn.name || `${dn.manufacturer||""} ${dn.reference||""}`.trim()},
-        result,
-        curves: { upstream: makeTCC(up), downstream: makeTCC(dn) }
-      });
-    } catch (e) {
-      console.error("[SELECTIVITY /check] error:", e);
-      res.status(500).json({ error: "check_failed" });
-    }
-  });
-
-  router.post("/scan", express.json(), async (req, res) => {
-    try {
-      const { switchboard_id, prospective_short_circuit_kA } = req.body || {};
-      if (!switchboard_id) return res.status(400).json({ error: "switchboard_id required" });
-      const devs = await loadBoardDevices(switchboard_id);
-      const pairs = makePairs(devs);
-      const table = pairs.map(p => {
-        const r = checkPair(p.upstream, p.downstream, prospective_short_circuit_kA ? parseFloat(prospective_short_circuit_kA) : undefined);
-        return {
-          upstream_id: p.upstream.id, upstream_name: p.upstream.name || `${p.upstream.manufacturer||""} ${p.upstream.reference||""}`.trim(),
-          downstream_id: p.downstream.id, downstream_name: p.downstream.name || `${p.downstream.manufacturer||""} ${p.downstream.reference||""}`.trim(),
-          verdict: r.verdict, limit_kA: r.limit_kA,
-          remediation: remediationHint(r, p.upstream, p.downstream)
-        };
-      });
-      res.json({ rows: table });
-    } catch (e) {
-      console.error("[SELECTIVITY /scan] error:", e);
-      res.status(500).json({ error: "scan_failed" });
-    }
-  });
-
-  function remediationHint(r, up, dn) {
-    if (r.verdict === "TOTAL") return "OK – No action.";
-    if (r.missing?.length) return "Missing data: " + r.missing.join(", ");
-    const tips = [];
-    if (r.reasons?.length) tips.push(...r.reasons);
-    tips.push("Increase upstream instantaneous pickup (Ii) or enable short-time delay (ts) when available.");
-    tips.push("Use manufacturer pairwise selectivity tables to validate or change device combination.");
-    return tips.join(" ");
+    res.json({
+      upstream: { id: up.id, curve: tcc(upT) },
+      downstream: { id: dn.id, curve: tcc(dnT) }
+    });
+  } catch (e) {
+    console.error('[SELECTIVITY curves]', e);
+    res.status(500).json({ error: 'Curves failed' });
   }
+});
 
-  return router;
-}
-
-// Standalone
-if (process.env.SELECTIVITY_STANDALONE === "1") {
-  const expressMod = await import("express");
-  const { Pool } = await import("pg");
-  const app = expressMod.default();
-  const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL || process.env.DATABASE_URL });
-  app.use("/api/selectivity", buildSelectivityRouter({ pool }));
-  const port = process.env.SELECTIVITY_PORT || 3004;
-  app.listen(port, () => console.log("[selectivity] ready on :" + port));
-}
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+const port = process.env.SELECTIVITY_PORT || 3004;
+app.listen(port, () => console.log(`Selectivity service listening on :${port}`));
