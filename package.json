@@ -28,8 +28,8 @@
     "openai": "^4.25.0",
     "xlsx": "^0.18.5",
     "lucide-react": "^0.294.0",
-    "chart.js": "^4.4.4", // AJOUT POUR GRAPHIQUES DANS SELECTIVITY.JSX
-    "react-chartjs-2": "^5.2.0" // AJOUT POUR INTÉGRATION REACT DE CHART.JS
+    "chart.js": "^4.4.4",
+    "react-chartjs-2": "^5.2.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
