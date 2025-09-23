@@ -713,6 +713,25 @@ app.get('/api/switchboard/search-downstreams', async (req, res) => {
   }
 });
 
+// Unique Device References
+app.get('/api/switchboard/device-references', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { rows } = await pool.query(
+      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings
+       FROM devices 
+       WHERE site = $1 AND manufacturer IS NOT NULL AND reference IS NOT NULL 
+       ORDER BY manufacturer, reference`,
+      [site]
+    );
+    res.json({ data: rows });
+  } catch (e) {
+    console.error('[DEVICE REFERENCES] error:', e.message);
+    res.status(500).json({ error: 'List failed' });
+  }
+});
+
 // Search Device References
 app.get('/api/switchboard/search-references', async (req, res) => {
   try {
