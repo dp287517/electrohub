@@ -97,7 +97,6 @@ export const api = {
     /** Suppression */
     remove: (id) => del(`/api/switchboard/boards/${id}`),
   },
-  // NOUVELLE SECTION POUR SELECTIVITY
   selectivity: {
     /** Liste des paires amont/aval avec filtres */
     listPairs: (params) => get("/api/selectivity/pairs", params),
@@ -110,5 +109,19 @@ export const api = {
 
     /** AI Tip pour remédiation */
     getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
+  },
+  // NOUVELLE SECTION POUR FLA
+  fla: {
+    /** Liste des points d'évaluation (switchboards ou devices) avec filtres */
+    listPoints: (params) => get("/api/fla/points", params),
+
+    /** Calcul fault level pour un point spécifique */
+    check: (pointId, type = 'switchboard', params = {}) => get(`/api/fla/check?point=${pointId}&type=${type}`, params),
+
+    /** Données pour graphique de courbes (fault level vs temps ou impédance) */
+    getCurves: (pointId, type = 'switchboard') => get(`/api/fla/curves?point=${pointId}&type=${type}`),
+
+    /** AI Tip pour remédiation */
+    getAiTip: (payload) => post("/api/fla/ai-tip", payload),
   },
 };
