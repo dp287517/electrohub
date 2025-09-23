@@ -1,4 +1,3 @@
-// server_atex.js
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -327,6 +326,73 @@ app.delete('/api/atex/attachments/:attId', async (req, res) => {
   } catch (e) {
     console.error('[ATTACH DEL] error:', e?.message);
     res.status(500).json({ error: 'Delete attachment failed' });
+  }
+});
+
+// ------- Analyse Photo pour auto-remplissage -------
+app.post('/api/atex/photo-analysis', upload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No photo provided' });
+    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY missing' });
+
+    const base64 = req.file.buffer.toString('base64');
+
+    const prompt = `
+Analyze this equipment photo or label. Extract the following information if visible:
+- Manufacturer name (e.g., Schneider, Siemens)
+- Manufacturer reference or model number (e.g., 218143RT, NSX100F)
+- ATEX marking (e.g., II 2G Ex ib IIC T4 Gb, or similar full ATEX certification string)
+
+Be precise and only extract text that matches these fields. If not found or unclear, use null.
+
+Return ONLY a JSON object with keys: manufacturer, manufacturer_ref, atex_ref.
+`.trim();
+
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You are an expert in reading equipment labels and ATEX markings. Respond with JSON only.' },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
+            ]
+          }
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+        max_tokens: 200
+      })
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.error('[PHOTO ANALYSIS] OpenAI error:', errText);
+      return res.status(500).json({ error: 'OpenAI analysis failed', details: errText });
+    }
+
+    const json = await resp.json();
+    const analysis = json.choices?.[0]?.message?.content?.trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(analysis);
+    } catch {
+      return res.status(500).json({ error: 'Invalid JSON from analysis' });
+    }
+
+    res.json({
+      manufacturer: parsed.manufacturer || null,
+      manufacturer_ref: parsed.manufacturer_ref || null,
+      atex_ref: parsed.atex_ref || null
+    });
+  } catch (e) {
+    console.error('[PHOTO ANALYSIS] error:', e?.message);
+    res.status(500).json({ error: 'Photo analysis failed' });
   }
 });
 
