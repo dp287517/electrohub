@@ -35,7 +35,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
 // Upload setup for photo
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ memoryStorage: true });
 
 // CORS
 app.use((req, res, next) => {
@@ -55,7 +55,7 @@ function siteOf(req) {
   return (req.header('X-Site') || req.query.site || '').toString();
 }
 
-const WHITELIST_SORT = ['created_at', 'name', 'code', 'building_code', 'floor'];
+const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
@@ -155,15 +155,13 @@ app.get('/api/switchboard/boards', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { q, building, floor, room, sort = 'created_at', dir = 'desc', page = '1', pageSize = '18' } = req.query;
-    const where = ['site = $1'];
-    const vals = [site];
-    let i = 2;
+    const where = ['site = $1']; const vals = [site]; let i = 2;
     if (q) { where.push(`(name ILIKE $${i} OR code ILIKE $${i})`); vals.push(`%${q}%`); i++; }
     if (building) { where.push(`building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
     if (floor) { where.push(`floor ILIKE $${i}`); vals.push(`%${floor}%`); i++; }
     if (room) { where.push(`room ILIKE $${i}`); vals.push(`%${room}%`); i++; }
-    const limit = Math.min(parseInt(pageSize, 10) || 18, 100);
-    const offset = ((parseInt(page, 10) || 1) - 1) * limit;
+    const limit = Math.min(parseInt(pageSize,10) || 18, 100);
+    const offset = ((parseInt(page,10) || 1) - 1) * limit;
 
     const sql = `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at
                  FROM switchboards
@@ -175,13 +173,9 @@ app.get('/api/switchboard/boards', async (req, res) => {
     const data = rows.rows.map(r => ({
       id: r.id,
       meta: { site: r.site, building_code: r.building_code, floor: r.floor, room: r.room },
-      name: r.name,
-      code: r.code,
-      regime_neutral: r.regime_neutral,
+      name: r.name, code: r.code, regime_neutral: r.regime_neutral,
       is_principal: r.is_principal,
-      modes: r.modes || {},
-      quality: r.quality || {},
-      created_at: r.created_at
+      modes: r.modes || {}, quality: r.quality || {}, created_at: r.created_at
     }));
     res.json({ data, total: count.rows[0].total, page: Number(page), pageSize: limit });
   } catch (e) {
@@ -205,13 +199,9 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     res.json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
-      name: sb.name,
-      code: sb.code,
-      regime_neutral: sb.regime_neutral,
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
-      modes: sb.modes || {},
-      quality: sb.quality || {},
-      created_at: sb.created_at
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD GET] error:', e);
@@ -246,13 +236,9 @@ app.post('/api/switchboard/boards', async (req, res) => {
     res.status(201).json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
-      name: sb.name,
-      code: sb.code,
-      regime_neutral: sb.regime_neutral,
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
-      modes: sb.modes || {},
-      quality: sb.quality || {},
-      created_at: sb.created_at
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD CREATE] error:', e);
@@ -290,13 +276,9 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     res.json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
-      name: sb.name,
-      code: sb.code,
-      regime_neutral: sb.regime_neutral,
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
-      modes: sb.modes || {},
-      quality: sb.quality || {},
-      created_at: sb.created_at
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD UPDATE] error:', e);
@@ -322,13 +304,9 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
     res.status(201).json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
-      name: sb.name,
-      code: sb.code,
-      regime_neutral: sb.regime_neutral,
+      name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
-      modes: sb.modes || {},
-      quality: sb.quality || {},
-      created_at: sb.created_at
+      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD DUPLICATE] error:', e);
@@ -404,19 +382,15 @@ app.get('/api/switchboard/devices', async (req, res) => {
        COALESCE(s.name, '') as switchboard_name,
        COALESCE(p.name, '') as parent_name,
        COALESCE(p.manufacturer, '') as parent_manufacturer,
-       COALESCE(p.reference, '') as parent_reference,
-       COALESCE(ds.name, '') as downstream_name,
-       COALESCE(ds.code, '') as downstream_code
+       COALESCE(p.reference, '') as parent_reference
        FROM devices d
        LEFT JOIN switchboards s ON d.switchboard_id = s.id
        LEFT JOIN devices p ON d.parent_id = p.id
-       LEFT JOIN switchboards ds ON d.downstream_switchboard_id = ds.id
        WHERE d.switchboard_id=$1 
        ORDER BY d.created_at DESC`,
       [switchboard_id]
     );
     
-    // AMÉLIORATION: Enrichir les devices avec des infos parent/downstream
     const enriched = rows.map(d => ({
       ...d,
       in_amps: d.in_amps,
@@ -436,7 +410,7 @@ app.get('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// GET ONE Device - NOUVEAU: Inclure parent/downstream info
+// GET ONE Device - AMÉLIORATION: Retour complet avec parent/downstream info
 app.get('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -697,7 +671,6 @@ app.get('/api/switchboard/device-references', async (req, res) => {
       [site]
     );
     res.json({ data: rows });
-  } crs.json({ data: rows });
   } catch (e) {
     console.error('[DEVICE REFERENCES] error:', e.message);
     res.status(500).json({ error: 'List failed' });
@@ -957,13 +930,15 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
   }
 });
 
-// PHOTO ANALYSIS - MODIFIÉ: Ne retourner que les données minimales pour Quick AI Search
+// ---- PHOTO ANALYSIS (amélioration 5 : enrichissement systématique + flux Quick AI) ----
 function safeJsonParse(raw) {
   if (typeof raw !== 'string') return raw;
   let s = raw.trim();
+  // strip fences ```json ... ```
   if (s.startsWith('```')) {
     s = s.replace(/^```(?:json)?\s*/i, '').replace(/```$/,'').trim();
   }
+  // si un JSON est noyé dans du texte, on récupère le premier bloc {...}
   const m = s.match(/\{[\s\S]*\}$/);
   if (m) s = m[0];
   return JSON.parse(s);
@@ -987,6 +962,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     const base64Image = buffer.toString('base64');
     const mimeType = req.file.mimetype;
 
+    // Vision description - AMÉLIORATION: Prompt plus précis
     const descriptionResponse = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
@@ -1035,6 +1011,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       });
     }
 
+    // AMÉLIORATION: Recherche existant plus précise
     const { rows: existing } = await pool.query(
       `SELECT d.*, sb.name as switchboard_name
        FROM devices d
@@ -1049,19 +1026,38 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     let responseData;
     
     if (existing.length > 0) {
+      // AMÉLIORATION: Meilleur merge existant + AI specs
       const bestMatch = existing[0];
+      const aiSpecs = await getAiDeviceSpecs(description);
+      
       responseData = {
         ...bestMatch,
+        // Priorité: DB > AI specs > defaults, mais conserve NULL si pas de valeur
+        device_type: bestMatch.device_type || aiSpecs.device_type,
+        in_amps: bestMatch.in_amps !== null ? bestMatch.in_amps : aiSpecs.in_amps,
+        icu_ka: bestMatch.icu_ka !== null ? bestMatch.icu_ka : aiSpecs.icu_ka,
+        ics_ka: bestMatch.ics_ka !== null ? bestMatch.ics_ka : aiSpecs.ics_ka,
+        poles: bestMatch.poles !== null ? bestMatch.poles : aiSpecs.poles,
+        voltage_v: bestMatch.voltage_v !== null ? bestMatch.voltage_v : aiSpecs.voltage_v,
+        trip_unit: bestMatch.trip_unit || aiSpecs.trip_unit,
+        settings: {
+          ...(bestMatch.settings || {}),
+          ...(aiSpecs.settings || {})
+        },
         existing_id: bestMatch.id,
         matched: true,
         photo_description: description.description || `Identified: ${description.manufacturer} ${description.reference}`,
-        quick_ai_query: `${description.manufacturer} ${description.reference}`.trim()
+        quick_ai_query: `${description.manufacturer} ${description.reference}`.trim() // Pour le frontend
       };
+      
       res.json(responseData);
+      
     } else {
+      // Pas d'existant, générer specs AI complètes
       const aiSpecs = await getAiDeviceSpecs(description);
       
       if (switchboardId) {
+        // Créer directement le device
         const { rows: [newDevice] } = await pool.query(
           `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, name)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
@@ -1081,11 +1077,15 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
           photo_description: description.description || `Created: ${description.manufacturer} ${description.reference}`,
           quick_ai_query: `${description.manufacturer} ${description.reference}`.trim()
         });
+        
       } else {
-        res.json({
+        // Retourner specs pour pré-remplissage manuel
+        res.json({ 
+          ...aiSpecs,
           manufacturer: description.manufacturer,
           reference: description.reference,
-          created: false,
+          name: `${description.manufacturer} ${description.reference}`,
+          created: false, 
           requires_switchboard: true,
           photo_description: description.description || `Ready to create: ${description.manufacturer} ${description.reference}`,
           quick_ai_query: `${description.manufacturer} ${description.reference}`.trim()
@@ -1162,7 +1162,7 @@ async function getAiDeviceSpecs(description) {
   }
 }
 
-// AI TIP - AMÉLIORATION: Réponses plus contextuelles
+// ---- AI TIP - AMÉLIORATION: Réponses plus contextuelles ----
 app.post('/api/switchboard/ai-tip', async (req, res) => {
   try {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
@@ -1196,7 +1196,7 @@ app.post('/api/switchboard/ai-tip', async (req, res) => {
   }
 });
 
-// REPORT (PDF) - AMÉLIORATION: Rapport plus complet
+// ---- REPORT (PDF) - AMÉLIORATION: Rapport plus complet ----
 app.get('/api/switchboard/boards/:id/report', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -1206,6 +1206,7 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
     const row = r.rows[0];
     if (!row) return res.status(404).json({ error: 'Switchboard not found' });
 
+    // Get devices avec infos enrichies
     const devsR = await pool.query(`
       SELECT d.*, p.name as parent_name
       FROM devices d
@@ -1221,6 +1222,7 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
     doc.pipe(res);
 
+    // Header amélioré
     doc.rect(0, 0, doc.page.width, 90).fill('#1e3a8a');
     doc.fill('white').fontSize(24).font('Helvetica-Bold').text('ElectroHub', 50, 25);
     doc.fontSize(16).text('Switchboard Technical Report', 50, 50);
@@ -1229,6 +1231,7 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
 
     let y = 110;
     
+    // Switchboard Details
     doc.fontSize(14).font('Helvetica-Bold').fill('#1e3a8a').text('📋 Switchboard Information', 50, y);
     y += 25;
     doc.font('Helvetica').fontSize(11).fill('#333');
@@ -1255,6 +1258,7 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
     if (devices.length === 0) {
       doc.fontSize(11).text('No devices configured', 60, y);
     } else {
+      // Group by main incoming vs regular
       const mains = devices.filter(d => d.is_main_incoming);
       const regulars = devices.filter(d => !d.is_main_incoming);
       
@@ -1281,7 +1285,7 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
         y += 20;
         
         regulars.forEach((d, idx) => {
-          if (y > 750) { doc.addPage(); y = 50; }
+          if (y > 750) { doc.addPage(); y = 50; } // Pagination
           
           doc.fontSize(10).font('Helvetica').text(`${idx + 1}. ${d.manufacturer || 'N/A'} ${d.reference || 'N/A'}`, 60, y);
           y += 12;
@@ -1306,6 +1310,7 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
       }
     }
 
+    // Footer
     y = doc.page.height - 60;
     doc.fontSize(8).fill('#666').text('Generated by ElectroHub • For internal use only', 50, y);
     
