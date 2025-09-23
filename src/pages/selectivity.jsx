@@ -1,17 +1,8 @@
 // src/pages/Selectivity.jsx
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { get, post } from "../api"; // adapt to your helper
-import { Search, Filter, AlertTriangle, CheckCircle2, XCircle, Info } from "lucide-react";
-
-function logTicks(min, max, count = 6) {
-  const ticks = [];
-  for (let k = 0; k < count; k++) {
-    const f = k / (count - 1);
-    ticks.push(min * Math.pow(max / min, f));
-  }
-  return ticks;
-}
+import { get, post } from "../lib/api"; // adjust if your helper lives elsewhere
+import { Search, Filter, Info } from "lucide-react";
 
 function VerdictPill({ verdict }) {
   const styles = {
@@ -37,7 +28,7 @@ export default function Selectivity() {
     if (!switchboardId) return;
     setLoading(true);
     try {
-      const data = await get(`/api/selectivity/pairs?switchboard_id=${encodeURIComponent(switchboardId)}`);
+      const data = await get(`/api/selectivity/pairs`, { switchboard_id: switchboardId });
       setPairs(data?.pairs || []);
     } catch (e) {
       console.error(e);
@@ -79,10 +70,8 @@ export default function Selectivity() {
         downstream_id: p.downstream_id,
         prospective_short_circuit_kA: faultKA ? parseFloat(faultKA) : undefined,
       });
-      // Build chart points on log scale by sampling provided curves
       const up = data.curves?.upstream || [];
       const dn = data.curves?.downstream || [];
-      // Recharts can't do log axes natively, so pre-transform: x=log10(I), y=log10(t)
       const rows = [];
       const pushPts = (arr, who) => {
         arr.forEach(pt => {
@@ -104,10 +93,9 @@ export default function Selectivity() {
       <section className="bg-white rounded-2xl p-4 shadow border">
         <h1 className="text-2xl font-semibold">Selectivity</h1>
         <p className="text-sm text-gray-600 mt-2">
-          This page evaluates upstream/downstream protection device selectivity (discrimination). It uses
-          IEC concepts (e.g., IEC 60947-2 for MCCB/ACB and IEC 60898-1 for MCBs) by comparing simplified
-          time–current curves and settings (In, Isd, ts, Ii). Results are indicative; always confirm with
-          manufacturer selectivity tables for the exact breaker combination and settings.
+          This page evaluates upstream/downstream protection device selectivity (discrimination).
+          IEC concepts (60947-2 for MCCB/ACB, 60898-1 for MCBs) are approximated via time–current curves.
+          Always confirm with manufacturer selectivity tables for exact breaker combinations and settings.
         </p>
       </section>
 
