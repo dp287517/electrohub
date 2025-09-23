@@ -1,7 +1,7 @@
 // src/pages/Selectivity.jsx
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { get, post } from "../lib/api"; // adjust if your helper lives elsewhere
+import { get, post } from "../lib/api";
 import { Search, Filter, Info } from "lucide-react";
 
 function VerdictPill({ verdict }) {
@@ -16,26 +16,35 @@ function VerdictPill({ verdict }) {
 }
 
 export default function Selectivity() {
+  const [boards, setBoards] = useState([]);
   const [switchboardId, setSwitchboardId] = useState("");
-  const [pairs, setPairs] = useState([]);
   const [faultKA, setFaultKA] = useState("");
   const [loading, setLoading] = useState(false);
-  const [selectedPair, setSelectedPair] = useState(null);
   const [scanRows, setScanRows] = useState([]);
   const [filterVerdict, setFilterVerdict] = useState("");
+  const [chartData, setChartData] = useState([]);
+  const [info, setInfo] = useState(null);
 
-  const loadPairs = useCallback(async () => {
+  // -------- initial load: list all switchboards (and default select first) --------
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await get("/api/switchboard/boards", { page: 1, per_page: 1000 });
+        const items = data?.items || data || [];
+        setBoards(items);
+        if (items.length && !switchboardId) {
+          setSwitchboardId(String(items[0].id));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
+
+  // -------- when board changes, run a scan automatically --------
+  useEffect(() => {
     if (!switchboardId) return;
-    setLoading(true);
-    try {
-      const data = await get(`/api/selectivity/pairs`, { switchboard_id: switchboardId });
-      setPairs(data?.pairs || []);
-    } catch (e) {
-      console.error(e);
-      alert("Failed to load pairs");
-    } finally {
-      setLoading(false);
-    }
+    runScan();
   }, [switchboardId]);
 
   const runScan = useCallback(async () => {
@@ -43,7 +52,7 @@ export default function Selectivity() {
     setLoading(true);
     try {
       const data = await post(`/api/selectivity/scan`, {
-        switchboard_id: switchboardId,
+        switchboard_id: Number(switchboardId),
         prospective_short_circuit_kA: faultKA ? parseFloat(faultKA) : undefined,
       });
       setScanRows(data?.rows || []);
@@ -59,25 +68,17 @@ export default function Selectivity() {
     return scanRows.filter(r => !filterVerdict || r.verdict === filterVerdict);
   }, [scanRows, filterVerdict]);
 
-  const [chartData, setChartData] = useState([]);
-  const [info, setInfo] = useState(null);
-
-  const openPair = async (p) => {
-    setSelectedPair(p);
+  const openPair = async (row) => {
     try {
       const data = await post(`/api/selectivity/check`, {
-        upstream_id: p.upstream_id,
-        downstream_id: p.downstream_id,
+        upstream_id: row.upstream_id,
+        downstream_id: row.downstream_id,
         prospective_short_circuit_kA: faultKA ? parseFloat(faultKA) : undefined,
       });
       const up = data.curves?.upstream || [];
       const dn = data.curves?.downstream || [];
       const rows = [];
-      const pushPts = (arr, who) => {
-        arr.forEach(pt => {
-          rows.push({ who, xi: Math.log10(pt.i), yt: Math.log10(pt.t) });
-        });
-      };
+      const pushPts = (arr, who) => arr.forEach(pt => rows.push({ who, xi: Math.log10(pt.i), yt: Math.log10(pt.t) }));
       pushPts(up, "Upstream");
       pushPts(dn, "Downstream");
       setChartData(rows);
@@ -93,30 +94,48 @@ export default function Selectivity() {
       <section className="bg-white rounded-2xl p-4 shadow border">
         <h1 className="text-2xl font-semibold">Selectivity</h1>
         <p className="text-sm text-gray-600 mt-2">
-          This page evaluates upstream/downstream protection device selectivity (discrimination).
-          IEC concepts (60947-2 for MCCB/ACB, 60898-1 for MCBs) are approximated via time–current curves.
-          Always confirm with manufacturer selectivity tables for exact breaker combinations and settings.
+          Evaluate upstream/downstream protection device selectivity (discrimination).
+          Approximations use IEC concepts (60947-2: MCCB/ACB – Ir/Isd/ts/Ii; 60898-1: MCB curves B/C/D).
+          Always verify final results with manufacturer selectivity tables.
         </p>
       </section>
 
       <section className="bg-white rounded-2xl p-4 shadow border">
         <div className="flex flex-wrap gap-3 items-end">
           <div>
-            <label className="block text-xs font-medium text-gray-500">Switchboard ID</label>
-            <input className="border rounded-lg px-3 py-2" value={switchboardId} onChange={e=>setSwitchboardId(e.target.value)} placeholder="e.g. 12" />
+            <label className="block text-xs font-medium text-gray-700">Switchboard</label>
+            <select
+              className="border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900"
+              value={switchboardId}
+              onChange={e=>setSwitchboardId(e.target.value)}
+            >
+              {boards.map(b => <option key={b.id} value={b.id}>{b.name || `#${b.id}`}</option>)}
+            </select>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500">Prospective Isc at board (kA)</label>
-            <input className="border rounded-lg px-3 py-2" value={faultKA} onChange={e=>setFaultKA(e.target.value)} placeholder="e.g. 6" />
+            <label className="block text-xs font-medium text-gray-700">Prospective Isc at board (kA)</label>
+            <input
+              className="border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-400"
+              value={faultKA}
+              onChange={e=>setFaultKA(e.target.value)}
+              placeholder="e.g. 6"
+              inputMode="decimal"
+            />
           </div>
-          <button onClick={loadPairs} className="px-3 py-2 rounded-lg bg-gray-100 border hover:bg-gray-200 flex items-center gap-2">
-            <Search size={16}/> Load pairs
+          <button
+            onClick={runScan}
+            className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+          >
+            Run scan
           </button>
-          <button onClick={runScan} className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700">Run scan</button>
 
           <div className="ml-auto flex gap-2 items-center">
             <Filter size={16} className="text-gray-500"/>
-            <select className="border rounded-lg px-2 py-2" value={filterVerdict} onChange={e=>setFilterVerdict(e.target.value)}>
+            <select
+              className="border border-gray-300 rounded-lg px-2 py-2 bg-white text-gray-900"
+              value={filterVerdict}
+              onChange={e=>setFilterVerdict(e.target.value)}
+            >
               <option value="">All</option>
               <option value="TOTAL">TOTAL</option>
               <option value="PARTIAL">PARTIAL</option>
@@ -145,7 +164,7 @@ export default function Selectivity() {
                   <td className="py-2 pr-4">{r.upstream_name}</td>
                   <td className="py-2 pr-4">{r.downstream_name}</td>
                   <td className="py-2 pr-4"><VerdictPill verdict={r.verdict}/></td>
-                  <td className="py-2 pr-4">{r.limit_kA ? r.limit_kA.toFixed(2) : "—"}</td>
+                  <td className="py-2 pr-4">{r.limit_kA ? Number(r.limit_kA).toFixed(2) : "—"}</td>
                   <td className="py-2 pr-4">{r.remediation}</td>
                   <td className="py-2 pr-4">
                     <button onClick={()=>openPair(r)} className="text-blue-600 hover:underline">View curves</button>
