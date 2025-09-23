@@ -56,6 +56,17 @@ app.use(
   })
 );
 
+// --- PROXY SELECTIVITY (AJOUT: place BEFORE body parsing) ---
+const selectivityTarget = process.env.SELECTIVITY_BASE_URL || 'http://127.0.0.1:3004';
+app.use(
+  '/api/selectivity',
+  createProxyMiddleware({
+    target: selectivityTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
