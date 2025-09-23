@@ -73,28 +73,21 @@ export async function upload(path, formData) {
 export { API_BASE };
 
 /* -------------------------------------------------------------------------- */
-/*  Clients “confort” (optionnels) — n’impactent pas le code existant        */
-/*  Tu peux les utiliser dans Switchboards.jsx ou rester sur get/post/put/del */
+/*  Clients “confort” (optionnels)                                            */
 /* -------------------------------------------------------------------------- */
 
 export const api = {
   switchboard: {
-    /** Liste paginée + filtres (site ajouté automatiquement via header) */
     list: (params) => get("/api/switchboard/boards", params),
-
-    /** Lecture unitaire */
     getOne: (id) => get(`/api/switchboard/boards/${id}`),
-
-    /** Création */
     create: (payload) => post("/api/switchboard/boards", payload),
-
-    /** Mise à jour */
     update: (id, payload) => put(`/api/switchboard/boards/${id}`, payload),
-
-    /** Duplication */
     duplicate: (id) => post(`/api/switchboard/boards/${id}/duplicate`),
-
-    /** Suppression */
     remove: (id) => del(`/api/switchboard/boards/${id}`),
   },
+  selectivity: {
+    pairs: (switchboard_id) => get("/api/selectivity/pairs", { switchboard_id }),
+    scan: (switchboard_id, prospective_short_circuit_kA) => post("/api/selectivity/scan", { switchboard_id, prospective_short_circuit_kA }),
+    check: (upstream_id, downstream_id, prospective_short_circuit_kA) => post("/api/selectivity/check", { upstream_id, downstream_id, prospective_short_circuit_kA }),
+  }
 };
