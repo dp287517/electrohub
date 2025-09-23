@@ -90,11 +90,12 @@ const emptyDeviceForm = {
   manufacturer: '',
   reference: '',
   in_amps: 0,
-  icu_kA: null, // Changé pour permettre NULL
-  ics_kA: null, // Changé pour permettre NULL
-  poles: null, // Changé pour permettre NULL
-  voltage_V: null, // Changé pour permettre NULL
+  icu_ka: 0,
+  ics_ka: 0,
+  poles: 3,
+  voltage_v: 400,
   trip_unit: '',
+  position_number: '',
   settings: {
     ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false,
     curve_type: ''
@@ -383,42 +384,46 @@ export default function Switchboards() {
   const resetDeviceModal = (panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(null);
-    setDeviceForm({ ...emptyDeviceForm, name: '' });
+    setDeviceForm({
+        ...emptyDeviceForm,
+        name: '',
+        position_number: ''
+    });
     setPhotoFile(null);
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
-    setParentSearchInput(''); // CORRECTION: Toujours vide pour création
-    setDownstreamSearchInput(''); // CORRECTION: Toujours vide pour création
-    setQuickAiQuery(''); // CORRECTION: Vide pour création
+    setParentSearchInput('');
+    setDownstreamSearchInput('');
+    setQuickAiQuery('');
     setOpenDevice(true);
-  };
+    };
 
   // CORRECTION MAJEURE: Persistance complète + chargement parent/downstream
   const onEditDevice = async (device, panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(device);
-   
+    
     // Charger les noms parent/downstream en parallèle
     const [parentName, downstreamName] = await Promise.all([
-      loadParentName(device.parent_id),
-      loadDownstreamName(device.downstream_switchboard_id)
+        loadParentName(device.parent_id),
+        loadDownstreamName(device.downstream_switchboard_id)
     ]);
 
     const safeSettings = device.settings || {};
     
-    // CORRECTION: Préserver NULL pour icu_kA, ics_kA, poles, voltage_V
     setDeviceForm({
-      name: device.name || '',
-      device_type: device.device_type || 'Low Voltage Circuit Breaker',
-      manufacturer: device.manufacturer || '',
-      reference: device.reference || '',
-      in_amps: device.in_amps !== null && device.in_amps !== undefined ? Number(device.in_amps) : 0,
-      icu_kA: device.icu_kA !== null && device.icu_kA !== undefined ? Number(device.icu_kA) : null,
-      ics_kA: device.ics_kA !== null && device.ics_kA !== undefined ? Number(device.ics_kA) : null,
-      poles: device.poles !== null && device.poles !== undefined ? Number(device.poles) : null,
-      voltage_V: device.voltage_V !== null && device.voltage_V !== undefined ? Number(device.voltage_V) : null,
-      trip_unit: device.trip_unit || '',
-      settings: {
+        name: device.name || '',
+        device_type: device.device_type || 'Low Voltage Circuit Breaker',
+        manufacturer: device.manufacturer || '',
+        reference: device.reference || '',
+        in_amps: device.in_amps !== null && device.in_amps !== undefined ? Number(device.in_amps) : 0,
+        icu_ka: device.icu_ka !== null && device.icu_ka !== undefined ? Number(device.icu_ka) : 0,
+        ics_ka: device.ics_ka !== null && device.ics_ka !== undefined ? Number(device.ics_ka) : 0,
+        poles: device.poles !== null && device.poles !== undefined ? Number(device.poles) : 3,
+        voltage_v: device.voltage_v !== null && device.voltage_v !== undefined ? Number(device.voltage_v) : 400,
+        trip_unit: device.trip_unit || '',
+        position_number: device.position_number || '',
+        settings: {
         ir: safeSettings.ir !== null && safeSettings.ir !== undefined ? Number(safeSettings.ir) : 1,
         tr: safeSettings.tr !== null && safeSettings.tr !== undefined ? Number(safeSettings.tr) : 10,
         isd: safeSettings.isd !== null && safeSettings.isd !== undefined ? Number(safeSettings.isd) : 6,
@@ -429,24 +434,22 @@ export default function Switchboards() {
         zsi: safeSettings.zsi !== null && safeSettings.zsi !== undefined ? Boolean(safeSettings.zsi) : false,
         erms: safeSettings.erms !== null && safeSettings.erms !== undefined ? Boolean(safeSettings.erms) : false,
         curve_type: safeSettings.curve_type || ''
-      },
-      is_main_incoming: Boolean(device.is_main_incoming),
-      parent_id: device.parent_id || null,
-      downstream_switchboard_id: device.downstream_switchboard_id || null,
-      pv_tests: null,
-      photos: []
+        },
+        is_main_incoming: Boolean(device.is_main_incoming),
+        parent_id: device.parent_id || null,
+        downstream_switchboard_id: device.downstream_switchboard_id || null,
+        pv_tests: null,
+        photos: []
     });
-   
-    // CORRECTION: Parent vide par défaut, seulement suggestions si on tape
+    
     setParentSearchInput(parentName || '');
     setDownstreamSearchInput(downstreamName || '');
     setPhotoFile(null);
-    setQuickAiQuery(''); // CORRECTION: Ne pré-remplit pas automatiquement
+    setQuickAiQuery('');
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
     setOpenDevice(true);
-  };
-
+    };
   const safeUploadStrip = (form) => {
     const { pv_tests, photos, ...rest } = form;
     return { ...rest, pv_tests: null, photos: [] };
@@ -454,38 +457,39 @@ export default function Switchboards() {
 
   const saveDevice = async () => {
     if (!deviceForm.name.trim()) {
-      return notify('Device name is required', 'error');
+        return notify('Device name is required', 'error');
     }
     if (deviceForm.in_amps <= 0) {
-      return notify('Rated current must be greater than 0', 'error');
+        return notify('Rated current must be greater than 0', 'error');
     }
 
     setBusy(true);
     try {
-      const payload = {
+        const payload = {
         ...safeUploadStrip(deviceForm),
-        switchboard_id: currentPanelId
-      };
-     
-      if (editingDevice) {
+        switchboard_id: currentPanelId,
+        position_number: deviceForm.position_number.trim() || null
+        };
+        
+        if (editingDevice) {
         await put(`/api/switchboard/devices/${editingDevice.id}?site=${encodeURIComponent(site)}`, payload);
         notify('Device updated successfully!', 'success');
-      } else {
+        } else {
         await post(`/api/switchboard/devices?site=${encodeURIComponent(site)}`, payload);
         notify('Device created successfully!', 'success');
-      }
-     
-      setOpenDevice(false);
-      setPhotoFile(null);
-      await loadDevices(currentPanelId);
-      await loadDeviceReferences();
+        }
+        
+        setOpenDevice(false);
+        setPhotoFile(null);
+        await loadDevices(currentPanelId);
+        await loadDeviceReferences();
     } catch (e) {
-      console.error('Save device failed:', e);
-      notify('Failed to save device: ' + (e.message || 'Unknown error'), 'error');
+        console.error('Save device failed:', e);
+        notify('Failed to save device: ' + (e.message || 'Unknown error'), 'error');
     } finally {
-      setBusy(false);
+        setBusy(false);
     }
-  };
+    };
 
   // CORRECTION: Suppression des confirm() - action directe avec toast
   const duplicateDevice = async (id, panelId) => {
@@ -547,10 +551,10 @@ export default function Switchboards() {
       reference: ref.reference || prev.reference,
       device_type: ref.device_type || prev.device_type,
       in_amps: Number(ref.in_amps) || prev.in_amps,
-      icu_kA: ref.icu_kA !== null && ref.icu_kA !== undefined ? Number(ref.icu_kA) : prev.icu_kA,
-      ics_kA: ref.ics_kA !== null && ref.ics_kA !== undefined ? Number(ref.ics_kA) : prev.ics_kA,
-      poles: ref.poles !== null && ref.poles !== undefined ? Number(ref.poles) : prev.poles,
-      voltage_V: ref.voltage_V !== null && ref.voltage_V !== undefined ? Number(ref.voltage_V) : prev.voltage_V,
+      icu_kA: Number(ref.icu_kA) || prev.icu_kA,
+      ics_kA: Number(ref.ics_kA) || prev.ics_kA,
+      poles: Number(ref.poles) || prev.poles,
+      voltage_V: Number(ref.voltage_V) || prev.voltage_V,
       trip_unit: ref.trip_unit || prev.trip_unit,
       settings: { ...prev.settings, curve_type: ref.settings?.curve_type || prev.settings.curve_type }
     }));
@@ -575,10 +579,10 @@ export default function Switchboards() {
           manufacturer: data.manufacturer || prev.manufacturer,
           device_type: data.device_type || prev.device_type,
           in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: data.icu_kA !== null && data.icu_kA !== undefined ? Number(data.icu_kA) : prev.icu_kA,
-          ics_kA: data.ics_kA !== null && data.ics_kA !== undefined ? Number(data.ics_kA) : prev.ics_kA,
-          poles: data.poles !== null && data.poles !== undefined ? Number(data.poles) : prev.poles,
-          voltage_V: data.voltage_V !== null && data.voltage_V !== undefined ? Number(data.voltage_V) : prev.voltage_V,
+          icu_kA: Number(data.icu_kA) || prev.icu_kA,
+          ics_kA: Number(data.ics_kA) || prev.ics_kA,
+          poles: Number(data.poles) || prev.poles,
+          voltage_V: Number(data.voltage_V) || prev.voltage_V,
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: {
             ...prev.settings,
@@ -629,10 +633,10 @@ export default function Switchboards() {
           reference: autoFill.reference || prev.reference,
           device_type: autoFill.device_type || prev.device_type,
           in_amps: Number(autoFill.in_amps) || prev.in_amps,
-          icu_kA: autoFill.icu_kA !== null && autoFill.icu_kA !== undefined ? Number(autoFill.icu_kA) : prev.icu_kA,
-          ics_kA: autoFill.ics_kA !== null && autoFill.ics_kA !== undefined ? Number(autoFill.ics_kA) : prev.ics_kA,
-          poles: autoFill.poles !== null && autoFill.poles !== undefined ? Number(autoFill.poles) : prev.poles,
-          voltage_V: autoFill.voltage_V !== null && autoFill.voltage_V !== undefined ? Number(autoFill.voltage_V) : prev.voltage_V,
+          icu_kA: Number(autoFill.icu_kA) || prev.icu_kA,
+          ics_kA: Number(autoFill.ics_kA) || prev.ics_kA,
+          poles: Number(autoFill.poles) || prev.poles,
+          voltage_V: Number(autoFill.voltage_V) || prev.voltage_V,
           trip_unit: autoFill.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, curve_type: autoFill.settings?.curve_type || prev.settings.curve_type }
         }));
@@ -656,10 +660,10 @@ export default function Switchboards() {
           reference: data.reference || prev.reference,
           device_type: data.device_type || prev.device_type,
           in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: data.icu_kA !== null && data.icu_kA !== undefined ? Number(data.icu_kA) : prev.icu_kA,
-          ics_kA: data.ics_kA !== null && data.ics_kA !== undefined ? Number(data.ics_kA) : prev.ics_kA,
-          poles: data.poles !== null && data.poles !== undefined ? Number(data.poles) : prev.poles,
-          voltage_V: data.voltage_V !== null && data.voltage_V !== undefined ? Number(data.voltage_V) : prev.voltage_V,
+          icu_kA: Number(data.icu_kA) || prev.icu_kA,
+          ics_kA: Number(data.ics_kA) || prev.ics_kA,
+          poles: Number(data.poles) || prev.poles,
+          voltage_V: Number(data.voltage_V) || prev.voltage_V,
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, ...data.settings }
         }));
@@ -688,9 +692,7 @@ export default function Switchboards() {
       const formData = new FormData();
       formData.append('photo', photoFile);
      
-      // CORRECTION: Ne pas envoyer switchboard_id si non valide
-      const switchboardIdParam = currentPanelId && Number.isInteger(currentPanelId) ? `&switchboard_id=${encodeURIComponent(currentPanelId)}` : '';
-      const response = await fetch(`/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}${switchboardIdParam}`, {
+      const response = await fetch(`/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}&switchboard_id=${encodeURIComponent(currentPanelId || '')}`, {
         method: 'POST',
         credentials: 'include',
         body: formData
@@ -719,10 +721,10 @@ export default function Switchboards() {
           reference: data.reference || prev.reference,
           device_type: data.device_type || prev.device_type,
           in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: data.icu_kA !== null && data.icu_kA !== undefined ? Number(data.icu_kA) : prev.icu_kA,
-          ics_kA: data.ics_kA !== null && data.ics_kA !== undefined ? Number(data.ics_kA) : prev.ics_kA,
-          poles: data.poles !== null && data.poles !== undefined ? Number(data.poles) : prev.poles,
-          voltage_V: data.voltage_V !== null && data.voltage_V !== undefined ? Number(data.voltage_V) : prev.voltage_V,
+          icu_kA: Number(data.icu_kA) || prev.icu_kA,
+          ics_kA: Number(data.ics_kA) || prev.ics_kA,
+          poles: Number(data.poles) || prev.poles,
+          voltage_V: Number(data.voltage_V) || prev.voltage_V,
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, ...data.settings },
           is_main_incoming: Boolean(data.is_main_incoming)
@@ -742,10 +744,10 @@ export default function Switchboards() {
           reference: data.reference || prev.reference,
           device_type: data.device_type || prev.device_type,
           in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: data.icu_kA !== null && data.icu_kA !== undefined ? Number(data.icu_kA) : prev.icu_kA,
-          ics_kA: data.ics_kA !== null && data.ics_kA !== undefined ? Number(data.ics_kA) : prev.ics_kA,
-          poles: data.poles !== null && data.poles !== undefined ? Number(data.poles) : prev.poles,
-          voltage_V: data.voltage_V !== null && data.voltage_V !== undefined ? Number(data.voltage_V) : prev.voltage_V,
+          icu_kA: Number(data.icu_kA) || prev.icu_kA,
+          ics_kA: Number(data.ics_kA) || prev.ics_kA,
+          poles: Number(data.poles) || prev.poles,
+          voltage_V: Number(data.voltage_V) || prev.voltage_V,
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, ...data.settings }
         }));
@@ -1219,28 +1221,38 @@ export default function Switchboards() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Device Name</label>
-              <input
+                <label className="block text-sm font-medium text-gray-700 mb-2">Device Name</label>
+                <input
                 type="text"
                 value={deviceForm.name}
                 onChange={e => setDeviceForm(f => ({ ...f, name: e.target.value }))}
                 className="input w-full"
                 placeholder="Device name (optional)"
-              />
+                />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
-              <select
+                <label className="block text-sm font-medium text-gray-700 mb-2">Position Number</label>
+                <input
+                type="text"
+                value={deviceForm.position_number}
+                onChange={e => setDeviceForm(f => ({ ...f, position_number: e.target.value }))}
+                className="input w-full"
+                placeholder="e.g., Slot 12 or A3 (optional)"
+                />
+            </div>
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
+                <select
                 value={deviceForm.device_type}
                 onChange={e => setDeviceForm(f => ({ ...f, device_type: e.target.value }))}
                 className="input w-full"
-              >
+                >
                 {deviceTypes.map(type => (
-                  <option key={type} value={type}>{type}</option>
+                    <option key={type} value={type}>{type}</option>
                 ))}
-              </select>
+                </select>
             </div>
-          </div>
+            </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             <div className="relative">
@@ -1290,8 +1302,8 @@ export default function Switchboards() {
               <input
                 type="number"
                 step="0.1"
-                value={deviceForm.icu_kA ?? ''}
-                onChange={e => setDeviceForm(f => ({ ...f, icu_kA: e.target.value === '' ? null : Number(e.target.value) }))}
+                value={deviceForm.icu_kA}
+                onChange={e => setDeviceForm(f => ({ ...f, icu_kA: Number(e.target.value) || 0 }))}
                 className="input w-full"
                 placeholder="25"
               />
@@ -1301,8 +1313,8 @@ export default function Switchboards() {
               <input
                 type="number"
                 step="0.1"
-                value={deviceForm.ics_kA ?? ''}
-                onChange={e => setDeviceForm(f => ({ ...f, ics_kA: e.target.value === '' ? null : Number(e.target.value) }))}
+                value={deviceForm.ics_kA}
+                onChange={e => setDeviceForm(f => ({ ...f, ics_kA: Number(e.target.value) || 0 }))}
                 className="input w-full"
                 placeholder="20"
               />
@@ -1315,8 +1327,8 @@ export default function Switchboards() {
               <input
                 type="number"
                 min="1"
-                value={deviceForm.poles ?? ''}
-                onChange={e => setDeviceForm(f => ({ ...f, poles: e.target.value === '' ? null : Number(e.target.value) }))}
+                value={deviceForm.poles}
+                onChange={e => setDeviceForm(f => ({ ...f, poles: Number(e.target.value) || 3 }))}
                 className="input w-full"
                 placeholder="3"
               />
@@ -1325,8 +1337,8 @@ export default function Switchboards() {
               <label className="block text-sm font-medium text-gray-700 mb-2">Voltage (V)</label>
               <input
                 type="number"
-                value={deviceForm.voltage_V ?? ''}
-                onChange={e => setDeviceForm(f => ({ ...f, voltage_V: e.target.value === '' ? null : Number(e.target.value) }))}
+                value={deviceForm.voltage_V}
+                onChange={e => setDeviceForm(f => ({ ...f, voltage_V: Number(e.target.value) || 400 }))}
                 className="input w-full"
                 placeholder="400"
               />
@@ -1672,7 +1684,6 @@ export default function Switchboards() {
   );
 }
 
-// DeviceTree Component (amélioration 2 : suppression du bouton redondant)
 function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain, level = 0, site }) {
   return (
     <div className={`space-y-3 ${level > 0 ? 'ml-6 border-l border-gray-200 pl-4' : ''}`}>
@@ -1701,11 +1712,15 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  Icu: {device.icu_kA || '—'}kA
+                  Icu: {device.icu_ka || '—'}kA
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
                   {device.poles || '—'}P
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                  Pos: {device.position_number || '—'}
                 </span>
                 {device.settings?.curve_type && (
                   <span className="flex items-center gap-1">
