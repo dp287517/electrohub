@@ -1,3 +1,4 @@
+// server_selectivity.js
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -52,8 +53,6 @@ function siteOf(req) {
 const WHITELIST_SORT = ['name','code','building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
-
-// Schema - Pas de nouvelle table, réutilise devices et switchboards de switchboard
 
 // LIST Pairs amont/aval
 app.get('/api/selectivity/pairs', async (req, res) => {
@@ -113,8 +112,8 @@ app.get('/api/selectivity/check', async (req, res) => {
       return res.json({ status: 'incomplete', missing, remediation: 'Complete device settings in Switchboards' });
     }
 
-    // Calcul sélectivité (simplifié basé sur IEC)
-    const isSelective = checkSelectivity(up, down, Number(fault_current));
+    // Calcul sélectivité et zones non-sélectives
+    const { isSelective, nonSelectiveZones } = checkSelectivity(up, down, Number(fault_current));
     const remediation = isSelective ? [] : getRemediations(up, down);
     const details = { 
       why: isSelective ? 
@@ -122,7 +121,7 @@ app.get('/api/selectivity/check', async (req, res) => {
         'Partial/non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.'
     };
 
-    res.json({ status: isSelective ? 'selective' : 'non-selective', details, remediation });
+    res.json({ status: isSelective ? 'selective' : 'non-selective', details, remediation, nonSelectiveZones });
   } catch (e) {
     console.error('[SELECTIVITY CHECK] error:', e);
     res.status(500).json({ error: 'Check failed' });
@@ -185,16 +184,29 @@ app.post('/api/selectivity/ai-tip', async (req, res) => {
 // Fonctions helpers pour calculs (basés sur recherches IEC)
 function checkSelectivity(up, down, faultI = null) {
   const currents = faultI ? [Number(faultI)] : Array.from({length: 20}, (_, i) => Math.pow(10, i/5) * Math.min(up.in_amps || 100, down.in_amps || 100));
-  for (let I of currents) {
+  const nonSelectiveZones = [];
+  let zoneStart = null;
+  let isSelective = true;
+
+  for (let i = 0; i < currents.length; i++) {
+    const I = currents[i];
     const tDown = calculateTripTime(down, I);
     const tUp = calculateTripTime(up, I);
-    if (tDown >= tUp * 1.05) return false; // Non-selective si aval plus lent
+    if (tDown >= tUp * 1.05) {
+      isSelective = false;
+      if (zoneStart === null) zoneStart = I;
+    } else if (zoneStart !== null) {
+      nonSelectiveZones.push({ xMin: zoneStart, xMax: I });
+      zoneStart = null;
+    }
   }
-  return true;
+  if (zoneStart !== null) nonSelectiveZones.push({ xMin: zoneStart, xMax: currents[currents.length - 1] });
+
+  return { isSelective, nonSelectiveZones };
 }
 
 function calculateTripTime(device, I) {
-  const { settings, in_amps: In, device_type } = device;
+  const { settings, in_amps: In } = device;
   const Ir = settings.ir || 1;
   const Tr = settings.tr || 10;
   const Isd = settings.isd || 6;
@@ -213,12 +225,13 @@ function getRemediations(up, down) {
 
 function generateCurvePoints(device) {
   const points = [];
-  const minI = device.in_amps * 0.1;
-  const maxI = device.icu_ka * 1000;
+  const minI = (device.in_amps || 100) * 0.1;
+  const maxI = (device.icu_ka || 50) * 1000;
   for (let logI = Math.log10(minI); logI < Math.log10(maxI); logI += 0.1) {
     const I = Math.pow(10, logI);
-    const t = calculateTripTime(device, I);
-    if (t < Infinity) points.push({ current: I, time: t });
+    let t = calculateTripTime(device, I);
+    if (t === Infinity) t = 1000; // Limite pour affichage
+    if (t > 0) points.push({ current: I, time: t });
   }
   return points;
 }
