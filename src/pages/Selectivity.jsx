@@ -202,9 +202,12 @@ export default function Selectivity() {
 
   const exportPDF = async () => {
     const pdf = new jsPDF();
+    pdf.setFontSize(16);
     pdf.text('Selectivity Report', 10, 10);
+    pdf.setFontSize(12);
     pdf.text(`Date: ${new Date().toLocaleString()}`, 10, 20);
     
+    // Tableau des paires
     pdf.text('Pairs Status:', 10, 30);
     let y = 40;
     pairs.forEach(pair => {
@@ -213,12 +216,97 @@ export default function Selectivity() {
       y += 10;
     });
 
-    if (chartRef.current) {
-      const canvas = await html2canvas(chartRef.current.chartInstance.canvas);
-      pdf.addPage();
-      pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 10, 180, 100);
+    // Graphiques pour chaque paire vérifiée
+    const canvas = document.createElement('canvas');
+    canvas.width = 600;
+    canvas.height = 300;
+    const ctx = canvas.getContext('2d');
+    let chartInstance = null;
+
+    for (const pair of pairs.filter(p => statuses[p.downstream_id])) {
+      try {
+        const curves = await get('/api/selectivity/curves', {
+          upstream: pair.upstream_id,
+          downstream: pair.downstream_id,
+        });
+        const data = {
+          labels: curves.upstream.map(p => p.current.toFixed(0)),
+          datasets: [
+            { label: 'Upstream', data: curves.upstream.map(p => Math.min(p.time, 1000)), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
+            { label: 'Downstream', data: curves.downstream.map(p => Math.min(p.time, 1000)), borderColor: 'green', tension: 0.1, pointRadius: 0 },
+          ],
+        };
+        const status = statuses[pair.downstream_id];
+        const nonSelectiveZones = status === 'non-selective' ? (await get('/api/selectivity/check', {
+          upstream: pair.upstream_id,
+          downstream: pair.downstream_id,
+        })).nonSelectiveZones : [];
+
+        pdf.addPage();
+        pdf.setFontSize(14);
+        pdf.text(`Selectivity Curve for Pair: ${pair.downstream_name} vs ${pair.upstream_name}`, 10, 10);
+        pdf.setFontSize(12);
+        pdf.text(`Status: ${status}`, 10, 20);
+
+        // Créer un graphique temporaire
+        chartInstance = new ChartJS(ctx, {
+          type: 'line',
+          data: data,
+          options: {
+            responsive: false,
+            plugins: {
+              annotation: {
+                annotations: nonSelectiveZones.map((zone, i) => ({
+                  type: 'box',
+                  xMin: zone.xMin,
+                  xMax: zone.xMax,
+                  backgroundColor: 'rgba(255, 0, 0, 0.2)',
+                  borderColor: 'red',
+                  label: { content: 'Non-Selective', display: true, position: 'center' }
+                }))
+              },
+              title: { display: true, text: `Curve: ${pair.downstream_name} vs ${pair.upstream_name}` },
+              tooltip: {
+                callbacks: {
+                  label: (context) => {
+                    const nonSelective = context.datasetIndex === 1 && context.parsed.y >= data.datasets[0].data[context.dataIndex] * 1.05;
+                    return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}s at ${context.parsed.x}A ${nonSelective ? '(Non-selective)' : ''}`;
+                  }
+                }
+              }
+            },
+            scales: {
+              x: { 
+                type: 'logarithmic', 
+                title: { display: true, text: 'Current (A)' },
+                ticks: { callback: (value) => Number(value).toFixed(0) + 'A' }
+              },
+              y: { 
+                type: 'linear', 
+                title: { display: true, text: 'Time (s)' },
+                min: 0.001,
+                max: 1000,
+                ticks: { 
+                  callback: (value) => Number(value).toFixed(2) + 's',
+                  maxTicksLimit: 10 
+                }
+              },
+            },
+          }
+        });
+
+        // Attendre que le graphique soit rendu
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const imgData = canvas.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', 10, 30, 180, 100);
+        chartInstance.destroy();
+      } catch (e) {
+        console.error('Failed to generate chart for PDF:', e);
+        pdf.text('Error generating curve', 10, 30);
+      }
     }
 
+    canvas.remove();
     pdf.save('selectivity_report.pdf');
   };
 
