@@ -1,213 +1,195 @@
 // src/pages/Selectivity.jsx
-import { useEffect, useMemo, useState, useCallback } from "react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { get, post } from "../lib/api";
-import { Search, Filter, Info } from "lucide-react";
+import { useEffect, useState } from 'react';
+import { get } from '../lib/api.js';
+import { api } from '../lib/api.js'; // Utilise la nouvelle section selectivity
+import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { Line } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  LogarithmicScale,
+} from 'chart.js';
 
-function VerdictPill({ verdict }) {
-  const styles = {
-    "TOTAL": "bg-green-100 text-green-800 border-green-200",
-    "PARTIAL": "bg-yellow-100 text-yellow-800 border-yellow-200",
-    "POOR": "bg-orange-100 text-orange-800 border-orange-200",
-    "NOT SELECTIVE": "bg-red-100 text-red-800 border-red-200",
-    "UNKNOWN": "bg-gray-100 text-gray-800 border-gray-200"
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, LogarithmicScale);
+
+function useUserSite() {
+  try {
+    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+    return user?.site || '';
+  } catch { return ''; }
+}
+
+function Toast({ msg, type }) {
+  const colors = {
+    success: 'bg-green-600 text-white',
+    error: 'bg-red-600 text-white',
+    info: 'bg-blue-600 text-white',
   };
-  return <span className={`px-2 py-1 rounded-full text-xs border ${styles[verdict] || styles.UNKNOWN}`}>{verdict}</span>;
+  return (
+    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-sm ${colors[type]}`}>
+      {msg}
+    </div>
+  );
 }
 
 export default function Selectivity() {
-  const [boards, setBoards] = useState([]);
-  const [switchboardId, setSwitchboardId] = useState("");
-  const [faultKA, setFaultKA] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [scanRows, setScanRows] = useState([]);
-  const [filterVerdict, setFilterVerdict] = useState("");
-  const [chartData, setChartData] = useState([]);
-  const [info, setInfo] = useState(null);
+  const site = useUserSite();
+  const [pairs, setPairs] = useState([]);
+  const [q, setQ] = useState({ q: '', switchboard: '', building: '', floor: '', sort: 'name', dir: 'desc', page: 1 });
+  const [total, setTotal] = useState(0);
+  const [selectedPair, setSelectedPair] = useState(null);
+  const [checkResult, setCheckResult] = useState(null);
+  const [curveData, setCurveData] = useState(null);
+  const [aiTip, setAiTip] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const pageSize = 18;
 
-  // -------- initial load: list all switchboards (and default select first) --------
   useEffect(() => {
-    (async () => {
-      try {
-        const data = await get("/api/switchboard/boards", { page: 1, per_page: 1000 });
-        const items = data?.items || data || [];
-        setBoards(items);
-        if (items.length && !switchboardId) {
-          setSwitchboardId(String(items[0].id));
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    })();
-  }, []);
+    loadPairs();
+  }, [q]);
 
-  // -------- when board changes, run a scan automatically --------
-  useEffect(() => {
-    if (!switchboardId) return;
-    runScan();
-  }, [switchboardId]);
-
-  const runScan = useCallback(async () => {
-    if (!switchboardId) return;
-    setLoading(true);
+  const loadPairs = async () => {
     try {
-      const data = await post(`/api/selectivity/scan`, {
-        switchboard_id: Number(switchboardId),
-        prospective_short_circuit_kA: faultKA ? parseFloat(faultKA) : undefined,
-      });
-      setScanRows(data?.rows || []);
+      if (!site) return;
+      setBusy(true);
+      const data = await api.selectivity.listPairs(q);
+      setPairs(data?.data || []);
+      setTotal(data?.total || 0);
     } catch (e) {
-      console.error(e);
-      alert("Scan failed");
+      setToast({ msg: 'Failed to load pairs', type: 'error' });
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  }, [switchboardId, faultKA]);
+  };
 
-  const filteredRows = useMemo(() => {
-    return scanRows.filter(r => !filterVerdict || r.verdict === filterVerdict);
-  }, [scanRows, filterVerdict]);
-
-  const openPair = async (row) => {
+  const handleCheck = async (upstreamId, downstreamId) => {
     try {
-      const data = await post(`/api/selectivity/check`, {
-        upstream_id: row.upstream_id,
-        downstream_id: row.downstream_id,
-        prospective_short_circuit_kA: faultKA ? parseFloat(faultKA) : undefined,
+      setBusy(true);
+      const result = await api.selectivity.checkPair(upstreamId, downstreamId);
+      setCheckResult(result);
+      const curves = await api.selectivity.getCurves(upstreamId, downstreamId);
+      setCurveData({
+        labels: curves.upstream.map(p => p.current),
+        datasets: [
+          { label: 'Upstream', data: curves.upstream.map(p => p.time), borderColor: 'blue' },
+          { label: 'Downstream', data: curves.downstream.map(p => p.time), borderColor: 'green' },
+        ],
       });
-      const up = data.curves?.upstream || [];
-      const dn = data.curves?.downstream || [];
-      const rows = [];
-      const pushPts = (arr, who) => arr.forEach(pt => rows.push({ who, xi: Math.log10(pt.i), yt: Math.log10(pt.t) }));
-      pushPts(up, "Upstream");
-      pushPts(dn, "Downstream");
-      setChartData(rows);
-      setInfo(data);
+      if (result.status === 'non-selective') {
+        const tip = await api.selectivity.getAiTip({ query: `Remediation for non-selective pair: upstream ${upstreamId}, downstream ${downstreamId}` });
+        setAiTip(tip.tip);
+      }
     } catch (e) {
-      console.error(e);
-      alert("Check failed");
+      setToast({ msg: 'Check failed', type: 'error' });
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <div className="p-4 space-y-6">
-      <section className="bg-white rounded-2xl p-4 shadow border">
-        <h1 className="text-2xl font-semibold">Selectivity</h1>
-        <p className="text-sm text-gray-600 mt-2">
-          Evaluate upstream/downstream protection device selectivity (discrimination).
-          Approximations use IEC concepts (60947-2: MCCB/ACB – Ir/Isd/ts/Ii; 60898-1: MCB curves B/C/D).
-          Always verify final results with manufacturer selectivity tables.
+    <section className="max-w-7xl mx-auto px-4 py-8">
+      <header className="mb-8">
+        <h1 className="text-3xl font-bold text-gray-900 mb-4">Selectivity Analysis</h1>
+        <p className="text-gray-600 max-w-3xl">
+          Cette page vérifie la sélectivité entre disjoncteurs amont et aval basée sur les données des switchboards. 
+          La sélectivité assure que seul le disjoncteur aval déclenche en cas de défaut, évitant des coupures inutiles (normes IEC 60947-2, 60898-1). 
+          Les liens amont/aval sont définis via parent_id dans les devices. Utilisez les filtres pour cibler, visualisez les courbes temps-courant, 
+          et obtenez des remédiations si non-sélectif. Si données manquantes, éditez via la page Switchboards.
         </p>
-      </section>
+      </header>
 
-      <section className="bg-white rounded-2xl p-4 shadow border">
-        <div className="flex flex-wrap gap-3 items-end">
-          <div>
-            <label className="block text-xs font-medium text-gray-700">Switchboard</label>
-            <select
-              className="border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900"
-              value={switchboardId}
-              onChange={e=>setSwitchboardId(e.target.value)}
-            >
-              {boards.map(b => <option key={b.id} value={b.id}>{b.name || `#${b.id}`}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-700">Prospective Isc at board (kA)</label>
-            <input
-              className="border border-gray-300 rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-400"
-              value={faultKA}
-              onChange={e=>setFaultKA(e.target.value)}
-              placeholder="e.g. 6"
-              inputMode="decimal"
-            />
-          </div>
-          <button
-            onClick={runScan}
-            className="px-3 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-          >
-            Run scan
-          </button>
+      {/* Filtres */}
+      <div className="flex flex-wrap gap-4 mb-6">
+        <input
+          className="input flex-1"
+          placeholder="Search by name..."
+          value={q.q}
+          onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
+        />
+        <input className="input w-32" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
+        <input className="input w-32" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
+        <input className="input w-32" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
+      </div>
 
-          <div className="ml-auto flex gap-2 items-center">
-            <Filter size={16} className="text-gray-500"/>
-            <select
-              className="border border-gray-300 rounded-lg px-2 py-2 bg-white text-gray-900"
-              value={filterVerdict}
-              onChange={e=>setFilterVerdict(e.target.value)}
-            >
-              <option value="">All</option>
-              <option value="TOTAL">TOTAL</option>
-              <option value="PARTIAL">PARTIAL</option>
-              <option value="POOR">POOR</option>
-              <option value="NOT SELECTIVE">NOT SELECTIVE</option>
-              <option value="UNKNOWN">UNKNOWN</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto mt-4">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left border-b">
-                <th className="py-2 pr-4">Upstream</th>
-                <th className="py-2 pr-4">Downstream</th>
-                <th className="py-2 pr-4">Verdict</th>
-                <th className="py-2 pr-4">Limit (kA)</th>
-                <th className="py-2 pr-4">Remediation</th>
-                <th className="py-2 pr-4">Actions</th>
+      {/* Tableau */}
+      <div className="overflow-x-auto">
+        <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Downstream</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Upstream</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Switchboard</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {pairs.map(pair => (
+              <tr key={`${pair.downstream_id}-${pair.upstream_id}`} className="hover:bg-gray-50">
+                <td className="px-6 py-4 text-sm text-gray-900">{pair.downstream_name} ({pair.downstream_type})</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{pair.upstream_name} ({pair.upstream_type})</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{pair.switchboard_name}</td>
+                <td className="px-6 py-4 text-sm">
+                  <button
+                    onClick={() => handleCheck(pair.upstream_id, pair.downstream_id)}
+                    className="text-blue-600 hover:underline"
+                  >
+                    Check Selectivity
+                  </button>
+                  <a href={`/app/switchboards?edit=${pair.downstream_id}`} className="ml-4 text-green-600 hover:underline">Edit</a>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map((r, idx) => (
-                <tr key={idx} className="border-b hover:bg-gray-50">
-                  <td className="py-2 pr-4">{r.upstream_name}</td>
-                  <td className="py-2 pr-4">{r.downstream_name}</td>
-                  <td className="py-2 pr-4"><VerdictPill verdict={r.verdict}/></td>
-                  <td className="py-2 pr-4">{r.limit_kA ? Number(r.limit_kA).toFixed(2) : "—"}</td>
-                  <td className="py-2 pr-4">{r.remediation}</td>
-                  <td className="py-2 pr-4">
-                    <button onClick={()=>openPair(r)} className="text-blue-600 hover:underline">View curves</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      {info && (
-        <section className="bg-white rounded-2xl p-4 shadow border">
-          <div className="flex items-center gap-2 mb-2">
-            <Info size={18} className="text-gray-500"/>
-            <div className="font-medium">{info.upstream.name} (Upstream) vs {info.downstream.name} (Downstream)</div>
-            <div className="ml-2"><VerdictPill verdict={info.result?.verdict}/></div>
+      {/* Résultats Check */}
+      {checkResult && (
+        <div className="mt-8 p-6 bg-white rounded-lg border">
+          <h2 className="text-xl font-semibold mb-4">Analysis Result</h2>
+          <div className="flex items-center gap-2 mb-4">
+            {checkResult.status === 'selective' ? <CheckCircle className="text-green-600" /> : <XCircle className="text-red-600" />}
+            <span>{checkResult.status.toUpperCase()}</span>
           </div>
-          <div className="text-xs text-gray-600 mb-3">
-            {info.result?.reasons?.length ? <span className="text-orange-700">Notes: {info.result.reasons.join(" ")}</span> : null}
-            {info.result?.missing?.length ? <span className="ml-2 text-red-700">Missing: {info.result.missing.join(", ")}</span> : null}
-          </div>
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <XAxis type="number" dataKey="xi" tickFormatter={v=>`10^${v.toFixed(1)} A`} />
-                <YAxis type="number" dataKey="yt" tickFormatter={v=>`10^${v.toFixed(1)} s`} />
-                <Tooltip formatter={(v, n, p)=>{
-                  if (p && typeof p.payload?.xi === "number" && typeof p.payload?.yt === "number") {
-                    const I = Math.pow(10, p.payload.xi);
-                    const T = Math.pow(10, p.payload.yt);
-                    return [`t = ${T.toFixed(3)} s`, `I = ${I.toFixed(0)} A`];
-                  }
-                  return v;
-                }}/>
-                <Legend />
-                <Line dataKey="yt" name="Upstream" data={chartData.filter(r=>r.who==='Upstream')} dot={false} strokeWidth={2}/>
-                <Line dataKey="yt" name="Downstream" data={chartData.filter(r=>r.who==='Downstream')} dot={false} strokeWidth={2}/>
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
+          {checkResult.missing?.length > 0 && (
+            <div className="mb-4 text-yellow-600">
+              <AlertTriangle className="inline mr-2" />
+              Missing data: {checkResult.missing.join(', ')}
+            </div>
+          )}
+          {checkResult.remediation?.length > 0 && (
+            <ul className="list-disc pl-5 mb-4">
+              {checkResult.remediation.map((r, i) => <li key={i}>{r}</li>)}
+            </ul>
+          )}
+          {aiTip && <p className="text-gray-600 italic">AI Tip: {aiTip}</p>}
+        </div>
       )}
-    </div>
+
+      {/* Graphique */}
+      {curveData && (
+        <div className="mt-8">
+          <h2 className="text-xl font-semibold mb-4">Time-Current Curves</h2>
+          <Line
+            data={curveData}
+            options={{
+              scales: {
+                x: { type: 'logarithmic', title: { display: true, text: 'Current (A)' } },
+                y: { type: 'logarithmic', title: { display: true, text: 'Time (s)' } },
+              },
+            }}
+          />
+        </div>
+      )}
+
+      {toast && <Toast {...toast} />}
+    </section>
   );
 }
