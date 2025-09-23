@@ -29,7 +29,11 @@
     "xlsx": "^0.18.5",
     "lucide-react": "^0.294.0",
     "chart.js": "^4.4.4",
-    "react-chartjs-2": "^5.2.0"
+    "react-chartjs-2": "^5.2.0",
+    "chartjs-plugin-zoom": "^2.0.1",
+    "chartjs-plugin-annotation": "^3.0.1",
+    "react-confetti": "^6.1.0",
+    "html2canvas": "^1.4.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
