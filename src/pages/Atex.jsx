@@ -305,6 +305,7 @@ export default function Atex() {
   const [pageSize] = useState(100);
   const [total, setTotal] = useState(0);
   const [attachments, setAttachments] = useState([]);
+  const [modalAttachments, setModalAttachments] = useState([]);
 
   function notify(msg, type = 'success') {
     setToast({ msg, type });
@@ -388,6 +389,9 @@ export default function Atex() {
     try {
       const data = await get(`${API_BASE}/api/atex/equipments/${id}/attachments`);
       setAttachments(data || []);
+      if (editItem && editItem.id === id) {
+        setModalAttachments(data || []);
+      }
     } catch (e) {
       console.error('Load attachments failed:', e);
       notify('Failed to load attachments', 'error');
@@ -406,10 +410,18 @@ export default function Atex() {
         await put(`${API_BASE}/api/atex/equipments/${editItem.id}`, payload);
         notify('Equipment updated successfully', 'success');
       } else {
-        await post(`${API_BASE}/api/atex/equipments`, payload);
+        const response = await post(`${API_BASE}/api/atex/equipments`, payload);
+        if (modalAttachments.length > 0) {
+          const formData = new FormData();
+          modalAttachments.forEach(a => {
+            if (a.file) formData.append('files', a.file);
+          });
+          await upload(`${API_BASE}/api/atex/equipments/${response.id}/attachments`, formData);
+        }
         notify('Equipment created successfully', 'success');
       }
       setEditItem(null);
+      setModalAttachments([]);
       await loadData();
     } catch (e) {
       console.error('Save failed:', e);
@@ -456,6 +468,9 @@ export default function Atex() {
       await del(`${API_BASE}/api/atex/attachments/${attId}`);
       notify('Attachment deleted successfully', 'success');
       await loadAttachments(id);
+      if (editItem && editItem.id === id) {
+        setModalAttachments(prev => prev.filter(a => a.id !== attId));
+      }
     } catch (e) {
       console.error('Delete attachment failed:', e);
       notify('Failed to delete attachment', 'error');
@@ -530,6 +545,7 @@ export default function Atex() {
       comments: row.comments || '',
       frequency_months: row.frequency_months || 36
     });
+    loadAttachments(row.id);
   }
 
   function onReset() {
@@ -1014,7 +1030,10 @@ export default function Atex() {
             <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-gray-100">
               <h3 className="text-xl font-semibold text-gray-800">{editItem.id ? 'Edit Equipment' : 'New Equipment'}</h3>
               <button
-                onClick={() => setEditItem(null)}
+                onClick={() => {
+                  setEditItem(null);
+                  setModalAttachments([]);
+                }}
                 className="p-1 rounded-lg hover:bg-gray-200 transition-colors"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1131,6 +1150,43 @@ export default function Atex() {
                     </div>
                   )}
                 </div>
+                <div className="col-span-1 sm:col-span-2 mt-4 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                  <label className="block text-sm font-medium mb-2">Attachments</label>
+                  <p className="text-xs text-gray-500 mb-2">Upload files to attach to this equipment.</p>
+                  <input
+                    type="file"
+                    multiple
+                    className="input text-sm w-full"
+                    disabled={loading}
+                    onChange={e => {
+                      const files = Array.from(e.target.files);
+                      if (files.length === 0) return;
+                      setModalAttachments(prev => [
+                        ...prev,
+                        ...files.map(f => ({ file: f, filename: f.name, id: `temp-${Math.random().toString(36).slice(2)}` }))
+                      ]);
+                      e.target.value = '';
+                    }}
+                  />
+                  {modalAttachments.length === 0 ? (
+                    <p className="text-sm text-gray-500 mt-2">No attachments</p>
+                  ) : (
+                    <ul className="space-y-2 mt-2">
+                      {modalAttachments.map(a => (
+                        <li key={a.id} className="flex items-center justify-between text-sm">
+                          <span className="text-blue-600 truncate">{a.filename}</span>
+                          <button
+                            className="text-red-600 hover:text-red-800"
+                            onClick={() => setModalAttachments(prev => prev.filter(x => x.id !== a.id))}
+                            disabled={loading}
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Gas Zone</label>
                   <select
@@ -1197,7 +1253,10 @@ export default function Atex() {
             <div className="flex justify-end px-6 py-4 border-t bg-gray-50 gap-2">
               <button
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
-                onClick={() => setEditItem(null)}
+                onClick={() => {
+                  setEditItem(null);
+                  setModalAttachments([]);
+                }}
               >
                 Cancel
               </button>
