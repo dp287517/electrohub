@@ -10,7 +10,6 @@ import ProtectedRoute from './components/ProtectedRoute.jsx';
 import Atex from './pages/Atex.jsx';
 import LoopCalc from './pages/LoopCalc.jsx';
 import Switchboards from './pages/Switchboards.jsx';
-import Selectivity from './pages/Selectivity.jsx'; // ⬅️ NEW
 
 export default function App() {
   return (
@@ -25,7 +24,6 @@ export default function App() {
         <Route path="/app/atex" element={<ProtectedRoute><Atex /></ProtectedRoute>} />
         <Route path="/app/loopcalc" element={<ProtectedRoute><LoopCalc /></ProtectedRoute>} />
         <Route path="/app/switchboards" element={<ProtectedRoute><Switchboards /></ProtectedRoute>} />
-        <Route path="/app/selectivity" element={<ProtectedRoute><Selectivity /></ProtectedRoute>} />{/* ⬅️ NEW */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
