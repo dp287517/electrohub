@@ -1,4 +1,3 @@
-// server_selectivity.js
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -54,6 +53,22 @@ const WHITELIST_SORT = ['name','code','building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
+// Schema - Ajout de la table selectivity_checks
+async function ensureSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS selectivity_checks (
+      upstream_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+      downstream_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+      site TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('selective', 'non-selective', 'incomplete')),
+      checked_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (upstream_id, downstream_id, site)
+    );
+    CREATE INDEX IF NOT EXISTS idx_selectivity_checks_site ON selectivity_checks(site);
+  `);
+}
+ensureSchema().catch(e => console.error('[SELECTIVITY SCHEMA] error:', e.message));
+
 // LIST Pairs amont/aval
 app.get('/api/selectivity/pairs', async (req, res) => {
   try {
@@ -72,10 +87,12 @@ app.get('/api/selectivity/pairs', async (req, res) => {
       SELECT 
         d.id AS downstream_id, d.name AS downstream_name, d.device_type AS downstream_type, d.settings AS downstream_settings,
         u.id AS upstream_id, u.name AS upstream_name, u.device_type AS upstream_type, u.settings AS upstream_settings,
-        s.id AS switchboard_id, s.name AS switchboard_name
+        s.id AS switchboard_id, s.name AS switchboard_name,
+        sc.status AS status
       FROM devices d
       JOIN devices u ON d.parent_id = u.id
       JOIN switchboards s ON d.switchboard_id = s.id
+      LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id AND u.id = sc.upstream_id AND sc.site = $1
       WHERE ${where.join(' AND ')}
       ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
       LIMIT ${limit} OFFSET ${offset}
@@ -109,6 +126,12 @@ app.get('/api/selectivity/check', async (req, res) => {
     if (!up.in_amps || !down.in_amps) missing.push('In amps missing');
 
     if (missing.length > 0) {
+      await pool.query(`
+        INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status, checked_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (upstream_id, downstream_id, site)
+        DO UPDATE SET status = $4, checked_at = NOW()
+      `, [Number(upstream), Number(downstream), site, 'incomplete']);
       return res.json({ status: 'incomplete', missing, remediation: 'Complete device settings in Switchboards' });
     }
 
@@ -120,6 +143,14 @@ app.get('/api/selectivity/check', async (req, res) => {
         'Total selectivity achieved: Downstream trip time < upstream for all tested currents (IEC 60947-2).' : 
         'Partial/non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.'
     };
+
+    // Sauvegarde du statut
+    await pool.query(`
+      INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status, checked_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (upstream_id, downstream_id, site)
+      DO UPDATE SET status = $4, checked_at = NOW()
+    `, [Number(upstream), Number(downstream), site, isSelective ? 'selective' : 'non-selective']);
 
     res.json({ status: isSelective ? 'selective' : 'non-selective', details, remediation, nonSelectiveZones });
   } catch (e) {
@@ -142,7 +173,7 @@ app.get('/api/selectivity/curves', async (req, res) => {
     const up = r.rows.find(d => d.id === Number(upstream));
     const down = r.rows.find(d => d.id === Number(downstream));
 
-    const upCurve = generateCurvePoints(up); // Points [current, time]
+    const upCurve = generateCurvePoints(up);
     const downCurve = generateCurvePoints(down);
 
     res.json({ upstream: upCurve, downstream: downCurve });
