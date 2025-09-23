@@ -91,11 +91,12 @@ async function ensureSchema() {
       manufacturer TEXT,
       reference TEXT,
       in_amps NUMERIC,
-      icu_kA NUMERIC,
-      ics_kA NUMERIC,
+      icu_ka NUMERIC,
+      ics_ka NUMERIC,
       poles INTEGER,
-      voltage_V NUMERIC,
+      voltage_v NUMERIC,
       trip_unit TEXT,
+      position_number TEXT,
       settings JSONB DEFAULT '{}'::jsonb,
       is_main_incoming BOOLEAN DEFAULT FALSE,
       pv_tests BYTEA,
@@ -107,22 +108,42 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_parent ON devices(parent_id);
     CREATE INDEX IF NOT EXISTS idx_devices_site ON devices(site);
     CREATE INDEX IF NOT EXISTS idx_devices_reference ON devices(reference);
+    CREATE INDEX IF NOT EXISTS idx_devices_downstream ON devices(downstream_switchboard_id);
+    CREATE INDEX IF NOT EXISTS idx_devices_manufacturer ON devices(manufacturer);
+    CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(name);
+    CREATE INDEX IF NOT EXISTS idx_devices_position ON devices(position_number);
 
-    -- AMÉLIORATION: Ajout de colonnes manquantes si elles n'existent pas
+    -- Add columns if missing
     DO $$
     BEGIN
-      IF NOT EXISTS (
-        SELECT FROM information_schema.columns 
-        WHERE table_name = 'devices' AND column_name = 'name'
-      ) THEN
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'name') THEN
         ALTER TABLE devices ADD COLUMN name TEXT;
       END IF;
-      
-      -- AMÉLIORATION: Assurer que settings a les clés par défaut
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'position_number') THEN
+        ALTER TABLE devices ADD COLUMN position_number TEXT;
+      END IF;
+      -- Ensure settings defaults
       UPDATE devices 
       SET settings = COALESCE(settings, '{}'::jsonb) || 
         '{"ir": 1, "tr": 10, "isd": 6, "tsd": 0.1, "ii": 10, "ig": 0.5, "tg": 0.2, "zsi": false, "erms": false, "curve_type": ""}'::jsonb
       WHERE settings IS NULL OR settings = '{}'::jsonb;
+    END $$;
+
+    -- Add trigger if missing (matches schema)
+    CREATE OR REPLACE FUNCTION update_updated_at_column() RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = NOW();
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_devices_updated_at') THEN
+        CREATE TRIGGER update_devices_updated_at
+        BEFORE UPDATE ON devices
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+      END IF;
     END $$;
   `);
 }
@@ -375,10 +396,10 @@ app.get('/api/switchboard/devices', async (req, res) => {
       ...d,
       // Conserver les NULL réels pour persistance
       in_amps: d.in_amps,
-      icu_kA: d.icu_kA,
-      ics_kA: d.ics_kA,
+      icu_ka: d.icu_ka,
+      ics_ka: d.ics_ka,
       poles: d.poles,
-      voltage_V: d.voltage_V,
+      voltage_v: d.voltage_v,
       settings: d.settings || {
         ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: ''
       }
@@ -420,10 +441,10 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
       ...device,
       // Conserver les NULL réels pour persistance
       in_amps: device.in_amps,
-      icu_kA: device.icu_kA,
-      ics_kA: device.ics_kA,
+      icu_ka: device.icu_ka,
+      ics_ka: device.ics_ka,
       poles: device.poles,
-      voltage_V: device.voltage_V,
+      voltage_v: device.voltage_v,
       settings: device.settings || {
         ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: ''
       }
@@ -489,18 +510,18 @@ app.post('/api/switchboard/devices', async (req, res) => {
     };
 
     const { rows } = await pool.query(
-      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, is_main_incoming, pv_tests, photos, position_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
        RETURNING *`,
       [device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
        b.in_amps !== undefined ? Number(b.in_amps) : null, 
-       b.icu_kA !== undefined ? Number(b.icu_kA) : null,
-       b.ics_kA !== undefined ? Number(b.ics_kA) : null, 
+       b.icu_ka !== undefined ? Number(b.icu_ka) : null,
+       b.ics_ka !== undefined ? Number(b.ics_ka) : null, 
        b.poles !== undefined ? Number(b.poles) : null,
-       b.voltage_V !== undefined ? Number(b.voltage_V) : null,
+       b.voltage_v !== undefined ? Number(b.voltage_v) : null,
        b.trip_unit || null, 
        mergedSettings,
-       !!b.is_main_incoming, safePV, safePhotos]
+       !!b.is_main_incoming, safePV, safePhotos, b.position_number || null]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -538,10 +559,10 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE devices SET
         parent_id=$1, downstream_switchboard_id=$2, name=$3, device_type=$4, manufacturer=$5, reference=$6, 
-        in_amps=$7, icu_kA=$8, ics_kA=$9, poles=$10, voltage_V=$11, trip_unit=$12, settings=$13, is_main_incoming=$14, 
-        pv_tests=$15, photos=$16, updated_at=NOW()
+        in_amps=$7, icu_ka=$8, ics_ka=$9, poles=$10, voltage_v=$11, trip_unit=$12, settings=$13, is_main_incoming=$14, 
+        pv_tests=$15, photos=$16, position_number=$17
        FROM switchboards sb
-       WHERE devices.id=$17 AND devices.switchboard_id = sb.id AND sb.site=$18
+       WHERE devices.id=$18 AND devices.switchboard_id = sb.id AND sb.site=$19
        RETURNING devices.*`,
       [
         b.parent_id !== undefined ? b.parent_id : null, 
@@ -551,17 +572,17 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         b.manufacturer !== undefined ? b.manufacturer : null,
         b.reference !== undefined ? b.reference : null,
         b.in_amps !== undefined ? Number(b.in_amps) : null,
-        b.icu_kA !== undefined ? Number(b.icu_kA) : null,
-        b.ics_kA !== undefined ? Number(b.ics_kA) : null,
+        b.icu_ka !== undefined ? Number(b.icu_ka) : null,
+        b.ics_ka !== undefined ? Number(b.ics_ka) : null,
         b.poles !== undefined ? Number(b.poles) : null,
-        b.voltage_V !== undefined ? Number(b.voltage_V) : null,
+        b.voltage_v !== undefined ? Number(b.voltage_v) : null,
         b.trip_unit !== undefined ? b.trip_unit : null,
         mergedSettings,
-        !!b.is_main_incoming, 
-        safePV, 
-        safePhotos, 
-        id, 
-        site
+        !!b.is_main_incoming,
+        safePV,
+        safePhotos,
+        b.position_number !== undefined ? b.position_number : null,
+        id, site
       ]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
@@ -579,13 +600,9 @@ app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     const r = await pool.query(
-      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, is_main_incoming, pv_tests, photos)
-       SELECT sb.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
-              COALESCE(d.name, d.reference) || ' (copy)', d.device_type, d.manufacturer, COALESCE(d.reference, 'Device') || ' (copy)',
-              d.in_amps, d.icu_kA, d.ics_kA, d.poles, d.voltage_V, d.trip_unit, d.settings, FALSE, d.pv_tests, d.photos
-       FROM devices d
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE d.id=$1 AND sb.site=$2
+      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, is_main_incoming, pv_tests, photos, position_number)
+       SELECT site, switchboard_id, parent_id, downstream_switchboard_id, name || ' (copy)', device_type, manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, FALSE, pv_tests, photos, position_number
+       FROM devices WHERE id=$1 AND site=$2
        RETURNING *`,
       [id, site]
     );
@@ -603,13 +620,7 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
-
-    const r = await pool.query(
-      `DELETE FROM devices d
-       USING switchboards sb
-       WHERE d.id=$1 AND d.switchboard_id = sb.id AND sb.site=$2`,
-      [id, site]
-    );
+    const r = await pool.query(`DELETE FROM devices WHERE id=$1 AND site=$2`, [id, site]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
     res.json({ success: true, deleted: id });
   } catch (e) {
@@ -618,79 +629,54 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// Set Main Incoming
+// SET Main Incoming
 app.put('/api/switchboard/devices/:id/set-main', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
-    const is_main_incoming = !!req.body.is_main_incoming;
+    const b = req.body || {};
+    const isMain = !!b.is_main_incoming;
 
-    const r = await pool.query(
-      `UPDATE devices d
-       SET is_main_incoming=$1, updated_at=NOW()
-       FROM switchboards sb
-       WHERE d.id=$2 AND d.switchboard_id = sb.id AND sb.site=$3
-       RETURNING d.*`,
-      [is_main_incoming, id, site]
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
-    res.json(r.rows[0]);
-  } catch (e) {
-    console.error('[DEVICES SET MAIN] error:', e.message);
-    res.status(500).json({ error: 'Set main failed' });
-  }
-});
-
-// Unique Device References
-app.get('/api/switchboard/device-references', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
     const { rows } = await pool.query(
-      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings
-       FROM devices 
-       WHERE site=$1 AND manufacturer IS NOT NULL AND reference IS NOT NULL 
-       ORDER BY manufacturer, reference`,
-      [site]
+      `UPDATE devices SET is_main_incoming=$1
+       FROM switchboards sb
+       WHERE devices.id=$2 AND devices.switchboard_id = sb.id AND sb.site=$3
+       RETURNING devices.*`,
+      [isMain, id, site]
     );
-    res.json({ data: rows });
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
   } catch (e) {
-    console.error('[DEVICE REFERENCES] error:', e.message);
-    res.status(500).json({ error: 'List failed' });
+    console.error('[SET MAIN] error:', e.message);
+    res.status(500).json({ error: 'Update failed' });
   }
 });
 
-// AMÉLIORATION: Recherche parents enrichie avec plus d'infos
+// Search Parent Devices
 app.get('/api/switchboard/search-parents', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { query = '', switchboard_id } = req.query;
-    if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
+    const query = (req.query.query || '').trim().toLowerCase();
+    const switchboard_id = Number(req.query.switchboard_id);
 
-    const { rows } = await pool.query(
-      `SELECT DISTINCT d.id, d.name, d.device_type, d.manufacturer, d.reference, d.in_amps,
-       CASE 
-         WHEN d.is_main_incoming THEN 'MAIN'
-         WHEN d.parent_id IS NOT NULL THEN 'CHILD'
-         ELSE 'STANDALONE'
-       END as hierarchy_type
-       FROM devices d 
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE sb.id = $1 AND sb.site = $2 
-       AND ($3 = '' OR 
-            d.name ILIKE $3 OR 
-            d.reference ILIKE $3 OR 
-            d.manufacturer ILIKE $3 OR
-            (d.manufacturer || ' ' || d.reference) ILIKE $3)
-       ORDER BY 
-         CASE WHEN d.is_main_incoming THEN 0 ELSE 1 END,
-         d.name NULLS LAST, 
-         d.reference NULLS LAST 
-       LIMIT 15`,
-      [switchboard_id, site, `%${query}%`]
-    );
+    const where = ['d.site = $1', 'd.switchboard_id != $2'];
+    const vals = [site, switchboard_id];
+    let i = 3;
+    if (query) {
+      where.push(`(LOWER(d.name) ILIKE $${i} OR LOWER(d.manufacturer) ILIKE $${i} OR LOWER(d.reference) ILIKE $${i})`);
+      vals.push(`%${query}%`);
+      i++;
+    }
+
+    const sql = `SELECT d.id, d.name, d.device_type, d.manufacturer, d.reference, s.name as switchboard_name
+                 FROM devices d
+                 JOIN switchboards s ON d.switchboard_id = s.id
+                 WHERE ${where.join(' AND ')}
+                 ORDER BY d.created_at DESC
+                 LIMIT 20`;
+    const { rows } = await pool.query(sql, vals);
     res.json({ suggestions: rows });
   } catch (e) {
     console.error('[SEARCH PARENTS] error:', e.message);
@@ -698,31 +684,28 @@ app.get('/api/switchboard/search-parents', async (req, res) => {
   }
 });
 
-// AMÉLIORATION: Recherche downstreams enrichie
+// Search Downstream Switchboards
 app.get('/api/switchboard/search-downstreams', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { query = '' } = req.query;
+    const query = (req.query.query || '').trim().toLowerCase();
 
-    const { rows } = await pool.query(
-      `SELECT id, name, code, building_code, floor, room, is_principal,
-       COUNT(d.id) as device_count
-       FROM switchboards sb
-       LEFT JOIN devices d ON sb.id = d.switchboard_id
-       WHERE site = $1 
-       AND ($2 = '' OR 
-            name ILIKE $2 OR 
-            code ILIKE $2 OR 
-            building_code ILIKE $2 OR
-            (building_code || ' ' || floor || ' ' || room) ILIKE $2)
-       GROUP BY sb.id, sb.name, sb.code, sb.building_code, sb.floor, sb.room, sb.is_principal
-       ORDER BY 
-         CASE WHEN is_principal THEN 0 ELSE 1 END,
-         name, code 
-       LIMIT 15`,
-      [site, `%${query}%`]
-    );
+    const where = ['site = $1'];
+    const vals = [site];
+    let i = 2;
+    if (query) {
+      where.push(`(LOWER(name) ILIKE $${i} OR LOWER(code) ILIKE $${i})`);
+      vals.push(`%${query}%`);
+      i++;
+    }
+
+    const sql = `SELECT id, name, code, building_code, floor, room
+                 FROM switchboards
+                 WHERE ${where.join(' AND ')}
+                 ORDER BY created_at DESC
+                 LIMIT 20`;
+    const { rows } = await pool.query(sql, vals);
     res.json({ suggestions: rows });
   } catch (e) {
     console.error('[SEARCH DOWNSTREAMS] error:', e.message);
@@ -730,37 +713,35 @@ app.get('/api/switchboard/search-downstreams', async (req, res) => {
   }
 });
 
-// AMÉLIORATION: Recherche références avec auto-fill plus intelligent
+// Search Device References
 app.get('/api/switchboard/search-references', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { query = '' } = req.query;
+    const query = (req.query.query || '').trim().toLowerCase();
 
-    if (!query.trim()) return res.json({ suggestions: [], auto_fill: null });
+    const where = ['site = $1'];
+    const vals = [site];
+    let i = 2;
+    if (query) {
+      where.push(`(LOWER(reference) ILIKE $${i} OR LOWER(manufacturer) ILIKE $${i})`);
+      vals.push(`%${query}%`);
+      i++;
+    }
 
-    const { rows } = await pool.query(
-      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings
-      FROM devices 
-      WHERE site = $1 
-      AND (LOWER(COALESCE(manufacturer, '')) LIKE LOWER($2) OR 
-            LOWER(COALESCE(reference, '')) LIKE LOWER($2) OR
-            LOWER(COALESCE(manufacturer || ' ' || reference, '')) LIKE LOWER($2))
-      ORDER BY manufacturer NULLS LAST, reference NULLS LAST
-      LIMIT 15`,
-      [site, `%${query}%`]
-    );
+    const sql = `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings
+                 FROM devices
+                 WHERE ${where.join(' AND ')}
+                 ORDER BY manufacturer, reference
+                 LIMIT 20`;
+    const { rows } = await pool.query(sql, vals);
 
-    // Auto-fill si match exact ou très proche
     let exactMatch = null;
-    const queryLower = query.toLowerCase().trim();
-    
+    const queryLower = query.toLowerCase();
     for (const row of rows) {
       const refLower = (row.reference || '').toLowerCase();
       const mfgLower = (row.manufacturer || '').toLowerCase();
-      const fullLower = `${mfgLower} ${refLower}`.trim().toLowerCase();
-      
-      // Match exact sur reference OU manufacturer OU full string
+      const fullLower = `${mfgLower} ${refLower}`.trim();
       if (refLower === queryLower || mfgLower === queryLower || fullLower === queryLower) {
         exactMatch = row;
         break;
@@ -778,10 +759,10 @@ app.get('/api/switchboard/search-references', async (req, res) => {
       ...r,
       // Conserver les valeurs réelles (pas de fallback)
       in_amps: r.in_amps,
-      icu_kA: r.icu_kA,
-      ics_kA: r.ics_kA,
+      icu_ka: r.icu_ka,
+      ics_ka: r.ics_ka,
       poles: r.poles,
-      voltage_V: r.voltage_V,
+      voltage_v: r.voltage_v,
       settings: r.settings || {}
     }));
 
@@ -792,10 +773,10 @@ app.get('/api/switchboard/search-references', async (req, res) => {
         reference: exactMatch.reference,
         device_type: exactMatch.device_type || 'Low Voltage Circuit Breaker',
         in_amps: exactMatch.in_amps,
-        icu_kA: exactMatch.icu_kA,
-        ics_kA: exactMatch.ics_kA,
+        icu_ka: exactMatch.icu_ka,
+        ics_ka: exactMatch.ics_ka,
         poles: exactMatch.poles,
-        voltage_V: exactMatch.voltage_V,
+        voltage_v: exactMatch.voltage_v,
         trip_unit: exactMatch.trip_unit || '',
         settings: exactMatch.settings || { curve_type: '' }
       } : null 
@@ -828,10 +809,10 @@ Required fields (use realistic values based on manufacturer standards):
 - reference: string (specific model number)
 - device_type: string (e.g. "MCCB", "ACB", "MCB", "Low Voltage Circuit Breaker")
 - in_amps: number (rated current in Amps)
-- icu_kA: number (ultimate breaking capacity in kA) 
-- ics_kA: number (service breaking capacity in kA, usually 0.75-1.0 × Icu)
+- icu_ka: number (ultimate breaking capacity in kA) 
+- ics_ka: number (service breaking capacity in kA, usually 0.75-1.0 × Icu)
 - poles: number (1-4 poles)
-- voltage_V: number (rated voltage in Volts, typically 400 for LV)
+- voltage_v: number (rated voltage in Volts, typically 400 for LV)
 - trip_unit: string (e.g. "Thermal Magnetic", "Electronic", "Micrologic")
 
 Settings object (LSIG protection parameters - use realistic defaults):
@@ -863,10 +844,10 @@ Output ONLY valid JSON. If uncertain about a value, use null. Base values on ele
       reference: jsonResponse.reference || null,
       device_type: jsonResponse.device_type || 'Low Voltage Circuit Breaker',
       in_amps: jsonResponse.in_amps ? Number(jsonResponse.in_amps) : null,
-      icu_kA: jsonResponse.icu_kA ? Number(jsonResponse.icu_kA) : null,
-      ics_kA: jsonResponse.ics_kA ? Number(jsonResponse.ics_kA) : (jsonResponse.icu_kA ? Number(jsonResponse.icu_kA) * 0.75 : null),
+      icu_ka: jsonResponse.icu_ka ? Number(jsonResponse.icu_ka) : null,
+      ics_ka: jsonResponse.ics_ka ? Number(jsonResponse.ics_ka) : (jsonResponse.icu_ka ? Number(jsonResponse.icu_ka) * 0.75 : null),
       poles: jsonResponse.poles ? Number(jsonResponse.poles) : 3,
-      voltage_V: jsonResponse.voltage_V ? Number(jsonResponse.voltage_V) : 400,
+      voltage_v: jsonResponse.voltage_v ? Number(jsonResponse.voltage_v) : 400,
       trip_unit: jsonResponse.trip_unit || null,
       settings: {
         ir: jsonResponse.settings?.ir ? Number(jsonResponse.settings.ir) : 1,
@@ -942,7 +923,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     if (!site) return res.status(400).json({ error: 'Missing site' });
     if (!openai || !req.file) return res.status(400).json({ error: 'OpenAI or file missing' });
 
-    const switchboardId = req.query.switchboard_id && Number.isInteger(Number(req.query.switchboard_id)) ? Number(req.query.switchboard_id) : null;
+    const switchboardId = req.query.switchboard_id ? Number(req.query.switchboard_id) : null;
     let deviceSite = site;
     if (switchboardId) {
       const chk = await pool.query('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboardId, site]);
@@ -973,7 +954,7 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
               - device_type: type (Circuit Breaker, MCCB, ACB, MCB, Switch, Fuse, etc.)
               - in_amps: rated current if visible
               - poles: number of poles if visible
-              - voltage_V: voltage rating if visible
+              - voltage_v: voltage rating if visible
               - description: brief technical description of what you see
 
               Be specific with model numbers. If text is unclear, use "unknown". JSON only.` 
@@ -1027,10 +1008,10 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
         // Priorité: DB > AI specs > defaults, mais conserve NULL si pas de valeur
         device_type: bestMatch.device_type || aiSpecs.device_type,
         in_amps: bestMatch.in_amps !== null ? bestMatch.in_amps : aiSpecs.in_amps,
-        icu_kA: bestMatch.icu_kA !== null ? bestMatch.icu_kA : aiSpecs.icu_kA,
-        ics_kA: bestMatch.ics_kA !== null ? bestMatch.ics_kA : aiSpecs.ics_kA,
+        icu_ka: bestMatch.icu_ka !== null ? bestMatch.icu_ka : aiSpecs.icu_ka,
+        ics_ka: bestMatch.ics_ka !== null ? bestMatch.ics_ka : aiSpecs.ics_ka,
         poles: bestMatch.poles !== null ? bestMatch.poles : aiSpecs.poles,
-        voltage_V: bestMatch.voltage_V !== null ? bestMatch.voltage_V : aiSpecs.voltage_V,
+        voltage_v: bestMatch.voltage_v !== null ? bestMatch.voltage_v : aiSpecs.voltage_v,
         trip_unit: bestMatch.trip_unit || aiSpecs.trip_unit,
         settings: {
           ...(bestMatch.settings || {}),
@@ -1051,14 +1032,14 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       if (switchboardId) {
         // Créer directement le device
         const { rows: [newDevice] } = await pool.query(
-          `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_kA, ics_kA, poles, voltage_V, trip_unit, settings, name)
+          `INSERT INTO devices (site, switchboard_id, device_type, manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, name)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
            RETURNING *`,
           [deviceSite, switchboardId, 
            aiSpecs.device_type || description.device_type || 'Low Voltage Circuit Breaker', 
            description.manufacturer,
            description.reference,
-           aiSpecs.in_amps, aiSpecs.icu_kA, aiSpecs.ics_kA, aiSpecs.poles, aiSpecs.voltage_V,
+           aiSpecs.in_amps, aiSpecs.icu_ka, aiSpecs.ics_ka, aiSpecs.poles, aiSpecs.voltage_v,
            aiSpecs.trip_unit, aiSpecs.settings,
            `${description.manufacturer} ${description.reference}`]
         );
@@ -1102,10 +1083,10 @@ async function getAiDeviceSpecs(description) {
     Return JSON with:
     - device_type: specific type
     - in_amps: realistic rated current
-    - icu_kA: ultimate breaking capacity (kA)
-    - ics_kA: service breaking capacity (typically 75% of Icu)
+    - icu_ka: ultimate breaking capacity (kA)
+    - ics_ka: service breaking capacity (typically 75% of Icu)
     - poles: number of poles (1-4)
-    - voltage_V: rated voltage (typically 400V for LV)
+    - voltage_v: rated voltage (typically 400V for LV)
     - trip_unit: type of trip unit
     - settings: object with {ir, tr, isd, tsd, ii, ig, tg, zsi, erms, curve_type}
     
@@ -1127,10 +1108,10 @@ async function getAiDeviceSpecs(description) {
     return {
       device_type: specs.device_type || 'Low Voltage Circuit Breaker',
       in_amps: specs.in_amps ? Number(specs.in_amps) : null,
-      icu_kA: specs.icu_kA ? Number(specs.icu_kA) : null,
-      ics_kA: specs.ics_kA ? Number(specs.ics_kA) : null,
+      icu_ka: specs.icu_ka ? Number(specs.icu_ka) : null,
+      ics_ka: specs.ics_ka ? Number(specs.ics_ka) : null,
       poles: specs.poles ? Number(specs.poles) : 3,
-      voltage_V: specs.voltage_V ? Number(specs.voltage_V) : 400,
+      voltage_v: specs.voltage_v ? Number(specs.voltage_v) : 400,
       trip_unit: specs.trip_unit || null,
       settings: {
         ir: specs.settings?.ir ? Number(specs.settings.ir) : 1,
@@ -1282,7 +1263,7 @@ app.get('/api/switchboard/boards/:id/report', async (req, res) => {
           
           doc.fontSize(10).font('Helvetica').text(`${idx + 1}. ${d.manufacturer || 'N/A'} ${d.reference || 'N/A'}`, 60, y);
           y += 12;
-          doc.text(`   ${d.device_type} | ${d.in_amps || 'N/A'}A | Icu: ${d.icu_kA || 'N/A'}kA | ${d.poles || 'N/A'}P`, 70, y);
+          doc.text(`   ${d.device_type} | ${d.in_amps || 'N/A'}A | Icu: ${d.icu_ka || 'N/A'}kA | ${d.poles || 'N/A'}P`, 70, y);
           
           if (d.settings && (d.settings.ir || d.settings.curve_type)) {
             y += 12;
