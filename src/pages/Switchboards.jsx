@@ -712,12 +712,12 @@ export default function Switchboards() {
     if (!photoFile) {
       return notify('Please select a photo first', 'info');
     }
-   
+  
     setDeviceSearchBusy(true);
     try {
       const formData = new FormData();
       formData.append('photo', photoFile);
-     
+    
       // CORRECTION: Ne pas envoyer switchboard_id si non valide
       const switchboardIdParam = currentPanelId && Number.isInteger(currentPanelId) ? `&switchboard_id=${encodeURIComponent(currentPanelId)}` : '';
       const response = await fetch(`/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}${switchboardIdParam}`, {
@@ -725,63 +725,30 @@ export default function Switchboards() {
         credentials: 'include',
         body: formData
       });
-     
+    
       const data = await response.json();
-     
+    
       if (data.error) {
         notify(`Photo analysis failed: ${data.error}`, 'error');
         return;
       }
-     
-      // NOUVELLE COMBINAISON: Pré-remplir Quick AI Search avec manufacturer + reference
+    
+      // Pré-remplir uniquement Quick AI Search avec manufacturer + reference
       if (data.manufacturer && data.reference) {
         const quickQuery = `${data.manufacturer} ${data.reference}`.trim();
         setQuickAiQuery(quickQuery);
         notify(`✅ Photo analyzed! Quick AI Search ready: "${quickQuery}". Click "Search (AI)" to complete fields.`, 'success');
+      } else {
+        notify('Photo analyzed but no clear manufacturer or reference identified.', 'info');
       }
 
-      if (data.existing_id) {
-        // Existing device found, load it
-        setDeviceForm(prev => ({
-          ...prev,
-          name: data.name || prev.name,
-          manufacturer: data.manufacturer || prev.manufacturer,
-          reference: data.reference || prev.reference,
-          device_type: data.device_type || prev.device_type,
-          in_amps: data.in_amps !== null ? Number(data.in_amps) : prev.in_amps,
-          icu_ka: data.icu_ka !== null ? Number(data.icu_ka) : prev.icu_ka,
-          ics_ka: data.ics_ka !== null ? Number(data.ics_ka) : prev.ics_ka,
-          poles: data.poles !== null ? Number(data.poles) : prev.poles,
-          voltage_v: data.voltage_v !== null ? Number(data.voltage_v) : prev.voltage_v,
-          trip_unit: data.trip_unit || prev.trip_unit,
-          settings: { ...prev.settings, ...data.settings },
-          is_main_incoming: Boolean(data.is_main_incoming)
-        }));
-        notify(`✅ Found existing device: ${data.manufacturer} ${data.reference}. Form pre-filled!`, 'success');
-      } else if (data.created) {
-        // New device created successfully
+      // Si un device a été créé automatiquement, recharger les devices
+      if (data.created) {
         await loadDevices(currentPanelId);
         notify(`✅ Created new device: ${data.manufacturer} ${data.reference}. Added to switchboard!`, 'success');
         setOpenDevice(false);
-      } else if (data.requires_switchboard) {
-        // Specs ready, but needs switchboard - prefill form
-        setDeviceForm(prev => ({
-          ...prev,
-          name: data.name || data.reference || prev.name,
-          manufacturer: data.manufacturer || prev.manufacturer,
-          reference: data.reference || prev.reference,
-          device_type: data.device_type || prev.device_type,
-          in_amps: data.in_amps !== null ? Number(data.in_amps) : prev.in_amps,
-          icu_ka: data.icu_ka !== null ? Number(data.icu_ka) : prev.icu_ka,
-          ics_ka: data.ics_ka !== null ? Number(data.ics_ka) : prev.ics_ka,
-          poles: data.poles !== null ? Number(data.poles) : prev.poles,
-          voltage_v: data.voltage_v !== null ? Number(data.voltage_v) : prev.voltage_v,
-          trip_unit: data.trip_unit || prev.trip_unit,
-          settings: { ...prev.settings, ...data.settings }
-        }));
-        notify(`✅ Photo analyzed! Form pre-filled with: ${data.manufacturer} ${data.reference}. Ready to save.`, 'success');
       }
-     
+    
       setPhotoFile(null);
     } catch (e) {
       console.error('Photo analysis failed:', e);
