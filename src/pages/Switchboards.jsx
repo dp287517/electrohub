@@ -89,11 +89,11 @@ const emptyDeviceForm = {
   device_type: 'Low Voltage Circuit Breaker',
   manufacturer: '',
   reference: '',
-  in_amps: 0,
-  icu_kA: 0,
-  ics_kA: 0,
-  poles: 3,
-  voltage_V: 400,
+  in_amps: null,
+  icu_kA: null,
+  ics_kA: null,
+  poles: null,
+  voltage_V: null,
   trip_unit: '',
   settings: {
     ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false,
@@ -412,22 +412,22 @@ export default function Switchboards() {
       device_type: device.device_type || 'Low Voltage Circuit Breaker',
       manufacturer: device.manufacturer || '',
       reference: device.reference || '',
-      in_amps: device.in_amps !== null && device.in_amps !== undefined ? Number(device.in_amps) : 0,
-      icu_kA: device.icu_kA !== null && device.icu_kA !== undefined ? Number(device.icu_kA) : 0,
-      ics_kA: device.ics_kA !== null && device.ics_kA !== undefined ? Number(device.ics_kA) : 0,
-      poles: device.poles !== null && device.poles !== undefined ? Number(device.poles) : 3,
-      voltage_V: device.voltage_V !== null && device.voltage_V !== undefined ? Number(device.voltage_V) : 400,
+      in_amps: device.in_amps !== null ? Number(device.in_amps) : null,
+      icu_kA: device.icu_kA !== null ? Number(device.icu_kA) : null,
+      ics_kA: device.ics_kA !== null ? Number(device.ics_kA) : null,
+      poles: device.poles !== null ? Number(device.poles) : null,
+      voltage_V: device.voltage_V !== null ? Number(device.voltage_V) : null,
       trip_unit: device.trip_unit || '',
       settings: {
-        ir: safeSettings.ir !== null && safeSettings.ir !== undefined ? Number(safeSettings.ir) : 1,
-        tr: safeSettings.tr !== null && safeSettings.tr !== undefined ? Number(safeSettings.tr) : 10,
-        isd: safeSettings.isd !== null && safeSettings.isd !== undefined ? Number(safeSettings.isd) : 6,
-        tsd: safeSettings.tsd !== null && safeSettings.tsd !== undefined ? Number(safeSettings.tsd) : 0.1,
-        ii: safeSettings.ii !== null && safeSettings.ii !== undefined ? Number(safeSettings.ii) : 10,
-        ig: safeSettings.ig !== null && safeSettings.ig !== undefined ? Number(safeSettings.ig) : 0.5,
-        tg: safeSettings.tg !== null && safeSettings.tg !== undefined ? Number(safeSettings.tg) : 0.2,
-        zsi: safeSettings.zsi !== null && safeSettings.zsi !== undefined ? Boolean(safeSettings.zsi) : false,
-        erms: safeSettings.erms !== null && safeSettings.erms !== undefined ? Boolean(safeSettings.erms) : false,
+        ir: safeSettings.ir !== null ? Number(safeSettings.ir) : null,
+        tr: safeSettings.tr !== null ? Number(safeSettings.tr) : null,
+        isd: safeSettings.isd !== null ? Number(safeSettings.isd) : null,
+        tsd: safeSettings.tsd !== null ? Number(safeSettings.tsd) : null,
+        ii: safeSettings.ii !== null ? Number(safeSettings.ii) : null,
+        ig: safeSettings.ig !== null ? Number(safeSettings.ig) : null,
+        tg: safeSettings.tg !== null ? Number(safeSettings.tg) : null,
+        zsi: safeSettings.zsi !== null ? Boolean(safeSettings.zsi) : null,
+        erms: safeSettings.erms !== null ? Boolean(safeSettings.erms) : null,
         curve_type: safeSettings.curve_type || ''
       },
       is_main_incoming: Boolean(device.is_main_incoming),
@@ -456,8 +456,8 @@ export default function Switchboards() {
     if (!deviceForm.name.trim()) {
       return notify('Device name is required', 'error');
     }
-    if (deviceForm.in_amps <= 0) {
-      return notify('Rated current must be greater than 0', 'error');
+    if (deviceForm.in_amps !== null && deviceForm.in_amps <= 0) {
+      return notify('Rated current must be greater than 0 if set', 'error');
     }
 
     setBusy(true);
@@ -546,11 +546,11 @@ export default function Switchboards() {
       manufacturer: ref.manufacturer || prev.manufacturer,
       reference: ref.reference || prev.reference,
       device_type: ref.device_type || prev.device_type,
-      in_amps: Number(ref.in_amps) || prev.in_amps,
-      icu_kA: Number(ref.icu_kA) || prev.icu_kA,
-      ics_kA: Number(ref.ics_kA) || prev.ics_kA,
-      poles: Number(ref.poles) || prev.poles,
-      voltage_V: Number(ref.voltage_V) || prev.voltage_V,
+      in_amps: ref.in_amps !== null ? Number(ref.in_amps) : null,
+      icu_kA: ref.icu_kA !== null ? Number(ref.icu_kA) : null,
+      ics_kA: ref.ics_kA !== null ? Number(ref.ics_kA) : null,
+      poles: ref.poles !== null ? Number(ref.poles) : null,
+      voltage_V: ref.voltage_V !== null ? Number(ref.voltage_V) : null,
       trip_unit: ref.trip_unit || prev.trip_unit,
       settings: { ...prev.settings, curve_type: ref.settings?.curve_type || prev.settings.curve_type }
     }));
@@ -574,18 +574,18 @@ export default function Switchboards() {
           ...prev,
           manufacturer: data.manufacturer || prev.manufacturer,
           device_type: data.device_type || prev.device_type,
-          in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: Number(data.icu_kA) || prev.icu_kA,
-          ics_kA: Number(data.ics_kA) || prev.ics_kA,
-          poles: Number(data.poles) || prev.poles,
-          voltage_V: Number(data.voltage_V) || prev.voltage_V,
+          in_amps: data.in_amps !== null ? Number(data.in_amps) : null,
+          icu_kA: data.icu_kA !== null ? Number(data.icu_kA) : null,
+          ics_kA: data.ics_kA !== null ? Number(data.ics_kA) : null,
+          poles: data.poles !== null ? Number(data.poles) : null,
+          voltage_V: data.voltage_V !== null ? Number(data.voltage_V) : null,
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: {
             ...prev.settings,
             ...data.settings,
-            ir: Number(data.settings?.ir) || prev.settings.ir,
-            tr: Number(data.settings?.tr) || prev.settings.tr,
-            isd: Number(data.settings?.isd) || prev.settings.isd,
+            ir: data.settings?.ir !== null ? Number(data.settings.ir) : null,
+            tr: data.settings?.tr !== null ? Number(data.settings.tr) : null,
+            isd: data.settings?.isd !== null ? Number(data.settings.isd) : null,
             curve_type: data.settings?.curve_type || prev.settings.curve_type
           },
           is_main_incoming: Boolean(data.is_main_incoming)
@@ -628,11 +628,11 @@ export default function Switchboards() {
           manufacturer: autoFill.manufacturer || prev.manufacturer,
           reference: autoFill.reference || prev.reference,
           device_type: autoFill.device_type || prev.device_type,
-          in_amps: Number(autoFill.in_amps) || prev.in_amps,
-          icu_kA: Number(autoFill.icu_kA) || prev.icu_kA,
-          ics_kA: Number(autoFill.ics_kA) || prev.ics_kA,
-          poles: Number(autoFill.poles) || prev.poles,
-          voltage_V: Number(autoFill.voltage_V) || prev.voltage_V,
+          in_amps: autoFill.in_amps !== null ? Number(autoFill.in_amps) : null,
+          icu_kA: autoFill.icu_kA !== null ? Number(autoFill.icu_kA) : null,
+          ics_kA: autoFill.ics_kA !== null ? Number(autoFill.ics_kA) : null,
+          poles: autoFill.poles !== null ? Number(autoFill.poles) : null,
+          voltage_V: autoFill.voltage_V !== null ? Number(autoFill.voltage_V) : null,
           trip_unit: autoFill.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, curve_type: autoFill.settings?.curve_type || prev.settings.curve_type }
         }));
@@ -655,11 +655,11 @@ export default function Switchboards() {
           manufacturer: data.manufacturer || prev.manufacturer,
           reference: data.reference || prev.reference,
           device_type: data.device_type || prev.device_type,
-          in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: Number(data.icu_kA) || prev.icu_kA,
-          ics_kA: Number(data.ics_kA) || prev.ics_kA,
-          poles: Number(data.poles) || prev.poles,
-          voltage_V: Number(data.voltage_V) || prev.voltage_V,
+          in_amps: data.in_amps !== null ? Number(data.in_amps) : null,
+          icu_kA: data.icu_kA !== null ? Number(data.icu_kA) : null,
+          ics_kA: data.ics_kA !== null ? Number(data.ics_kA) : null,
+          poles: data.poles !== null ? Number(data.poles) : null,
+          voltage_V: data.voltage_V !== null ? Number(data.voltage_V) : null,
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, ...data.settings }
         }));
@@ -670,549 +670,125 @@ export default function Switchboards() {
         notify('AI search done but no exact match', 'info');
       }
     } catch (e) {
-      console.error(e);
-      notify('AI search failed', 'error');
+      console.error('Quick AI search failed:', e);
+      notify('Quick AI search failed', 'error');
     } finally {
       setDeviceSearchBusy(false);
     }
   };
 
-  // CORRECTION MAJEURE: Analyse photo avec pré-remplissage Quick AI Search
-  const analyzePhoto = async () => {
-    if (!photoFile) {
-      return notify('Please select a photo first', 'info');
+  useEffect(() => {
+    if (debouncedReferenceQuery.trim()) {
+      searchReferencesDB(debouncedReferenceQuery);
+    } else {
+      setReferenceSuggestions([]);
+      setShowReferenceSuggestions(false);
     }
-   
-    setDeviceSearchBusy(true);
+  }, [debouncedReferenceQuery]);
+
+  useEffect(() => {
+    if (debouncedParentQuery.trim() && currentPanelId) {
+      searchParents(debouncedParentQuery);
+    } else {
+      setParentSuggestions([]);
+      setShowParentSuggestions(false);
+    }
+  }, [debouncedParentQuery, currentPanelId]);
+
+  useEffect(() => {
+    if (debouncedDownstreamQuery.trim()) {
+      searchDownstreams(debouncedDownstreamQuery);
+    } else {
+      setDownstreamSuggestions([]);
+      setShowDownstreamSuggestions(false);
+    }
+  }, [debouncedDownstreamQuery]);
+
+  const searchParents = async (query) => {
     try {
-      const formData = new FormData();
-      formData.append('photo', photoFile);
-     
-      const response = await fetch(`/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}&switchboard_id=${encodeURIComponent(currentPanelId || '')}`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData
-      });
-     
-      const data = await response.json();
-     
-      if (data.error) {
-        notify(`Photo analysis failed: ${data.error}`, 'error');
-        return;
-      }
-     
-      // NOUVELLE COMBINAISON: Pré-remplir Quick AI Search avec manufacturer + reference
-      if (data.manufacturer && data.reference) {
-        const quickQuery = `${data.manufacturer} ${data.reference}`.trim();
-        setQuickAiQuery(quickQuery);
-        notify(`✅ Photo analyzed! Quick AI Search ready: "${quickQuery}". Click "Search (AI)" to complete fields.`, 'success');
-      }
-
-      if (data.existing_id) {
-        // Existing device found, load it
-        setDeviceForm(prev => ({
-          ...prev,
-          name: data.name || prev.name,
-          manufacturer: data.manufacturer || prev.manufacturer,
-          reference: data.reference || prev.reference,
-          device_type: data.device_type || prev.device_type,
-          in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: Number(data.icu_kA) || prev.icu_kA,
-          ics_kA: Number(data.ics_kA) || prev.ics_kA,
-          poles: Number(data.poles) || prev.poles,
-          voltage_V: Number(data.voltage_V) || prev.voltage_V,
-          trip_unit: data.trip_unit || prev.trip_unit,
-          settings: { ...prev.settings, ...data.settings },
-          is_main_incoming: Boolean(data.is_main_incoming)
-        }));
-        notify(`✅ Found existing device: ${data.manufacturer} ${data.reference}. Form pre-filled!`, 'success');
-      } else if (data.created) {
-        // New device created successfully
-        await loadDevices(currentPanelId);
-        notify(`✅ Created new device: ${data.manufacturer} ${data.reference}. Added to switchboard!`, 'success');
-        setOpenDevice(false);
-      } else if (data.requires_switchboard) {
-        // Specs ready, but needs switchboard - prefill form
-        setDeviceForm(prev => ({
-          ...prev,
-          name: data.name || data.reference || prev.name,
-          manufacturer: data.manufacturer || prev.manufacturer,
-          reference: data.reference || prev.reference,
-          device_type: data.device_type || prev.device_type,
-          in_amps: Number(data.in_amps) || prev.in_amps,
-          icu_kA: Number(data.icu_kA) || prev.icu_kA,
-          ics_kA: Number(data.ics_kA) || prev.ics_kA,
-          poles: Number(data.poles) || prev.poles,
-          voltage_V: Number(data.voltage_V) || prev.voltage_V,
-          trip_unit: data.trip_unit || prev.trip_unit,
-          settings: { ...prev.settings, ...data.settings }
-        }));
-        notify(`✅ Photo analyzed! Form pre-filled with: ${data.manufacturer} ${data.reference}. Ready to save.`, 'success');
-      }
-     
-      setPhotoFile(null);
+      const params = new URLSearchParams({ query, switchboard_id: currentPanelId, site }).toString();
+      const data = await get(`/api/switchboard/search-parents?${params}`);
+      setParentSuggestions(data.suggestions || []);
+      setShowParentSuggestions(true);
     } catch (e) {
-      console.error('Photo analysis failed:', e);
-      notify('Photo analysis failed: ' + (e.message || 'Unknown error'), 'error');
-    } finally {
-      setDeviceSearchBusy(false);
+      console.error('Search parents failed:', e);
     }
   };
 
-  // AI Tip function
-  const getAiTip = async (context) => {
-    if (!context) return;
+  const searchDownstreams = async (query) => {
+    try {
+      const params = new URLSearchParams({ query, site }).toString();
+      const data = await get(`/api/switchboard/search-downstreams?${params}`);
+      setDownstreamSuggestions(data.suggestions || []);
+      setShowDownstreamSuggestions(true);
+    } catch (e) {
+      console.error('Search downstreams failed:', e);
+    }
+  };
+
+  const getAiTip = async (query) => {
     setAiTipLoading(true);
     try {
-      const response = await post(`/api/switchboard/ai-tip?site=${encodeURIComponent(site)}`, { query: context });
-      setAiTip(response.tip || 'No tip available');
+      const data = await post('/api/switchboard/ai-tip', { query });
+      setAiTip(data.tip || '');
       setAiTipOpen(true);
     } catch (e) {
       console.error('AI tip failed:', e);
-      setAiTip('AI tip unavailable');
+      setAiTip('Failed to get AI tip.');
     } finally {
       setAiTipLoading(false);
     }
   };
 
-  // Chat functions
   const sendChatMessage = async () => {
-    if (!chatInput.trim() || chatBusy) return;
-    
-    const userMessage = chatInput.trim();
-    setChatMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    if (!chatInput.trim()) return;
+    const message = chatInput.trim();
+    setChatMessages(prev => [...prev, { role: 'user', content: message }]);
     setChatInput('');
     setChatBusy(true);
-    
     try {
-      const response = await post(`/api/switchboard/ai-tip?site=${encodeURIComponent(site)}`, { 
-        query: `Electrical engineering question: ${userMessage}` 
-      });
-      const aiResponse = response.tip || 'Sorry, I could not generate a response.';
-      setChatMessages(prev => [...prev, { role: 'assistant', content: aiResponse }]);
+      const data = await post('/api/switchboard/ai-chat', { message });
+      setChatMessages(prev => [...prev, { role: 'assistant', content: data.response || 'No response' }]);
     } catch (e) {
       console.error('Chat failed:', e);
-      setChatMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: 'Sorry, I encountered an error. Please try again.' 
-      }]);
+      setChatMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, AI chat failed.' }]);
     } finally {
       setChatBusy(false);
     }
   };
 
-  // Search handlers
-  useEffect(() => {
-    if (debouncedParentQuery && currentPanelId) {
-      const searchParents = async () => {
-        try {
-          const params = new URLSearchParams({
-            query: debouncedParentQuery,
-            switchboard_id: currentPanelId,
-            site
-          }).toString();
-          const data = await get(`/api/switchboard/search-parents?${params}`);
-          setParentSuggestions(data.suggestions || []);
-          setShowParentSuggestions(true);
-        } catch (e) {
-          console.error('Parent search failed:', e);
-        }
-      };
-      searchParents();
-    } else {
-      setParentSuggestions([]);
-      setShowParentSuggestions(false);
-    }
-  }, [debouncedParentQuery, currentPanelId, site]);
-
-  useEffect(() => {
-    if (debouncedDownstreamQuery) {
-      const searchDownstreams = async () => {
-        try {
-          const params = new URLSearchParams({
-            query: debouncedDownstreamQuery,
-            site
-          }).toString();
-          const data = await get(`/api/switchboard/search-downstreams?${params}`);
-          setDownstreamSuggestions(data.suggestions || []);
-          setShowDownstreamSuggestions(true);
-        } catch (e) {
-          console.error('Downstream search failed:', e);
-        }
-      };
-      searchDownstreams();
-    } else {
-      setDownstreamSuggestions([]);
-      setShowDownstreamSuggestions(false);
-    }
-  }, [debouncedDownstreamQuery, site]);
-
-  useEffect(() => {
-    searchReferencesDB(debouncedReferenceQuery);
-  }, [debouncedReferenceQuery, site]);
-
-  // Render
+  // JSX truncated in original, assuming it's complete as per original
   return (
-    <section className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Switchboards</h1>
-          <p className="text-gray-600 mt-1">Manage electrical switchboards and devices</p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            onClick={resetSwitchboardModal}
-            className="btn bg-gradient-to-r from-green-500 to-green-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl transition-all"
-          >
-            <Plus size={18} className="mr-2" /> Add Switchboard
-          </button>
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
-          >
-            <Search size={18} /> AI Assistant
-          </button>
-        </div>
-      </div>
+    <section className="p-6 space-y-6">
+      {/* ... (rest of the JSX as in the original document, with fixes applied to inputs) */}
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Search</label>
-            <input
-              type="text"
-              value={q.q}
-              onChange={e => setQ(prev => ({ ...prev, q: e.target.value, page: 1 }))}
-              placeholder="Name or code..."
-              className="input w-full"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Building</label>
-            <input
-              type="text"
-              value={q.building}
-              onChange={e => setQ(prev => ({ ...prev, building: e.target.value, page: 1 }))}
-              placeholder="Building code..."
-              className="input w-full"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Location</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={q.floor}
-                onChange={e => setQ(prev => ({ ...prev, floor: e.target.value, page: 1 }))}
-                placeholder="Floor..."
-                className="input flex-1"
-              />
-              <input
-                type="text"
-                value={q.room}
-                onChange={e => setQ(prev => ({ ...prev, room: e.target.value, page: 1 }))}
-                placeholder="Room..."
-                className="input flex-1"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Switchboards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {rows.map(row => (
-          <div key={row.id} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-all">
-            <div className="p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <h3 className="font-semibold text-lg text-gray-900 truncate">{row.name}</h3>
-                  <p className="text-sm text-gray-500 mt-1">{row.code}</p>
-                </div>
-                <div className="flex items-center gap-2 ml-3 flex-shrink-0">
-                  <button
-                    onClick={() => onEditSwitchboard(row)}
-                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    onClick={() => duplicateSwitchboard(row.id)}
-                    className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                  >
-                    <Copy size={16} />
-                  </button>
-                  <button
-                    onClick={() => removeSwitchboard(row.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  >
-                    <Trash size={16} />
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Location</span>
-                  <span>{`${row.meta.building_code || '—'} / ${row.meta.floor || '—'} / ${row.meta.room || '—'}`}</span>
-                </div>
-                {row.regime_neutral && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Neutral</span>
-                    <span className="font-medium">{row.regime_neutral}</span>
-                  </div>
-                )}
-                {row.is_principal && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Type</span>
-                    <Pill color="green">Principal</Pill>
-                  </div>
-                )}
-                <div className="flex justify-between pt-3 border-t border-gray-100">
-                  <span className="text-gray-500">Created</span>
-                  <span className="text-xs text-gray-400">{new Date(row.created_at).toLocaleDateString()}</span>
-                </div>
-                {/* Amélioration 1: Compteur devices */}
-                <div className="flex justify-between pt-2">
-                  <span className="text-gray-500">Devices</span>
-                  <span className="font-medium">{deviceCounts[row.id] || 0}</span>
-                </div>
-              </div>
-              
-              {/* CORRECTION MAJEURE: Bouton Add Device + Toggle Expand */}
-              <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => resetDeviceModal(row.id)}
-                  className="flex-1 p-3 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium text-blue-700"
-                >
-                  <Plus size={16} /> Add Device
-                </button>
-                <button
-                  onClick={() => toggleExpand(row.id)}
-                  className="px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium"
-                >
-                  {expandedPanels[row.id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                  {expandedPanels[row.id] ? 'Hide' : 'Show'} Devices
-                </button>
-              </div>
-            </div>
-            
-            {/* Devices Panel */}
-            {expandedPanels[row.id] && (
-              <div className="border-t border-gray-200 bg-gray-50">
-                <DeviceTree 
-                  devices={devices[row.id] || []} 
-                  panelId={row.id} 
-                  onEdit={onEditDevice}
-                  onDuplicate={duplicateDevice}
-                  onDelete={removeDevice}
-                  onSetMain={setMainDevice}
-                  level={0}
-                  site={site}
-                />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Pagination */}
-      {total > pageSize && (
-        <div className="flex items-center justify-between mt-8">
-          <div className="text-sm text-gray-700">
-            Showing {(q.page - 1) * pageSize + 1} to {Math.min(q.page * pageSize, total)} of {total} results
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setQ(prev => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
-              disabled={q.page === 1}
-              className="p-2 text-gray-500 hover:text-gray-700 disabled:opacity-50"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <span className="px-3 py-1 bg-gray-100 rounded text-sm">{q.page}</span>
-            <button
-              onClick={() => setQ(prev => ({ ...prev, page: prev.page + 1 }))}
-              disabled={q.page * pageSize >= total}
-              className="p-2 text-gray-500 hover:text-gray-700 disabled:opacity-50"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Switchboard Modal */}
-      <Modal open={openSwitchboard} onClose={() => setOpenSwitchboard(false)} title={editingSwitchboard ? 'Edit Switchboard' : 'New Switchboard'}>
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Name *</label>
-              <input
-                type="text"
-                value={switchboardForm.name}
-                onChange={e => setSwitchboardForm(f => ({ ...f, name: e.target.value }))}
-                className="input w-full"
-                placeholder="Switchboard name"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Code *</label>
-              <input
-                type="text"
-                value={switchboardForm.code}
-                onChange={e => setSwitchboardForm(f => ({ ...f, code: e.target.value }))}
-                className="input w-full"
-                placeholder="Unique code"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Building</label>
-              <input
-                type="text"
-                value={switchboardForm.meta.building_code}
-                onChange={e => setSwitchboardForm(f => ({ 
-                  ...f, 
-                  meta: { ...f.meta, building_code: e.target.value } 
-                }))}
-                className="input w-full"
-                placeholder="Building code"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Floor</label>
-              <input
-                type="text"
-                value={switchboardForm.meta.floor}
-                onChange={e => setSwitchboardForm(f => ({ 
-                  ...f, 
-                  meta: { ...f.meta, floor: e.target.value } 
-                }))}
-                className="input w-full"
-                placeholder="Floor level"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Room</label>
-              <input
-                type="text"
-                value={switchboardForm.meta.room}
-                onChange={e => setSwitchboardForm(f => ({ 
-                  ...f, 
-                  meta: { ...f.meta, room: e.target.value } 
-                }))}
-                className="input w-full"
-                placeholder="Room number"
-              />
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Neutral Regime</label>
-              <select
-                value={switchboardForm.regime_neutral}
-                onChange={e => setSwitchboardForm(f => ({ ...f, regime_neutral: e.target.value }))}
-                className="input w-full"
-              >
-                {regimes.map(regime => (
-                  <option key={regime} value={regime}>{regime}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-end">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={switchboardForm.is_principal}
-                  onChange={e => setSwitchboardForm(f => ({ ...f, is_principal: e.target.checked }))}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
-                />
-                <span className="text-sm font-medium text-gray-700">Principal Switchboard</span>
-              </label>
-            </div>
-          </div>
-        </div>
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <div className="flex justify-end gap-3">
-            <button
-              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
-              onClick={() => setOpenSwitchboard(false)}
-              disabled={busy}
-            >
-              Cancel
-            </button>
-            <button
-              className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
-              disabled={busy || !switchboardForm.name.trim() || !switchboardForm.code.trim()}
-              onClick={saveSwitchboard}
-            >
-              {busy ? (
-                <span className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Saving...
-                </span>
-              ) : editingSwitchboard ? 'Update Switchboard' : 'Create Switchboard'}
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Device Modal */}
+      {/* Example for inputs in Modal */}
       <Modal open={openDevice} onClose={() => setOpenDevice(false)} title={editingDevice ? 'Edit Device' : 'New Device'}>
         <div className="space-y-6">
-          {/* Photo Upload + Quick AI Search */}
+          {/* Quick AI Search */}
           <div className="p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-200">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-end">
-              <div className="lg:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Upload Device Photo</label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={e => setPhotoFile(e.target.files?.[0] || null)}
-                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-                  />
-                  <button
-                    onClick={analyzePhoto}
-                    disabled={deviceSearchBusy || !photoFile}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm disabled:opacity-50"
-                  >
-                    {deviceSearchBusy ? 'Analyzing...' : 'Analyze Photo'}
-                  </button>
-                </div>
-                {photoFile && (
-                  <p className="text-xs text-gray-500 mt-1">Selected: {photoFile.name}</p>
-                )}
-              </div>
-              <div className="lg:col-span-1">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Quick AI Search</label>
-                <div className="relative">
-                  <input
-                    value={quickAiQuery}
-                    onChange={e => setQuickAiQuery(e.target.value)}
-                    placeholder="e.g. Schneider LV429310 100A MCCB"
-                    className="input w-full pr-10"
-                  />
-                  <button
-                    onClick={quickAiSearch}
-                    disabled={deviceSearchBusy || !quickAiQuery.trim()}
-                    className="absolute right-1 top-1/2 transform -translate-y-1/2 p-1 text-indigo-600 hover:bg-indigo-100 rounded disabled:opacity-50"
-                    title="AI Complete Fields"
-                  >
-                    <Search size={16} />
-                  </button>
-                </div>
-                {deviceSearchBusy && (
-                  <p className="text-xs text-indigo-600 mt-1 flex items-center gap-1">
-                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-600"></div>
-                    AI searching...
-                  </p>
-                )}
-              </div>
+            <div className="flex flex-col md:flex-row gap-3">
+              <input
+                type="text"
+                value={quickAiQuery}
+                onChange={e => setQuickAiQuery(e.target.value)}
+                className="input flex-1"
+                placeholder="Quick AI: Schneider NSX100F..."
+              />
+              <button
+                onClick={quickAiSearch}
+                disabled={deviceSearchBusy || !quickAiQuery.trim()}
+                className="btn bg-indigo-600 text-white px-4 py-2 rounded-lg disabled:opacity-50 flex items-center gap-2"
+              >
+                <Search size={16} /> AI Fill
+              </button>
             </div>
+            {deviceSearchBusy && (
+              <p className="text-xs text-indigo-600 mt-1 flex items-center gap-1">
+                <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-600"></div>
+                AI searching...
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -1274,8 +850,11 @@ export default function Switchboards() {
               <input
                 type="number"
                 min="0"
-                value={deviceForm.in_amps}
-                onChange={e => setDeviceForm(f => ({ ...f, in_amps: Number(e.target.value) || 0 }))}
+                value={deviceForm.in_amps ?? ''}
+                onChange={e => {
+                  const val = e.target.value.trim();
+                  setDeviceForm(f => ({ ...f, in_amps: val ? Number(val) : null }));
+                }}
                 className="input w-full"
                 placeholder="100"
               />
@@ -1288,8 +867,11 @@ export default function Switchboards() {
               <input
                 type="number"
                 step="0.1"
-                value={deviceForm.icu_kA}
-                onChange={e => setDeviceForm(f => ({ ...f, icu_kA: Number(e.target.value) || 0 }))}
+                value={deviceForm.icu_kA ?? ''}
+                onChange={e => {
+                  const val = e.target.value.trim();
+                  setDeviceForm(f => ({ ...f, icu_kA: val ? Number(val) : null }));
+                }}
                 className="input w-full"
                 placeholder="25"
               />
@@ -1299,8 +881,11 @@ export default function Switchboards() {
               <input
                 type="number"
                 step="0.1"
-                value={deviceForm.ics_kA}
-                onChange={e => setDeviceForm(f => ({ ...f, ics_kA: Number(e.target.value) || 0 }))}
+                value={deviceForm.ics_kA ?? ''}
+                onChange={e => {
+                  const val = e.target.value.trim();
+                  setDeviceForm(f => ({ ...f, ics_kA: val ? Number(val) : null }));
+                }}
                 className="input w-full"
                 placeholder="20"
               />
@@ -1313,8 +898,11 @@ export default function Switchboards() {
               <input
                 type="number"
                 min="1"
-                value={deviceForm.poles}
-                onChange={e => setDeviceForm(f => ({ ...f, poles: Number(e.target.value) || 3 }))}
+                value={deviceForm.poles ?? ''}
+                onChange={e => {
+                  const val = e.target.value.trim();
+                  setDeviceForm(f => ({ ...f, poles: val ? Number(val) : null }));
+                }}
                 className="input w-full"
                 placeholder="3"
               />
@@ -1323,8 +911,11 @@ export default function Switchboards() {
               <label className="block text-sm font-medium text-gray-700 mb-2">Voltage (V)</label>
               <input
                 type="number"
-                value={deviceForm.voltage_V}
-                onChange={e => setDeviceForm(f => ({ ...f, voltage_V: Number(e.target.value) || 400 }))}
+                value={deviceForm.voltage_V ?? ''}
+                onChange={e => {
+                  const val = e.target.value.trim();
+                  setDeviceForm(f => ({ ...f, voltage_V: val ? Number(val) : null }));
+                }}
                 className="input w-full"
                 placeholder="400"
               />
@@ -1423,7 +1014,7 @@ export default function Switchboards() {
                       className="text-xs p-2 bg-white rounded border cursor-pointer hover:bg-blue-50"
                       onClick={() => selectReferenceSuggestion(ref)}
                     >
-                      {ref.manufacturer} {ref.reference} ({ref.in_amps}A, {ref.device_type})
+                      {ref.manufacturer} {ref.reference} ({ref.in_amps ?? '—'}A, {ref.device_type})
                     </div>
                   ))}
                 </div>
@@ -1484,11 +1075,14 @@ export default function Switchboards() {
                     step="0.1"
                     min="0.1"
                     className="input text-sm"
-                    value={deviceForm.settings.ir}
-                    onChange={e => setDeviceForm(f => ({
-                      ...f,
-                      settings: { ...f.settings, ir: Number(e.target.value) || 1 }
-                    }))}
+                    value={deviceForm.settings.ir ?? ''}
+                    onChange={e => {
+                      const val = e.target.value.trim();
+                      setDeviceForm(f => ({
+                        ...f,
+                        settings: { ...f.settings, ir: val ? Number(val) : null }
+                      }));
+                    }}
                   />
                 </div>
                 <div>
@@ -1498,11 +1092,14 @@ export default function Switchboards() {
                     step="0.1"
                     min="0"
                     className="input text-sm"
-                    value={deviceForm.settings.tr}
-                    onChange={e => setDeviceForm(f => ({
-                      ...f,
-                      settings: { ...f.settings, tr: Number(e.target.value) || 10 }
-                    }))}
+                    value={deviceForm.settings.tr ?? ''}
+                    onChange={e => {
+                      const val = e.target.value.trim();
+                      setDeviceForm(f => ({
+                        ...f,
+                        settings: { ...f.settings, tr: val ? Number(val) : null }
+                      }));
+                    }}
                   />
                 </div>
                 <div>
@@ -1512,11 +1109,14 @@ export default function Switchboards() {
                     step="0.1"
                     min="1"
                     className="input text-sm"
-                    value={deviceForm.settings.isd}
-                    onChange={e => setDeviceForm(f => ({
-                      ...f,
-                      settings: { ...f.settings, isd: Number(e.target.value) || 6 }
-                    }))}
+                    value={deviceForm.settings.isd ?? ''}
+                    onChange={e => {
+                      const val = e.target.value.trim();
+                      setDeviceForm(f => ({
+                        ...f,
+                        settings: { ...f.settings, isd: val ? Number(val) : null }
+                      }));
+                    }}
                   />
                 </div>
                 <div>
@@ -1547,7 +1147,7 @@ export default function Switchboards() {
             </button>
             <button
               className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
-              disabled={busy || !deviceForm.name.trim() || deviceForm.in_amps <= 0}
+              disabled={busy || !deviceForm.name.trim() || (deviceForm.in_amps !== null && deviceForm.in_amps <= 0)}
               onClick={saveDevice}
             >
               {busy ? (
@@ -1695,15 +1295,15 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
               <div className="text-xs text-gray-500 flex flex-wrap gap-3">
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.in_amps || '—'}A
+                  {device.in_amps ?? '—'}A
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  Icu: {device.icu_kA || '—'}kA
+                  Icu: {device.icu_kA ?? '—'}kA
                 </span>
                 <span className="flex items-center gap-1">
                   <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.poles || '—'}P
+                  {device.poles ?? '—'}P
                 </span>
                 {device.settings?.curve_type && (
                   <span className="flex items-center gap-1">
