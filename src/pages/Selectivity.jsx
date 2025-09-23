@@ -12,9 +12,20 @@ import {
   Title,
   Tooltip,
   Legend,
+  LogarithmicScale, // Import explicite
 } from 'chart.js';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+// Enregistrement explicite des composants nécessaires
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  LogarithmicScale // S'assurer que l'échelle logarithmique est enregistrée
+);
 
 function useUserSite() {
   try {
@@ -268,38 +279,40 @@ export default function Selectivity() {
 
       {/* Graph Modal */}
       <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Time-Current Curves">
-        <Line
-          data={curveData}
-          options={{
-            responsive: true,
-            scales: {
-              x: { 
-                type: 'logarithmic', 
-                title: { display: true, text: 'Current (A)' },
-                ticks: { callback: (value) => value.toFixed(0) + 'A' }
+        {curveData && (
+          <Line
+            data={curveData}
+            options={{
+              responsive: true,
+              scales: {
+                x: { 
+                  type: 'logarithmic', 
+                  title: { display: true, text: 'Current (A)' },
+                  ticks: { callback: (value) => value.toFixed(0) + 'A' }
+                },
+                y: { 
+                  type: 'linear', 
+                  title: { display: true, text: 'Time (s)' },
+                  min: 0,
+                  ticks: { 
+                    callback: (value) => value.toFixed(2) + 's',
+                    maxTicksLimit: 10 
+                  }
+                },
               },
-              y: { 
-                type: 'linear', 
-                title: { display: true, text: 'Time (s)' },
-                min: 0,
-                ticks: { 
-                  callback: (value) => value.toFixed(2) + 's',
-                  maxTicksLimit: 10 
-                }
-              },
-            },
-            plugins: {
-              tooltip: {
-                callbacks: {
-                  label: (context) => {
-                    const nonSelective = context.datasetIndex === 1 && context.parsed.y >= curveData.datasets[0].data[context.dataIndex] * 1.05;
-                    return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}s at ${context.parsed.x}A ${nonSelective ? '(Non-selective alert!)' : ''}`;
+              plugins: {
+                tooltip: {
+                  callbacks: {
+                    label: (context) => {
+                      const nonSelective = context.datasetIndex === 1 && context.parsed.y >= curveData.datasets[0].data[context.dataIndex] * 1.05;
+                      return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}s at ${context.parsed.x}A ${nonSelective ? '(Non-selective alert!)' : ''}`;
+                    }
                   }
                 }
               }
-            }
-          }}
-        />
+            }}
+          />
+        )}
         <button 
           onClick={() => setShowGraph(false)} 
           className="mt-4 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
