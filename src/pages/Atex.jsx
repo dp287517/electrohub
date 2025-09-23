@@ -75,7 +75,7 @@ function MultiSelect({ label, values, setValues, options }) {
         </svg>
       </button>
       {open && (
-        <div className="absolute z-20 mt-2 w-72 rounded-xl border border-gray-200 bg-white shadow-lg p-3">
+        <div className="absolute z-20 mt-2 w-72 rounded-xl border border-gray-200 bg-white shadow-lg p-3 sm:w-64">
           <div className="flex items-center gap-2">
             <input
               className="input h-9 flex-1"
@@ -151,11 +151,11 @@ function FilterBar({
 }) {
   return (
     <div className="card p-4">
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="relative">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative w-full sm:w-72">
             <input
-              className="h-9 w-72 rounded-md border border-gray-300 bg-white pl-9 pr-3 text-sm"
+              className="h-9 w-full rounded-md border border-gray-300 bg-white pl-9 pr-3 text-sm"
               placeholder="Search text (building, room, ref...)"
               value={q}
               onChange={e => setQ(e.target.value)}
@@ -164,10 +164,10 @@ function FilterBar({
               <path d="M10 2a8 8 0 105.293 14.293l4.707 4.707 1.414-1.414-4.707-4.707A8 8 0 0010 2zm0 2a6 6 0 110 12A6 6 0 0110 4z" />
             </svg>
           </div>
-          <button className="btn btn-primary h-9" onClick={onSearch}>
+          <button className="btn btn-primary h-9 w-full sm:w-auto" onClick={onSearch}>
             Search
           </button>
-          <button className="h-9 px-3 rounded-md border bg-white text-sm hover:bg-gray-50" onClick={onReset} type="button">
+          <button className="h-9 px-3 rounded-md border bg-white text-sm hover:bg-gray-50 w-full sm:w-auto" onClick={onReset} type="button">
             Reset
           </button>
         </div>
@@ -189,7 +189,6 @@ function FilterBar({
 /* ---------- Simple Bar Chart Component ---------- */
 function SimpleBarChart({ data, title, yLabel = 'Count' }) {
   const maxValue = Math.max(...data.map(d => d.value), 1);
-  const barWidth = 100 / data.length;
 
   return (
     <div className="bg-white p-4 rounded-lg shadow">
@@ -398,18 +397,23 @@ export default function Atex() {
   async function saveItem() {
     setLoading(true);
     try {
+      const payload = {
+        ...editItem,
+        zone_gas: editItem.zone_gas === '' ? null : editItem.zone_gas,
+        zone_dust: editItem.zone_dust === '' ? null : editItem.zone_dust
+      };
       if (editItem.id) {
-        await put(`${API_BASE}/api/atex/equipments/${editItem.id}`, editItem);
+        await put(`${API_BASE}/api/atex/equipments/${editItem.id}`, payload);
         notify('Equipment updated successfully', 'success');
       } else {
-        await post(`${API_BASE}/api/atex/equipments`, editItem);
+        await post(`${API_BASE}/api/atex/equipments`, payload);
         notify('Equipment created successfully', 'success');
       }
       setEditItem(null);
       await loadData();
     } catch (e) {
       console.error('Save failed:', e);
-      notify('Failed to save equipment', 'error');
+      notify(`Failed to save equipment: ${e.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -495,7 +499,7 @@ export default function Atex() {
           last_control: row.last_control || null,
           next_control: row.next_control || null,
           comments: row.comments || null,
-          frequency_months: row.frequency_months ? Number(row.frequency_months) : null
+          frequency_months: row.frequency_months ? Number(row.frequency_months) : 36
         });
       }
       notify('Data imported successfully', 'success');
@@ -521,10 +525,10 @@ export default function Atex() {
       atex_ref: row.atex_ref || '',
       zone_gas: row.zone_gas ?? '',
       zone_dust: row.zone_dust ?? '',
-      last_control: row.last_control || '',
-      next_control: row.next_control || '',
+      last_control: row.last_control ? row.last_control.split('T')[0] : '',
+      next_control: row.next_control ? row.next_control.split('T')[0] : '',
       comments: row.comments || '',
-      frequency_months: row.frequency_months || ''
+      frequency_months: row.frequency_months || 36
     });
   }
 
@@ -548,9 +552,9 @@ export default function Atex() {
   }, [q, fBuilding, fRoom, fType, fManufacturer, fStatus, fGas, fDust, sort.by, sort.dir, page]);
 
   return (
-    <section className="p-4 md:p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex gap-2">
+    <section className="p-4 sm:p-6 space-y-6 max-w-full">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex gap-2 flex-wrap">
           <button
             className={`px-4 py-2 text-sm font-medium rounded-lg ${tab === 'controls' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
             onClick={() => setTab('controls')}
@@ -571,7 +575,7 @@ export default function Atex() {
           </button>
         </div>
         <button
-          className="btn btn-primary flex items-center gap-2"
+          className="btn btn-primary flex items-center gap-2 w-full sm:w-auto"
           onClick={() =>
             setEditItem({
               id: null,
@@ -587,7 +591,7 @@ export default function Atex() {
               last_control: '',
               next_control: '',
               comments: '',
-              frequency_months: ''
+              frequency_months: 36
             })
           }
         >
@@ -600,7 +604,7 @@ export default function Atex() {
 
       {tab === 'controls' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <h2 className="text-2xl font-semibold">ATEX Equipment Controls</h2>
             <button
               className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
@@ -637,89 +641,87 @@ export default function Atex() {
             />
           )}
 
-          <div className="bg-white rounded-lg shadow">
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
+          <div className="bg-white rounded-lg shadow overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2 text-left font-medium">ID</th>
+                  <th className="px-4 py-2 text-left font-medium">Equipment</th>
+                  <th className="px-4 py-2 text-left font-medium">Location</th>
+                  <th className="px-4 py-2 text-left font-medium">Manufacturer</th>
+                  <th className="px-4 py-2 text-left font-medium">ATEX</th>
+                  <th className="px-4 py-2 text-left font-medium">Zones</th>
+                  <th className="px-4 py-2 text-left font-medium">Status</th>
+                  <th className="px-4 py-2 text-left font-medium">Next Inspection</th>
+                  <th className="px-4 py-2 text-left font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading ? (
                   <tr>
-                    <th className="px-4 py-2 text-left font-medium">ID</th>
-                    <th className="px-4 py-2 text-left font-medium">Equipment</th>
-                    <th className="px-4 py-2 text-left font-medium">Location</th>
-                    <th className="px-4 py-2 text-left font-medium">Manufacturer</th>
-                    <th className="px-4 py-2 text-left font-medium">ATEX</th>
-                    <th className="px-4 py-2 text-left font-medium">Zones</th>
-                    <th className="px-4 py-2 text-left font-medium">Status</th>
-                    <th className="px-4 py-2 text-left font-medium">Next Inspection</th>
-                    <th className="px-4 py-2 text-left font-medium">Actions</th>
+                    <td colSpan="9" className="text-center py-4 text-gray-500">
+                      Loading...
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr>
-                      <td colSpan="9" className="text-center py-4 text-gray-500">
-                        Loading...
+                ) : rows.length === 0 ? (
+                  <tr>
+                    <td colSpan="9" className="text-center py-4 text-gray-500">
+                      No equipment found
+                    </td>
+                  </tr>
+                ) : (
+                  rows.map(r => (
+                    <tr key={r.id} className="border-t">
+                      <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
+                      <td className="px-4 py-2">{r.component_type}</td>
+                      <td className="px-4 py-2">
+                        <div>{r.building}</div>
+                        <div className="text-xs text-gray-500">Room {r.room}</div>
+                      </td>
+                      <td className="px-4 py-2">
+                        {r.manufacturer || '—'}
+                        {r.manufacturer_ref && <div className="text-xs text-gray-500">{r.manufacturer_ref}</div>}
+                      </td>
+                      <td className="px-4 py-2 font-mono text-xs">{r.atex_ref || '—'}</td>
+                      <td className="px-4 py-2">
+                        <div className="text-xs">Gas: {r.zone_gas || '—'}</div>
+                        <div className="text-xs">Dust: {r.zone_dust || '—'}</div>
+                      </td>
+                      <td className="px-4 py-2">
+                        <span className={`px-2 py-1 rounded text-xs ${getStatusColor(r.status)}`}>
+                          {getStatusDisplay(r.status)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2">{formatDate(r.next_control)}</td>
+                      <td className="px-4 py-2 flex gap-2 flex-wrap">
+                        <button
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium"
+                          onClick={() => onEdit(r)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="text-red-600 hover:text-red-800 text-xs font-medium"
+                          onClick={() => setShowDelete(r.id)}
+                        >
+                          Delete
+                        </button>
+                        <button
+                          className="text-blue-600 hover:text-blue-800 text-xs font-medium"
+                          onClick={() => {
+                            setShowAttach(r.id);
+                            loadAttachments(r.id);
+                          }}
+                        >
+                          Attach
+                        </button>
                       </td>
                     </tr>
-                  ) : rows.length === 0 ? (
-                    <tr>
-                      <td colSpan="9" className="text-center py-4 text-gray-500">
-                        No equipment found
-                      </td>
-                    </tr>
-                  ) : (
-                    rows.map(r => (
-                      <tr key={r.id} className="border-t">
-                        <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
-                        <td className="px-4 py-2">{r.component_type}</td>
-                        <td className="px-4 py-2">
-                          <div>{r.building}</div>
-                          <div className="text-xs text-gray-500">Room {r.room}</div>
-                        </td>
-                        <td className="px-4 py-2">
-                          {r.manufacturer || '—'}
-                          {r.manufacturer_ref && <div className="text-xs text-gray-500">{r.manufacturer_ref}</div>}
-                        </td>
-                        <td className="px-4 py-2 font-mono text-xs">{r.atex_ref || '—'}</td>
-                        <td className="px-4 py-2">
-                          <div className="text-xs">Gas: {r.zone_gas || '—'}</div>
-                          <div className="text-xs">Dust: {r.zone_dust || '—'}</div>
-                        </td>
-                        <td className="px-4 py-2">
-                          <span className={`px-2 py-1 rounded text-xs ${getStatusColor(r.status)}`}>
-                            {getStatusDisplay(r.status)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2">{formatDate(r.next_control)}</td>
-                        <td className="px-4 py-2 flex gap-2">
-                          <button
-                            className="text-blue-600 hover:text-blue-800 text-xs font-medium"
-                            onClick={() => onEdit(r)}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="text-red-600 hover:text-red-800 text-xs font-medium"
-                            onClick={() => setShowDelete(r.id)}
-                          >
-                            Delete
-                          </button>
-                          <button
-                            className="text-blue-600 hover:text-blue-800 text-xs font-medium"
-                            onClick={() => {
-                              setShowAttach(r.id);
-                              loadAttachments(r.id);
-                            }}
-                          >
-                            Attach
-                          </button>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <div className="px-4 py-3 border-t flex items-center justify-between">
+                  ))
+                )}
+              </tbody>
+            </table>
+            <div className="px-4 py-3 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div className="text-sm text-gray-500">
                 Showing {(page - 1) * pageSize + 1} to {Math.min(page * pageSize, total)} of {total} entries
               </div>
@@ -744,7 +746,7 @@ export default function Atex() {
 
           {showDelete && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-              <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full">
+              <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
                 <h3 className="text-lg font-semibold mb-4">Confirm Delete</h3>
                 <p className="text-sm text-gray-600 mb-6">Are you sure you want to delete equipment #{showDelete}?</p>
                 <div className="flex justify-end gap-2">
@@ -767,7 +769,7 @@ export default function Atex() {
 
           {showAttach && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-              <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full">
+              <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-semibold">Attachments for #{showAttach}</h3>
                   <button
@@ -782,7 +784,7 @@ export default function Atex() {
                 <input
                   type="file"
                   multiple
-                  className="input mb-4"
+                  className="input mb-4 w-full"
                   onChange={e => uploadAttachments(showAttach, Array.from(e.target.files))}
                 />
                 {attachments.length === 0 ? (
@@ -849,8 +851,8 @@ export default function Atex() {
               <p className="text-xs text-gray-500 mt-3">Dates in YYYY-MM-DD format. Numbers for zones (0,1,2 for gas; 20,21,22 for dust).</p>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-4">
-              <button className="btn btn-primary" onClick={exportToExcel}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <button className="btn btn-primary w-full" onClick={exportToExcel}>
                 <svg className="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
@@ -858,7 +860,7 @@ export default function Atex() {
               </button>
               <div>
                 <label className="block text-sm font-medium mb-1">Import Equipment Data</label>
-                <input className="input" type="file" accept=".xlsx,.xls" onChange={importFromExcel} />
+                <input className="input w-full" type="file" accept=".xlsx,.xls" onChange={importFromExcel} />
               </div>
             </div>
           </div>
@@ -867,7 +869,7 @@ export default function Atex() {
 
       {tab === 'assessment' && (
         <div className="space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <h2 className="text-2xl font-semibold">Assessment & Analytics</h2>
             <div className="text-sm text-gray-500">
               Updated: {analytics?.generatedAt ? new Date(analytics.generatedAt).toLocaleString() : 'Loading...'}
@@ -875,7 +877,7 @@ export default function Atex() {
           </div>
 
           {analyticsLoading ? (
-            <div className="grid md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {[...Array(3)].map((_, i) => (
                 <div key={i} className="bg-white p-4 rounded-lg shadow animate-pulse">
                   <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
@@ -884,7 +886,7 @@ export default function Atex() {
               ))}
             </div>
           ) : analytics ? (
-            <div className="grid md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-white p-6 rounded-lg shadow border-l-4 border-blue-500">
                 <h3 className="text-lg font-medium text-gray-900">Total Equipment</h3>
                 <p className="text-3xl font-bold text-blue-600 mt-1">{analytics.stats.total}</p>
@@ -906,7 +908,7 @@ export default function Atex() {
           )}
 
           {analytics && (
-            <div className="grid lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <DoughnutChart
                 data={[
                   { label: 'Compliant', value: analytics.stats.compliant },
@@ -942,67 +944,65 @@ export default function Atex() {
           )}
 
           {analytics && analytics.riskEquipment.length > 0 && (
-            <div className="bg-white rounded-lg shadow">
+            <div className="bg-white rounded-lg shadow overflow-x-auto">
               <div className="px-6 py-4 border-b bg-gray-50">
                 <h3 className="text-lg font-medium">High Priority Equipment ({analytics.riskEquipment.length})</h3>
                 <p className="text-sm text-gray-600">Overdue inspections and due within next 90 days</p>
               </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-2 text-left font-medium">ID</th>
-                      <th className="px-4 py-2 text-left font-medium">Equipment</th>
-                      <th className="px-4 py-2 text-left font-medium">Location</th>
-                      <th className="px-4 py-2 text-left font-medium">Zones</th>
-                      <th className="px-4 py-2 text-left font-medium">Status</th>
-                      <th className="px-4 py-2 text-left font-medium">Next Inspection</th>
-                      <th className="px-4 py-2 text-left font-medium">Days</th>
-                      <th className="px-4 py-2 text-left font-medium">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {analytics.riskEquipment.map(r => {
-                      const dleft = daysUntil(r.next_control);
-                      const risk = dleft < 0 ? 'High' : 'Medium';
-                      const riskColor = risk === 'High' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800';
-                      return (
-                        <tr key={r.id} className="border-t">
-                          <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
-                          <td className="px-4 py-2">{r.component_type}</td>
-                          <td className="px-4 py-2">
-                            <div>{r.building}</div>
-                            <div className="text-xs text-gray-500">Room {r.room}</div>
-                          </td>
-                          <td className="px-4 py-2">
-                            <div className="text-xs">Gas: {r.zone_gas || '—'}</div>
-                            <div className="text-xs">Dust: {r.zone_dust || '—'}</div>
-                          </td>
-                          <td className="px-4 py-2">
-                            <span className={`px-2 py-1 rounded text-xs ${getStatusColor(r.status)}`}>
-                              {getStatusDisplay(r.status)}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2">{formatDate(r.next_control)}</td>
-                          <td className="px-4 py-2">
-                            <span className={`px-2 py-1 rounded text-xs ${riskColor}`}>
-                              {dleft < 0 ? `${Math.abs(dleft)} days late` : `${dleft} days`}
-                            </span>
-                          </td>
-                          <td className="px-4 py-2">
-                            <button
-                              className="text-blue-600 hover:text-blue-800 text-xs font-medium"
-                              onClick={() => setTab('controls')}
-                            >
-                              View
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left font-medium">ID</th>
+                    <th className="px-4 py-2 text-left font-medium">Equipment</th>
+                    <th className="px-4 py-2 text-left font-medium">Location</th>
+                    <th className="px-4 py-2 text-left font-medium">Zones</th>
+                    <th className="px-4 py-2 text-left font-medium">Status</th>
+                    <th className="px-4 py-2 text-left font-medium">Next Inspection</th>
+                    <th className="px-4 py-2 text-left font-medium">Days</th>
+                    <th className="px-4 py-2 text-left font-medium">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analytics.riskEquipment.map(r => {
+                    const dleft = daysUntil(r.next_control);
+                    const risk = dleft < 0 ? 'High' : 'Medium';
+                    const riskColor = risk === 'High' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800';
+                    return (
+                      <tr key={r.id} className="border-t">
+                        <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
+                        <td className="px-4 py-2">{r.component_type}</td>
+                        <td className="px-4 py-2">
+                          <div>{r.building}</div>
+                          <div className="text-xs text-gray-500">Room {r.room}</div>
+                        </td>
+                        <td className="px-4 py-2">
+                          <div className="text-xs">Gas: {r.zone_gas || '—'}</div>
+                          <div className="text-xs">Dust: {r.zone_dust || '—'}</div>
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className={`px-2 py-1 rounded text-xs ${getStatusColor(r.status)}`}>
+                            {getStatusDisplay(r.status)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2">{formatDate(r.next_control)}</td>
+                        <td className="px-4 py-2">
+                          <span className={`px-2 py-1 rounded text-xs ${riskColor}`}>
+                            {dleft < 0 ? `${Math.abs(dleft)} days late` : `${dleft} days`}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2">
+                          <button
+                            className="text-blue-600 hover:text-blue-800 text-xs font-medium"
+                            onClick={() => setTab('controls')}
+                          >
+                            View
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -1010,7 +1010,7 @@ export default function Atex() {
 
       {editItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl sm:max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-gray-100">
               <h3 className="text-xl font-semibold text-gray-800">{editItem.id ? 'Edit Equipment' : 'New Equipment'}</h3>
               <button
@@ -1022,12 +1022,12 @@ export default function Atex() {
                 </svg>
               </button>
             </div>
-            <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">
-              <div className="grid md:grid-cols-2 gap-4">
+            <div className="p-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1">Site</label>
                   <select
-                    className="input"
+                    className="input w-full"
                     value={editItem.site || ''}
                     onChange={e => setEditItem({ ...editItem, site: e.target.value })}
                   >
@@ -1042,7 +1042,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Building</label>
                   <input
-                    className="input"
+                    className="input w-full"
                     value={editItem.building || ''}
                     onChange={e => setEditItem({ ...editItem, building: e.target.value })}
                   />
@@ -1050,7 +1050,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Room</label>
                   <input
-                    className="input"
+                    className="input w-full"
                     value={editItem.room || ''}
                     onChange={e => setEditItem({ ...editItem, room: e.target.value })}
                   />
@@ -1058,7 +1058,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Component Type</label>
                   <input
-                    className="input"
+                    className="input w-full"
                     value={editItem.component_type || ''}
                     onChange={e => setEditItem({ ...editItem, component_type: e.target.value })}
                   />
@@ -1066,7 +1066,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Manufacturer</label>
                   <input
-                    className="input"
+                    className="input w-full"
                     value={editItem.manufacturer || ''}
                     onChange={e => setEditItem({ ...editItem, manufacturer: e.target.value })}
                   />
@@ -1074,7 +1074,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Manufacturer Ref</label>
                   <input
-                    className="input"
+                    className="input w-full"
                     value={editItem.manufacturer_ref || ''}
                     onChange={e => setEditItem({ ...editItem, manufacturer_ref: e.target.value })}
                   />
@@ -1082,12 +1082,12 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">ATEX Marking</label>
                   <input
-                    className="input"
+                    className="input w-full"
                     value={editItem.atex_ref || ''}
                     onChange={e => setEditItem({ ...editItem, atex_ref: e.target.value })}
                   />
                 </div>
-                <div className="col-span-2 mt-4 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+                <div className="col-span-1 sm:col-span-2 mt-4 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
                   <label className="block text-sm font-medium mb-2">Upload Photo for Auto-Fill</label>
                   <p className="text-xs text-gray-500 mb-2">Upload a clear photo of the equipment label to automatically fill Manufacturer, Mfr Ref, and ATEX Marking.</p>
                   <input
@@ -1134,7 +1134,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Gas Zone</label>
                   <select
-                    className="input"
+                    className="input w-full"
                     value={editItem.zone_gas ?? ''}
                     onChange={e => setEditItem({ ...editItem, zone_gas: e.target.value ? Number(e.target.value) : null })}
                   >
@@ -1147,7 +1147,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Dust Zone</label>
                   <select
-                    className="input"
+                    className="input w-full"
                     value={editItem.zone_dust ?? ''}
                     onChange={e => setEditItem({ ...editItem, zone_dust: e.target.value ? Number(e.target.value) : null })}
                   >
@@ -1158,19 +1158,19 @@ export default function Atex() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Last Control</label>
+                  <label className="block text-sm font-medium mb-1">Last Inspection</label>
                   <input
                     type="date"
-                    className="input"
+                    className="input w-full"
                     value={editItem.last_control || ''}
                     onChange={e => setEditItem({ ...editItem, last_control: e.target.value || null })}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1">Next Control</label>
+                  <label className="block text-sm font-medium mb-1">Next Inspection</label>
                   <input
                     type="date"
-                    className="input"
+                    className="input w-full"
                     value={editItem.next_control || ''}
                     onChange={e => setEditItem({ ...editItem, next_control: e.target.value || null })}
                   />
@@ -1179,15 +1179,15 @@ export default function Atex() {
                   <label className="block text-sm font-medium mb-1">Frequency (months)</label>
                   <input
                     type="number"
-                    className="input"
+                    className="input w-full"
                     value={editItem.frequency_months || ''}
                     onChange={e => setEditItem({ ...editItem, frequency_months: e.target.value ? Number(e.target.value) : null })}
                   />
                 </div>
-                <div className="col-span-2">
+                <div className="col-span-1 sm:col-span-2">
                   <label className="block text-sm font-medium mb-1">Comments</label>
                   <textarea
-                    className="input min-h-[100px]"
+                    className="input w-full min-h-[100px]"
                     value={editItem.comments || ''}
                     onChange={e => setEditItem({ ...editItem, comments: e.target.value || null })}
                   />
