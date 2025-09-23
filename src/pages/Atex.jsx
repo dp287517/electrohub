@@ -390,7 +390,7 @@ export default function Atex() {
       const data = await get(`${API_BASE}/api/atex/equipments/${id}/attachments`);
       setAttachments(data || []);
       if (editItem && editItem.id === id) {
-        setModalAttachments(data || []);
+        setModalAttachments(data.map(a => ({ ...a, file: null })) || []);
       }
     } catch (e) {
       console.error('Load attachments failed:', e);
@@ -406,19 +406,21 @@ export default function Atex() {
         zone_gas: editItem.zone_gas === '' ? null : editItem.zone_gas,
         zone_dust: editItem.zone_dust === '' ? null : editItem.zone_dust
       };
+      let equipmentId = editItem.id;
       if (editItem.id) {
         await put(`${API_BASE}/api/atex/equipments/${editItem.id}`, payload);
         notify('Equipment updated successfully', 'success');
       } else {
         const response = await post(`${API_BASE}/api/atex/equipments`, payload);
-        if (modalAttachments.length > 0) {
-          const formData = new FormData();
-          modalAttachments.forEach(a => {
-            if (a.file) formData.append('files', a.file);
-          });
-          await upload(`${API_BASE}/api/atex/equipments/${response.id}/attachments`, formData);
-        }
+        equipmentId = response.id;
         notify('Equipment created successfully', 'success');
+      }
+      if (modalAttachments.length > 0) {
+        const formData = new FormData();
+        modalAttachments.forEach(a => {
+          if (a.file) formData.append('files', a.file);
+        });
+        await upload(`${API_BASE}/api/atex/equipments/${equipmentId}/attachments`, formData);
       }
       setEditItem(null);
       setModalAttachments([]);
@@ -469,7 +471,7 @@ export default function Atex() {
       notify('Attachment deleted successfully', 'success');
       await loadAttachments(id);
       if (editItem && editItem.id === id) {
-        setModalAttachments(prev => prev.filter(a => a.id !== attId));
+        setModalAttachments(prev => prev.filter(x => x.id !== attId));
       }
     } catch (e) {
       console.error('Delete attachment failed:', e);
@@ -1046,7 +1048,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Site</label>
                   <select
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.site || ''}
                     onChange={e => setEditItem({ ...editItem, site: e.target.value })}
                   >
@@ -1061,7 +1063,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Building</label>
                   <input
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.building || ''}
                     onChange={e => setEditItem({ ...editItem, building: e.target.value })}
                   />
@@ -1069,7 +1071,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Room</label>
                   <input
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.room || ''}
                     onChange={e => setEditItem({ ...editItem, room: e.target.value })}
                   />
@@ -1077,7 +1079,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Component Type</label>
                   <input
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.component_type || ''}
                     onChange={e => setEditItem({ ...editItem, component_type: e.target.value })}
                   />
@@ -1085,7 +1087,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Manufacturer</label>
                   <input
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.manufacturer || ''}
                     onChange={e => setEditItem({ ...editItem, manufacturer: e.target.value })}
                   />
@@ -1093,7 +1095,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Manufacturer Ref</label>
                   <input
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.manufacturer_ref || ''}
                     onChange={e => setEditItem({ ...editItem, manufacturer_ref: e.target.value })}
                   />
@@ -1101,7 +1103,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">ATEX Marking</label>
                   <input
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.atex_ref || ''}
                     onChange={e => setEditItem({ ...editItem, atex_ref: e.target.value })}
                   />
@@ -1112,7 +1114,7 @@ export default function Atex() {
                   <input
                     type="file"
                     accept="image/*"
-                    className="input text-sm w-full"
+                    className="input text-sm w-full bg-white text-gray-900 border-gray-300"
                     disabled={photoLoading}
                     onChange={async e => {
                       const file = e.target.files[0];
@@ -1156,7 +1158,7 @@ export default function Atex() {
                   <input
                     type="file"
                     multiple
-                    className="input text-sm w-full"
+                    className="input text-sm w-full bg-white text-gray-900 border-gray-300"
                     disabled={loading}
                     onChange={e => {
                       const files = Array.from(e.target.files);
@@ -1190,7 +1192,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Gas Zone</label>
                   <select
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.zone_gas ?? ''}
                     onChange={e => setEditItem({ ...editItem, zone_gas: e.target.value ? Number(e.target.value) : null })}
                   >
@@ -1203,7 +1205,7 @@ export default function Atex() {
                 <div>
                   <label className="block text-sm font-medium mb-1">Dust Zone</label>
                   <select
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.zone_dust ?? ''}
                     onChange={e => setEditItem({ ...editItem, zone_dust: e.target.value ? Number(e.target.value) : null })}
                   >
@@ -1213,29 +1215,31 @@ export default function Atex() {
                     <option value="22">22</option>
                   </select>
                 </div>
-                <div>
+                <div className="relative">
                   <label className="block text-sm font-medium mb-1">Last Inspection</label>
                   <input
                     type="date"
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.last_control || ''}
                     onChange={e => setEditItem({ ...editItem, last_control: e.target.value || null })}
+                    style={{ zIndex: 10 }}
                   />
                 </div>
-                <div>
+                <div className="relative">
                   <label className="block text-sm font-medium mb-1">Next Inspection</label>
                   <input
                     type="date"
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.next_control || ''}
                     onChange={e => setEditItem({ ...editItem, next_control: e.target.value || null })}
+                    style={{ zIndex: 10 }}
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1">Frequency (months)</label>
                   <input
                     type="number"
-                    className="input w-full"
+                    className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.frequency_months || ''}
                     onChange={e => setEditItem({ ...editItem, frequency_months: e.target.value ? Number(e.target.value) : null })}
                   />
@@ -1243,7 +1247,7 @@ export default function Atex() {
                 <div className="col-span-1 sm:col-span-2">
                   <label className="block text-sm font-medium mb-1">Comments</label>
                   <textarea
-                    className="input w-full min-h-[100px]"
+                    className="input w-full min-h-[100px] bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
                     value={editItem.comments || ''}
                     onChange={e => setEditItem({ ...editItem, comments: e.target.value || null })}
                   />
