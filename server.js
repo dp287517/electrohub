@@ -56,12 +56,24 @@ app.use(
   })
 );
 
+// --- PROXY SELECTIVITY (nouveau service, port 3004 par défaut) ---
+const selectivityTarget = process.env.SELECTIVITY_BASE_URL || 'http://127.0.0.1:3004';
+app.use(
+  '/api/selectivity',
+  createProxyMiddleware({
+    target: selectivityTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
 
 // ---- CORS (pour les routes servies par ce serveur-ci ;
-// les routes /api/atex et /api/loopcalc gèrent déjà CORS côté services dédiés)
+// les routes /api/atex, /api/loopcalc, /api/switchboard et /api/selectivity
+// gèrent leurs CORS côté services dédiés)
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
