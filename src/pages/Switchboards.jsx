@@ -1,5 +1,5 @@
 // src/pages/Switchboards.jsx
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { get, post, put, del } from '../lib/api.js';
 import {
   Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle,
@@ -24,7 +24,8 @@ function Pill({ children, color = 'blue' }) {
   const colors = {
     blue: 'bg-blue-100 text-blue-800 border-blue-200',
     green: 'bg-green-100 text-green-800 border-green-200',
-    red: 'bg-red-100 text-red-800 border-red-200'
+    red: 'bg-red-100 text-red-800 border-red-200',
+    purple: 'bg-purple-100 text-purple-800 border-purple-200'
   };
   return (
     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${colors[color]}`}>
@@ -117,6 +118,7 @@ const emptyDeviceForm = {
 
 export default function Switchboards() {
   const site = useUserSite();
+  const isMounted = useRef(true);
   const [rows, setRows] = useState([]);
   const [allSwitchboards, setAllSwitchboards] = useState([]);
   const [q, setQ] = useState({ q: '', building: '', floor: '', room: '', sort: 'created_at', dir: 'desc', page: 1 });
@@ -198,14 +200,18 @@ export default function Switchboards() {
       if (!site) return;
       const params = new URLSearchParams({ ...q, pageSize, site }).toString();
       const data = await get(`/api/switchboard/boards?${params}`);
-      setRows(data?.data || []);
-      setTotal(data?.total || 0);
-      // Amélioration 1 : charger les counts après les rows
-      const ids = (data?.data || []).map(r => r.id);
-      loadDeviceCounts(ids);
+      if (isMounted.current) {
+        setRows(data?.data || []);
+        setTotal(data?.total || 0);
+        // Amélioration 1 : charger les counts après les rows
+        const ids = (data?.data || []).map(r => r.id);
+        loadDeviceCounts(ids);
+      }
     } catch (e) {
       console.error('Load switchboards failed:', e);
-      notify('Failed to load switchboards. Please refresh the page.', 'error');
+      if (isMounted.current) {
+        notify('Failed to load switchboards. Please refresh the page.', 'error');
+      }
     }
   };
 
@@ -214,7 +220,9 @@ export default function Switchboards() {
       if (!site) return;
       const params = new URLSearchParams({ site, pageSize: 1000 }).toString();
       const data = await get(`/api/switchboard/boards?${params}`);
-      setAllSwitchboards(data?.data || []);
+      if (isMounted.current) {
+        setAllSwitchboards(data?.data || []);
+      }
     } catch (e) {
       console.error('Load all switchboards failed:', e);
     }
@@ -225,7 +233,9 @@ export default function Switchboards() {
       if (!site) return;
       const params = new URLSearchParams({ switchboard_id: panelId, site }).toString();
       const data = await get(`/api/switchboard/devices?${params}`);
-      setDevices(prev => ({ ...prev, [panelId]: data?.data || [] }));
+      if (isMounted.current) {
+        setDevices(prev => ({ ...prev, [panelId]: data?.data || [] }));
+      }
     } catch (e) {
       console.error('Load devices failed:', e);
     }
@@ -237,7 +247,9 @@ export default function Switchboards() {
       const param = ids.length ? `?ids=${ids.join(',')}&site=${encodeURIComponent(site)}`
                                : `?site=${encodeURIComponent(site)}`;
       const data = await get(`/api/switchboard/devices-count${param}`);
-      setDeviceCounts(data.counts || {});
+      if (isMounted.current) {
+        setDeviceCounts(data.counts || {});
+      }
     } catch (e) {
       console.error('Load device counts failed:', e);
     }
@@ -248,7 +260,9 @@ export default function Switchboards() {
       if (!site) return;
       const params = new URLSearchParams({ site }).toString();
       const data = await get(`/api/switchboard/device-references?${params}`);
-      setDeviceReferences(data.data || []);
+      if (isMounted.current) {
+        setDeviceReferences(data.data || []);
+      }
     } catch (e) {
       console.error('Load device references failed:', e);
     }
@@ -392,17 +406,13 @@ export default function Switchboards() {
   const resetDeviceModal = (panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(null);
-    setDeviceForm({
-      ...emptyDeviceForm,
-      name: '',
-      position_number: ''
-    });
+    setDeviceForm({ ...emptyDeviceForm });
     setPhotoFile(null);
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
-    setParentSearchInput(''); // CORRECTION: Toujours vide pour création
-    setDownstreamSearchInput(''); // CORRECTION: Toujours vide pour création
-    setQuickAiQuery(''); // CORRECTION: Vide pour création
+    setParentSearchInput('');
+    setDownstreamSearchInput('');
+    setQuickAiQuery('');
     setOpenDevice(true);
   };
 
@@ -419,29 +429,28 @@ export default function Switchboards() {
 
     const safeSettings = device.settings || {};
     
-    // CORRECTION: Préserver NULL pour tous les champs
     setDeviceForm({
       name: device.name || '',
       device_type: device.device_type || 'Low Voltage Circuit Breaker',
       manufacturer: device.manufacturer || '',
       reference: device.reference || '',
-      in_amps: device.in_amps !== null && device.in_amps !== undefined ? Number(device.in_amps) : null,
-      icu_ka: device.icu_ka !== null && device.icu_ka !== undefined ? Number(device.icu_ka) : null,
-      ics_ka: device.ics_ka !== null && device.ics_ka !== undefined ? Number(device.ics_ka) : null,
-      poles: device.poles !== null && device.poles !== undefined ? Number(device.poles) : null,
-      voltage_v: device.voltage_v !== null && device.voltage_v !== undefined ? Number(device.voltage_v) : null,
+      in_amps: device.in_amps !== null ? Number(device.in_amps) : null,
+      icu_ka: device.icu_ka !== null ? Number(device.icu_ka) : null,
+      ics_ka: device.ics_ka !== null ? Number(device.ics_ka) : null,
+      poles: device.poles !== null ? Number(device.poles) : null,
+      voltage_v: device.voltage_v !== null ? Number(device.voltage_v) : null,
       trip_unit: device.trip_unit || '',
       position_number: device.position_number || '',
       settings: {
-        ir: safeSettings.ir !== null && safeSettings.ir !== undefined ? Number(safeSettings.ir) : null,
-        tr: safeSettings.tr !== null && safeSettings.tr !== undefined ? Number(safeSettings.tr) : null,
-        isd: safeSettings.isd !== null && safeSettings.isd !== undefined ? Number(safeSettings.isd) : null,
-        tsd: safeSettings.tsd !== null && safeSettings.tsd !== undefined ? Number(safeSettings.tsd) : null,
-        ii: safeSettings.ii !== null && safeSettings.ii !== undefined ? Number(safeSettings.ii) : null,
-        ig: safeSettings.ig !== null && safeSettings.ig !== undefined ? Number(safeSettings.ig) : null,
-        tg: safeSettings.tg !== null && safeSettings.tg !== undefined ? Number(safeSettings.tg) : null,
-        zsi: safeSettings.zsi !== null && safeSettings.zsi !== undefined ? Boolean(safeSettings.zsi) : false,
-        erms: safeSettings.erms !== null && safeSettings.erms !== undefined ? Boolean(safeSettings.erms) : false,
+        ir: safeSettings.ir !== null ? Number(safeSettings.ir) : null,
+        tr: safeSettings.tr !== null ? Number(safeSettings.tr) : null,
+        isd: safeSettings.isd !== null ? Number(safeSettings.isd) : null,
+        tsd: safeSettings.tsd !== null ? Number(safeSettings.tsd) : null,
+        ii: safeSettings.ii !== null ? Number(safeSettings.ii) : null,
+        ig: safeSettings.ig !== null ? Number(safeSettings.ig) : null,
+        tg: safeSettings.tg !== null ? Number(safeSettings.tg) : null,
+        zsi: safeSettings.zsi !== null ? Boolean(safeSettings.zsi) : false,
+        erms: safeSettings.erms !== null ? Boolean(safeSettings.erms) : false,
         curve_type: safeSettings.curve_type || ''
       },
       is_main_incoming: Boolean(device.is_main_incoming),
@@ -451,11 +460,10 @@ export default function Switchboards() {
       photos: []
     });
    
-    // CORRECTION: Parent vide par défaut, seulement suggestions si on tape
     setParentSearchInput(parentName || '');
     setDownstreamSearchInput(downstreamName || '');
     setPhotoFile(null);
-    setQuickAiQuery(''); // CORRECTION: Ne pré-remplit pas automatiquement
+    setQuickAiQuery('');
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
     setOpenDevice(true);
@@ -470,8 +478,8 @@ export default function Switchboards() {
     if (!deviceForm.name.trim()) {
       return notify('Device name is required', 'error');
     }
-    if (deviceForm.in_amps <= 0) {
-      return notify('Rated current must be greater than 0', 'error');
+    if (deviceForm.in_amps <= 0 && deviceForm.in_amps !== null) {
+      return notify('Rated current must be greater than 0 or left empty', 'error');
     }
 
     setBusy(true);
@@ -683,6 +691,7 @@ export default function Switchboards() {
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: {
             ...prev.settings,
+            ...data.settings,
             ir: data.settings?.ir !== null ? Number(data.settings.ir) : prev.settings.ir,
             tr: data.settings?.tr !== null ? Number(data.settings.tr) : prev.settings.tr,
             isd: data.settings?.isd !== null ? Number(data.settings.isd) : prev.settings.isd,
@@ -712,12 +721,12 @@ export default function Switchboards() {
     if (!photoFile) {
       return notify('Please select a photo first', 'info');
     }
-  
+   
     setDeviceSearchBusy(true);
     try {
       const formData = new FormData();
       formData.append('photo', photoFile);
-    
+     
       // CORRECTION: Ne pas envoyer switchboard_id si non valide
       const switchboardIdParam = currentPanelId && Number.isInteger(currentPanelId) ? `&switchboard_id=${encodeURIComponent(currentPanelId)}` : '';
       const response = await fetch(`/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}${switchboardIdParam}`, {
@@ -725,14 +734,14 @@ export default function Switchboards() {
         credentials: 'include',
         body: formData
       });
-    
+     
       const data = await response.json();
-    
+     
       if (data.error) {
         notify(`Photo analysis failed: ${data.error}`, 'error');
         return;
       }
-    
+     
       // Pré-remplir uniquement Quick AI Search avec manufacturer + reference
       if (data.manufacturer && data.reference) {
         const quickQuery = `${data.manufacturer} ${data.reference}`.trim();
@@ -748,7 +757,7 @@ export default function Switchboards() {
         notify(`✅ Created new device: ${data.manufacturer} ${data.reference}. Added to switchboard!`, 'success');
         setOpenDevice(false);
       }
-    
+     
       setPhotoFile(null);
     } catch (e) {
       console.error('Photo analysis failed:', e);
@@ -1556,7 +1565,7 @@ export default function Switchboards() {
             </button>
             <button
               className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
-              disabled={busy || !deviceForm.name.trim() || deviceForm.in_amps <= 0}
+              disabled={busy || !deviceForm.name.trim() || (deviceForm.in_amps !== null && deviceForm.in_amps <= 0)}
               onClick={saveDevice}
             >
               {busy ? (
