@@ -1,4 +1,3 @@
-// server_selectivity.js
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -96,7 +95,7 @@ app.get('/api/selectivity/check', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { upstream, downstream } = req.query;
+    const { upstream, downstream, fault_current } = req.query;
     const r = await pool.query(`
       SELECT * FROM devices WHERE id IN ($1, $2) AND site = $3
     `, [Number(upstream), Number(downstream), site]);
@@ -109,17 +108,21 @@ app.get('/api/selectivity/check', async (req, res) => {
     const missing = [];
     if (!up.settings?.ir || !down.settings?.ir) missing.push('Ir missing');
     if (!up.in_amps || !down.in_amps) missing.push('In amps missing');
-    // Ajouter plus selon besoins
 
     if (missing.length > 0) {
       return res.json({ status: 'incomplete', missing, remediation: 'Complete device settings in Switchboards' });
     }
 
     // Calcul sélectivité (simplifié basé sur IEC)
-    const isSelective = checkSelectivity(up, down); // Fonction implémentée ci-dessous
+    const isSelective = checkSelectivity(up, down, Number(fault_current));
     const remediation = isSelective ? [] : getRemediations(up, down);
+    const details = { 
+      why: isSelective ? 
+        'Total selectivity achieved: Downstream trip time < upstream for all tested currents (IEC 60947-2).' : 
+        'Partial/non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.'
+    };
 
-    res.json({ status: isSelective ? 'selective' : 'non-selective', details: { /* points de calcul */ }, remediation });
+    res.json({ status: isSelective ? 'selective' : 'non-selective', details, remediation });
   } catch (e) {
     console.error('[SELECTIVITY CHECK] error:', e);
     res.status(500).json({ error: 'Check failed' });
@@ -180,9 +183,8 @@ app.post('/api/selectivity/ai-tip', async (req, res) => {
 });
 
 // Fonctions helpers pour calculs (basés sur recherches IEC)
-function checkSelectivity(up, down) {
-  // Grille de courants test (log scale)
-  const currents = Array.from({length: 20}, (_, i) => Math.pow(10, i/5) * Math.min(up.in_amps, down.in_amps));
+function checkSelectivity(up, down, faultI = null) {
+  const currents = faultI ? [Number(faultI)] : Array.from({length: 20}, (_, i) => Math.pow(10, i/5) * Math.min(up.in_amps || 100, down.in_amps || 100));
   for (let I of currents) {
     const tDown = calculateTripTime(down, I);
     const tUp = calculateTripTime(up, I);
