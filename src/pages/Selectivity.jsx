@@ -54,6 +54,23 @@ function Toast({ msg, type }) {
   );
 }
 
+function Modal({ open, onClose, children, title }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-2xl max-h-[80vh] bg-white rounded-2xl shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-gray-50">
+          <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-200">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-6 overflow-y-auto max-h-[calc(80vh-100px)]">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({ open, onClose, children }) {
   if (!open) return null;
   return (
@@ -69,8 +86,8 @@ function Sidebar({ open, onClose, children }) {
 export default function Selectivity() {
   const site = useUserSite();
   const [pairs, setPairs] = useState([]);
-  const [statuses, setStatuses] = useState({}); // Statuts par paire ID
-  const [selectedPairs, setSelectedPairs] = useState([]); // Multi-select
+  const [statuses, setStatuses] = useState({});
+  const [selectedPairs, setSelectedPairs] = useState([]);
   const [q, setQ] = useState({ q: '', switchboard: '', building: '', floor: '', sort: 'name', dir: 'desc', page: 1 });
   const [total, setTotal] = useState(0);
   const [selectedPair, setSelectedPair] = useState(null);
@@ -83,7 +100,7 @@ export default function Selectivity() {
   const [toast, setToast] = useState(null);
   const [faultCurrent, setFaultCurrent] = useState(1000);
   const [showConfetti, setShowConfetti] = useState(false);
-  const chartRef = useRef(null); // Pour export PDF
+  const chartRef = useRef(null);
   const pageSize = 18;
 
   useEffect(() => {
@@ -116,8 +133,8 @@ export default function Selectivity() {
       const datasets = {
         labels: curves.upstream.map(p => p.current.toFixed(0)),
         datasets: [
-          { label: 'Upstream', data: curves.upstream.map(p => p.time), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
-          { label: 'Downstream', data: curves.downstream.map(p => p.time), borderColor: 'green', tension: 0.1, pointRadius: 0 },
+          { label: 'Upstream', data: curves.upstream.map(p => Math.min(p.time, 1000)), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
+          { label: 'Downstream', data: curves.downstream.map(p => Math.min(p.time, 1000)), borderColor: 'green', tension: 0.1, pointRadius: 0 },
         ],
       };
       setCurveData(datasets);
@@ -160,7 +177,7 @@ export default function Selectivity() {
     try {
       setBusy(true);
       const results = [];
-      for (const pair of pairs.slice(0, 10)) { // Limite à 10 pour perf
+      for (const pair of pairs.slice(0, 10)) {
         const res = await get('/api/selectivity/check', { upstream: pair.upstream_id, downstream: pair.downstream_id });
         results.push({ pair: pair.downstream_name, status: res.status });
         setStatuses(prev => ({ ...prev, [`${pair.downstream_id}`]: res.status }));
@@ -188,7 +205,6 @@ export default function Selectivity() {
     pdf.text('Selectivity Report', 10, 10);
     pdf.text(`Date: ${new Date().toLocaleString()}`, 10, 20);
     
-    // Tableau
     pdf.text('Pairs Status:', 10, 30);
     let y = 40;
     pairs.forEach(pair => {
@@ -197,7 +213,6 @@ export default function Selectivity() {
       y += 10;
     });
 
-    // Graph screenshot
     if (chartRef.current) {
       const canvas = await html2canvas(chartRef.current.chartInstance.canvas);
       pdf.addPage();
