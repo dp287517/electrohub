@@ -67,6 +67,17 @@ app.use(
   })
 );
 
+// --- PROXY FLA (AJOUT: place BEFORE body parsing) ---
+const flaTarget = process.env.FLA_BASE_URL || 'http://127.0.0.1:3005';
+app.use(
+  '/api/fla',
+  createProxyMiddleware({
+    target: flaTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
