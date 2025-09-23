@@ -1,4 +1,3 @@
-// src/pages/Selectivity.jsx
 import { useEffect, useState, useRef } from 'react';
 import { get, post } from '../lib/api.js';
 import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Zap, Download, ChevronRight } from 'lucide-react';
@@ -113,6 +112,14 @@ export default function Selectivity() {
       const data = await get('/api/selectivity/pairs', q);
       setPairs(data?.data || []);
       setTotal(data?.total || 0);
+      // Initialiser les statuts depuis l'API
+      const initialStatuses = {};
+      data?.data.forEach(pair => {
+        if (pair.status) {
+          initialStatuses[pair.downstream_id] = pair.status;
+        }
+      });
+      setStatuses(initialStatuses);
     } catch (e) {
       setToast({ msg: 'Failed to load pairs', type: 'error' });
     } finally {
@@ -387,7 +394,8 @@ export default function Selectivity() {
                 <td className="px-6 py-4 text-sm text-gray-900">{pair.switchboard_name}</td>
                 <td className="px-6 py-4 text-sm">
                   {statuses[pair.downstream_id] === 'selective' ? <CheckCircle className="text-green-600" /> :
-                   statuses[pair.downstream_id] === 'non-selective' ? <XCircle className="text-red-600" /> : 'Pending'}
+                   statuses[pair.downstream_id] === 'non-selective' ? <XCircle className="text-red-600" /> :
+                   statuses[pair.downstream_id] === 'incomplete' ? <AlertTriangle className="text-yellow-600" /> : 'Pending'}
                 </td>
                 <td className="px-6 py-4 text-sm">
                   <button
@@ -437,7 +445,9 @@ export default function Selectivity() {
         <div className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
           <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
           <div className="flex items-center gap-2 mb-4">
-            {checkResult.status === 'selective' ? <CheckCircle className="text-green-600 animate-bounce" size={24} /> : <XCircle className="text-red-600" size={24} />}
+            {checkResult.status === 'selective' ? <CheckCircle className="text-green-600 animate-bounce" size={24} /> :
+             checkResult.status === 'non-selective' ? <XCircle className="text-red-600" size={24} /> :
+             <AlertTriangle className="text-yellow-600" size={24} />}
             <span className="text-xl capitalize">{checkResult.status}</span>
           </div>
           {checkResult.missing?.length > 0 && (
