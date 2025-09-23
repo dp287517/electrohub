@@ -45,6 +45,17 @@ app.use(
   })
 );
 
+// --- PROXY SELECTIVITY ---
+const selectivityTarget = process.env.SELECTIVITY_BASE_URL || 'http://127.0.0.1:3004';
+app.use(
+  '/api/selectivity',
+  createProxyMiddleware({
+    target: selectivityTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // --- PROXY SWITCHBOARD (place BEFORE body parsing like /api/atex & /api/loopcalc) ---
 // --- PROXY SELECTIVITY (nouveau service, port 3004 par défaut) ---
 const selectivityTarget = process.env.SELECTIVITY_BASE_URL || 'http://127.0.0.1:3004';
