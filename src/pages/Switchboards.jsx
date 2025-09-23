@@ -96,7 +96,7 @@ const emptyDeviceForm = {
   voltage_V: null,
   trip_unit: '',
   settings: {
-    ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false,
+    ir: null, tr: null, isd: null, tsd: null, ii: null, ig: null, tg: null, zsi: null, erms: null,
     curve_type: ''
   },
   is_main_incoming: false,
@@ -135,7 +135,7 @@ export default function Switchboards() {
   const [showDownstreamSuggestions, setShowDownstreamSuggestions] = useState(false);
   const [showReferenceSuggestions, setShowReferenceSuggestions] = useState(false);
 
-  // Search inputs - CORRECTION: Parent vide par défaut
+  // Search inputs
   const [parentSearchInput, setParentSearchInput] = useState('');
   const [downstreamSearchInput, setDownstreamSearchInput] = useState('');
 
@@ -150,17 +150,17 @@ export default function Switchboards() {
   const [aiTipLoading, setAiTipLoading] = useState(false);
   const [aiTipOpen, setAiTipOpen] = useState(false);
 
-  // Compteur devices (amélioration 1)
+  // Compteur devices
   const [deviceCounts, setDeviceCounts] = useState({});
 
-  // Toasts (amélioration 3)
-  const [toast, setToast] = useState(null); // { type: 'success'|'error'|'info', msg: string }
+  // Toasts
+  const [toast, setToast] = useState(null);
   const notify = (msg, type='success') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 2500);
   };
 
-  // Quick AI Search (amélioration 4)
+  // Quick AI Search
   const [quickAiQuery, setQuickAiQuery] = useState('');
 
   // Debounce hook
@@ -184,6 +184,7 @@ export default function Switchboards() {
   const debouncedParentQuery = useDebounce(parentSearchInput, 300);
   const debouncedDownstreamQuery = useDebounce(downstreamSearchInput, 300);
 
+  // ===== API FUNCTIONS =====
   const loadSwitchboards = async () => {
     try {
       if (!site) return;
@@ -191,7 +192,6 @@ export default function Switchboards() {
       const data = await get(`/api/switchboard/boards?${params}`);
       setRows(data?.data || []);
       setTotal(data?.total || 0);
-      // Amélioration 1 : charger les counts après les rows
       const ids = (data?.data || []).map(r => r.id);
       loadDeviceCounts(ids);
     } catch (e) {
@@ -222,7 +222,6 @@ export default function Switchboards() {
     }
   };
 
-  // Amélioration 1 : loader pour les counts
   const loadDeviceCounts = async (ids=[]) => {
     try {
       const param = ids.length ? `?ids=${ids.join(',')}&site=${encodeURIComponent(site)}`
@@ -245,7 +244,6 @@ export default function Switchboards() {
     }
   };
 
-  // NOUVELLE FONCTION: Charger le nom du parent pour l'édition
   const loadParentName = async (parentId) => {
     if (!parentId || !currentPanelId || !site) return '';
     try {
@@ -263,7 +261,6 @@ export default function Switchboards() {
     }
   };
 
-  // NOUVELLE FONCTION: Charger le nom du downstream pour l'édition
   const loadDownstreamName = async (downstreamId) => {
     if (!downstreamId || !site) return '';
     try {
@@ -277,6 +274,7 @@ export default function Switchboards() {
     }
   };
 
+  // ===== EFFECTS =====
   useEffect(() => {
     if (site) {
       loadSwitchboards();
@@ -294,6 +292,7 @@ export default function Switchboards() {
     }
   };
 
+  // ===== SWITCHBOARD FUNCTIONS =====
   const resetSwitchboardModal = () => {
     setEditingSwitchboard(null);
     setSwitchboardForm({
@@ -355,7 +354,6 @@ export default function Switchboards() {
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
   const duplicateSwitchboard = async (id) => {
     try {
       await post(`/api/switchboard/boards/${id}/duplicate?site=${encodeURIComponent(site)}`);
@@ -367,7 +365,6 @@ export default function Switchboards() {
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
   const removeSwitchboard = async (id) => {
     try {
       await del(`/api/switchboard/boards/${id}?site=${encodeURIComponent(site)}`);
@@ -379,7 +376,7 @@ export default function Switchboards() {
     }
   };
 
-  // Device functions
+  // ===== DEVICE FUNCTIONS =====
   const resetDeviceModal = (panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(null);
@@ -387,18 +384,16 @@ export default function Switchboards() {
     setPhotoFile(null);
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
-    setParentSearchInput(''); // CORRECTION: Toujours vide pour création
-    setDownstreamSearchInput(''); // CORRECTION: Toujours vide pour création
-    setQuickAiQuery(''); // CORRECTION: Vide pour création
+    setParentSearchInput('');
+    setDownstreamSearchInput('');
+    setQuickAiQuery('');
     setOpenDevice(true);
   };
 
-  // CORRECTION MAJEURE: Persistance complète + chargement parent/downstream
   const onEditDevice = async (device, panelId) => {
     setCurrentPanelId(panelId);
     setEditingDevice(device);
    
-    // Charger les noms parent/downstream en parallèle
     const [parentName, downstreamName] = await Promise.all([
       loadParentName(device.parent_id),
       loadDownstreamName(device.downstream_switchboard_id)
@@ -406,7 +401,6 @@ export default function Switchboards() {
 
     const safeSettings = device.settings || {};
     
-    // CORRECTION: Pas de fallback si valeur existe en DB - conserve les valeurs réelles
     setDeviceForm({
       name: device.name || '',
       device_type: device.device_type || 'Low Voltage Circuit Breaker',
@@ -437,11 +431,10 @@ export default function Switchboards() {
       photos: []
     });
    
-    // CORRECTION: Parent vide par défaut, seulement suggestions si on tape
     setParentSearchInput(parentName || '');
     setDownstreamSearchInput(downstreamName || '');
     setPhotoFile(null);
-    setQuickAiQuery(''); // CORRECTION: Ne pré-remplit pas automatiquement
+    setQuickAiQuery('');
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
     setOpenDevice(true);
@@ -487,7 +480,6 @@ export default function Switchboards() {
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
   const duplicateDevice = async (id, panelId) => {
     try {
       await post(`/api/switchboard/devices/${id}/duplicate?site=${encodeURIComponent(site)}`);
@@ -500,7 +492,6 @@ export default function Switchboards() {
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
   const removeDevice = async (id, panelId) => {
     try {
       await del(`/api/switchboard/devices/${id}?site=${encodeURIComponent(site)}`);
@@ -512,7 +503,6 @@ export default function Switchboards() {
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
   const setMainDevice = async (id, panelId, isMain) => {
     try {
       await put(`/api/switchboard/devices/${id}/set-main?site=${encodeURIComponent(site)}`, { is_main_incoming: isMain });
@@ -525,7 +515,7 @@ export default function Switchboards() {
     }
   };
 
-  // Fonctions de sélection des suggestions
+  // ===== SEARCH FUNCTIONS =====
   const selectParent = (parent) => {
     setDeviceForm(f => ({ ...f, parent_id: parent.id }));
     setParentSearchInput(`${parent.name} (${parent.manufacturer} ${parent.reference})`.trim());
@@ -558,7 +548,6 @@ export default function Switchboards() {
     notify(`Device specs loaded from database`, 'success');
   };
 
-  // Reference Search - FIXED
   const searchDeviceReference = async () => {
     if (!deviceForm.reference.trim()) {
       return notify('Please enter a reference to search', 'info');
@@ -604,7 +593,6 @@ export default function Switchboards() {
       setDeviceSearchBusy(false);
     }
    
-    // Fallback to DB search
     await searchReferencesDB(deviceForm.reference);
   };
 
@@ -643,7 +631,6 @@ export default function Switchboards() {
     }
   };
 
-  // Quick AI Search (amélioration 4)
   const quickAiSearch = async () => {
     if (!quickAiQuery.trim()) return notify('Enter a query first', 'info');
     setDeviceSearchBusy(true);
@@ -663,7 +650,6 @@ export default function Switchboards() {
           trip_unit: data.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, ...data.settings }
         }));
-        // CORRECTION: Met à jour aussi la référence pour cohérence
         setDeviceForm(prev => ({ ...prev, reference: data.reference || prev.reference }));
         notify(`AI filled specs for ${data.manufacturer} ${data.reference}`, 'success');
       } else {
@@ -677,6 +663,7 @@ export default function Switchboards() {
     }
   };
 
+  // ===== SEARCH EFFECTS =====
   useEffect(() => {
     if (debouncedReferenceQuery.trim()) {
       searchReferencesDB(debouncedReferenceQuery);
@@ -757,12 +744,368 @@ export default function Switchboards() {
     }
   };
 
-  // JSX truncated in original, assuming it's complete as per original
+  // ===== PAGINATION =====
+  const totalPages = Math.ceil(total / pageSize);
+  const startItem = (q.page - 1) * pageSize + 1;
+  const endItem = Math.min(q.page * pageSize, total);
+
+  // ===== RENDER =====
+  if (!site) {
+    return (
+      <section className="p-6 space-y-6">
+        <div className="text-center py-12">
+          <Info size={48} className="mx-auto text-gray-400 mb-4" />
+          <h1 className="text-2xl font-semibold text-gray-900 mb-2">Site not configured</h1>
+          <p className="text-gray-500">Please select a site to continue.</p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="p-6 space-y-6">
-      {/* ... (rest of the JSX as in the original document, with fixes applied to inputs) */}
+      {/* HEADER */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Switchboards</h1>
+          <p className="text-gray-600">Manage electrical distribution panels and devices</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setSidebarOpen(true)}
+            className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+            title="AI Assistant"
+          >
+            <Search size={20} />
+          </button>
+          <button
+            onClick={resetSwitchboardModal}
+            className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl transition-all"
+          >
+            <Plus size={16} className="mr-2" />
+            New Switchboard
+          </button>
+        </div>
+      </div>
 
-      {/* Example for inputs in Modal */}
+      {/* SEARCH & FILTERS */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={q.q}
+              onChange={e => setQ(prev => ({ ...prev, q: e.target.value, page: 1 }))}
+              className="input w-full pl-10"
+              placeholder="Search switchboards..."
+            />
+          </div>
+          <input
+            type="text"
+            value={q.building}
+            onChange={e => setQ(prev => ({ ...prev, building: e.target.value, page: 1 }))}
+            className="input"
+            placeholder="Building"
+          />
+          <input
+            type="text"
+            value={q.floor}
+            onChange={e => setQ(prev => ({ ...prev, floor: e.target.value, page: 1 }))}
+            className="input"
+            placeholder="Floor"
+          />
+          <input
+            type="text"
+            value={q.room}
+            onChange={e => setQ(prev => ({ ...prev, room: e.target.value, page: 1 }))}
+            className="input"
+            placeholder="Room"
+          />
+        </div>
+
+        {/* CONTROLS */}
+        <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <span>Showing {startItem}-{endItem} of {total} switchboards</span>
+            <div className="flex items-center gap-1">
+              <select
+                value={`${q.sort}`}
+                onChange={e => setQ(prev => ({ ...prev, sort: e.target.value, page: 1 }))}
+                className="text-xs border border-gray-300 rounded px-2 py-1"
+              >
+                <option value="created_at">Newest</option>
+                <option value="name">Name</option>
+                <option value="code">Code</option>
+              </select>
+              <span className="text-xs">|</span>
+              <select
+                value={q.dir}
+                onChange={e => setQ(prev => ({ ...prev, dir: e.target.value, page: 1 }))}
+                className="text-xs border border-gray-300 rounded px-2 py-1"
+              >
+                <option value="desc">Descending</option>
+                <option value="asc">Ascending</option>
+              </select>
+            </div>
+          </div>
+
+          {/* PAGINATION */}
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setQ(prev => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
+                disabled={q.page === 1}
+                className="p-2 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <span className="text-sm text-gray-600">Page {q.page} of {totalPages}</span>
+              <button
+                onClick={() => setQ(prev => ({ ...prev, page: Math.min(totalPages, prev.page + 1) }))}
+                disabled={q.page === totalPages}
+                className="p-2 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* SWITCHBOARDS GRID */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {rows.map((row) => (
+          <div key={row.id} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
+            <div className="p-6">
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex-1">
+                  <h3 className="font-semibold text-gray-900 mb-1 truncate">{row.name}</h3>
+                  <p className="text-sm text-gray-500 mb-2">{row.code}</p>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded-full">
+                      {row.meta.building_code || 'N/A'}
+                    </span>
+                    {row.regime_neutral && (
+                      <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                        {row.regime_neutral}
+                      </span>
+                    )}
+                    {row.is_principal && (
+                      <Pill color="green">Principal</Pill>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+                  <button
+                    onClick={() => duplicateSwitchboard(row.id)}
+                    className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                    title="Duplicate"
+                  >
+                    <Copy size={16} />
+                  </button>
+                  <button
+                    onClick={() => removeSwitchboard(row.id)}
+                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Delete"
+                  >
+                    <Trash size={16} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2 mb-4">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Floor:</span>
+                  <span>{row.meta.floor || '—'}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Room:</span>
+                  <span>{row.meta.room || '—'}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500">Devices:</span>
+                  <span className="font-medium">
+                    {deviceCounts[row.id] || 0}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-4 border-t border-gray-100">
+                <button
+                  onClick={() => onEditSwitchboard(row)}
+                  className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                >
+                  <Edit size={14} />
+                  Edit
+                </button>
+                <button
+                  onClick={() => toggleExpand(row.id)}
+                  className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                >
+                  {expandedPanels[row.id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  {expandedPanels[row.id] ? 'Hide' : 'Show'} Devices
+                </button>
+                <button
+                  onClick={() => window.open(`/api/switchboard/boards/${row.id}/report?site=${encodeURIComponent(site)}`, '_blank')}
+                  className="ml-auto text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                >
+                  <Download size={14} />
+                  Report
+                </button>
+              </div>
+            </div>
+
+            {/* DEVICES PANEL */}
+            {expandedPanels[row.id] && (
+              <div className="bg-gray-50 px-6 py-4 border-t border-gray-100">
+                <DeviceTree
+                  devices={devices[row.id] || []}
+                  panelId={row.id}
+                  onEdit={onEditDevice}
+                  onDuplicate={duplicateDevice}
+                  onDelete={removeDevice}
+                  onSetMain={setMainDevice}
+                  site={site}
+                />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* EMPTY STATE */}
+      {rows.length === 0 && (
+        <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300">
+          <Plus size={48} className="mx-auto text-gray-400 mb-4" />
+          <h3 className="text-xl font-semibold text-gray-900 mb-2">No switchboards yet</h3>
+          <p className="text-gray-500 mb-6">Get started by creating your first electrical panel.</p>
+          <button
+            onClick={resetSwitchboardModal}
+            className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg"
+          >
+            Create First Switchboard
+          </button>
+        </div>
+      )}
+
+      {/* SWITCHBOARD MODAL */}
+      <Modal open={openSwitchboard} onClose={() => setOpenSwitchboard(false)} title={editingSwitchboard ? 'Edit Switchboard' : 'New Switchboard'}>
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Name *</label>
+              <input
+                type="text"
+                value={switchboardForm.name}
+                onChange={e => setSwitchboardForm(f => ({ ...f, name: e.target.value }))}
+                className="input w-full"
+                placeholder="Main Distribution Panel"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Code *</label>
+              <input
+                type="text"
+                value={switchboardForm.code}
+                onChange={e => setSwitchboardForm(f => ({ ...f, code: e.target.value }))}
+                className="input w-full"
+                placeholder="MDP-001"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <input
+              type="text"
+              value={switchboardForm.meta.building_code}
+              onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, building_code: e.target.value } }))}
+              className="input"
+              placeholder="Building"
+            />
+            <input
+              type="text"
+              value={switchboardForm.meta.floor}
+              onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, floor: e.target.value } }))}
+              className="input"
+              placeholder="Floor"
+            />
+            <input
+              type="text"
+              value={switchboardForm.meta.room}
+              onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, room: e.target.value } }))}
+              className="input"
+              placeholder="Room"
+            />
+            <select
+              value={switchboardForm.regime_neutral}
+              onChange={e => setSwitchboardForm(f => ({ ...f, regime_neutral: e.target.value }))}
+              className="input"
+            >
+              {regimes.map(regime => (
+                <option key={regime} value={regime}>{regime}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-3">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={switchboardForm.is_principal}
+                  onChange={e => setSwitchboardForm(f => ({ ...f, is_principal: e.target.checked }))}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                />
+                <span className="text-sm font-medium text-gray-700">Principal Switchboard</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            {Object.entries(switchboardForm.modes).map(([key, value]) => (
+              <label key={key} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={value}
+                  onChange={e => setSwitchboardForm(f => ({
+                    ...f,
+                    modes: { ...f.modes, [key]: e.target.checked }
+                  }))}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                />
+                <span className="text-gray-700 capitalize">{key.replace('_', ' ')}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-6 pt-4 border-t border-gray-200">
+          <div className="flex justify-end gap-3">
+            <button
+              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
+              onClick={() => setOpenSwitchboard(false)}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
+              disabled={busy || !switchboardForm.name.trim() || !switchboardForm.code.trim()}
+              onClick={saveSwitchboard}
+            >
+              {busy ? (
+                <span className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  Saving...
+                </span>
+              ) : editingSwitchboard ? 'Update Switchboard' : 'Create Switchboard'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* DEVICE MODAL */}
       <Modal open={openDevice} onClose={() => setOpenDevice(false)} title={editingDevice ? 'Edit Device' : 'New Device'}>
         <div className="space-y-6">
           {/* Quick AI Search */}
@@ -922,7 +1265,7 @@ export default function Switchboards() {
             </div>
           </div>
 
-          {/* Parent Device Search - CORRECTION: Vide par défaut */}
+          {/* Parent Device Search */}
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-2">Parent Device (Upstream)</label>
             <div className="relative">
@@ -932,7 +1275,7 @@ export default function Switchboards() {
                 onChange={e => {
                   setParentSearchInput(e.target.value);
                   setDeviceForm(f => ({ ...f, parent_id: null }));
-                  setShowParentSuggestions(e.target.value.trim().length > 0); // CORRECTION: Seulement si on tape
+                  setShowParentSuggestions(e.target.value.trim().length > 0);
                 }}
                 onFocus={() => {
                   if (parentSearchInput.trim().length > 0) {
@@ -1033,7 +1376,7 @@ export default function Switchboards() {
                 <input
                   type="checkbox"
                   checked={deviceForm.is_main_incoming}
-                  onChange={() => {}} // Handled by parent div click
+                  onChange={() => {}}
                   className="rounded border-blue-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
                 />
                 <span className="font-medium text-blue-900">Main Incoming Device</span>
@@ -1161,7 +1504,7 @@ export default function Switchboards() {
         </div>
       </Modal>
 
-      {/* AI Assistant Sidebar - amélioration 6 */}
+      {/* AI Assistant Sidebar */}
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setSidebarOpen(false)}>
           <div
@@ -1228,8 +1571,7 @@ export default function Switchboards() {
               )}
             </div>
 
-            {/* Amélioration 6 : footer sticky pour mobile */}
-            <div className="p-4 border-t border-gray-200 sticky bottom-0 bg-white pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <div className="p-4 border-t border-gray-200 sticky bottom-0 bg-white">
               <div className="flex gap-2">
                 <input
                   className="input flex-1 pr-10"
@@ -1238,9 +1580,7 @@ export default function Switchboards() {
                   onKeyPress={e => e.key === 'Enter' && !chatBusy && sendChatMessage()}
                   placeholder="Ask about devices, standards, configurations..."
                   disabled={chatBusy}
-                  onFocus={e => { e.currentTarget.scrollIntoView({ block:'nearest', behavior:'smooth' }); }}
                 />
-                <Search size={16} className="absolute right-12 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
                 <button
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
                     chatBusy || !chatInput.trim()
@@ -1258,7 +1598,7 @@ export default function Switchboards() {
         </div>
       )}
 
-      {/* Amélioration 3 : UI des toasts */}
+      {/* TOAST */}
       {toast && (
         <div className={`fixed bottom-4 right-4 z-[60] px-4 py-3 rounded-lg shadow-lg text-sm
           ${toast.type==='success' ? 'bg-green-600 text-white' :
@@ -1270,7 +1610,7 @@ export default function Switchboards() {
   );
 }
 
-// DeviceTree Component (amélioration 2 : suppression du bouton redondant)
+// ===== DEVICETREE COMPONENT =====
 function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain, level = 0, site }) {
   return (
     <div className={`space-y-3 ${level > 0 ? 'ml-6 border-l border-gray-200 pl-4' : ''}`}>
@@ -1371,7 +1711,12 @@ function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain
         <div className="text-center py-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
           <Plus size={24} className="mx-auto text-gray-400 mb-2" />
           <p className="text-sm text-gray-500">No devices yet</p>
-          <p className="text-xs text-gray-400">Add your first device using the button above</p>
+          <button
+            onClick={() => resetDeviceModal(panelId)}
+            className="mt-2 text-blue-600 hover:text-blue-700 text-sm"
+          >
+            Add first device
+          </button>
         </div>
       )}
     </div>
