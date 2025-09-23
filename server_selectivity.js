@@ -79,7 +79,7 @@ app.get('/api/selectivity/pairs', async (req, res) => {
       JOIN devices u ON d.parent_id = u.id
       JOIN switchboards s ON d.switchboard_id = s.id
       WHERE ${where.join(' AND ')}
-      ORDER BY ${sortSafe(sort)} ${dirSafe(dir)}
+      ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
       LIMIT ${limit} OFFSET ${offset}
     `;
     const rows = await pool.query(sql, vals);
