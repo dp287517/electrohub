@@ -70,14 +70,16 @@ function Modal({ open, onClose, children, title }) {
   );
 }
 
-function Sidebar({ open, onClose, children }) {
+function Sidebar({ open, onClose, tipContent }) { // Explicitly pass tipContent as prop
   if (!open) return null;
   return (
     <div className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl z-40 overflow-y-auto p-6 transition-transform duration-300 ease-in-out transform translate-x-0">
       <button onClick={onClose} className="absolute top-4 right-4 p-1 hover:bg-gray-200 rounded">
         <X size={20} />
       </button>
-      {children}
+      <h3 className="text-xl font-bold mb-4">Explanation Tip</h3>
+      <p className="text-gray-700 whitespace-pre-wrap mb-4">{tipContent || 'No tip available'}</p>
+      <HelpCircle className="text-blue-500 inline" size={24} />
     </div>
   );
 }
@@ -99,6 +101,7 @@ export default function FaultLevelAssessment() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
+  const [tipContent, setTipContent] = useState(''); // Ensure tipContent is defined
   const chartRef = useRef(null);
   const pageSize = 18;
 
@@ -120,7 +123,7 @@ export default function FaultLevelAssessment() {
       });
       setStatuses(initialStatuses);
     } catch (e) {
-      setToast({ msg: 'Failed to load points', type: 'error' });
+      setToast({ msg: `Failed to load points: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -145,10 +148,15 @@ export default function FaultLevelAssessment() {
       setCurveData(datasets);
       setShowGraph(true);
 
-      const tipRes = await post('/api/faultlevel/ai-tip', { 
-        query: `Explain why this point is ${result.status}: device ${deviceId}, fault_level: ${result.fault_level_ka || 'general'}, phase_type: ${phaseType}` 
-      });
-      setTipContent(tipRes.tip);
+      try {
+        const tipRes = await post('/api/faultlevel/ai-tip', { 
+          query: `Explain why this point is ${result.status}: device ${deviceId}, fault_level: ${result.fault_level_ka || 'general'}, phase_type: ${phaseType}` 
+        });
+        setTipContent(tipRes.tip || 'No tip available');
+      } catch (tipError) {
+        console.error('AI tip failed:', tipError.message);
+        setTipContent('Failed to load AI tip');
+      }
       setShowSidebar(true);
 
       if (result.status === 'safe' && !isBatch) {
@@ -156,7 +164,7 @@ export default function FaultLevelAssessment() {
         setTimeout(() => setShowConfetti(false), 3000);
       }
     } catch (e) {
-      setToast({ msg: 'Check failed: ' + e.message, type: 'error' });
+      setToast({ msg: `Check failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -167,11 +175,11 @@ export default function FaultLevelAssessment() {
       setBusy(true);
       for (const id of selectedPoints) {
         const point = points.find(p => p.device_id === id);
-        if (point) await handleCheck(point.device_id, point.switchboard_id, 'three', true);
+        if (point) await handleCheck(point.device_id, point.switchboard_id, point.phase_type || 'three', true);
       }
       setToast({ msg: 'Batch check completed!', type: 'success' });
     } catch (e) {
-      setToast({ msg: 'Batch check failed: ' + e.message, type: 'error' });
+      setToast({ msg: `Batch check failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
       setSelectedPoints([]);
@@ -183,7 +191,7 @@ export default function FaultLevelAssessment() {
       setBusy(true);
       const results = [];
       for (const point of points.slice(0, 10)) {
-        const res = await get('/api/faultlevel/check', { device: point.device_id, switchboard: point.switchboard_id });
+        const res = await get('/api/faultlevel/check', { device: point.device_id, switchboard: point.switchboard_id, phase_type: point.phase_type || 'three' });
         results.push({ point: point.device_name, status: res.status });
         setStatuses(prev => ({ ...prev, [`${point.device_id}`]: res.status }));
       }
@@ -194,7 +202,7 @@ export default function FaultLevelAssessment() {
       });
       if (safe === results.length) setShowConfetti(true);
     } catch (e) {
-      setToast({ msg: 'Auto-evaluation failed: ' + e.message, type: 'error' });
+      setToast({ msg: `Auto-evaluation failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -227,12 +235,16 @@ export default function FaultLevelAssessment() {
         setToast({ msg: 'Invalid source impedance', type: 'error' });
         return;
       }
+      if (!['three', 'single'].includes(phase_type)) {
+        setToast({ msg: 'Invalid phase type', type: 'error' });
+        return;
+      }
       await post('/api/faultlevel/parameters', { device_id, switchboard_id, line_length, source_impedance, phase_type });
       setToast({ msg: 'Parameters saved!', type: 'success' });
       setShowParamsModal(false);
       loadPoints(); // Refresh points with updated parameters
     } catch (e) {
-      setToast({ msg: 'Failed to save parameters: ' + e.message, type: 'error' });
+      setToast({ msg: `Failed to save parameters: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -330,7 +342,7 @@ export default function FaultLevelAssessment() {
         pdf.addImage(imgData, 'PNG', 10, 30, 180, 100);
         chartInstance.destroy();
       } catch (e) {
-        console.error('Failed to generate chart for PDF:', e);
+        console.error('Failed to generate chart for PDF:', e.message);
         pdf.text('Error generating curve', 10, 30);
       }
     }
@@ -586,11 +598,7 @@ export default function FaultLevelAssessment() {
       </Modal>
 
       {/* Sidebar for Tips */}
-      <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)}>
-        <h3 className="text-xl font-bold mb-4">Explanation Tip</h3>
-        <p className="text-gray-700 whitespace-pre-wrap mb-4">{tipContent}</p>
-        <HelpCircle className="text-blue-500 inline" size={24} />
-      </Sidebar>
+      <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)} tipContent={tipContent} />
 
       {toast && <Toast {...toast} />}
       {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
