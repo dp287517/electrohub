@@ -94,6 +94,16 @@ export const api = {
       get(`/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`),
     getAiTip: (payload) => post("/api/faultlevel/ai-tip", payload),
     updateParameters: (payload) => post("/api/faultlevel/parameters", payload),
-    reset: () => post("/api/faultlevel/reset", {}), // New reset endpoint
+    reset: () => post("/api/faultlevel/reset", {}),
+  },
+  arcflash: {  // AJOUT SECTION AR CFLASH
+    listPoints: (params) => get("/api/arcflash/points", params),
+    checkPoint: (deviceId, switchboardId) => 
+      get(`/api/arcflash/check?device=${deviceId}&switchboard=${switchboardId}`),
+    getCurves: (deviceId, switchboardId) => 
+      get(`/api/arcflash/curves?device=${deviceId}&switchboard=${switchboardId}`),
+    getAiTip: (payload) => post("/api/arcflash/ai-tip", payload),
+    updateParameters: (payload) => post("/api/arcflash/parameters", payload),
+    reset: () => post("/api/arcflash/reset", {}),
   },
 };
