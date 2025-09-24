@@ -95,8 +95,7 @@ export default function FaultLevelAssessment() {
   const [showGraph, setShowGraph] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   const [showParamsModal, setShowParamsModal] = useState(false);
-  const [paramForm, setParamForm] = useState({ deviceId: null, switchboardId: null, line_length: 100, source_impedance: 0.1 });
-  const [tipContent, setTipContent] = useState('');
+  const [paramForm, setParamForm] = useState({ device_id: null, switchboard_id: null, line_length: 100, source_impedance: 0.1, phase_type: 'three' });
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -133,7 +132,7 @@ export default function FaultLevelAssessment() {
       const params = { device: deviceId, switchboard: switchboardId, phase_type: phaseType };
       const result = await get('/api/faultlevel/check', params);
       setCheckResult(result);
-      setSelectedPoint({ deviceId, switchboardId });
+      setSelectedPoint({ deviceId, switchboardId, phaseType });
       setStatuses(prev => ({ ...prev, [`${deviceId}`]: result.status }));
 
       const curves = await get('/api/faultlevel/curves', params);
@@ -147,7 +146,7 @@ export default function FaultLevelAssessment() {
       setShowGraph(true);
 
       const tipRes = await post('/api/faultlevel/ai-tip', { 
-        query: `Explain why this point is ${result.status}: device ${deviceId}, fault_level: ${result.fault_level_ka || 'general'}` 
+        query: `Explain why this point is ${result.status}: device ${deviceId}, fault_level: ${result.fault_level_ka || 'general'}, phase_type: ${phaseType}` 
       });
       setTipContent(tipRes.tip);
       setShowSidebar(true);
@@ -157,7 +156,7 @@ export default function FaultLevelAssessment() {
         setTimeout(() => setShowConfetti(false), 3000);
       }
     } catch (e) {
-      setToast({ msg: 'Check failed', type: 'error' });
+      setToast({ msg: 'Check failed: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -172,7 +171,7 @@ export default function FaultLevelAssessment() {
       }
       setToast({ msg: 'Batch check completed!', type: 'success' });
     } catch (e) {
-      setToast({ msg: 'Batch check failed', type: 'error' });
+      setToast({ msg: 'Batch check failed: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
       setSelectedPoints([]);
@@ -195,7 +194,7 @@ export default function FaultLevelAssessment() {
       });
       if (safe === results.length) setShowConfetti(true);
     } catch (e) {
-      setToast({ msg: 'Auto-evaluation failed', type: 'error' });
+      setToast({ msg: 'Auto-evaluation failed: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -203,10 +202,11 @@ export default function FaultLevelAssessment() {
 
   const openParamsModal = (point) => {
     setParamForm({
-      deviceId: point.device_id,
-      switchboardId: point.switchboard_id,
+      device_id: point.device_id,
+      switchboard_id: point.switchboard_id,
       line_length: point.line_length || 100,
-      source_impedance: point.source_impedance || 0.1
+      source_impedance: point.source_impedance || 0.1,
+      phase_type: point.phase_type || 'three'
     });
     setShowParamsModal(true);
   };
@@ -214,14 +214,25 @@ export default function FaultLevelAssessment() {
   const saveParameters = async () => {
     try {
       setBusy(true);
-      await post('/api/faultlevel/parameters', paramForm, {
-        params: { device: paramForm.deviceId, switchboard: paramForm.switchboardId }
-      });
+      const { device_id, switchboard_id, line_length, source_impedance, phase_type } = paramForm;
+      if (!device_id || !switchboard_id) {
+        setToast({ msg: 'Missing device or switchboard ID', type: 'error' });
+        return;
+      }
+      if (isNaN(line_length) || line_length <= 0) {
+        setToast({ msg: 'Invalid line length', type: 'error' });
+        return;
+      }
+      if (isNaN(source_impedance) || source_impedance <= 0) {
+        setToast({ msg: 'Invalid source impedance', type: 'error' });
+        return;
+      }
+      await post('/api/faultlevel/parameters', { device_id, switchboard_id, line_length, source_impedance, phase_type });
       setToast({ msg: 'Parameters saved!', type: 'success' });
       setShowParamsModal(false);
       loadPoints(); // Refresh points with updated parameters
     } catch (e) {
-      setToast({ msg: 'Failed to save parameters', type: 'error' });
+      setToast({ msg: 'Failed to save parameters: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -255,6 +266,7 @@ export default function FaultLevelAssessment() {
         const curves = await get('/api/faultlevel/curves', {
           device: point.device_id,
           switchboard: point.switchboard_id,
+          phase_type: point.phase_type || 'three'
         });
         const data = {
           labels: curves.curve.map(p => p.line_length.toFixed(0)),
@@ -266,11 +278,12 @@ export default function FaultLevelAssessment() {
         const riskZones = status === 'at-risk' ? (await get('/api/faultlevel/check', {
           device: point.device_id,
           switchboard: point.switchboard_id,
+          phase_type: point.phase_type || 'three'
         })).riskZones : [];
 
         pdf.addPage();
         pdf.setFontSize(14);
-        pdf.text(`Fault Curve for Point: ${point.device_name}`, 10, 10);
+        pdf.text(`Fault Curve for Point: ${point.device_name} (${point.phase_type})`, 10, 10);
         pdf.setFontSize(12);
         pdf.text(`Status: ${status}`, 10, 20);
 
@@ -290,7 +303,7 @@ export default function FaultLevelAssessment() {
                   label: { content: 'Risk Zone', display: true, position: 'center' }
                 }))
               },
-              title: { display: true, text: `Curve: ${point.device_name}` },
+              title: { display: true, text: `Curve: ${point.device_name} (${point.phase_type})` },
               tooltip: {
                 callbacks: {
                   label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}kA at ${context.parsed.x}m`
@@ -385,6 +398,7 @@ export default function FaultLevelAssessment() {
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Voltage (V)</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Line Length (m)</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Source Impedance (Ω)</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Phase Type</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Status</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Actions</th>
             </tr>
@@ -404,6 +418,7 @@ export default function FaultLevelAssessment() {
                 <td className="px-6 py-4 text-sm text-gray-900">{point.voltage_v} V</td>
                 <td className="px-6 py-4 text-sm text-gray-900">{point.line_length} m</td>
                 <td className="px-6 py-4 text-sm text-gray-900">{point.source_impedance} Ω</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.phase_type || 'three'}</td>
                 <td className="px-6 py-4 text-sm">
                   {statuses[point.device_id] === 'safe' ? <CheckCircle className="text-green-600" /> :
                    statuses[point.device_id] === 'at-risk' ? <XCircle className="text-red-600" /> :
@@ -411,7 +426,7 @@ export default function FaultLevelAssessment() {
                 </td>
                 <td className="px-6 py-4 text-sm">
                   <button
-                    onClick={() => handleCheck(point.device_id, point.switchboard_id)}
+                    onClick={() => handleCheck(point.device_id, point.switchboard_id, point.phase_type || 'three')}
                     className="text-blue-600 hover:underline mr-2"
                   >
                     Check
@@ -481,6 +496,7 @@ export default function FaultLevelAssessment() {
               onChange={e => setParamForm({ ...paramForm, line_length: e.target.value })}
               className="input w-full"
               placeholder="Default: 100"
+              min="1"
             />
           </div>
           <div>
@@ -492,7 +508,19 @@ export default function FaultLevelAssessment() {
               onChange={e => setParamForm({ ...paramForm, source_impedance: e.target.value })}
               className="input w-full"
               placeholder="Default: 0.1"
+              min="0.01"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Phase Type</label>
+            <select
+              value={paramForm.phase_type}
+              onChange={e => setParamForm({ ...paramForm, phase_type: e.target.value })}
+              className="input w-full"
+            >
+              <option value="three">Three-Phase</option>
+              <option value="single">Single-Phase</option>
+            </select>
           </div>
           <button
             onClick={saveParameters}
