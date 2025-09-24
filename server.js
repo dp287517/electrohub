@@ -56,7 +56,7 @@ app.use(
   })
 );
 
-// --- PROXY SELECTIVITY (place BEFORE body parsing) ---
+// --- PROXY SELECTIVITY (AJOUT: place BEFORE body parsing) ---
 const selectivityTarget = process.env.SELECTIVITY_BASE_URL || 'http://127.0.0.1:3004';
 app.use(
   '/api/selectivity',
@@ -70,7 +70,7 @@ app.use(
 // --- PROXY FLA (AJOUT: place BEFORE body parsing) ---
 const flaTarget = process.env.FLA_BASE_URL || 'http://127.0.0.1:3005';
 app.use(
-  '/api/fla',
+  '/api/faultlevel',
   createProxyMiddleware({
     target: flaTarget,
     changeOrigin: true,
