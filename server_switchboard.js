@@ -748,36 +748,32 @@ app.get('/api/switchboard/search-references', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const query = (req.query.query || '').trim().toLowerCase();
 
-    if (!query.trim()) return res.json({ suggestions: [], auto_fill: null });
+    const where = ['site = $1'];
+    const vals = [site];
+    let i = 2;
+    if (query) {
+      where.push(`(LOWER(reference) ILIKE $${i} OR LOWER(manufacturer) ILIKE $${i})`);
+      vals.push(`%${query}%`);
+      i++;
+    }
 
-    const { rows } = await pool.query(
-      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings
-       FROM devices 
-       WHERE site = $1 
-       AND (LOWER(COALESCE(manufacturer, '')) LIKE LOWER($2) OR 
-            LOWER(COALESCE(reference, '')) LIKE LOWER($2) OR
-            LOWER(COALESCE(manufacturer || ' ' || reference, '')) LIKE LOWER($2))
-       ORDER BY 
-         CASE WHEN manufacturer ILIKE $2 OR reference ILIKE $2 THEN 0 ELSE 1 END,
-         manufacturer NULLS LAST, 
-         reference NULLS LAST
-       LIMIT 15`,
-      [site, `%${query}%`]
-    );
+    const sql = `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings
+                 FROM devices
+                 WHERE ${where.join(' AND ')}
+                 ORDER BY manufacturer, reference
+                 LIMIT 20`;
+    const { rows } = await pool.query(sql, vals);
 
     let exactMatch = null;
-    const queryLower = query.toLowerCase().trim();
-    
+    const queryLower = query.toLowerCase();
     for (const row of rows) {
       const refLower = (row.reference || '').toLowerCase();
       const mfgLower = (row.manufacturer || '').toLowerCase();
-      const fullLower = `${mfgLower} ${refLower}`.trim().toLowerCase();
-      
+      const fullLower = `${mfgLower} ${refLower}`.trim();
       if (refLower === queryLower || mfgLower === queryLower || fullLower === queryLower) {
         exactMatch = row;
         break;
       }
-      
       if (queryLower.length >= 4 && 
           (refLower.startsWith(queryLower) || mfgLower.startsWith(queryLower) || fullLower.startsWith(queryLower))) {
         exactMatch = row;
@@ -787,32 +783,32 @@ app.get('/api/switchboard/search-references', async (req, res) => {
 
     const suggestions = rows.map(r => ({
       ...r,
-      in_amps: r.in_amps,
-      icu_ka: r.icu_ka,
-      ics_ka: r.ics_ka,
-      poles: r.poles,
-      voltage_v: r.voltage_v,
+      in_amps: r.in_amps !== null && !isNaN(r.in_amps) ? Number(r.in_amps) : null,
+      icu_ka: r.icu_ka !== null && !isNaN(r.icu_ka) ? Number(r.icu_ka) : null,
+      ics_ka: r.ics_ka !== null && !isNaN(r.ics_ka) ? Number(r.ics_ka) : null,
+      poles: r.poles !== null && !isNaN(r.poles) ? Number(r.poles) : null,
+      voltage_v: r.voltage_v !== null && !isNaN(r.voltage_v) ? Number(r.voltage_v) : null,
       settings: r.settings || {}
     }));
 
-    res.json({ 
+    res.json({
       suggestions,
       auto_fill: exactMatch ? {
         manufacturer: exactMatch.manufacturer,
         reference: exactMatch.reference,
         device_type: exactMatch.device_type || 'Low Voltage Circuit Breaker',
-        in_amps: exactMatch.in_amps,
-        icu_ka: exactMatch.icu_ka,
-        ics_ka: exactMatch.ics_ka,
-        poles: exactMatch.poles,
-        voltage_v: exactMatch.voltage_v,
+        in_amps: exactMatch.in_amps !== null && !isNaN(exactMatch.in_amps) ? Number(exactMatch.in_amps) : null,
+        icu_ka: exactMatch.icu_ka !== null && !isNaN(exactMatch.icu_ka) ? Number(exactMatch.icu_ka) : null,
+        ics_ka: exactMatch.ics_ka !== null && !isNaN(exactMatch.ics_ka) ? Number(exactMatch.ics_ka) : null,
+        poles: exactMatch.poles !== null && !isNaN(exactMatch.poles) ? Number(exactMatch.poles) : null,
+        voltage_v: exactMatch.voltage_v !== null && !isNaN(exactMatch.voltage_v) ? Number(exactMatch.voltage_v) : null,
         trip_unit: exactMatch.trip_unit || '',
         settings: exactMatch.settings || { curve_type: '' }
-      } : null 
+      } : null
     });
   } catch (e) {
-    console.error('[SEARCH REFERENCES] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
+    console.error('[SEARCH REFERENCES] error:', e.message, e.stack);
+    res.status(500).json({ error: 'Search failed', details: e.message });
   }
 });
 
@@ -1135,131 +1131,6 @@ app.post('/api/switchboard/ai-tip', async (req, res) => {
   } catch (e) {
     console.error('[AI TIP] error:', e.message);
     res.status(500).json({ error: 'AI tip failed' });
-  }
-});
-
-// ---- REPORT (PDF) - AMÉLIORATION: Rapport plus complet ----
-app.get('/api/switchboard/boards/:id/report', async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const r = await pool.query('SELECT * FROM switchboards WHERE id=$1 AND site=$2', [id, site]);
-    const row = r.rows[0];
-    if (!row) return res.status(404).json({ error: 'Switchboard not found' });
-
-    // Get devices avec infos enrichies
-    const devsR = await pool.query(`
-      SELECT d.*, p.name as parent_name
-      FROM devices d
-      LEFT JOIN devices p ON d.parent_id = p.id
-      WHERE d.switchboard_id=$1 
-      ORDER BY d.is_main_incoming DESC, d.created_at ASC
-    `, [id]);
-    const devices = devsR.rows;
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="switchboard_${row.code || id}_report.pdf"`);
-    
-    const doc = new PDFDocument({ size: 'A4', margin: 50 });
-    doc.pipe(res);
-
-    // Header amélioré
-    doc.rect(0, 0, doc.page.width, 90).fill('#1e3a8a');
-    doc.fill('white').fontSize(24).font('Helvetica-Bold').text('ElectroHub', 50, 25);
-    doc.fontSize(16).text('Switchboard Technical Report', 50, 50);
-    doc.fontSize(10).text(`Site: ${site} | ID: ${id} | Generated: ${new Date().toLocaleString()}`, 50, 70);
-    doc.fill('#333');
-
-    let y = 110;
-    
-    // Switchboard Details
-    doc.fontSize(14).font('Helvetica-Bold').fill('#1e3a8a').text('📋 Switchboard Information', 50, y);
-    y += 25;
-    doc.font('Helvetica').fontSize(11).fill('#333');
-    
-    const sbDetails = [
-      ['Name', row.name],
-      ['Code', row.code],
-      ['Location', `${row.building_code || 'N/A'} / ${row.floor || 'N/A'} / ${row.room || 'N/A'}`],
-      ['Neutral Regime', row.regime_neutral || 'N/A'],
-      ['Type', row.is_principal ? 'Principal' : 'Distribution'],
-      ['Total Devices', devices.length]
-    ];
-    
-    sbDetails.forEach(([k, v]) => {
-      doc.text(`${k}:`, 60, y, { width: 120, continued: true });
-      doc.text(v, 180, y);
-      y += 18;
-    });
-
-    y += 30;
-    doc.fontSize(14).font('Helvetica-Bold').fill('#1e3a8a').text('🔌 Connected Devices', 50, y);
-    y += 25;
-    
-    if (devices.length === 0) {
-      doc.fontSize(11).text('No devices configured', 60, y);
-    } else {
-      // Group by main incoming vs regular
-      const mains = devices.filter(d => d.is_main_incoming);
-      const regulars = devices.filter(d => !d.is_main_incoming);
-      
-      if (mains.length > 0) {
-        y += 5;
-        doc.fontSize(12).font('Helvetica-Bold').text('Main Incoming Devices', 60, y);
-        y += 20;
-        
-        mains.forEach(d => {
-          doc.fontSize(11).font('Helvetica-Bold').text(`• ${d.manufacturer || 'N/A'} ${d.reference || 'N/A'}`, 60, y);
-          y += 15;
-          doc.font('Helvetica').text(`  Type: ${d.device_type} | Rating: ${d.in_amps || 'N/A'}A | Poles: ${d.poles || 'N/A'}`, 60, y);
-          if (d.parent_name) {
-            doc.text(`  Upstream: ${d.parent_name}`, 60, y + 15);
-            y += 15;
-          }
-          y += 10;
-        });
-      }
-      
-      if (regulars.length > 0) {
-        y += 10;
-        doc.fontSize(12).font('Helvetica-Bold').text('Protection & Distribution Devices', 60, y);
-        y += 20;
-        
-        regulars.forEach((d, idx) => {
-          if (y > 750) { doc.addPage(); y = 50; } // Pagination
-          
-          doc.fontSize(10).font('Helvetica').text(`${idx + 1}. ${d.manufacturer || 'N/A'} ${d.reference || 'N/A'}`, 60, y);
-          y += 12;
-          doc.text(`   ${d.device_type} | ${d.in_amps || 'N/A'}A | Icu: ${d.icu_ka || 'N/A'}kA | ${d.poles || 'N/A'}P`, 70, y);
-          
-          if (d.settings && (d.settings.ir || d.settings.curve_type)) {
-            y += 12;
-            const settingsStr = [
-              d.settings.curve_type ? `Curve: ${d.settings.curve_type}` : null,
-              d.settings.ir ? `Ir: ${d.settings.ir}xIn` : null,
-              d.settings.isd ? `Isd: ${d.settings.isd}xIr` : null
-            ].filter(Boolean).join(' | ');
-            
-            if (settingsStr) {
-              doc.text(`   Settings: ${settingsStr}`, 70, y);
-              y += 12;
-            }
-          }
-          
-          if (idx < regulars.length - 1) y += 5;
-        });
-      }
-    }
-
-    // Footer
-    y = doc.page.height - 60;
-    doc.fontSize(8).fill('#666').text('Generated by ElectroHub • For internal use only', 50, y);
-    
-    doc.end();
-  } catch (e) {
-    console.error('[REPORT] error:', e.message);
-    res.status(500).json({ error: 'Report failed' });
   }
 });
 
