@@ -110,16 +110,16 @@ export const api = {
     /** AI Tip pour remédiation */
     getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
   },
-  // NOUVELLE SECTION POUR FLA
+  // NOUVELLE SECTION POUR FAULT LEVEL ASSESSMENT
   fla: {
-    /** Liste des points d'évaluation (switchboards ou devices) avec filtres */
+    /** Liste des points d'évaluation (switchboards/devices) avec filtres */
     listPoints: (params) => get("/api/fla/points", params),
 
-    /** Calcul fault level pour un point spécifique */
-    check: (pointId, type = 'switchboard', params = {}) => get(`/api/fla/check?point=${pointId}&type=${type}`, params),
+    /** Vérification fault level pour un point spécifique */
+    checkPoint: (pointId, type, faultType) => get(`/api/fla/check?point=${pointId}&type=${type}&fault_type=${faultType}`),
 
-    /** Données pour graphique de courbes (fault level vs temps ou impédance) */
-    getCurves: (pointId, type = 'switchboard') => get(`/api/fla/curves?point=${pointId}&type=${type}`),
+    /** Données pour graphique de courbes */
+    getCurves: (pointId, type) => get(`/api/fla/curves?point=${pointId}&type=${type}`),
 
     /** AI Tip pour remédiation */
     getAiTip: (payload) => post("/api/fla/ai-tip", payload),
