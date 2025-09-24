@@ -97,6 +97,23 @@ async function ensureSchema() {
 }
 ensureSchema().catch(e => console.error('[FLA SCHEMA] error:', e.message));
 
+// RESET Fault data (new endpoint)
+app.post('/api/faultlevel/reset', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    await pool.query(`DELETE FROM fault_checks WHERE site = $1`, [site]);
+    await pool.query(`DELETE FROM fault_parameters WHERE site = $1`, [site]);
+    
+    console.log(`[FLA RESET] Cleared fault_checks and fault_parameters for site=${site}`);
+    res.json({ message: 'Fault data reset successfully' });
+  } catch (e) {
+    console.error('[FLA RESET] error:', e.message, e.stack);
+    res.status(500).json({ error: 'Reset failed', details: e.message });
+  }
+});
+
 // LIST Fault points (based on switchboards/devices)
 app.get('/api/faultlevel/points', async (req, res) => {
   try {
@@ -128,7 +145,7 @@ app.get('/api/faultlevel/points', async (req, res) => {
     const rows = await pool.query(sql, vals);
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE ${where.join(' AND ')}`, vals);
     
-    console.log(`[FLA POINTS] Loaded ${rows.rows.length} points for site=${site}`);
+    console.log(`[FLA POINTS] Loaded ${rows.rows.length} points for site=${site}, sample: ${JSON.stringify(rows.rows[0] || {})}`);
     
     res.json({ 
       data: rows.rows.map(r => ({ 
@@ -174,13 +191,17 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
 
     // Verify device and switchboard exist
     const check = await pool.query(
-      `SELECT 1 FROM devices d JOIN switchboards s ON d.switchboard_id = s.id 
+      `SELECT d.poles FROM devices d JOIN switchboards s ON d.switchboard_id = s.id 
        WHERE d.id = $1 AND s.id = $2 AND d.site = $3`,
       [Number(device_id), Number(switchboard_id), site]
     );
     if (!check.rows.length) {
       return res.status(404).json({ error: 'Device or switchboard not found' });
     }
+
+    // Respect poles for phase_type unless explicitly overridden
+    const default_phase_type = check.rows[0].poles && [1, 2].includes(check.rows[0].poles) ? 'single' : 'three';
+    const final_phase_type = phase_type === default_phase_type ? phase_type : default_phase_type;
 
     await pool.query(`
       INSERT INTO fault_parameters (device_id, switchboard_id, site, line_length, source_impedance, cable_resistivity, phase_type, created_at)
@@ -192,7 +213,7 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
         cable_resistivity = $6,
         phase_type = $7,
         created_at = NOW()
-    `, [Number(device_id), Number(switchboard_id), site, Number(line_length), Number(source_impedance), Number(cable_resistivity), phase_type]);
+    `, [Number(device_id), Number(switchboard_id), site, Number(line_length), Number(source_impedance), Number(cable_resistivity), final_phase_type]);
 
     res.json({ message: 'Parameters updated' });
   } catch (e) {
@@ -229,6 +250,8 @@ app.get('/api/faultlevel/check', async (req, res) => {
     const cable_resistivity = point.cable_resistivity || 0.0175; // Default
     const effective_phase_type = phase_type || point.phase_type || (point.poles && [1, 2].includes(point.poles) ? 'single' : 'three');
 
+    console.log(`[FLA CHECK] Calculating for device=${device}, switchboard=${switchboard}, phase_type=${effective_phase_type}, voltage_v=${point.voltage_v}, icu_ka=${point.icu_ka}, line_length=${line_length}, source_impedance=${source_impedance}`);
+
     // Check missing data
     const missing = [];
     if (!point.voltage_v) missing.push('Voltage missing');
@@ -258,7 +281,8 @@ app.get('/api/faultlevel/check', async (req, res) => {
         'At risk: Ik >= Icu; reinforce protection or reduce impedance.',
       calculated_ik: faultLevelKa,
       used_line_length: line_length,
-      used_source_impedance: source_impedance
+      used_source_impedance: source_impedance,
+      used_phase_type: effective_phase_type
     };
 
     // Save status
@@ -363,7 +387,7 @@ function calculateFaultLevel(point, phase_type, sourceZ, lineLength, cableResist
   faultLevelKa = Math.max(faultLevelKa, 0); // Ensure non-negative
   const riskZones = faultLevelKa > point.icu_ka ? [{ min: point.icu_ka, max: faultLevelKa }] : [];
 
-  console.log(`[FLA CALC] Ik=${faultLevelKa} kA for Un=${Un}, Zk=${Zk}Ω, phase_type=${phase_type}`);
+  console.log(`[FLA CALC] Ik=${faultLevelKa} kA for Un=${Un}, Zk=${Zk}Ω, phase_type=${phase_type}, icu_ka=${point.icu_ka}`);
   
   return { faultLevelKa: Math.round(faultLevelKa * 100) / 100, riskZones }; // Round to 2 decimals
 }
@@ -381,7 +405,7 @@ function generateFaultCurve(point, phase_type, sourceZ, lineLength, cableResisti
   const Un = point.voltage_v;
   const c = 1.1;
   for (let length = 10; length <= 500; length += 10) { // Vary line length
-    const Zline = (lineLength / 1000) * cableResistivity;
+    const Zline = (length / 1000) * cableResistivity;
     let Zk = Math.max(sourceZ + Zline, 0.001); // Protect against zero
     let Ik;
     if (phase_type === 'three') {
