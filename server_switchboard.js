@@ -366,6 +366,28 @@ app.get('/api/switchboard/devices-count', async (req, res) => {
   }
 });
 
+// Liste toutes les références uniques des dispositifs pour le site
+app.get('/api/switchboard/device-references', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Site manquant' });
+
+    const sql = `
+      SELECT DISTINCT ON (manufacturer, reference) 
+        manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings
+      FROM devices 
+      WHERE site = $1 AND manufacturer IS NOT NULL AND reference IS NOT NULL
+      ORDER BY manufacturer, reference, created_at DESC
+    `;
+    const { rows } = await pool.query(sql, [site]);
+
+    res.json({ data: rows });
+  } catch (e) {
+    console.error('[DEVICE REFERENCES] erreur:', e.message);
+    res.status(500).json({ error: 'Échec de la récupération' });
+  }
+});
+
 // LIST Devices - AMÉLIORATION: Retour plus complet pour l'édition
 app.get('/api/switchboard/devices', async (req, res) => {
   try {
