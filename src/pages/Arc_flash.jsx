@@ -19,7 +19,6 @@ import {
 import Annotation from 'chartjs-plugin-annotation';
 import Zoom from 'chartjs-plugin-zoom';
 
-// Register plugins
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -103,7 +102,7 @@ export default function ArcFlash() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [tipContent, setTipContent] = useState('');
   const chartRef = useRef(null);
-  const resultRef = useRef(null); // Ajout pour capturer le résultat
+  const resultRef = useRef(null);
   const pageSize = 18;
 
   useEffect(() => {
@@ -144,7 +143,7 @@ export default function ArcFlash() {
       const datasets = {
         labels: curves.curve.map(p => p.distance.toFixed(0)),
         datasets: [
-          { label: 'Incident Energy (cal/cm²)', data: validData.length ? validData : [1, 2, 3], borderColor: 'orange', tension: 0.1, pointRadius: 0 },
+          { label: 'Incident Energy (cal/cm²)', data: validData.length ? validData : [0.1, 0.2, 0.3], borderColor: 'orange', tension: 0.1, pointRadius: 0 },
         ],
       };
       setCurveData(datasets);
@@ -216,18 +215,31 @@ export default function ArcFlash() {
   };
 
   const exportPdf = async (isLabel = false) => {
+    if (!showGraph || !checkResult) {
+      setToast({ msg: 'No graph or results to export', type: 'error' });
+      return;
+    }
+
     const pdf = new jsPDF();
     
     // Capture graph
-    const graphCanvas = await html2canvas(chartRef.current);
-    const graphImg = graphCanvas.toDataURL('image/png');
+    const chartCanvas = chartRef.current?.canvas;
+    if (!chartCanvas) {
+      setToast({ msg: 'Graph not rendered', type: 'error' });
+      return;
+    }
+    const graphImg = chartCanvas.toDataURL('image/png');
     
     // Capture result section
-    const resultCanvas = await html2canvas(resultRef.current);
+    const resultElement = resultRef.current;
+    if (!resultElement) {
+      setToast({ msg: 'Results not rendered', type: 'error' });
+      return;
+    }
+    const resultCanvas = await html2canvas(resultElement);
     const resultImg = resultCanvas.toDataURL('image/png');
 
     if (isLabel) {
-      // PDF spécifique pour labels disjoncteurs
       pdf.setFontSize(18);
       pdf.text('Arc Flash Label for Breaker', 20, 20);
       pdf.setFontSize(12);
@@ -236,9 +248,8 @@ export default function ArcFlash() {
       pdf.text(`PPE Category: ${checkResult?.ppe_category} (IEC 61482 compliant)`, 20, 60);
       pdf.text('Required EPI: Arc-rated clothing, gloves, face shield', 20, 70);
       pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 80);
-      pdf.addImage(resultImg, 'PNG', 20, 90, 160, 80); // Image du résultat
+      pdf.addImage(resultImg, 'PNG', 20, 90, 160, 80);
     } else {
-      // PDF complet (comme Fault Level)
       pdf.addImage(graphImg, 'PNG', 10, 10, 180, 160);
       pdf.addPage();
       pdf.addImage(resultImg, 'PNG', 10, 10, 180, 100);
@@ -278,7 +289,6 @@ export default function ArcFlash() {
         <Flame className="text-orange-600" /> Arc Flash Analysis
       </h1>
 
-      {/* Search & Filters */}
       <div className="flex flex-wrap gap-4 mb-6">
         <div className="flex-1 relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
@@ -294,7 +304,6 @@ export default function ArcFlash() {
         <input className="input flex-1" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
       </div>
 
-      {/* Points Table */}
       <div className="overflow-x-auto rounded-lg shadow-md">
         <table className="w-full bg-white">
           <thead className="bg-gray-50">
@@ -337,7 +346,6 @@ export default function ArcFlash() {
         </table>
       </div>
 
-      {/* Pagination & Batch */}
       <div className="flex justify-between mt-4">
         <button onClick={() => setQ({ ...q, page: Math.max(1, q.page - 1) })} disabled={q.page === 1} className="btn">Previous</button>
         <span>Page {q.page} of {Math.ceil(total / pageSize)}</span>
@@ -354,7 +362,6 @@ export default function ArcFlash() {
         </button>
       )}
 
-      {/* Results */}
       {checkResult && (
         <div ref={resultRef} className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
           <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
@@ -384,7 +391,7 @@ export default function ArcFlash() {
             <ChevronRight size={16} /> View Explanation
           </button>
           <button 
-            onClick={() => exportPdf(true)}  // Nouveau : PDF label pour disjoncteur
+            onClick={() => exportPdf(true)}
             className="mt-4 ml-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2"
           >
             <Download size={16} /> Generate Arc Flash Label PDF
@@ -392,7 +399,6 @@ export default function ArcFlash() {
         </div>
       )}
 
-      {/* Parameters Modal */}
       <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Edit Arc Flash Parameters">
         <div className="space-y-4">
           <div>
@@ -400,9 +406,9 @@ export default function ArcFlash() {
             <input
               type="number"
               value={paramForm.working_distance}
-              onChange={e => setParamForm({ ...paramForm, working_distance: e.target.value })}
+              onChange={e => setParamForm({ ...paramForm, working_distance: Math.max(Number(e.target.value), 100) })}
               className="input w-full"
-              placeholder="Default: 455"
+              placeholder="Minimum: 100"
               min="100"
             />
           </div>
@@ -464,51 +470,47 @@ export default function ArcFlash() {
         </div>
       </Modal>
 
-      {/* Graph Modal */}
       <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Incident Energy Curves (Zoom & Pan Enabled)">
-        <div ref={chartRef}>
-          {curveData && (
-            <Line
-              data={curveData}
-              options={{
-                responsive: true,
-                plugins: {
-                  zoom: {
-                    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
-                    pan: { enabled: true, mode: 'xy' },
-                  },
-                  annotation: {
-                    annotations: checkResult?.riskZones?.map((zone, i) => ({
-                      type: 'box',
-                      yMin: zone.min,
-                      yMax: zone.max,
-                      backgroundColor: 'rgba(255, 165, 0, 0.2)',
-                      borderColor: 'orange',
-                      label: { content: 'Risk Zone', display: true, position: 'center' }
-                    })) || []
-                  },
-                  tooltip: {
-                    callbacks: {
-                      label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)} cal/cm² at ${context.parsed.x}mm`
-                    }
-                  }
-                },
-                scales: {
-                  x: { 
-                    type: 'linear', 
-                    title: { display: true, text: 'Working Distance (mm)' }
-                  },
-                  y: { 
-                    type: 'logarithmic', 
-                    title: { display: true, text: 'Incident Energy (cal/cm²)' },
-                    min: 0.1,
-                    max: 100,
-                  },
-                },
-              }}
-            />
-          )}
-        </div>
+        <Line
+          ref={chartRef}
+          data={curveData}
+          options={{
+            responsive: true,
+            plugins: {
+              zoom: {
+                zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
+                pan: { enabled: true, mode: 'xy' },
+              },
+              annotation: {
+                annotations: checkResult?.riskZones?.map((zone, i) => ({
+                  type: 'box',
+                  yMin: zone.min,
+                  yMax: zone.max,
+                  backgroundColor: 'rgba(255, 165, 0, 0.2)',
+                  borderColor: 'orange',
+                  label: { content: 'Risk Zone', display: true, position: 'center' }
+                })) || []
+              },
+              tooltip: {
+                callbacks: {
+                  label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)} cal/cm² at ${context.parsed.x}mm`
+                }
+              }
+            },
+            scales: {
+              x: { 
+                type: 'linear', 
+                title: { display: true, text: 'Working Distance (mm)' }
+              },
+              y: { 
+                type: 'logarithmic', 
+                title: { display: true, text: 'Incident Energy (cal/cm²)' },
+                min: 0.1,
+                max: 100,
+              },
+            },
+          }}
+        />
         <button 
           onClick={() => exportPdf(false)} 
           className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
@@ -523,7 +525,6 @@ export default function ArcFlash() {
         </button>
       </Modal>
 
-      {/* Sidebar for Tips */}
       <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)} tipContent={tipContent} />
 
       {toast && <Toast {...toast} />}
