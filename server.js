@@ -56,7 +56,7 @@ app.use(
   })
 );
 
-// --- PROXY SELECTIVITY (AJOUT: place BEFORE body parsing) ---
+// --- PROXY SELECTIVITY (place BEFORE body parsing) ---
 const selectivityTarget = process.env.SELECTIVITY_BASE_URL || 'http://127.0.0.1:3004';
 app.use(
   '/api/selectivity',
