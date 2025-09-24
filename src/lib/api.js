@@ -94,5 +94,6 @@ export const api = {
       get(`/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`),
     getAiTip: (payload) => post("/api/faultlevel/ai-tip", payload),
     updateParameters: (payload) => post("/api/faultlevel/parameters", payload),
+    reset: () => post("/api/faultlevel/reset", {}), // New reset endpoint
   },
 };
