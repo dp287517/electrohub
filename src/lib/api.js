@@ -88,9 +88,11 @@ export const api = {
   },
   faultlevel: {
     listPoints: (params) => get("/api/faultlevel/points", params),
-    checkPoint: (deviceId, switchboardId) => get(`/api/faultlevel/check?device=${deviceId}&switchboard=${switchboardId}`),
-    getCurves: (deviceId, switchboardId) => get(`/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}`),
+    checkPoint: (deviceId, switchboardId, phaseType = 'three') => 
+      get(`/api/faultlevel/check?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`),
+    getCurves: (deviceId, switchboardId, phaseType = 'three') => 
+      get(`/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`),
     getAiTip: (payload) => post("/api/faultlevel/ai-tip", payload),
-    updateParameters: (deviceId, switchboardId, payload) => post(`/api/faultlevel/parameters?device=${deviceId}&switchboard=${switchboardId}`, payload),
+    updateParameters: (payload) => post("/api/faultlevel/parameters", payload),
   },
 };
