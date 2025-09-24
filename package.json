@@ -10,6 +10,7 @@
     "start": "concurrently -k \"node server_atex.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server.js\""
   },
   "dependencies": {
+    "@radix-ui/react-tooltip": "^1.1.2",
     "bcryptjs": "^2.4.3",
     "concurrently": "^9.0.1",
     "cookie-parser": "^1.4.6",
