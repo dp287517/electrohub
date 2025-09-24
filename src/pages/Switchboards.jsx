@@ -473,14 +473,12 @@ export default function Switchboards() {
     if (deviceForm.in_amps <= 0) {
       return notify('Rated current must be greater than 0', 'error');
     }
-
     setBusy(true);
     try {
       const payload = {
         ...safeUploadStrip(deviceForm),
         switchboard_id: currentPanelId
       };
-     
       if (editingDevice) {
         await put(`/api/switchboard/devices/${editingDevice.id}?site=${encodeURIComponent(site)}`, payload);
         notify('Device updated successfully!', 'success');
@@ -488,7 +486,6 @@ export default function Switchboards() {
         await post(`/api/switchboard/devices?site=${encodeURIComponent(site)}`, payload);
         notify('Device created successfully!', 'success');
       }
-     
       setOpenDevice(false);
       setPhotoFile(null);
       await loadDevices(currentPanelId);
@@ -712,27 +709,21 @@ export default function Switchboards() {
     if (!photoFile) {
       return notify('Please select a photo first', 'info');
     }
-  
     setDeviceSearchBusy(true);
     try {
       const formData = new FormData();
       formData.append('photo', photoFile);
-    
-      // CORRECTION: Ne pas envoyer switchboard_id si non valide
       const switchboardIdParam = currentPanelId && Number.isInteger(currentPanelId) ? `&switchboard_id=${encodeURIComponent(currentPanelId)}` : '';
       const response = await fetch(`/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}${switchboardIdParam}`, {
         method: 'POST',
         credentials: 'include',
         body: formData
       });
-    
       const data = await response.json();
-    
       if (data.error) {
         notify(`Photo analysis failed: ${data.error}`, 'error');
         return;
       }
-    
       // Pré-remplir uniquement Quick AI Search avec manufacturer + reference
       if (data.manufacturer && data.reference) {
         const quickQuery = `${data.manufacturer} ${data.reference}`.trim();
@@ -741,14 +732,12 @@ export default function Switchboards() {
       } else {
         notify('Photo analyzed but no clear manufacturer or reference identified.', 'info');
       }
-
       // Si un device a été créé automatiquement, recharger les devices
       if (data.created) {
         await loadDevices(currentPanelId);
         notify(`✅ Created new device: ${data.manufacturer} ${data.reference}. Added to switchboard!`, 'success');
         setOpenDevice(false);
       }
-    
       setPhotoFile(null);
     } catch (e) {
       console.error('Photo analysis failed:', e);
