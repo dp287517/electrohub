@@ -98,7 +98,6 @@ export default function FaultLevelAssessment() {
   const [showSidebar, setShowSidebar] = useState(false);
   const [showParamsModal, setShowParamsModal] = useState(false);
   const [paramForm, setParamForm] = useState({ device_id: null, switchboard_id: null, line_length: 100, source_impedance: 0.1, phase_type: 'three' });
-  const [liveTest, setLiveTest] = useState({ line_length: 100, source_impedance: 0.1 }); // For live slider
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -130,38 +129,25 @@ export default function FaultLevelAssessment() {
     }
   };
 
-  const handleCheck = async (deviceId, switchboardId, phaseType = 'three', testParams = null, isBatch = false) => {
+  const handleCheck = async (deviceId, switchboardId, phaseType = 'three', isBatch = false) => {
     try {
       setBusy(true);
-      const params = { 
-        device: deviceId, 
-        switchboard: switchboardId, 
-        phase_type: phaseType,
-        ...(testParams || {}) // Override for live test
-      };
+      const params = { device: deviceId, switchboard: switchboardId, phase_type: phaseType };
       const result = await get('/api/faultlevel/check', params);
       setCheckResult(result);
       setSelectedPoint({ deviceId, switchboardId, phaseType });
       setStatuses(prev => ({ ...prev, [`${deviceId}`]: result.status }));
 
       const curves = await get('/api/faultlevel/curves', params);
+      const validData = curves.curve.map(p => p.fault_ka).filter(v => !isNaN(v) && v > 0);
       const datasets = {
         labels: curves.curve.map(p => p.line_length.toFixed(0)),
         datasets: [
-          { 
-            label: 'Fault Current (kA)', 
-            data: curves.curve.map(p => p.fault_ka), 
-            borderColor: 'red', 
-            tension: 0.1, 
-            pointRadius: 2, // Visible points
-            fill: false
-          },
+          { label: 'Fault Current (kA)', data: validData.length ? validData : [1, 2, 3], borderColor: 'red', tension: 0.1, pointRadius: 0 },
         ],
       };
       setCurveData(datasets);
       setShowGraph(true);
-
-      console.log('[FLA UI] Check result:', result); // Debug
 
       try {
         const tipRes = await post('/api/faultlevel/ai-tip', { 
@@ -182,13 +168,6 @@ export default function FaultLevelAssessment() {
       setToast({ msg: `Check failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
-    }
-  };
-
-  const handleLiveTest = (newParams) => {
-    setLiveTest(newParams);
-    if (selectedPoint) {
-      handleCheck(selectedPoint.deviceId, selectedPoint.switchboardId, selectedPoint.phaseType, newParams);
     }
   };
 
@@ -266,9 +245,10 @@ export default function FaultLevelAssessment() {
         return;
       }
       await post('/api/faultlevel/parameters', { device_id, switchboard_id, line_length, source_impedance, phase_type });
-      setToast({ msg: 'Parameters saved!', type: 'success' });
+      setToast({ msg: 'Parameters saved! Refreshing data...', type: 'success' });
       setShowParamsModal(false);
-      loadPoints(); // Refresh
+      // Force refresh after 500ms to ensure DB update
+      setTimeout(() => loadPoints(), 500);
     } catch (e) {
       setToast({ msg: `Failed to save parameters: ${e.message}`, type: 'error' });
     } finally {
@@ -277,9 +257,103 @@ export default function FaultLevelAssessment() {
   };
 
   const exportPDF = async () => {
-    // ... (same as before, but with dynamic scales)
     const pdf = new jsPDF();
-    // ... (omit for brevity, use previous version)
+    pdf.setFontSize(16);
+    pdf.text('Fault Level Report', 10, 10);
+    pdf.setFontSize(12);
+    pdf.text(`Date: ${new Date().toLocaleString()}`, 10, 20);
+    
+    // Table of points
+    pdf.text('Points Status:', 10, 30);
+    let y = 40;
+    points.forEach(point => {
+      const status = statuses[point.device_id] || 'Pending';
+      pdf.text(`${point.device_name} in ${point.switchboard_name}: ${status} (${point.fault_level_ka || 'N/A'} kA)`, 10, y);
+      y += 10;
+    });
+
+    // Graphs for checked points
+    const canvas = document.createElement('canvas');
+    canvas.width = 600;
+    canvas.height = 300;
+    const ctx = canvas.getContext('2d');
+    let chartInstance = null;
+
+    for (const point of points.filter(p => statuses[p.device_id])) {
+      try {
+        const curves = await get('/api/faultlevel/curves', {
+          device: point.device_id,
+          switchboard: point.switchboard_id,
+          phase_type: point.phase_type || 'three'
+        });
+        const data = {
+          labels: curves.curve.map(p => p.line_length.toFixed(0)),
+          datasets: [
+            { label: 'Fault Current (kA)', data: curves.curve.map(p => p.fault_ka).filter(v => !isNaN(v) && v > 0), borderColor: 'red', tension: 0.1, pointRadius: 0 },
+          ],
+        };
+        const status = statuses[point.device_id];
+        const riskZones = status === 'at-risk' ? (await get('/api/faultlevel/check', {
+          device: point.device_id,
+          switchboard: point.switchboard_id,
+          phase_type: point.phase_type || 'three'
+        })).riskZones : [];
+
+        pdf.addPage();
+        pdf.setFontSize(14);
+        pdf.text(`Fault Curve for Point: ${point.device_name} (${point.phase_type})`, 10, 10);
+        pdf.setFontSize(12);
+        pdf.text(`Status: ${status}`, 10, 20);
+
+        chartInstance = new ChartJS(ctx, {
+          type: 'line',
+          data: data,
+          options: {
+            responsive: false,
+            plugins: {
+              annotation: {
+                annotations: riskZones.map((zone, i) => ({
+                  type: 'box',
+                  yMin: zone.min,
+                  yMax: zone.max,
+                  backgroundColor: 'rgba(255, 0, 0, 0.2)',
+                  borderColor: 'red',
+                  label: { content: 'Risk Zone', display: true, position: 'center' }
+                }))
+              },
+              title: { display: true, text: `Curve: ${point.device_name} (${point.phase_type})` },
+              tooltip: {
+                callbacks: {
+                  label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}kA at ${context.parsed.x}m`
+                }
+              }
+            },
+            scales: {
+              x: { 
+                type: 'linear', 
+                title: { display: true, text: 'Line Length (m)' }
+              },
+              y: { 
+                type: 'logarithmic', 
+                title: { display: true, text: 'Fault Current (kA)' },
+                min: 0.1,
+                max: 100,
+              },
+            },
+          }
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const imgData = canvas.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', 10, 30, 180, 100);
+        chartInstance.destroy();
+      } catch (e) {
+        console.error('Failed to generate chart for PDF:', e.message);
+        pdf.text('Error generating curve', 10, 30);
+      }
+    }
+
+    canvas.remove();
     pdf.save('fault_level_report.pdf');
   };
 
@@ -293,69 +367,190 @@ export default function FaultLevelAssessment() {
 
   return (
     <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
-      {/* ... (header and filters same) */}
+      {showConfetti && <Confetti width={window.innerWidth} height={window.innerHeight} />}
+      <header className="mb-8">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4 drop-shadow-md">Fault Level Assessment</h1>
+        <p className="text-gray-600 max-w-3xl">
+          This page calculates short-circuit fault levels (Ik) for devices in switchboards per IEC 60909-0. 
+          It supports three-phase and single-phase faults, comparing Ik to Icu/Ics ratings. 
+          Data like voltage and Icu are auto-filled from switchboards; edit line length and source impedance below. 
+          View curves and get AI remediations.
+        </p>
+      </header>
 
-      {/* Table same, but no Edit button */}
+      {/* Filters */}
+      <div className="flex flex-wrap gap-4 mb-6 items-center">
+        <input
+          className="input flex-1 shadow-sm"
+          placeholder="Search by name..."
+          value={q.q}
+          onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
+        />
+        <input className="input w-32 shadow-sm" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
+        <input className="input w-32 shadow-sm" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
+        <input className="input w-32 shadow-sm" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
+        <button 
+          onClick={autoEvaluateAll} 
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md transition-transform hover:scale-105"
+          disabled={busy}
+        >
+          Auto-Evaluate All
+        </button>
+        <button 
+          onClick={exportPDF} 
+          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-md transition-transform hover:scale-105"
+        >
+          <Download size={16} className="inline mr-1" /> Export PDF
+        </button>
+      </div>
 
-      {/* Live Test Section (after table, if selectedPoint) */}
-      {selectedPoint && (
-        <div className="mt-6 p-6 bg-white rounded-lg shadow-md">
-          <h3 className="font-semibold mb-2 text-lg">Live Test Parameters</h3>
-          <p className="text-sm text-gray-500 mb-4">Adjust line length and source impedance to see real-time changes in fault level. Graph updates automatically.</p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-            <div>
-              <label className="block text-sm font-medium">Line Length (m)</label>
-              <input
-                type="range"
-                min="10"
-                max="500"
-                step="10"
-                value={liveTest.line_length}
-                onChange={e => handleLiveTest({ ...liveTest, line_length: Number(e.target.value) })}
-                className="w-full accent-indigo-600"
-              />
-              <span>{liveTest.line_length} m</span>
-            </div>
-            <div>
-              <label className="block text-sm font-medium">Source Impedance (Ω)</label>
-              <input
-                type="range"
-                min="0.01"
-                max="1"
-                step="0.01"
-                value={liveTest.source_impedance}
-                onChange={e => handleLiveTest({ ...liveTest, source_impedance: Number(e.target.value) })}
-                className="w-full accent-indigo-600"
-              />
-              <span>{liveTest.source_impedance} Ω</span>
-            </div>
-            <div>
-              <label className="block text-sm font-medium">Phase Type</label>
-              <select
-                value={selectedPoint.phaseType}
-                onChange={e => handleCheck(selectedPoint.deviceId, selectedPoint.switchboardId, e.target.value)}
-                className="input w-full"
-              >
-                <option value="three">Three-Phase</option>
-                <option value="single">Single-Phase</option>
-              </select>
-            </div>
+      {/* Table */}
+      <div className="overflow-x-auto shadow-xl rounded-lg">
+        <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+          <thead className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">
+                <input type="checkbox" onChange={toggleSelectAll} checked={selectedPoints.length === points.length} />
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Device</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Switchboard</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Voltage (V)</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Line Length (m)</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Source Impedance (Ω)</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Phase Type</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {points.map(point => (
+              <tr key={point.device_id} className="hover:bg-gray-50 transition-colors">
+                <td className="px-6 py-4">
+                  <input 
+                    type="checkbox" 
+                    checked={selectedPoints.includes(point.device_id)} 
+                    onChange={() => toggleSelect(point.device_id)} 
+                  />
+                </td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.device_name} ({point.device_type})</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.switchboard_name}</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.voltage_v} V</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.line_length} m</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.source_impedance} Ω</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.phase_type}</td>
+                <td className="px-6 py-4 text-sm">
+                  {statuses[point.device_id] === 'safe' ? <CheckCircle className="text-green-600" /> :
+                   statuses[point.device_id] === 'at-risk' ? <XCircle className="text-red-600" /> :
+                   statuses[point.device_id] === 'incomplete' ? <AlertTriangle className="text-yellow-600" /> : 'Pending'}
+                </td>
+                <td className="px-6 py-4 text-sm">
+                  <button
+                    onClick={() => handleCheck(point.device_id, point.switchboard_id, point.phase_type)}
+                    className="text-blue-600 hover:underline mr-2"
+                  >
+                    Check
+                  </button>
+                  <button
+                    onClick={() => openParamsModal(point)}
+                    className="text-purple-600 hover:underline"
+                  >
+                    <Settings size={16} className="inline mr-1" /> Parameters
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selectedPoints.length > 0 && (
+        <button 
+          onClick={handleBatchCheck} 
+          className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-md transition-transform hover:scale-105"
+          disabled={busy}
+        >
+          Check Selected ({selectedPoints.length})
+        </button>
+      )}
+
+      {/* Results */}
+      {checkResult && (
+        <div className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
+          <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
+          <div className="flex items-center gap-2 mb-4">
+            {checkResult.status === 'safe' ? <CheckCircle className="text-green-600 animate-bounce" size={24} /> :
+             checkResult.status === 'at-risk' ? <XCircle className="text-red-600" size={24} /> :
+             <AlertTriangle className="text-yellow-600" size={24} />}
+            <span className="text-xl capitalize">{checkResult.status}</span>
           </div>
-          {checkResult && checkResult.details && (
-            <p className="text-sm text-blue-600">Calculated Ik: {checkResult.details.calculated_ik} kA (using {checkResult.details.used_line_length}m, {checkResult.details.used_source_impedance}Ω)</p>
+          <p className="mb-2">Fault Level: {checkResult.fault_level_ka} kA</p>
+          {checkResult.missing?.length > 0 && (
+            <div className="mb-4 text-yellow-600 flex items-center">
+              <AlertTriangle className="mr-2" />
+              Missing data: {checkResult.missing.join(', ')}. Please update voltage or Icu in the Switchboards page.
+            </div>
           )}
-          {checkResult && !checkResult.riskZones.length && (
-            <p className="text-sm text-yellow-600 mt-2">Tip: Try lower impedance or shorter line for higher Ik and visible changes.</p>
+          {checkResult.remediation?.length > 0 && (
+            <ul className="list-disc pl-5 mb-4 text-gray-700">
+              {checkResult.remediation.map((r, i) => <li key={i} className="mb-1">{r}</li>)}
+            </ul>
           )}
+          <button 
+            onClick={() => setShowSidebar(true)} 
+            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
+          >
+            <ChevronRight size={16} /> View Explanation
+          </button>
         </div>
       )}
 
-      {/* Results, Modals, Sidebar same as before, but graph options with dynamic scales */}
-      {checkResult && (
-        // ... (same)
-      )}
+      {/* Parameters Modal */}
+      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Edit Fault Parameters">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Line Length (m)</label>
+            <input
+              type="number"
+              value={paramForm.line_length}
+              onChange={e => setParamForm({ ...paramForm, line_length: e.target.value })}
+              className="input w-full"
+              placeholder="Default: 100"
+              min="1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Source Impedance (Ω)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={paramForm.source_impedance}
+              onChange={e => setParamForm({ ...paramForm, source_impedance: e.target.value })}
+              className="input w-full"
+              placeholder="Default: 0.1"
+              min="0.01"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Phase Type</label>
+            <select
+              value={paramForm.phase_type}
+              onChange={e => setParamForm({ ...paramForm, phase_type: e.target.value })}
+              className="input w-full"
+            >
+              <option value="three">Three-Phase</option>
+              <option value="single">Single-Phase</option>
+            </select>
+          </div>
+          <button
+            onClick={saveParameters}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 w-full"
+            disabled={busy}
+          >
+            Save Parameters
+          </button>
+        </div>
+      </Modal>
 
-      {/* Graph Modal with dynamic scales */}
+      {/* Graph Modal */}
       <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Fault Current Curves (Zoom & Pan Enabled)">
         <div ref={chartRef}>
           {curveData && (
@@ -387,27 +582,30 @@ export default function FaultLevelAssessment() {
                 scales: {
                   x: { 
                     type: 'linear', 
-                    title: { display: true, text: 'Line Length (m)' },
-                    min: 0,
-                    max: 550
+                    title: { display: true, text: 'Line Length (m)' }
                   },
                   y: { 
                     type: 'logarithmic', 
                     title: { display: true, text: 'Fault Current (kA)' },
-                    min: Math.min(...curveData.datasets[0].data) / 2 || 0.1,
-                    max: Math.max(...curveData.datasets[0].data) * 2 || 100,
+                    min: 0.1,
+                    max: 100,
                   },
                 },
               }}
             />
           )}
         </div>
-        <button onClick={() => setShowGraph(false)} className="mt-4 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700">
+        <button 
+          onClick={() => setShowGraph(false)} 
+          className="mt-4 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+        >
           Close Graph
         </button>
       </Modal>
 
-      {/* Other modals and sidebar same */}
+      {/* Sidebar for Tips */}
+      <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)} tipContent={tipContent} />
+
       {toast && <Toast {...toast} />}
       {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
         <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600"></div>
