@@ -189,11 +189,12 @@ app.get('/api/arcflash/check', async (req, res) => {
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
-        fc.fault_level_ka  -- Join with fault_checks for fault_current if available
+        fc.fault_level_ka, sp.trip_time  -- Join with fault_checks and selectivity_pairs
       FROM devices d 
       JOIN switchboards s ON d.switchboard_id = s.id 
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $3
       LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $3 AND fc.phase_type = 'three'
+      LEFT JOIN selectivity_pairs sp ON d.id = sp.downstream_id AND s.id = sp.upstream_switchboard_id  -- Integration with Selectivity
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
@@ -203,7 +204,7 @@ app.get('/api/arcflash/check', async (req, res) => {
     const working_distance = point.working_distance || 455; // mm
     const enclosure_type = point.enclosure_type || 'VCB';
     const electrode_gap = point.electrode_gap || 32; // mm
-    const arcing_time = point.arcing_time || 0.2; // s (from selectivity if integrated)
+    const arcing_time = point.trip_time || point.arcing_time || 0.2; // Priorité à Selectivity si disponible, sinon manuel
     const fault_current_ka = point.fault_current_ka || point.fault_level_ka || 20; // kA, default or from faultlevel
 
     if (!point.voltage_v || !fault_current_ka) {
@@ -249,18 +250,19 @@ app.get('/api/arcflash/curves', async (req, res) => {
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
-        fc.fault_level_ka
+        fc.fault_level_ka, sp.trip_time
       FROM devices d 
       JOIN switchboards s ON d.switchboard_id = s.id 
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $3
       LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $3 AND fc.phase_type = 'three'
+      LEFT JOIN selectivity_pairs sp ON d.id = sp.downstream_id AND s.id = sp.upstream_switchboard_id  -- Integration with Selectivity
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
 
     const point = r.rows[0];
     point.voltage_v = point.voltage_v || 400;
-    const arcing_time = point.arcing_time || 0.2;
+    const arcing_time = point.trip_time || point.arcing_time || 0.2; // Priorité à Selectivity
     const fault_current_ka = point.fault_current_ka || point.fault_level_ka || 20;
     const enclosure_type = point.enclosure_type || 'VCB';
     const electrode_gap = point.electrode_gap || 32;
