@@ -631,13 +631,13 @@ export default function Switchboards() {
       setShowReferenceSuggestions(false);
       return;
     }
-   
+
     try {
       const params = new URLSearchParams({ query, site }).toString();
       const data = await get(`/api/switchboard/search-references?${params}`);
       setReferenceSuggestions(data.suggestions || []);
       setShowReferenceSuggestions(true);
-     
+
       if (data.auto_fill) {
         const autoFill = data.auto_fill;
         setDeviceForm(prev => ({
@@ -645,11 +645,11 @@ export default function Switchboards() {
           manufacturer: autoFill.manufacturer || prev.manufacturer,
           reference: autoFill.reference || prev.reference,
           device_type: autoFill.device_type || prev.device_type,
-          in_amps: autoFill.in_amps !== null ? Number(autoFill.in_amps) : prev.in_amps,
-          icu_ka: autoFill.icu_ka !== null ? Number(autoFill.icu_ka) : prev.icu_ka,
-          ics_ka: autoFill.ics_ka !== null ? Number(autoFill.ics_ka) : prev.ics_ka,
-          poles: autoFill.poles !== null ? Number(autoFill.poles) : prev.poles,
-          voltage_v: autoFill.voltage_v !== null ? Number(autoFill.voltage_v) : prev.voltage_v,
+          in_amps: autoFill.in_amps !== null && !isNaN(autoFill.in_amps) ? Number(autoFill.in_amps) : prev.in_amps,
+          icu_ka: autoFill.icu_ka !== null && !isNaN(autoFill.icu_ka) ? Number(autoFill.icu_ka) : prev.icu_ka,
+          ics_ka: autoFill.ics_ka !== null && !isNaN(autoFill.ics_ka) ? Number(autoFill.ics_ka) : prev.ics_ka,
+          poles: autoFill.poles !== null && !isNaN(autoFill.poles) ? Number(autoFill.poles) : prev.poles,
+          voltage_v: autoFill.voltage_v !== null && !isNaN(autoFill.voltage_v) ? Number(autoFill.voltage_v) : prev.voltage_v,
           trip_unit: autoFill.trip_unit || prev.trip_unit,
           settings: { ...prev.settings, curve_type: autoFill.settings?.curve_type || prev.settings.curve_type }
         }));
@@ -657,6 +657,7 @@ export default function Switchboards() {
       }
     } catch (e) {
       console.error('Database reference search failed:', e);
+      notify('Failed to load reference suggestions. Please try again.', 'error');
     }
   };
 
