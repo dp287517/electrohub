@@ -1,4 +1,3 @@
-// server_fla.js
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -54,7 +53,7 @@ const WHITELIST_SORT = ['name','code','building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema - Add fault_checks table
+// Schema - Add fault_checks and fault_parameters tables
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fault_checks (
@@ -68,6 +67,18 @@ async function ensureSchema() {
       PRIMARY KEY (device_id, switchboard_id, site, phase_type)
     );
     CREATE INDEX IF NOT EXISTS idx_fault_checks_site ON fault_checks(site);
+
+    CREATE TABLE IF NOT EXISTS fault_parameters (
+      device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+      switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
+      site TEXT NOT NULL,
+      line_length NUMERIC NOT NULL DEFAULT 100,
+      source_impedance NUMERIC NOT NULL DEFAULT 0.1,
+      cable_resistivity NUMERIC NOT NULL DEFAULT 0.0175,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (device_id, switchboard_id, site)
+    );
+    CREATE INDEX IF NOT EXISTS idx_fault_parameters_site ON fault_parameters(site);
   `);
 }
 ensureSchema().catch(e => console.error('[FLA SCHEMA] error:', e.message));
@@ -90,20 +101,57 @@ app.get('/api/faultlevel/points', async (req, res) => {
       SELECT 
         d.id AS device_id, d.name AS device_name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings,
         s.id AS switchboard_id, s.name AS switchboard_name, s.regime_neutral,
-        fc.status AS status, fc.phase_type, fc.fault_level_ka
+        fc.status AS status, fc.phase_type, fc.fault_level_ka,
+        fp.line_length, fp.source_impedance, fp.cable_resistivity
       FROM devices d
       JOIN switchboards s ON d.switchboard_id = s.id
       LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $1
+      LEFT JOIN fault_parameters fp ON d.id = fp.device_id AND s.id = fp.switchboard_id AND fp.site = $1
       WHERE ${where.join(' AND ')}
       ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
       LIMIT ${limit} OFFSET ${offset}
     `;
     const rows = await pool.query(sql, vals);
     const count = await pool.query(`SELECT COUNT(*)::int AS total FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE ${where.join(' AND ')}`, vals);
-    res.json({ data: rows.rows.map(r => ({ ...r, voltage_v: r.voltage_v || 400 })), total: count.rows[0].total }); // Default voltage
+    res.json({ 
+      data: rows.rows.map(r => ({ 
+        ...r, 
+        voltage_v: r.voltage_v || 400,
+        line_length: r.line_length || 100,
+        source_impedance: r.source_impedance || 0.1,
+        cable_resistivity: r.cable_resistivity || 0.0175
+      })), 
+      total: count.rows[0].total 
+    });
   } catch (e) {
     console.error('[FLA POINTS] error:', e);
     res.status(500).json({ error: 'List points failed' });
+  }
+});
+
+// UPDATE Fault parameters
+app.post('/api/faultlevel/parameters', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { device, switchboard } = req.query;
+    const { line_length = 100, source_impedance = 0.1, cable_resistivity = 0.0175 } = req.body;
+
+    await pool.query(`
+      INSERT INTO fault_parameters (device_id, switchboard_id, site, line_length, source_impedance, cable_resistivity, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      ON CONFLICT (device_id, switchboard_id, site)
+      DO UPDATE SET 
+        line_length = $4,
+        source_impedance = $5,
+        cable_resistivity = $6,
+        created_at = NOW()
+    `, [Number(device), Number(switchboard), site, Number(line_length), Number(source_impedance), Number(cable_resistivity)]);
+
+    res.json({ message: 'Parameters updated' });
+  } catch (e) {
+    console.error('[FLA PARAMETERS] error:', e);
+    res.status(500).json({ error: 'Update parameters failed' });
   }
 });
 
@@ -112,9 +160,13 @@ app.get('/api/faultlevel/check', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { device, switchboard, phase_type = 'three', source_impedance = 0.1, line_length = 100 } = req.query; // Defaults for imperative fields
+    const { device, switchboard, phase_type = 'three' } = req.query;
     const r = await pool.query(`
-      SELECT d.*, s.regime_neutral, s.modes FROM devices d JOIN switchboards s ON d.switchboard_id = s.id 
+      SELECT d.*, s.regime_neutral, s.modes, 
+             fp.line_length, fp.source_im�2source_impedance, fp.cable_resistivity
+      FROM devices d 
+      JOIN switchboards s ON d.switchboard_id = s.id 
+      LEFT JOIN fault_parameters fp ON d.id = fp.device_id AND s.id = fp.switchboard_id AND fp.site = $3
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
@@ -123,6 +175,9 @@ app.get('/api/faultlevel/check', async (req, res) => {
     point.voltage_v = point.voltage_v || 400; // Default
     point.in_amps = point.in_amps || 100; // Default
     point.icu_ka = point.icu_ka || 50; // Default
+    const line_length = point.line_length || 100; // Default
+    const source_impedance = point.source_impedance || 0.1; // Default
+    const cable_resistivity = point.cable_resistivity || 0.0175; // Default
 
     // Check missing data
     const missing = [];
@@ -140,7 +195,7 @@ app.get('/api/faultlevel/check', async (req, res) => {
     }
 
     // Calculate fault level (IEC 60909 simplified)
-    const { faultLevelKa, riskZones } = calculateFaultLevel(point, phase_type, Number(source_impedance), Number(line_length));
+    const { faultLevelKa, riskZones } = calculateFaultLevel(point, phase_type, source_impedance, line_length, cable_resistivity);
     const isSafe = faultLevelKa < point.icu_ka;
     const remediation = isSafe ? [] : getRemediations(point, faultLevelKa);
     const details = { 
@@ -171,15 +226,21 @@ app.get('/api/faultlevel/curves', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device, switchboard, phase_type = 'three' } = req.query;
     const r = await pool.query(`
-      SELECT d.*, s.regime_neutral FROM devices d JOIN switchboards s ON d.switchboard_id = s.id 
+      SELECT d.*, s.regime_neutral, fp.line_length, fp.source_impedance, fp.cable_resistivity
+      FROM devices d 
+      JOIN switchboards s ON d.switchboard_id = s.id 
+      LEFT JOIN fault_parameters fp ON d.id = fp.device_id AND s.id = fp.switchboard_id AND fp.site = $3
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
 
     const point = r.rows[0];
     point.voltage_v = point.voltage_v || 400;
+    const line_length = point.line_length || 100;
+    const source_impedance = point.source_impedance || 0.1;
+    const cable_resistivity = point.cable_resistivity || 0.0175;
 
-    const curve = generateFaultCurve(point, phase_type);
+    const curve = generateFaultCurve(point, phase_type, source_impedance, line_length, cable_resistivity);
 
     res.json({ curve });
   } catch (e) {
@@ -218,10 +279,11 @@ app.post('/api/faultlevel/ai-tip', async (req, res) => {
 });
 
 // Helper functions for calculations (based on IEC 60909)
-function calculateFaultLevel(point, phase_type, sourceZ = 0.1, lineLength = 100) {
+function calculateFaultLevel(point, phase_type, sourceZ, lineLength, cableResistivity) {
   const Un = point.voltage_v; // Nominal voltage
   const c = 1.1; // Voltage factor for max fault (IEC 60909)
-  let Zk = sourceZ + (lineLength * 0.0001); // Simplified: source + line impedance (ohm/km approx)
+  const Zline = (lineLength / 1000) * cableResistivity; // Line impedance in ohms
+  let Zk = sourceZ + Zline; // Total impedance
 
   let faultLevelKa;
   if (phase_type === 'three') {
@@ -239,22 +301,28 @@ function calculateFaultLevel(point, phase_type, sourceZ = 0.1, lineLength = 100)
 }
 
 function getRemediations(point, faultLevelKa) {
-  return ['Increase device Icu rating', 'Add impedance (e.g., reactor) per IEC 60909', 'Shorten line length'];
+  return [
+    'Increase device Icu rating above ' + faultLevelKa + 'kA',
+    'Add series reactor to increase impedance (IEC 60909)',
+    'Shorten line length to reduce Zline'
+  ];
 }
 
-function generateFaultCurve(point, phase_type) {
+function generateFaultCurve(point, phase_type, sourceZ, lineLength, cableResistivity) {
   const points = [];
   const Un = point.voltage_v;
   const c = 1.1;
-  for (let z = 0.01; z < 1; z += 0.01) { // Impedance range
+  for (let length = 10; length <= 500; length += 10) { // Vary line length
+    const Zline = (length / 1000) * cableResistivity;
+    const Zk = sourceZ + Zline;
     let Ik;
     if (phase_type === 'three') {
-      Ik = (c * Un / (Math.sqrt(3) * z)) / 1000;
+      Ik = (c * Un / (Math.sqrt(3) * Zk)) / 1000;
     } else {
-      const Z0 = 2 * z;
-      Ik = (Math.sqrt(3) * c * Un / (3 * z + Z0)) / 1000;
+      const Z0 = 2 * Zk;
+      Ik = (Math.sqrt(3) * c * Un / (3 * Zk + Z0)) / 1000;
     }
-    points.push({ impedance: z, fault_ka: Ik });
+    points.push({ line_length: length, fault_ka: Ik });
   }
   return points;
 }
