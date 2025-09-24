@@ -97,6 +97,7 @@ export const api = {
     /** Suppression */
     remove: (id) => del(`/api/switchboard/boards/${id}`),
   },
+  // NOUVELLE SECTION POUR SELECTIVITY
   selectivity: {
     /** Liste des paires amont/aval avec filtres */
     listPairs: (params) => get("/api/selectivity/pairs", params),
@@ -110,18 +111,18 @@ export const api = {
     /** AI Tip pour remédiation */
     getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
   },
-  // NOUVELLE SECTION POUR FAULT LEVEL ASSESSMENT
-  fla: {
-    /** Liste des points d'évaluation (switchboards/devices) avec filtres */
-    listPoints: (params) => get("/api/fla/points", params),
+  // NOUVELLE SECTION POUR FAULT LEVEL
+  faultlevel: {
+    /** Liste des points de fault avec filtres */
+    listPoints: (params) => get("/api/faultlevel/points", params),
 
     /** Vérification fault level pour un point spécifique */
-    checkPoint: (pointId, type, faultType) => get(`/api/fla/check?point=${pointId}&type=${type}&fault_type=${faultType}`),
+    checkPoint: (deviceId, switchboardId) => get(`/api/faultlevel/check?device=${deviceId}&switchboard=${switchboardId}`),
 
     /** Données pour graphique de courbes */
-    getCurves: (pointId, type) => get(`/api/fla/curves?point=${pointId}&type=${type}`),
+    getCurves: (deviceId, switchboardId) => get(`/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}`),
 
     /** AI Tip pour remédiation */
-    getAiTip: (payload) => post("/api/fla/ai-tip", payload),
+    getAiTip: (payload) => post("/api/faultlevel/ai-tip", payload),
   },
 };
