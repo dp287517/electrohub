@@ -70,7 +70,7 @@ function Modal({ open, onClose, children, title }) {
   );
 }
 
-function Sidebar({ open, onClose, tipContent }) { // Explicitly pass tipContent as prop
+function Sidebar({ open, onClose, tipContent }) {
   if (!open) return null;
   return (
     <div className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl z-40 overflow-y-auto p-6 transition-transform duration-300 ease-in-out transform translate-x-0">
@@ -101,7 +101,7 @@ export default function FaultLevelAssessment() {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
-  const [tipContent, setTipContent] = useState(''); // Ensure tipContent is defined
+  const [tipContent, setTipContent] = useState('');
   const chartRef = useRef(null);
   const pageSize = 18;
 
@@ -191,7 +191,11 @@ export default function FaultLevelAssessment() {
       setBusy(true);
       const results = [];
       for (const point of points.slice(0, 10)) {
-        const res = await get('/api/faultlevel/check', { device: point.device_id, switchboard: point.switchboard_id, phase_type: point.phase_type || 'three' });
+        const res = await get('/api/faultlevel/check', { 
+          device: point.device_id, 
+          switchboard: point.switchboard_id, 
+          phase_type: point.phase_type || 'three' 
+        });
         results.push({ point: point.device_name, status: res.status });
         setStatuses(prev => ({ ...prev, [`${point.device_id}`]: res.status }));
       }
@@ -214,7 +218,7 @@ export default function FaultLevelAssessment() {
       switchboard_id: point.switchboard_id,
       line_length: point.line_length || 100,
       source_impedance: point.source_impedance || 0.1,
-      phase_type: point.phase_type || 'three'
+      phase_type: point.phase_type || (point.poles && [1, 2].includes(point.poles) ? 'single' : 'three')
     });
     setShowParamsModal(true);
   };
@@ -366,8 +370,9 @@ export default function FaultLevelAssessment() {
         <h1 className="text-4xl font-bold text-gray-900 mb-4 drop-shadow-md">Fault Level Assessment</h1>
         <p className="text-gray-600 max-w-3xl">
           This page calculates short-circuit fault levels (Ik) for devices in switchboards per IEC 60909-0. 
-          It supports three-phase and single-phase faults, comparing Ik to Icu/Ics ratings. Data is auto-filled from switchboards; 
-          edit missing values or parameters like line length via the interface below. View curves and get AI remediations.
+          It supports three-phase and single-phase faults, comparing Ik to Icu/Ics ratings. 
+          Data like voltage and Icu are auto-filled from switchboards; edit line length and source impedance below. 
+          View curves and get AI remediations.
         </p>
       </header>
 
@@ -430,7 +435,7 @@ export default function FaultLevelAssessment() {
                 <td className="px-6 py-4 text-sm text-gray-900">{point.voltage_v} V</td>
                 <td className="px-6 py-4 text-sm text-gray-900">{point.line_length} m</td>
                 <td className="px-6 py-4 text-sm text-gray-900">{point.source_impedance} Ω</td>
-                <td className="px-6 py-4 text-sm text-gray-900">{point.phase_type || 'three'}</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.phase_type}</td>
                 <td className="px-6 py-4 text-sm">
                   {statuses[point.device_id] === 'safe' ? <CheckCircle className="text-green-600" /> :
                    statuses[point.device_id] === 'at-risk' ? <XCircle className="text-red-600" /> :
@@ -438,18 +443,17 @@ export default function FaultLevelAssessment() {
                 </td>
                 <td className="px-6 py-4 text-sm">
                   <button
-                    onClick={() => handleCheck(point.device_id, point.switchboard_id, point.phase_type || 'three')}
+                    onClick={() => handleCheck(point.device_id, point.switchboard_id, point.phase_type)}
                     className="text-blue-600 hover:underline mr-2"
                   >
                     Check
                   </button>
                   <button
                     onClick={() => openParamsModal(point)}
-                    className="text-purple-600 hover:underline mr-2"
+                    className="text-purple-600 hover:underline"
                   >
                     <Settings size={16} className="inline mr-1" /> Parameters
                   </button>
-                  <a href={`/app/switchboards?edit=${point.switchboard_id}`} className="text-green-600 hover:underline">Edit</a>
                 </td>
               </tr>
             ))}
@@ -480,7 +484,7 @@ export default function FaultLevelAssessment() {
           {checkResult.missing?.length > 0 && (
             <div className="mb-4 text-yellow-600 flex items-center">
               <AlertTriangle className="mr-2" />
-              Missing data: {checkResult.missing.join(', ')}
+              Missing data: {checkResult.missing.join(', ')}. Please update voltage or Icu in the Switchboards page.
             </div>
           )}
           {checkResult.remediation?.length > 0 && (
