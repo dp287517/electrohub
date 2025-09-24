@@ -55,31 +55,37 @@ function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DE
 
 // Schema - Add fault_checks and fault_parameters tables
 async function ensureSchema() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS fault_checks (
-      device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
-      switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
-      site TEXT NOT NULL,
-      phase_type TEXT NOT NULL CHECK (phase_type IN ('three', 'single')),
-      fault_level_ka NUMERIC NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('safe', 'at-risk', 'incomplete')),
-      checked_at TIMESTAMPTZ DEFAULT NOW(),
-      PRIMARY KEY (device_id, switchboard_id, site, phase_type)
-    );
-    CREATE INDEX IF NOT EXISTS idx_fault_checks_site ON fault_checks(site);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS fault_checks (
+        device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+        switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
+        site TEXT NOT NULL,
+        phase_type TEXT NOT NULL CHECK (phase_type IN ('three', 'single')),
+        fault_level_ka NUMERIC NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('safe', 'at-risk', 'incomplete')),
+        checked_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (device_id, switchboard_id, site, phase_type)
+      );
+      CREATE INDEX IF NOT EXISTS idx_fault_checks_site ON fault_checks(site);
 
-    CREATE TABLE IF NOT EXISTS fault_parameters (
-      device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
-      switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
-      site TEXT NOT NULL,
-      line_length NUMERIC NOT NULL DEFAULT 100,
-      source_impedance NUMERIC NOT NULL DEFAULT 0.1,
-      cable_resistivity NUMERIC NOT NULL DEFAULT 0.0175,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      PRIMARY KEY (device_id, switchboard_id, site)
-    );
-    CREATE INDEX IF NOT EXISTS idx_fault_parameters_site ON fault_parameters(site);
-  `);
+      CREATE TABLE IF NOT EXISTS fault_parameters (
+        device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+        switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
+        site TEXT NOT NULL,
+        line_length NUMERIC NOT NULL DEFAULT 100,
+        source_impedance NUMERIC NOT NULL DEFAULT 0.1,
+        cable_resistivity NUMERIC NOT NULL DEFAULT 0.0175,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (device_id, switchboard_id, site)
+      );
+      CREATE INDEX IF NOT EXISTS idx_fault_parameters_site ON fault_parameters(site);
+    `);
+    console.log('[FLA SCHEMA] Schema ensured');
+  } catch (e) {
+    console.error('[FLA SCHEMA] error:', e.message);
+    throw e;
+  }
 }
 ensureSchema().catch(e => console.error('[FLA SCHEMA] error:', e.message));
 
@@ -119,7 +125,8 @@ app.get('/api/faultlevel/points', async (req, res) => {
         voltage_v: r.voltage_v || 400,
         line_length: r.line_length || 100,
         source_impedance: r.source_impedance || 0.1,
-        cable_resistivity: r.cable_resistivity || 0.0175
+        cable_resistivity: r.cable_resistivity || 0.0175,
+        phase_type: r.phase_type || 'three'
       })), 
       total: count.rows[0].total 
     });
@@ -134,7 +141,7 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { device_id, switchboard_id, line_length = 100, source_impedance = 0.1, cable_resistivity = 0.0175 } = req.body;
+    const { device_id, switchboard_id, line_length = 100, source_impedance = 0.1, cable_resistivity = 0.0175, phase_type = 'three' } = req.body;
 
     if (!device_id || !switchboard_id) {
       return res.status(400).json({ error: 'Missing device_id or switchboard_id' });
@@ -147,6 +154,9 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
     }
     if (isNaN(cable_resistivity) || cable_resistivity <= 0) {
       return res.status(400).json({ error: 'Invalid cable_resistivity' });
+    }
+    if (!['three', 'single'].includes(phase_type)) {
+      return res.status(400).json({ error: 'Invalid phase_type' });
     }
 
     // Verify device and switchboard exist
@@ -184,6 +194,7 @@ app.get('/api/faultlevel/check', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device, switchboard, phase_type = 'three' } = req.query;
     if (!device || !switchboard) return res.status(400).json({ error: 'Missing device or switchboard' });
+    if (!['three', 'single'].includes(phase_type)) return res.status(400).json({ error: 'Invalid phase_type' });
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, s.modes, 
@@ -250,6 +261,7 @@ app.get('/api/faultlevel/curves', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device, switchboard, phase_type = 'three' } = req.query;
     if (!device || !switchboard) return res.status(400).json({ error: 'Missing device or switchboard' });
+    if (!['three', 'single'].includes(phase_type)) return res.status(400).json({ error: 'Invalid phase_type' });
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, fp.line_length, fp.source_impedance, fp.cable_resistivity
