@@ -105,7 +105,7 @@ app.get('/api/faultlevel/points', async (req, res) => {
 
     const sql = `
       SELECT 
-        d.id AS device_id, d.name AS device_name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings,
+        d.id AS device_id, d.name AS device_name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings, d.poles,
         s.id AS switchboard_id, s.name AS switchboard_name, s.regime_neutral,
         fc.status AS status, fc.phase_type, fc.fault_level_ka,
         fp.line_length, fp.source_impedance, fp.cable_resistivity
@@ -126,7 +126,7 @@ app.get('/api/faultlevel/points', async (req, res) => {
         line_length: r.line_length || 100,
         source_impedance: r.source_impedance || 0.1,
         cable_resistivity: r.cable_resistivity || 0.0175,
-        phase_type: r.phase_type || 'three'
+        phase_type: r.phase_type || (r.poles && [1, 2].includes(r.poles) ? 'single' : 'three')
       })), 
       total: count.rows[0].total 
     });
@@ -182,7 +182,7 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
 
     res.json({ message: 'Parameters updated' });
   } catch (e) {
-    console.error('[FLA PARAMETERS] error:', e.message);
+    console.error('[FLA PARAMETERS] error:', e.message, e.stack);
     res.status(500).json({ error: 'Update parameters failed', details: e.message });
   }
 });
@@ -226,7 +226,11 @@ app.get('/api/faultlevel/check', async (req, res) => {
         ON CONFLICT (device_id, switchboard_id, site, phase_type)
         DO UPDATE SET fault_level_ka = 0, status = $5, checked_at = NOW()
       `, [Number(device), Number(switchboard), site, phase_type, 'incomplete']);
-      return res.json({ status: 'incomplete', missing, remediation: 'Complete device/switchboard data' });
+      return res.json({ 
+        status: 'incomplete', 
+        missing, 
+        remediation: 'Complete voltage and Icu settings in the Switchboards page' 
+      });
     }
 
     // Calculate fault level (IEC 60909 simplified)
@@ -249,7 +253,7 @@ app.get('/api/faultlevel/check', async (req, res) => {
 
     res.json({ status: isSafe ? 'safe' : 'at-risk', fault_level_ka: faultLevelKa, details, remediation, riskZones });
   } catch (e) {
-    console.error('[FLA CHECK] error:', e.message);
+    console.error('[FLA CHECK] error:', e.message, e.stack);
     res.status(500).json({ error: 'Check failed', details: e.message });
   }
 });
@@ -282,7 +286,7 @@ app.get('/api/faultlevel/curves', async (req, res) => {
 
     res.json({ curve });
   } catch (e) {
-    console.error('[FLA CURVES] error:', e.message);
+    console.error('[FLA CURVES] error:', e.message, e.stack);
     res.status(500).json({ error: 'Curves generation failed', details: e.message });
   }
 });
@@ -311,7 +315,7 @@ app.post('/api/faultlevel/ai-tip', async (req, res) => {
     const tip = completion.choices[0].message.content.trim();
     res.json({ tip });
   } catch (e) {
-    console.error('[AI TIP] error:', e.message);
+    console.error('[AI TIP] error:', e.message, e.stack);
     res.status(500).json({ error: 'AI tip failed', details: e.message });
   }
 });
