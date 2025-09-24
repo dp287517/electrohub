@@ -1,9 +1,7 @@
-// src/lib/api.js
-
-/** Base API (déjà présent chez toi) */
+/** Base API */
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-/** Récupère le site courant depuis le profil stocké côté client */
+/** Get current site from client-side stored profile */
 function currentSite() {
   try {
     const u = JSON.parse(localStorage.getItem("eh_user") || "{}");
@@ -13,7 +11,7 @@ function currentSite() {
   }
 }
 
-/** Fetch JSON avec en-tête X-Site automatique (compatible avec ton backend/proxy) */
+/** Fetch JSON with automatic X-Site header */
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
 
@@ -22,7 +20,7 @@ async function jsonFetch(url, options = {}) {
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {}),
-      ...(site ? { "X-Site": site } : {}), // ➕ ajoute le site si dispo
+      ...(site ? { "X-Site": site } : {}),
     },
     ...options,
   });
@@ -36,7 +34,7 @@ async function jsonFetch(url, options = {}) {
   return ct.includes("application/json") ? res.json() : null;
 }
 
-/** Helpers génériques (identiques à ton implémentation actuelle) */
+/** Generic helpers */
 export async function get(path, params) {
   const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
   return jsonFetch(`${path}${qs}`);
@@ -54,7 +52,7 @@ export async function del(path) {
   return jsonFetch(path, { method: "DELETE" });
 }
 
-/** Upload multipart (on ne définit pas Content-Type pour laisser le navigateur gérer) */
+/** Multipart upload */
 export async function upload(path, formData) {
   const site = currentSite();
   const res = await fetch(`${API_BASE}${path}`, {
@@ -69,60 +67,30 @@ export async function upload(path, formData) {
   return res.json();
 }
 
-/** Export de base conservé */
+/** Base export */
 export { API_BASE };
 
-/* -------------------------------------------------------------------------- */
-/*  Clients “confort” (optionnels) — n’impactent pas le code existant        */
-/*  Tu peux les utiliser dans Switchboards.jsx ou rester sur get/post/put/del */
-/* -------------------------------------------------------------------------- */
-
+/** Convenience clients */
 export const api = {
   switchboard: {
-    /** Liste paginée + filtres (site ajouté automatiquement via header) */
     list: (params) => get("/api/switchboard/boards", params),
-
-    /** Lecture unitaire */
     getOne: (id) => get(`/api/switchboard/boards/${id}`),
-
-    /** Création */
     create: (payload) => post("/api/switchboard/boards", payload),
-
-    /** Mise à jour */
     update: (id, payload) => put(`/api/switchboard/boards/${id}`, payload),
-
-    /** Duplication */
     duplicate: (id) => post(`/api/switchboard/boards/${id}/duplicate`),
-
-    /** Suppression */
     remove: (id) => del(`/api/switchboard/boards/${id}`),
   },
-  // NOUVELLE SECTION POUR SELECTIVITY
   selectivity: {
-    /** Liste des paires amont/aval avec filtres */
     listPairs: (params) => get("/api/selectivity/pairs", params),
-
-    /** Vérification sélectivité pour une paire spécifique */
     checkPair: (upstreamId, downstreamId) => get(`/api/selectivity/check?upstream=${upstreamId}&downstream=${downstreamId}`),
-
-    /** Données pour graphique de courbes */
     getCurves: (upstreamId, downstreamId) => get(`/api/selectivity/curves?upstream=${upstreamId}&downstream=${downstreamId}`),
-
-    /** AI Tip pour remédiation */
     getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
   },
-  // NOUVELLE SECTION POUR FAULT LEVEL
   faultlevel: {
-    /** Liste des points de fault avec filtres */
     listPoints: (params) => get("/api/faultlevel/points", params),
-
-    /** Vérification fault level pour un point spécifique */
     checkPoint: (deviceId, switchboardId) => get(`/api/faultlevel/check?device=${deviceId}&switchboard=${switchboardId}`),
-
-    /** Données pour graphique de courbes */
     getCurves: (deviceId, switchboardId) => get(`/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}`),
-
-    /** AI Tip pour remédiation */
     getAiTip: (payload) => post("/api/faultlevel/ai-tip", payload),
+    updateParameters: (deviceId, switchboardId, payload) => post(`/api/faultlevel/parameters?device=${deviceId}&switchboard=${switchboardId}`, payload),
   },
 };
