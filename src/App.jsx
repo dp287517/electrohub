@@ -1,127 +1,35 @@
-// src/lib/api.js
+// src/App.jsx
+import { Routes, Route, Navigate } from 'react-router-dom';
+import Navbar from './components/Navbar.jsx';
+import Index from './pages/Index.jsx';
+import SignIn from './pages/SignIn.jsx';
+import SignUp from './pages/SignUp.jsx';
+import LostPassword from './pages/LostPassword.jsx';
+import Dashboard from './pages/Dashboard.jsx';
+import ProtectedRoute from './components/ProtectedRoute.jsx';
+import Atex from './pages/Atex.jsx';
+import LoopCalc from './pages/LoopCalc.jsx';
+import Switchboards from './pages/Switchboards.jsx';
+import Selectivity from './pages/Selectivity.jsx'; // AJOUT IMPORT
+import FaultLevelAssessment from './pages/Fault_level_assessment.jsx'; // AJOUT IMPORT
 
-/** Base API (déjà présent chez toi) */
-const API_BASE = import.meta.env.VITE_API_BASE || "";
-
-/** Récupère le site courant depuis le profil stocké côté client */
-function currentSite() {
-  try {
-    const u = JSON.parse(localStorage.getItem("eh_user") || "{}");
-    return u?.site || "";
-  } catch {
-    return "";
-  }
+export default function App() {
+  return (
+    <div className="min-h-screen">
+      <Navbar />
+      <Routes>
+        <Route path="/" element={<Index />} />
+        <Route path="/signin" element={<SignIn />} />
+        <Route path="/signup" element={<SignUp />} />
+        <Route path="/lost-password" element={<LostPassword />} />
+        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+        <Route path="/app/atex" element={<ProtectedRoute><Atex /></ProtectedRoute>} />
+        <Route path="/app/loopcalc" element={<ProtectedRoute><LoopCalc /></ProtectedRoute>} />
+        <Route path="/app/switchboards" element={<ProtectedRoute><Switchboards /></ProtectedRoute>} />
+        <Route path="/app/selectivity" element={<ProtectedRoute><Selectivity /></ProtectedRoute>} /> {/* AJOUT ROUTE */}
+        <Route path="/app/fault-level" element={<ProtectedRoute><FaultLevelAssessment /></ProtectedRoute>} /> {/* AJOUT ROUTE */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </div>
+  );
 }
-
-/** Fetch JSON avec en-tête X-Site automatique (compatible avec ton backend/proxy) */
-async function jsonFetch(url, options = {}) {
-  const site = currentSite();
-
-  const res = await fetch(`${API_BASE}${url}`, {
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-      ...(site ? { "X-Site": site } : {}), // ➕ ajoute le site si dispo
-    },
-    ...options,
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-
-  const ct = res.headers.get("content-type") || "";
-  return ct.includes("application/json") ? res.json() : null;
-}
-
-/** Helpers génériques (identiques à ton implémentation actuelle) */
-export async function get(path, params) {
-  const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
-  return jsonFetch(`${path}${qs}`);
-}
-
-export async function post(path, body) {
-  return jsonFetch(path, { method: "POST", body: JSON.stringify(body || {}) });
-}
-
-export async function put(path, body) {
-  return jsonFetch(path, { method: "PUT", body: JSON.stringify(body || {}) });
-}
-
-export async function del(path) {
-  return jsonFetch(path, { method: "DELETE" });
-}
-
-/** Upload multipart (on ne définit pas Content-Type pour laisser le navigateur gérer) */
-export async function upload(path, formData) {
-  const site = currentSite();
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    body: formData,
-    credentials: "include",
-    headers: {
-      ...(site ? { "X-Site": site } : {}),
-    },
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-/** Export de base conservé */
-export { API_BASE };
-
-/* -------------------------------------------------------------------------- */
-/*  Clients “confort” (optionnels) — n’impactent pas le code existant        */
-/*  Tu peux les utiliser dans Switchboards.jsx ou rester sur get/post/put/del */
-/* -------------------------------------------------------------------------- */
-
-export const api = {
-  switchboard: {
-    /** Liste paginée + filtres (site ajouté automatiquement via header) */
-    list: (params) => get("/api/switchboard/boards", params),
-
-    /** Lecture unitaire */
-    getOne: (id) => get(`/api/switchboard/boards/${id}`),
-
-    /** Création */
-    create: (payload) => post("/api/switchboard/boards", payload),
-
-    /** Mise à jour */
-    update: (id, payload) => put(`/api/switchboard/boards/${id}`, payload),
-
-    /** Duplication */
-    duplicate: (id) => post(`/api/switchboard/boards/${id}/duplicate`),
-
-    /** Suppression */
-    remove: (id) => del(`/api/switchboard/boards/${id}`),
-  },
-  selectivity: {
-    /** Liste des paires amont/aval avec filtres */
-    listPairs: (params) => get("/api/selectivity/pairs", params),
-
-    /** Vérification sélectivité pour une paire spécifique */
-    checkPair: (upstreamId, downstreamId) => get(`/api/selectivity/check?upstream=${upstreamId}&downstream=${downstreamId}`),
-
-    /** Données pour graphique de courbes */
-    getCurves: (upstreamId, downstreamId) => get(`/api/selectivity/curves?upstream=${upstreamId}&downstream=${downstreamId}`),
-
-    /** AI Tip pour remédiation */
-    getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
-  },
-  // NOUVELLE SECTION POUR FAULT LEVEL ASSESSMENT
-  fla: {
-    /** Liste des points d'évaluation (switchboards/devices) avec filtres */
-    listPoints: (params) => get("/api/fla/points", params),
-
-    /** Vérification fault level pour un point spécifique */
-    checkPoint: (pointId, type, faultType) => get(`/api/fla/check?point=${pointId}&type=${type}&fault_type=${faultType}`),
-
-    /** Données pour graphique de courbes */
-    getCurves: (pointId, type) => get(`/api/fla/curves?point=${pointId}&type=${type}`),
-
-    /** AI Tip pour remédiation */
-    getAiTip: (payload) => post("/api/fla/ai-tip", payload),
-  },
-};
