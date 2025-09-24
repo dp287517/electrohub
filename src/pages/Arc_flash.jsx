@@ -19,6 +19,7 @@ import {
 import Annotation from 'chartjs-plugin-annotation';
 import Zoom from 'chartjs-plugin-zoom';
 
+// Register plugins
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -96,17 +97,7 @@ export default function ArcFlash() {
   const [showGraph, setShowGraph] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   const [showParamsModal, setShowParamsModal] = useState(false);
-  const [paramForm, setParamForm] = useState({
-    device_id: null,
-    switchboard_id: null,
-    working_distance: 455,
-    enclosure_type: 'VCB',
-    electrode_gap: 32,
-    arcing_time: 0.2,
-    fault_current_ka: null,
-    settings: { ir: 1, isd: 6, tsd: 0.1, ii: 10 },
-    parent_id: null,
-  });
+  const [paramForm, setParamForm] = useState({ device_id: null, switchboard_id: null, working_distance: 455, enclosure_type: 'VCB', electrode_gap: 32, arcing_time: 0.2, fault_current_ka: null, settings: {}, parent_id: null });
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -146,7 +137,7 @@ export default function ArcFlash() {
       setToast({ msg: result.message, type: 'success' });
       loadPoints();
     } catch (e) {
-      setToast({ msg: `Autofill failed: ${e.message}`, type: 'error' });
+      setToast({ msg: `Autofill failed: ${e.message || 'Server endpoint not found'}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -245,6 +236,7 @@ export default function ArcFlash() {
 
     const pdf = new jsPDF();
     
+    // Capture graph
     const chartCanvas = chartRef.current?.canvas;
     if (!chartCanvas) {
       setToast({ msg: 'Graph not rendered', type: 'error' });
@@ -252,6 +244,7 @@ export default function ArcFlash() {
     }
     const graphImg = chartCanvas.toDataURL('image/png');
     
+    // Capture result section
     const resultElement = resultRef.current;
     if (!resultElement) {
       setToast({ msg: 'Results not rendered', type: 'error' });
@@ -299,7 +292,7 @@ export default function ArcFlash() {
       electrode_gap: point.electrode_gap || 32,
       arcing_time: point.arcing_time || 0.2,
       fault_current_ka: point.fault_current_ka || point.icu_ka,
-      settings: point.settings || { ir: 1, isd: 6, tsd: 0.1, ii: 10 },
+      settings: point.settings || { ir: 1, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' },
       parent_id: point.parent_id || '',
     });
     setShowParamsModal(true);
@@ -311,23 +304,6 @@ export default function ArcFlash() {
       <h1 className="text-3xl font-bold mb-6 flex items-center gap-2">
         <Flame className="text-orange-600" /> Arc Flash Analysis
       </h1>
-
-      <div className="flex justify-between mb-4">
-        <button 
-          onClick={handleAutofill} 
-          className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 shadow-md transition-transform hover:scale-105"
-          disabled={busy}
-        >
-          Autofill Missing Parameters
-        </button>
-        <button 
-          onClick={handleReset} 
-          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-md transition-transform hover:scale-105"
-          disabled={busy}
-        >
-          Reset Arc Data
-        </button>
-      </div>
 
       <div className="flex flex-wrap gap-4 mb-6">
         <div className="flex-1 relative">
@@ -431,7 +407,7 @@ export default function ArcFlash() {
             <ChevronRight size={16} /> View Explanation
           </button>
           <button 
-            onClick={() => exportPdf(true)}
+            onClick={() => exportPdf(true)} 
             className="mt-4 ml-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2"
           >
             <Download size={16} /> Generate Arc Flash Label PDF
@@ -505,7 +481,7 @@ export default function ArcFlash() {
             <input
               type="number"
               step="0.1"
-              value={paramForm.settings.ir}
+              value={paramForm.settings.ir || 1}
               onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, ir: Number(e.target.value) } })}
               className="input w-full"
               placeholder="Long-time pickup (default: 1)"
@@ -517,7 +493,7 @@ export default function ArcFlash() {
             <input
               type="number"
               step="0.1"
-              value={paramForm.settings.isd}
+              value={paramForm.settings.isd || 6}
               onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, isd: Number(e.target.value) } })}
               className="input w-full"
               placeholder="Short-time pickup (default: 6)"
@@ -529,7 +505,7 @@ export default function ArcFlash() {
             <input
               type="number"
               step="0.01"
-              value={paramForm.settings.tsd}
+              value={paramForm.settings.tsd || 0.1}
               onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, tsd: Number(e.target.value) } })}
               className="input w-full"
               placeholder="Short-time delay (default: 0.1)"
@@ -541,7 +517,7 @@ export default function ArcFlash() {
             <input
               type="number"
               step="0.1"
-              value={paramForm.settings.ii}
+              value={paramForm.settings.ii || 10}
               onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, ii: Number(e.target.value) } })}
               className="input w-full"
               placeholder="Instantaneous pickup (default: 10)"
@@ -553,7 +529,7 @@ export default function ArcFlash() {
             <input
               type="number"
               value={paramForm.parent_id}
-              onChange={e => setParamForm({ ...paramForm, parent_id: e.target.value ? Number(e.target.value) : null })}
+              onChange={e => setParamForm({ ...paramForm, parent_id: e.target.value })}
               className="input w-full"
               placeholder="Upstream device ID (optional)"
             />
@@ -566,6 +542,64 @@ export default function ArcFlash() {
             Save Parameters
           </button>
         </div>
+      </Modal>
+
+      <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Incident Energy Curves (Zoom & Pan Enabled)">
+        <div ref={chartRef}>
+          {curveData && (
+            <Line
+              data={curveData}
+              options={{
+                responsive: true,
+                plugins: {
+                  zoom: {
+                    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
+                    pan: { enabled: true, mode: 'xy' },
+                  },
+                  annotation: {
+                    annotations: checkResult?.riskZones?.map((zone, i) => ({
+                      type: 'box',
+                      yMin: zone.min,
+                      yMax: zone.max,
+                      backgroundColor: 'rgba(255, 165, 0, 0.2)',
+                      borderColor: 'orange',
+                      label: { content: 'Risk Zone', display: true, position: 'center' }
+                    })) || []
+                  },
+                  tooltip: {
+                    callbacks: {
+                      label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)} cal/cm² at ${context.parsed.x}mm`
+                    }
+                  }
+                },
+                scales: {
+                  x: { 
+                    type: 'linear', 
+                    title: { display: true, text: 'Working Distance (mm)' }
+                  },
+                  y: { 
+                    type: 'logarithmic', 
+                    title: { display: true, text: 'Incident Energy (cal/cm²)' },
+                    min: 0.1,
+                    max: 100,
+                  },
+                },
+              }}
+            />
+          )}
+        </div>
+        <button 
+          onClick={() => exportPdf(false)} 
+          className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
+        >
+          <Download size={16} /> Export Full Report PDF
+        </button>
+        <button 
+          onClick={() => setShowGraph(false)} 
+          className="mt-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+        >
+          Close Graph
+        </button>
       </Modal>
 
       <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)} tipContent={tipContent} />
