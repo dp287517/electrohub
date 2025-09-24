@@ -1,7 +1,6 @@
-// src/pages/Fault_level_assessment.jsx
 import { useEffect, useState, useRef } from 'react';
 import { get, post } from '../lib/api.js';
-import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Zap, Download, ChevronRight } from 'lucide-react';
+import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Zap, Download, ChevronRight, Settings } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
 import Confetti from 'react-confetti';
 import html2canvas from 'html2canvas';
@@ -95,10 +94,11 @@ export default function FaultLevelAssessment() {
   const [curveData, setCurveData] = useState(null);
   const [showGraph, setShowGraph] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [showParamsModal, setShowParamsModal] = useState(false);
+  const [paramForm, setParamForm] = useState({ deviceId: null, switchboardId: null, line_length: 100, source_impedance: 0.1 });
   const [tipContent, setTipContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
-  const [impedance, setImpedance] = useState(0.1);
   const [showConfetti, setShowConfetti] = useState(false);
   const chartRef = useRef(null);
   const pageSize = 18;
@@ -127,10 +127,10 @@ export default function FaultLevelAssessment() {
     }
   };
 
-  const handleCheck = async (deviceId, switchboardId, phaseType = 'three', imp = null, isBatch = false) => {
+  const handleCheck = async (deviceId, switchboardId, phaseType = 'three', isBatch = false) => {
     try {
       setBusy(true);
-      const params = { device: deviceId, switchboard: switchboardId, phase_type: phaseType, source_impedance: imp || impedance };
+      const params = { device: deviceId, switchboard: switchboardId, phase_type: phaseType };
       const result = await get('/api/faultlevel/check', params);
       setCheckResult(result);
       setSelectedPoint({ deviceId, switchboardId });
@@ -138,7 +138,7 @@ export default function FaultLevelAssessment() {
 
       const curves = await get('/api/faultlevel/curves', params);
       const datasets = {
-        labels: curves.curve.map(p => p.impedance.toFixed(2)),
+        labels: curves.curve.map(p => p.line_length.toFixed(0)),
         datasets: [
           { label: 'Fault Current (kA)', data: curves.curve.map(p => p.fault_ka), borderColor: 'red', tension: 0.1, pointRadius: 0 },
         ],
@@ -168,7 +168,7 @@ export default function FaultLevelAssessment() {
       setBusy(true);
       for (const id of selectedPoints) {
         const point = points.find(p => p.device_id === id);
-        if (point) await handleCheck(point.device_id, point.switchboard_id, 'three', null, true);
+        if (point) await handleCheck(point.device_id, point.switchboard_id, 'three', true);
       }
       setToast({ msg: 'Batch check completed!', type: 'success' });
     } catch (e) {
@@ -201,9 +201,30 @@ export default function FaultLevelAssessment() {
     }
   };
 
-  const testImpedance = (value) => {
-    setImpedance(value);
-    if (selectedPoint) handleCheck(selectedPoint.deviceId, selectedPoint.switchboardId, 'three', value);
+  const openParamsModal = (point) => {
+    setParamForm({
+      deviceId: point.device_id,
+      switchboardId: point.switchboard_id,
+      line_length: point.line_length || 100,
+      source_impedance: point.source_impedance || 0.1
+    });
+    setShowParamsModal(true);
+  };
+
+  const saveParameters = async () => {
+    try {
+      setBusy(true);
+      await post('/api/faultlevel/parameters', paramForm, {
+        params: { device: paramForm.deviceId, switchboard: paramForm.switchboardId }
+      });
+      setToast({ msg: 'Parameters saved!', type: 'success' });
+      setShowParamsModal(false);
+      loadPoints(); // Refresh points with updated parameters
+    } catch (e) {
+      setToast({ msg: 'Failed to save parameters', type: 'error' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const exportPDF = async () => {
@@ -236,7 +257,7 @@ export default function FaultLevelAssessment() {
           switchboard: point.switchboard_id,
         });
         const data = {
-          labels: curves.curve.map(p => p.impedance.toFixed(2)),
+          labels: curves.curve.map(p => p.line_length.toFixed(0)),
           datasets: [
             { label: 'Fault Current (kA)', data: curves.curve.map(p => p.fault_ka), borderColor: 'red', tension: 0.1, pointRadius: 0 },
           ],
@@ -272,14 +293,14 @@ export default function FaultLevelAssessment() {
               title: { display: true, text: `Curve: ${point.device_name}` },
               tooltip: {
                 callbacks: {
-                  label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}kA at ${context.parsed.x}Ω`
+                  label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}kA at ${context.parsed.x}m`
                 }
               }
             },
             scales: {
               x: { 
                 type: 'linear', 
-                title: { display: true, text: 'Impedance (Ω)' }
+                title: { display: true, text: 'Line Length (m)' }
               },
               y: { 
                 type: 'logarithmic', 
@@ -321,7 +342,7 @@ export default function FaultLevelAssessment() {
         <p className="text-gray-600 max-w-3xl">
           This page calculates short-circuit fault levels (Ik) for devices in switchboards per IEC 60909-0. 
           It supports three-phase and single-phase faults, comparing Ik to Icu/Ics ratings. Data is auto-filled from switchboards; 
-          edit missing values there. Use sliders to test variables like source impedance. View curves and get AI remediations.
+          edit missing values or parameters like line length via the interface below. View curves and get AI remediations.
         </p>
       </header>
 
@@ -362,6 +383,8 @@ export default function FaultLevelAssessment() {
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Device</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Switchboard</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Voltage (V)</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Line Length (m)</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Source Impedance (Ω)</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Status</th>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase">Actions</th>
             </tr>
@@ -379,6 +402,8 @@ export default function FaultLevelAssessment() {
                 <td className="px-6 py-4 text-sm text-gray-900">{point.device_name} ({point.device_type})</td>
                 <td className="px-6 py-4 text-sm text-gray-900">{point.switchboard_name}</td>
                 <td className="px-6 py-4 text-sm text-gray-900">{point.voltage_v} V</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.line_length} m</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{point.source_impedance} Ω</td>
                 <td className="px-6 py-4 text-sm">
                   {statuses[point.device_id] === 'safe' ? <CheckCircle className="text-green-600" /> :
                    statuses[point.device_id] === 'at-risk' ? <XCircle className="text-red-600" /> :
@@ -390,6 +415,12 @@ export default function FaultLevelAssessment() {
                     className="text-blue-600 hover:underline mr-2"
                   >
                     Check
+                  </button>
+                  <button
+                    onClick={() => openParamsModal(point)}
+                    className="text-purple-600 hover:underline mr-2"
+                  >
+                    <Settings size={16} className="inline mr-1" /> Parameters
                   </button>
                   <a href={`/app/switchboards?edit=${point.switchboard_id}`} className="text-green-600 hover:underline">Edit</a>
                 </td>
@@ -406,26 +437,6 @@ export default function FaultLevelAssessment() {
         >
           Check Selected ({selectedPoints.length})
         </button>
-      )}
-
-      {/* Interactive Impedance Test */}
-      {selectedPoint && (
-        <div className="mt-6 p-6 bg-white rounded-lg shadow-md transition-opacity duration-500 opacity-100">
-          <h3 className="font-semibold mb-2 text-lg">Test Source Impedance</h3>
-          <p className="text-sm text-gray-500 mb-4">Adjust source impedance (Ω) to simulate fault levels. Defaults to 0.1Ω; slide for live updates per IEC 60909.</p>
-          <div className="flex gap-4 items-center">
-            <input
-              type="range"
-              min="0.01"
-              max="1"
-              step="0.01"
-              value={impedance}
-              onChange={e => testImpedance(e.target.value)}
-              className="flex-1 accent-indigo-600"
-            />
-            <span className="text-sm font-medium">{impedance} Ω</span>
-          </div>
-        </div>
       )}
 
       {/* Results */}
@@ -459,6 +470,40 @@ export default function FaultLevelAssessment() {
         </div>
       )}
 
+      {/* Parameters Modal */}
+      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Edit Fault Parameters">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Line Length (m)</label>
+            <input
+              type="number"
+              value={paramForm.line_length}
+              onChange={e => setParamForm({ ...paramForm, line_length: e.target.value })}
+              className="input w-full"
+              placeholder="Default: 100"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Source Impedance (Ω)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={paramForm.source_impedance}
+              onChange={e => setParamForm({ ...paramForm, source_impedance: e.target.value })}
+              className="input w-full"
+              placeholder="Default: 0.1"
+            />
+          </div>
+          <button
+            onClick={saveParameters}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 w-full"
+            disabled={busy}
+          >
+            Save Parameters
+          </button>
+        </div>
+      </Modal>
+
       {/* Graph Modal */}
       <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Fault Current Curves (Zoom & Pan Enabled)">
         <div ref={chartRef}>
@@ -484,14 +529,14 @@ export default function FaultLevelAssessment() {
                   },
                   tooltip: {
                     callbacks: {
-                      label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}kA at ${context.parsed.x}Ω`
+                      label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)}kA at ${context.parsed.x}m`
                     }
                   }
                 },
                 scales: {
                   x: { 
                     type: 'linear', 
-                    title: { display: true, text: 'Impedance (Ω)' }
+                    title: { display: true, text: 'Line Length (m)' }
                   },
                   y: { 
                     type: 'logarithmic', 
