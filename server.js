@@ -78,6 +78,17 @@ app.use(
   })
 );
 
+// --- PROXY ARCFLASH (AJOUT: place BEFORE body parsing) ---
+const arcflashTarget = process.env.ARCFLASH_BASE_URL || 'http://127.0.0.1:3006';
+app.use(
+  '/api/arcflash',
+  createProxyMiddleware({
+    target: arcflashTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
