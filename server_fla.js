@@ -46,7 +46,7 @@ app.get('/api/faultlevel/health', (_req, res) => res.json({ ok: true, ts: Date.n
 
 // Helpers
 function siteOf(req) {
-  return (req.header('X-Site') || req.query.site || '').toString();
+  return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
 }
 
 const WHITELIST_SORT = ['name','code','building_code'];
@@ -124,8 +124,8 @@ app.get('/api/faultlevel/points', async (req, res) => {
       total: count.rows[0].total 
     });
   } catch (e) {
-    console.error('[FLA POINTS] error:', e);
-    res.status(500).json({ error: 'List points failed' });
+    console.error('[FLA POINTS] error:', e.message);
+    res.status(500).json({ error: 'List points failed', details: e.message });
   }
 });
 
@@ -134,8 +134,30 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { device, switchboard } = req.query;
-    const { line_length = 100, source_impedance = 0.1, cable_resistivity = 0.0175 } = req.body;
+    const { device_id, switchboard_id, line_length = 100, source_impedance = 0.1, cable_resistivity = 0.0175 } = req.body;
+
+    if (!device_id || !switchboard_id) {
+      return res.status(400).json({ error: 'Missing device_id or switchboard_id' });
+    }
+    if (isNaN(line_length) || line_length <= 0) {
+      return res.status(400).json({ error: 'Invalid line_length' });
+    }
+    if (isNaN(source_impedance) || source_impedance <= 0) {
+      return res.status(400).json({ error: 'Invalid source_impedance' });
+    }
+    if (isNaN(cable_resistivity) || cable_resistivity <= 0) {
+      return res.status(400).json({ error: 'Invalid cable_resistivity' });
+    }
+
+    // Verify device and switchboard exist
+    const check = await pool.query(
+      `SELECT 1 FROM devices d JOIN switchboards s ON d.switchboard_id = s.id 
+       WHERE d.id = $1 AND s.id = $2 AND d.site = $3`,
+      [Number(device_id), Number(switchboard_id), site]
+    );
+    if (!check.rows.length) {
+      return res.status(404).json({ error: 'Device or switchboard not found' });
+    }
 
     await pool.query(`
       INSERT INTO fault_parameters (device_id, switchboard_id, site, line_length, source_impedance, cable_resistivity, created_at)
@@ -146,12 +168,12 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
         source_impedance = $5,
         cable_resistivity = $6,
         created_at = NOW()
-    `, [Number(device), Number(switchboard), site, Number(line_length), Number(source_impedance), Number(cable_resistivity)]);
+    `, [Number(device_id), Number(switchboard_id), site, Number(line_length), Number(source_impedance), Number(cable_resistivity)]);
 
     res.json({ message: 'Parameters updated' });
   } catch (e) {
-    console.error('[FLA PARAMETERS] error:', e);
-    res.status(500).json({ error: 'Update parameters failed' });
+    console.error('[FLA PARAMETERS] error:', e.message);
+    res.status(500).json({ error: 'Update parameters failed', details: e.message });
   }
 });
 
@@ -161,9 +183,11 @@ app.get('/api/faultlevel/check', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device, switchboard, phase_type = 'three' } = req.query;
+    if (!device || !switchboard) return res.status(400).json({ error: 'Missing device or switchboard' });
+
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, s.modes, 
-             fp.line_length, fp.source_im�2source_impedance, fp.cable_resistivity
+             fp.line_length, fp.source_impedance, fp.cable_resistivity
       FROM devices d 
       JOIN switchboards s ON d.switchboard_id = s.id 
       LEFT JOIN fault_parameters fp ON d.id = fp.device_id AND s.id = fp.switchboard_id AND fp.site = $3
@@ -214,17 +238,19 @@ app.get('/api/faultlevel/check', async (req, res) => {
 
     res.json({ status: isSafe ? 'safe' : 'at-risk', fault_level_ka: faultLevelKa, details, remediation, riskZones });
   } catch (e) {
-    console.error('[FLA CHECK] error:', e);
-    res.status(500).json({ error: 'Check failed' });
+    console.error('[FLA CHECK] error:', e.message);
+    res.status(500).json({ error: 'Check failed', details: e.message });
   }
 });
 
-// GET Curves data for graph (e.g., fault current vs impedance)
+// GET Curves data for graph (e.g., fault current vs line length)
 app.get('/api/faultlevel/curves', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device, switchboard, phase_type = 'three' } = req.query;
+    if (!device || !switchboard) return res.status(400).json({ error: 'Missing device or switchboard' });
+
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, fp.line_length, fp.source_impedance, fp.cable_resistivity
       FROM devices d 
@@ -244,8 +270,8 @@ app.get('/api/faultlevel/curves', async (req, res) => {
 
     res.json({ curve });
   } catch (e) {
-    console.error('[FLA CURVES] error:', e);
-    res.status(500).json({ error: 'Curves generation failed' });
+    console.error('[FLA CURVES] error:', e.message);
+    res.status(500).json({ error: 'Curves generation failed', details: e.message });
   }
 });
 
@@ -274,7 +300,7 @@ app.post('/api/faultlevel/ai-tip', async (req, res) => {
     res.json({ tip });
   } catch (e) {
     console.error('[AI TIP] error:', e.message);
-    res.status(500).json({ error: 'AI tip failed' });
+    res.status(500).json({ error: 'AI tip failed', details: e.message });
   }
 });
 
@@ -302,7 +328,7 @@ function calculateFaultLevel(point, phase_type, sourceZ, lineLength, cableResist
 
 function getRemediations(point, faultLevelKa) {
   return [
-    'Increase device Icu rating above ' + faultLevelKa + 'kA',
+    `Increase device Icu rating above ${faultLevelKa} kA`,
     'Add series reactor to increase impedance (IEC 60909)',
     'Shorten line length to reduce Zline'
   ];
