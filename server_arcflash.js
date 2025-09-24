@@ -134,7 +134,7 @@ app.get('/api/arcflash/points', async (req, res) => {
       LEFT JOIN arcflash_checks ac ON d.id = ac.device_id AND s.id = ac.switchboard_id AND ac.site = $1
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $1
       WHERE ${where.join(' AND ')}
-      ORDER BY ${sortSafe(sort)} ${dirSafe(dir)}
+      ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
       LIMIT $${i} OFFSET $${i+1}
     `;
     vals.push(limit, offset);
@@ -189,12 +189,12 @@ app.get('/api/arcflash/check', async (req, res) => {
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
-        fc.fault_level_ka, sp.trip_time  -- Join with fault_checks and selectivity_pairs
+        fc.fault_level_ka, up.id AS upstream_id, up.settings AS upstream_settings, up.in_amps AS upstream_in_amps
       FROM devices d 
       JOIN switchboards s ON d.switchboard_id = s.id 
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $3
       LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $3 AND fc.phase_type = 'three'
-      LEFT JOIN selectivity_pairs sp ON d.id = sp.downstream_id AND s.id = sp.upstream_switchboard_id  -- Integration with Selectivity
+      LEFT JOIN devices up ON d.parent_id = up.id
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
@@ -204,8 +204,18 @@ app.get('/api/arcflash/check', async (req, res) => {
     const working_distance = point.working_distance || 455; // mm
     const enclosure_type = point.enclosure_type || 'VCB';
     const electrode_gap = point.electrode_gap || 32; // mm
-    const arcing_time = point.trip_time || point.arcing_time || 0.2; // Priorité à Selectivity si disponible, sinon manuel
     const fault_current_ka = point.fault_current_ka || point.fault_level_ka || 20; // kA, default or from faultlevel
+    
+    // Calculate arcing_time using upstream if available
+    let arcing_time = point.arcing_time || 0.2;
+    if (point.upstream_id) {
+      const upstream = { settings: point.upstream_settings, in_amps: point.upstream_in_amps };
+      const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000); // Convert kA to A
+      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
+    } else {
+      const calculated_time = calculateTripTime(point, fault_current_ka * 1000);
+      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
+    }
 
     if (!point.voltage_v || !fault_current_ka) {
       await pool.query(`
@@ -250,22 +260,32 @@ app.get('/api/arcflash/curves', async (req, res) => {
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
-        fc.fault_level_ka, sp.trip_time
+        fc.fault_level_ka, up.id AS upstream_id, up.settings AS upstream_settings, up.in_amps AS upstream_in_amps
       FROM devices d 
       JOIN switchboards s ON d.switchboard_id = s.id 
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $3
       LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $3 AND fc.phase_type = 'three'
-      LEFT JOIN selectivity_pairs sp ON d.id = sp.downstream_id AND s.id = sp.upstream_switchboard_id  -- Integration with Selectivity
+      LEFT JOIN devices up ON d.parent_id = up.id
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
 
     const point = r.rows[0];
     point.voltage_v = point.voltage_v || 400;
-    const arcing_time = point.trip_time || point.arcing_time || 0.2; // Priorité à Selectivity
     const fault_current_ka = point.fault_current_ka || point.fault_level_ka || 20;
     const enclosure_type = point.enclosure_type || 'VCB';
     const electrode_gap = point.electrode_gap || 32;
+    
+    // Calculate arcing_time using upstream if available
+    let arcing_time = point.arcing_time || 0.2;
+    if (point.upstream_id) {
+      const upstream = { settings: point.upstream_settings, in_amps: point.upstream_in_amps };
+      const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000);
+      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
+    } else {
+      const calculated_time = calculateTripTime(point, fault_current_ka * 1000);
+      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
+    }
 
     console.log(`[ARC CURVES] Generating for device=${device}, switchboard=${switchboard}, voltage_v=${point.voltage_v}, fault_current_ka=${fault_current_ka}`);
     
@@ -370,6 +390,21 @@ function generateArcCurve(point, faultKa, arcingTime, enclosure, gap) {
   console.log(`[ARC CURVES] Generated ${points.length} points, sample: ${JSON.stringify(points[0])}`);
   
   return points;
+}
+
+// Replicated from selectivity for integration
+function calculateTripTime(device, I) {
+  const { settings, in_amps: In } = device;
+  const Ir = settings.ir || 1;
+  const Tr = settings.tr || 10;
+  const Isd = settings.isd || 6;
+  const Tsd = settings.tsd || 0.1;
+  const Ii = settings.ii || 10;
+
+  if (I > Ii * Ir * In) return 0.01; // Instantané
+  if (I > Isd * Ir * In) return Tsd; // Short-time
+  if (I > Ir * In) return Tr / ((I / (Ir * In)) ** 2 - 1); // Long-time approx I²t
+  return Infinity; // Pas de trip
 }
 
 const port = process.env.ARCFLASH_PORT || 3006;
