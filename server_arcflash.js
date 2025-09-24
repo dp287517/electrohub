@@ -54,7 +54,7 @@ const WHITELIST_SORT = ['name','code','building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema - Tables for arcflash_checks and arcflash_parameters
+// Schema
 async function ensureSchema() {
   try {
     await pool.query(`
@@ -74,11 +74,11 @@ async function ensureSchema() {
         device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
         switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
         site TEXT NOT NULL,
-        working_distance NUMERIC NOT NULL DEFAULT 455,  -- mm, default IEEE
+        working_distance NUMERIC NOT NULL DEFAULT 455,
         enclosure_type TEXT DEFAULT 'VCB' CHECK (enclosure_type IN ('VCB', 'VCBB', 'HCB', 'HOA', 'VOA')),
-        electrode_gap NUMERIC NOT NULL DEFAULT 32,  -- mm
-        arcing_time NUMERIC NOT NULL DEFAULT 0.2,  -- seconds, from selectivity if available
-        fault_current_ka NUMERIC,  -- from faultlevel if available
+        electrode_gap NUMERIC NOT NULL DEFAULT 32,
+        arcing_time NUMERIC NOT NULL DEFAULT 0.2,
+        fault_current_ka NUMERIC,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         PRIMARY KEY (device_id, switchboard_id, site)
       );
@@ -109,7 +109,7 @@ app.post('/api/arcflash/reset', async (req, res) => {
   }
 });
 
-// LIST Arc points (based on switchboards/devices)
+// LIST Arc points
 app.get('/api/arcflash/points', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -134,7 +134,7 @@ app.get('/api/arcflash/points', async (req, res) => {
       LEFT JOIN arcflash_checks ac ON d.id = ac.device_id AND s.id = ac.switchboard_id AND ac.site = $1
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $1
       WHERE ${where.join(' AND ')}
-      ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
+      ORDER BY d.device_name ${dirSafe(dir)}  -- Changed to d.device_name to avoid ambiguity
       LIMIT $${i} OFFSET $${i+1}
     `;
     vals.push(limit, offset);
@@ -160,6 +160,9 @@ app.post('/api/arcflash/parameters', async (req, res) => {
     const { device_id, switchboard_id, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka } = req.body;
     if (!device_id || !switchboard_id) return res.status(400).json({ error: 'Missing IDs' });
 
+    // Validate working_distance to avoid unrealistic values
+    const validated_distance = Math.max(Number(working_distance) || 455, 100); // Minimum 100 mm
+
     await pool.query(`
       INSERT INTO arcflash_parameters (device_id, switchboard_id, site, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -169,7 +172,7 @@ app.post('/api/arcflash/parameters', async (req, res) => {
         electrode_gap = EXCLUDED.electrode_gap,
         arcing_time = EXCLUDED.arcing_time,
         fault_current_ka = EXCLUDED.fault_current_ka
-    `, [device_id, switchboard_id, site, working_distance || 455, enclosure_type || 'VCB', electrode_gap || 32, arcing_time || 0.2, fault_current_ka]);
+    `, [device_id, switchboard_id, site, validated_distance, enclosure_type || 'VCB', electrode_gap || 32, arcing_time || 0.2, fault_current_ka]);
 
     console.log(`[ARC PARAMS] Updated for device=${device_id}, switchboard=${switchboard_id}`);
     res.json({ message: 'Parameters updated' });
@@ -189,31 +192,29 @@ app.get('/api/arcflash/check', async (req, res) => {
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
-        fc.fault_level_ka, up.id AS upstream_id, up.settings AS upstream_settings, up.in_amps AS upstream_in_amps
+        fc.fault_level_ka, sc.upstream_id, up.settings AS upstream_settings, up.in_amps AS upstream_in_amps
       FROM devices d 
       JOIN switchboards s ON d.switchboard_id = s.id 
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $3
       LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $3 AND fc.phase_type = 'three'
-      LEFT JOIN devices up ON d.parent_id = up.id
+      LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id AND sc.site = $3
+      LEFT JOIN devices up ON sc.upstream_id = up.id
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
 
     const point = r.rows[0];
     point.voltage_v = point.voltage_v || 400;
-    const working_distance = point.working_distance || 455; // mm
+    const working_distance = Math.max(point.working_distance || 455, 100); // Minimum 100 mm
     const enclosure_type = point.enclosure_type || 'VCB';
-    const electrode_gap = point.electrode_gap || 32; // mm
-    const fault_current_ka = point.fault_current_ka || point.fault_level_ka || 20; // kA, default or from faultlevel
+    const electrode_gap = point.electrode_gap || 32;
+    const fault_current_ka = point.fault_current_ka || point.fault_level_ka || 20;
     
-    // Calculate arcing_time using upstream if available
+    // Calculate arcing_time using selectivity_checks
     let arcing_time = point.arcing_time || 0.2;
     if (point.upstream_id) {
-      const upstream = { settings: point.upstream_settings, in_amps: point.upstream_in_amps };
-      const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000); // Convert kA to A
-      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
-    } else {
-      const calculated_time = calculateTripTime(point, fault_current_ka * 1000);
+      const upstream = { settings: point.upstream_settings || {}, in_amps: point.upstream_in_amps || 100 };
+      const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000);
       arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
     }
 
@@ -226,9 +227,9 @@ app.get('/api/arcflash/check', async (req, res) => {
       return res.json({ status: 'incomplete', missing: ['voltage_v or fault_current_ka'] });
     }
 
-    // Calculate Arc Flash (IEEE 1584 simplified)
+    // Calculate Arc Flash
     const { incident_energy, ppe_category, riskZones } = calculateArcFlash(point, fault_current_ka, arcing_time, working_distance, enclosure_type, electrode_gap);
-    const isSafe = ppe_category <= 2; // Arbitrary threshold for 'safe'
+    const isSafe = ppe_category <= 2;
     const status = isSafe ? 'safe' : 'at-risk';
     const details = `Incident Energy: ${incident_energy} cal/cm², PPE: ${ppe_category}`;
     const remediation = getRemediations(point, incident_energy, ppe_category);
@@ -250,7 +251,7 @@ app.get('/api/arcflash/check', async (req, res) => {
   }
 });
 
-// GET Curves data for graph (e.g., incident energy vs distance)
+// GET Curves data
 app.get('/api/arcflash/curves', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -260,36 +261,32 @@ app.get('/api/arcflash/curves', async (req, res) => {
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
-        fc.fault_level_ka, up.id AS upstream_id, up.settings AS upstream_settings, up.in_amps AS upstream_in_amps
+        fc.fault_level_ka, sc.upstream_id, up.settings AS upstream_settings, up.in_amps AS upstream_in_amps
       FROM devices d 
       JOIN switchboards s ON d.switchboard_id = s.id 
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $3
       LEFT JOIN fault_checks fc ON d.id = fc.device_id AND s.id = fc.switchboard_id AND fc.site = $3 AND fc.phase_type = 'three'
-      LEFT JOIN devices up ON d.parent_id = up.id
+      LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id AND sc.site = $3
+      LEFT JOIN devices up ON sc.upstream_id = up.id
       WHERE d.id = $1 AND s.id = $2 AND d.site = $3
     `, [Number(device), Number(switchboard), site]);
     if (!r.rows.length) return res.status(404).json({ error: 'Point not found' });
 
     const point = r.rows[0];
     point.voltage_v = point.voltage_v || 400;
+    const working_distance = Math.max(point.working_distance || 455, 100);
     const fault_current_ka = point.fault_current_ka || point.fault_level_ka || 20;
     const enclosure_type = point.enclosure_type || 'VCB';
     const electrode_gap = point.electrode_gap || 32;
     
-    // Calculate arcing_time using upstream if available
     let arcing_time = point.arcing_time || 0.2;
     if (point.upstream_id) {
-      const upstream = { settings: point.upstream_settings, in_amps: point.upstream_in_amps };
+      const upstream = { settings: point.upstream_settings || {}, in_amps: point.upstream_in_amps || 100 };
       const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000);
-      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
-    } else {
-      const calculated_time = calculateTripTime(point, fault_current_ka * 1000);
       arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
     }
 
-    console.log(`[ARC CURVES] Generating for device=${device}, switchboard=${switchboard}, voltage_v=${point.voltage_v}, fault_current_ka=${fault_current_ka}`);
-    
-    const curve = generateArcCurve(point, fault_current_ka, arcing_time, enclosure_type, electrode_gap);
+    const curve = generateArcCurve(point, fault_current_ka, arcing_time, enclosure_type, electrode_gap, working_distance);
 
     res.json({ curve });
   } catch (e) {
@@ -298,7 +295,7 @@ app.get('/api/arcflash/curves', async (req, res) => {
   }
 });
 
-// AI TIP for remediation
+// AI TIP
 app.post('/api/arcflash/ai-tip', async (req, res) => {
   try {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
@@ -327,26 +324,26 @@ app.post('/api/arcflash/ai-tip', async (req, res) => {
   }
 });
 
-// Helper functions for calculations (IEEE 1584 simplified)
+// Helper functions
 function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure, gap) {
   const V = point.voltage_v / 1000; // kV
   const Ibf = faultKa; // kA
-  const t = arcingTime; // s
-  const D = workingDistMm / 25.4; // inches
+  const t = Math.max(arcingTime, 0.01); // Minimum 10 ms
+  const D = Math.max(workingDistMm / 25.4, 3.94); // Minimum 100 mm (3.94 inches)
   const G = gap / 25.4; // inches
 
-  // Arcing current Ia (approx)
-  const lgIa = -0.004 * Math.pow(Math.log10(V), 2) + 0.555 * Math.log10(V) + 0.0966 * Math.log10(Ibf) - 0.000526 * G + 0.5588;
+  // Arcing current Ia
+  const lgIa = 0.00402 + 0.983 * Math.log10(Ibf); // Simplified for LV
   const Ia = Math.pow(10, lgIa);
 
-  // Incident energy E (cal/cm²)
-  const k1 = enclosure === 'VCB' ? -0.097 : -0.555; // Factors simplified
-  const lgE = k1 + 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) - 0.0076 * Math.pow(V, 2) + 0.6279 * V - 6.4633 / D;
-  let E = Math.pow(10, lgE) * 4.184; // To cal/cm²
+  // Incident energy E
+  const k1 = enclosure === 'VCB' ? -0.097 : -0.555;
+  const lgE = 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) + k1 + 1.0;
+  let E = Math.pow(10, lgE) * 4.184 * (610 / workingDistMm) ** 2; // Normalized to working distance
 
-  E = Math.max(E, 0); // Non-negative
+  E = Math.max(E, 0.1); // Minimum 0.1 cal/cm²
 
-  // PPE category
+  // PPE category (IEC 61482 aligned)
   let ppe = 0;
   if (E > 40) ppe = 4;
   else if (E > 25) ppe = 3;
@@ -355,34 +352,34 @@ function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure,
 
   const riskZones = E > 1.2 ? [{ min: 1.2, max: E }] : [];
 
-  console.log(`[ARC CALC] E=${E} cal/cm², PPE=${ppe} for V=${V}kV, Ibf=${Ibf}kA, t=${t}s`);
+  console.log(`[ARC CALC] E=${E} cal/cm², PPE=${ppe} for V=${V}kV, Ibf=${Ibf}kA, t=${t}s, D=${workingDistMm}mm`);
 
   return { incident_energy: Math.round(E * 100) / 100, ppe_category: ppe, riskZones };
 }
 
 function getRemediations(point, E, ppe) {
   return [
-    `Require PPE Category ${ppe} (IEEE 1584)`,
-    'Reduce arcing time via faster protection (NFPA 70E)',
-    'Increase working distance or add barriers'
+    `Require PPE Category ${ppe} (IEC 61482 compliant)`,
+    'Reduce arcing time via faster protection (IEC 60947-2)',
+    'Increase working distance or use arc-resistant switchgear (IEC TR 61641)'
   ];
 }
 
-function generateArcCurve(point, faultKa, arcingTime, enclosure, gap) {
+function generateArcCurve(point, faultKa, arcingTime, enclosure, gap, workingDistMm) {
   const points = [];
   const V = point.voltage_v / 1000;
   const Ibf = faultKa;
-  const t = arcingTime;
+  const t = Math.max(arcingTime, 0.01);
   const G = gap / 25.4;
 
-  const lgIa = -0.004 * Math.pow(Math.log10(V), 2) + 0.555 * Math.log10(V) + 0.0966 * Math.log10(Ibf) - 0.000526 * G + 0.5588;
+  const lgIa = 0.00402 + 0.983 * Math.log10(Ibf);
   const Ia = Math.pow(10, lgIa);
 
-  for (let dist = 200; dist <= 1000; dist += 50) { // Vary distance mm
+  for (let dist = 100; dist <= 1000; dist += 50) {
     const D = dist / 25.4;
     const k1 = enclosure === 'VCB' ? -0.097 : -0.555;
-    const lgE = k1 + 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) - 0.0076 * Math.pow(V, 2) + 0.6279 * V - 6.4633 / D;
-    let E = Math.pow(10, lgE) * 4.184;
+    const lgE = 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) + k1 + 1.0;
+    let E = Math.pow(10, lgE) * 4.184 * (610 / dist) ** 2;
     E = Math.max(E, 0.1);
     points.push({ distance: dist, energy: Math.round(E * 100) / 100 });
   }
@@ -392,19 +389,18 @@ function generateArcCurve(point, faultKa, arcingTime, enclosure, gap) {
   return points;
 }
 
-// Replicated from selectivity for integration
 function calculateTripTime(device, I) {
-  const { settings, in_amps: In } = device;
+  const { settings = {}, in_amps: In = 100 } = device;
   const Ir = settings.ir || 1;
   const Tr = settings.tr || 10;
   const Isd = settings.isd || 6;
   const Tsd = settings.tsd || 0.1;
   const Ii = settings.ii || 10;
 
-  if (I > Ii * Ir * In) return 0.01; // Instantané
-  if (I > Isd * Ir * In) return Tsd; // Short-time
-  if (I > Ir * In) return Tr / ((I / (Ir * In)) ** 2 - 1); // Long-time approx I²t
-  return Infinity; // Pas de trip
+  if (I > Ii * Ir * In) return 0.01;
+  if (I > Isd * Ir * In) return Tsd;
+  if (I > Ir * In) return Tr / ((I / (Ir * In)) ** 2 - 1);
+  return Infinity;
 }
 
 const port = process.env.ARCFLASH_PORT || 3006;
