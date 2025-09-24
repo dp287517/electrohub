@@ -98,6 +98,7 @@ export default function ArcFlash() {
   const [showSidebar, setShowSidebar] = useState(false);
   const [showParamsModal, setShowParamsModal] = useState(false);
   const [paramForm, setParamForm] = useState({ device_id: null, switchboard_id: null, working_distance: 455, enclosure_type: 'VCB', electrode_gap: 32, arcing_time: 0.2, fault_current_ka: null, settings: {}, parent_id: null });
+  const [paramTips, setParamTips] = useState({});
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -113,7 +114,11 @@ export default function ArcFlash() {
   const loadPoints = async () => {
     try {
       setBusy(true);
-      const data = await get('/api/arcflash/points', q);
+      const params = {
+        ...q,
+        switchboard: isNaN(Number(q.switchboard)) ? '' : q.switchboard, // Prevent NaN
+      };
+      const data = await get('/api/arcflash/points', params);
       setPoints(data?.data || []);
       setTotal(data?.total || 0);
       const initialStatuses = {};
@@ -151,6 +156,7 @@ export default function ArcFlash() {
       setCheckResult(result);
       setSelectedPoint({ deviceId, switchboardId });
       setStatuses(prev => ({ ...prev, [`${deviceId}`]: result.status }));
+      setParamTips(result.paramTips || {});
 
       const curves = await get('/api/arcflash/curves', params);
       const validData = curves.curve.map(p => p.energy).filter(v => !isNaN(v) && v > 0);
@@ -204,8 +210,9 @@ export default function ArcFlash() {
   const saveParameters = async () => {
     try {
       setBusy(true);
-      await post('/api/arcflash/parameters', { ...paramForm, site });
-      setToast({ msg: 'Parameters saved', type: 'success' });
+      const result = await post('/api/arcflash/parameters', { ...paramForm, site });
+      setToast({ msg: result.message, type: 'success' });
+      setParamTips(result.tips || {});
       setShowParamsModal(false);
       loadPoints();
     } catch (e) {
@@ -218,7 +225,7 @@ export default function ArcFlash() {
   const handleReset = async () => {
     try {
       setBusy(true);
-      await post('/api/arcflash/reset');
+      await post('/api/arcflash/reset', { site });
       setToast({ msg: 'Data reset', type: 'info' });
       loadPoints();
     } catch (e) {
@@ -229,50 +236,64 @@ export default function ArcFlash() {
   };
 
   const exportPdf = async (isLabel = false) => {
-    if (!showGraph || !checkResult) {
-      setToast({ msg: 'No graph or results to export', type: 'error' });
+    if (!checkResult || !curveData) {
+      setToast({ msg: 'No results or graph to export. Run a check first.', type: 'error' });
       return;
     }
 
-    const pdf = new jsPDF();
-    
-    // Capture graph
-    const chartCanvas = chartRef.current?.canvas;
-    if (!chartCanvas) {
-      setToast({ msg: 'Graph not rendered', type: 'error' });
-      return;
-    }
-    const graphImg = chartCanvas.toDataURL('image/png');
-    
-    // Capture result section
-    const resultElement = resultRef.current;
-    if (!resultElement) {
-      setToast({ msg: 'Results not rendered', type: 'error' });
-      return;
-    }
-    const resultCanvas = await html2canvas(resultElement);
-    const resultImg = resultCanvas.toDataURL('image/png');
+    try {
+      setBusy(true);
+      const pdf = new jsPDF();
 
-    if (isLabel) {
-      pdf.setFontSize(18);
-      pdf.text('Arc Flash Label for Breaker', 20, 20);
-      pdf.setFontSize(12);
-      pdf.text(`Device: ${selectedPoint?.deviceId} - Switchboard: ${selectedPoint?.switchboardId}`, 20, 40);
-      pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 50);
-      pdf.text(`PPE Category: ${checkResult?.ppe_category} (IEC 61482 compliant)`, 20, 60);
-      pdf.text('Required EPI: Arc-rated clothing, gloves, face shield', 20, 70);
-      pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 80);
-      pdf.addImage(resultImg, 'PNG', 20, 90, 160, 80);
-    } else {
-      pdf.addImage(graphImg, 'PNG', 10, 10, 180, 160);
-      pdf.addPage();
-      pdf.addImage(resultImg, 'PNG', 10, 10, 180, 100);
-      pdf.text('Full Arc Flash Report', 20, 120);
-      pdf.text(`Status: ${checkResult?.status}`, 20, 130);
-      pdf.text(`Remediation: ${checkResult?.remediation?.join('; ')}`, 20, 140);
+      // Capture graph
+      const chartCanvas = chartRef.current?.canvas;
+      if (!chartCanvas) {
+        setToast({ msg: 'Graph not rendered. Try again.', type: 'error' });
+        return;
+      }
+      const graphImg = chartCanvas.toDataURL('image/png');
+
+      // Capture result section
+      const resultElement = resultRef.current;
+      if (!resultElement) {
+        setToast({ msg: 'Results not rendered. Try again.', type: 'error' });
+        return;
+      }
+      const resultCanvas = await html2canvas(resultElement, { scale: 2 });
+      const resultImg = resultCanvas.toDataURL('image/png');
+
+      if (isLabel) {
+        pdf.setFontSize(18);
+        pdf.text('Arc Flash Label', 20, 20);
+        pdf.setFontSize(12);
+        pdf.text(`Device: ${selectedPoint?.deviceId} - Switchboard: ${selectedPoint?.switchboardId}`, 20, 40);
+        pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 50);
+        pdf.text(`PPE Category: ${checkResult?.ppe_category} (IEC 61482 compliant)`, 20, 60);
+        pdf.text('Required PPE: Arc-rated clothing, gloves, face shield', 20, 70);
+        pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 80);
+        pdf.addImage(resultImg, 'PNG', 20, 90, 160, 80);
+      } else {
+        pdf.addImage(graphImg, 'PNG', 10, 10, 180, 100);
+        pdf.addPage();
+        pdf.addImage(resultImg, 'PNG', 10, 10, 180, 80);
+        pdf.text('Full Arc Flash Report', 20, 100);
+        pdf.text(`Status: ${checkResult?.status}`, 20, 110);
+        pdf.text(`Remediation: ${checkResult?.remediation?.join('; ')}`, 20, 120);
+        if (Object.keys(paramTips).length > 0) {
+          pdf.text('Parameter Optimization Tips:', 20, 130);
+          pdf.text(`- Working Distance: ${paramTips.working_distance_tip || 'No tip available'}`, 20, 140);
+          pdf.text(`- Arcing Time: ${paramTips.arcing_time_tip || 'No tip available'}`, 20, 150);
+          pdf.text(`- Fault Current: ${paramTips.fault_current_tip || 'No tip available'}`, 20, 160);
+        }
+      }
+
+      pdf.save(isLabel ? 'arcflash-label.pdf' : 'arcflash-report.pdf');
+      setToast({ msg: `PDF ${isLabel ? 'label' : 'report'} generated successfully`, type: 'success' });
+    } catch (e) {
+      setToast({ msg: `PDF export failed: ${e.message}`, type: 'error' });
+    } finally {
+      setBusy(false);
     }
-    
-    pdf.save(isLabel ? 'arcflash-label.pdf' : 'arcflash-report.pdf');
   };
 
   const toggleSelect = (point) => {
@@ -295,6 +316,7 @@ export default function ArcFlash() {
       settings: point.settings || { ir: 1, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' },
       parent_id: point.parent_id || '',
     });
+    setParamTips({});
     setShowParamsModal(true);
   };
 
@@ -315,9 +337,24 @@ export default function ArcFlash() {
             onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
           />
         </div>
-        <input className="input flex-1" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
+        <input
+          className="input flex-1"
+          placeholder="Switchboard ID"
+          type="number"
+          value={q.switchboard}
+          onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })}
+        />
         <input className="input flex-1" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
         <input className="input flex-1" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
+      </div>
+
+      <div className="flex gap-4 mb-6">
+        <button onClick={handleAutofill} className="btn" disabled={busy}>
+          Autofill Missing Parameters
+        </button>
+        <button onClick={handleReset} className="btn bg-red-500 hover:bg-red-600 text-white" disabled={busy}>
+          Reset Arc Data
+        </button>
       </div>
 
       <div className="overflow-x-auto rounded-lg shadow-md">
@@ -352,8 +389,12 @@ export default function ArcFlash() {
                     </span>
                   </td>
                   <td className="p-3 flex gap-2">
-                    <button onClick={() => handleCheck(point.device_id, point.switchboard_id)} className="btn-small">Check</button>
-                    <button onClick={() => openParams(point)} className="btn-small flex items-center gap-1"><Settings size={14} /> Params</button>
+                    <button onClick={() => handleCheck(point.device_id, point.switchboard_id)} className="btn-small" disabled={busy}>
+                      Check
+                    </button>
+                    <button onClick={() => openParams(point)} className="btn-small flex items-center gap-1" disabled={busy}>
+                      <Settings size={14} /> Params
+                    </button>
                   </td>
                 </tr>
               );
@@ -363,9 +404,13 @@ export default function ArcFlash() {
       </div>
 
       <div className="flex justify-between mt-4">
-        <button onClick={() => setQ({ ...q, page: Math.max(1, q.page - 1) })} disabled={q.page === 1} className="btn">Previous</button>
+        <button onClick={() => setQ({ ...q, page: Math.max(1, q.page - 1) })} disabled={q.page === 1 || busy} className="btn">
+          Previous
+        </button>
         <span>Page {q.page} of {Math.ceil(total / pageSize)}</span>
-        <button onClick={() => setQ({ ...q, page: q.page + 1 })} disabled={q.page >= Math.ceil(total / pageSize)} className="btn">Next</button>
+        <button onClick={() => setQ({ ...q, page: q.page + 1 })} disabled={q.page >= Math.ceil(total / pageSize) || busy} className="btn">
+          Next
+        </button>
       </div>
 
       {selectedPoints.length > 0 && (
@@ -396,22 +441,46 @@ export default function ArcFlash() {
             </div>
           )}
           {checkResult.remediation?.length > 0 && (
-            <ul className="list-disc pl-5 mb-4 text-gray-700">
-              {checkResult.remediation.map((r, i) => <li key={i} className="mb-1">{r}</li>)}
-            </ul>
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold">Remediation Actions:</h3>
+              <ul className="list-disc pl-5 text-gray-700">
+                {checkResult.remediation.map((r, i) => <li key={i} className="mb-1">{r}</li>)}
+              </ul>
+            </div>
           )}
-          <button 
-            onClick={() => setShowSidebar(true)} 
-            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
-          >
-            <ChevronRight size={16} /> View Explanation
-          </button>
-          <button 
-            onClick={() => exportPdf(true)} 
-            className="mt-4 ml-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2"
-          >
-            <Download size={16} /> Generate Arc Flash Label PDF
-          </button>
+          {Object.keys(paramTips).length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold">Parameter Optimization Tips:</h3>
+              <ul className="list-disc pl-5 text-gray-700">
+                {paramTips.working_distance_tip && <li className="mb-1">Working Distance: {paramTips.working_distance_tip}</li>}
+                {paramTips.arcing_time_tip && <li className="mb-1">Arcing Time: {paramTips.arcing_time_tip}</li>}
+                {paramTips.fault_current_tip && <li className="mb-1">Fault Current: {paramTips.fault_current_tip}</li>}
+              </ul>
+            </div>
+          )}
+          <div className="flex gap-4">
+            <button 
+              onClick={() => setShowSidebar(true)} 
+              className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
+              disabled={busy}
+            >
+              <ChevronRight size={16} /> View Explanation
+            </button>
+            <button 
+              onClick={() => exportPdf(true)} 
+              className="mt-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2"
+              disabled={busy}
+            >
+              <Download size={16} /> Generate Arc Flash Label PDF
+            </button>
+            <button 
+              onClick={() => exportPdf(false)} 
+              className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
+              disabled={busy}
+            >
+              <Download size={16} /> Generate Full Report PDF
+            </button>
+          </div>
         </div>
       )}
 
@@ -427,6 +496,9 @@ export default function ArcFlash() {
               placeholder="Minimum: 100"
               min="100"
             />
+            {paramTips.working_distance_tip && (
+              <p className="text-sm text-gray-600 mt-1">{paramTips.working_distance_tip}</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Enclosure Type</label>
@@ -464,6 +536,9 @@ export default function ArcFlash() {
               placeholder="Default: 0.2 (from selectivity if available)"
               min="0.01"
             />
+            {paramTips.arcing_time_tip && (
+              <p className="text-sm text-gray-600 mt-1">{paramTips.arcing_time_tip}</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Fault Current (kA)</label>
@@ -475,6 +550,9 @@ export default function ArcFlash() {
               placeholder="From Fault Level or manual"
               min="1"
             />
+            {paramTips.fault_current_tip && (
+              <p className="text-sm text-gray-600 mt-1">{paramTips.fault_current_tip}</p>
+            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Protection Settings (Ir)</label>
@@ -545,8 +623,8 @@ export default function ArcFlash() {
       </Modal>
 
       <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Incident Energy Curves (Zoom & Pan Enabled)">
-        <div ref={chartRef}>
-          {curveData && (
+        {curveData ? (
+          <div ref={chartRef}>
             <Line
               data={curveData}
               options={{
@@ -586,17 +664,21 @@ export default function ArcFlash() {
                 },
               }}
             />
-          )}
-        </div>
+          </div>
+        ) : (
+          <p className="text-red-600">Graph data not available. Try running the check again.</p>
+        )}
         <button 
           onClick={() => exportPdf(false)} 
           className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
+          disabled={busy}
         >
           <Download size={16} /> Export Full Report PDF
         </button>
         <button 
           onClick={() => setShowGraph(false)} 
           className="mt-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+          disabled={busy}
         >
           Close Graph
         </button>
@@ -605,9 +687,11 @@ export default function ArcFlash() {
       <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)} tipContent={tipContent} />
 
       {toast && <Toast {...toast} />}
-      {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
-        <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600"></div>
-      </div>}
+      {busy && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600"></div>
+        </div>
+      )}
     </section>
   );
 }
