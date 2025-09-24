@@ -103,6 +103,7 @@ export default function ArcFlash() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [tipContent, setTipContent] = useState('');
   const chartRef = useRef(null);
+  const resultRef = useRef(null); // Ajout pour capturer le résultat
   const pageSize = 18;
 
   useEffect(() => {
@@ -214,12 +215,39 @@ export default function ArcFlash() {
     }
   };
 
-  const exportPdf = async () => {
-    const canvas = await html2canvas(chartRef.current);
-    const imgData = canvas.toDataURL('image/png');
+  const exportPdf = async (isLabel = false) => {
     const pdf = new jsPDF();
-    pdf.addImage(imgData, 'PNG', 10, 10, 180, 160);
-    pdf.save('arcflash-report.pdf');
+    
+    // Capture graph
+    const graphCanvas = await html2canvas(chartRef.current);
+    const graphImg = graphCanvas.toDataURL('image/png');
+    
+    // Capture result section
+    const resultCanvas = await html2canvas(resultRef.current);
+    const resultImg = resultCanvas.toDataURL('image/png');
+
+    if (isLabel) {
+      // PDF spécifique pour labels disjoncteurs
+      pdf.setFontSize(18);
+      pdf.text('Arc Flash Label for Breaker', 20, 20);
+      pdf.setFontSize(12);
+      pdf.text(`Device: ${selectedPoint?.deviceId} - Switchboard: ${selectedPoint?.switchboardId}`, 20, 40);
+      pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 50);
+      pdf.text(`PPE Category: ${checkResult?.ppe_category} (IEC 61482 compliant)`, 20, 60);
+      pdf.text('Required EPI: Arc-rated clothing, gloves, face shield', 20, 70);
+      pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 80);
+      pdf.addImage(resultImg, 'PNG', 20, 90, 160, 80); // Image du résultat
+    } else {
+      // PDF complet (comme Fault Level)
+      pdf.addImage(graphImg, 'PNG', 10, 10, 180, 160);
+      pdf.addPage();
+      pdf.addImage(resultImg, 'PNG', 10, 10, 180, 100);
+      pdf.text('Full Arc Flash Report', 20, 120);
+      pdf.text(`Status: ${checkResult?.status}`, 20, 130);
+      pdf.text(`Remediation: ${checkResult?.remediation?.join('; ')}`, 20, 140);
+    }
+    
+    pdf.save(isLabel ? 'arcflash-label.pdf' : 'arcflash-report.pdf');
   };
 
   const toggleSelect = (point) => {
@@ -328,7 +356,7 @@ export default function ArcFlash() {
 
       {/* Results */}
       {checkResult && (
-        <div className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
+        <div ref={resultRef} className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
           <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
           <div className="flex items-center gap-2 mb-4">
             {checkResult.status === 'safe' ? <CheckCircle className="text-green-600 animate-bounce" size={24} /> :
@@ -354,6 +382,12 @@ export default function ArcFlash() {
             className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
           >
             <ChevronRight size={16} /> View Explanation
+          </button>
+          <button 
+            onClick={() => exportPdf(true)}  // Nouveau : PDF label pour disjoncteur
+            className="mt-4 ml-4 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 flex items-center gap-2"
+          >
+            <Download size={16} /> Generate Arc Flash Label PDF
           </button>
         </div>
       )}
@@ -405,7 +439,7 @@ export default function ArcFlash() {
               value={paramForm.arcing_time}
               onChange={e => setParamForm({ ...paramForm, arcing_time: e.target.value })}
               className="input w-full"
-              placeholder="Default: 0.2 (from selectivity)"
+              placeholder="Default: 0.2 (from selectivity if available)"
               min="0.01"
             />
           </div>
@@ -476,10 +510,10 @@ export default function ArcFlash() {
           )}
         </div>
         <button 
-          onClick={exportPdf} 
+          onClick={() => exportPdf(false)} 
           className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
         >
-          <Download size={16} /> Export PDF
+          <Download size={16} /> Export Full Report PDF
         </button>
         <button 
           onClick={() => setShowGraph(false)} 
