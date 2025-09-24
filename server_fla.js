@@ -162,8 +162,8 @@ app.post('/api/faultlevel/parameters', async (req, res) => {
     if (isNaN(line_length) || line_length <= 0) {
       return res.status(400).json({ error: 'Invalid line_length' });
     }
-    if (isNaN(source_impedance) || source_impedance <= 0) {
-      return res.status(400).json({ error: 'Invalid source_impedance' });
+    if (isNaN(source_impedance) || source_impedance <= 0 || source_impedance > 10) {
+      return res.status(400).json({ error: 'Invalid source_impedance (must be between 0 and 10 Ω)' });
     }
     if (isNaN(cable_resistivity) || cable_resistivity <= 0) {
       return res.status(400).json({ error: 'Invalid cable_resistivity' });
@@ -264,6 +264,30 @@ app.get('/api/faultlevel/check', async (req, res) => {
 
     // Calculate fault level (IEC 60909 simplified)
     const { faultLevelKa, riskZones } = calculateFaultLevel(point, effective_phase_type, source_impedance, line_length, cable_resistivity);
+    
+    // Check if fault level is too low (invalid)
+    if (faultLevelKa < 0.001) {
+      await pool.query(`
+        INSERT INTO fault_checks (device_id, switchboard_id, site, phase_type, fault_level_ka, status, checked_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        ON CONFLICT (device_id, switchboard_id, site, phase_type)
+        DO UPDATE SET fault_level_ka = $5, status = $6, checked_at = NOW()
+      `, [Number(device), Number(switchboard), site, effective_phase_type, faultLevelKa, 'incomplete']);
+      return res.json({ 
+        status: 'incomplete', 
+        fault_level_ka: faultLevelKa,
+        details: { 
+          why: 'Fault level too low (<0.001 kA), likely due to high source impedance.',
+          calculated_ik: faultLevelKa,
+          used_line_length: line_length,
+          used_source_impedance: source_impedance,
+          used_phase_type: effective_phase_type,
+          icu_ka: point.icu_ka
+        },
+        remediation: ['Reduce source impedance (e.g., <10 Ω) to get a valid fault level calculation']
+      });
+    }
+
     const isSafe = faultLevelKa < point.icu_ka;
     const remediation = isSafe ? [] : getRemediations(point, faultLevelKa);
     const details = { 
@@ -381,7 +405,7 @@ function calculateFaultLevel(point, phase_type, sourceZ, lineLength, cableResist
 
   console.log(`[FLA CALC] Ik=${faultLevelKa} kA for Un=${Un}, Zk=${Zk}Ω, phase_type=${phase_type}, icu_ka=${point.icu_ka}, line_length=${lineLength}, source_impedance=${sourceZ}, cable_resistivity=${cableResistivity}`);
   
-  return { faultLevelKa: Math.round(faultLevelKa * 100) / 100, riskZones }; // Round to 2 decimals
+  return { faultLevelKa: Math.round(faultLevelKa * 10000) / 10000, riskZones }; // Round to 4 decimals for precision
 }
 
 function getRemediations(point, faultLevelKa) {
@@ -406,8 +430,8 @@ function generateFaultCurve(point, phase_type, sourceZ, lineLength, cableResisti
       const Z0 = 2 * Zk;
       Ik = (Math.sqrt(3) * c * Un / (3 * Zk + Z0)) / 1000;
     }
-    Ik = Math.max(Ik, 0.1); // Minimum for graph visibility
-    points.push({ line_length: length, fault_ka: Math.round(Ik * 100) / 100 });
+    Ik = Math.max(Ik, 0.001); // Minimum for graph visibility
+    points.push({ line_length: length, fault_ka: Math.round(Ik * 10000) / 10000 });
   }
   
   console.log(`[FLA CURVES] Generated ${points.length} points, sample: ${JSON.stringify(points[0])}`);
