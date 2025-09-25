@@ -13,7 +13,7 @@ import Switchboards from './pages/Switchboards.jsx';
 import Selectivity from './pages/Selectivity.jsx';
 import FaultLevelAssessment from './pages/Fault_level_assessment.jsx';
 import ArcFlash from './pages/Arc_flash.jsx';
-import Obsolescence from './pages/Obsolescence.jsx'; // AJOUT IMPORT
+import Obsolescence from './pages/Obsolescence.jsx';
 
 export default function App() {
   return (
