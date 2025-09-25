@@ -1,3 +1,4 @@
+// server_arcflash.js
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -49,7 +50,7 @@ function siteOf(req) {
   return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
 }
 
-const WHITELIST_SORT = ['name', 'code', 'building_code'];
+const WHITELIST_SORT = ['name','code','building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
@@ -73,11 +74,11 @@ async function ensureSchema() {
         device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
         switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
         site TEXT NOT NULL,
-        working_distance NUMERIC NOT NULL DEFAULT 455,
+        working_distance NUMERIC NOT NULL DEFAULT 455,  -- mm, default IEEE
         enclosure_type TEXT DEFAULT 'VCB' CHECK (enclosure_type IN ('VCB', 'VCBB', 'HCB', 'HOA', 'VOA')),
-        electrode_gap NUMERIC NOT NULL DEFAULT 32,
-        arcing_time NUMERIC NOT NULL DEFAULT 0.2,
-        fault_current_ka NUMERIC,
+        electrode_gap NUMERIC NOT NULL DEFAULT 32,  -- mm
+        arcing_time NUMERIC NOT NULL DEFAULT 0.2,  -- seconds, from selectivity if available
+        fault_current_ka NUMERIC,  -- from faultlevel if available
         created_at TIMESTAMPTZ DEFAULT NOW(),
         PRIMARY KEY (device_id, switchboard_id, site)
       );
@@ -119,8 +120,8 @@ app.get('/api/arcflash/points', async (req, res) => {
     if (switchboard && !isNaN(Number(switchboard))) { where.push(`d.switchboard_id = $${i}`); vals.push(Number(switchboard)); i++; }
     if (building) { where.push(`s.building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
     if (floor) { where.push(`s.floor ILIKE $${i}`); vals.push(`%${floor}%`); i++; }
-    const limit = Math.min(parseInt(pageSize, 10) || 18, 100);
-    const offset = ((parseInt(page, 10) || 1) - 1) * limit;
+    const limit = Math.min(parseInt(pageSize,10) || 18, 100);
+    const offset = ((parseInt(page,10) || 1) - 1) * limit;
 
     const sql = `
       SELECT 
@@ -141,7 +142,7 @@ app.get('/api/arcflash/points', async (req, res) => {
 
     const { rows: [{ count: total }] } = await pool.query(
       `SELECT COUNT(*) FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE ${where.join(' AND ')}`,
-      vals.slice(0, i - 1)
+      vals.slice(0, i-1)
     );
 
     res.json({ data, total: Number(total) });
@@ -157,10 +158,7 @@ app.post('/api/arcflash/parameters', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device_id, switchboard_id, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka, settings, parent_id } = req.body;
-
-    if (!device_id || !switchboard_id || isNaN(Number(device_id)) || isNaN(Number(switchboard_id))) {
-      return res.status(400).json({ error: 'Invalid or missing device_id or switchboard_id' });
-    }
+    if (!device_id || !switchboard_id) return res.status(400).json({ error: 'Missing IDs' });
 
     await pool.query(`
       INSERT INTO arcflash_parameters (device_id, switchboard_id, site, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka)
@@ -171,14 +169,14 @@ app.post('/api/arcflash/parameters', async (req, res) => {
         electrode_gap = EXCLUDED.electrode_gap,
         arcing_time = EXCLUDED.arcing_time,
         fault_current_ka = EXCLUDED.fault_current_ka
-    `, [Number(device_id), Number(switchboard_id), site, working_distance || 455, enclosure_type || 'VCB', electrode_gap || 32, arcing_time || 0.2, fault_current_ka]);
+    `, [device_id, switchboard_id, site, working_distance || 455, enclosure_type || 'VCB', electrode_gap || 32, arcing_time || 0.2, fault_current_ka]);
 
     if (settings || parent_id) {
       await pool.query(`
         UPDATE devices
         SET settings = $1, parent_id = $2
         WHERE id = $3 AND site = $4
-      `, [settings || {}, parent_id ? Number(parent_id) : null, Number(device_id), site]);
+      `, [settings, parent_id, device_id, site]);
     }
 
     if (parent_id) {
@@ -186,38 +184,16 @@ app.post('/api/arcflash/parameters', async (req, res) => {
         INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status)
         VALUES ($1, $2, $3, 'incomplete')
         ON CONFLICT (upstream_id, downstream_id, site) DO UPDATE SET status = 'incomplete'
-      `, [Number(parent_id), Number(device_id), site]);
+      `, [parent_id, device_id, site]);
     }
 
     console.log(`[ARC PARAMS] Updated for device=${device_id}, switchboard=${switchboard_id}`);
-    res.json({ message: 'Parameters updated', tips: await getParameterTips({ working_distance, arcing_time, fault_current_ka }) });
+    res.json({ message: 'Parameters updated' });
   } catch (e) {
     console.error('[ARC PARAMS] error:', e.message, e.stack);
     res.status(500).json({ error: 'Parameters update failed', details: e.message });
   }
 });
-
-// AI-based parameter tips
-async function getParameterTips(params) {
-  if (!openai) return {};
-  try {
-    const prompt = `For arc flash risk reduction (IEEE 1584/IEC 61482), explain how changing these parameters affects risk:
-- Working distance: ${params.working_distance || 455} mm
-- Arcing time: ${params.arcing_time || 0.2} s
-- Fault current: ${params.fault_current_ka || 20} kA
-Provide tips like "Increasing working distance reduces energy by X factor". Return JSON with keys: working_distance_tip, arcing_time_tip, fault_current_tip.`;
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'system', content: prompt }],
-      response_format: { type: 'json_object' },
-      temperature: 0.3,
-    });
-    return JSON.parse(completion.choices[0].message.content.trim());
-  } catch (e) {
-    console.error('[AI PARAM TIPS] error:', e.message);
-    return {};
-  }
-}
 
 // Autofill missing parameters using OpenAI
 app.post('/api/arcflash/autofill', async (req, res) => {
@@ -229,7 +205,7 @@ app.post('/api/arcflash/autofill', async (req, res) => {
     const devices = await pool.query(`
       SELECT d.id, d.name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings, d.parent_id, d.switchboard_id, d.is_main_incoming
       FROM devices d
-      WHERE d.site = $1 AND (d.settings IS NULL OR d.settings = '{}'::jsonb OR (d.parent_id IS NULL AND d.is_main_incoming = false))
+      WHERE d.site = $1 AND (d.settings IS NULL OR d.settings = '{}'::jsonb OR d.parent_id IS NULL)
     `, [site]);
 
     if (!devices.rows.length) {
@@ -245,6 +221,7 @@ app.post('/api/arcflash/autofill', async (req, res) => {
         continue;
       }
 
+      // Generate settings if missing
       let settings = device.settings || {};
       if (Object.keys(settings).length === 0) {
         const prompt = `Generate realistic protection settings for a ${device_type} breaker with In=${in_amps}A, Icu=${icu_ka}kA, Voltage=${voltage_v}V. Return JSON: {"ir": number, "isd": number, "tsd": number, "ii": number, "ig": number, "tg": number, "zsi": boolean, "erms": boolean, "curve_type": string}`;
@@ -260,6 +237,7 @@ app.post('/api/arcflash/autofill', async (req, res) => {
         console.log(`[ARC AUTOFILL] Generated settings for device ${id}: ${JSON.stringify(settings)}`);
       }
 
+      // Generate parent_id if missing
       if (!device.parent_id) {
         const upstream = await pool.query(`
           SELECT id FROM devices
@@ -314,9 +292,7 @@ app.get('/api/arcflash/check', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device, switchboard } = req.query;
-    if (!device || !switchboard || isNaN(Number(device)) || isNaN(Number(switchboard))) {
-      return res.status(400).json({ error: 'Invalid or missing device or switchboard ID' });
-    }
+    if (!device || !switchboard) return res.status(400).json({ error: 'Missing device or switchboard' });
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
@@ -339,15 +315,10 @@ app.get('/api/arcflash/check', async (req, res) => {
     const fault_current_ka = point.fault_current_ka || point.fault_level_ka || point.icu_ka || 20;
 
     let arcing_time = point.arcing_time || 0.2;
-    if (point.is_main_incoming || point.name.toUpperCase().includes('PRINCIPAL')) {
-      console.log(`[ARC CHECK] Main breaker ${point.name} - Using default arcing_time=${arcing_time}s`);
-    } else if (point.upstream_id) {
+    if (point.upstream_id) {
       const upstream = { settings: point.upstream_settings || {}, in_amps: point.upstream_in_amps || 100 };
       const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000);
       arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
-      console.log(`[ARC CHECK] Calculated arcing_time=${arcing_time}s for device=${device}`);
-    } else {
-      console.warn(`[ARC CHECK] No upstream device for ${point.name}, using default arcing_time=${arcing_time}s`);
     }
 
     if (!point.voltage_v || !fault_current_ka) {
@@ -355,8 +326,8 @@ app.get('/api/arcflash/check', async (req, res) => {
         INSERT INTO arcflash_checks (device_id, switchboard_id, site, incident_energy, ppe_category, status)
         VALUES ($1, $2, $3, 0, 0, 'incomplete')
         ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET status = 'incomplete'
-      `, [Number(device), Number(switchboard), site]);
-      return res.json({ status: 'incomplete', missing: ['voltage_v or fault_current_ka'], details: 'Cannot perform arc flash analysis due to missing data' });
+      `, [device, switchboard, site]);
+      return res.json({ status: 'incomplete', missing: ['voltage_v or fault_current_ka'] });
     }
 
     const { incident_energy, ppe_category, riskZones } = calculateArcFlash(point, fault_current_ka, arcing_time, working_distance, enclosure_type, electrode_gap);
@@ -372,17 +343,9 @@ app.get('/api/arcflash/check', async (req, res) => {
         ppe_category = EXCLUDED.ppe_category,
         status = EXCLUDED.status,
         checked_at = NOW()
-    `, [Number(device), Number(switchboard), site, incident_energy, ppe_category, status]);
+    `, [device, switchboard, site, incident_energy, ppe_category, status]);
 
-    res.json({
-      status,
-      incident_energy,
-      ppe_category,
-      details,
-      remediation: getRemediations(point, incident_energy, ppe_category),
-      riskZones,
-      paramTips: await getParameterTips({ working_distance, arcing_time, fault_current_ka })
-    });
+    res.json({ status, incident_energy, ppe_category, details, remediation: getRemediations(point, incident_energy, ppe_category), riskZones });
   } catch (e) {
     console.error('[ARC CHECK] error:', e.message, e.stack);
     res.status(500).json({ error: 'Check failed', details: e.message });
@@ -395,9 +358,7 @@ app.get('/api/arcflash/curves', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device, switchboard } = req.query;
-    if (!device || !switchboard || isNaN(Number(device)) || isNaN(Number(switchboard))) {
-      return res.status(400).json({ error: 'Invalid or missing device or switchboard ID' });
-    }
+    if (!device || !switchboard) return res.status(400).json({ error: 'Missing device or switchboard' });
 
     const r = await pool.query(`
       SELECT d.*, s.regime_neutral, ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka,
@@ -420,15 +381,10 @@ app.get('/api/arcflash/curves', async (req, res) => {
     const electrode_gap = point.electrode_gap || 32;
     
     let arcing_time = point.arcing_time || 0.2;
-    if (point.is_main_incoming || point.name.toUpperCase().includes('PRINCIPAL')) {
-      console.log(`[ARC CURVES] Main breaker ${point.name} - Using default arcing_time=${arcing_time}s`);
-    } else if (point.upstream_id) {
+    if (point.upstream_id) {
       const upstream = { settings: point.upstream_settings || {}, in_amps: point.upstream_in_amps || 100 };
       const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000);
       arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
-      console.log(`[ARC CURVES] Calculated arcing_time=${arcing_time}s for device=${device}`);
-    } else {
-      console.warn(`[ARC CURVES] No upstream device for ${point.name}, using default arcing_time=${arcing_time}s`);
     }
 
     const curve = generateArcCurve(point, fault_current_ka, arcing_time, enclosure_type, electrode_gap, working_distance);
@@ -502,7 +458,7 @@ function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure,
   return { incident_energy: Math.round(E * 100) / 100, ppe_category: ppe, riskZones };
 }
 
-function getRemediations(point, incident_energy, ppe) {
+function getRemediations(point, E, ppe) {
   return [
     `Require PPE Category ${ppe} (IEC 61482 compliant)`,
     'Reduce arcing time via faster protection (IEC 60947-2)',
@@ -510,7 +466,7 @@ function getRemediations(point, incident_energy, ppe) {
   ];
 }
 
-function generateArcCurve(point, faultKa, arcingTime, enclosure, gap, workingDistMm) {
+function generateArcCurve(point, faultKa, arcingTime, enclosure, gap) {
   const points = [];
   const V = point.voltage_v / 1000;
   const Ibf = faultKa;
