@@ -89,6 +89,17 @@ app.use(
   })
 );
 
+// --- PROXY OBSOLESCENCE (AJOUT: place BEFORE body parsing) ---
+const obsolescenceTarget = process.env.OBSOLESCENCE_BASE_URL || 'http://127.0.0.1:3007';
+app.use(
+  '/api/obsolescence',
+  createProxyMiddleware({
+    target: obsolescenceTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
