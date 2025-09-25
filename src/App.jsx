@@ -12,7 +12,8 @@ import LoopCalc from './pages/LoopCalc.jsx';
 import Switchboards from './pages/Switchboards.jsx';
 import Selectivity from './pages/Selectivity.jsx';
 import FaultLevelAssessment from './pages/Fault_level_assessment.jsx';
-import ArcFlash from './pages/Arc_flash.jsx'; // AJOUT IMPORT
+import ArcFlash from './pages/Arc_flash.jsx';
+import Obsolescence from './pages/Obsolescence.jsx'; // AJOUT IMPORT
 
 export default function App() {
   return (
@@ -29,7 +30,8 @@ export default function App() {
         <Route path="/app/switchboards" element={<ProtectedRoute><Switchboards /></ProtectedRoute>} />
         <Route path="/app/selectivity" element={<ProtectedRoute><Selectivity /></ProtectedRoute>} />
         <Route path="/app/fault-level" element={<ProtectedRoute><FaultLevelAssessment /></ProtectedRoute>} />
-        <Route path="/app/arc-flash" element={<ProtectedRoute><ArcFlash /></ProtectedRoute>} /> {/* AJOUT ROUTE */}
+        <Route path="/app/arc-flash" element={<ProtectedRoute><ArcFlash /></ProtectedRoute>} />
+        <Route path="/app/obsolescence" element={<ProtectedRoute><Obsolescence /></ProtectedRoute>} /> {/* AJOUT ROUTE */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
