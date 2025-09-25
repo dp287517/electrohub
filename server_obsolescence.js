@@ -189,12 +189,14 @@ app.post('/api/obsolescence/parameters', async (req, res) => {
     if (devCheck.rows.length === 0 || sbCheck.rows.length === 0) {
       return res.status(400).json({ error: 'Device or Switchboard not found - run /test-data first' });
     }
+    // Validation de manufacture_date
+    const validDate = manufacture_date && !isNaN(new Date(manufacture_date).getTime()) ? manufacture_date : '2000-01-01';
     await pool.query(`
       INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date, avg_temperature, avg_humidity, operation_cycles, avg_life_years, replacement_cost)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (device_id, switchboard_id, site)
       DO UPDATE SET manufacture_date = $4, avg_temperature = $5, avg_humidity = $6, operation_cycles = $7, avg_life_years = $8, replacement_cost = $9
-    `, [Number(device_id), Number(switchboard_id), site, manufacture_date, Number(avg_temperature), Number(avg_humidity), Number(operation_cycles), Number(avg_life_years), Number(replacement_cost)]);
+    `, [Number(device_id), Number(switchboard_id), site, validDate, Number(avg_temperature), Number(avg_humidity), Number(operation_cycles), Number(avg_life_years), Number(replacement_cost)]);
     res.json({ message: 'Parameters updated' });
   } catch (e) {
     console.error('[OBS PARAMS] error:', e.message, e.stack);
@@ -254,18 +256,19 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
       FROM devices d
       JOIN switchboards s ON d.switchboard_id = s.id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND op.site = $1
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = op.switchboard_id AND oc.site = $1
       WHERE d.site = $1
     `, [site]);
 
     const currentYear = new Date().getFullYear();
     const tasks = r.rows.map(row => {
-      const manufactureYear = new Date(row.manufacture_date).getFullYear() || 2000;
+      const manufactureDate = row.manufacture_date && !isNaN(new Date(row.manufacture_date).getTime()) ? row.manufacture_date : '2000-01-01';
+      const manufactureYear = new Date(manufactureDate).getFullYear();
       const lifeYears = row.avg_life_years || 25;
       const replacementYear = manufactureYear + lifeYears;
       return {
-        start: new Date(replacementYear, 0, 1),
-        end: new Date(replacementYear + 1, 0, 1),
+        start: new Date(replacementYear, 0, 1).toISOString(),
+        end: new Date(replacementYear + 1, 0, 1).toISOString(),
         name: `${row.building_code}/${row.floor}/${row.switchboard_name}/${row.name || 'Device'}`,
         id: `d${row.device_id}`,
         type: 'task',
@@ -275,9 +278,9 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
           progressSelectedColor: '#ff0000',
         },
         cost: row.replacement_cost || 1000,
-        group: row[groupField.split('.')[1]],
+        group: row[groupField.split('.')[1]] || 'Unknown',
       };
-    });
+    }).filter(task => !isNaN(new Date(task.start).getTime()) && !isNaN(new Date(task.end).getTime()));
 
     res.json({ tasks });
   } catch (e) {
@@ -305,7 +308,7 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
       FROM switchboards s
       LEFT JOIN devices d ON s.id = d.switchboard_id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = op.switchboard_id AND oc.site = $1
       WHERE s.site = $1
       GROUP BY ${groupField}
     `;
@@ -332,7 +335,7 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
       FROM switchboards s
       JOIN devices d ON s.id = d.switchboard_id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = op.switchboard_id AND oc.site = $1
       WHERE s.site = $1
     `, [site]);
 
@@ -387,7 +390,7 @@ app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res)
       response_format: { type: 'json_object' },
     });
     const extracted = JSON.parse(completion.choices[0].message.content);
-    const manufacture_date = extracted.manufacture_date || '2000-01-01';
+    const manufacture_date = extracted.manufacture_date && !isNaN(new Date(extracted.manufacture_date).getTime()) ? extracted.manufacture_date : '2000-01-01';
     await pool.query(`
       UPDATE obsolescence_parameters SET manufacture_date = $1
       WHERE device_id = $2 AND switchboard_id = $3 AND site = $4
@@ -402,7 +405,7 @@ app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res)
 // Helper functions
 function calculateObsolescence(point) {
   const currentYear = new Date().getFullYear();
-  const manufactureYear = new Date(point.manufacture_date).getFullYear() || 2000;
+  const manufactureYear = point.manufacture_date && !isNaN(new Date(point.manufacture_date).getTime()) ? new Date(point.manufacture_date).getFullYear() : 2000;
   const age = currentYear - manufactureYear;
   const avgLife = point.avg_life_years || 25;
   const tempFactor = Math.pow(2, (point.avg_temperature - 25) / 10);
@@ -433,7 +436,7 @@ function generateForecastForItem(item) {
   const currentYear = new Date().getFullYear();
   let capexCumul = 0;
   const inflation = 1.02;
-  const manufactureYear = new Date(item.manufacture_date).getFullYear() || 2000;
+  const manufactureYear = item.manufacture_date && !isNaN(new Date(item.manufacture_date).getTime()) ? new Date(item.manufacture_date).getFullYear() : 2000;
   const lifeYears = item.avg_life_years || 25;
   const replacementYear = manufactureYear + lifeYears;
 
