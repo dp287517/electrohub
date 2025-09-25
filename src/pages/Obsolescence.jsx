@@ -229,7 +229,7 @@ export default function Obsolescence() {
   const getAiTip = async (context) => {
     try {
       const { tip } = await post('/api/obsolescence/ai-tip', { query: context });
-      setAiTips(prev => [...prev, { id: Date.now(), content: tip }].slice(-5)); // Keep last 5 tips
+      setAiTips(prev => [...prev, { id: Date.now(), content: tip }].slice(-5));
     } catch (e) {
       setToast({ msg: `AI tip failed: ${e.message}`, type: 'error' });
     }
@@ -339,7 +339,7 @@ export default function Obsolescence() {
   };
 
   return (
-    <sectionês className="p-6 max-w-7xl mx-auto relative">
+    <section className="p-6 max-w-7xl mx-auto relative">
       <h1 className="text-3xl font-bold mb-6">Obsolescence CAPEX Forecasting</h1>
 
       {/* Filters and Controls */}
