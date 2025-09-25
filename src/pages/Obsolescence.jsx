@@ -119,7 +119,7 @@ export default function Obsolescence() {
     avg_life_years: 25,
     replacement_cost: 1000
   });
-  const [pdfFile, setPdfFile] = useState(null); // Correctement défini
+  const [pdfFile, setPdfFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -158,7 +158,13 @@ export default function Obsolescence() {
   const loadGanttData = async () => {
     try {
       const data = await get('/api/obsolescence/gantt-data', { group: groupBy });
-      setGanttTasks(data.tasks);
+      // Convertir les dates en objets Date
+      const tasks = data.tasks.map(task => ({
+        ...task,
+        start: new Date(task.start),
+        end: new Date(task.end),
+      })).filter(task => !isNaN(task.start.getTime()) && !isNaN(task.end.getTime()));
+      setGanttTasks(tasks);
     } catch (e) {
       setToast({ msg: `Failed to load Gantt data: ${e.message}`, type: 'error' });
     }
@@ -395,7 +401,10 @@ export default function Obsolescence() {
               columnWidth={100}
               listCellWidth="200px"
               onClick={task => getAiTip(`Replacement strategy for ${task.name}`)}
-              tooltipContent={task => `Replace in ${task.start.getFullYear()}: €${task.cost}`}
+              tooltipContent={task => {
+                const startYear = task.start && !isNaN(task.start.getTime()) ? task.start.getFullYear() : 'N/A';
+                return `Replace in ${startYear}: €${task.cost}`;
+              }}
             />
           ) : <p className="text-gray-500">No data, run checks or add devices</p>}
         </div>
