@@ -7,8 +7,6 @@ import pg from 'pg';
 import OpenAI from 'openai';
 import multer from 'multer';
 import PDFDocument from 'pdfkit';
-import fs from 'fs';
-import path from 'path';
 
 dotenv.config();
 const { Pool } = pg;
@@ -57,11 +55,11 @@ function siteOf(req) {
   return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
 }
 
-const WHITELIST_SORT = ['name','code','building_code'];
+const WHITELIST_SORT = ['name', 'code', 'building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema - Tables for obsolescence_checks and obsolescence_parameters
+// Schema
 async function ensureSchema() {
   try {
     await pool.query(`
@@ -82,11 +80,11 @@ async function ensureSchema() {
         switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
         site TEXT NOT NULL,
         manufacture_date DATE NOT NULL DEFAULT '2000-01-01',
-        avg_temperature NUMERIC NOT NULL DEFAULT 25,  -- °C
-        avg_humidity NUMERIC NOT NULL DEFAULT 50,  -- %
+        avg_temperature NUMERIC NOT NULL DEFAULT 25,
+        avg_humidity NUMERIC NOT NULL DEFAULT 50,
         operation_cycles INTEGER NOT NULL DEFAULT 5000,
-        avg_life_years NUMERIC NOT NULL DEFAULT 25,  -- Based on norms
-        replacement_cost NUMERIC NOT NULL DEFAULT 1000,  -- €
+        avg_life_years NUMERIC NOT NULL DEFAULT 25,
+        replacement_cost NUMERIC NOT NULL DEFAULT 1000,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         PRIMARY KEY (device_id, switchboard_id, site)
       );
@@ -100,24 +98,46 @@ async function ensureSchema() {
 }
 ensureSchema().catch(e => console.error('[OBS SCHEMA] error:', e.message));
 
+// Test data to avoid FK errors
+app.post('/api/obsolescence/test-data', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE site = $1 LIMIT 1', [site]);
+    if (sbCheck.rows.length === 0) {
+      const sbIns = await pool.query(
+        'INSERT INTO switchboards (site, name, code, building_code, floor) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [site, 'Test SB', 'TSB', 'Building A', '1']
+      );
+      await pool.query(
+        'INSERT INTO devices (site, switchboard_id, name, device_type, in_amps, replacement_cost) VALUES ($1, $2, $3, $4, $5, $6)',
+        [site, sbIns.rows[0].id, 'Test Device', 'MCCB', 100, 1000]
+      );
+      console.log('[OBS TEST] Created test data');
+    }
+    res.json({ message: 'Test data created/verified' });
+  } catch (e) {
+    console.error('[OBS TEST] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // RESET Obs data
 app.post('/api/obsolescence/reset', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-
     await pool.query(`DELETE FROM obsolescence_checks WHERE site = $1`, [site]);
     await pool.query(`DELETE FROM obsolescence_parameters WHERE site = $1`, [site]);
-    
     console.log(`[OBS RESET] Cleared obsolescence_checks and obsolescence_parameters for site=${site}`);
     res.json({ message: 'Obs data reset successfully' });
   } catch (e) {
-    console.error('[OBS RESET] error:', e.message, e.stack);
+    console.error('[OBS RESET] error:', e.message);
     res.status(500).json({ error: 'Reset failed', details: e.message });
   }
 });
 
-// LIST Obs points (devices in switchboards)
+// LIST Obs points
 app.get('/api/obsolescence/points', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -128,8 +148,8 @@ app.get('/api/obsolescence/points', async (req, res) => {
     if (switchboard) { where.push(`d.switchboard_id = $${i}`); vals.push(Number(switchboard)); i++; }
     if (building) { where.push(`s.building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
     if (floor) { where.push(`s.floor ILIKE $${i}`); vals.push(`%${floor}%`); i++; }
-    const limit = Math.min(parseInt(pageSize,10) || 18, 100);
-    const offset = ((parseInt(page,10) || 1) - 1) * limit;
+    const limit = Math.min(parseInt(pageSize, 10) || 18, 100);
+    const offset = ((parseInt(page, 10) || 1) - 1) * limit;
 
     const sql = `
       SELECT 
@@ -163,14 +183,18 @@ app.post('/api/obsolescence/parameters', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device_id, switchboard_id, manufacture_date, avg_temperature, avg_humidity, operation_cycles, avg_life_years, replacement_cost } = req.body;
-
+    // Vérification FK
+    const devCheck = await pool.query('SELECT id FROM devices WHERE id = $1 AND site = $2', [Number(device_id), site]);
+    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id = $1 AND site = $2', [Number(switchboard_id), site]);
+    if (devCheck.rows.length === 0 || sbCheck.rows.length === 0) {
+      return res.status(400).json({ error: 'Device or Switchboard not found - run /test-data first' });
+    }
     await pool.query(`
       INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date, avg_temperature, avg_humidity, operation_cycles, avg_life_years, replacement_cost)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       ON CONFLICT (device_id, switchboard_id, site)
       DO UPDATE SET manufacture_date = $4, avg_temperature = $5, avg_humidity = $6, operation_cycles = $7, avg_life_years = $8, replacement_cost = $9
     `, [Number(device_id), Number(switchboard_id), site, manufacture_date, Number(avg_temperature), Number(avg_humidity), Number(operation_cycles), Number(avg_life_years), Number(replacement_cost)]);
-
     res.json({ message: 'Parameters updated' });
   } catch (e) {
     console.error('[OBS PARAMS] error:', e.message, e.stack);
@@ -207,7 +231,6 @@ app.get('/api/obsolescence/check', async (req, res) => {
     `, [Number(device), Number(switchboard), site, remaining_life_years, urgency_score, status]);
 
     const remediations = getRemediations(point, urgency_score);
-
     res.json({ remaining_life_years, urgency_score, status, riskZones, remediations });
   } catch (e) {
     console.error('[OBS CHECK] error:', e.message, e.stack);
@@ -215,101 +238,60 @@ app.get('/api/obsolescence/check', async (req, res) => {
   }
 });
 
-// GET Forecast data (Gantt/CAPEX over 30 years)
-app.get('/api/obsolescence/forecast', async (req, res) => {
+// Gantt Data
+app.get('/api/obsolescence/gantt-data', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { device, switchboard } = req.query;
+    const { group = 'building' } = req.query;
+    let groupField = 's.building_code';
+    if (group === 'floor') groupField = 's.floor';
+    if (group === 'switchboard') groupField = 's.name';
+
     const r = await pool.query(`
-      SELECT d.*, s.*, op.*, oc.*
+      SELECT d.id AS device_id, d.name, s.building_code, s.floor, s.name AS switchboard_name,
+             op.manufacture_date, op.avg_life_years, op.replacement_cost, oc.urgency_score
       FROM devices d
       JOIN switchboards s ON d.switchboard_id = s.id
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $3
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $3
-      WHERE d.id = $1 AND s.id = $2 AND d.site = $3
-    `, [Number(device), Number(switchboard), site]);
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Point not found' });
+      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
+      WHERE d.site = $1
+    `, [site]);
 
-    const point = r.rows[0];
-    const forecast = generateForecast(point);
-
-    res.json({ forecast });
-  } catch (e) {
-    console.error('[OBS FORECAST] error:', e.message, e.stack);
-    res.status(500).json({ error: 'Forecast generation failed', details: e.message });
-  }
-});
-
-// AI TIP for obsolescence
-app.post('/api/obsolescence/ai-tip', async (req, res) => {
-  try {
-    if (!openai) return res.json({ tip: 'AI tips unavailable' });
-
-    const { query } = req.body;
-    const context = query || 'Obsolescence advice';
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: `You are an expert in IEC/IEEE asset management. Provide concise advice on obsolescence based on "${context}". Reference norms like IEC 62271, suggest CAPEX strategies or mitigations. 1-2 sentences.` 
+    const currentYear = new Date().getFullYear();
+    const tasks = r.rows.map(row => {
+      const manufactureYear = new Date(row.manufacture_date).getFullYear() || 2000;
+      const lifeYears = row.avg_life_years || 25;
+      const replacementYear = manufactureYear + lifeYears;
+      return {
+        start: new Date(replacementYear, 0, 1),
+        end: new Date(replacementYear + 1, 0, 1),
+        name: `${row.building_code}/${row.floor}/${row.switchboard_name}/${row.name || 'Device'}`,
+        id: `d${row.device_id}`,
+        type: 'task',
+        progress: row.urgency_score || 0,
+        styles: {
+          progressColor: row.urgency_score > 70 ? '#ff0000' : row.urgency_score > 50 ? '#ffa500' : '#00ff00',
+          progressSelectedColor: '#ff0000',
         },
-        { role: 'user', content: context }
-      ],
-      max_tokens: 120,
-      temperature: 0.3
+        cost: row.replacement_cost || 1000,
+        group: row[groupField.split('.')[1]],
+      };
     });
 
-    const tip = completion.choices[0].message.content.trim();
-    res.json({ tip });
+    res.json({ tasks });
   } catch (e) {
-    console.error('[AI TIP] error:', e.message, e.stack);
-    res.status(500).json({ error: 'AI tip failed', details: e.message });
+    console.error('[OBS GANTT] error:', e.message);
+    res.status(500).json({ error: 'Gantt data failed' });
   }
 });
 
-// ANALYZE PDF (upload and extract manufacture date, etc.)
-app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'No PDF uploaded' });
-    const site = siteOf(req);
-    const { device_id, switchboard_id } = req.body;
-
-    // Simulation extraction (in real: use pdfjs or OCR)
-    // Prompt IA pour "analyser" buffer PDF (ici mock)
-    const pdfText = 'Mock extracted text: Manufacture date 2015-06-01'; // Remplacer par real extraction
-    const prompt = `Extract manufacture date from this PDF text: "${pdfText}"`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-    });
-
-    const extracted = JSON.parse(completion.choices[0].message.content);
-    const manufacture_date = extracted.manufacture_date || '2000-01-01';
-
-    // Update params
-    await pool.query(`
-      UPDATE obsolescence_parameters SET manufacture_date = $1
-      WHERE device_id = $2 AND switchboard_id = $3 AND site = $4
-    `, [manufacture_date, Number(device_id), Number(switchboard_id), site]);
-
-    res.json({ manufacture_date });
-  } catch (e) {
-    console.error('[PDF ANALYZE] error:', e.message, e.stack);
-    res.status(500).json({ error: 'PDF analysis failed', details: e.message });
-  }
-});
-
-// NEW: Doughnut data by group (building/floor/switchboard)
+// Doughnut Data
 app.get('/api/obsolescence/doughnut', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { group } = req.query; // 'building', 'floor', 'switchboard'
+    const { group = 'building' } = req.query;
     let groupField = 's.building_code';
     if (group === 'floor') groupField = 's.floor';
     if (group === 'switchboard') groupField = 's.name';
@@ -318,9 +300,11 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
       SELECT ${groupField} AS label,
         COUNT(CASE WHEN oc.status = 'ok' THEN 1 END) AS ok,
         COUNT(CASE WHEN oc.status = 'warning' THEN 1 END) AS warning,
-        COUNT(CASE WHEN oc.status = 'critical' THEN 1 END) AS critical
+        COUNT(CASE WHEN oc.status = 'critical' THEN 1 END) AS critical,
+        SUM(op.replacement_cost) AS total_cost
       FROM switchboards s
       LEFT JOIN devices d ON s.id = d.switchboard_id
+      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
       LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
       WHERE s.site = $1
       GROUP BY ${groupField}
@@ -333,18 +317,18 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
   }
 });
 
-// NEW: CAPEX forecast by group
+// CAPEX Forecast
 app.get('/api/obsolescence/capex-forecast', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { group } = req.query; // 'building', etc.
+    const { group = 'building' } = req.query;
     let groupField = 's.building_code';
     if (group === 'floor') groupField = 's.floor';
     if (group === 'switchboard') groupField = 's.name';
 
     const r = await pool.query(`
-      SELECT ${groupField} AS group_label, op.replacement_cost, oc.remaining_life_years
+      SELECT ${groupField} AS group_label, op.replacement_cost, op.manufacture_date, op.avg_life_years, oc.urgency_score
       FROM switchboards s
       JOIN devices d ON s.id = d.switchboard_id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
@@ -365,24 +349,103 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
   }
 });
 
-// Helper for single item forecast
+// AI Tip
+app.post('/api/obsolescence/ai-tip', async (req, res) => {
+  try {
+    if (!openai) return res.json({ tip: 'AI tips unavailable' });
+    const { query } = req.body;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { 
+          role: 'system', 
+          content: `You are an expert in IEC/IEEE asset management. Provide concise advice on obsolescence based on "${query}". Reference norms like IEC 62271, suggest CAPEX strategies or mitigations. 1-2 sentences.` 
+        },
+        { role: 'user', content: query }
+      ],
+      max_tokens: 120,
+      temperature: 0.3
+    });
+    res.json({ tip: completion.choices[0].message.content.trim() });
+  } catch (e) {
+    console.error('[AI TIP] error:', e.message);
+    res.status(500).json({ error: 'AI tip failed' });
+  }
+});
+
+// PDF Analysis
+app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No PDF uploaded' });
+    const site = siteOf(req);
+    const { device_id, switchboard_id } = req.body;
+    const pdfText = 'Mock extracted text: Manufacture date 2015-06-01'; // Replace with real extraction
+    const prompt = `Extract manufacture date from this PDF text: "${pdfText}"`;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+    });
+    const extracted = JSON.parse(completion.choices[0].message.content);
+    const manufacture_date = extracted.manufacture_date || '2000-01-01';
+    await pool.query(`
+      UPDATE obsolescence_parameters SET manufacture_date = $1
+      WHERE device_id = $2 AND switchboard_id = $3 AND site = $4
+    `, [manufacture_date, Number(device_id), Number(switchboard_id), site]);
+    res.json({ manufacture_date });
+  } catch (e) {
+    console.error('[PDF ANALYZE] error:', e.message);
+    res.status(500).json({ error: 'PDF analysis failed', details: e.message });
+  }
+});
+
+// Helper functions
+function calculateObsolescence(point) {
+  const currentYear = new Date().getFullYear();
+  const manufactureYear = new Date(point.manufacture_date).getFullYear() || 2000;
+  const age = currentYear - manufactureYear;
+  const avgLife = point.avg_life_years || 25;
+  const tempFactor = Math.pow(2, (point.avg_temperature - 25) / 10);
+  const humFactor = point.avg_humidity > 70 ? 1.5 : 1;
+  const cycleFactor = point.operation_cycles > 10000 ? 1.2 : 1;
+  const adjustedLife = avgLife / (tempFactor * humFactor * cycleFactor);
+  const remaining_life_years = Math.max(adjustedLife - age, 0);
+  let urgency = (age / adjustedLife) * 50;
+  if (point.selectivity_status === 'non-selective') urgency += 20;
+  if (point.fault_status === 'at-risk') urgency += 15;
+  if (point.arc_status === 'at-risk') urgency += 15;
+  urgency = Math.min(urgency, 100);
+  const status = urgency < 30 ? 'ok' : urgency < 70 ? 'warning' : 'critical';
+  const riskZones = urgency > 50 ? [{ min: 50, max: urgency }] : [];
+  return { remaining_life_years: Math.round(remaining_life_years), urgency_score: Math.round(urgency), status, riskZones };
+}
+
+function getRemediations(point, urgency) {
+  return [
+    `Monitor closely if urgency >50; plan replacement in ${Math.round(30 - urgency / 3)} years`,
+    'Reduce temperature/humidity to extend life (IEC 62271)',
+    `Estimated CAPEX: ${point.replacement_cost * 1.1}€ with 10% inflation`
+  ];
+}
+
 function generateForecastForItem(item) {
   const forecast = [];
   const currentYear = new Date().getFullYear();
   let capexCumul = 0;
   const inflation = 1.02;
+  const manufactureYear = new Date(item.manufacture_date).getFullYear() || 2000;
+  const lifeYears = item.avg_life_years || 25;
+  const replacementYear = manufactureYear + lifeYears;
 
   for (let y = 0; y < 30; y++) {
     const year = currentYear + y;
-    const remaining = item.remaining_life_years - y;
-    const capexYear = remaining <= 0 ? item.replacement_cost * Math.pow(inflation, y) : 0;
+    const remaining = lifeYears - (year - manufactureYear);
+    const capexYear = year >= replacementYear ? item.replacement_cost * Math.pow(inflation, y) : 0;
     capexCumul += capexYear;
-    forecast.push({ year, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul) });
+    forecast.push({ year, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul), remaining_life: Math.max(remaining, 0) });
   }
   return forecast;
 }
-
-// ... other helpers as before
 
 const port = process.env.OBSOLESCENCE_PORT || 3007;
 app.listen(port, () => console.log(`Obsolescence service running on :${port}`));
