@@ -96,7 +96,7 @@ export const api = {
     updateParameters: (payload) => post("/api/faultlevel/parameters", payload),
     reset: () => post("/api/faultlevel/reset", {}),
   },
-  arcflash: {  // AJOUT SECTION AR CFLASH
+  arcflash: {
     listPoints: (params) => get("/api/arcflash/points", params),
     checkPoint: (deviceId, switchboardId) => 
       get(`/api/arcflash/check?device=${deviceId}&switchboard=${switchboardId}`),
@@ -105,5 +105,17 @@ export const api = {
     getAiTip: (payload) => post("/api/arcflash/ai-tip", payload),
     updateParameters: (payload) => post("/api/arcflash/parameters", payload),
     reset: () => post("/api/arcflash/reset", {}),
+  },
+  obsolescence: {  // AJOUT SECTION OBSOLESCENCE
+    listPoints: (params) => get("/api/obsolescence/points", params),
+    checkPoint: (deviceId, switchboardId) => 
+      get(`/api/obsolescence/check?device=${deviceId}&switchboard=${switchboardId}`),
+    getGantt: () => get("/api/obsolescence/gantt"),
+    getCapexForecast: () => get("/api/obsolescence/capex-forecast"),
+    getAiTip: (payload) => post("/api/obsolescence/ai-tip", payload),
+    updateParameters: (payload) => post("/api/obsolescence/parameters", payload),
+    reset: () => post("/api/obsolescence/reset", {}),
+    analyzePdf: (formData) => upload("/api/obsolescence/analyze-pdf", formData),
+    exportPdf: () => get("/api/obsolescence/export-pdf"),
   },
 };
