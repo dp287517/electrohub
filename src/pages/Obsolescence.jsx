@@ -110,10 +110,16 @@ export default function Obsolescence() {
   const [aiTips, setAiTips] = useState([]);
   const [showParamsModal, setShowParamsModal] = useState(false);
   const [paramForm, setParamForm] = useState({
-    device_id: null, switchboard_id: null, manufacture_date: '2000-01-01',
-    avg_temperature: 25, avg_humidity: 50, operation_cycles: 5000,
-    avg_life_years: 25, replacement_cost: 1000
+    device_id: null,
+    switchboard_id: null,
+    manufacture_date: '2000-01-01',
+    avg_temperature: 25,
+    avg_humidity: 50,
+    operation_cycles: 5000,
+    avg_life_years: 25,
+    replacement_cost: 1000
   });
+  const [pdfFile, setPdfFile] = useState(null); // Correctement défini
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
@@ -236,7 +242,10 @@ export default function Obsolescence() {
   };
 
   const handlePdfUpload = async () => {
-    if (!pdfFile) return;
+    if (!pdfFile) {
+      setToast({ msg: 'No PDF file selected', type: 'error' });
+      return;
+    }
     try {
       setBusy(true);
       const formData = new FormData();
@@ -440,7 +449,7 @@ export default function Obsolescence() {
       </motion.div>
 
       {/* Points List */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+      <div ref={resultRef} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
         {points.map(point => (
           <motion.div
             key={point.device_id}
