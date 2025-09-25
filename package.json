@@ -38,7 +38,7 @@
     "framer-motion": "^11.3.24",
     "react-google-charts": "^4.0.1",
     "pdfjs-dist": "^4.7.21",
-    "gantt-task-react": "^0.3.8"  // AJOUT pour Gantt avancé
+    "gantt-task-react": "^0.3.8"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
