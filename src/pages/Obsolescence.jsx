@@ -20,21 +20,60 @@ import {
   Title,
   Tooltip,
   Legend,
-  Annotation,
-  Zoom,
 } from 'chart.js';
-ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Annotation, Zoom);
+
+import annotationPlugin from 'chartjs-plugin-annotation';
+import zoomPlugin from 'chartjs-plugin-zoom';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  PointElement,
+  LineElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  annotationPlugin,
+  zoomPlugin
+);
 
 function useUserSite() {
-  // inchangé
+  try {
+    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+    return user?.site || '';
+  } catch { return ''; }
 }
 
 function Toast({ msg, type }) {
-  // inchangé, mais design plus moderne
+  const colors = {
+    success: 'bg-green-600 text-white',
+    error: 'bg-red-600 text-white',
+    info: 'bg-blue-600 text-white',
+  };
+  return (
+    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-sm ${colors[type]}`}>
+      {msg}
+    </div>
+  );
 }
 
 function Modal({ open, onClose, children, title }) {
-  // inchangé, mais plus élégant
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-2xl max-h-[80vh] bg-white rounded-2xl shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-gray-50">
+          <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-200">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-6 overflow-y-auto max-h-[calc(80vh-100px)]">{children}</div>
+      </div>
+    </div>
+  );
 }
 
 function Sidebar({ tips, open, onClose }) {
@@ -152,32 +191,149 @@ export default function Obsolescence() {
     }
   };
 
-  // Similaires pour doughnut et capex, avec params filter
+  const loadDoughnutData = async () => {
+    try {
+      const params = { group: 'building', ...selectedFilter };
+      const data = await get('/api/obsolescence/doughnut', params);
+      setDoughnutData(data.data);
+    } catch (e) {
+      setToast({ msg: `Doughnut failed: ${e.message}`, type: 'error' });
+    }
+  };
 
-  const handleCheck = async (device) => {
-    // inchangé, mais refresh hiérarchie après
-    loadBuildings();
+  const loadCapexForecast = async () => {
+    try {
+      const params = { group: 'building', ...selectedFilter };
+      const data = await get('/api/obsolescence/capex-forecast', params);
+      setCapexForecast(data.forecasts);
+    } catch (e) {
+      setToast({ msg: `CAPEX failed: ${e.message}`, type: 'error' });
+    }
+  };
+
+  const handleCheck = async (point) => {
+    try {
+      setBusy(true);
+      const result = await get(`/api/obsolescence/check?device=${point.device_id}&switchboard=${point.switchboard_id}`);
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 3000);
+      setToast({ msg: 'Check completed!', type: 'success' });
+      loadBuildings(); // Refresh hierarchy
+      if (tab === 'roll-up') loadGanttData();
+      if (tab === 'analysis') {
+        loadDoughnutData();
+        loadCapexForecast();
+      }
+    } catch (e) {
+      setToast({ msg: `Check failed: ${e.message}`, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const getAiTip = async (context) => {
+    try {
+      const { tip } = await post('/api/obsolescence/ai-tip', { query: context });
+      setAiTips(prev => [...prev, { id: Date.now(), content: tip }].slice(-5));
+    } catch (e) {
+      setToast({ msg: `AI tip failed: ${e.message}`, type: 'error' });
+    }
+  };
+
+  const handlePdfUpload = async () => {
+    if (!pdfFile) {
+      setToast({ msg: 'No PDF selected', type: 'error' });
+      return;
+    }
+    try {
+      setBusy(true);
+      const formData = new FormData();
+      formData.append('pdf', pdfFile);
+      formData.append('device_id', paramForm.device_id);
+      formData.append('switchboard_id', paramForm.switchboard_id);
+      const { manufacture_date } = await upload('/api/obsolescence/analyze-pdf', formData);
+      setParamForm({ ...paramForm, manufacture_date });
+      setToast({ msg: 'PDF analyzed!', type: 'success' });
+    } catch (e) {
+      setToast({ msg: `PDF failed: ${e.message}`, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
   };
 
   const saveParameters = async () => {
     try {
-      const flatForm = { ...paramForm }; // Assure plat
+      const flatForm = { 
+        device_id: paramForm.device_id,
+        switchboard_id: paramForm.switchboard_id,
+        manufacture_date: paramForm.manufacture_date,
+        avg_temperature: paramForm.avg_temperature,
+        avg_humidity: paramForm.avg_humidity,
+        operation_cycles: paramForm.operation_cycles,
+        avg_life_years: paramForm.avg_life_years,
+        replacement_cost: paramForm.replacement_cost,
+        document_link: paramForm.document_link
+      };
       await post('/api/obsolescence/parameters', flatForm);
-      setToast({ msg: 'Saved!', type: 'success' });
-      // Refresh data
+      setToast({ msg: 'Parameters saved!', type: 'success' });
       loadBuildings();
+      setShowParamsModal(false);
     } catch (e) {
       setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
     }
   };
 
-  // Autres fonctions inchangées, mais adaptées
+  const exportPdf = async () => {
+    try {
+      setBusy(true);
+      const pdf = new jsPDF();
+      pdf.text('Obsolescence Report', 10, 10);
+      // Add canvases...
+      pdf.save('report.pdf');
+      setToast({ msg: 'PDF exported!', type: 'success' });
+    } catch (e) {
+      setToast({ msg: `Export failed: ${e.message}`, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const getDoughnutChartData = (data) => ({
+    labels: data.map(d => d.label || 'Unknown'),
+    datasets: [
+      { label: 'OK', data: data.map(d => d.ok || 0), backgroundColor: '#00ff00' },
+      { label: 'Warning', data: data.map(d => d.warning || 0), backgroundColor: '#ffa500' },
+      { label: 'Critical', data: data.map(d => d.critical || 0), backgroundColor: '#ff0000' },
+    ],
+  });
+
+  const getCapexChartData = (forecasts) => {
+    const years = Array.from({ length: 30 }, (_, i) => new Date().getFullYear() + i);
+    const datasets = [];
+    Object.keys(forecasts).forEach(group => {
+      const annual = years.map(y => forecasts[group].reduce((sum, f) => sum + (f.year === y ? f.capex_year : 0), 0));
+      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
+      datasets.push({
+        type: 'bar',
+        label: `${group} Annual (€)`,
+        data: annual,
+        backgroundColor: '#1e90ff',
+      });
+      datasets.push({
+        type: 'line',
+        label: `${group} Cumulative (€)`,
+        data: cumul,
+        borderColor: '#32cd32',
+        fill: false,
+      });
+    });
+    return { labels: years, datasets };
+  };
 
   return (
     <section className="p-6 max-w-7xl mx-auto bg-gradient-to-br from-white to-indigo-50 rounded-3xl shadow-xl">
       <h1 className="text-4xl font-bold mb-8 text-indigo-900">Obsolescence CAPEX Forecasting</h1>
 
-      {/* Onglets */}
       <div className="flex gap-4 mb-6 border-b pb-2">
         <button onClick={() => setTab('overview')} className={`px-6 py-2 rounded-t-lg ${tab === 'overview' ? 'bg-indigo-600 text-white' : 'bg-white text-indigo-600'}`}>Overview</button>
         <button onClick={() => setTab('roll-up')} className={`px-6 py-2 rounded-t-lg ${tab === 'roll-up' ? 'bg-indigo-600 text-white' : 'bg-white text-indigo-600'}`}>Roll-up</button>
@@ -199,15 +355,46 @@ export default function Obsolescence() {
             </thead>
             <tbody>
               {buildings.map(build => (
-                <motion.tr key={build.building} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                  <td className="p-4 flex items-center cursor-pointer" onClick={() => toggleBuilding(build.building)}>
-                    {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} items)
-                  </td>
-                  <td></td><td></td><td>€{build.total_cost.toLocaleString()}</td><td></td>
-                  <td></td>
-                </motion.tr>
+                <>
+                  <motion.tr key={build.building} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                    <td className="p-4 flex items-center cursor-pointer" onClick={() => toggleBuilding(build.building)}>
+                      {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} items)
+                    </td>
+                    <td></td>
+                    <td></td>
+                    <td>€{build.total_cost?.toLocaleString() || 'N/A'}</td>
+                    <td></td>
+                    <td></td>
+                  </motion.tr>
+                  {expandedBuildings[build.building] && switchboards[build.building]?.map(sb => (
+                    <>
+                      <motion.tr key={sb.id} className="bg-gray-50">
+                        <td className="p-4 pl-8 flex items-center cursor-pointer" onClick={() => toggleSwitchboard(sb.id)}>
+                          {expandedSwitchboards[sb.id] ? <ChevronDown /> : <ChevronRight />} {sb.name} (Floor: {sb.floor})
+                        </td>
+                        <td></td>
+                        <td></td>
+                        <td>€{sb.total_cost?.toLocaleString() || 'N/A'}</td>
+                        <td></td>
+                        <td></td>
+                      </motion.tr>
+                      {expandedSwitchboards[sb.id] && devices[sb.id]?.map(dev => (
+                        <motion.tr key={dev.id} className="bg-gray-100">
+                          <td className="p-4 pl-16">{dev.name || 'Device'}</td>
+                          <td className="p-4">{new Date(dev.manufacture_date).getFullYear() || 'N/A'}</td>
+                          <td className="p-4">{dev.document_link ? <a href={dev.document_link}>Link</a> : 'N/A'}</td>
+                          <td className="p-4">€{dev.replacement_cost?.toLocaleString() || 'N/A'}</td>
+                          <td className="p-4">{dev.remaining_life_years ? new Date().getFullYear() + dev.remaining_life_years : 'N/A'}</td>
+                          <td className="p-4 flex gap-2">
+                            <button onClick={() => handleCheck(dev)} className="text-blue-600">Check</button>
+                            <button onClick={() => { setParamForm({ ...dev }); setShowParamsModal(true); }} className="text-green-600"><Settings size={16} /></button>
+                          </td>
+                        </motion.tr>
+                      ))}
+                    </>
+                  ))}
+                </>
               ))}
-              {/* Sous-lignes pour switchboards et devices de manière similaire, avec clics et colonnes remplies */}
             </tbody>
           </table>
         </div>
@@ -215,15 +402,16 @@ export default function Obsolescence() {
 
       {tab === 'roll-up' && (
         <div ref={ganttRef} className="h-[600px] overflow-auto border rounded-2xl p-4 bg-white shadow-lg">
-          <Gantt
-            tasks={ganttTasks}
-            viewMode={ViewMode.Year}
-            columnWidth={120}
-            listCellWidth="250px"
-            todayColor="#ff0000" // Highlight année actuelle
-            onClick={task => getAiTip(`Strategy for ${task.name}`)}
-            // Zoom auto sur current year
-          />
+          {ganttTasks.length ? (
+            <Gantt
+              tasks={ganttTasks}
+              viewMode={ViewMode.Year}
+              columnWidth={120}
+              listCellWidth="250px"
+              todayColor="#ff0000"
+              onClick={task => getAiTip(`Replacement strategy for ${task.name}`)}
+            />
+          ) : <p>No data</p>}
         </div>
       )}
 
@@ -231,11 +419,11 @@ export default function Obsolescence() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white p-6 rounded-2xl shadow-lg">
             <h2 className="text-2xl font-semibold mb-4">Urgency Distribution</h2>
-            <Doughnut data={getDoughnutChartData(doughnutData)} options={{ /* options splendides avec gradients */ }} />
+            <Doughnut data={getDoughnutChartData(doughnutData)} options={{ responsive: true, plugins: { legend: { position: 'top' } } }} />
           </div>
           <div ref={chartRef} className="bg-white p-6 rounded-2xl shadow-lg">
             <h2 className="text-2xl font-semibold mb-4">CAPEX Forecast</h2>
-            <Line data={getCapexChartData(capexForecast)} options={{ /* courbe splendide avec annotations, zoom */ }} />
+            <Line data={getCapexChartData(capexForecast)} options={{ responsive: true, plugins: { zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } } } }} />
           </div>
         </div>
       )}
@@ -244,11 +432,19 @@ export default function Obsolescence() {
         <Sidebar tips={aiTips} open={showSidebar} onClose={() => setShowSidebar(false)} />
       </AnimatePresence>
 
-      {/* Modals, toasts, confetti inchangés */}
+      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Parameters">
+        <div className="space-y-4">
+          {/* Inputs for all fields */}
+          <button onClick={saveParameters} className="btn-primary w-full">Save</button>
+          <input type="file" onChange={e => setPdfFile(e.target.files[0])} />
+          <button onClick={handlePdfUpload}>Analyze PDF</button>
+        </div>
+      </Modal>
 
-      <button onClick={() => setShowSidebar(true)} className="fixed bottom-8 right-8 bg-indigo-600 text-white p-4 rounded-full shadow-lg">
-        <HelpCircle size={24} />
-      </button>
+      {toast && <Toast {...toast} />}
+      {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-indigo-600 rounded-full"></div></div>}
+      {showConfetti && <Confetti />}
+      <button onClick={() => setShowSidebar(true)} className="fixed bottom-8 right-8 bg-indigo-600 text-white p-4 rounded-full shadow-lg"><HelpCircle size={24} /></button>
     </section>
   );
 }
