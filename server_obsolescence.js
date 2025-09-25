@@ -6,8 +6,8 @@ import dotenv from 'dotenv';
 import pg from 'pg';
 import OpenAI from 'openai';
 import multer from 'multer';
-import PDFDocument from 'pdfkit'; // Pour génération PDF
-import fs from 'fs'; // Pour temp files si besoin
+import PDFDocument from 'pdfkit';
+import fs from 'fs';
 import path from 'path';
 
 dotenv.config();
@@ -304,58 +304,85 @@ app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res)
   }
 });
 
-// Helper functions for calculations (based on norms)
-function calculateObsolescence(point) {
-  const currentYear = new Date().getFullYear();
-  const manufactureYear = new Date(point.manufacture_date).getFullYear() || 2000;
-  const age = currentYear - manufactureYear;
-  const avgLife = point.avg_life_years || 25;
+// NEW: Doughnut data by group (building/floor/switchboard)
+app.get('/api/obsolescence/doughnut', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { group } = req.query; // 'building', 'floor', 'switchboard'
+    let groupField = 's.building_code';
+    if (group === 'floor') groupField = 's.floor';
+    if (group === 'switchboard') groupField = 's.name';
 
-  // Acceleration factors
-  const tempFactor = Math.pow(2, (point.avg_temperature - 25) / 10); // Arrhenius
-  const humFactor = point.avg_humidity > 70 ? 1.5 : 1; // Corrosion
-  const cycleFactor = point.operation_cycles > 10000 ? 1.2 : 1;
+    const sql = `
+      SELECT ${groupField} AS label,
+        COUNT(CASE WHEN oc.status = 'ok' THEN 1 END) AS ok,
+        COUNT(CASE WHEN oc.status = 'warning' THEN 1 END) AS warning,
+        COUNT(CASE WHEN oc.status = 'critical' THEN 1 END) AS critical
+      FROM switchboards s
+      LEFT JOIN devices d ON s.id = d.switchboard_id
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
+      WHERE s.site = $1
+      GROUP BY ${groupField}
+    `;
+    const rows = await pool.query(sql, [site]);
+    res.json({ data: rows.rows });
+  } catch (e) {
+    console.error('[OBS DOUGHNUT] error:', e.message);
+    res.status(500).json({ error: 'Doughnut data failed' });
+  }
+});
 
-  const adjustedLife = avgLife / (tempFactor * humFactor * cycleFactor);
-  const remaining_life_years = Math.max(adjustedLife - age, 0);
+// NEW: CAPEX forecast by group
+app.get('/api/obsolescence/capex-forecast', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { group } = req.query; // 'building', etc.
+    let groupField = 's.building_code';
+    if (group === 'floor') groupField = 's.floor';
+    if (group === 'switchboard') groupField = 's.name';
 
-  // Urgency score (0-100)
-  let urgency = (age / adjustedLife) * 50;
-  if (point.selectivity_status === 'non-selective') urgency += 20;
-  if (point.fault_status === 'at-risk') urgency += 15;
-  if (point.arc_status === 'at-risk') urgency += 15;
-  urgency = Math.min(urgency, 100);
+    const r = await pool.query(`
+      SELECT ${groupField} AS group_label, op.replacement_cost, oc.remaining_life_years
+      FROM switchboards s
+      JOIN devices d ON s.id = d.switchboard_id
+      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
+      WHERE s.site = $1
+    `, [site]);
 
-  const status = urgency < 30 ? 'ok' : urgency < 70 ? 'warning' : 'critical';
-  const riskZones = urgency > 50 ? [{ min: 50, max: urgency }] : [];
+    const forecasts = {};
+    r.rows.forEach(row => {
+      if (!forecasts[row.group_label]) forecasts[row.group_label] = [];
+      forecasts[row.group_label].push(generateForecastForItem(row));
+    });
 
-  return { remaining_life_years: Math.round(remaining_life_years), urgency_score: Math.round(urgency), status, riskZones };
-}
+    res.json({ forecasts });
+  } catch (e) {
+    console.error('[OBS CAPEX FORECAST] error:', e.message);
+    res.status(500).json({ error: 'CAPEX forecast failed' });
+  }
+});
 
-function getRemediations(point, urgency) {
-  return [
-    `Monitor closely if urgency >50; plan replacement in ${Math.round(30 - urgency / 3)} years`,
-    'Reduce temperature/humidity to extend life (IEC 62271)',
-    `Estimated CAPEX: ${point.replacement_cost * 1.1}€ with 10% inflation`
-  ];
-}
-
-function generateForecast(point) {
+// Helper for single item forecast
+function generateForecastForItem(item) {
   const forecast = [];
   const currentYear = new Date().getFullYear();
   let capexCumul = 0;
-  const inflation = 1.02; // 2%/an
+  const inflation = 1.02;
 
   for (let y = 0; y < 30; y++) {
     const year = currentYear + y;
-    const remaining = calculateObsolescence({ ...point, manufacture_date: new Date(point.manufacture_date).setFullYear(manufactureYear + y) }).remaining_life_years;
-    const capexYear = remaining <= 0 ? point.replacement_cost * Math.pow(inflation, y) : 0;
+    const remaining = item.remaining_life_years - y;
+    const capexYear = remaining <= 0 ? item.replacement_cost * Math.pow(inflation, y) : 0;
     capexCumul += capexYear;
-    forecast.push({ year, remaining_life: remaining, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul) });
+    forecast.push({ year, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul) });
   }
-
   return forecast;
 }
+
+// ... other helpers as before
 
 const port = process.env.OBSOLESCENCE_PORT || 3007;
 app.listen(port, () => console.log(`Obsolescence service running on :${port}`));
