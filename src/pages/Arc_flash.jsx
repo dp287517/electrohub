@@ -151,6 +151,7 @@ export default function ArcFlash() {
   const handleCheck = async (deviceId, switchboardId, isBatch = false) => {
     try {
       setBusy(true);
+      if (!deviceId || !switchboardId) throw new Error('Missing device or switchboard ID');
       const params = { device: deviceId, switchboard: switchboardId };
       const result = await get('/api/arcflash/check', params);
       setCheckResult(result);
@@ -195,7 +196,9 @@ export default function ArcFlash() {
     try {
       setBusy(true);
       for (const { device_id, switchboard_id } of selectedPoints) {
-        await handleCheck(device_id, switchboard_id, true);
+        if (device_id && switchboard_id) {
+          await handleCheck(device_id, switchboard_id, true);
+        }
       }
       setToast({ msg: 'Batch check completed', type: 'success' });
       loadPoints();
@@ -210,6 +213,9 @@ export default function ArcFlash() {
   const saveParameters = async () => {
     try {
       setBusy(true);
+      if (!paramForm.device_id || !paramForm.switchboard_id) {
+        throw new Error('Device ID or Switchboard ID is missing');
+      }
       const result = await post('/api/arcflash/parameters', { ...paramForm, site });
       setToast({ msg: result.message, type: 'success' });
       setParamTips(result.tips || {});
@@ -305,9 +311,13 @@ export default function ArcFlash() {
   };
 
   const openParams = (point) => {
+    if (!point.device_id || !point.switchboard_id) {
+      setToast({ msg: 'Invalid device or switchboard data', type: 'error' });
+      return;
+    }
     setParamForm({
-      device_id: point.device_id,
-      switchboard_id: point.switchboard_id,
+      device_id: Number(point.device_id),
+      switchboard_id: Number(point.switchboard_id),
       working_distance: point.working_distance || 455,
       enclosure_type: point.enclosure_type || 'VCB',
       electrode_gap: point.electrode_gap || 32,
@@ -490,7 +500,7 @@ export default function ArcFlash() {
             <label className="block text-sm font-medium text-gray-700">Working Distance (mm)</label>
             <input
               type="number"
-              value={paramForm.working_distance}
+              value={paramForm.working_distance || 455}
               onChange={e => setParamForm({ ...paramForm, working_distance: Math.max(Number(e.target.value), 100) })}
               className="input w-full"
               placeholder="Minimum: 100"
@@ -503,7 +513,7 @@ export default function ArcFlash() {
           <div>
             <label className="block text-sm font-medium text-gray-700">Enclosure Type</label>
             <select
-              value={paramForm.enclosure_type}
+              value={paramForm.enclosure_type || 'VCB'}
               onChange={e => setParamForm({ ...paramForm, enclosure_type: e.target.value })}
               className="input w-full"
             >
@@ -518,8 +528,8 @@ export default function ArcFlash() {
             <label className="block text-sm font-medium text-gray-700">Electrode Gap (mm)</label>
             <input
               type="number"
-              value={paramForm.electrode_gap}
-              onChange={e => setParamForm({ ...paramForm, electrode_gap: e.target.value })}
+              value={paramForm.electrode_gap || 32}
+              onChange={e => setParamForm({ ...paramForm, electrode_gap: Number(e.target.value) })}
               className="input w-full"
               placeholder="Default: 32"
               min="1"
@@ -530,8 +540,8 @@ export default function ArcFlash() {
             <input
               type="number"
               step="0.01"
-              value={paramForm.arcing_time}
-              onChange={e => setParamForm({ ...paramForm, arcing_time: e.target.value })}
+              value={paramForm.arcing_time || 0.2}
+              onChange={e => setParamForm({ ...paramForm, arcing_time: Number(e.target.value) })}
               className="input w-full"
               placeholder="Default: 0.2 (from selectivity if available)"
               min="0.01"
@@ -544,8 +554,8 @@ export default function ArcFlash() {
             <label className="block text-sm font-medium text-gray-700">Fault Current (kA)</label>
             <input
               type="number"
-              value={paramForm.fault_current_ka}
-              onChange={e => setParamForm({ ...paramForm, fault_current_ka: e.target.value })}
+              value={paramForm.fault_current_ka || ''}
+              onChange={e => setParamForm({ ...paramForm, fault_current_ka: Number(e.target.value) })}
               className="input w-full"
               placeholder="From Fault Level or manual"
               min="1"
@@ -606,8 +616,8 @@ export default function ArcFlash() {
             <label className="block text-sm font-medium text-gray-700">Parent Device ID</label>
             <input
               type="number"
-              value={paramForm.parent_id}
-              onChange={e => setParamForm({ ...paramForm, parent_id: e.target.value })}
+              value={paramForm.parent_id || ''}
+              onChange={e => setParamForm({ ...paramForm, parent_id: Number(e.target.value) || null })}
               className="input w-full"
               placeholder="Upstream device ID (optional)"
             />
@@ -615,7 +625,7 @@ export default function ArcFlash() {
           <button
             onClick={saveParameters}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 w-full"
-            disabled={busy}
+            disabled={busy || !paramForm.device_id || !paramForm.switchboard_id}
           >
             Save Parameters
           </button>
