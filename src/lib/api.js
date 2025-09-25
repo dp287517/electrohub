@@ -106,7 +106,7 @@ export const api = {
     updateParameters: (payload) => post("/api/arcflash/parameters", payload),
     reset: () => post("/api/arcflash/reset", {}),
   },
-  obsolescence: {  // AJOUT SECTION OBSOLESCENCE
+  obsolescence: {
     listPoints: (params) => get("/api/obsolescence/points", params),
     checkPoint: (deviceId, switchboardId) => 
       get(`/api/obsolescence/check?device=${deviceId}&switchboard=${switchboardId}`),
