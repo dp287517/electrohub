@@ -2,8 +2,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { get, post, upload } from '../lib/api.js';
 import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Flame, Download, ChevronRight, Settings, Upload } from 'lucide-react';
-import { Line } from 'react-chartjs-2';
-import { Chart as GoogleChart } from 'react-google-charts';
+import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import Confetti from 'react-confetti';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -11,11 +10,13 @@ import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
+  BarElement,
   PointElement,
   LineElement,
   Title,
   Tooltip,
   Legend,
+  ArcElement,
   LogarithmicScale,
 } from 'chart.js';
 import Annotation from 'chartjs-plugin-annotation';
@@ -25,11 +26,13 @@ import Zoom from 'chartjs-plugin-zoom';
 ChartJS.register(
   CategoryScale,
   LinearScale,
+  BarElement,
   PointElement,
   LineElement,
   Title,
   Tooltip,
   Legend,
+  ArcElement,
   LogarithmicScale,
   Annotation,
   Zoom
@@ -106,13 +109,18 @@ export default function Obsolescence() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [tipContent, setTipContent] = useState('');
   const [pdfFile, setPdfFile] = useState(null);
+  const [groupBy, setGroupBy] = useState('building'); // 'building', 'floor', 'switchboard'
+  const [doughnutData, setDoughnutData] = useState([]);
+  const [capexForecast, setCapexForecast] = useState({});
   const chartRef = useRef(null);
   const resultRef = useRef(null);
   const pageSize = 18;
 
   useEffect(() => {
     loadPoints();
-  }, [q]);
+    loadDoughnutData();
+    loadCapexForecast();
+  }, [q, groupBy]);
 
   const loadPoints = async () => {
     try {
@@ -133,6 +141,37 @@ export default function Obsolescence() {
       setStatuses(initialStatuses);
     } catch (e) {
       setToast({ msg: `Failed to load points: ${e.message}`, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadDoughnutData = async () => {
+    try {
+      const data = await get('/api/obsolescence/doughnut', { group: groupBy });
+      setDoughnutData(data.data);
+    } catch (e) {
+      setToast({ msg: `Failed to load doughnut data: ${e.message}`, type: 'error' });
+    }
+  };
+
+  const loadCapexForecast = async () => {
+    try {
+      const data = await get('/api/obsolescence/capex-forecast', { group: groupBy });
+      setCapexForecast(data.forecasts);
+    } catch (e) {
+      setToast({ msg: `Failed to load CAPEX forecast: ${e.message}`, type: 'error' });
+    }
+  };
+
+  const handleAutofill = async () => {
+    try {
+      setBusy(true);
+      const result = await post('/api/obsolescence/autofill', { site });
+      setToast({ msg: 'Autofill completed!', type: 'success' });
+      loadPoints();
+    } catch (e) {
+      setToast({ msg: `Autofill failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -259,50 +298,88 @@ export default function Obsolescence() {
     }
   };
 
-  const getChartData = (forecast) => ({
-    labels: forecast.map(f => f.year),
+  const getDoughnutChartData = (data) => ({
+    labels: data.map(d => d.label),
     datasets: [
       {
-        label: 'Remaining Life (years)',
-        data: forecast.map(f => f.remaining_life),
-        borderColor: 'blue',
-        fill: false,
+        label: 'OK',
+        data: data.map(d => d.ok),
+        backgroundColor: 'green',
       },
       {
-        label: 'CAPEX Cumulative (€)',
-        data: forecast.map(f => f.capex_cumul),
-        borderColor: 'green',
-        fill: false,
+        label: 'Warning',
+        data: data.map(d => d.warning),
+        backgroundColor: 'orange',
+      },
+      {
+        label: 'Critical',
+        data: data.map(d => d.critical),
+        backgroundColor: 'red',
       },
     ],
   });
 
-  const getGanttData = (forecast) => [
-    ['Year', 'Remaining Life', { type: 'string', role: 'style' }],
-    ...forecast.map(f => [f.year.toString(), f.remaining_life, f.remaining_life < 5 ? 'red' : f.remaining_life < 10 ? 'orange' : 'green']),
-  ];
+  const getCapexChartData = (forecasts) => {
+    const years = Array.from({ length: 30 }, (_, i) => new Date().getFullYear() + i);
+    const datasets = [];
+    Object.keys(forecasts).forEach(group => {
+      const annual = years.map(y => forecasts[group].find(f => f.year === y)?.capex_year || 0);
+      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
+      datasets.push({
+        type: 'bar',
+        label: `${group} Annual (€)`,
+        data: annual,
+        backgroundColor: 'blue',
+      });
+      datasets.push({
+        type: 'line',
+        label: `${group} Cumulative (€)`,
+        data: cumul,
+        borderColor: 'green',
+        fill: false,
+      });
+    });
+    return { labels: years, datasets };
+  };
 
   return (
     <section className="p-6 max-w-7xl mx-auto">
       <h1 className="text-3xl font-bold mb-6">Obsolescence CAPEX Forecasting</h1>
-      {/* Search and controls */}
-      <div className="flex flex-wrap gap-4 mb-6">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-3 text-gray-400" size={18} />
-          <input
-            type="text"
-            placeholder="Search devices or switchboards..."
-            className="input pl-10 w-full"
-            value={q.q}
-            onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
-          />
-        </div>
+      {/* Filters */}
+      <div className="flex gap-4 mb-6">
+        <select value={groupBy} onChange={e => setGroupBy(e.target.value)} className="input">
+          <option value="building">By Building</option>
+          <option value="floor">By Floor</option>
+          <option value="switchboard">By Switchboard</option>
+        </select>
         <button onClick={handleBatchCheck} className="btn-primary" disabled={selectedPoints.length === 0 || busy}>
           Run Batch Check ({selectedPoints.length})
         </button>
         <button onClick={handleReset} className="btn-secondary" disabled={busy}>
           Reset Data
         </button>
+      </div>
+
+      {/* Doughnut Charts */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+        <div>
+          <h2 className="text-2xl mb-4">Urgency Distribution</h2>
+          <Doughnut data={getDoughnutChartData(doughnutData)} options={{ responsive: true }} />
+        </div>
+        {/* More doughnuts if needed, e.g., cost distribution */}
+      </div>
+
+      {/* CAPEX Forecasting Chart */}
+      <div className="mb-8">
+        <h2 className="text-2xl mb-4">CAPEX Forecasting (Annual Bars & Cumulative Curve)</h2>
+        <Line 
+          data={getCapexChartData(capexForecast)} 
+          options={{
+            responsive: true,
+            plugins: { zoom: { zoom: { wheel: { enabled: true } }, pan: { enabled: true } } },
+            scales: { y: { beginAtZero: true, title: { display: true, text: '€' } } },
+          }} 
+        />
       </div>
 
       {/* Points list */}
@@ -319,7 +396,7 @@ export default function Obsolescence() {
                     prev.includes(point.device_id) ? prev.filter(id => id !== point.device_id) : [...prev, point.device_id]
                   )}
                 />
-                <button onClick={() => { setSelectedPoint(point); setShowParamsModal(true); }} className="text-blue-600">
+                <button onClick={() => { setSelectedPoint(point); setParamForm({...paramForm, ...point}); setShowParamsModal(true); }} className="text-blue-600">
                   <Settings size={16} />
                 </button>
               </div>
@@ -347,9 +424,6 @@ export default function Obsolescence() {
           </div>
         ))}
       </div>
-
-      {/* Pagination */}
-      {/* ... (similaire aux autres pages, omis pour brièveté) */}
 
       {/* Params Modal */}
       <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Obsolescence Parameters">
@@ -419,14 +493,14 @@ export default function Obsolescence() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Upload PDF for Analysis</label>
+            <label className="block text-sm font-medium text-gray-700">Optional PDF Upload for AI Analysis</label>
             <input type="file" accept=".pdf" onChange={e => setPdfFile(e.target.files[0])} className="input w-full" />
-            <button onClick={handlePdfUpload} className="mt-2 btn-primary w-full" disabled={busy || !pdfFile}>
-              <Upload size={16} /> Analyze PDF
+            <button onClick={handlePdfUpload} className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 w-full" disabled={busy || !pdfFile}>
+              Analyze PDF
             </button>
           </div>
           <button
-            onClick={() => saveParameters()}
+            onClick={saveParameters}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 w-full"
             disabled={busy}
           >
@@ -435,70 +509,17 @@ export default function Obsolescence() {
         </div>
       </Modal>
 
-      {/* Forecast Modal with Graphs */}
-      <Modal open={showGraph} onClose={() => setShowGraph(false)} title="30-Year CAPEX Forecast (Zoom & Pan Enabled)">
-        {forecastData ? (
-          <div>
-            <div ref={chartRef} className="mb-8">
-              <Line
-                data={getChartData(forecastData)}
-                options={{
-                  responsive: true,
-                  plugins: {
-                    zoom: { zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' }, pan: { enabled: true, mode: 'xy' } },
-                    annotation: {
-                      annotations: checkResult?.riskZones?.map((zone, i) => ({
-                        type: 'box',
-                        yMin: zone.min,
-                        yMax: zone.max,
-                        backgroundColor: 'rgba(255, 0, 0, 0.2)',
-                        borderColor: 'red',
-                        label: { content: 'High Urgency', display: true, position: 'center' }
-                      })) || []
-                    },
-                    tooltip: {
-                      callbacks: {
-                        label: (context) => `${context.dataset.label}: ${context.parsed.y} at year ${context.parsed.x}`
-                      }
-                    }
-                  },
-                  scales: {
-                    x: { title: { display: true, text: 'Year' } },
-                    y: { title: { display: true, text: 'Value' } },
-                  },
-                }}
-              />
-            </div>
-            <GoogleChart
-              chartType="Gantt"
-              width="100%"
-              height="400px"
-              data={getGanttData(forecastData)}
-              options={{
-                gantt: {
-                  trackHeight: 30,
-                  barHeight: 20,
-                },
-              }}
-            />
-          </div>
-        ) : (
-          <p className="text-red-600">Forecast data not available. Try running the check again.</p>
+      {/* Graph Modal (if needed for detailed) */}
+      <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Detailed Forecast">
+        {forecastData && (
+          <Line data={{
+            labels: forecastData.map(f => f.year),
+            datasets: [
+              { type: 'bar', label: 'Annual CAPEX (€)', data: forecastData.map(f => f.capex_year), backgroundColor: 'blue' },
+              { type: 'line', label: 'Cumulative CAPEX (€)', data: forecastData.map(f => f.capex_cumul), borderColor: 'green' },
+            ],
+          }} options={{ responsive: true }} />
         )}
-        <button 
-          onClick={() => exportPdf(true)} 
-          className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2"
-          disabled={busy}
-        >
-          <Download size={16} /> Export Full Report PDF
-        </button>
-        <button 
-          onClick={() => setShowGraph(false)} 
-          className="mt-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
-          disabled={busy}
-        >
-          Close
-        </button>
       </Modal>
 
       <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)} tipContent={tipContent} />
