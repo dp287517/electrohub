@@ -1,7 +1,7 @@
 // src/pages/Obsolescence.jsx
 import { useEffect, useState, useRef } from 'react';
 import { api } from '../lib/api.js'; // Changé de get/post à api.obsolescence
-import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight, Settings, BarChart, ChartNoAxesGantt } from 'lucide-react';
+import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight, Settings, BarChart, GanttChart } from 'lucide-react';
 import { Line, Pie } from 'react-chartjs-2';
 import { Chart as GoogleChart } from 'react-google-charts';
 import Confetti from 'react-confetti';
@@ -303,7 +303,7 @@ export default function Obsolescence() {
             Reset Data
           </button>
           <button onClick={() => setShowGantt(true)} className="btn bg-green-600 text-white">
-            <ChartNoAxesGantt size={16} /> View Gantt
+            <GanttChart size={16} /> View Gantt
           </button>
           <button onClick={() => setShowCapex(true)} className="btn bg-purple-600 text-white">
             <BarChart size={16} /> CAPEX Graph
