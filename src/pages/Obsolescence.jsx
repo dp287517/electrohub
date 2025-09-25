@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from 'react';
 import { get, post, upload } from '../lib/api.js';
 import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight, Settings, Upload, ChevronDown } from 'lucide-react';
 import { Line, Bar, Doughnut } from 'react-chartjs-2';
-import { Gantt, Task, ViewMode } from 'gantt-task-react';
+import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
 import Confetti from 'react-confetti';
 import html2canvas from 'html2canvas';
@@ -379,7 +379,7 @@ export default function Obsolescence() {
                         <td></td>
                       </motion.tr>
                       {expandedSwitchboards[sb.id] && devices[sb.id]?.map(dev => (
-                        <motion.tr key={dev.id} className="bg-gray-100">
+                        <motion.tr key={dev.device_id} className="bg-gray-100">
                           <td className="p-4 pl-16">{dev.name || 'Device'}</td>
                           <td className="p-4">{new Date(dev.manufacture_date).getFullYear() || 'N/A'}</td>
                           <td className="p-4">{dev.document_link ? <a href={dev.document_link}>Link</a> : 'N/A'}</td>
@@ -432,19 +432,108 @@ export default function Obsolescence() {
         <Sidebar tips={aiTips} open={showSidebar} onClose={() => setShowSidebar(false)} />
       </AnimatePresence>
 
-      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Parameters">
+      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Obsolescence Parameters">
         <div className="space-y-4">
-          {/* Inputs for all fields */}
-          <button onClick={saveParameters} className="btn-primary w-full">Save</button>
-          <input type="file" onChange={e => setPdfFile(e.target.files[0])} />
-          <button onClick={handlePdfUpload}>Analyze PDF</button>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Manufacture Date</label>
+            <input
+              type="date"
+              value={paramForm.manufacture_date}
+              onChange={e => setParamForm({ ...paramForm, manufacture_date: e.target.value })}
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Avg Temperature (°C)</label>
+            <input
+              type="number"
+              value={paramForm.avg_temperature}
+              onChange={e => setParamForm({ ...paramForm, avg_temperature: Number(e.target.value) })}
+              className="input w-full"
+              min="0"
+              step="0.1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Avg Humidity (%)</label>
+            <input
+              type="number"
+              value={paramForm.avg_humidity}
+              onChange={e => setParamForm({ ...paramForm, avg_humidity: Number(e.target.value) })}
+              className="input w-full"
+              min="0"
+              max="100"
+              step="1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Operation Cycles</label>
+            <input
+              type="number"
+              value={paramForm.operation_cycles}
+              onChange={e => setParamForm({ ...paramForm, operation_cycles: Number(e.target.value) })}
+              className="input w-full"
+              min="0"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Avg Life Years (Norm)</label>
+            <input
+              type="number"
+              value={paramForm.avg_life_years}
+              onChange={e => setParamForm({ ...paramForm, avg_life_years: Number(e.target.value) })}
+              className="input w-full"
+              min="10"
+              step="1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Replacement Cost (€)</label>
+            <input
+              type="number"
+              value={paramForm.replacement_cost}
+              onChange={e => setParamForm({ ...paramForm, replacement_cost: Number(e.target.value) })}
+              className="input w-full"
+              min="0"
+              step="100"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Document Link</label>
+            <input
+              type="text"
+              value={paramForm.document_link}
+              onChange={e => setParamForm({ ...paramForm, document_link: e.target.value })}
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Upload PDF for AI Extraction</label>
+            <input type="file" accept=".pdf" onChange={e => setPdfFile(e.target.files[0])} className="input w-full" />
+            <button onClick={handlePdfUpload} className="mt-2 btn-primary w-full" disabled={busy || !pdfFile}>
+              <Upload size={16} /> Analyze PDF
+            </button>
+          </div>
+          <button
+            onClick={saveParameters}
+            className="btn-primary w-full"
+            disabled={busy}
+          >
+            Save Parameters
+          </button>
         </div>
       </Modal>
 
       {toast && <Toast {...toast} />}
-      {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-indigo-600 rounded-full"></div></div>}
+      {busy && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
+          <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600"></div>
+        </div>
+      )}
       {showConfetti && <Confetti />}
-      <button onClick={() => setShowSidebar(true)} className="fixed bottom-8 right-8 bg-indigo-600 text-white p-4 rounded-full shadow-lg"><HelpCircle size={24} /></button>
+      <button onClick={() => setShowSidebar(true)} className="fixed bottom-8 right-8 bg-indigo-600 text-white p-4 rounded-full shadow-lg">
+        <HelpCircle size={24} />
+      </button>
     </section>
   );
 }
