@@ -36,8 +36,13 @@ ChartJS.register(
 function useUserSite() {
   try {
     const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-    return user?.site || '';
-  } catch { return ''; }
+    const site = user?.site || '';
+    console.log('Site from useUserSite:', site); // <--- Debug
+    return site;
+  } catch (e) {
+    console.error('Error in useUserSite:', e.message); // <--- Debug
+    return '';
+  }
 }
 
 function Toast({ msg, type }) {
@@ -105,8 +110,10 @@ export default function ArcFlash() {
   const [tipContent, setTipContent] = useState('');
   const chartRef = useRef(null);
   const resultRef = useRef(null);
+  const pageSize = 18;
 
   useEffect(() => {
+    console.log('useEffect triggered with query:', q); // <--- Debug
     loadPoints();
   }, [q]);
 
@@ -115,9 +122,11 @@ export default function ArcFlash() {
       setBusy(true);
       const params = {
         ...q,
-        switchboard: isNaN(Number(q.switchboard)) ? '' : q.switchboard, // Prevent NaN
+        switchboard: isNaN(Number(q.switchboard)) ? '' : q.switchboard,
       };
+      console.log('Calling /api/arcflash/points with params:', params); // <--- Debug
       const data = await get('/api/arcflash/points', params);
+      console.log('Data received from /api/arcflash/points:', data); // <--- Debug
       setPoints(data?.data || []);
       setTotal(data?.total || 0);
       const initialStatuses = {};
@@ -128,6 +137,7 @@ export default function ArcFlash() {
       });
       setStatuses(initialStatuses);
     } catch (e) {
+      console.error('Error in loadPoints:', e.message); // <--- Debug
       setToast({ msg: `Failed to load points: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -152,6 +162,7 @@ export default function ArcFlash() {
       setBusy(true);
       if (!deviceId || !switchboardId) throw new Error('Missing device or switchboard ID');
       const params = { device: deviceId, switchboard: switchboardId };
+      console.log('Checking arcflash with params:', params); // <--- Debug
       const result = await get('/api/arcflash/check', params);
       setCheckResult(result);
       setSelectedPoint({ deviceId, switchboardId });
@@ -185,6 +196,7 @@ export default function ArcFlash() {
         setTimeout(() => setShowConfetti(false), 3000);
       }
     } catch (e) {
+      console.error('Error in handleCheck:', e.message); // <--- Debug
       setToast({ msg: `Check failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -202,6 +214,7 @@ export default function ArcFlash() {
       setToast({ msg: 'Batch check completed', type: 'success' });
       loadPoints();
     } catch (e) {
+      console.error('Error in handleBatchCheck:', e.message); // <--- Debug
       setToast({ msg: `Batch failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -221,6 +234,7 @@ export default function ArcFlash() {
       setShowParamsModal(false);
       loadPoints();
     } catch (e) {
+      console.error('Error in saveParameters:', e.message); // <--- Debug
       setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -234,13 +248,13 @@ export default function ArcFlash() {
       setToast({ msg: 'Data reset', type: 'info' });
       loadPoints();
     } catch (e) {
+      console.error('Error in handleReset:', e.message); // <--- Debug
       setToast({ msg: `Reset failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
   };
 
-  // Fonction corrigée pour exportPdf
   const exportPdf = async (isLabel = false) => {
     try {
       if (!checkResult || !curveData) {
@@ -251,15 +265,14 @@ export default function ArcFlash() {
       setBusy(true);
       const pdf = new jsPDF();
 
-      // 1) RENDU FIABLE DU GRAPHE VIA CANVAS TEMPORAIRE (comme Selectivity)
+      // 1) Rendu fiable du graphe via canvas temporaire
       const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = 900;  // assez large pour un rendu net
+      tempCanvas.width = 900;
       tempCanvas.height = 450;
       const ctx = tempCanvas.getContext('2d');
 
       let chartInstance = null;
       try {
-        // Reconstruire un dataset minimal à partir de curveData existant
         const data = {
           labels: curveData.labels,
           datasets: [
@@ -287,7 +300,6 @@ export default function ArcFlash() {
           }
         });
 
-        // Laisse le temps au chart de peindre
         await new Promise(r => setTimeout(r, 400));
       } catch (e) {
         console.error('Temp chart build failed:', e);
@@ -295,8 +307,7 @@ export default function ArcFlash() {
 
       const graphImg = tempCanvas.toDataURL('image/png');
 
-      // 2) (OPTIONNEL) CAPTURE DE LA SECTION RÉSULTATS
-      // NOTE: tu peux enlever toute cette partie si tu veux éviter html2canvas.
+      // 2) Capture optionnelle de la section résultats
       let resultImg = null;
       if (resultRef?.current) {
         try {
@@ -307,7 +318,7 @@ export default function ArcFlash() {
         }
       }
 
-      // 3) COMPOSITION DU PDF
+      // 3) Composition du PDF
       if (isLabel) {
         pdf.setFontSize(18);
         pdf.text('Arc Flash Label', 20, 20);
@@ -326,7 +337,6 @@ export default function ArcFlash() {
           pdf.addImage(graphImg, 'PNG', 10, 10, 190, 95);
         }
       } else {
-        // Rapport complet
         if (graphImg) pdf.addImage(graphImg, 'PNG', 10, 10, 190, 95);
         pdf.setFontSize(14);
         pdf.text('Full Arc Flash Report', 20, 115);
@@ -335,7 +345,6 @@ export default function ArcFlash() {
         pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 132);
         pdf.text(`PPE Category: ${checkResult?.ppe_category}`, 20, 139);
 
-        // Remediations
         const remediations = checkResult?.remediation || [];
         if (remediations.length) {
           pdf.text('Remediation Actions:', 20, 149);
@@ -347,7 +356,6 @@ export default function ArcFlash() {
           });
         }
 
-        // Tips param (sans html2canvas)
         if (Object.keys(paramTips || {}).length) {
           pdf.addPage();
           pdf.text('Parameter Optimization Tips:', 20, 20);
@@ -357,14 +365,12 @@ export default function ArcFlash() {
           if (paramTips.fault_current_tip) { pdf.text(`- Fault Current: ${paramTips.fault_current_tip}`, 20, y); y += 6; }
         }
 
-        // Bloc résultats “image” (si tu tiens à l’avoir en capture)
         if (resultImg) {
           pdf.addPage();
           pdf.addImage(resultImg, 'PNG', 10, 10, 190, 90);
         }
       }
 
-      // Nettoyage
       if (chartInstance) chartInstance.destroy();
       tempCanvas.remove();
 
@@ -406,12 +412,120 @@ export default function ArcFlash() {
     setShowParamsModal(true);
   };
 
-  // Le reste du JSX (j'ai complété avec la partie tronquée que tu as fournie)
   return (
     <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
       {showConfetti && <Confetti width={window.innerWidth} height={window.innerHeight} />}
-      {/* ... (le reste du JSX original, comme les headers, filters, table, etc. – je ne le recopie pas tout car c'est long, mais assume qu'il est inchangé) */}
-      {/* Par exemple, la partie résultats : */}
+      <header className="mb-8">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4 drop-shadow-md">Arc Flash Analysis</h1>
+        <p className="text-gray-600 max-w-3xl">
+          Analyze arc flash risks based on switchboard and device data. Check incident energy, PPE requirements, and generate reports or labels (per IEEE 1584).
+        </p>
+      </header>
+
+      {/* Élément de debug statique */}
+      <div className="text-blue-600">Test statique : Contenu visible ici</div>
+
+      {/* Filtres */}
+      <div className="flex flex-wrap gap-4 mb-6 items-center">
+        <input
+          className="input flex-1 shadow-sm"
+          placeholder="Search by name..."
+          value={q.q}
+          onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
+        />
+        <input className="input w-32 shadow-sm" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
+        <input className="input w-32 shadow-sm" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
+        <input className="input w-32 shadow-sm" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
+        <button 
+          onClick={handleAutofill} 
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md"
+          disabled={busy}
+        >
+          Autofill Parameters
+        </button>
+        <button 
+          onClick={handleReset} 
+          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-md"
+          disabled={busy}
+        >
+          Reset Data
+        </button>
+      </div>
+
+      {/* Message si aucun point */}
+      {points.length === 0 && (
+        <div className="text-yellow-600 mb-4">
+          Aucun point trouvé. Vérifiez que le site est correctement défini ou ajoutez des données via la page Switchboards.
+        </div>
+      )}
+
+      {/* Tableau */}
+      {points.length > 0 && (
+        <div className="overflow-x-auto shadow-xl rounded-lg">
+          <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+            <thead className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase">
+                  <input
+                    type="checkbox"
+                    onChange={() => setSelectedPoints(selectedPoints.length === points.length ? [] : points.map(p => ({ device_id: p.device_id, switchboard_id: p.switchboard_id })))}
+                    checked={selectedPoints.length === points.length}
+                  />
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Device</th>
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Switchboard</th>
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium uppercase">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {points.map(point => (
+                <tr key={`${point.device_id}-${point.switchboard_id}`} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-6 py-4">
+                    <input 
+                      type="checkbox" 
+                      checked={selectedPoints.some(p => p.device_id === point.device_id)} 
+                      onChange={() => toggleSelect(point)} 
+                    />
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-900">{point.device_name} ({point.device_type})</td>
+                  <td className="px-6 py-4 text-sm text-gray-900">{point.switchboard_name}</td>
+                  <td className="px-6 py-4 text-sm">
+                    {statuses[point.device_id] === 'safe' ? <CheckCircle className="text-green-600" /> :
+                     statuses[point.device_id] === 'at-risk' ? <XCircle className="text-red-600" /> :
+                     statuses[point.device_id] === 'incomplete' ? <AlertTriangle className="text-yellow-600" /> : 'Pending'}
+                  </td>
+                  <td className="px-6 py-4 text-sm">
+                    <button
+                      onClick={() => handleCheck(point.device_id, point.switchboard_id)}
+                      className="text-blue-600 hover:underline mr-2"
+                    >
+                      Check
+                    </button>
+                    <button
+                      onClick={() => openParams(point)}
+                      className="text-green-600 hover:underline"
+                    >
+                      Edit Params
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {selectedPoints.length > 0 && (
+        <button 
+          onClick={handleBatchCheck} 
+          className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-md"
+          disabled={busy}
+        >
+          Check Selected ({selectedPoints.length})
+        </button>
+      )}
+
       {checkResult && (
         <div ref={resultRef} className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
           <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
@@ -473,14 +587,144 @@ export default function ArcFlash() {
         </div>
       )}
 
-      {/* Modale des paramètres (inchangée) */}
       <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Edit Arc Flash Parameters">
         <div className="space-y-4">
-          {/* ... (le contenu de la modale des params, inchangé) */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Working Distance (mm)</label>
+            <input
+              type="number"
+              value={paramForm.working_distance || 455}
+              onChange={e => setParamForm({ ...paramForm, working_distance: Math.max(Number(e.target.value), 100) })}
+              className="input w-full"
+              placeholder="Minimum: 100"
+              min="100"
+            />
+            {paramTips.working_distance_tip && (
+              <p className="text-sm text-gray-600 mt-1">{paramTips.working_distance_tip}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Enclosure Type</label>
+            <select
+              value={paramForm.enclosure_type || 'VCB'}
+              onChange={e => setParamForm({ ...paramForm, enclosure_type: e.target.value })}
+              className="input w-full"
+            >
+              <option value="VCB">VCB (Vertical Conductors in Box)</option>
+              <option value="VCBB">VCBB (Vertical Conductors Bottom Box)</option>
+              <option value="HCB">HCB (Horizontal Conductors in Box)</option>
+              <option value="HOA">HOA (Horizontal Open Air)</option>
+              <option value="VOA">VOA (Vertical Open Air)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Electrode Gap (mm)</label>
+            <input
+              type="number"
+              value={paramForm.electrode_gap || 32}
+              onChange={e => setParamForm({ ...paramForm, electrode_gap: Number(e.target.value) })}
+              className="input w-full"
+              placeholder="Default: 32"
+              min="1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Arcing Time (s)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={paramForm.arcing_time || 0.2}
+              onChange={e => setParamForm({ ...paramForm, arcing_time: Number(e.target.value) })}
+              className="input w-full"
+              placeholder="Default: 0.2 (from selectivity if available)"
+              min="0.01"
+            />
+            {paramTips.arcing_time_tip && (
+              <p className="text-sm text-gray-600 mt-1">{paramTips.arcing_time_tip}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Fault Current (kA)</label>
+            <input
+              type="number"
+              value={paramForm.fault_current_ka || ''}
+              onChange={e => setParamForm({ ...paramForm, fault_current_ka: Number(e.target.value) })}
+              className="input w-full"
+              placeholder="From Fault Level or manual"
+              min="1"
+            />
+            {paramTips.fault_current_tip && (
+              <p className="text-sm text-gray-600 mt-1">{paramTips.fault_current_tip}</p>
+            )}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Protection Settings (Ir)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={paramForm.settings.ir || 1}
+              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, ir: Number(e.target.value) } })}
+              className="input w-full"
+              placeholder="Long-time pickup (default: 1)"
+              min="0.1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Protection Settings (Isd)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={paramForm.settings.isd || 6}
+              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, isd: Number(e.target.value) } })}
+              className="input w-full"
+              placeholder="Short-time pickup (default: 6)"
+              min="1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Protection Settings (Tsd, s)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={paramForm.settings.tsd || 0.1}
+              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, tsd: Number(e.target.value) } })}
+              className="input w-full"
+              placeholder="Short-time delay (default: 0.1)"
+              min="0.01"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Protection Settings (Ii)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={paramForm.settings.ii || 10}
+              onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, ii: Number(e.target.value) } })}
+              className="input w-full"
+              placeholder="Instantaneous pickup (default: 10)"
+              min="1"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Parent Device ID</label>
+            <input
+              type="number"
+              value={paramForm.parent_id || ''}
+              onChange={e => setParamForm({ ...paramForm, parent_id: Number(e.target.value) || null })}
+              className="input w-full"
+              placeholder="Upstream device ID (optional)"
+            />
+          </div>
+          <button
+            onClick={saveParameters}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 w-full"
+            disabled={busy || !paramForm.device_id || !paramForm.switchboard_id}
+          >
+            Save Parameters
+          </button>
         </div>
       </Modal>
 
-      {/* Modale du graphe (inchangée) */}
       <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Incident Energy Curves (Zoom & Pan Enabled)">
         {curveData ? (
           <div ref={chartRef}>
