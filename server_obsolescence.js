@@ -254,7 +254,7 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
       FROM devices d
       JOIN switchboards s ON d.switchboard_id = s.id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND op.site = $1
       WHERE d.site = $1
     `, [site]);
 
