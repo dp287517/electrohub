@@ -209,13 +209,13 @@ export default function Obsolescence() {
   const toggleBuilding = (building) => {
     setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }));
     if (!switchboards[building]) loadSwitchboards(building);
-    setSelectedFilter({ building, switchboard: null });
+    setSelectedFilter(prev => ({ ...prev, building, switchboard: null }));
   };
 
   const toggleSwitchboard = (switchboard) => {
     setExpandedSwitchboards(prev => ({ ...prev, [switchboard]: !prev[switchboard] }));
     if (!devices[switchboard]) loadDevices(switchboard);
-    setSelectedFilter(prev => ({ ...prev, switchboard });
+    setSelectedFilter(prev => ({ ...prev, switchboard }));
   };
 
   const loadGanttData = async () => {
@@ -258,7 +258,7 @@ export default function Obsolescence() {
 
   const handleAiQuery = async (query) => {
     try {
-      const { response, updates } = await post('/api/obsolescence/ai-query', { query });
+      const { response, updates } = await post('/api/obsolescence/ai-query', { query, site });
       setAiTips(prev => [...prev, { id: Date.now(), content: response }].slice(-5));
       if (updates) {
         loadBuildings(); // Refresh if DB updated
