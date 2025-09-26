@@ -204,6 +204,7 @@ app.post('/api/obsolescence/parameters', async (req, res) => {
   try {
     const site = siteOf(req);
     const params = req.body;
+    if (!params.device_id || !params.switchboard_id) return res.status(400).json({ error: 'Missing device_id or switchboard_id' });
     await pool.query(`
       INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date, avg_temperature, avg_humidity, operation_cycles, avg_life_years, replacement_cost, document_link)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -376,62 +377,63 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
 // AI-QUERY
 app.post('/api/obsolescence/ai-query', async (req, res) => {
   try {
-    if (!openai) return res.json({ tip: 'AI unavailable' });
     const { query } = req.body;
+    const site = siteOf(req);
+    // Fetch DB context
+    const dbContext = await pool.query(`SELECT * FROM switchboards WHERE name ILIKE $1 AND site = $2 LIMIT 1`, ['%Production%', site]);
+    const context = dbContext.rows[0] ? JSON.stringify(dbContext.rows[0]) : 'No specific data';
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { 
           role: 'system', 
-          content: `You are an expert in IEC/IEEE asset management. Provide concise advice on obsolescence based on "${query}". Reference norms like IEC 62271, suggest CAPEX strategies or mitigations. 1-2 sentences.` 
+          content: `You are an expert in substation obsolescence. Use DB context: ${context}. Provide analysis based on DB data, norms like IEC 62271, CAPEX strategies. Update if asked (return updates: true).` 
         },
         { role: 'user', content: query }
       ],
-      max_tokens: 120,
-      temperature: 0.3
+      max_tokens: 200,
+      temperature: 0.5
     });
-    res.json({ response: completion.choices[0].message.content.trim(), updates: false }); // Add updates logic if needed
+    const response = completion.choices[0].message.content.trim();
+    let updates = false;
+    // Parse for updates, e.g. if query asks to set temp
+    if (query.toLowerCase().includes('set temp')) {
+      // Parse value and update DB
+      const temp = parseFloat(query.match(/\d+/)[0]);
+      await pool.query(`UPDATE obsolescence_parameters SET avg_temperature = $1 WHERE site = $2`, [temp, site]);
+      updates = true;
+    }
+    res.json({ response, updates });
   } catch (e) {
     console.error('[AI QUERY] error:', e.message);
     res.status(500).json({ error: 'AI query failed' });
   }
 });
 
-// GANTT-DATA with group_label fix
+// GANTT-DATA with switchboard aggregation
 app.get('/api/obsolescence/gantt-data', async (req, res) => {
   try {
     const site = siteOf(req);
-    const { group = 'building', building, switchboard } = req.query;
-    let groupField = '';
-    switch (group) {
-      case 'floor':
-        groupField = 's.floor';
-        break;
-      case 'switchboard':
-        groupField = 's.name';
-        break;
-      default:
-        groupField = 's.building_code';
-    }
+    const { group = 'switchboard', building, switchboard } = req.query;
+    let groupField = 's.name AS group_label';
     let where = 'd.site = $1';
     let vals = [site];
     if (building) { where += ' AND s.building_code = $2'; vals.push(building); }
     if (switchboard) { where += ' AND s.id = $3'; vals.push(Number(switchboard)); }
     const r = await pool.query(`
-      SELECT d.id AS device_id, d.name, s.building_code, s.floor, s.name AS switchboard_name,
-             op.manufacture_date, op.avg_life_years, op.replacement_cost, oc.urgency_score,
-             ${groupField} AS group_label
-      FROM devices d
-      JOIN switchboards s ON d.switchboard_id = s.id
+      SELECT s.name AS group_label, SUM(op.replacement_cost) AS replacement_cost, AVG(EXTRACT(YEAR FROM op.manufacture_date)) AS manufacture_year, AVG(op.avg_life_years) AS avg_life_years, AVG(oc.urgency_score) AS urgency_score
+      FROM switchboards s
+      JOIN devices d ON s.id = d.switchboard_id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
       LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
       WHERE ${where}
+      GROUP BY s.name
     `, vals);
     const tasks = r.rows.map(row => ({
-      start: new Date(row.manufacture_date || '2000-01-01'),
-      end: new Date(new Date(row.manufacture_date || '2000-01-01').getFullYear() + (row.avg_life_years || 25), 0, 1),
-      name: row.name || 'Device',
-      id: row.device_id,
+      start: new Date(row.manufacture_year, 0, 1),
+      end: new Date(row.manufacture_year + row.avg_life_years, 0, 1),
+      name: row.group_label,
+      id: row.group_label,
       progress: row.urgency_score || 0,
       type: 'task',
     })).filter(task => !isNaN(task.start.getTime()));
@@ -439,6 +441,37 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
   } catch (e) {
     console.error('[OBS GANTT] error:', e.message);
     res.status(500).json({ error: 'Gantt data failed' });
+  }
+});
+
+// ANNUAL-GANTT for modal
+app.get('/api/obsolescence/annual-gantt', async (req, res) => {
+  try {
+    const { device_id } = req.query;
+    const site = siteOf(req);
+    const r = await pool.query(`
+      SELECT op.manufacture_date, op.avg_life_years
+      FROM obsolescence_parameters op WHERE device_id = $1 AND site = $2
+    `, [Number(device_id), site]);
+    const row = r.rows[0];
+    const tasks = [];
+    if (row) {
+      const manufactureYear = new Date(row.manufacture_date).getFullYear();
+      for (let m = 0; m < 12; m++) {
+        tasks.push({
+          start: new Date(manufactureYear, m, 1),
+          end: new Date(manufactureYear, m + 1, 0),
+          name: `Month ${m + 1}`,
+          id: m,
+          progress: (m / 12) * 100,
+          type: 'task',
+        });
+      }
+    }
+    res.json({ tasks });
+  } catch (e) {
+    console.error('[OBS ANNUAL GANTT] error:', e.message);
+    res.status(500).json({ error: 'Annual Gantt failed' });
   }
 });
 
