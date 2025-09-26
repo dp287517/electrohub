@@ -135,6 +135,8 @@ export default function Obsolescence() {
   const [showConfetti, setShowConfetti] = useState(false);
   const chartRef = useRef(null);
   const ganttRef = useRef(null);
+  const [avgUrgency, setAvgUrgency] = useState(45);
+  const [totalCapex, setTotalCapex] = useState(50000);
 
   useEffect(() => {
     loadBuildings();
@@ -170,6 +172,10 @@ export default function Obsolescence() {
       const data = await get('/api/obsolescence/buildings');
       setBuildings(data.data || []);
       await post('/api/obsolescence/ai-fill'); // Auto-fill with AI
+      const urgencyRes = await get('/api/obsolescence/avg-urgency');
+      setAvgUrgency(urgencyRes.avg || 45);
+      const capexRes = await get('/api/obsolescence/total-capex');
+      setTotalCapex(capexRes.total || 50000);
     } catch (e) {
       setToast({ msg: `Failed to load buildings: ${e.message}`, type: 'error' });
     } finally {
@@ -373,11 +379,11 @@ export default function Obsolescence() {
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Avg Urgency</h3>
-            <p className="text-3xl font-bold text-orange-600">45%</p>
+            <p className="text-3xl font-bold text-orange-600">{avgUrgency}%</p>
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Total CAPEX Forecast</h3>
-            <p className="text-3xl font-bold text-green-600">€50k</p>
+            <p className="text-3xl font-bold text-green-600">€{totalCapex.toLocaleString()}</p>
           </div>
         </div>
       )}
