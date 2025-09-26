@@ -256,9 +256,9 @@ app.put('/api/atex/equipments/:id', async (req, res) => {
     if ('atex_ref' in filteredPatch || 'zone_gas' in filteredPatch || 'zone_dust' in filteredPatch) {
       const cur = await pool.query('SELECT atex_ref, zone_gas, zone_dust FROM atex_equipments WHERE id=$1', [id]);
       const merged = {
-        atex_ref: filteredPatch.atex_ref ?? cur.rows[0]?.atex_ref,
-        zone_gas: filteredPatch.zone_gas ?? cur.rows[0]?.zone_gas,
-        zone_dust: filteredPatch.zone_dust ?? cur.rows[0]?.zone_dust,
+        atex_ref: 'atex_ref' in filteredPatch ? filteredPatch.atex_ref : cur.rows[0]?.atex_ref,
+        zone_gas: 'zone_gas' in filteredPatch ? filteredPatch.zone_gas : cur.rows[0]?.zone_gas,
+        zone_dust: 'zone_dust' in filteredPatch ? filteredPatch.zone_dust : cur.rows[0]?.zone_dust,
       };
       filteredPatch.status = assessCompliance(merged.atex_ref, merged.zone_gas, merged.zone_dust).status;
     }
