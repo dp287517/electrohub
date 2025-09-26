@@ -378,7 +378,13 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
 app.post('/api/obsolescence/ai-query', async (req, res) => {
   try {
     const { query, site } = req.body;
-    const dbContext = await pool.query(`SELECT s.name, op.* FROM switchboards s LEFT JOIN devices d ON s.id = d.switchboard_id LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND op.site = $1 WHERE s.site = $1`, [site]);
+    const dbContext = await pool.query(`
+      SELECT s.name, op.* 
+      FROM switchboards s 
+      LEFT JOIN devices d ON s.id = d.switchboard_id 
+      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND op.site = $1 
+      WHERE s.site = $1
+    `, [site]);
     const context = dbContext.rows.length ? JSON.stringify(dbContext.rows) : 'No data';
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -430,7 +436,7 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
     `, vals);
     const tasks = r.rows.map(row => ({
       start: new Date(row.manufacture_year || 2000, 0, 1),
-      end: new Date((row.manufacture_year || 2000) + (row.avg_life_years || 25), 0, 1),
+      end: new Date((row.manufacture_year || 2000) + (row.avg_life_years || 25), 11, 31),
       name: row.group_label || 'Unknown',
       id: row.group_label || 'unknown',
       progress: row.urgency_score || 0,
@@ -563,4 +569,50 @@ function calculateObsolescence(point) {
   if (point.arc_status === 'at-risk') urgency += 15;
   urgency = Math.min(urgency, 100);
   const status = urgency < 30 ? 'ok' : urgency < 70 ? 'warning' : 'critical';
-  const riskZones = urgency > 50 ? [{ min: 50
+  const riskZones = urgency > 50 ? [{ min: 50, max: urgency }] : [];
+  return { remaining_life_years: Math.round(remaining_life_years), urgency_score: Math.round(urgency), status, riskZones };
+}
+
+function getRemediations(point, urgency) {
+  return [
+    `Monitor closely if urgency >50; plan replacement in ${Math.round(30 - urgency / 3)} years`,
+    'Reduce temperature/humidity to extend life (IEC 62271)',
+    `Estimated CAPEX: ${point.replacement_cost * 1.1}€ with 10% inflation`
+  ];
+}
+
+function generateForecastForItem(item) {
+  const forecast = [];
+  const currentYear = new Date().getFullYear();
+  let capexCumul = 0;
+  const inflation = 1.02;
+  const manufactureYear = item.manufacture_date && !isNaN(new Date(item.manufacture_date).getTime()) ? new Date(item.manufacture_date).getFullYear() : 2000;
+  const lifeYears = item.avg_life_years || 25;
+  const replacementYear = manufactureYear + lifeYears;
+
+  for (let y = 0; y < 30; y++) {
+    const year = currentYear + y;
+    const remaining = lifeYears - (year - manufactureYear);
+    const capexYear = year >= replacementYear ? item.replacement_cost * Math.pow(inflation, y) : 0;
+    capexCumul += capexYear;
+    forecast.push({ year, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul), remaining_life: Math.max(remaining, 0) });
+  }
+  return forecast;
+}
+
+async function estimateCost(deviceType) {
+  try {
+    const searchResult = await axios.get(`https://api.duckduckgo.com/?q=average+cost+of+${deviceType}&format=json`);
+    const prompt = `Estimate replacement cost for ${deviceType} based on this data: ${searchResult.data.AbstractText || 'No data'}`;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return parseFloat(completion.choices[0].message.content) || 1000;
+  } catch {
+    return 1000;
+  }
+}
+
+const port = process.env.OBSOLESCENCE_PORT || 3007;
+app.listen(port, () => console.log(`Obsolescence service running on :${port}`));
