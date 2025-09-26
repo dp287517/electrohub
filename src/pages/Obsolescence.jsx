@@ -1,7 +1,7 @@
 // src/pages/Obsolescence.jsx
 import { useEffect, useState, useRef } from 'react';
 import { get, post, upload } from '../lib/api.js';
-import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight, Settings, Upload, ChevronDown, Send } from 'lucide-react';
+import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight, Settings, Upload, ChevronDown, Send, Calendar } from 'lucide-react';
 import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
@@ -13,6 +13,7 @@ import {
   Chart as ChartJS,
   CategoryScale,
   LinearScale,
+  BarController,
   BarElement,
   PointElement,
   LineElement,
@@ -27,6 +28,7 @@ import zoomPlugin from 'chartjs-plugin-zoom';
 ChartJS.register(
   CategoryScale,
   LinearScale,
+  BarController,
   BarElement,
   PointElement,
   LineElement,
@@ -137,6 +139,9 @@ export default function Obsolescence() {
   const ganttRef = useRef(null);
   const [avgUrgency, setAvgUrgency] = useState(45);
   const [totalCapex, setTotalCapex] = useState(50000);
+  const [selectedDevice, setSelectedDevice] = useState(null);
+  const [showGanttModal, setShowGanttModal] = useState(false);
+  const [annualGanttTasks, setAnnualGanttTasks] = useState([]);
 
   useEffect(() => {
     loadBuildings();
@@ -210,7 +215,7 @@ export default function Obsolescence() {
   const toggleSwitchboard = (switchboard) => {
     setExpandedSwitchboards(prev => ({ ...prev, [switchboard]: !prev[switchboard] }));
     if (!devices[switchboard]) loadDevices(switchboard);
-    setSelectedFilter(prev => ({ ...prev, switchboard }));
+    setSelectedFilter(prev => ({ ...prev, switchboard });
   };
 
   const loadGanttData = async () => {
@@ -353,6 +358,17 @@ export default function Obsolescence() {
     return { labels: years, datasets };
   };
 
+  const openAnnualGantt = async (device) => {
+    try {
+      const data = await get('/api/obsolescence/annual-gantt', { device_id: device.device_id });
+      setAnnualGanttTasks(data.tasks || []);
+      setSelectedDevice(device);
+      setShowGanttModal(true);
+    } catch (e) {
+      setToast({ msg: `Annual Gantt failed: ${e.message}`, type: 'error' });
+    }
+  };
+
   return (
     <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-green-50 to-orange-50 rounded-3xl shadow-xl min-h-screen">
       <header className="flex items-center justify-between mb-8">
@@ -379,7 +395,7 @@ export default function Obsolescence() {
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Avg Urgency</h3>
-            <p className="text-3xl font-bold text-orange-600">{avgUrgency}%</p>
+            <p className="text-3xl font-bold text-orange-600">{avgUrgency.toFixed(1)}%</p>
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Total CAPEX Forecast</h3>
@@ -427,6 +443,7 @@ export default function Obsolescence() {
                           <td className="p-4">{dev.remaining_life_years ? new Date().getFullYear() + dev.remaining_life_years : 'N/A'}</td>
                           <td className="p-4 flex gap-2">
                             <button onClick={() => { setParamForm({ ...dev }); setShowParamsModal(true); }} className="text-green-600 hover:text-green-800"><Settings size={16} /></button>
+                            <button onClick={() => openAnnualGantt(dev)} className="text-blue-600 hover:text-blue-800"><Calendar size={16} /></button>
                           </td>
                         </motion.tr>
                       ))}
@@ -444,11 +461,11 @@ export default function Obsolescence() {
           {ganttTasks.length ? (
             <Gantt
               tasks={ganttTasks}
-              viewMode={ViewMode.Year}
+              viewMode={ViewMode.Decade}
               columnWidth={120}
               listCellWidth="250px"
               todayColor="#ff6b00"
-              onClick={task => handleAiQuery(`Strategy for ${task.name}`)}
+              onClick={task => handleAiQuery(`Explain Gantt for ${task.name}`)}
             />
           ) : <p className="text-gray-600 text-center py-20">No data available yet. AI is analyzing...</p>}
         </div>
@@ -479,12 +496,15 @@ export default function Obsolescence() {
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700">Manufacture Date</label>
-            <input
-              type="date"
-              value={paramForm.manufacture_date}
-              onChange={e => setParamForm({ ...paramForm, manufacture_date: e.target.value })}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-            />
+            <div className="relative">
+              <input
+                type="date"
+                value={paramForm.manufacture_date}
+                onChange={e => setParamForm({ ...paramForm, manufacture_date: e.target.value })}
+                className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
+              />
+              <Calendar className="absolute right-2 top-2 text-gray-500" size={20} />
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Avg Temperature (°C)</label>
@@ -564,6 +584,21 @@ export default function Obsolescence() {
           >
             Save Parameters
           </button>
+        </div>
+      </Modal>
+
+      <Modal open={showGanttModal} onClose={() => setShowGanttModal(false)} title={`Annual Gantt for ${selectedDevice?.name}`}>
+        <div className="h-[400px]">
+          {annualGanttTasks.length ? (
+            <Gantt
+              tasks={annualGanttTasks}
+              viewMode={ViewMode.Month}
+              columnWidth={80}
+              listCellWidth="200px"
+              todayColor="#ff6b00"
+              onClick={task => handleAiQuery(`Explain annual Gantt for ${task.name}`)}
+            />
+          ) : <p className="text-gray-600 text-center py-20">No annual data</p>}
         </div>
       </Modal>
 
