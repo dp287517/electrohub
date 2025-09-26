@@ -261,7 +261,6 @@ app.post('/api/obsolescence/auto-check', async (req, res) => {
       FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE d.site = $1
     `, [site]);
     for (const p of points.rows) {
-      // Internal check call
       const point = await pool.query(`
         SELECT d.*, op.*, sc.status AS selectivity_status, fc.status AS fault_status, ac.status AS arc_status
         FROM devices d
@@ -302,10 +301,11 @@ app.post('/api/obsolescence/ai-fill', async (req, res) => {
       // AI estimate
       def.avg_temperature = 25; // From research
       def.avg_life_years = 30; // From MCCB average
+      def.manufacture_date = new Date().toISOString().split('T')[0]; // Default recent date
       def.replacement_cost = await estimateCost(def.device_type);
       // Update
-      await pool.query(`UPDATE obsolescence_parameters SET avg_temperature = $1, avg_life_years = $2, replacement_cost = $3 WHERE device_id = $4 AND switchboard_id = $5 AND site = $6`,
-        [def.avg_temperature, def.avg_life_years, def.replacement_cost, def.device_id, def.switchboard_id, site]);
+      await pool.query(`UPDATE obsolescence_parameters SET avg_temperature = $1, avg_life_years = $2, manufacture_date = $3, replacement_cost = $4 WHERE device_id = $5 AND switchboard_id = $6 AND site = $7`,
+        [def.avg_temperature, def.avg_life_years, def.manufacture_date, def.replacement_cost, def.device_id, def.switchboard_id, site]);
     }
     res.json({ message: 'AI fill done' });
   } catch (e) {
@@ -377,17 +377,15 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
 // AI-QUERY
 app.post('/api/obsolescence/ai-query', async (req, res) => {
   try {
-    const { query } = req.body;
-    const site = siteOf(req);
-    // Fetch DB context
-    const dbContext = await pool.query(`SELECT * FROM switchboards WHERE name ILIKE $1 AND site = $2 LIMIT 1`, ['%Production%', site]);
-    const context = dbContext.rows[0] ? JSON.stringify(dbContext.rows[0]) : 'No specific data';
+    const { query, site } = req.body;
+    const dbContext = await pool.query(`SELECT s.name, op.* FROM switchboards s LEFT JOIN devices d ON s.id = d.switchboard_id LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND op.site = $1 WHERE s.site = $1`, [site]);
+    const context = dbContext.rows.length ? JSON.stringify(dbContext.rows) : 'No data';
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { 
           role: 'system', 
-          content: `You are an expert in substation obsolescence. Use DB context: ${context}. Provide analysis based on DB data, norms like IEC 62271, CAPEX strategies. Update if asked (return updates: true).` 
+          content: `You are an expert in substation obsolescence. Use DB context: ${context}. Provide analysis based on DB data, norms like IEC 62271, CAPEX strategies. If query includes 'set temp' or similar, update avg_temperature in obsolescence_parameters (return updates: true).` 
         },
         { role: 'user', content: query }
       ],
@@ -396,12 +394,13 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
     });
     const response = completion.choices[0].message.content.trim();
     let updates = false;
-    // Parse for updates, e.g. if query asks to set temp
     if (query.toLowerCase().includes('set temp')) {
-      // Parse value and update DB
-      const temp = parseFloat(query.match(/\d+/)[0]);
-      await pool.query(`UPDATE obsolescence_parameters SET avg_temperature = $1 WHERE site = $2`, [temp, site]);
-      updates = true;
+      const tempMatch = query.match(/\d+/);
+      if (tempMatch) {
+        const temp = parseFloat(tempMatch[0]);
+        await pool.query(`UPDATE obsolescence_parameters SET avg_temperature = $1 WHERE site = $2`, [temp, site]);
+        updates = true;
+      }
     }
     res.json({ response, updates });
   } catch (e) {
@@ -416,27 +415,28 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
     const site = siteOf(req);
     const { group = 'switchboard', building, switchboard } = req.query;
     let groupField = 's.name AS group_label';
-    let where = 'd.site = $1';
+    let where = 's.site = $1';
     let vals = [site];
     if (building) { where += ' AND s.building_code = $2'; vals.push(building); }
     if (switchboard) { where += ' AND s.id = $3'; vals.push(Number(switchboard)); }
     const r = await pool.query(`
-      SELECT s.name AS group_label, SUM(op.replacement_cost) AS replacement_cost, AVG(EXTRACT(YEAR FROM op.manufacture_date)) AS manufacture_year, AVG(op.avg_life_years) AS avg_life_years, AVG(oc.urgency_score) AS urgency_score
+      SELECT ${groupField}, AVG(EXTRACT(YEAR FROM op.manufacture_date)) AS manufacture_year, AVG(op.avg_life_years) AS avg_life_years, AVG(oc.urgency_score) AS urgency_score, SUM(op.replacement_cost) AS replacement_cost
       FROM switchboards s
-      JOIN devices d ON s.id = d.switchboard_id
+      LEFT JOIN devices d ON s.id = d.switchboard_id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
       LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
       WHERE ${where}
-      GROUP BY s.name
+      GROUP BY ${groupField}
     `, vals);
     const tasks = r.rows.map(row => ({
-      start: new Date(row.manufacture_year, 0, 1),
-      end: new Date(row.manufacture_year + row.avg_life_years, 0, 1),
-      name: row.group_label,
-      id: row.group_label,
+      start: new Date(row.manufacture_year || 2000, 0, 1),
+      end: new Date((row.manufacture_year || 2000) + (row.avg_life_years || 25), 0, 1),
+      name: row.group_label || 'Unknown',
+      id: row.group_label || 'unknown',
       progress: row.urgency_score || 0,
       type: 'task',
-    })).filter(task => !isNaN(task.start.getTime()));
+      cost: row.replacement_cost || 0,
+    })).filter(task => !isNaN(task.start.getTime()) && !isNaN(task.end.getTime()));
     res.json({ tasks });
   } catch (e) {
     console.error('[OBS GANTT] error:', e.message);
@@ -462,7 +462,7 @@ app.get('/api/obsolescence/annual-gantt', async (req, res) => {
           start: new Date(manufactureYear, m, 1),
           end: new Date(manufactureYear, m + 1, 0),
           name: `Month ${m + 1}`,
-          id: m,
+          id: `${device_id}-${m}`,
           progress: (m / 12) * 100,
           type: 'task',
         });
@@ -563,36 +563,4 @@ function calculateObsolescence(point) {
   if (point.arc_status === 'at-risk') urgency += 15;
   urgency = Math.min(urgency, 100);
   const status = urgency < 30 ? 'ok' : urgency < 70 ? 'warning' : 'critical';
-  const riskZones = urgency > 50 ? [{ min: 50, max: urgency }] : [];
-  return { remaining_life_years: Math.round(remaining_life_years), urgency_score: Math.round(urgency), status, riskZones };
-}
-
-function getRemediations(point, urgency) {
-  return [
-    `Monitor closely if urgency >50; plan replacement in ${Math.round(30 - urgency / 3)} years`,
-    'Reduce temperature/humidity to extend life (IEC 62271)',
-    `Estimated CAPEX: ${point.replacement_cost * 1.1}€ with 10% inflation`
-  ];
-}
-
-function generateForecastForItem(item) {
-  const forecast = [];
-  const currentYear = new Date().getFullYear();
-  let capexCumul = 0;
-  const inflation = 1.02;
-  const manufactureYear = item.manufacture_date && !isNaN(new Date(item.manufacture_date).getTime()) ? new Date(item.manufacture_date).getFullYear() : 2000;
-  const lifeYears = item.avg_life_years || 25;
-  const replacementYear = manufactureYear + lifeYears;
-
-  for (let y = 0; y < 30; y++) {
-    const year = currentYear + y;
-    const remaining = lifeYears - (year - manufactureYear);
-    const capexYear = year >= replacementYear ? item.replacement_cost * Math.pow(inflation, y) : 0;
-    capexCumul += capexYear;
-    forecast.push({ year, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul), remaining_life: Math.max(remaining, 0) });
-  }
-  return forecast;
-}
-
-const port = process.env.OBSOLESCENCE_PORT || 3007;
-app.listen(port, () => console.log(`Obsolescence service running on :${port}`));
+  const riskZones = urgency > 50 ? [{ min: 50
