@@ -1,11 +1,9 @@
-// src/pages/Obsolescence.jsx
-import { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, Fragment } from 'react';
 import { get, post, upload } from '../lib/api.js';
-import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight, Settings, Upload, ChevronDown, Send, Calendar } from 'lucide-react';
-import { Line, Bar, Doughnut } from 'react-chartjs-2';
+import { HelpCircle, ChevronRight, Settings, Upload, ChevronDown, Send, Calendar } from 'lucide-react';
+import { Line, Doughnut } from 'react-chartjs-2';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
-import Confetti from 'react-confetti';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -68,7 +66,8 @@ function Modal({ open, onClose, children, title }) {
         <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-green-50 to-orange-50">
           <h3 className="text-xl font-bold text-gray-800">{title}</h3>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100">
-            <X size={20} className="text-gray-600" />
+            <span className="sr-only">Close</span>
+            ×
           </button>
         </div>
         <div className="p-6 overflow-y-auto max-h-[60vh]">{children}</div>
@@ -89,7 +88,7 @@ function Sidebar({ tips, open, onClose, onSendQuery }) {
     >
       <div className="flex justify-between mb-6">
         <h3 className="text-2xl font-bold text-gray-800">AI Assistant</h3>
-        <button onClick={onClose}><X size={24} className="text-gray-600" /></button>
+        <button onClick={onClose}><span className="sr-only">Close</span>×</button>
       </div>
       <div className="space-y-4 mb-4">
         {tips.map(tip => (
@@ -134,7 +133,6 @@ export default function Obsolescence() {
   const [pdfFile, setPdfFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
-  const [showConfetti, setShowConfetti] = useState(false);
   const chartRef = useRef(null);
   const ganttRef = useRef(null);
   const [avgUrgency, setAvgUrgency] = useState(45);
@@ -176,11 +174,11 @@ export default function Obsolescence() {
       setBusy(true);
       const data = await get('/api/obsolescence/buildings');
       setBuildings(data.data || []);
-      await post('/api/obsolescence/ai-fill'); // Auto-fill with AI
+      await post('/api/obsolescence/ai-fill'); // populate sensible defaults
       const urgencyRes = await get('/api/obsolescence/avg-urgency');
-      setAvgUrgency(urgencyRes.avg || 45);
+      setAvgUrgency(Number(urgencyRes.avg || 45));
       const capexRes = await get('/api/obsolescence/total-capex');
-      setTotalCapex(capexRes.total || 50000);
+      setTotalCapex(Number(capexRes.total || 50000));
     } catch (e) {
       setToast({ msg: `Failed to load buildings: ${e.message}`, type: 'error' });
     } finally {
@@ -226,7 +224,7 @@ export default function Obsolescence() {
         ...task,
         start: new Date(task.start),
         end: new Date(task.end),
-      })).filter(task => !isNaN(task.start.getTime()));
+      })).filter(task => !isNaN(task.start.getTime()) && !isNaN(task.end.getTime()));
       setGanttTasks(tasks);
     } catch (e) {
       setToast({ msg: `Gantt failed: ${e.message}`, type: 'error' });
@@ -280,7 +278,7 @@ export default function Obsolescence() {
       formData.append('device_id', paramForm.device_id);
       formData.append('switchboard_id', paramForm.switchboard_id);
       const { manufacture_date } = await upload('/api/obsolescence/analyze-pdf', formData);
-      setParamForm({ ...paramForm, manufacture_date });
+      setParamForm(prev => ({ ...prev, manufacture_date }));
       setToast({ msg: 'PDF analyzed!', type: 'success' });
     } catch (e) {
       setToast({ msg: `PDF failed: ${e.message}`, type: 'error' });
@@ -295,11 +293,11 @@ export default function Obsolescence() {
         device_id: paramForm.device_id,
         switchboard_id: paramForm.switchboard_id,
         manufacture_date: paramForm.manufacture_date,
-        avg_temperature: paramForm.avg_temperature,
-        avg_humidity: paramForm.avg_humidity,
-        operation_cycles: paramForm.operation_cycles,
-        avg_life_years: paramForm.avg_life_years,
-        replacement_cost: paramForm.replacement_cost,
+        avg_temperature: Number(paramForm.avg_temperature),
+        avg_humidity: Number(paramForm.avg_humidity),
+        operation_cycles: Number(paramForm.operation_cycles),
+        avg_life_years: Number(paramForm.avg_life_years),
+        replacement_cost: Number(paramForm.replacement_cost),
         document_link: paramForm.document_link
       };
       await post('/api/obsolescence/parameters', flatForm);
@@ -316,7 +314,6 @@ export default function Obsolescence() {
       setBusy(true);
       const pdf = new jsPDF();
       pdf.text('Obsolescence Report', 10, 10);
-      // Add canvases or table data here if needed
       pdf.save('obsolescence-report.pdf');
       setToast({ msg: 'PDF exported!', type: 'success' });
     } catch (e) {
@@ -395,11 +392,11 @@ export default function Obsolescence() {
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Avg Urgency</h3>
-            <p className="text-3xl font-bold text-orange-600">{avgUrgency.toFixed(1)}%</p>
+            <p className="text-3xl font-bold text-orange-600">{Number(avgUrgency).toFixed(1)}%</p>
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Total CAPEX Forecast</h3>
-            <p className="text-3xl font-bold text-green-600">€{totalCapex.toLocaleString()}</p>
+            <p className="text-3xl font-bold text-green-600">€{Number(totalCapex).toLocaleString()}</p>
           </div>
         </div>
       )}
@@ -419,37 +416,43 @@ export default function Obsolescence() {
             </thead>
             <tbody>
               {buildings.map(build => (
-                <>
-                  <motion.tr key={build.building} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="hover:bg-green-50/50 transition-colors">
+                <Fragment key={`b-${build.building}`}>
+                  <motion.tr initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="hover:bg-green-50/50 transition-colors">
                     <td className="p-4 flex items-center cursor-pointer" onClick={() => toggleBuilding(build.building)}>
                       {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} items)
                     </td>
-                    <td></td><td></td><td>€{build.total_cost?.toLocaleString() || 'N/A'}</td><td></td><td></td>
+                    <td></td><td></td><td>€{Number(build.total_cost || 0).toLocaleString()}</td><td></td><td></td>
                   </motion.tr>
-                  {expandedBuildings[build.building] && switchboards[build.building]?.map(sb => (
-                    <>
-                      <motion.tr key={sb.id} className="bg-orange-50 hover:bg-orange-100 transition-colors">
+                  {expandedBuildings[build.building] && (switchboards[build.building] || []).map(sb => (
+                    <Fragment key={`sb-${sb.id}`}>
+                      <motion.tr className="bg-orange-50 hover:bg-orange-100 transition-colors">
                         <td className="p-4 pl-8 flex items-center cursor-pointer" onClick={() => toggleSwitchboard(sb.id)}>
                           {expandedSwitchboards[sb.id] ? <ChevronDown /> : <ChevronRight />} {sb.name} (Floor: {sb.floor})
                         </td>
-                        <td></td><td></td><td>€{sb.total_cost?.toLocaleString() || 'N/A'}</td><td></td><td></td>
+                        <td></td><td></td><td>€{Number(sb.total_cost || 0).toLocaleString()}</td><td></td><td></td>
                       </motion.tr>
-                      {expandedSwitchboards[sb.id] && devices[sb.id]?.map(dev => (
-                        <motion.tr key={dev.device_id} className="bg-white hover:bg-gray-50 transition-colors">
-                          <td className="p-4 pl-16">{dev.name || 'Device'}</td>
-                          <td className="p-4">{new Date(dev.manufacture_date).getFullYear() || 'N/A'}</td>
-                          <td className="p-4">{dev.document_link ? <a href={dev.document_link} className="text-blue-600 underline">Link</a> : 'N/A'}</td>
-                          <td className="p-4">€{dev.replacement_cost?.toLocaleString() || 'N/A'}</td>
-                          <td className="p-4">{dev.remaining_life_years ? new Date().getFullYear() + dev.remaining_life_years : 'N/A'}</td>
-                          <td className="p-4 flex gap-2">
-                            <button onClick={() => { setParamForm({ ...dev }); setShowParamsModal(true); }} className="text-green-600 hover:text-green-800"><Settings size={16} /></button>
-                            <button onClick={() => openAnnualGantt(dev)} className="text-blue-600 hover:text-blue-800"><Calendar size={16} /></button>
-                          </td>
-                        </motion.tr>
-                      ))}
-                    </>
+                      {expandedSwitchboards[sb.id] && (devices[sb.id] || []).map(dev => {
+                        const serviceYear = (dev.manufacture_date && !isNaN(new Date(dev.manufacture_date).getTime()))
+                          ? new Date(dev.manufacture_date).getFullYear() : 'N/A';
+                        const replacementYear = (dev.remaining_life_years != null && !isNaN(Number(dev.remaining_life_years)))
+                          ? (new Date().getFullYear() + Number(dev.remaining_life_years)) : 'N/A';
+                        return (
+                          <motion.tr key={`dev-${dev.device_id}`} className="bg-white hover:bg-gray-50 transition-colors">
+                            <td className="p-4 pl-16">{dev.name || 'Device'}</td>
+                            <td className="p-4">{serviceYear}</td>
+                            <td className="p-4">{dev.document_link ? <a href={dev.document_link} className="text-blue-600 underline" target="_blank" rel="noreferrer">Link</a> : 'N/A'}</td>
+                            <td className="p-4">€{Number(dev.replacement_cost || 0).toLocaleString()}</td>
+                            <td className="p-4">{replacementYear}</td>
+                            <td className="p-4 flex gap-2">
+                              <button onClick={() => { setParamForm({ ...dev }); setShowParamsModal(true); }} className="text-green-600 hover:text-green-800"><Settings size={16} /></button>
+                              <button onClick={() => openAnnualGantt(dev)} className="text-blue-600 hover:text-blue-800"><Calendar size={16} /></button>
+                            </td>
+                          </motion.tr>
+                        );
+                      })}
+                    </Fragment>
                   ))}
-                </>
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -467,7 +470,7 @@ export default function Obsolescence() {
               todayColor="#ff6b00"
               onClick={task => handleAiQuery(`Explain Gantt for ${task.name}`)}
             />
-          ) : <p className="text-gray-600 text-center py-20">No data available yet. AI is analyzing...</p>}
+          ) : <p className="text-gray-600 text-center py-20">No data available yet.</p>}
         </div>
       )}
 
@@ -477,13 +480,13 @@ export default function Obsolescence() {
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgency Distribution</h2>
             {doughnutData.length ? (
               <Doughnut data={getDoughnutChartData(doughnutData)} options={{ responsive: true, plugins: { legend: { position: 'top' } } }} />
-            ) : <p className="text-gray-600 text-center py-20">No data. Running AI analysis...</p>}
+            ) : <p className="text-gray-600 text-center py-20">No data.</p>}
           </div>
           <div ref={chartRef} className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
             <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX Forecast</h2>
             {Object.keys(capexForecast).length ? (
               <Line data={getCapexChartData(capexForecast)} options={{ responsive: true, plugins: { zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } } } }} />
-            ) : <p className="text-gray-600 text-center py-20">No data. Running AI analysis...</p>}
+            ) : <p className="text-gray-600 text-center py-20">No data.</p>}
           </div>
         </div>
       )}
@@ -499,19 +502,18 @@ export default function Obsolescence() {
             <div className="relative">
               <input
                 type="date"
-                value={paramForm.manufacture_date}
-                onChange={e => setParamForm({ ...paramForm, manufacture_date: e.target.value })}
+                value={paramForm.manufacture_date || '2000-01-01'}
+                onChange={e => setParamForm(prev => ({ ...prev, manufacture_date: e.target.value }))}
                 className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               />
-              <Calendar className="absolute right-2 top-2 text-gray-500" size={20} />
             </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Avg Temperature (°C)</label>
             <input
               type="number"
-              value={paramForm.avg_temperature}
-              onChange={e => setParamForm({ ...paramForm, avg_temperature: Number(e.target.value) })}
+              value={paramForm.avg_temperature ?? 25}
+              onChange={e => setParamForm(prev => ({ ...prev, avg_temperature: Number(e.target.value) }))}
               className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
               step="0.1"
@@ -521,8 +523,8 @@ export default function Obsolescence() {
             <label className="block text-sm font-medium text-gray-700">Avg Humidity (%)</label>
             <input
               type="number"
-              value={paramForm.avg_humidity}
-              onChange={e => setParamForm({ ...paramForm, avg_humidity: Number(e.target.value) })}
+              value={paramForm.avg_humidity ?? 50}
+              onChange={e => setParamForm(prev => ({ ...prev, avg_humidity: Number(e.target.value) }))}
               className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
               max="100"
@@ -533,8 +535,8 @@ export default function Obsolescence() {
             <label className="block text-sm font-medium text-gray-700">Operation Cycles</label>
             <input
               type="number"
-              value={paramForm.operation_cycles}
-              onChange={e => setParamForm({ ...paramForm, operation_cycles: Number(e.target.value) })}
+              value={paramForm.operation_cycles ?? 5000}
+              onChange={e => setParamForm(prev => ({ ...prev, operation_cycles: Number(e.target.value) }))}
               className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
             />
@@ -543,8 +545,8 @@ export default function Obsolescence() {
             <label className="block text-sm font-medium text-gray-700">Avg Life Years (Norm)</label>
             <input
               type="number"
-              value={paramForm.avg_life_years}
-              onChange={e => setParamForm({ ...paramForm, avg_life_years: Number(e.target.value) })}
+              value={paramForm.avg_life_years ?? 30}
+              onChange={e => setParamForm(prev => ({ ...prev, avg_life_years: Number(e.target.value) }))}
               className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="10"
               step="1"
@@ -554,8 +556,8 @@ export default function Obsolescence() {
             <label className="block text-sm font-medium text-gray-700">Replacement Cost (€)</label>
             <input
               type="number"
-              value={paramForm.replacement_cost}
-              onChange={e => setParamForm({ ...paramForm, replacement_cost: Number(e.target.value) })}
+              value={paramForm.replacement_cost ?? 1000}
+              onChange={e => setParamForm(prev => ({ ...prev, replacement_cost: Number(e.target.value) }))}
               className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
               step="100"
@@ -565,8 +567,8 @@ export default function Obsolescence() {
             <label className="block text-sm font-medium text-gray-700">Document Link</label>
             <input
               type="text"
-              value={paramForm.document_link}
-              onChange={e => setParamForm({ ...paramForm, document_link: e.target.value })}
+              value={paramForm.document_link || ''}
+              onChange={e => setParamForm(prev => ({ ...prev, document_link: e.target.value }))}
               className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
             />
           </div>
@@ -587,24 +589,8 @@ export default function Obsolescence() {
         </div>
       </Modal>
 
-      <Modal open={showGanttModal} onClose={() => setShowGanttModal(false)} title={`Annual Gantt for ${selectedDevice?.name}`}>
-        <div className="h-[400px]">
-          {annualGanttTasks.length ? (
-            <Gantt
-              tasks={annualGanttTasks}
-              viewMode={ViewMode.Month}
-              columnWidth={80}
-              listCellWidth="200px"
-              todayColor="#ff6b00"
-              onClick={task => handleAiQuery(`Explain annual Gantt for ${task.name}`)}
-            />
-          ) : <p className="text-gray-600 text-center py-20">No annual data</p>}
-        </div>
-      </Modal>
-
       {toast && <Toast {...toast} />}
       {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-green-500 rounded-full"></div></div>}
-      {showConfetti && <Confetti />}
     </section>
   );
 }
