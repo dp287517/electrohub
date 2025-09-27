@@ -1,8 +1,8 @@
 // src/pages/Obsolescence.jsx
 import { useEffect, useState, useRef } from 'react';
 import { get, post, upload } from '../lib/api.js';
-import { Search, HelpCircle, X, Download, ChevronRight, Settings, Upload, ChevronDown, Send, Calendar } from 'lucide-react';
-import { Line, Bar, Doughnut, Scatter } from 'react-chartjs-2';
+import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight, Settings, Upload, ChevronDown, Send, Calendar } from 'lucide-react';
+import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
 import Confetti from 'react-confetti';
@@ -21,12 +21,9 @@ import {
   Title,
   Tooltip,
   Legend,
-  ScatterController,
 } from 'chart.js';
 import annotationPlugin from 'chartjs-plugin-annotation';
 import zoomPlugin from 'chartjs-plugin-zoom';
-import * as yup from 'yup';
-import debounce from 'lodash/debounce';
 
 ChartJS.register(
   CategoryScale,
@@ -40,27 +37,24 @@ ChartJS.register(
   Tooltip,
   Legend,
   annotationPlugin,
-  zoomPlugin,
-  ScatterController
+  zoomPlugin
 );
 
 function useUserSite() {
   try {
     const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
     return user?.site || '';
-  } catch {
-    return '';
-  }
+  } catch { return ''; }
 }
 
 function Toast({ msg, type }) {
   const colors = {
-    success: 'bg-green-600 text-white',
-    error: 'bg-red-600 text-white',
-    info: 'bg-blue-600 text-white',
+    success: 'bg-green-500 text-white',
+    error: 'bg-red-500 text-white',
+    info: 'bg-blue-500 text-white',
   };
   return (
-    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm ${colors[type]} ring-1 ring-black/10`} role="alert">
+    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm ${colors[type]} ring-1 ring-black/10`}>
       {msg}
     </div>
   );
@@ -71,9 +65,9 @@ function Modal({ open, onClose, children, title }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden ring-1 ring-black/5">
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-green-100 to-orange-100">
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-green-50 to-orange-50">
           <h3 className="text-xl font-bold text-gray-800">{title}</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100" aria-label="Fermer la modale">
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100">
             <X size={20} className="text-gray-600" />
           </button>
         </div>
@@ -94,20 +88,12 @@ function Sidebar({ tips, open, onClose, onSendQuery }) {
       className="fixed right-0 top-0 h-full w-96 bg-white/95 backdrop-blur-md shadow-2xl z-40 overflow-y-auto p-6 rounded-l-3xl ring-1 ring-black/5"
     >
       <div className="flex justify-between mb-6">
-        <h3 className="text-2xl font-bold text-gray-800">Assistant IA</h3>
-        <button onClick={onClose} aria-label="Fermer la barre latérale"><X size={24} className="text-gray-600" /></button>
+        <h3 className="text-2xl font-bold text-gray-800">AI Assistant</h3>
+        <button onClick={onClose}><X size={24} className="text-gray-600" /></button>
       </div>
-      <p className="text-sm text-gray-600 mb-4">Exemples : 'Analyser tableau X', 'Estimer coût remplacement', 'Définir température 30 pour tableau Y'</p>
       <div className="space-y-4 mb-4">
         {tips.map(tip => (
-          <motion.p
-            key={tip.id}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="text-sm text-gray-700 p-4 bg-gradient-to-r from-green-100 to-orange-100 rounded-xl shadow-sm ring-1 ring-black/5"
-          >
-            {tip.content}
-          </motion.p>
+          <motion.p key={tip.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm text-gray-700 p-4 bg-gradient-to-r from-green-50 to-orange-50 rounded-xl shadow-sm ring-1 ring-black/5">{tip.content}</motion.p>
         ))}
       </div>
       <div className="flex gap-2">
@@ -115,18 +101,10 @@ function Sidebar({ tips, open, onClose, onSendQuery }) {
           type="text"
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Demander à l'IA : Analyser tableau X ou définir temp..."
-          className="flex-1 p-3 rounded-xl bg-gray-50 text-gray-800 placeholder-gray-500 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
-          aria-label="Champ de requête IA"
+          placeholder="Ask AI: Analyze switchboard X or set temp..."
+          className="flex-1 p-3 rounded-xl bg-gray-50 text-gray-800 placeholder-gray-500 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
         />
-        <button
-          onClick={() => {
-            onSendQuery(query);
-            setQuery('');
-          }}
-          className="p-3 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
-          aria-label="Envoyer la requête IA"
-        >
+        <button onClick={() => { onSendQuery(query); setQuery(''); }} className="p-3 bg-green-500 text-white rounded-xl shadow-md hover:bg-green-600">
           <Send size={20} />
         </button>
       </div>
@@ -134,53 +112,34 @@ function Sidebar({ tips, open, onClose, onSendQuery }) {
   );
 }
 
-const paramSchema = yup.object({
-  manufacture_date: yup.date().required('Date de fabrication requise').max(new Date(), 'Date future non autorisée'),
-  avg_temperature: yup.number().required('Température requise').min(0).max(100),
-  avg_humidity: yup.number().required('Humidité requise').min(0).max(100),
-  operation_cycles: yup.number().required('Cycles requis').min(0),
-  avg_life_years: yup.number().required('Années de vie requises').min(10),
-  replacement_cost: yup.number().required('Coût requis').min(0),
-  document_link: yup.string().url('Lien invalide').nullable(),
-});
-
 export default function Obsolescence() {
   const site = useUserSite();
   const [tab, setTab] = useState('overview');
   const [buildings, setBuildings] = useState([]);
   const [expandedBuildings, setExpandedBuildings] = useState({});
+  const [expandedSwitchboards, setExpandedSwitchboards] = useState({});
   const [switchboards, setSwitchboards] = useState({});
+  const [devices, setDevices] = useState({});
   const [selectedFilter, setSelectedFilter] = useState({ building: null, switchboard: null });
   const [ganttTasks, setGanttTasks] = useState([]);
   const [doughnutData, setDoughnutData] = useState([]);
   const [capexForecast, setCapexForecast] = useState({});
-  const [costByBuildingData, setCostByBuildingData] = useState([]);
-  const [urgencyVsAgeData, setUrgencyVsAgeData] = useState([]);
   const [aiTips, setAiTips] = useState([]);
   const [showSidebar, setShowSidebar] = useState(false);
   const [showParamsModal, setShowParamsModal] = useState(false);
   const [paramForm, setParamForm] = useState({
-    switchboard_id: null,
-    manufacture_date: '2000-01-01',
-    avg_temperature: 25,
-    avg_humidity: 50,
-    operation_cycles: 5000,
-    avg_life_years: 30,
-    replacement_cost: 1000,
-    document_link: '',
+    device_id: null, switchboard_id: null, manufacture_date: '2000-01-01', avg_temperature: 25, avg_humidity: 50,
+    operation_cycles: 5000, avg_life_years: 30, replacement_cost: 1000, document_link: ''
   });
-  const [paramErrors, setParamErrors] = useState({});
   const [pdfFile, setPdfFile] = useState(null);
-  const [pdfText, setPdfText] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const chartRef = useRef(null);
   const ganttRef = useRef(null);
   const [avgUrgency, setAvgUrgency] = useState(45);
   const [totalCapex, setTotalCapex] = useState(50000);
-  const [selectedSwitchboard, setSelectedSwitchboard] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(null);
   const [showGanttModal, setShowGanttModal] = useState(false);
   const [annualGanttTasks, setAnnualGanttTasks] = useState([]);
 
@@ -195,8 +154,6 @@ export default function Obsolescence() {
     if (tab === 'analysis') {
       loadDoughnutData();
       loadCapexForecast();
-      loadCostByBuilding();
-      loadUrgencyVsAge();
     }
   }, [tab, selectedFilter]);
 
@@ -208,12 +165,9 @@ export default function Obsolescence() {
       if (tab === 'analysis') {
         loadDoughnutData();
         loadCapexForecast();
-        loadCostByBuilding();
-        loadUrgencyVsAge();
       }
     } catch (e) {
-      console.error('Échec vérification automatique', e);
-      setToast({ msg: 'Échec de la vérification automatique : Vérifiez votre connexion.', type: 'error' });
+      console.error('Auto check failed', e);
     }
   };
 
@@ -222,15 +176,13 @@ export default function Obsolescence() {
       setBusy(true);
       const data = await get('/api/obsolescence/buildings');
       setBuildings(data.data || []);
-      await post('/api/obsolescence/ai-fill');
+      await post('/api/obsolescence/ai-fill'); // Auto-fill with AI
       const urgencyRes = await get('/api/obsolescence/avg-urgency');
-      const urgencyValue = Number(urgencyRes.avg);
-      setAvgUrgency(isNaN(urgencyValue) ? 45 : urgencyValue);
+      setAvgUrgency(urgencyRes.avg || 45);
       const capexRes = await get('/api/obsolescence/total-capex');
-      const capexValue = Number(capexRes.total);
-      setTotalCapex(isNaN(capexValue) ? 50000 : capexValue);
+      setTotalCapex(capexRes.total || 50000);
     } catch (e) {
-      setToast({ msg: `Échec du chargement des bâtiments : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setToast({ msg: `Failed to load buildings: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -241,7 +193,16 @@ export default function Obsolescence() {
       const data = await get('/api/obsolescence/switchboards', { building });
       setSwitchboards(prev => ({ ...prev, [building]: data.data }));
     } catch (e) {
-      setToast({ msg: `Échec du chargement des tableaux : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setToast({ msg: `Failed: ${e.message}`, type: 'error' });
+    }
+  };
+
+  const loadDevices = async (switchboard) => {
+    try {
+      const data = await get('/api/obsolescence/devices', { switchboard });
+      setDevices(prev => ({ ...prev, [switchboard]: data.data }));
+    } catch (e) {
+      setToast({ msg: `Failed: ${e.message}`, type: 'error' });
     }
   };
 
@@ -249,6 +210,12 @@ export default function Obsolescence() {
     setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }));
     if (!switchboards[building]) loadSwitchboards(building);
     setSelectedFilter(prev => ({ ...prev, building, switchboard: null }));
+  };
+
+  const toggleSwitchboard = (switchboard) => {
+    setExpandedSwitchboards(prev => ({ ...prev, [switchboard]: !prev[switchboard] }));
+    if (!devices[switchboard]) loadDevices(switchboard);
+    setSelectedFilter(prev => ({ ...prev, switchboard }));
   };
 
   const loadGanttData = async () => {
@@ -262,8 +229,8 @@ export default function Obsolescence() {
       })).filter(task => !isNaN(task.start.getTime()));
       setGanttTasks(tasks);
     } catch (e) {
-      setToast({ msg: `Échec du chargement du Gantt : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
-      setGanttTasks([]);
+      setToast({ msg: `Gantt failed: ${e.message}`, type: 'error' });
+      setGanttTasks([]); // No crash
     }
   };
 
@@ -273,8 +240,8 @@ export default function Obsolescence() {
       const data = await get('/api/obsolescence/doughnut', params);
       setDoughnutData(data.data || []);
     } catch (e) {
-      setToast({ msg: `Échec du chargement du camembert : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
-      setDoughnutData([]);
+      setToast({ msg: `Doughnut failed: ${e.message}`, type: 'error' });
+      setDoughnutData([]); // No crash
     }
   };
 
@@ -284,61 +251,39 @@ export default function Obsolescence() {
       const data = await get('/api/obsolescence/capex-forecast', params);
       setCapexForecast(data.forecasts || {});
     } catch (e) {
-      setToast({ msg: `Échec du chargement du CAPEX : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
-      setCapexForecast({});
+      setToast({ msg: `CAPEX failed: ${e.message}`, type: 'error' });
+      setCapexForecast({}); // No crash
     }
   };
 
-  const loadCostByBuilding = async () => {
-    try {
-      const data = await get('/api/obsolescence/cost-by-building');
-      setCostByBuildingData(data.data || []);
-    } catch (e) {
-      setToast({ msg: `Échec du chargement des coûts par bâtiment : ${e.message}.`, type: 'error' });
-      setCostByBuildingData([]);
-    }
-  };
-
-  const loadUrgencyVsAge = async () => {
-    try {
-      const data = await get('/api/obsolescence/urgency-vs-age');
-      setUrgencyVsAgeData(data.data || []);
-    } catch (e) {
-      setToast({ msg: `Échec du chargement urgence vs âge : ${e.message}.`, type: 'error' });
-      setUrgencyVsAgeData([]);
-    }
-  };
-
-  const debouncedAiQuery = debounce(async (query) => {
+  const handleAiQuery = async (query) => {
     try {
       const { response, updates } = await post('/api/obsolescence/ai-query', { query, site });
       setAiTips(prev => [...prev, { id: Date.now(), content: response }].slice(-5));
       if (updates) {
-        loadBuildings();
+        loadBuildings(); // Refresh if DB updated
       }
     } catch (e) {
-      setToast({ msg: `Échec de la requête IA : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setToast({ msg: `AI query failed: ${e.message}`, type: 'error' });
     }
-  }, 500);
-
-  const handleAiQuery = (query) => debouncedAiQuery(query);
+  };
 
   const handlePdfUpload = async () => {
     if (!pdfFile) {
-      setToast({ msg: 'Aucun PDF sélectionné', type: 'error' });
+      setToast({ msg: 'No PDF selected', type: 'error' });
       return;
     }
     try {
       setBusy(true);
       const formData = new FormData();
       formData.append('pdf', pdfFile);
+      formData.append('device_id', paramForm.device_id);
       formData.append('switchboard_id', paramForm.switchboard_id);
-      formData.append('pdf_text', pdfText); // Assumes client-side text extraction
       const { manufacture_date } = await upload('/api/obsolescence/analyze-pdf', formData);
       setParamForm({ ...paramForm, manufacture_date });
-      setToast({ msg: 'PDF analysé avec succès !', type: 'success' });
+      setToast({ msg: 'PDF analyzed!', type: 'success' });
     } catch (e) {
-      setToast({ msg: `Échec de l'analyse PDF : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setToast({ msg: `PDF failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -346,22 +291,23 @@ export default function Obsolescence() {
 
   const saveParameters = async () => {
     try {
-      await paramSchema.validate(paramForm, { abortEarly: false });
-      setParamErrors({});
-      const flatForm = { ...paramForm };
+      const flatForm = { 
+        device_id: paramForm.device_id,
+        switchboard_id: paramForm.switchboard_id,
+        manufacture_date: paramForm.manufacture_date,
+        avg_temperature: paramForm.avg_temperature,
+        avg_humidity: paramForm.avg_humidity,
+        operation_cycles: paramForm.operation_cycles,
+        avg_life_years: paramForm.avg_life_years,
+        replacement_cost: paramForm.replacement_cost,
+        document_link: paramForm.document_link
+      };
       await post('/api/obsolescence/parameters', flatForm);
-      setToast({ msg: 'Paramètres sauvegardés pour le tableau !', type: 'success' });
-      setShowConfetti(true);
-      setTimeout(() => setShowConfetti(false), 3000);
+      setToast({ msg: 'Parameters saved!', type: 'success' });
       loadBuildings();
       setShowParamsModal(false);
     } catch (e) {
-      if (e.name === 'ValidationError') {
-        const errors = e.inner.reduce((acc, err) => ({ ...acc, [err.path]: err.message }), {});
-        setParamErrors(errors);
-      } else {
-        setToast({ msg: `Échec de la sauvegarde : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
-      }
+      setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
     }
   };
 
@@ -369,31 +315,23 @@ export default function Obsolescence() {
     try {
       setBusy(true);
       const pdf = new jsPDF();
-      pdf.text('Rapport Obsolescence', 10, 10);
-      if (chartRef.current) {
-        const canvas = await html2canvas(chartRef.current);
-        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 20, 190, 100);
-      }
-      if (ganttRef.current) {
-        pdf.addPage();
-        const ganttCanvas = await html2canvas(ganttRef.current);
-        pdf.addImage(ganttCanvas.toDataURL('image/png'), 'PNG', 10, 10, 190, 100);
-      }
-      pdf.save('rapport-obsolescence.pdf');
-      setToast({ msg: 'PDF exporté avec succès !', type: 'success' });
+      pdf.text('Obsolescence Report', 10, 10);
+      // Add canvases or table data here if needed
+      pdf.save('obsolescence-report.pdf');
+      setToast({ msg: 'PDF exported!', type: 'success' });
     } catch (e) {
-      setToast({ msg: `Échec de l'export PDF : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setToast({ msg: `Export failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
     }
   };
 
   const getDoughnutChartData = (data) => ({
-    labels: data.map(d => d.label || 'Inconnu'),
+    labels: data.map(d => d.label || 'Unknown'),
     datasets: [
-      { label: 'OK', data: data.map(d => d.ok || 0), backgroundColor: '#22c55e' },
-      { label: 'Avertissement', data: data.map(d => d.warning || 0), backgroundColor: '#f59e0b' },
-      { label: 'Critique', data: data.map(d => d.critical || 0), backgroundColor: '#ef4444' },
+      { label: 'OK', data: data.map(d => d.ok || 0), backgroundColor: '#00ff00' },
+      { label: 'Warning', data: data.map(d => d.warning || 0), backgroundColor: '#ffa500' },
+      { label: 'Critical', data: data.map(d => d.critical || 0), backgroundColor: '#ff0000' },
     ],
   });
 
@@ -402,206 +340,115 @@ export default function Obsolescence() {
     const datasets = [];
     Object.keys(forecasts).forEach(group => {
       const annual = years.map(y => forecasts[group].reduce((sum, f) => sum + (f.year === y ? f.capex_year : 0), 0));
-      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i - 1] || 0) + cur], []);
+      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
       datasets.push({
         type: 'bar',
-        label: `${group} Annuel (€)`,
+        label: `${group} Annual (€)`,
         data: annual,
-        backgroundColor: '#3b82f6',
+        backgroundColor: '#1e90ff',
       });
       datasets.push({
         type: 'line',
-        label: `${group} Cumulatif (€)`,
+        label: `${group} Cumulative (€)`,
         data: cumul,
-        borderColor: '#22c55e',
+        borderColor: '#32cd32',
         fill: false,
       });
     });
     return { labels: years, datasets };
   };
 
-  const getCostByBuildingData = (data) => ({
-    labels: data.map(d => d.building),
-    datasets: [
-      {
-        label: 'Coût par bâtiment (€)',
-        data: data.map(d => d.total_cost),
-        backgroundColor: '#ff6384',
-      },
-    ],
-  });
-
-  const getUrgencyVsAgeData = (data) => ({
-    datasets: [
-      {
-        label: 'Urgence vs Âge',
-        data: data.map(d => ({ x: d.age, y: d.urgency })),
-        backgroundColor: '#36a2eb',
-      },
-    ],
-  });
-
-  const openAnnualGantt = async (task) => {
+  const openAnnualGantt = async (device) => {
     try {
-      const data = await get('/api/obsolescence/annual-gantt', { switchboard_id: task.id });
+      const data = await get('/api/obsolescence/annual-gantt', { device_id: device.device_id });
       setAnnualGanttTasks(data.tasks || []);
-      setSelectedSwitchboard({ name: task.name });
+      setSelectedDevice(device);
       setShowGanttModal(true);
     } catch (e) {
-      setToast({ msg: `Échec du chargement du Gantt annuel : ${e.message}.`, type: 'error' });
+      setToast({ msg: `Annual Gantt failed: ${e.message}`, type: 'error' });
     }
   };
 
-  const filteredBuildings = buildings.filter(
-    build =>
-      build.building.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (switchboards[build.building]?.some(sb => sb.name.toLowerCase().includes(searchQuery.toLowerCase())) || false)
-  );
-
   return (
-    <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-green-100 to-orange-100 rounded-3xl shadow-xl min-h-screen">
+    <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-green-50 to-orange-50 rounded-3xl shadow-xl min-h-screen">
       <header className="flex items-center justify-between mb-8">
-        <h1 className="text-4xl font-bold text-gray-800">Tableau de Bord Obsolescence</h1>
+        <h1 className="text-4xl font-bold text-gray-800">Obsolescence Dashboard</h1>
         <div className="flex gap-4">
-          <button
-            onClick={exportPdf}
-            className="px-4 py-2 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
-            aria-label="Exporter en PDF"
-          >
-            Exporter PDF
-          </button>
-          <button
-            onClick={() => setShowSidebar(true)}
-            className="p-3 bg-orange-600 text-white rounded-xl shadow-md hover:bg-orange-700"
-            aria-label="Ouvrir l'assistant IA"
-          >
+          <button onClick={exportPdf} className="px-4 py-2 bg-green-500 text-white rounded-xl shadow-md hover:bg-green-600">Export PDF</button>
+          <button onClick={() => setShowSidebar(true)} className="p-3 bg-orange-500 text-white rounded-xl shadow-md hover:bg-orange-600">
             <HelpCircle size={24} />
           </button>
         </div>
       </header>
 
       <div className="flex gap-4 mb-8 border-b pb-2">
-        <button
-          onClick={() => setTab('overview')}
-          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'overview' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}
-          aria-label="Vue globale"
-        >
-          Vue Globale
-        </button>
-        <button
-          onClick={() => setTab('roll-up')}
-          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'roll-up' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-600'}`}
-          aria-label="Roll-up"
-        >
-          Roll-up
-        </button>
-        <button
-          onClick={() => setTab('analysis')}
-          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'analysis' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}
-          aria-label="Analyse"
-        >
-          Analyse
-        </button>
+        <button onClick={() => setTab('overview')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'overview' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}>Overview</button>
+        <button onClick={() => setTab('roll-up')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'roll-up' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-600'}`}>Roll-up</button>
+        <button onClick={() => setTab('analysis')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'analysis' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}>Analysis</button>
       </div>
 
       {tab === 'overview' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
-            <h3 className="text-lg font-bold text-gray-800">Total Bâtiments</h3>
-            <p className="text-3xl font-bold text-green-600">{filteredBuildings.length}</p>
+            <h3 className="text-lg font-bold text-gray-800">Total Buildings</h3>
+            <p className="text-3xl font-bold text-green-600">{buildings.length}</p>
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
-            <h3 className="text-lg font-bold text-gray-800">Urgence Moyenne</h3>
-            <p className="text-3xl font-bold text-orange-600">
-              {typeof avgUrgency === 'number' && !isNaN(avgUrgency) ? avgUrgency.toFixed(1) : 'N/A'}%
-            </p>
+            <h3 className="text-lg font-bold text-gray-800">Avg Urgency</h3>
+            <p className="text-3xl font-bold text-orange-600">{avgUrgency.toFixed(1)}%</p>
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
-            <h3 className="text-lg font-bold text-gray-800">Prévision CAPEX Totale</h3>
-            <p className="text-3xl font-bold text-green-600">
-              €{typeof totalCapex === 'number' && !isNaN(totalCapex) ? totalCapex.toLocaleString() : 'N/A'}
-            </p>
+            <h3 className="text-lg font-bold text-gray-800">Total CAPEX Forecast</h3>
+            <p className="text-3xl font-bold text-green-600">€{totalCapex.toLocaleString()}</p>
           </div>
         </div>
       )}
 
       {tab === 'overview' && (
         <div className="overflow-x-auto bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Rechercher un bâtiment ou tableau..."
-            className="w-full p-3 mb-4 rounded-xl bg-gray-50 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
-            aria-label="Rechercher bâtiments ou tableaux"
-          />
           <table className="w-full text-left">
             <thead>
-              <tr className="bg-green-100 text-gray-700">
-                <th className="p-4">Nom</th>
-                <th className="p-4">Année de Service</th>
+              <tr className="bg-green-50 text-gray-700">
+                <th className="p-4">Name</th>
+                <th className="p-4">Service Year</th>
                 <th className="p-4">Document</th>
-                <th className="p-4">Coût de Remplacement Est.</th>
-                <th className="p-4">Année de Remplacement Prévue</th>
+                <th className="p-4">Est. Replacement Cost</th>
+                <th className="p-4">Forecast Replacement Date</th>
                 <th className="p-4">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filteredBuildings.map(build => (
+              {buildings.map(build => (
                 <>
-                  <motion.tr
-                    key={build.building}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    className="hover:bg-green-50/50 transition-colors"
-                    aria-expanded={expandedBuildings[build.building]}
-                  >
+                  <motion.tr key={build.building} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="hover:bg-green-50/50 transition-colors">
                     <td className="p-4 flex items-center cursor-pointer" onClick={() => toggleBuilding(build.building)}>
-                      {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} tableaux)
+                      {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} items)
                     </td>
-                    <td></td>
-                    <td></td>
-                    <td>€{Number(build.total_cost).toLocaleString() || 'N/A'}</td>
-                    <td></td>
-                    <td></td>
+                    <td></td><td></td><td>€{build.total_cost?.toLocaleString() || 'N/A'}</td><td></td><td></td>
                   </motion.tr>
-                  {expandedBuildings[build.building] &&
-                    switchboards[build.building]?.map(sb => (
+                  {expandedBuildings[build.building] && switchboards[build.building]?.map(sb => (
+                    <>
                       <motion.tr key={sb.id} className="bg-orange-50 hover:bg-orange-100 transition-colors">
-                        <td className="p-4 pl-8">{sb.name} (Étage: {sb.floor})</td>
-                        <td className="p-4">{sb.manufacture_date ? Math.round(Number(sb.manufacture_date)) : 'N/A'}</td>
-                        <td className="p-4">
-                          {sb.document_link ? (
-                            <a href={sb.document_link} className="text-blue-600 underline" target="_blank" rel="noopener noreferrer">
-                              Lien
-                            </a>
-                          ) : (
-                            'N/A'
-                          )}
+                        <td className="p-4 pl-8 flex items-center cursor-pointer" onClick={() => toggleSwitchboard(sb.id)}>
+                          {expandedSwitchboards[sb.id] ? <ChevronDown /> : <ChevronRight />} {sb.name} (Floor: {sb.floor})
                         </td>
-                        <td className="p-4">€{Number(sb.total_cost).toLocaleString() || 'N/A'}</td>
-                        <td className="p-4">{sb.remaining_life_years ? new Date().getFullYear() + Number(sb.remaining_life_years) : 'N/A'}</td>
-                        <td className="p-4 flex gap-2">
-                          <button
-                            onClick={() => {
-                              setParamForm({ ...sb });
-                              setShowParamsModal(true);
-                            }}
-                            className="text-green-600 hover:text-green-800"
-                            aria-label="Modifier paramètres"
-                          >
-                            <Settings size={16} />
-                          </button>
-                          <button
-                            onClick={() => openAnnualGantt({ id: sb.id, name: sb.name })}
-                            className="text-blue-600 hover:text-blue-800"
-                            aria-label="Voir Gantt annuel"
-                          >
-                            <Calendar size={16} />
-                          </button>
-                        </td>
+                        <td></td><td></td><td>€{sb.total_cost?.toLocaleString() || 'N/A'}</td><td></td><td></td>
                       </motion.tr>
-                    ))}
+                      {expandedSwitchboards[sb.id] && devices[sb.id]?.map(dev => (
+                        <motion.tr key={dev.device_id} className="bg-white hover:bg-gray-50 transition-colors">
+                          <td className="p-4 pl-16">{dev.name || 'Device'}</td>
+                          <td className="p-4">{new Date(dev.manufacture_date).getFullYear() || 'N/A'}</td>
+                          <td className="p-4">{dev.document_link ? <a href={dev.document_link} className="text-blue-600 underline">Link</a> : 'N/A'}</td>
+                          <td className="p-4">€{dev.replacement_cost?.toLocaleString() || 'N/A'}</td>
+                          <td className="p-4">{dev.remaining_life_years ? new Date().getFullYear() + dev.remaining_life_years : 'N/A'}</td>
+                          <td className="p-4 flex gap-2">
+                            <button onClick={() => { setParamForm({ ...dev }); setShowParamsModal(true); }} className="text-green-600 hover:text-green-800"><Settings size={16} /></button>
+                            <button onClick={() => openAnnualGantt(dev)} className="text-blue-600 hover:text-blue-800"><Calendar size={16} /></button>
+                          </td>
+                        </motion.tr>
+                      ))}
+                    </>
+                  ))}
                 </>
               ))}
             </tbody>
@@ -618,85 +465,25 @@ export default function Obsolescence() {
               columnWidth={120}
               listCellWidth="250px"
               todayColor="#ff6b00"
-              onClick={openAnnualGantt}
+              onClick={task => handleAiQuery(`Explain Gantt for ${task.name}`)}
             />
-          ) : (
-            <p className="text-gray-600 text-center py-20">Aucune donnée disponible. L'IA analyse...</p>
-          )}
+          ) : <p className="text-gray-600 text-center py-20">No data available yet. AI is analyzing...</p>}
         </div>
       )}
 
       {tab === 'analysis' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">Distribution d'Urgence</h2>
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgency Distribution</h2>
             {doughnutData.length ? (
-              <Doughnut
-                data={getDoughnutChartData(doughnutData)}
-                options={{
-                  responsive: true,
-                  plugins: {
-                    legend: { position: 'top' },
-                    title: { display: true, text: "Statut d'urgence par bâtiment" },
-                  },
-                }}
-              />
-            ) : (
-              <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>
-            )}
+              <Doughnut data={getDoughnutChartData(doughnutData)} options={{ responsive: true, plugins: { legend: { position: 'top' } } }} />
+            ) : <p className="text-gray-600 text-center py-20">No data. Running AI analysis...</p>}
           </div>
           <div ref={chartRef} className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">Prévision CAPEX</h2>
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX Forecast</h2>
             {Object.keys(capexForecast).length ? (
-              <Line
-                data={getCapexChartData(capexForecast)}
-                options={{
-                  responsive: true,
-                  plugins: {
-                    zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } },
-                    title: { display: true, text: 'Prévision des coûts CAPEX sur 30 ans' },
-                  },
-                }}
-              />
-            ) : (
-              <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>
-            )}
-          </div>
-          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">Coûts par Bâtiment</h2>
-            {costByBuildingData.length ? (
-              <Bar
-                data={getCostByBuildingData(costByBuildingData)}
-                options={{
-                  responsive: true,
-                  plugins: {
-                    title: { display: true, text: 'Coût total de remplacement par bâtiment' },
-                  },
-                }}
-              />
-            ) : (
-              <p className="text-gray-600 text-center py-20">Aucune donnée.</p>
-            )}
-          </div>
-          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgence vs Âge</h2>
-            {urgencyVsAgeData.length ? (
-              <Scatter
-                data={getUrgencyVsAgeData(urgencyVsAgeData)}
-                options={{
-                  responsive: true,
-                  plugins: {
-                    title: { display: true, text: "Urgence en fonction de l'âge des tableaux" },
-                  },
-                  scales: {
-                    x: { title: { display: true, text: 'Âge (années)' } },
-                    y: { title: { display: true, text: 'Score d\'urgence (%)' } },
-                  },
-                }}
-              />
-            ) : (
-              <p className="text-gray-600 text-center py-20">Aucune donnée.</p>
-            )}
+              <Line data={getCapexChartData(capexForecast)} options={{ responsive: true, plugins: { zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } } } }} />
+            ) : <p className="text-gray-600 text-center py-20">No data. Running AI analysis...</p>}
           </div>
         </div>
       )}
@@ -705,136 +492,102 @@ export default function Obsolescence() {
         <Sidebar tips={aiTips} open={showSidebar} onClose={() => setShowSidebar(false)} onSendQuery={handleAiQuery} />
       </AnimatePresence>
 
-      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Modifier Paramètres du Tableau">
+      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Edit Parameters">
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">
-              Date de Fabrication <span className="text-red-500">*</span>
-            </label>
+            <label className="block text-sm font-medium text-gray-700">Manufacture Date</label>
             <div className="relative">
               <input
                 type="date"
                 value={paramForm.manufacture_date}
                 onChange={e => setParamForm({ ...paramForm, manufacture_date: e.target.value })}
-                className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
-                aria-label="Date de fabrication"
+                className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               />
               <Calendar className="absolute right-2 top-2 text-gray-500" size={20} />
             </div>
-            {paramErrors.manufacture_date && <p className="text-red-500 text-xs">{paramErrors.manufacture_date}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Température Moyenne (°C) - Température ambiante typique</label>
+            <label className="block text-sm font-medium text-gray-700">Avg Temperature (°C)</label>
             <input
               type="number"
               value={paramForm.avg_temperature}
               onChange={e => setParamForm({ ...paramForm, avg_temperature: Number(e.target.value) })}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
               step="0.1"
-              aria-label="Température moyenne"
             />
-            {paramErrors.avg_temperature && <p className="text-red-500 text-xs">{paramErrors.avg_temperature}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Humidité Moyenne (%) - Humidité relative typique</label>
+            <label className="block text-sm font-medium text-gray-700">Avg Humidity (%)</label>
             <input
               type="number"
               value={paramForm.avg_humidity}
               onChange={e => setParamForm({ ...paramForm, avg_humidity: Number(e.target.value) })}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
               max="100"
               step="1"
-              aria-label="Humidité moyenne"
             />
-            {paramErrors.avg_humidity && <p className="text-red-500 text-xs">{paramErrors.avg_humidity}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Cycles d'Opération - Nombre de cycles d'activation typiques</label>
+            <label className="block text-sm font-medium text-gray-700">Operation Cycles</label>
             <input
               type="number"
               value={paramForm.operation_cycles}
               onChange={e => setParamForm({ ...paramForm, operation_cycles: Number(e.target.value) })}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
-              aria-label="Cycles d'opération"
             />
-            {paramErrors.operation_cycles && <p className="text-red-500 text-xs">{paramErrors.operation_cycles}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Années de Vie Moyennes (Norm) - Durée de vie normative</label>
+            <label className="block text-sm font-medium text-gray-700">Avg Life Years (Norm)</label>
             <input
               type="number"
               value={paramForm.avg_life_years}
               onChange={e => setParamForm({ ...paramForm, avg_life_years: Number(e.target.value) })}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="10"
               step="1"
-              aria-label="Années de vie moyennes"
             />
-            {paramErrors.avg_life_years && <p className="text-red-500 text-xs">{paramErrors.avg_life_years}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Coût de Remplacement (€) - Coût estimé du remplacement</label>
+            <label className="block text-sm font-medium text-gray-700">Replacement Cost (€)</label>
             <input
               type="number"
               value={paramForm.replacement_cost}
               onChange={e => setParamForm({ ...paramForm, replacement_cost: Number(e.target.value) })}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
               min="0"
               step="100"
-              aria-label="Coût de remplacement"
             />
-            {paramErrors.replacement_cost && <p className="text-red-500 text-xs">{paramErrors.replacement_cost}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Lien Document - URL vers la documentation</label>
+            <label className="block text-sm font-medium text-gray-700">Document Link</label>
             <input
               type="text"
               value={paramForm.document_link}
               onChange={e => setParamForm({ ...paramForm, document_link: e.target.value })}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
-              aria-label="Lien document"
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
             />
-            {paramErrors.document_link && <p className="text-red-500 text-xs">{paramErrors.document_link}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700">Télécharger PDF pour Extraction IA</label>
-            <input
-              type="file"
-              accept=".pdf"
-              onChange={e => {
-                setPdfFile(e.target.files[0]);
-                // Optional: Add client-side PDF text extraction using pdfjs-dist
-                if (e.target.files[0]) {
-                  setPdfText('Client-side extracted text placeholder');
-                }
-              }}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10"
-              aria-label="Télécharger PDF"
-            />
-            <button
-              onClick={handlePdfUpload}
-              className="mt-2 w-full p-2 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
-              disabled={busy || !pdfFile}
-              aria-label="Analyser PDF"
-            >
-              <Upload size={16} /> Analyser PDF
+            <label className="block text-sm font-medium text-gray-700">Upload PDF for AI Extraction</label>
+            <input type="file" accept=".pdf" onChange={e => setPdfFile(e.target.files[0])} className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10" />
+            <button onClick={handlePdfUpload} className="mt-2 w-full p-2 bg-green-500 text-white rounded-xl shadow-md hover:bg-green-600" disabled={busy || !pdfFile}>
+              <Upload size={16} /> Analyze PDF
             </button>
           </div>
           <button
             onClick={saveParameters}
-            className="w-full p-2 bg-orange-600 text-white rounded-xl shadow-md hover:bg-orange-700"
+            className="w-full p-2 bg-orange-500 text-white rounded-xl shadow-md hover:bg-orange-600"
             disabled={busy}
-            aria-label="Sauvegarder paramètres"
           >
-            Sauvegarder Paramètres
+            Save Parameters
           </button>
         </div>
       </Modal>
 
-      <Modal open={showGanttModal} onClose={() => setShowGanttModal(false)} title={`Gantt Annuel pour ${selectedSwitchboard?.name}`}>
+      <Modal open={showGanttModal} onClose={() => setShowGanttModal(false)} title={`Annual Gantt for ${selectedDevice?.name}`}>
         <div className="h-[400px]">
           {annualGanttTasks.length ? (
             <Gantt
@@ -843,20 +596,14 @@ export default function Obsolescence() {
               columnWidth={80}
               listCellWidth="200px"
               todayColor="#ff6b00"
-              onClick={task => handleAiQuery(`Expliquer Gantt annuel pour ${task.name}`)}
+              onClick={task => handleAiQuery(`Explain annual Gantt for ${task.name}`)}
             />
-          ) : (
-            <p className="text-gray-600 text-center py-20">Aucune donnée annuelle disponible.</p>
-          )}
+          ) : <p className="text-gray-600 text-center py-20">No annual data</p>}
         </div>
       </Modal>
 
       {toast && <Toast {...toast} />}
-      {busy && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50">
-          <div className="animate-spin h-16 w-16 border-b-4 border-green-600 rounded-full" aria-label="Chargement"></div>
-        </div>
-      )}
+      {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-green-500 rounded-full"></div></div>}
       {showConfetti && <Confetti />}
     </section>
   );
