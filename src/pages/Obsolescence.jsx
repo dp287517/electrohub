@@ -1,10 +1,10 @@
+// src/pages/Obsolescence.jsx (final patched - switchboards only, £, actions at SB level)
 import React, { useEffect, useState, useRef, Fragment } from 'react';
 import { get, post, upload } from '../lib/api.js';
 import { HelpCircle, ChevronRight, Settings, Upload, ChevronDown, Send, Calendar } from 'lucide-react';
 import { Line, Doughnut } from 'react-chartjs-2';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
-import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -58,24 +58,6 @@ function Toast({ msg, type }) {
   );
 }
 
-function Modal({ open, onClose, children, title }) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden ring-1 ring-black/5">
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-green-50 to-orange-50">
-          <h3 className="text-xl font-bold text-gray-800">{title}</h3>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100">
-            <span className="sr-only">Close</span>
-            ×
-          </button>
-        </div>
-        <div className="p-6 overflow-y-auto max-h-[60vh]">{children}</div>
-      </div>
-    </div>
-  );
-}
-
 function Sidebar({ tips, open, onClose, onSendQuery }) {
   const [query, setQuery] = useState('');
   if (!open) return null;
@@ -111,35 +93,51 @@ function Sidebar({ tips, open, onClose, onSendQuery }) {
   );
 }
 
+// simple ICS export for a given switchboard forecast year
+function downloadICS(sbName, year) {
+  if (!year || isNaN(Number(year))) return;
+  const start = `${year}-06-01T09:00:00Z`;
+  const end = `${year}-06-01T10:00:00Z`;
+  const ics = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//ElectroHub//Obsolescence//EN',
+    'BEGIN:VEVENT',
+    `UID:${Date.now()}@electrohub`,
+    `DTSTAMP:${new Date().toISOString().replace(/[-:]/g,'').split('.')[0]}Z`,
+    `DTSTART:${start.replace(/[-:]/g,'').replace('.000','')}`,
+    `DTEND:${end.replace(/[-:]/g,'').replace('.000','')}`,
+    `SUMMARY:Replacement planning - ${sbName}`,
+    'END:VEVENT',
+    'END:VCALENDAR'
+  ].join('\r\n');
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `replacement_${sbName}_${year}.ics`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function Obsolescence() {
   const site = useUserSite();
   const [tab, setTab] = useState('overview');
   const [buildings, setBuildings] = useState([]);
   const [expandedBuildings, setExpandedBuildings] = useState({});
-  const [expandedSwitchboards, setExpandedSwitchboards] = useState({});
   const [switchboards, setSwitchboards] = useState({});
-  const [devices, setDevices] = useState({});
   const [selectedFilter, setSelectedFilter] = useState({ building: null, switchboard: null });
   const [ganttTasks, setGanttTasks] = useState([]);
   const [doughnutData, setDoughnutData] = useState([]);
   const [capexForecast, setCapexForecast] = useState({});
   const [aiTips, setAiTips] = useState([]);
   const [showSidebar, setShowSidebar] = useState(false);
-  const [showParamsModal, setShowParamsModal] = useState(false);
-  const [paramForm, setParamForm] = useState({
-    device_id: null, switchboard_id: null, manufacture_date: '2000-01-01', avg_temperature: 25, avg_humidity: 50,
-    operation_cycles: 5000, avg_life_years: 30, replacement_cost: 1000, document_link: ''
-  });
-  const [pdfFile, setPdfFile] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const chartRef = useRef(null);
   const ganttRef = useRef(null);
   const [avgUrgency, setAvgUrgency] = useState(45);
   const [totalCapex, setTotalCapex] = useState(50000);
-  const [selectedDevice, setSelectedDevice] = useState(null);
-  const [showGanttModal, setShowGanttModal] = useState(false);
-  const [annualGanttTasks, setAnnualGanttTasks] = useState([]);
 
   useEffect(() => {
     loadBuildings();
@@ -195,25 +193,10 @@ export default function Obsolescence() {
     }
   };
 
-  const loadDevices = async (switchboard) => {
-    try {
-      const data = await get('/api/obsolescence/devices', { switchboard });
-      setDevices(prev => ({ ...prev, [switchboard]: data.data }));
-    } catch (e) {
-      setToast({ msg: `Failed: ${e.message}`, type: 'error' });
-    }
-  };
-
   const toggleBuilding = (building) => {
     setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }));
     if (!switchboards[building]) loadSwitchboards(building);
     setSelectedFilter(prev => ({ ...prev, building, switchboard: null }));
-  };
-
-  const toggleSwitchboard = (switchboard) => {
-    setExpandedSwitchboards(prev => ({ ...prev, [switchboard]: !prev[switchboard] }));
-    if (!devices[switchboard]) loadDevices(switchboard);
-    setSelectedFilter(prev => ({ ...prev, switchboard }));
   };
 
   const loadGanttData = async () => {
@@ -228,7 +211,7 @@ export default function Obsolescence() {
       setGanttTasks(tasks);
     } catch (e) {
       setToast({ msg: `Gantt failed: ${e.message}`, type: 'error' });
-      setGanttTasks([]); // No crash
+      setGanttTasks([]);
     }
   };
 
@@ -239,7 +222,7 @@ export default function Obsolescence() {
       setDoughnutData(data.data || []);
     } catch (e) {
       setToast({ msg: `Doughnut failed: ${e.message}`, type: 'error' });
-      setDoughnutData([]); // No crash
+      setDoughnutData([]);
     }
   };
 
@@ -250,7 +233,7 @@ export default function Obsolescence() {
       setCapexForecast(data.forecasts || {});
     } catch (e) {
       setToast({ msg: `CAPEX failed: ${e.message}`, type: 'error' });
-      setCapexForecast({}); // No crash
+      setCapexForecast({});
     }
   };
 
@@ -259,67 +242,10 @@ export default function Obsolescence() {
       const { response, updates } = await post('/api/obsolescence/ai-query', { query, site });
       setAiTips(prev => [...prev, { id: Date.now(), content: response }].slice(-5));
       if (updates) {
-        loadBuildings(); // Refresh if DB updated
+        loadBuildings();
       }
     } catch (e) {
       setToast({ msg: `AI query failed: ${e.message}`, type: 'error' });
-    }
-  };
-
-  const handlePdfUpload = async () => {
-    if (!pdfFile) {
-      setToast({ msg: 'No PDF selected', type: 'error' });
-      return;
-    }
-    try {
-      setBusy(true);
-      const formData = new FormData();
-      formData.append('pdf', pdfFile);
-      formData.append('device_id', paramForm.device_id);
-      formData.append('switchboard_id', paramForm.switchboard_id);
-      const { manufacture_date } = await upload('/api/obsolescence/analyze-pdf', formData);
-      setParamForm(prev => ({ ...prev, manufacture_date }));
-      setToast({ msg: 'PDF analyzed!', type: 'success' });
-    } catch (e) {
-      setToast({ msg: `PDF failed: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const saveParameters = async () => {
-    try {
-      const flatForm = { 
-        device_id: paramForm.device_id,
-        switchboard_id: paramForm.switchboard_id,
-        manufacture_date: paramForm.manufacture_date,
-        avg_temperature: Number(paramForm.avg_temperature),
-        avg_humidity: Number(paramForm.avg_humidity),
-        operation_cycles: Number(paramForm.operation_cycles),
-        avg_life_years: Number(paramForm.avg_life_years),
-        replacement_cost: Number(paramForm.replacement_cost),
-        document_link: paramForm.document_link
-      };
-      await post('/api/obsolescence/parameters', flatForm);
-      setToast({ msg: 'Parameters saved!', type: 'success' });
-      loadBuildings();
-      setShowParamsModal(false);
-    } catch (e) {
-      setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
-    }
-  };
-
-  const exportPdf = async () => {
-    try {
-      setBusy(true);
-      const pdf = new jsPDF();
-      pdf.text('Obsolescence Report', 10, 10);
-      pdf.save('obsolescence-report.pdf');
-      setToast({ msg: 'PDF exported!', type: 'success' });
-    } catch (e) {
-      setToast({ msg: `Export failed: ${e.message}`, type: 'error' });
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -340,13 +266,13 @@ export default function Obsolescence() {
       const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
       datasets.push({
         type: 'bar',
-        label: `${group} Annual (€)`,
+        label: `${group} Annual (£)`,
         data: annual,
         backgroundColor: '#1e90ff',
       });
       datasets.push({
         type: 'line',
-        label: `${group} Cumulative (€)`,
+        label: `${group} Cumulative (£)`,
         data: cumul,
         borderColor: '#32cd32',
         fill: false,
@@ -355,23 +281,16 @@ export default function Obsolescence() {
     return { labels: years, datasets };
   };
 
-  const openAnnualGantt = async (device) => {
-    try {
-      const data = await get('/api/obsolescence/annual-gantt', { device_id: device.device_id });
-      setAnnualGanttTasks(data.tasks || []);
-      setSelectedDevice(device);
-      setShowGanttModal(true);
-    } catch (e) {
-      setToast({ msg: `Annual Gantt failed: ${e.message}`, type: 'error' });
-    }
-  };
-
   return (
     <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-green-50 to-orange-50 rounded-3xl shadow-xl min-h-screen">
       <header className="flex items-center justify-between mb-8">
         <h1 className="text-4xl font-bold text-gray-800">Obsolescence Dashboard</h1>
         <div className="flex gap-4">
-          <button onClick={exportPdf} className="px-4 py-2 bg-green-500 text-white rounded-xl shadow-md hover:bg-green-600">Export PDF</button>
+          <button onClick={() => {
+            const pdf = new jsPDF();
+            pdf.text('Obsolescence Report', 10, 10);
+            pdf.save('obsolescence-report.pdf');
+          }} className="px-4 py-2 bg-green-500 text-white rounded-xl shadow-md hover:bg-green-600">Export PDF</button>
           <button onClick={() => setShowSidebar(true)} className="p-3 bg-orange-500 text-white rounded-xl shadow-md hover:bg-orange-600">
             <HelpCircle size={24} />
           </button>
@@ -396,7 +315,7 @@ export default function Obsolescence() {
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Total CAPEX Forecast</h3>
-            <p className="text-3xl font-bold text-green-600">€{Number(totalCapex).toLocaleString()}</p>
+            <p className="text-3xl font-bold text-green-600">£{Number(totalCapex).toLocaleString()}</p>
           </div>
         </div>
       )}
@@ -408,7 +327,6 @@ export default function Obsolescence() {
               <tr className="bg-green-50 text-gray-700">
                 <th className="p-4">Name</th>
                 <th className="p-4">Service Year</th>
-                <th className="p-4">Document</th>
                 <th className="p-4">Est. Replacement Cost</th>
                 <th className="p-4">Forecast Replacement Date</th>
                 <th className="p-4">Actions</th>
@@ -419,38 +337,25 @@ export default function Obsolescence() {
                 <Fragment key={`b-${build.building}`}>
                   <motion.tr initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="hover:bg-green-50/50 transition-colors">
                     <td className="p-4 flex items-center cursor-pointer" onClick={() => toggleBuilding(build.building)}>
-                      {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} items)
+                      {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} switchboards)
                     </td>
-                    <td></td><td></td><td>€{Number(build.total_cost || 0).toLocaleString()}</td><td></td><td></td>
+                    <td></td>
+                    <td className="p-4 font-semibold">£{Number(build.total_cost || 0).toLocaleString()}</td>
+                    <td></td>
+                    <td></td>
                   </motion.tr>
                   {expandedBuildings[build.building] && (switchboards[build.building] || []).map(sb => (
-                    <Fragment key={`sb-${sb.id}`}>
-                      <motion.tr className="bg-orange-50 hover:bg-orange-100 transition-colors">
-                        <td className="p-4 pl-8 flex items-center cursor-pointer" onClick={() => toggleSwitchboard(sb.id)}>
-                          {expandedSwitchboards[sb.id] ? <ChevronDown /> : <ChevronRight />} {sb.name} (Floor: {sb.floor})
-                        </td>
-                        <td></td><td></td><td>€{Number(sb.total_cost || 0).toLocaleString()}</td><td></td><td></td>
-                      </motion.tr>
-                      {expandedSwitchboards[sb.id] && (devices[sb.id] || []).map(dev => {
-                        const serviceYear = (dev.manufacture_date && !isNaN(new Date(dev.manufacture_date).getTime()))
-                          ? new Date(dev.manufacture_date).getFullYear() : 'N/A';
-                        const replacementYear = (dev.remaining_life_years != null && !isNaN(Number(dev.remaining_life_years)))
-                          ? (new Date().getFullYear() + Number(dev.remaining_life_years)) : 'N/A';
-                        return (
-                          <motion.tr key={`dev-${dev.device_id}`} className="bg-white hover:bg-gray-50 transition-colors">
-                            <td className="p-4 pl-16">{dev.name || 'Device'}</td>
-                            <td className="p-4">{serviceYear}</td>
-                            <td className="p-4">{dev.document_link ? <a href={dev.document_link} className="text-blue-600 underline" target="_blank" rel="noreferrer">Link</a> : 'N/A'}</td>
-                            <td className="p-4">€{Number(dev.replacement_cost || 0).toLocaleString()}</td>
-                            <td className="p-4">{replacementYear}</td>
-                            <td className="p-4 flex gap-2">
-                              <button onClick={() => { setParamForm({ ...dev }); setShowParamsModal(true); }} className="text-green-600 hover:text-green-800"><Settings size={16} /></button>
-                              <button onClick={() => openAnnualGantt(dev)} className="text-blue-600 hover:text-blue-800"><Calendar size={16} /></button>
-                            </td>
-                          </motion.tr>
-                        );
-                      })}
-                    </Fragment>
+                    <motion.tr key={`sb-${sb.id}`} className="bg-orange-50 hover:bg-orange-100 transition-colors">
+                      <td className="p-4 pl-8">{sb.name} (Floor: {sb.floor})</td>
+                      <td className="p-4">{sb.service_year || 'N/A'}</td>
+                      <td className="p-4 font-semibold">£{Number(sb.estimated_cost_gbp || 0).toLocaleString()}</td>
+                      <td className="p-4">{sb.forecast_year || 'N/A'}</td>
+                      <td className="p-4 flex gap-2">
+                        <button onClick={() => downloadICS(sb.name, sb.forecast_year)} className="text-blue-600 hover:text-blue-800" title="Add to Calendar">
+                          <Calendar size={16} />
+                        </button>
+                      </td>
+                    </motion.tr>
                   ))}
                 </Fragment>
               ))}
@@ -494,100 +399,6 @@ export default function Obsolescence() {
       <AnimatePresence>
         <Sidebar tips={aiTips} open={showSidebar} onClose={() => setShowSidebar(false)} onSendQuery={handleAiQuery} />
       </AnimatePresence>
-
-      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Edit Parameters">
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Manufacture Date</label>
-            <div className="relative">
-              <input
-                type="date"
-                value={paramForm.manufacture_date || '2000-01-01'}
-                onChange={e => setParamForm(prev => ({ ...prev, manufacture_date: e.target.value }))}
-                className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Avg Temperature (°C)</label>
-            <input
-              type="number"
-              value={paramForm.avg_temperature ?? 25}
-              onChange={e => setParamForm(prev => ({ ...prev, avg_temperature: Number(e.target.value) }))}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-              min="0"
-              step="0.1"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Avg Humidity (%)</label>
-            <input
-              type="number"
-              value={paramForm.avg_humidity ?? 50}
-              onChange={e => setParamForm(prev => ({ ...prev, avg_humidity: Number(e.target.value) }))}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-              min="0"
-              max="100"
-              step="1"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Operation Cycles</label>
-            <input
-              type="number"
-              value={paramForm.operation_cycles ?? 5000}
-              onChange={e => setParamForm(prev => ({ ...prev, operation_cycles: Number(e.target.value) }))}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-              min="0"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Avg Life Years (Norm)</label>
-            <input
-              type="number"
-              value={paramForm.avg_life_years ?? 30}
-              onChange={e => setParamForm(prev => ({ ...prev, avg_life_years: Number(e.target.value) }))}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-              min="10"
-              step="1"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Replacement Cost (€)</label>
-            <input
-              type="number"
-              value={paramForm.replacement_cost ?? 1000}
-              onChange={e => setParamForm(prev => ({ ...prev, replacement_cost: Number(e.target.value) }))}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-              min="0"
-              step="100"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Document Link</label>
-            <input
-              type="text"
-              value={paramForm.document_link || ''}
-              onChange={e => setParamForm(prev => ({ ...prev, document_link: e.target.value }))}
-              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Upload PDF for AI Extraction</label>
-            <input type="file" accept=".pdf" onChange={e => setPdfFile(e.target.files[0])} className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10" />
-            <button onClick={handlePdfUpload} className="mt-2 w-full p-2 bg-green-500 text-white rounded-xl shadow-md hover:bg-green-600" disabled={busy || !pdfFile}>
-              <Upload size={16} /> Analyze PDF
-            </button>
-          </div>
-          <button
-            onClick={saveParameters}
-            className="w-full p-2 bg-orange-500 text-white rounded-xl shadow-md hover:bg-orange-600"
-            disabled={busy}
-          >
-            Save Parameters
-          </button>
-        </div>
-      </Modal>
 
       {toast && <Toast {...toast} />}
       {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-green-500 rounded-full"></div></div>}
