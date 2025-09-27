@@ -48,7 +48,9 @@ function useUserSite() {
   try {
     const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
     return user?.site || '';
-  } catch { return ''; }
+  } catch {
+    return '';
+  }
 }
 
 function Toast({ msg, type }) {
@@ -98,7 +100,14 @@ function Sidebar({ tips, open, onClose, onSendQuery }) {
       <p className="text-sm text-gray-600 mb-4">Exemples : 'Analyser tableau X', 'Estimer coût remplacement', 'Définir température 30 pour tableau Y'</p>
       <div className="space-y-4 mb-4">
         {tips.map(tip => (
-          <motion.p key={tip.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="text-sm text-gray-700 p-4 bg-gradient-to-r from-green-100 to-orange-100 rounded-xl shadow-sm ring-1 ring-black/5">{tip.content}</motion.p>
+          <motion.p
+            key={tip.id}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-sm text-gray-700 p-4 bg-gradient-to-r from-green-100 to-orange-100 rounded-xl shadow-sm ring-1 ring-black/5"
+          >
+            {tip.content}
+          </motion.p>
         ))}
       </div>
       <div className="flex gap-2">
@@ -110,7 +119,14 @@ function Sidebar({ tips, open, onClose, onSendQuery }) {
           className="flex-1 p-3 rounded-xl bg-gray-50 text-gray-800 placeholder-gray-500 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
           aria-label="Champ de requête IA"
         />
-        <button onClick={() => { onSendQuery(query); setQuery(''); }} className="p-3 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700" aria-label="Envoyer la requête IA">
+        <button
+          onClick={() => {
+            onSendQuery(query);
+            setQuery('');
+          }}
+          className="p-3 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
+          aria-label="Envoyer la requête IA"
+        >
           <Send size={20} />
         </button>
       </div>
@@ -151,7 +167,7 @@ export default function Obsolescence() {
     operation_cycles: 5000,
     avg_life_years: 30,
     replacement_cost: 1000,
-    document_link: ''
+    document_link: '',
   });
   const [paramErrors, setParamErrors] = useState({});
   const [pdfFile, setPdfFile] = useState(null);
@@ -205,7 +221,7 @@ export default function Obsolescence() {
       setBusy(true);
       const data = await get('/api/obsolescence/buildings');
       setBuildings(data.data || []);
-      await post('/api/obsolescence/ai-fill'); // Auto-fill avec IA
+      await post('/api/obsolescence/ai-fill');
       const urgencyRes = await get('/api/obsolescence/avg-urgency');
       setAvgUrgency(Number(urgencyRes.avg) || 45);
       const capexRes = await get('/api/obsolescence/total-capex');
@@ -382,7 +398,7 @@ export default function Obsolescence() {
     const datasets = [];
     Object.keys(forecasts).forEach(group => {
       const annual = years.map(y => forecasts[group].reduce((sum, f) => sum + (f.year === y ? f.capex_year : 0), 0));
-      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
+      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i - 1] || 0) + cur], []);
       datasets.push({
         type: 'bar',
         label: `${group} Annuel (€)`,
@@ -402,19 +418,23 @@ export default function Obsolescence() {
 
   const getCostByBuildingData = (data) => ({
     labels: data.map(d => d.building),
-    datasets: [{
-      label: 'Coût par bâtiment (€)',
-      data: data.map(d => d.total_cost),
-      backgroundColor: '#ff6384',
-    }],
+    datasets: [
+      {
+        label: 'Coût par bâtiment (€)',
+        data: data.map(d => d.total_cost),
+        backgroundColor: '#ff6384',
+      },
+    ],
   });
 
   const getUrgencyVsAgeData = (data) => ({
-    datasets: [{
-      label: 'Urgence vs Âge',
-      data: data.map(d => ({ x: d.age, y: d.urgency })),
-      backgroundColor: '#36a2eb',
-    }],
+    datasets: [
+      {
+        label: 'Urgence vs Âge',
+        data: data.map(d => ({ x: d.age, y: d.urgency })),
+        backgroundColor: '#36a2eb',
+      },
+    ],
   });
 
   const openAnnualGantt = async (task) => {
@@ -428,9 +448,10 @@ export default function Obsolescence() {
     }
   };
 
-  const filteredBuildings = buildings.filter(build =>
-    build.building.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (switchboards[build.building]?.some(sb => sb.name.toLowerCase().includes(searchQuery.toLowerCase())) || false)
+  const filteredBuildings = buildings.filter(
+    build =>
+      build.building.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (switchboards[build.building]?.some(sb => sb.name.toLowerCase().includes(searchQuery.toLowerCase())) || false)
   );
 
   return (
@@ -438,17 +459,45 @@ export default function Obsolescence() {
       <header className="flex items-center justify-between mb-8">
         <h1 className="text-4xl font-bold text-gray-800">Tableau de Bord Obsolescence</h1>
         <div className="flex gap-4">
-          <button onClick={exportPdf} className="px-4 py-2 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700" aria-label="Exporter en PDF">Exporter PDF</button>
-          <button onClick={() => setShowSidebar(true)} className="p-3 bg-orange-600 text-white rounded-xl shadow-md hover:bg-orange-700" aria-label="Ouvrir l'assistant IA">
+          <button
+            onClick={exportPdf}
+            className="px-4 py-2 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
+            aria-label="Exporter en PDF"
+          >
+            Exporter PDF
+          </button>
+          <button
+            onClick={() => setShowSidebar(true)}
+            className="p-3 bg-orange-600 text-white rounded-xl shadow-md hover:bg-orange-700"
+            aria-label="Ouvrir l'assistant IA"
+          >
             <HelpCircle size={24} />
           </button>
         </div>
       </header>
 
       <div className="flex gap-4 mb-8 border-b pb-2">
-        <button onClick={() => setTab('overview')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'overview' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`} aria-label="Vue globale">Vue Globale</button>
-        <button onClick={() => setTab('roll-up')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'roll-up' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-600'}`} aria-label="Roll-up">Roll-up</button>
-        <button onClick={() => setTab('analysis')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'analysis' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`} aria-label="Analyse">Analyse</button>
+        <button
+          onClick={() => setTab('overview')}
+          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'overview' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}
+          aria-label="Vue globale"
+        >
+          Vue Globale
+        </button>
+        <button
+          onClick={() => setTab('roll-up')}
+          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'roll-up' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-600'}`}
+          aria-label="Roll-up"
+        >
+          Roll-up
+        </button>
+        <button
+          onClick={() => setTab('analysis')}
+          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'analysis' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}
+          aria-label="Analyse"
+        >
+          Analyse
+        </button>
       </div>
 
       {tab === 'overview' && (
@@ -508,23 +557,43 @@ export default function Obsolescence() {
                     <td></td>
                     <td></td>
                   </motion.tr>
-                  {expandedBuildings[build.building] && switchboards[build.building]?.map(sb => (
-                    <motion.tr key={sb.id} className="bg-orange-50 hover:bg-orange-100 transition-colors">
-                      <td className="p-4 pl-8">{sb.name} (Étage: {sb.floor})</td>
-                      <td className="p-4">{sb.manufacture_date ? Math.round(Number(sb.manufacture_date)) : 'N/A'}</td>
-                      <td className="p-4">{sb.document_link ? <a href={sb.document_link} className="text-blue-600 underline" target="_blank" rel="noopener noreferrer">Lien</a> : 'N/A'}</td>
-                      <td className="p-4">€{Number(sb.total_cost).toLocaleString() || 'N/A'}</td>
-                      <td className="p-4">{sb.remaining_life_years ? new Date().getFullYear() + Number(sb.remaining_life_years) : 'N/A'}</td>
-                      <td className="p-4 flex gap-2">
-                        <button onClick={() => { setParamForm({ ...sb }); setShowParamsModal(true); }} className="text-green-600 hover:text-green-800" aria-label="Modifier paramètres">
-                          <Settings size={16} />
-                        </button>
-                        <button onClick={() => openAnnualGantt({ id: sb.id, name: sb.name })} className="text-blue-600 hover:text-blue-800" aria-label="Voir Gantt annuel">
-                          <Calendar size={16} />
-                        </button>
-                      </td>
-                    </motion.tr>
-                  ))}
+                  {expandedBuildings[build.building] &&
+                    switchboards[build.building]?.map(sb => (
+                      <motion.tr key={sb.id} className="bg-orange-50 hover:bg-orange-100 transition-colors">
+                        <td className="p-4 pl-8">{sb.name} (Étage: {sb.floor})</td>
+                        <td className="p-4">{sb.manufacture_date ? Math.round(Number(sb.manufacture_date)) : 'N/A'}</td>
+                        <td className="p-4">
+                          {sb.document_link ? (
+                            <a href={sb.document_link} className="text-blue-600 underline" target="_blank" rel="noopener noreferrer">
+                              Lien
+                            </a>
+                          ) : (
+                            'N/A'
+                          )}
+                        </td>
+                        <td className="p-4">€{Number(sb.total_cost).toLocaleString() || 'N/A'}</td>
+                        <td className="p-4">{sb.remaining_life_years ? new Date().getFullYear() + Number(sb.remaining_life_years) : 'N/A'}</td>
+                        <td className="p-4 flex gap-2">
+                          <button
+                            onClick={() => {
+                              setParamForm({ ...sb });
+                              setShowParamsModal(true);
+                            }}
+                            className="text-green-600 hover:text-green-800"
+                            aria-label="Modifier paramètres"
+                          >
+                            <Settings size={16} />
+                          </button>
+                          <button
+                            onClick={() => openAnnualGantt({ id: sb.id, name: sb.name })}
+                            className="text-blue-600 hover:text-blue-800"
+                            aria-label="Voir Gantt annuel"
+                          >
+                            <Calendar size={16} />
+                          </button>
+                        </td>
+                      </motion.tr>
+                    ))}
                 </>
               ))}
             </tbody>
@@ -543,7 +612,9 @@ export default function Obsolescence() {
               todayColor="#ff6b00"
               onClick={openAnnualGantt}
             />
-          ) : <p className="text-gray-600 text-center py-20">Aucune donnée disponible. L'IA analyse...</p>}
+          ) : (
+            <p className="text-gray-600 text-center py-20">Aucune donnée disponible. L'IA analyse...</p>
+          )}
         </div>
       )}
 
@@ -558,11 +629,13 @@ export default function Obsolescence() {
                   responsive: true,
                   plugins: {
                     legend: { position: 'top' },
-                    title: { display: true, text: 'Statut d\'urgence par bâtiment' }
-                  }
+                    title: { display: true, text: "Statut d'urgence par bâtiment" },
+                  },
                 }}
               />
-            ) : <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>}
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>
+            )}
           </div>
           <div ref={chartRef} className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Prévision CAPEX</h2>
@@ -573,11 +646,13 @@ export default function Obsolescence() {
                   responsive: true,
                   plugins: {
                     zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } },
-                    title: { display: true, text: 'Prévision des coûts CAPEX sur 30 ans' }
-                  }
+                    title: { display: true, text: 'Prévision des coûts CAPEX sur 30 ans' },
+                  },
                 }}
               />
-            ) : <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>}
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>
+            )}
           </div>
           <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Coûts par Bâtiment</h2>
@@ -587,11 +662,13 @@ export default function Obsolescence() {
                 options={{
                   responsive: true,
                   plugins: {
-                    title: { display: true, text: 'Coût total de remplacement par bâtiment' }
-                  }
+                    title: { display: true, text: 'Coût total de remplacement par bâtiment' },
+                  },
                 }}
               />
-            ) : <p className="text-gray-600 text-center py-20">Aucune donnée.</p>}
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée.</p>
+            )}
           </div>
           <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgence vs Âge</h2>
@@ -601,15 +678,17 @@ export default function Obsolescence() {
                 options={{
                   responsive: true,
                   plugins: {
-                    title: { display: true, text: 'Urgence en fonction de l\'âge des tableaux' }
+                    title: { display: true, text: "Urgence en fonction de l'âge des tableaux" },
                   },
                   scales: {
                     x: { title: { display: true, text: 'Âge (années)' } },
-                    y: { title: { display: true, text: 'Score d\'urgence (%)' } }
-                  }
+                    y: { title: { display: true, text: 'Score d\'urgence (%)' } },
+                  },
                 }}
               />
-            ) : <p className="text-gray-600 text-center py-20">Aucune donnée.</p>}
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée.</p>
+            )}
           </div>
         </div>
       )}
@@ -621,7 +700,9 @@ export default function Obsolescence() {
       <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Modifier Paramètres du Tableau">
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">Date de Fabrication <span className="text-red-500">*</span></label>
+            <label className="block text-sm font-medium text-gray-700">
+              Date de Fabrication <span className="text-red-500">*</span>
+            </label>
             <div className="relative">
               <input
                 type="date"
@@ -750,7 +831,9 @@ export default function Obsolescence() {
               todayColor="#ff6b00"
               onClick={task => handleAiQuery(`Expliquer Gantt annuel pour ${task.name}`)}
             />
-          ) : <p className="text-gray-600 text-center py-20">Aucune donnée annuelle disponible.</p>}
+          ) : (
+            <p className="text-gray-600 text-center py-20">Aucune donnée annuelle disponible.</p>
+          )}
         </div>
       </Modal>
 
