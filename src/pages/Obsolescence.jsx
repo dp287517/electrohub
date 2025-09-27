@@ -1,4 +1,4 @@
-// Obsolescence.jsx
+// Obsolescence.jsx (final)
 import React, { useEffect, useState, useRef, Fragment } from 'react';
 import { get, post } from '../lib/api.js';
 import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil } from 'lucide-react';
@@ -108,7 +108,11 @@ export default function Obsolescence() {
 
   const loadGanttData = async () => {
     try {
-      const params = { ...selectedFilter };
+      // N’envoie PAS de null/undefined
+      const params = {};
+      if (selectedFilter.building) params.building = selectedFilter.building;
+      if (selectedFilter.switchboard) params.switchboard = selectedFilter.switchboard;
+
       const data = await get('/api/obsolescence/gantt-data', params);
       const tasks = (data.tasks || []).map(t => ({ ...t, start:new Date(t.start), end:new Date(t.end) }))
                        .filter(t => !isNaN(t.start.getTime()) && !isNaN(t.end.getTime()));
@@ -148,16 +152,68 @@ export default function Obsolescence() {
     ],
   });
 
+  const computeYears = () => Array.from({ length: 30 }, (_, i) => new Date().getFullYear() + i);
+
   const getCapexChartData = (forecasts) => {
-    const years = Array.from({ length: 30 }, (_, i) => new Date().getFullYear() + i);
+    const years = computeYears();
     const datasets = [];
     Object.keys(forecasts).forEach(group => {
       const annual = years.map(y => forecasts[group].reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
       const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
       datasets.push({ type:'bar', label:`${group} Annual (£)`, data: annual, backgroundColor:'#1e90ff' });
-      datasets.push({ type:'line', label:`${group} Cumulative (£)`, data: cumul, borderColor:'#32cd32', fill:false });
+      datasets.push({ type:'line', label:`${group} Cumulative (£)`, data: cumul, borderColor:'#32cd32', borderWidth:2, tension:0.3, fill:false });
     });
     return { labels: years, datasets };
+  };
+
+  const getCapexChartDataSingle = (forecasts, group) => {
+    const years = computeYears();
+    const annual = years.map(y => (forecasts[group] || []).reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
+    const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
+    return {
+      labels: years,
+      datasets: [
+        { type:'bar', label:'Annual (£)', data: annual, backgroundColor:'#1e90ff' },
+        { type:'line', label:'Cumulative (£)', data: cumul, borderColor:'#32cd32', borderWidth:2, tension:0.3, fill:false }
+      ]
+    };
+  };
+
+  const chartBigOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    scales: {
+      x: { grid: { display: false } },
+      y: { ticks: { callback: v => `£${Number(v).toLocaleString('en-GB')}` } }
+    },
+    plugins: {
+      legend: { position: 'top' },
+      zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } },
+      tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: £${Number(ctx.raw).toLocaleString('en-GB')}` } }
+    },
+    animation: { duration: 600 }
+  };
+
+  const downloadICS = (sb) => {
+    const y = sb.forecast_year || (new Date().getFullYear() + 1);
+    const dt = `${y}0101T090000Z`;
+    const ics =
+`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ElectroHub//Obsolescence//EN
+BEGIN:VEVENT
+UID:${sb.id || Math.random()}@electrohub
+DTSTAMP:${dt}
+DTSTART:${dt}
+SUMMARY:Replace ${sb.name} (forecast)
+DESCRIPTION:Forecast replacement of ${sb.name}
+END:VEVENT
+END:VCALENDAR`;
+    const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `${sb.name}-forecast.ics`; a.click();
+    URL.revokeObjectURL(url);
   };
 
   const openQuick = (sb) => {
@@ -185,27 +241,6 @@ export default function Obsolescence() {
     } catch (e) {
       setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
     }
-  };
-
-  const downloadICS = (sb) => {
-    const y = sb.forecast_year || (new Date().getFullYear() + 1);
-    const dt = `${y}0101T090000Z`;
-    const ics =
-`BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//ElectroHub//Obsolescence//EN
-BEGIN:VEVENT
-UID:${sb.id || Math.random()}@electrohub
-DTSTAMP:${dt}
-DTSTART:${dt}
-SUMMARY:Replace ${sb.name} (forecast)
-DESCRIPTION:Forecast replacement of ${sb.name}
-END:VEVENT
-END:VCALENDAR`;
-    const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `${sb.name}-forecast.ics`; a.click();
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -277,7 +312,11 @@ END:VCALENDAR`;
                         <td className="p-4">{sb.forecast_year ?? 'N/A'}</td>
                         <td className="p-4 flex gap-3">
                           <button onClick={() => openQuick(sb)} className="text-green-700 hover:text-green-900" title="Quick edit"><Pencil size={16} /></button>
-                          <button onClick={() => downloadICS(sb)} className="text-blue-700 hover:text-blue-900" title="Add to calendar"><Calendar size={16} /></button>
+                          <button onClick={() => {
+                            const y = sb.forecast_year ?? (new Date().getFullYear() + 1);
+                            const dt = `${y}-01-01`;
+                            downloadICS({ ...sb, forecast_year: y, dt });
+                          }} className="text-blue-700 hover:text-blue-900" title="Add to calendar"><Calendar size={16} /></button>
                         </td>
                       </tr>
                     ))}
@@ -292,20 +331,43 @@ END:VCALENDAR`;
       {tab === 'roll-up' && (
         <div className="h-[600px] overflow-auto bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
           {ganttTasks.length ? (
-            <Gantt tasks={ganttTasks} viewMode={ViewMode.Decade} columnWidth={120} listCellWidth="250px" todayColor="#ff6b00" />
+            <Gantt
+              tasks={ganttTasks}
+              viewMode={ViewMode.Year}        // plus universel que "Decade"
+              columnWidth={120}
+              listCellWidth="250px"
+              todayColor="#ff6b00"
+            />
           ) : <p className="text-gray-600 text-center py-20">No data available yet.</p>}
         </div>
       )}
 
       {tab === 'analysis' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 gap-8">
+          {/* Grand graphique plein écran */}
+          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5 h-[640px]">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX Forecast — All Buildings</h2>
+            {Object.keys(capexForecast).length ? (
+              <Line data={getCapexChartData(capexForecast)} options={chartBigOptions} />
+            ) : <p className="text-gray-600 text-center py-20">No data.</p>}
+          </div>
+
+          {/* Doughnut */}
           <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgency Distribution</h2>
             {doughnutData.length ? <Doughnut data={getDoughnutChartData(doughnutData)} /> : <p className="text-gray-600 text-center py-20">No data.</p>}
           </div>
-          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX Forecast</h2>
-            {Object.keys(capexForecast).length ? <Line data={getCapexChartData(capexForecast)} options={{ responsive: true, plugins:{ zoom:{ zoom:{ wheel:{enabled:true}, mode:'xy' } } } }} /> : <p className="text-gray-600 text-center py-20">No data.</p>}
+
+          {/* Mini-charts par bâtiment */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            {Object.keys(capexForecast).map(group => (
+              <div key={group} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5 h-[320px]">
+                <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {group}</h3>
+                <Line data={getCapexChartDataSingle(capexForecast, group)} options={{
+                  ...chartBigOptions, maintainAspectRatio:false, animation:{ duration:500 }
+                }} />
+              </div>
+            ))}
           </div>
         </div>
       )}
