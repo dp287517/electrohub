@@ -74,11 +74,11 @@ async function ensureSchema() {
         device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
         switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
         site TEXT NOT NULL,
-        working_distance NUMERIC NOT NULL DEFAULT 455,  -- mm, default IEEE
+        working_distance NUMERIC NOT NULL DEFAULT 455,
         enclosure_type TEXT DEFAULT 'VCB' CHECK (enclosure_type IN ('VCB', 'VCBB', 'HCB', 'HOA', 'VOA')),
-        electrode_gap NUMERIC NOT NULL DEFAULT 32,  -- mm
-        arcing_time NUMERIC NOT NULL DEFAULT 0.2,  -- seconds, from selectivity if available
-        fault_current_ka NUMERIC,  -- from faultlevel if available
+        electrode_gap NUMERIC NOT NULL DEFAULT 32,
+        arcing_time NUMERIC NOT NULL DEFAULT 0.2,
+        fault_current_ka NUMERIC,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         PRIMARY KEY (device_id, switchboard_id, site)
       );
@@ -109,7 +109,7 @@ app.post('/api/arcflash/reset', async (req, res) => {
   }
 });
 
-// LIST Arc points (based on switchboards/devices)
+// LIST Arc points
 app.get('/api/arcflash/points', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -158,8 +158,22 @@ app.post('/api/arcflash/parameters', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device_id, switchboard_id, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka, settings, parent_id } = req.body;
-    const cleanParentId = (parent_id === '' || parent_id === undefined) ? null : Number(parent_id);
     if (!device_id || !switchboard_id) return res.status(400).json({ error: 'Missing IDs' });
+
+    const cleanParentId = (parent_id === '' || parent_id === undefined) ? null : Number(parent_id);
+
+    // Validate parent_id: must exist in devices for the same site and not equal to self
+    let validatedParentId = null;
+    if (cleanParentId !== null) {
+      if (cleanParentId === Number(device_id)) {
+        return res.status(400).json({ error: 'Parameters update failed', details: 'parent_id cannot equal device_id' });
+      }
+      const { rows: parentRows } = await pool.query(`SELECT 1 FROM devices WHERE id = $1 AND site = $2`, [cleanParentId, site]);
+      if (!parentRows.length) {
+        return res.status(400).json({ error: 'Parameters update failed', details: 'parent_id does not reference a valid device for this site' });
+      }
+      validatedParentId = cleanParentId;
+    }
 
     await pool.query(`
       INSERT INTO arcflash_parameters (device_id, switchboard_id, site, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka)
@@ -172,20 +186,21 @@ app.post('/api/arcflash/parameters', async (req, res) => {
         fault_current_ka = EXCLUDED.fault_current_ka
     `, [device_id, switchboard_id, site, working_distance || 455, enclosure_type || 'VCB', electrode_gap || 32, arcing_time || 0.2, fault_current_ka]);
 
-    if (typeof settings !== 'undefined' || typeof parent_id !== 'undefined') {
-      await pool.query(`
-        UPDATE devices
-        SET settings = $1, parent_id = $2
-        WHERE id = $3 AND site = $4
-      `, [settings || {}, cleanParentId, device_id, site]);
-    }
+    // Update devices settings/parent conditionally; keep existing when undefined
+    const settingsValue = (typeof settings === 'undefined') ? null : settings;
+    await pool.query(`
+      UPDATE devices
+      SET settings = COALESCE($1, settings),
+          parent_id = $2
+      WHERE id = $3 AND site = $4
+    `, [settingsValue, validatedParentId, device_id, site]);
 
-    if (parent_id) {
+    if (validatedParentId) {
       await pool.query(`
         INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status)
         VALUES ($1, $2, $3, 'incomplete')
         ON CONFLICT (upstream_id, downstream_id, site) DO UPDATE SET status = 'incomplete'
-      `, [parent_id, device_id, site]);
+      `, [validatedParentId, device_id, site]);
     }
 
     console.log(`[ARC PARAMS] Updated for device=${device_id}, switchboard=${switchboard_id}`);
@@ -256,26 +271,7 @@ app.post('/api/arcflash/autofill', async (req, res) => {
           updates.push({ device_id: id, parent_id });
           console.log(`[ARC AUTOFILL] Set parent_id=${parent_id} for device ${id}`);
         } else {
-          const prompt = `Suggest a parent device ID for ${device.name} (${device_type}) in switchboard ${switchboard_id}. Available main breakers: query database for PRINCIPAL or main incoming. Return JSON: {"parent_id": number}`;
-          const completion = await openai.chat.completions.create({
-            model: 'gpt-4o-mini',
-            messages: [{ role: 'system', content: prompt }],
-            response_format: { type: 'json_object' },
-            temperature: 0.3,
-          });
-          const suggested = JSON.parse(completion.choices[0].message.content.trim());
-          if (suggested.parent_id) {
-            await pool.query(`UPDATE devices SET parent_id = $1 WHERE id = $2 AND site = $3`, [suggested.parent_id, id, site]);
-            await pool.query(`
-              INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status)
-              VALUES ($1, $2, $3, 'incomplete')
-              ON CONFLICT (upstream_id, downstream_id, site) DO NOTHING
-            `, [suggested.parent_id, id, site]);
-            updates.push({ device_id: id, parent_id: suggested.parent_id });
-            console.log(`[ARC AUTOFILL] AI suggested parent_id=${suggested.parent_id} for device ${id}`);
-          } else {
-            console.warn(`[ARC AUTOFILL] No suitable upstream for device ${id}`);
-          }
+          console.warn(`[ARC AUTOFILL] No suitable upstream for device ${id}`);
         }
       }
     }
@@ -353,7 +349,7 @@ app.get('/api/arcflash/check', async (req, res) => {
   }
 });
 
-// GET Curves data for graph (e.g., incident energy vs distance)
+// GET Curves data
 app.get('/api/arcflash/curves', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -403,7 +399,6 @@ app.post('/api/arcflash/ai-tip', async (req, res) => {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
 
     const { query } = req.body;
-    const cleanParentId = (parent_id === '' || parent_id === undefined) ? null : Number(parent_id);
     const context = query || 'Arc flash advice';
 
     const completion = await openai.chat.completions.create({
@@ -427,7 +422,7 @@ app.post('/api/arcflash/ai-tip', async (req, res) => {
   }
 });
 
-// Helper functions for calculations (IEEE 1584 simplified)
+// Helper functions
 function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure, gap) {
   const V = point.voltage_v / 1000; // kV
   const Ibf = faultKa; // kA
@@ -435,18 +430,18 @@ function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure,
   const D = Math.max(workingDistMm / 25.4, 3.94); // Minimum 100 mm (3.94 inches)
   const G = gap / 25.4; // inches
 
-  // Arcing current Ia
-  const lgIa = 0.00402 + 0.983 * Math.log10(Ibf); // Simplified for LV
+  // Arcing current Ia (simplifié)
+  const lgIa = 0.00402 + 0.983 * Math.log10(Ibf);
   const Ia = Math.pow(10, lgIa);
 
-  // Incident energy E
+  // Incident energy E (simplifié)
   const k1 = enclosure === 'VCB' ? -0.097 : -0.555;
   const lgE = 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) + k1 + 1.0;
-  let E = Math.pow(10, lgE) * 4.184 * (610 / workingDistMm) ** 2; // Normalized to working distance
+  let E = Math.pow(10, lgE) * 4.184 * (610 / workingDistMm) ** 2;
 
   E = Math.max(E, 0.1); // Minimum 0.1 cal/cm²
 
-  // PPE category (IEC 61482 aligned)
+  // PPE category
   let ppe = 0;
   if (E > 40) ppe = 4;
   else if (E > 25) ppe = 3;
