@@ -17,6 +17,7 @@
     "cookie-parser": "^1.4.6",
     "dotenv": "^16.4.5",
     "yup": "^1.4.0",
+    "lodash": "^4.17.21",
     "express": "^4.19.2",
     "helmet": "^7.1.0",
     "http-proxy-middleware": "^2.0.6",
