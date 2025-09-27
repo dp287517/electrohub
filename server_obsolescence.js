@@ -1,4 +1,4 @@
-// server_obsolescence.js (gallery + web-cost + buckets + auto-check + robust)
+// server_obsolescence.js (gallery + web-cost + buckets + auto-check + robust + AI assistant + pdf-ready health)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -35,6 +35,7 @@ app.use((req, res, next) => {
 
 const GBP = v => Math.max(0, Math.round(Number(v || 0)));
 const webCostCache = new Map();
+const isWebCostEnabled = !!process.env.ENABLE_WEB_COST;
 
 function siteOf(req) {
   return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
@@ -75,33 +76,58 @@ async function ensureSchema() {
 ensureSchema().catch(console.error);
 
 // ---------- COÛTS ----------
+function bracketBreakerCostGBP(amps) {
+  const A = Number(amps || 0);
+  if (A <= 10) return 20;
+  if (A <= 20) return 30;
+  if (A <= 40) return 60;
+  if (A <= 80) return 80;
+  if (A <= 120) return 150;
+  if (A <= 160) return 500;
+  if (A <= 250) return 800;
+  if (A <= 400) return 1200;
+  if (A <= 630) return 2000;
+  if (A <= 1500) return 5000;
+  if (A <= 2000) return 10000;
+  if (A <= 4000) return 15000;
+  return 15000;
+}
+
 function estimateDeviceCostGBP(type = '', inAmps = 0) {
   const t = String(type || '').toUpperCase();
   const A = Number(inAmps || 0);
   let base = 600; // fallback matériel
 
-  if (t.includes('MCCB')) {
-    if (A <= 125) base = 450;
-    else if (A <= 250) base = 900;
-    else if (A <= 400) base = 1800;
-    else if (A <= 630) base = 3200;
-    else if (A <= 800) base = 5200;
-    else base = 8500;
-  } else if (t.includes('ACB')) {
-    base = A <= 3200 ? 9000 : 14000;
-  } else if (t.includes('VCB') || t.includes('VACUUM')) {
-    base = 15000;
-  } else if (t.includes('RELAY') || t.includes('PROTECTION')) {
-    base = 2500;
-  } else if (t.includes('FUSE')) {
-    base = 150;
+  // Barème "générique disjoncteur" par intensité
+  if (t.includes('MCB') || t.includes('BREAKER') || t.includes('DISJONCTEUR')) {
+    base = bracketBreakerCostGBP(A);
   }
+
+  // Heuristiques par famille
+  if (t.includes('MCCB')) {
+    if (A <= 125) base = Math.max(base, 450);
+    else if (A <= 250) base = Math.max(base, 900);
+    else if (A <= 400) base = Math.max(base, 1800);
+    else if (A <= 630) base = Math.max(base, 3200);
+    else if (A <= 800) base = Math.max(base, 5200);
+    else base = Math.max(base, 8500);
+  } else if (t.includes('ACB')) {
+    base = Math.max(base, A <= 3200 ? 9000 : 14000);
+  } else if (t.includes('VCB') || t.includes('VACUUM')) {
+    base = Math.max(base, 15000);
+  } else if (t.includes('RELAY') || t.includes('PROTECTION')) {
+    base = Math.max(base, 2500);
+  } else if (t.includes('FUSE')) {
+    base = Math.max(base, 150);
+  }
+
   return GBP(base * 1.3); // +~30% pose
 }
 
+// Optionnel: raffinement web (si ENABLE_WEB_COST=1 et clé OpenAI dispo)
 async function estimateFromWeb(type = '', inAmps = 0) {
   try {
-    if (!process.env.ENABLE_WEB_COST || !openai) return null;
+    if (!isWebCostEnabled || !openai) return null;
     const key = `${String(type).toUpperCase()}_${Number(inAmps)}`;
     if (webCostCache.has(key)) return webCostCache.get(key);
 
@@ -222,7 +248,9 @@ function calculateObsolescence(point) {
 }
 
 // ---------- HEALTH ----------
-app.get('/api/obsolescence/health', (_req, res) => res.json({ ok: true, ts: Date.now(), openai: !!openai }));
+app.get('/api/obsolescence/health', (_req, res) =>
+  res.json({ ok: true, ts: Date.now(), openai: !!openai, web_cost: isWebCostEnabled })
+);
 
 // ---------- TEST DATA ----------
 app.post('/api/obsolescence/test-data', async (req, res) => {
@@ -427,7 +455,7 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
   }
 });
 
-// ---------- NOUVEAU : BUCKETS PAR BÂTIMENT ----------
+// ---------- BUCKETS PAR BÂTIMENT ----------
 app.get('/api/obsolescence/building-urgency-buckets', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -474,38 +502,59 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
   }
 });
 
-// ---------- AI-QUERY ----------
+// ---------- AI-QUERY (assistant complet + prix Web si question) ----------
 app.post('/api/obsolescence/ai-query', async (req, res) => {
   try {
     if (!openai) return res.status(503).json({ error: 'OpenAI not configured' });
     const { query, site } = req.body || {};
+
+    // Contexte DB
     const db = await pool.query(`
-      SELECT s.name, op.*
+      SELECT s.name AS switchboard, s.building_code, d.name AS device, d.device_type, d.in_amps,
+             op.manufacture_date, op.avg_life_years, op.replacement_cost
       FROM switchboards s
       LEFT JOIN devices d ON s.id = d.switchboard_id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND op.switchboard_id = s.id AND op.site = $1
       WHERE s.site = $1
     `, [site]);
-    const context = db.rows.length ? JSON.stringify(db.rows) : 'No data';
+    const context = db.rows.length ? JSON.stringify(db.rows.slice(0, 300)) : 'No data';
+
+    // Si la question porte sur un prix, tenter une estimation web instantanée
+    let inlinePrice = '';
+    const m = String(query||'').match(/(mccb|acb|vcb|breaker|disjoncteur)\s*([0-9]{1,4})\s*a/i);
+    if (m) {
+      const typ = m[1];
+      const amps = Number(m[2]);
+      const web = await estimateFromWeb(typ, amps);
+      const base = estimateDeviceCostGBP(typ, amps);
+      const final = web || base;
+      inlinePrice = `\n\n**Quick estimate** for ${typ.toUpperCase()} ${amps}A installed (UK): **£${final.toLocaleString('en-GB')}** ${web ? '(web-assist)' : '(heuristic)'}.\n`;
+    }
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: `You are an expert in substation obsolescence. DB context: ${context}.` },
-        { role: 'user', content: String(query || '') }
+        { role: 'system', content:
+`You are an experienced IEC/IEEE asset-management engineer.
+You answer in concise bullet points, with actionable recommendations.
+When relevant, propose sensors (cabinet temperature probes, cable overheat tags like HeatTag, electrical monitoring/IoT, trend analysis, thermal imaging routines).
+Always add a short "Estimates & Scope" note: prices are indicative, include materials+labour, exclude enclosures/cabling/accessories; confirm locally.` },
+        { role: 'user', content: `SITE DB (trimmed): ${context}` },
+        { role: 'user', content: String(query || '') + inlinePrice }
       ],
-      max_tokens: 200,
-      temperature: 0.5
+      max_tokens: 450,
+      temperature: 0.3
     });
     const response = completion.choices?.[0]?.message?.content?.trim() || 'No response';
-    res.json({ response, updates: false });
+    res.json({ response, updates: false, web_cost: isWebCostEnabled });
   } catch (e) {
+    console.error('[AI QUERY] error:', e.message);
     res.status(500).json({ error: 'AI query failed' });
   }
 });
 
 // ---------- AUTO-CHECK (robuste) ----------
 async function fetchDevicesForAutoCheck(site) {
-  // essaie avec les 3 tables de checks; si l’une manque (42P01), retombe sur une requête simple
   const sqlFull = `
     SELECT d.*,
            s.id AS sb_id,
@@ -584,11 +633,12 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
       return {
         start: new Date(mfgYear, 0, 1),
         end: new Date(mfgYear + life, 0, 1),
-        name: sb.name,
+        name: `${sb.building_code || 'Bldg'} — ${sb.name}`,
         id: String(sb.switchboard_id),
         progress: 0,
         type: 'task',
-        cost: sb.estimated_cost_gbp
+        cost: sb.estimated_cost_gbp,
+        building: sb.building_code || 'Unknown'
       };
     });
     res.json({ tasks });
