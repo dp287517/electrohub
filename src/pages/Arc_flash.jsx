@@ -3,7 +3,6 @@ import { get, post } from '../lib/api.js';
 import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Flame, Download, ChevronRight, Settings } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
 import Confetti from 'react-confetti';
-import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import {
   Chart as ChartJS,
@@ -37,10 +36,10 @@ function useUserSite() {
   try {
     const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
     const site = user?.site || '';
-    console.log('Site from useUserSite:', site); // <--- Debug
+    console.log('Site from useUserSite:', site); // debug (peut être retiré si besoin)
     return site;
   } catch (e) {
-    console.error('Error in useUserSite:', e.message); // <--- Debug
+    console.error('Error in useUserSite:', e.message);
     return '';
   }
 }
@@ -109,11 +108,10 @@ export default function ArcFlash() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [tipContent, setTipContent] = useState('');
   const chartRef = useRef(null);
-  const resultRef = useRef(null);
   const pageSize = 18;
 
   useEffect(() => {
-    console.log('useEffect triggered with query:', q); // <--- Debug
+    console.log('useEffect triggered with query:', q);
     loadPoints();
   }, [q]);
 
@@ -124,9 +122,9 @@ export default function ArcFlash() {
         ...q,
         switchboard: isNaN(Number(q.switchboard)) ? '' : q.switchboard,
       };
-      console.log('Calling /api/arcflash/points with params:', params); // <--- Debug
+      console.log('Calling /api/arcflash/points with params:', params);
       const data = await get('/api/arcflash/points', params);
-      console.log('Data received from /api/arcflash/points:', data); // <--- Debug
+      console.log('Data received from /api/arcflash/points:', data);
       setPoints(data?.data || []);
       setTotal(data?.total || 0);
       const initialStatuses = {};
@@ -137,7 +135,7 @@ export default function ArcFlash() {
       });
       setStatuses(initialStatuses);
     } catch (e) {
-      console.error('Error in loadPoints:', e.message); // <--- Debug
+      console.error('Error in loadPoints:', e.message);
       setToast({ msg: `Failed to load points: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -162,7 +160,7 @@ export default function ArcFlash() {
       setBusy(true);
       if (!deviceId || !switchboardId) throw new Error('Missing device or switchboard ID');
       const params = { device: deviceId, switchboard: switchboardId };
-      console.log('Checking arcflash with params:', params); // <--- Debug
+      console.log('Checking arcflash with params:', params);
       const result = await get('/api/arcflash/check', params);
       setCheckResult(result);
       setSelectedPoint({ deviceId, switchboardId });
@@ -196,7 +194,7 @@ export default function ArcFlash() {
         setTimeout(() => setShowConfetti(false), 3000);
       }
     } catch (e) {
-      console.error('Error in handleCheck:', e.message); // <--- Debug
+      console.error('Error in handleCheck:', e.message);
       setToast({ msg: `Check failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -214,7 +212,7 @@ export default function ArcFlash() {
       setToast({ msg: 'Batch check completed', type: 'success' });
       loadPoints();
     } catch (e) {
-      console.error('Error in handleBatchCheck:', e.message); // <--- Debug
+      console.error('Error in handleBatchCheck:', e.message);
       setToast({ msg: `Batch failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -234,7 +232,7 @@ export default function ArcFlash() {
       setShowParamsModal(false);
       loadPoints();
     } catch (e) {
-      console.error('Error in saveParameters:', e.message); // <--- Debug
+      console.error('Error in saveParameters:', e.message);
       setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -248,7 +246,7 @@ export default function ArcFlash() {
       setToast({ msg: 'Data reset', type: 'info' });
       loadPoints();
     } catch (e) {
-      console.error('Error in handleReset:', e.message); // <--- Debug
+      console.error('Error in handleReset:', e.message);
       setToast({ msg: `Reset failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -265,7 +263,7 @@ export default function ArcFlash() {
       setBusy(true);
       const pdf = new jsPDF();
 
-      // 1) Rendu fiable du graphe via canvas temporaire
+      // 1) Re-génère un graphe propre dans un canvas temporaire (pas de capture DOM)
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = 900;
       tempCanvas.height = 450;
@@ -307,18 +305,7 @@ export default function ArcFlash() {
 
       const graphImg = tempCanvas.toDataURL('image/png');
 
-      // 2) Capture optionnelle de la section résultats
-      let resultImg = null;
-      if (resultRef?.current) {
-        try {
-          const resultCanvas = await html2canvas(resultRef.current, { scale: 2, useCORS: true, logging: false });
-          resultImg = resultCanvas.toDataURL('image/png');
-        } catch (e) {
-          console.warn('html2canvas result section failed:', e.message);
-        }
-      }
-
-      // 3) Composition du PDF
+      // 2) Composition du PDF (sans \"impressions d'écran\" du DOM)
       if (isLabel) {
         const cat = Number(checkResult?.ppe_category ?? 0);
         const colors = {
@@ -345,9 +332,6 @@ export default function ArcFlash() {
         pdf.text('Required PPE: Arc-rated clothing, gloves, face shield', 20, 75);
         pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 85);
 
-        if (resultImg) {
-          pdf.addImage(resultImg, 'PNG', 20, 95, 170, 80);
-        }
         if (graphImg) {
           pdf.addPage();
           pdf.addImage(graphImg, 'PNG', 10, 10, 190, 95);
@@ -379,11 +363,6 @@ export default function ArcFlash() {
           if (paramTips.working_distance_tip) { pdf.text(`- Working Distance: ${paramTips.working_distance_tip}`, 20, y); y += 6; }
           if (paramTips.arcing_time_tip) { pdf.text(`- Arcing Time: ${paramTips.arcing_time_tip}`, 20, y); y += 6; }
           if (paramTips.fault_current_tip) { pdf.text(`- Fault Current: ${paramTips.fault_current_tip}`, 20, y); y += 6; }
-        }
-
-        if (resultImg) {
-          pdf.addPage();
-          pdf.addImage(resultImg, 'PNG', 10, 10, 190, 90);
         }
       }
 
@@ -541,7 +520,7 @@ export default function ArcFlash() {
       )}
 
       {checkResult && (
-        <div ref={resultRef} className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
+        <div className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
           <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
           <div className="flex items-center gap-2 mb-4">
             {checkResult.status === 'safe' ? <CheckCircle className="text-green-600 animate-bounce" size={24} /> :
@@ -562,16 +541,6 @@ export default function ArcFlash() {
               <h3 className="text-lg font-semibold">Remediation Actions:</h3>
               <ul className="list-disc pl-5 text-gray-700">
                 {checkResult.remediation.map((r, i) => <li key={i} className="mb-1">{r}</li>)}
-              </ul>
-            </div>
-          )}
-          {Object.keys(paramTips).length > 0 && (
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold">Parameter Optimization Tips:</h3>
-              <ul className="list-disc pl-5 text-gray-700">
-                {paramTips.working_distance_tip && <li className="mb-1">Working Distance: {paramTips.working_distance_tip}</li>}
-                {paramTips.arcing_time_tip && <li className="mb-1">Arcing Time: {paramTips.arcing_time_tip}</li>}
-                {paramTips.fault_current_tip && <li className="mb-1">Fault Current: {paramTips.fault_current_tip}</li>}
               </ul>
             </div>
           )}
