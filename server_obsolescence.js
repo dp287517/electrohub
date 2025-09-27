@@ -366,7 +366,7 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
       FROM switchboards s
       JOIN devices d ON s.id = d.switchboard_id
       LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND op.site = $1
+      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
       WHERE s.site = $1
     `, [site]);
 
@@ -585,4 +585,12 @@ app.get('/api/obsolescence/total-capex', async (req, res) => {
 // PDF Analysis (réel avec pdf-parse)
 app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400
+    if (!req.file) return res.status(400).json({ error: 'Aucun PDF uploadé' });
+    const site = siteOf(req);
+    const { switchboard_id } = req.body;
+    const { error } = Joi.object({ switchboard_id: Joi.number().required() }).validate({ switchboard_id });
+    if (error) return res.status(422).json({ error: 'Données invalides', details: error.details });
+    const buffer = req.file.buffer;
+    const data = await PDFParse(buffer);
+    const pdfText = data.text;
+    const prompt = `Extraire date de fabrication, modèle et coût du texte PDF suivant : "${pdfText.slice(0, 2000)}" (tronqué si trop long). Retourner en JSON.`;
