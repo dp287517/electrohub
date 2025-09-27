@@ -360,7 +360,6 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
     let groupField = 's.building_code';
     if (group === 'floor') groupField = 's.floor';
     if (group === 'switchboard') groupField = 's.name';
-
     const r = await pool.query(`
       SELECT ${groupField} AS group_label, op.replacement_cost, op.manufacture_date, op.avg_life_years, oc.urgency_score
       FROM switchboards s
@@ -369,13 +368,11 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
       LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
       WHERE s.site = $1
     `, [site]);
-
     const forecasts = {};
     r.rows.forEach(row => {
       if (!forecasts[row.group_label]) forecasts[row.group_label] = [];
       forecasts[row.group_label].push(generateForecastForItem(row));
     });
-
     res.json({ forecasts });
   } catch (e) {
     console.error('[OBS CAPEX FORECAST] erreur:', e.message);
@@ -594,3 +591,79 @@ app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res)
     const data = await PDFParse(buffer);
     const pdfText = data.text;
     const prompt = `Extraire date de fabrication, modèle et coût du texte PDF suivant : "${pdfText.slice(0, 2000)}" (tronqué si trop long). Retourner en JSON.`;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+    });
+    const extracted = JSON.parse(completion.choices[0].message.content);
+    const manufacture_date = extracted.manufacture_date && !isNaN(new Date(extracted.manufacture_date).getTime()) ? extracted.manufacture_date : '2000-01-01';
+    await pool.query(
+      `UPDATE obsolescence_parameters 
+       SET manufacture_date = $1 
+       WHERE switchboard_id = $2 AND site = $3`,
+      [manufacture_date, Number(switchboard_id), site]
+    );
+    res.json({ manufacture_date });
+  } catch (e) {
+    console.error('[PDF ANALYZE] erreur:', e.message);
+    res.status(500).json({ error: 'Échec analyse PDF', details: e.message });
+  }
+});
+
+// Helper functions
+function calculateObsolescence(point) {
+  const currentYear = new Date().getFullYear();
+  const manufactureYear = point.manufacture_date && !isNaN(new Date(point.manufacture_date).getTime()) ? new Date(point.manufacture_date).getFullYear() : 2000;
+  const age = currentYear - manufactureYear;
+  const avgLife = point.avg_life_years || 25;
+  const tempFactor = Math.pow(2, (point.avg_temperature - 25) / 10);
+  const humFactor = point.avg_humidity > 70 ? 1.5 : 1;
+  const cycleFactor = point.operation_cycles > 10000 ? 1.2 : 1;
+  const adjustedLife = avgLife / (tempFactor * humFactor * cycleFactor);
+  const remaining_life_years = Math.max(adjustedLife - age, 0);
+  let urgency = (age / adjustedLife) * 50;
+  if (point.selectivity_status === 'non-selective') urgency += 20;
+  if (point.fault_status === 'at-risk') urgency += 15;
+  if (point.arc_status === 'at-risk') urgency += 15;
+  urgency = Math.min(urgency, 100);
+  const status = urgency < 30 ? 'ok' : urgency < 70 ? 'warning' : 'critical';
+  return { remaining_life_years: Math.round(remaining_life_years), urgency_score: Math.round(urgency), status };
+}
+
+function generateForecastForItem(item) {
+  const forecast = [];
+  const currentYear = new Date().getFullYear();
+  let capexCumul = 0;
+  const inflation = 1.02;
+  const manufactureYear = item.manufacture_date && !isNaN(new Date(item.manufacture_date).getTime()) ? new Date(item.manufacture_date).getFullYear() : 2000;
+  const lifeYears = item.avg_life_years || 25;
+  const replacementYear = manufactureYear + lifeYears;
+
+  for (let y = 0; y < 30; y++) {
+    const year = currentYear + y;
+    const remaining = lifeYears - (year - manufactureYear);
+    const capexYear = year >= replacementYear ? item.replacement_cost * Math.pow(inflation, y) : 0;
+    capexCumul += capexYear;
+    forecast.push({ year, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul), remaining_life: Math.max(remaining, 0) });
+  }
+  return forecast;
+}
+
+async function estimateCost(deviceType) {
+  try {
+    if (deviceType === 'MCCB') return 100; // Moyenne approx en EUR
+    const searchResult = await axios.get(`https://api.duckduckgo.com/?q=average+cost+of+${deviceType}&format=json`);
+    const prompt = `Estimer coût de remplacement pour ${deviceType} basé sur ces données : ${searchResult.data.AbstractText || 'Aucune donnée'}. Retourner un nombre.`;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return parseFloat(completion.choices[0].message.content) || 1000;
+  } catch {
+    return 1000;
+  }
+}
+
+const port = process.env.OBSOLESCENCE_PORT || 3007;
+app.listen(port, () => console.log(`Service obsolescence sur :${port}`));
