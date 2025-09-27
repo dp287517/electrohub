@@ -320,17 +320,33 @@ export default function ArcFlash() {
 
       // 3) Composition du PDF
       if (isLabel) {
+        const cat = Number(checkResult?.ppe_category ?? 0);
+        const colors = {
+          0: [67,160,71],   // vert
+          1: [255,193,7],   // vert-orangé / ambre
+          2: [255,152,0],   // orange
+          3: [229,57,53],   // rouge
+          4: [123,0,44],    // bordeaux
+        };
+        const [r,g,b] = colors[cat] || colors[0];
+        // Bandeau de couleur en haut
+        pdf.setFillColor(r, g, b);
+        pdf.rect(0, 0, 210, 40, 'F'); // A4 largeur 210mm, bandeau 40mm
+
         pdf.setFontSize(18);
-        pdf.text('Arc Flash Label', 20, 20);
+        pdf.setTextColor(255,255,255);
+        pdf.text('Arc Flash Label', 20, 25);
+
+        pdf.setTextColor(0,0,0);
         pdf.setFontSize(12);
-        pdf.text(`Device: ${selectedPoint?.deviceId} - Switchboard: ${selectedPoint?.switchboardId}`, 20, 35);
-        pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 45);
-        pdf.text(`PPE Category: ${checkResult?.ppe_category} (IEC 61482)`, 20, 55);
-        pdf.text('Required PPE: Arc-rated clothing, gloves, face shield', 20, 65);
-        pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 75);
+        pdf.text(`Device: ${selectedPoint?.deviceId} - Switchboard: ${selectedPoint?.switchboardId}`, 20, 45);
+        pdf.text(`Incident Energy: ${checkResult?.incident_energy} cal/cm²`, 20, 55);
+        pdf.text(`PPE Category: ${cat} (IEC 61482)`, 20, 65);
+        pdf.text('Required PPE: Arc-rated clothing, gloves, face shield', 20, 75);
+        pdf.text('Warning: High Arc Flash Risk - Maintain Safe Distance', 20, 85);
 
         if (resultImg) {
-          pdf.addImage(resultImg, 'PNG', 20, 85, 170, 80);
+          pdf.addImage(resultImg, 'PNG', 20, 95, 170, 80);
         }
         if (graphImg) {
           pdf.addPage();
@@ -406,7 +422,7 @@ export default function ArcFlash() {
       arcing_time: point.arcing_time || 0.2,
       fault_current_ka: point.fault_current_ka || point.icu_ka,
       settings: point.settings || { ir: 1, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' },
-      parent_id: point.parent_id || '',
+      parent_id: point.parent_id ?? null,
     });
     setParamTips({});
     setShowParamsModal(true);
@@ -422,9 +438,7 @@ export default function ArcFlash() {
         </p>
       </header>
 
-      {/* Élément de debug statique */}
-      <div className="text-blue-600">Test statique : Contenu visible ici</div>
-
+      
       {/* Filtres */}
       <div className="flex flex-wrap gap-4 mb-6 items-center">
         <input
@@ -647,8 +661,11 @@ export default function ArcFlash() {
             <label className="block text-sm font-medium text-gray-700">Fault Current (kA)</label>
             <input
               type="number"
-              value={paramForm.fault_current_ka || ''}
-              onChange={e => setParamForm({ ...paramForm, fault_current_ka: Number(e.target.value) })}
+              value={paramForm.fault_current_ka ?? ''}
+              onChange={e => {
+                const v = e.target.value;
+                setParamForm({ ...paramForm, fault_current_ka: v === '' ? null : Number(v) });
+              }}
               className="input w-full"
               placeholder="From Fault Level or manual"
               min="1"
@@ -709,8 +726,11 @@ export default function ArcFlash() {
             <label className="block text-sm font-medium text-gray-700">Parent Device ID</label>
             <input
               type="number"
-              value={paramForm.parent_id || ''}
-              onChange={e => setParamForm({ ...paramForm, parent_id: Number(e.target.value) || null })}
+              value={paramForm.parent_id ?? ''}
+              onChange={e => {
+                const v = e.target.value;
+                setParamForm({ ...paramForm, parent_id: v === '' ? null : Number(v) });
+              }}
               className="input w-full"
               placeholder="Upstream device ID (optional)"
             />
