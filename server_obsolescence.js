@@ -1,4 +1,4 @@
-// server_obsolescence.js
+// server_obsolescence.js (final)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -78,7 +78,7 @@ function estimateDeviceCostGBP(type = '', inAmps = 0) {
   const t = String(type || '').toUpperCase();
   const A = Number(inAmps || 0);
 
-  // Barèmes (prix matériel) – bornes prudentes
+  // Barèmes (matériel) +30% installation
   let base = 600; // fallback
   if (t.includes('MCCB')) {
     if (A <= 125) base = 450;
@@ -96,13 +96,10 @@ function estimateDeviceCostGBP(type = '', inAmps = 0) {
   } else if (t.includes('FUSE')) {
     base = 150;
   }
-
-  // Intégration pose/essais/gestion : +30 %
-  const installed = base * 1.3;
-  return GBP(installed);
+  return GBP(base * 1.3); // installé
 }
 
-// Optionnel: tentative de raffinement web (DuckDuckGo Instant Answer + LLM)
+// Optionnel: raffinement web (si ENABLE_WEB_COST=1 et clé OpenAI dispo)
 async function estimateFromWeb(type = '', inAmps = 0) {
   try {
     if (!process.env.ENABLE_WEB_COST || !openai) return null;
@@ -127,7 +124,6 @@ async function estimateFromWeb(type = '', inAmps = 0) {
 }
 
 async function deviceEstimatedOrParamCostGBP(row) {
-  // Si paramètre saisi, on l’utilise, sinon estimation (web → heuristique)
   if (row.replacement_cost && Number(row.replacement_cost) > 0) return GBP(row.replacement_cost);
   const web = await estimateFromWeb(row.device_type, row.in_amps);
   if (web) return GBP(web);
@@ -135,9 +131,8 @@ async function deviceEstimatedOrParamCostGBP(row) {
 }
 
 async function computeSwitchboardTotals(site) {
-  // Ramène chaque device + param et regroupe au niveau switchboard
   const r = await pool.query(`
-    SELECT s.id AS switchboard_id, s.name, s.building_code,
+    SELECT s.id AS switchboard_id, s.name, s.building_code, s.floor,
            d.id AS device_id, d.device_type, d.in_amps,
            op.replacement_cost,
            op.manufacture_date, op.avg_life_years
@@ -154,6 +149,7 @@ async function computeSwitchboardTotals(site) {
       switchboard_id: row.switchboard_id,
       name: row.name,
       building_code: row.building_code,
+      floor: row.floor,
       devices: [],
     });
     bySB.get(row.switchboard_id).devices.push(row);
@@ -161,9 +157,8 @@ async function computeSwitchboardTotals(site) {
 
   const enriched = [];
   for (const sb of bySB.values()) {
-    // coût de board : base + par voie (approximation via nb devices)
     const n = sb.devices.filter(d => d.device_id).length;
-    const boardBase = 1500 + 400 * Math.max(0, n - 4); // châssis, barres, coffret
+    const boardBase = 1500 + 400 * Math.max(0, n - 4); // châssis/barres/coffret
     let sumDevices = 0;
 
     for (const d of sb.devices) {
@@ -172,9 +167,7 @@ async function computeSwitchboardTotals(site) {
       sumDevices += c;
     }
 
-    // marge projet 15% (gestion, logistique)
-    const total = GBP((boardBase + sumDevices) * 1.15);
-    // service year (médiane) & life (moyenne) si disponibles
+    const total = GBP((boardBase + sumDevices) * 1.15); // +15% gestion
     const years = sb.devices.map(d => d.manufacture_date).filter(Boolean).map(x => new Date(x).getFullYear()).filter(y => Number.isFinite(y));
     const service_year = years.length ? years.sort((a,b)=>a-b)[Math.floor(years.length/2)] : null;
     const lifeVals = sb.devices.map(d => Number(d.avg_life_years)).filter(v => Number.isFinite(v) && v>0);
@@ -184,6 +177,7 @@ async function computeSwitchboardTotals(site) {
       switchboard_id: sb.switchboard_id,
       name: sb.name,
       building_code: sb.building_code,
+      floor: sb.floor,
       device_count: n,
       service_year,
       avg_life_years,
@@ -231,7 +225,7 @@ app.post('/api/obsolescence/reset', async (req, res) => {
   }
 });
 
-// ---------- BUILDINGS (corrigé: nb de switchboards + coût enrichi) ----------
+// ---------- BUILDINGS ----------
 app.get('/api/obsolescence/buildings', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -253,7 +247,7 @@ app.get('/api/obsolescence/buildings', async (req, res) => {
   }
 });
 
-// ---------- SWITCHBOARDS (coût et forecast calculés correctement) ----------
+// ---------- SWITCHBOARDS ----------
 app.get('/api/obsolescence/switchboards', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -269,7 +263,7 @@ app.get('/api/obsolescence/switchboards', async (req, res) => {
         return {
           id: sb.switchboard_id,
           name: sb.name,
-          floor: '', // si tu as la colonne floor, tu peux l’ajouter au SELECT
+          floor: sb.floor || '',
           device_count: sb.device_count,
           total_cost: sb.estimated_cost_gbp,
           service_year: sb.service_year,
@@ -283,7 +277,7 @@ app.get('/api/obsolescence/switchboards', async (req, res) => {
   }
 });
 
-// ---------- DEVICES (inchangé, utile pour l’édition fine si besoin) ----------
+// ---------- DEVICES ----------
 app.get('/api/obsolescence/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -302,14 +296,13 @@ app.get('/api/obsolescence/devices', async (req, res) => {
   }
 });
 
-// ---------- QUICK SET (tu peux forcer l’année de service au niveau Switchboard) ----------
+// ---------- QUICK SET ----------
 app.post('/api/obsolescence/quick-set', async (req, res) => {
   try {
     const site = siteOf(req);
     const { switchboard_id, service_year, avg_life_years, override_cost_per_device } = req.body || {};
     if (!site || !switchboard_id) return res.status(400).json({ error: 'Missing params' });
 
-    // Crée les lignes manquantes
     await pool.query(`
       INSERT INTO obsolescence_parameters (device_id, switchboard_id, site)
       SELECT d.id, d.switchboard_id, $1
@@ -319,7 +312,6 @@ app.post('/api/obsolescence/quick-set', async (req, res) => {
       WHERE d.switchboard_id = $2 AND d.site = $1 AND op.device_id IS NULL
     `, [site, Number(switchboard_id)]);
 
-    // Met à jour manufacture_date (= 1er janvier de l’année), avg_life_years, et coût si demandé
     const date = service_year ? `${service_year}-01-01` : null;
     if (date) {
       await pool.query(
@@ -333,10 +325,10 @@ app.post('/api/obsolescence/quick-set', async (req, res) => {
         [Number(avg_life_years), Number(switchboard_id), site]
       );
     }
-    if (Number(override_cost_per_device) >= 0) {
+    if (override_cost_per_device !== undefined) {
       await pool.query(
         `UPDATE obsolescence_parameters SET replacement_cost=$1 WHERE switchboard_id=$2 AND site=$3`,
-        [Number(override_cost_per_device), Number(switchboard_id), site]
+        [Number(override_cost_per_device) || 0, Number(switchboard_id), site]
       );
     }
     res.json({ message: 'Switchboard parameters updated' });
@@ -346,12 +338,10 @@ app.post('/api/obsolescence/quick-set', async (req, res) => {
   }
 });
 
-// ---------- AI-FILL (crée les lignes + valeurs par défaut raisonnables) ----------
+// ---------- AI-FILL ----------
 app.post('/api/obsolescence/ai-fill', async (req, res) => {
   try {
     const site = siteOf(req);
-
-    // 1) insère les lignes manquantes
     await pool.query(`
       INSERT INTO obsolescence_parameters (device_id, switchboard_id, site)
       SELECT d.id, d.switchboard_id, $1
@@ -361,7 +351,6 @@ app.post('/api/obsolescence/ai-fill', async (req, res) => {
       WHERE d.site = $1 AND op.device_id IS NULL
     `, [site]);
 
-    // 2) complète des valeurs par défaut si toujours “neutres”
     await pool.query(`
       UPDATE obsolescence_parameters
       SET avg_temperature = 25,
@@ -404,7 +393,7 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
   }
 });
 
-// ---------- CAPEX-FORECAST (même base de coût enrichie) ----------
+// ---------- CAPEX-FORECAST ----------
 app.get('/api/obsolescence/capex-forecast', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -424,7 +413,7 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
   }
 });
 
-// ---------- AI-QUERY (conservé) ----------
+// ---------- AI-QUERY ----------
 app.post('/api/obsolescence/ai-query', async (req, res) => {
   try {
     if (!openai) return res.status(503).json({ error: 'OpenAI not configured' });
@@ -453,16 +442,25 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
   }
 });
 
-// ---------- GANTT-DATA (robuste aux manques) ----------
+// ---------- GANTT-DATA (normalisation des filtres) ----------
 app.get('/api/obsolescence/gantt-data', async (req, res) => {
   try {
     const site = siteOf(req);
-    const { building, switchboard } = req.query;
+    const rawB = req.query.building;
+    const rawS = req.query.switchboard;
+
+    const building = (rawB && !['', 'null', 'undefined'].includes(String(rawB).toLowerCase())) ? String(rawB) : null;
+    const switchboard = (rawS && !['', 'null', 'undefined'].includes(String(rawS).toLowerCase())) ? Number(rawS) : null;
+
     const sbTotals = await computeSwitchboardTotals(site);
-    const filtered = sbTotals.filter(sb =>
-      (!building || sb.building_code === String(building)) &&
-      (!switchboard || sb.switchboard_id === Number(switchboard))
+    let filtered = sbTotals.filter(sb =>
+      (!building || sb.building_code === building) &&
+      (!switchboard || sb.switchboard_id === switchboard)
     );
+
+    // Fallback si filtre invalide
+    if (!filtered.length) filtered = sbTotals;
+
     const tasks = filtered.map(sb => {
       const mfgYear = sb.service_year || (new Date().getFullYear() - 10);
       const life = sb.avg_life_years || 25;
