@@ -1,676 +1,858 @@
-// server_obsolescence.js
-import express from 'express';
-import helmet from 'helmet';
-import cookieParser from 'cookie-parser';
-import dotenv from 'dotenv';
-import pg from 'pg';
-import OpenAI from 'openai';
-import multer from 'multer';
-import Joi from 'joi';
-import axios from 'axios';
+// src/pages/Obsolescence.jsx
+import { useEffect, useState, useRef } from 'react';
+import { get, post, upload } from '../lib/api.js';
+import { Search, HelpCircle, X, Download, ChevronRight, Settings, Upload, ChevronDown, Send, Calendar } from 'lucide-react';
+import { Line, Bar, Doughnut, Scatter } from 'react-chartjs-2';
+import { Gantt, ViewMode } from 'gantt-task-react';
+import 'gantt-task-react/dist/index.css';
+import Confetti from 'react-confetti';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarController,
+  BarElement,
+  PointElement,
+  LineElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  ScatterController,
+} from 'chart.js';
+import annotationPlugin from 'chartjs-plugin-annotation';
+import zoomPlugin from 'chartjs-plugin-zoom';
+import * as yup from 'yup';
+import debounce from 'lodash/debounce';
 
-dotenv.config();
-const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarController,
+  BarElement,
+  PointElement,
+  LineElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  annotationPlugin,
+  zoomPlugin,
+  ScatterController
+);
 
-// OpenAI setup
-let openai = null;
-let openaiError = null;
-
-if (process.env.OPENAI_API_KEY) {
+function useUserSite() {
   try {
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    console.log('[OBSOLESCENCE] OpenAI initialisé');
-  } catch (e) {
-    console.warn('[OBSOLESCENCE] Échec init OpenAI:', e.message);
-    openaiError = e.message;
-  }
-} else {
-  console.warn('[OBSOLESCENCE] Aucune OPENAI_API_KEY trouvée');
-  openaiError = 'Aucune clé API';
-}
-
-const app = express();
-app.use(helmet());
-app.use(express.json({ limit: '10mb' }));
-app.use(cookieParser());
-
-// Upload setup pour PDF, limite à 5MB
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
-
-// CORS
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Site');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
-});
-
-// Health
-app.get('/api/obsolescence/health', (_req, res) => res.json({ ok: true, ts: Date.now(), openai: !!openai }));
-
-// Helpers
-function siteOf(req) {
-  return (req.header('X-Site') || req.query.site || req.body.site || '').toString().trim();
-}
-
-// Schema validation
-const idSchema = Joi.object({
-  device_id: Joi.number().integer().positive(),
-  switchboard_id: Joi.number().integer().positive().required(),
-});
-
-const paramSchema = Joi.object({
-  switchboard_id: Joi.number().integer().positive().required(),
-  manufacture_date: Joi.date().required(),
-  avg_temperature: Joi.number().min(0).max(100).required(),
-  avg_humidity: Joi.number().min(0).max(100).required(),
-  operation_cycles: Joi.number().min(0).required(),
-  avg_life_years: Joi.number().min(10).required(),
-  replacement_cost: Joi.number().min(0).required(),
-  document_link: Joi.string().uri().allow('').optional(),
-});
-
-// Schema - Étendu pour documents
-async function ensureSchema() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS obsolescence_checks (
-        device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
-        switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
-        site TEXT NOT NULL,
-        remaining_life_years NUMERIC NOT NULL,
-        urgency_score NUMERIC NOT NULL CHECK (urgency_score BETWEEN 0 AND 100),
-        status TEXT NOT NULL CHECK (status IN ('ok', 'warning', 'critical', 'incomplete')),
-        checked_at TIMESTAMPTZ DEFAULT NOW(),
-        PRIMARY KEY (device_id, switchboard_id, site)
-      );
-      CREATE INDEX IF NOT EXISTS idx_obsolescence_checks_site ON obsolescence_checks(site);
-
-      CREATE TABLE IF NOT EXISTS obsolescence_parameters (
-        device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
-        switchboard_id INTEGER REFERENCES switchboards(id) ON DELETE CASCADE,
-        site TEXT NOT NULL,
-        manufacture_date DATE NOT NULL DEFAULT '2000-01-01',
-        avg_temperature NUMERIC NOT NULL DEFAULT 25,
-        avg_humidity NUMERIC NOT NULL DEFAULT 50,
-        operation_cycles INTEGER NOT NULL DEFAULT 5000,
-        avg_life_years NUMERIC NOT NULL DEFAULT 25,
-        replacement_cost NUMERIC NOT NULL DEFAULT 1000,
-        document_link TEXT,
-        created_at TIMESTAMPTZ DEFAULT NOW(),
-        PRIMARY KEY (device_id, switchboard_id, site)
-      );
-      CREATE INDEX IF NOT EXISTS idx_obsolescence_parameters_site ON obsolescence_parameters(site);
-    `);
-    console.log('[OBS SCHEMA] Schéma assuré');
-  } catch (e) {
-    console.error('[OBS SCHEMA] erreur:', e.message);
-    throw e;
-  }
-}
-ensureSchema().catch(e => console.error('[OBS SCHEMA] erreur:', e.message));
-
-// Test data
-app.post('/api/obsolescence/test-data', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Site manquant' });
-    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE site = $1 LIMIT 1', [site]);
-    if (sbCheck.rows.length === 0) {
-      const sbIns = await pool.query(
-        'INSERT INTO switchboards (site, name, code, building_code, floor) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-        [site, 'Test SB', 'TSB', 'Bâtiment A', '1']
-      );
-      await pool.query(
-        'INSERT INTO devices (site, switchboard_id, name, device_type, in_amps, replacement_cost) VALUES ($1, $2, $3, $4, $5, $6)',
-        [site, sbIns.rows[0].id, 'Test Device', 'MCCB', 100, 1000]
-      );
-      console.log('[OBS TEST] Données test créées');
-    }
-    res.json({ message: 'Données test créées/vérifiées' });
-  } catch (e) {
-    console.error('[OBS TEST] erreur:', e.message);
-    res.status(500).json({ error: 'Échec création données test', details: e.message });
-  }
-});
-
-// RESET
-app.post('/api/obsolescence/reset', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Site manquant' });
-    await pool.query(`DELETE FROM obsolescence_checks WHERE site = $1`, [site]);
-    await pool.query(`DELETE FROM obsolescence_parameters WHERE site = $1`, [site]);
-    console.log(`[OBS RESET] Effacé obsolescence_checks et obsolescence_parameters pour site=${site}`);
-    res.json({ message: 'Données obsolescence réinitialisées' });
-  } catch (e) {
-    console.error('[OBS RESET] erreur:', e.message);
-    res.status(500).json({ error: 'Échec réinitialisation', details: e.message });
-  }
-});
-
-// LIST Buildings
-app.get('/api/obsolescence/buildings', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Site manquant' });
-    const r = await pool.query(`
-      SELECT DISTINCT building_code AS building, COUNT(DISTINCT s.id) AS count, SUM(op.replacement_cost) AS total_cost
-      FROM switchboards s
-      LEFT JOIN devices d ON s.id = d.switchboard_id
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND op.site = $1
-      WHERE s.site = $1
-      GROUP BY building_code
-    `, [site]);
-    res.json({ data: r.rows });
-  } catch (e) {
-    console.error('[OBS BUILDINGS] erreur:', e.message);
-    res.status(500).json({ error: 'Échec chargement bâtiments', details: e.message });
-  }
-});
-
-// LIST Switchboards by Building
-app.get('/api/obsolescence/switchboards', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const { building } = req.query;
-    if (!site || !building) return res.status(400).json({ error: 'Paramètres manquants' });
-    const r = await pool.query(`
-      SELECT s.id, s.name, s.floor, COUNT(d.id) AS device_count, SUM(op.replacement_cost) AS total_cost,
-      AVG(EXTRACT(YEAR FROM op.manufacture_date)) AS manufacture_date, AVG(op.avg_life_years) AS remaining_life_years, op.document_link
-      FROM switchboards s
-      LEFT JOIN devices d ON s.id = d.switchboard_id
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND op.site = $1
-      WHERE s.site = $1 AND s.building_code = $2
-      GROUP BY s.id, s.name, s.floor, op.document_link
-    `, [site, building]);
-    res.json({ data: r.rows });
-  } catch (e) {
-    console.error('[OBS SWITCHBOARDS] erreur:', e.message);
-    res.status(500).json({ error: 'Échec chargement tableaux', details: e.message });
-  }
-});
-
-// UPDATE Parameters (pour switchboard entier)
-app.post('/api/obsolescence/parameters', async (req, res) => {
-  const { error } = paramSchema.validate(req.body);
-  if (error) return res.status(422).json({ error: 'Données invalides', details: error.details });
-  try {
-    const site = siteOf(req);
-    const params = req.body;
-    const devices = await pool.query('SELECT id FROM devices WHERE switchboard_id = $1 AND site = $2', [params.switchboard_id, site]);
-    if (devices.rows.length === 0) return res.status(404).json({ error: 'Aucun appareil trouvé pour ce tableau' });
-    for (const dev of devices.rows) {
-      await pool.query(`
-        INSERT INTO obsolescence_parameters (device_id, switchboard_id, site, manufacture_date, avg_temperature, avg_humidity, operation_cycles, avg_life_years, replacement_cost, document_link)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        ON CONFLICT (device_id, switchboard_id, site)
-        DO UPDATE SET manufacture_date = $4, avg_temperature = $5, avg_humidity = $6, operation_cycles = $7, avg_life_years = $8, replacement_cost = $9, document_link = $10
-      `, [dev.id, params.switchboard_id, site, params.manufacture_date, params.avg_temperature, params.avg_humidity, params.operation_cycles, params.avg_life_years, params.replacement_cost, params.document_link || null]);
-    }
-    res.json({ message: 'Paramètres mis à jour pour le tableau entier' });
-  } catch (e) {
-    console.error('[OBS PARAMS] erreur:', e.message);
-    res.status(500).json({ error: 'Échec mise à jour paramètres', details: e.message });
-  }
-});
-
-// CHECK
-app.get('/api/obsolescence/check', async (req, res) => {
-  const { error } = idSchema.validate(req.query);
-  if (error) return res.status(422).json({ error: 'Données invalides', details: error.details });
-  try {
-    const { device, switchboard } = req.query;
-    const site = siteOf(req);
-    if (!device || !switchboard || !site) return res.status(400).json({ error: 'Paramètres manquants' });
-    const pointRes = await pool.query(`
-      SELECT d.*, op.*, sc.status AS selectivity_status, fc.status AS fault_status, ac.status AS arc_status
-      FROM devices d
-      JOIN switchboards s ON d.switchboard_id = s.id
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id
-      LEFT JOIN fault_checks fc ON d.id = fc.device_id
-      LEFT JOIN arcflash_checks ac ON d.id = ac.device_id
-      WHERE d.id = $2 AND d.switchboard_id = $3 AND d.site = $1
-    `, [site, Number(device), Number(switchboard)]);
-    if (pointRes.rows.length === 0) return res.status(404).json({ error: 'Point non trouvé' });
-    let point = pointRes.rows[0];
-    if (point.replacement_cost === 1000) {
-      point.replacement_cost = await estimateCost(point.device_type);
-    }
-    const obs = calculateObsolescence(point);
-    await pool.query(`
-      INSERT INTO obsolescence_checks (device_id, switchboard_id, site, remaining_life_years, urgency_score, status)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET remaining_life_years = $4, urgency_score = $5, status = $6, checked_at = NOW()
-    `, [Number(device), Number(switchboard), site, obs.remaining_life_years, obs.urgency_score, obs.status]);
-    res.json(obs);
-  } catch (e) {
-    console.error('[OBS CHECK] erreur:', e.message);
-    res.status(500).json({ error: 'Échec vérification', details: e.message });
-  }
-});
-
-// AUTO-CHECK
-app.post('/api/obsolescence/auto-check', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const points = await pool.query(`
-      SELECT d.id AS device_id, s.id AS switchboard_id
-      FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE d.site = $1
-    `, [site]);
-    for (const p of points.rows) {
-      const point = await pool.query(`
-        SELECT d.*, op.*, sc.status AS selectivity_status, fc.status AS fault_status, ac.status AS arc_status
-        FROM devices d
-        JOIN switchboards s ON d.switchboard_id = s.id
-        LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-        LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id
-        LEFT JOIN fault_checks fc ON d.id = fc.device_id
-        LEFT JOIN arcflash_checks ac ON d.id = ac.device_id
-        WHERE d.id = $2 AND d.switchboard_id = $3 AND d.site = $1
-      `, [site, p.device_id, p.switchboard_id]);
-      if (point.rows.length === 0) continue;
-      let pt = point.rows[0];
-      if (pt.replacement_cost === 1000) {
-        pt.replacement_cost = await estimateCost(pt.device_type);
-      }
-      const obs = calculateObsolescence(pt);
-      await pool.query(`
-        INSERT INTO obsolescence_checks (device_id, switchboard_id, site, remaining_life_years, urgency_score, status)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET remaining_life_years = $4, urgency_score = $5, status = $6, checked_at = NOW()
-      `, [p.device_id, p.switchboard_id, site, obs.remaining_life_years, obs.urgency_score, obs.status]);
-    }
-    res.json({ message: 'Vérification automatique terminée' });
-  } catch (e) {
-    console.error('[OBS AUTO-CHECK] erreur:', e.message);
-    res.status(500).json({ error: 'Échec vérification automatique', details: e.message });
-  }
-});
-
-// AI-FILL (par switchboard)
-app.post('/api/obsolescence/ai-fill', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const switchboards = await pool.query('SELECT id FROM switchboards WHERE site = $1', [site]);
-    for (const sb of switchboards.rows) {
-      const defaults = await pool.query(`
-        SELECT * FROM obsolescence_parameters WHERE switchboard_id = $1 AND site = $2 AND (avg_temperature = 25 OR avg_life_years = 25 OR replacement_cost = 1000)
-      `, [sb.id, site]);
-      for (const def of defaults.rows) {
-        // Estimation IA
-        def.avg_temperature = 25; // De recherche
-        def.avg_life_years = 30; // Moyenne MCCB
-        def.manufacture_date = new Date().toISOString().split('T')[0]; // Date récente par défaut
-        def.replacement_cost = await estimateCost(def.device_type);
-        // Mise à jour
-        await pool.query(`
-          UPDATE obsolescence_parameters 
-          SET avg_temperature = $1, avg_life_years = $2, manufacture_date = $3, replacement_cost = $4 
-          WHERE device_id = $5 AND switchboard_id = $6 AND site = $7
-        `, [def.avg_temperature, def.avg_life_years, def.manufacture_date, def.replacement_cost, def.device_id, def.switchboard_id, site]);
-      }
-    }
-    res.json({ message: 'Remplissage IA terminé' });
-  } catch (e) {
-    console.error('[OBS AI-FILL] erreur:', e.message);
-    res.status(500).json({ error: 'Échec remplissage IA', details: e.message });
-  }
-});
-
-// DOUGHNUT
-app.get('/api/obsolescence/doughnut', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const { group = 'building' } = req.query;
-    let groupField = 's.building_code';
-    if (group === 'floor') groupField = 's.floor';
-    if (group === 'switchboard') groupField = 's.name';
-    const sql = `
-      SELECT ${groupField} AS label,
-        COUNT(CASE WHEN oc.status = 'ok' THEN 1 END) AS ok,
-        COUNT(CASE WHEN oc.status = 'warning' THEN 1 END) AS warning,
-        COUNT(CASE WHEN oc.status = 'critical' THEN 1 END) AS critical,
-        SUM(op.replacement_cost) AS total_cost
-      FROM switchboards s
-      LEFT JOIN devices d ON s.id = d.switchboard_id
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
-      WHERE s.site = $1
-      GROUP BY ${groupField}
-    `;
-    const rows = await pool.query(sql, [site]);
-    res.json({ data: rows.rows });
-  } catch (e) {
-    console.error('[OBS DOUGHNUT] erreur:', e.message);
-    res.status(500).json({ error: 'Échec données camembert', details: e.message });
-  }
-});
-
-// CAPEX-FORECAST
-app.get('/api/obsolescence/capex-forecast', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const { group = 'building' } = req.query;
-    let groupField = 's.building_code';
-    if (group === 'floor') groupField = 's.floor';
-    if (group === 'switchboard') groupField = 's.name';
-    const r = await pool.query(`
-      SELECT ${groupField} AS group_label, op.replacement_cost, op.manufacture_date, op.avg_life_years, oc.urgency_score
-      FROM switchboards s
-      JOIN devices d ON s.id = d.switchboard_id
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
-      WHERE s.site = $1
-    `, [site]);
-    const forecasts = {};
-    r.rows.forEach(row => {
-      if (!forecasts[row.group_label]) forecasts[row.group_label] = [];
-      forecasts[row.group_label].push(generateForecastForItem(row));
-    });
-    res.json({ forecasts });
-  } catch (e) {
-    console.error('[OBS CAPEX FORECAST] erreur:', e.message);
-    res.status(500).json({ error: 'Échec prévision CAPEX', details: e.message });
-  }
-});
-
-// AI-QUERY
-app.post('/api/obsolescence/ai-query', async (req, res) => {
-  try {
-    const { query, site } = req.body;
-    if (!query || !site) return res.status(400).json({ error: 'Query ou site manquant' });
-    const dbContext = await pool.query(`
-      SELECT s.name, op.* 
-      FROM switchboards s 
-      LEFT JOIN devices d ON s.id = d.switchboard_id 
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND op.site = $1 
-      WHERE s.site = $1
-    `, [site]);
-    const context = dbContext.rows.length ? JSON.stringify(dbContext.rows) : 'Aucune donnée';
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'system',
-          content: `Vous êtes un expert en obsolescence de sous-stations. Utilisez le contexte DB: ${context}. Fournissez une analyse basée sur les données DB, normes comme IEC 62271, stratégies CAPEX. Si la requête inclut 'set temp' ou similaire, mettez à jour avg_temperature dans obsolescence_parameters pour le tableau entier (retournez updates: true).`,
-        },
-        { role: 'user', content: query },
-      ],
-      max_tokens: 200,
-      temperature: 0.5,
-    });
-    const response = completion.choices[0].message.content.trim();
-    let updates = false;
-    if (query.toLowerCase().includes('set temp')) {
-      const tempMatch = query.match(/\d+(\.\d+)?/);
-      if (tempMatch) {
-        const temp = parseFloat(tempMatch[0]);
-        const switchboardMatch = query.match(/tableau\s+(\w+)/i);
-        const switchboardName = switchboardMatch ? switchboardMatch[1] : null;
-        if (switchboardName) {
-          await pool.query(
-            `UPDATE obsolescence_parameters 
-             SET avg_temperature = $1 
-             WHERE switchboard_id = (SELECT id FROM switchboards WHERE name = $2 AND site = $3) AND site = $3`,
-            [temp, switchboardName, site]
-          );
-          updates = true;
-        }
-      }
-    }
-    res.json({ response, updates });
-  } catch (e) {
-    console.error('[AI QUERY] erreur:', e.message);
-    res.status(500).json({ error: 'Échec requête IA', details: e.message });
-  }
-});
-
-// GANTT-DATA avec agrégation switchboard
-app.get('/api/obsolescence/gantt-data', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const { group = 'switchboard', building, switchboard } = req.query;
-    let groupField = 's.name AS group_label, s.id';
-    let where = 's.site = $1';
-    let vals = [site];
-    if (building) {
-      where += ' AND s.building_code = $2';
-      vals.push(building);
-    }
-    if (switchboard) {
-      where += ' AND s.id = $3';
-      vals.push(Number(switchboard));
-    }
-    const r = await pool.query(
-      `
-      SELECT ${groupField}, AVG(EXTRACT(YEAR FROM op.manufacture_date)) AS manufacture_year, AVG(op.avg_life_years) AS avg_life_years, AVG(oc.urgency_score) AS urgency_score, SUM(op.replacement_cost) AS replacement_cost
-      FROM switchboards s
-      LEFT JOIN devices d ON s.id = d.switchboard_id
-      LEFT JOIN obsolescence_parameters op ON d.id = op.device_id AND s.id = op.switchboard_id AND op.site = $1
-      LEFT JOIN obsolescence_checks oc ON d.id = oc.device_id AND s.id = oc.switchboard_id AND oc.site = $1
-      WHERE ${where}
-      GROUP BY s.id, s.name
-    `,
-      vals
-    );
-    const tasks = r.rows
-      .map(row => ({
-        start: new Date(row.manufacture_year || 2000, 0, 1),
-        end: new Date((row.manufacture_year || 2000) + (row.avg_life_years || 25), 11, 31),
-        name: row.group_label || 'Inconnu',
-        id: row.id || 'inconnu',
-        progress: row.urgency_score || 0,
-        type: 'task',
-        cost: row.replacement_cost || 0,
-      }))
-      .filter(task => !isNaN(task.start.getTime()) && !isNaN(task.end.getTime()));
-    res.json({ tasks });
-  } catch (e) {
-    console.error('[OBS GANTT] erreur:', e.message);
-    res.status(500).json({ error: 'Échec données Gantt', details: e.message });
-  }
-});
-
-// ANNUAL-GANTT pour switchboard
-app.get('/api/obsolescence/annual-gantt', async (req, res) => {
-  try {
-    const { switchboard_id } = req.query;
-    const site = siteOf(req);
-    const { error } = Joi.object({ switchboard_id: Joi.number().required() }).validate({ switchboard_id });
-    if (error) return res.status(422).json({ error: 'Données invalides', details: error.details });
-    const r = await pool.query(
-      `
-      SELECT op.manufacture_date, op.avg_life_years
-      FROM obsolescence_parameters op 
-      WHERE switchboard_id = $1 AND site = $2
-      LIMIT 1
-    `,
-      [Number(switchboard_id), site]
-    );
-    const row = r.rows[0];
-    const tasks = [];
-    if (row) {
-      const manufactureYear = new Date(row.manufacture_date).getFullYear();
-      for (let m = 0; m < 12; m++) {
-        tasks.push({
-          start: new Date(manufactureYear, m, 1),
-          end: new Date(manufactureYear, m + 1, 0),
-          name: `Mois ${m + 1}`,
-          id: `${switchboard_id}-${m}`,
-          progress: (m / 12) * 100,
-          type: 'task',
-        });
-      }
-    }
-    res.json({ tasks });
-  } catch (e) {
-    console.error('[OBS ANNUAL GANTT] erreur:', e.message);
-    res.status(500).json({ error: 'Échec Gantt annuel', details: e.message });
-  }
-});
-
-// Nouveaux endpoints pour graphiques supplémentaires
-app.get('/api/obsolescence/cost-by-building', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const r = await pool.query(
-      `
-      SELECT s.building_code AS building, SUM(op.replacement_cost) AS total_cost
-      FROM switchboards s 
-      JOIN obsolescence_parameters op ON s.id = op.switchboard_id 
-      WHERE op.site = $1
-      GROUP BY s.building_code
-    `,
-      [site]
-    );
-    res.json({ data: r.rows });
-  } catch (e) {
-    console.error('[OBS COST-BY-BUILDING] erreur:', e.message);
-    res.status(500).json({ error: 'Échec coûts par bâtiment', details: e.message });
-  }
-});
-
-app.get('/api/obsolescence/urgency-vs-age', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const r = await pool.query(
-      `
-      SELECT EXTRACT(YEAR FROM AGE(NOW(), op.manufacture_date)) AS age, AVG(oc.urgency_score) AS urgency
-      FROM obsolescence_parameters op 
-      JOIN obsolescence_checks oc ON op.switchboard_id = oc.switchboard_id 
-      WHERE op.site = $1
-      GROUP BY EXTRACT(YEAR FROM AGE(NOW(), op.manufacture_date))
-    `,
-      [site]
-    );
-    res.json({ data: r.rows });
-  } catch (e) {
-    console.error('[OBS URGENCY-VS-AGE] erreur:', e.message);
-    res.status(500).json({ error: 'Échec urgence vs âge', details: e.message });
-  }
-});
-
-// Additional endpoints pour suggestions
-app.get('/api/obsolescence/avg-urgency', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const r = await pool.query(`SELECT AVG(urgency_score) AS avg FROM obsolescence_checks WHERE site = $1`, [site]);
-    res.json({ avg: Number(r.rows[0].avg) || 45 });
-  } catch (e) {
-    console.error('[OBS AVG-URGENCY] erreur:', e.message);
-    res.status(500).json({ error: 'Échec urgence moyenne', details: e.message });
-  }
-});
-
-app.get('/api/obsolescence/total-capex', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    const r = await pool.query(`SELECT SUM(replacement_cost) AS total FROM obsolescence_parameters WHERE site = $1`, [site]);
-    res.json({ total: Number(r.rows[0].total) || 50000 });
-  } catch (e) {
-    console.error('[OBS TOTAL-CAPEX] erreur:', e.message);
-    res.status(500).json({ error: 'Échec CAPEX total', details: e.message });
-  }
-});
-
-// PDF Analysis (Fallback sans pdf-parse)
-app.post('/api/obsolescence/analyze-pdf', upload.single('pdf'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'Aucun PDF uploadé' });
-    const site = siteOf(req);
-    const { switchboard_id, pdf_text } = req.body;
-    const { error } = Joi.object({ switchboard_id: Joi.number().required(), pdf_text: Joi.string().optional() }).validate({ switchboard_id, pdf_text });
-    if (error) return res.status(422).json({ error: 'Données invalides', details: error.details });
-    
-    // Fallback: Utiliser pdf_text fourni par le client ou un texte mocké
-    const pdfText = pdf_text || 'Mock PDF text: Manufacture Date 2020-01-01, Model MCCB, Cost 1000 EUR';
-    const prompt = `Extraire date de fabrication, modèle et coût du texte PDF suivant : "${pdfText.slice(0, 2000)}" (tronqué si trop long). Retourner en JSON.`;
-    
-    if (!openai) {
-      throw new Error('OpenAI non initialisé');
-    }
-    
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      response_format: { type: 'json_object' },
-    });
-    
-    const extracted = JSON.parse(completion.choices[0].message.content);
-    const manufacture_date = extracted.manufacture_date && !isNaN(new Date(extracted.manufacture_date).getTime()) ? extracted.manufacture_date : '2000-01-01';
-    
-    await pool.query(
-      `UPDATE obsolescence_parameters 
-       SET manufacture_date = $1 
-       WHERE switchboard_id = $2 AND site = $3`,
-      [manufacture_date, Number(switchboard_id), site]
-    );
-    
-    res.json({ manufacture_date });
-  } catch (e) {
-    console.error('[PDF ANALYZE] erreur:', e.message);
-    res.status(500).json({ error: 'Échec analyse PDF', details: e.message });
-  }
-});
-
-// Helper functions
-function calculateObsolescence(point) {
-  const currentYear = new Date().getFullYear();
-  const manufactureYear = point.manufacture_date && !isNaN(new Date(point.manufacture_date).getTime()) ? new Date(point.manufacture_date).getFullYear() : 2000;
-  const age = currentYear - manufactureYear;
-  const avgLife = point.avg_life_years || 25;
-  const tempFactor = Math.pow(2, (point.avg_temperature - 25) / 10);
-  const humFactor = point.avg_humidity > 70 ? 1.5 : 1;
-  const cycleFactor = point.operation_cycles > 10000 ? 1.2 : 1;
-  const adjustedLife = avgLife / (tempFactor * humFactor * cycleFactor);
-  const remaining_life_years = Math.max(adjustedLife - age, 0);
-  let urgency = (age / adjustedLife) * 50;
-  if (point.selectivity_status === 'non-selective') urgency += 20;
-  if (point.fault_status === 'at-risk') urgency += 15;
-  if (point.arc_status === 'at-risk') urgency += 15;
-  urgency = Math.min(urgency, 100);
-  const status = urgency < 30 ? 'ok' : urgency < 70 ? 'warning' : 'critical';
-  return { remaining_life_years: Math.round(remaining_life_years), urgency_score: Math.round(urgency), status };
-}
-
-function generateForecastForItem(item) {
-  const forecast = [];
-  const currentYear = new Date().getFullYear();
-  let capexCumul = 0;
-  const inflation = 1.02;
-  const manufactureYear = item.manufacture_date && !isNaN(new Date(item.manufacture_date).getTime()) ? new Date(item.manufacture_date).getFullYear() : 2000;
-  const lifeYears = item.avg_life_years || 25;
-  const replacementYear = manufactureYear + lifeYears;
-
-  for (let y = 0; y < 30; y++) {
-    const year = currentYear + y;
-    const remaining = lifeYears - (year - manufactureYear);
-    const capexYear = year >= replacementYear ? item.replacement_cost * Math.pow(inflation, y) : 0;
-    capexCumul += capexYear;
-    forecast.push({ year, capex_year: Math.round(capexYear), capex_cumul: Math.round(capexCumul), remaining_life: Math.max(remaining, 0) });
-  }
-  return forecast;
-}
-
-async function estimateCost(deviceType) {
-  try {
-    if (deviceType === 'MCCB') return 100; // Moyenne approx en EUR
-    const searchResult = await axios.get(`https://api.duckduckgo.com/?q=average+cost+of+${deviceType}&format=json`);
-    const prompt = `Estimer coût de remplacement pour ${deviceType} basé sur ces données : ${searchResult.data.AbstractText || 'Aucune donnée'}. Retourner un nombre.`;
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-    });
-    return parseFloat(completion.choices[0].message.content) || 1000;
+    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+    return user?.site || '';
   } catch {
-    return 1000;
+    return '';
   }
 }
 
-const port = process.env.OBSOLESCENCE_PORT || 3007;
-app.listen(port, () => console.log(`Service obsolescence sur :${port}`));
+function Toast({ msg, type }) {
+  const colors = {
+    success: 'bg-green-600 text-white',
+    error: 'bg-red-600 text-white',
+    info: 'bg-blue-600 text-white',
+  };
+  return (
+    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm ${colors[type]} ring-1 ring-black/10`} role="alert">
+      {msg}
+    </div>
+  );
+}
+
+function Modal({ open, onClose, children, title }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden ring-1 ring-black/5">
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-green-100 to-orange-100">
+          <h3 className="text-xl font-bold text-gray-800">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100" aria-label="Fermer la modale">
+            <X size={20} className="text-gray-600" />
+          </button>
+        </div>
+        <div className="p-6 overflow-y-auto max-h-[60vh]">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ tips, open, onClose, onSendQuery }) {
+  const [query, setQuery] = useState('');
+  if (!open) return null;
+  return (
+    <motion.div
+      initial={{ x: 400 }}
+      animate={{ x: 0 }}
+      exit={{ x: 400 }}
+      className="fixed right-0 top-0 h-full w-96 bg-white/95 backdrop-blur-md shadow-2xl z-40 overflow-y-auto p-6 rounded-l-3xl ring-1 ring-black/5"
+    >
+      <div className="flex justify-between mb-6">
+        <h3 className="text-2xl font-bold text-gray-800">Assistant IA</h3>
+        <button onClick={onClose} aria-label="Fermer la barre latérale"><X size={24} className="text-gray-600" /></button>
+      </div>
+      <p className="text-sm text-gray-600 mb-4">Exemples : 'Analyser tableau X', 'Estimer coût remplacement', 'Définir température 30 pour tableau Y'</p>
+      <div className="space-y-4 mb-4">
+        {tips.map(tip => (
+          <motion.p
+            key={tip.id}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-sm text-gray-700 p-4 bg-gradient-to-r from-green-100 to-orange-100 rounded-xl shadow-sm ring-1 ring-black/5"
+          >
+            {tip.content}
+          </motion.p>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Demander à l'IA : Analyser tableau X ou définir temp..."
+          className="flex-1 p-3 rounded-xl bg-gray-50 text-gray-800 placeholder-gray-500 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+          aria-label="Champ de requête IA"
+        />
+        <button
+          onClick={() => {
+            onSendQuery(query);
+            setQuery('');
+          }}
+          className="p-3 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
+          aria-label="Envoyer la requête IA"
+        >
+          <Send size={20} />
+        </button>
+      </div>
+    </motion.div>
+  );
+}
+
+const paramSchema = yup.object({
+  manufacture_date: yup.date().required('Date de fabrication requise').max(new Date(), 'Date future non autorisée'),
+  avg_temperature: yup.number().required('Température requise').min(0).max(100),
+  avg_humidity: yup.number().required('Humidité requise').min(0).max(100),
+  operation_cycles: yup.number().required('Cycles requis').min(0),
+  avg_life_years: yup.number().required('Années de vie requises').min(10),
+  replacement_cost: yup.number().required('Coût requis').min(0),
+  document_link: yup.string().url('Lien invalide').nullable(),
+});
+
+export default function Obsolescence() {
+  const site = useUserSite();
+  const [tab, setTab] = useState('overview');
+  const [buildings, setBuildings] = useState([]);
+  const [expandedBuildings, setExpandedBuildings] = useState({});
+  const [switchboards, setSwitchboards] = useState({});
+  const [selectedFilter, setSelectedFilter] = useState({ building: null, switchboard: null });
+  const [ganttTasks, setGanttTasks] = useState([]);
+  const [doughnutData, setDoughnutData] = useState([]);
+  const [capexForecast, setCapexForecast] = useState({});
+  const [costByBuildingData, setCostByBuildingData] = useState([]);
+  const [urgencyVsAgeData, setUrgencyVsAgeData] = useState([]);
+  const [aiTips, setAiTips] = useState([]);
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [showParamsModal, setShowParamsModal] = useState(false);
+  const [paramForm, setParamForm] = useState({
+    switchboard_id: null,
+    manufacture_date: '2000-01-01',
+    avg_temperature: 25,
+    avg_humidity: 50,
+    operation_cycles: 5000,
+    avg_life_years: 30,
+    replacement_cost: 1000,
+    document_link: '',
+  });
+  const [paramErrors, setParamErrors] = useState({});
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfText, setPdfText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const chartRef = useRef(null);
+  const ganttRef = useRef(null);
+  const [avgUrgency, setAvgUrgency] = useState(45);
+  const [totalCapex, setTotalCapex] = useState(50000);
+  const [selectedSwitchboard, setSelectedSwitchboard] = useState(null);
+  const [showGanttModal, setShowGanttModal] = useState(false);
+  const [annualGanttTasks, setAnnualGanttTasks] = useState([]);
+
+  useEffect(() => {
+    loadBuildings();
+    const interval = setInterval(autoCheck, 300000); // Every 5 min
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'roll-up') loadGanttData();
+    if (tab === 'analysis') {
+      loadDoughnutData();
+      loadCapexForecast();
+      loadCostByBuilding();
+      loadUrgencyVsAge();
+    }
+  }, [tab, selectedFilter]);
+
+  const autoCheck = async () => {
+    try {
+      await post('/api/obsolescence/auto-check');
+      loadBuildings();
+      if (tab === 'roll-up') loadGanttData();
+      if (tab === 'analysis') {
+        loadDoughnutData();
+        loadCapexForecast();
+        loadCostByBuilding();
+        loadUrgencyVsAge();
+      }
+    } catch (e) {
+      console.error('Échec vérification automatique', e);
+      setToast({ msg: 'Échec de la vérification automatique : Vérifiez votre connexion.', type: 'error' });
+    }
+  };
+
+  const loadBuildings = async () => {
+    try {
+      setBusy(true);
+      const data = await get('/api/obsolescence/buildings');
+      setBuildings(data.data || []);
+      await post('/api/obsolescence/ai-fill');
+      const urgencyRes = await get('/api/obsolescence/avg-urgency');
+      setAvgUrgency(Number(urgencyRes.avg) || 45);
+      const capexRes = await get('/api/obsolescence/total-capex');
+      setTotalCapex(Number(capexRes.total) || 50000);
+    } catch (e) {
+      setToast({ msg: `Échec du chargement des bâtiments : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadSwitchboards = async (building) => {
+    try {
+      const data = await get('/api/obsolescence/switchboards', { building });
+      setSwitchboards(prev => ({ ...prev, [building]: data.data }));
+    } catch (e) {
+      setToast({ msg: `Échec du chargement des tableaux : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+    }
+  };
+
+  const toggleBuilding = (building) => {
+    setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }));
+    if (!switchboards[building]) loadSwitchboards(building);
+    setSelectedFilter(prev => ({ ...prev, building, switchboard: null }));
+  };
+
+  const loadGanttData = async () => {
+    try {
+      const params = { ...selectedFilter };
+      const data = await get('/api/obsolescence/gantt-data', params);
+      const tasks = (data.tasks || []).map(task => ({
+        ...task,
+        start: new Date(task.start),
+        end: new Date(task.end),
+      })).filter(task => !isNaN(task.start.getTime()));
+      setGanttTasks(tasks);
+    } catch (e) {
+      setToast({ msg: `Échec du chargement du Gantt : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setGanttTasks([]);
+    }
+  };
+
+  const loadDoughnutData = async () => {
+    try {
+      const params = { group: 'building', ...selectedFilter };
+      const data = await get('/api/obsolescence/doughnut', params);
+      setDoughnutData(data.data || []);
+    } catch (e) {
+      setToast({ msg: `Échec du chargement du camembert : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setDoughnutData([]);
+    }
+  };
+
+  const loadCapexForecast = async () => {
+    try {
+      const params = { group: 'building', ...selectedFilter };
+      const data = await get('/api/obsolescence/capex-forecast', params);
+      setCapexForecast(data.forecasts || {});
+    } catch (e) {
+      setToast({ msg: `Échec du chargement du CAPEX : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      setCapexForecast({});
+    }
+  };
+
+  const loadCostByBuilding = async () => {
+    try {
+      const data = await get('/api/obsolescence/cost-by-building');
+      setCostByBuildingData(data.data || []);
+    } catch (e) {
+      setToast({ msg: `Échec du chargement des coûts par bâtiment : ${e.message}.`, type: 'error' });
+      setCostByBuildingData([]);
+    }
+  };
+
+  const loadUrgencyVsAge = async () => {
+    try {
+      const data = await get('/api/obsolescence/urgency-vs-age');
+      setUrgencyVsAgeData(data.data || []);
+    } catch (e) {
+      setToast({ msg: `Échec du chargement urgence vs âge : ${e.message}.`, type: 'error' });
+      setUrgencyVsAgeData([]);
+    }
+  };
+
+  const debouncedAiQuery = debounce(async (query) => {
+    try {
+      const { response, updates } = await post('/api/obsolescence/ai-query', { query, site });
+      setAiTips(prev => [...prev, { id: Date.now(), content: response }].slice(-5));
+      if (updates) {
+        loadBuildings();
+      }
+    } catch (e) {
+      setToast({ msg: `Échec de la requête IA : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+    }
+  }, 500);
+
+  const handleAiQuery = (query) => debouncedAiQuery(query);
+
+  const handlePdfUpload = async () => {
+    if (!pdfFile) {
+      setToast({ msg: 'Aucun PDF sélectionné', type: 'error' });
+      return;
+    }
+    try {
+      setBusy(true);
+      const formData = new FormData();
+      formData.append('pdf', pdfFile);
+      formData.append('switchboard_id', paramForm.switchboard_id);
+      formData.append('pdf_text', pdfText); // Assumes client-side text extraction
+      const { manufacture_date } = await upload('/api/obsolescence/analyze-pdf', formData);
+      setParamForm({ ...paramForm, manufacture_date });
+      setToast({ msg: 'PDF analysé avec succès !', type: 'success' });
+    } catch (e) {
+      setToast({ msg: `Échec de l'analyse PDF : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveParameters = async () => {
+    try {
+      await paramSchema.validate(paramForm, { abortEarly: false });
+      setParamErrors({});
+      const flatForm = { ...paramForm };
+      await post('/api/obsolescence/parameters', flatForm);
+      setToast({ msg: 'Paramètres sauvegardés pour le tableau !', type: 'success' });
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 3000);
+      loadBuildings();
+      setShowParamsModal(false);
+    } catch (e) {
+      if (e.name === 'ValidationError') {
+        const errors = e.inner.reduce((acc, err) => ({ ...acc, [err.path]: err.message }), {});
+        setParamErrors(errors);
+      } else {
+        setToast({ msg: `Échec de la sauvegarde : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+      }
+    }
+  };
+
+  const exportPdf = async () => {
+    try {
+      setBusy(true);
+      const pdf = new jsPDF();
+      pdf.text('Rapport Obsolescence', 10, 10);
+      if (chartRef.current) {
+        const canvas = await html2canvas(chartRef.current);
+        pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 10, 20, 190, 100);
+      }
+      if (ganttRef.current) {
+        pdf.addPage();
+        const ganttCanvas = await html2canvas(ganttRef.current);
+        pdf.addImage(ganttCanvas.toDataURL('image/png'), 'PNG', 10, 10, 190, 100);
+      }
+      pdf.save('rapport-obsolescence.pdf');
+      setToast({ msg: 'PDF exporté avec succès !', type: 'success' });
+    } catch (e) {
+      setToast({ msg: `Échec de l'export PDF : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const getDoughnutChartData = (data) => ({
+    labels: data.map(d => d.label || 'Inconnu'),
+    datasets: [
+      { label: 'OK', data: data.map(d => d.ok || 0), backgroundColor: '#22c55e' },
+      { label: 'Avertissement', data: data.map(d => d.warning || 0), backgroundColor: '#f59e0b' },
+      { label: 'Critique', data: data.map(d => d.critical || 0), backgroundColor: '#ef4444' },
+    ],
+  });
+
+  const getCapexChartData = (forecasts) => {
+    const years = Array.from({ length: 30 }, (_, i) => new Date().getFullYear() + i);
+    const datasets = [];
+    Object.keys(forecasts).forEach(group => {
+      const annual = years.map(y => forecasts[group].reduce((sum, f) => sum + (f.year === y ? f.capex_year : 0), 0));
+      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i - 1] || 0) + cur], []);
+      datasets.push({
+        type: 'bar',
+        label: `${group} Annuel (€)`,
+        data: annual,
+        backgroundColor: '#3b82f6',
+      });
+      datasets.push({
+        type: 'line',
+        label: `${group} Cumulatif (€)`,
+        data: cumul,
+        borderColor: '#22c55e',
+        fill: false,
+      });
+    });
+    return { labels: years, datasets };
+  };
+
+  const getCostByBuildingData = (data) => ({
+    labels: data.map(d => d.building),
+    datasets: [
+      {
+        label: 'Coût par bâtiment (€)',
+        data: data.map(d => d.total_cost),
+        backgroundColor: '#ff6384',
+      },
+    ],
+  });
+
+  const getUrgencyVsAgeData = (data) => ({
+    datasets: [
+      {
+        label: 'Urgence vs Âge',
+        data: data.map(d => ({ x: d.age, y: d.urgency })),
+        backgroundColor: '#36a2eb',
+      },
+    ],
+  });
+
+  const openAnnualGantt = async (task) => {
+    try {
+      const data = await get('/api/obsolescence/annual-gantt', { switchboard_id: task.id });
+      setAnnualGanttTasks(data.tasks || []);
+      setSelectedSwitchboard({ name: task.name });
+      setShowGanttModal(true);
+    } catch (e) {
+      setToast({ msg: `Échec du chargement du Gantt annuel : ${e.message}.`, type: 'error' });
+    }
+  };
+
+  const filteredBuildings = buildings.filter(
+    build =>
+      build.building.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (switchboards[build.building]?.some(sb => sb.name.toLowerCase().includes(searchQuery.toLowerCase())) || false)
+  );
+
+  return (
+    <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-green-100 to-orange-100 rounded-3xl shadow-xl min-h-screen">
+      <header className="flex items-center justify-between mb-8">
+        <h1 className="text-4xl font-bold text-gray-800">Tableau de Bord Obsolescence</h1>
+        <div className="flex gap-4">
+          <button
+            onClick={exportPdf}
+            className="px-4 py-2 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
+            aria-label="Exporter en PDF"
+          >
+            Exporter PDF
+          </button>
+          <button
+            onClick={() => setShowSidebar(true)}
+            className="p-3 bg-orange-600 text-white rounded-xl shadow-md hover:bg-orange-700"
+            aria-label="Ouvrir l'assistant IA"
+          >
+            <HelpCircle size={24} />
+          </button>
+        </div>
+      </header>
+
+      <div className="flex gap-4 mb-8 border-b pb-2">
+        <button
+          onClick={() => setTab('overview')}
+          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'overview' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}
+          aria-label="Vue globale"
+        >
+          Vue Globale
+        </button>
+        <button
+          onClick={() => setTab('roll-up')}
+          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'roll-up' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-600'}`}
+          aria-label="Roll-up"
+        >
+          Roll-up
+        </button>
+        <button
+          onClick={() => setTab('analysis')}
+          className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'analysis' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}
+          aria-label="Analyse"
+        >
+          Analyse
+        </button>
+      </div>
+
+      {tab === 'overview' && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
+            <h3 className="text-lg font-bold text-gray-800">Total Bâtiments</h3>
+            <p className="text-3xl font-bold text-green-600">{filteredBuildings.length}</p>
+          </div>
+          <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
+            <h3 className="text-lg font-bold text-gray-800">Urgence Moyenne</h3>
+            <p className="text-3xl font-bold text-orange-600">{Number(avgUrgency).toFixed(1)}%</p>
+          </div>
+          <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
+            <h3 className="text-lg font-bold text-gray-800">Prévision CAPEX Totale</h3>
+            <p className="text-3xl font-bold text-green-600">€{Number(totalCapex).toLocaleString()}</p>
+          </div>
+        </div>
+      )}
+
+      {tab === 'overview' && (
+        <div className="overflow-x-auto bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Rechercher un bâtiment ou tableau..."
+            className="w-full p-3 mb-4 rounded-xl bg-gray-50 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+            aria-label="Rechercher bâtiments ou tableaux"
+          />
+          <table className="w-full text-left">
+            <thead>
+              <tr className="bg-green-100 text-gray-700">
+                <th className="p-4">Nom</th>
+                <th className="p-4">Année de Service</th>
+                <th className="p-4">Document</th>
+                <th className="p-4">Coût de Remplacement Est.</th>
+                <th className="p-4">Année de Remplacement Prévue</th>
+                <th className="p-4">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredBuildings.map(build => (
+                <>
+                  <motion.tr
+                    key={build.building}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="hover:bg-green-50/50 transition-colors"
+                    aria-expanded={expandedBuildings[build.building]}
+                  >
+                    <td className="p-4 flex items-center cursor-pointer" onClick={() => toggleBuilding(build.building)}>
+                      {expandedBuildings[build.building] ? <ChevronDown /> : <ChevronRight />} {build.building} ({build.count} tableaux)
+                    </td>
+                    <td></td>
+                    <td></td>
+                    <td>€{Number(build.total_cost).toLocaleString() || 'N/A'}</td>
+                    <td></td>
+                    <td></td>
+                  </motion.tr>
+                  {expandedBuildings[build.building] &&
+                    switchboards[build.building]?.map(sb => (
+                      <motion.tr key={sb.id} className="bg-orange-50 hover:bg-orange-100 transition-colors">
+                        <td className="p-4 pl-8">{sb.name} (Étage: {sb.floor})</td>
+                        <td className="p-4">{sb.manufacture_date ? Math.round(Number(sb.manufacture_date)) : 'N/A'}</td>
+                        <td className="p-4">
+                          {sb.document_link ? (
+                            <a href={sb.document_link} className="text-blue-600 underline" target="_blank" rel="noopener noreferrer">
+                              Lien
+                            </a>
+                          ) : (
+                            'N/A'
+                          )}
+                        </td>
+                        <td className="p-4">€{Number(sb.total_cost).toLocaleString() || 'N/A'}</td>
+                        <td className="p-4">{sb.remaining_life_years ? new Date().getFullYear() + Number(sb.remaining_life_years) : 'N/A'}</td>
+                        <td className="p-4 flex gap-2">
+                          <button
+                            onClick={() => {
+                              setParamForm({ ...sb });
+                              setShowParamsModal(true);
+                            }}
+                            className="text-green-600 hover:text-green-800"
+                            aria-label="Modifier paramètres"
+                          >
+                            <Settings size={16} />
+                          </button>
+                          <button
+                            onClick={() => openAnnualGantt({ id: sb.id, name: sb.name })}
+                            className="text-blue-600 hover:text-blue-800"
+                            aria-label="Voir Gantt annuel"
+                          >
+                            <Calendar size={16} />
+                          </button>
+                        </td>
+                      </motion.tr>
+                    ))}
+                </>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === 'roll-up' && (
+        <div ref={ganttRef} className="h-[600px] overflow-auto bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
+          {ganttTasks.length ? (
+            <Gantt
+              tasks={ganttTasks}
+              viewMode={ViewMode.Decade}
+              columnWidth={120}
+              listCellWidth="250px"
+              todayColor="#ff6b00"
+              onClick={openAnnualGantt}
+            />
+          ) : (
+            <p className="text-gray-600 text-center py-20">Aucune donnée disponible. L'IA analyse...</p>
+          )}
+        </div>
+      )}
+
+      {tab === 'analysis' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Distribution d'Urgence</h2>
+            {doughnutData.length ? (
+              <Doughnut
+                data={getDoughnutChartData(doughnutData)}
+                options={{
+                  responsive: true,
+                  plugins: {
+                    legend: { position: 'top' },
+                    title: { display: true, text: "Statut d'urgence par bâtiment" },
+                  },
+                }}
+              />
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>
+            )}
+          </div>
+          <div ref={chartRef} className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Prévision CAPEX</h2>
+            {Object.keys(capexForecast).length ? (
+              <Line
+                data={getCapexChartData(capexForecast)}
+                options={{
+                  responsive: true,
+                  plugins: {
+                    zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } },
+                    title: { display: true, text: 'Prévision des coûts CAPEX sur 30 ans' },
+                  },
+                }}
+              />
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée. Exécution de l'analyse IA...</p>
+            )}
+          </div>
+          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Coûts par Bâtiment</h2>
+            {costByBuildingData.length ? (
+              <Bar
+                data={getCostByBuildingData(costByBuildingData)}
+                options={{
+                  responsive: true,
+                  plugins: {
+                    title: { display: true, text: 'Coût total de remplacement par bâtiment' },
+                  },
+                }}
+              />
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée.</p>
+            )}
+          </div>
+          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgence vs Âge</h2>
+            {urgencyVsAgeData.length ? (
+              <Scatter
+                data={getUrgencyVsAgeData(urgencyVsAgeData)}
+                options={{
+                  responsive: true,
+                  plugins: {
+                    title: { display: true, text: "Urgence en fonction de l'âge des tableaux" },
+                  },
+                  scales: {
+                    x: { title: { display: true, text: 'Âge (années)' } },
+                    y: { title: { display: true, text: 'Score d\'urgence (%)' } },
+                  },
+                }}
+              />
+            ) : (
+              <p className="text-gray-600 text-center py-20">Aucune donnée.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      <AnimatePresence>
+        <Sidebar tips={aiTips} open={showSidebar} onClose={() => setShowSidebar(false)} onSendQuery={handleAiQuery} />
+      </AnimatePresence>
+
+      <Modal open={showParamsModal} onClose={() => setShowParamsModal(false)} title="Modifier Paramètres du Tableau">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">
+              Date de Fabrication <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type="date"
+                value={paramForm.manufacture_date}
+                onChange={e => setParamForm({ ...paramForm, manufacture_date: e.target.value })}
+                className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+                aria-label="Date de fabrication"
+              />
+              <Calendar className="absolute right-2 top-2 text-gray-500" size={20} />
+            </div>
+            {paramErrors.manufacture_date && <p className="text-red-500 text-xs">{paramErrors.manufacture_date}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Température Moyenne (°C) - Température ambiante typique</label>
+            <input
+              type="number"
+              value={paramForm.avg_temperature}
+              onChange={e => setParamForm({ ...paramForm, avg_temperature: Number(e.target.value) })}
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              min="0"
+              step="0.1"
+              aria-label="Température moyenne"
+            />
+            {paramErrors.avg_temperature && <p className="text-red-500 text-xs">{paramErrors.avg_temperature}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Humidité Moyenne (%) - Humidité relative typique</label>
+            <input
+              type="number"
+              value={paramForm.avg_humidity}
+              onChange={e => setParamForm({ ...paramForm, avg_humidity: Number(e.target.value) })}
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              min="0"
+              max="100"
+              step="1"
+              aria-label="Humidité moyenne"
+            />
+            {paramErrors.avg_humidity && <p className="text-red-500 text-xs">{paramErrors.avg_humidity}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Cycles d'Opération - Nombre de cycles d'activation typiques</label>
+            <input
+              type="number"
+              value={paramForm.operation_cycles}
+              onChange={e => setParamForm({ ...paramForm, operation_cycles: Number(e.target.value) })}
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              min="0"
+              aria-label="Cycles d'opération"
+            />
+            {paramErrors.operation_cycles && <p className="text-red-500 text-xs">{paramErrors.operation_cycles}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Années de Vie Moyennes (Norm) - Durée de vie normative</label>
+            <input
+              type="number"
+              value={paramForm.avg_life_years}
+              onChange={e => setParamForm({ ...paramForm, avg_life_years: Number(e.target.value) })}
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              min="10"
+              step="1"
+              aria-label="Années de vie moyennes"
+            />
+            {paramErrors.avg_life_years && <p className="text-red-500 text-xs">{paramErrors.avg_life_years}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Coût de Remplacement (€) - Coût estimé du remplacement</label>
+            <input
+              type="number"
+              value={paramForm.replacement_cost}
+              onChange={e => setParamForm({ ...paramForm, replacement_cost: Number(e.target.value) })}
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              min="0"
+              step="100"
+              aria-label="Coût de remplacement"
+            />
+            {paramErrors.replacement_cost && <p className="text-red-500 text-xs">{paramErrors.replacement_cost}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Lien Document - URL vers la documentation</label>
+            <input
+              type="text"
+              value={paramForm.document_link}
+              onChange={e => setParamForm({ ...paramForm, document_link: e.target.value })}
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10 focus:ring-2 focus:ring-green-600"
+              aria-label="Lien document"
+            />
+            {paramErrors.document_link && <p className="text-red-500 text-xs">{paramErrors.document_link}</p>}
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Télécharger PDF pour Extraction IA</label>
+            <input
+              type="file"
+              accept=".pdf"
+              onChange={e => {
+                setPdfFile(e.target.files[0]);
+                // Optional: Add client-side PDF text extraction using pdfjs-dist
+                if (e.target.files[0]) {
+                  // Placeholder for client-side PDF text extraction
+                  setPdfText('Client-side extracted text placeholder');
+                }
+              }}
+              className="w-full p-2 rounded-xl bg-gray-50 text-gray-800 ring-1 ring-black/10"
+              aria-label="Télécharger PDF"
+            />
+            <button
+              onClick={handlePdfUpload}
+              className="mt-2 w-full p-2 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700"
+              disabled={busy || !pdfFile}
+              aria-label="Analyser PDF"
+            >
+              <Upload size={16} /> Analyser PDF
+            </button>
+          </div>
+          <button
+            onClick={saveParameters}
+            className="w-full p-2 bg-orange-600 text-white rounded-xl shadow-md hover:bg-orange-700"
+            disabled={busy}
+            aria-label="Sauvegarder paramètres"
+          >
+            Sauvegarder Paramètres
+          </button>
+        </div>
+      </Modal>
+
+      <Modal open={showGanttModal} onClose={() => setShowGanttModal(false)} title={`Gantt Annuel pour ${selectedSwitchboard?.name}`}>
+        <div className="h-[400px]">
+          {annualGanttTasks.length ? (
+            <Gantt
+              tasks={annualGanttTasks}
+              viewMode={ViewMode.Month}
+              columnWidth={80}
+              listCellWidth="200px"
+              todayColor="#ff6b00"
+              onClick={task => handleAiQuery(`Expliquer Gantt annuel pour ${task.name}`)}
+            />
+          ) : (
+            <p className="text-gray-600 text-center py-20">Aucune donnée annuelle disponible.</p>
+          )}
+        </div>
+      </Modal>
+
+      {toast && <Toast {...toast} />}
+      {busy && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50">
+          <div className="animate-spin h-16 w-16 border-b-4 border-green-600 rounded-full" aria-label="Chargement"></div>
+        </div>
+      )}
+      {showConfetti && <Confetti />}
+    </section>
+  );
+}
