@@ -1,4 +1,4 @@
-// server_obsolescence.js (gallery + web-cost + buckets)
+// server_obsolescence.js (gallery + web-cost + buckets + auto-check + robust)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -189,6 +189,36 @@ async function computeSwitchboardTotals(site) {
     });
   }
   return enriched;
+}
+
+// ---------- Obsolescence calc ----------
+function calculateObsolescence(point) {
+  const nowY = new Date().getFullYear();
+  const mfg = point.manufacture_date && !isNaN(new Date(point.manufacture_date).getTime())
+    ? new Date(point.manufacture_date).getFullYear()
+    : nowY - 10;
+
+  const age = Math.max(0, nowY - mfg);
+  const avgLife = Number(point.avg_life_years) || 25;
+  const temp = Number(point.avg_temperature) || 25;
+  const hum = Number(point.avg_humidity) || 50;
+  const cycles = Number(point.operation_cycles) || 5000;
+
+  const tempFactor = Math.pow(2, (temp - 25) / 10);
+  const humFactor = hum > 70 ? 1.5 : 1;
+  const cycleFactor = cycles > 10000 ? 1.2 : 1;
+
+  const adjustedLife = Math.max(1, avgLife / (tempFactor * humFactor * cycleFactor));
+  const remaining = Math.max(0, adjustedLife - age);
+
+  let urgency = (age / adjustedLife) * 50;
+  if (point.selectivity_status === 'non-selective') urgency += 20;
+  if (point.fault_status === 'at-risk')          urgency += 15;
+  if (point.arc_status === 'at-risk')            urgency += 15;
+  urgency = Math.min(100, Math.max(0, urgency));
+
+  const status = urgency < 30 ? 'ok' : urgency < 70 ? 'warning' : 'critical';
+  return { remaining_life_years: Math.round(remaining), urgency_score: Math.round(urgency), status };
 }
 
 // ---------- HEALTH ----------
@@ -397,7 +427,7 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
   }
 });
 
-// ---------- NOUVEAU : BUCKETS PAR BÂTIMENT (switchboards) ----------
+// ---------- NOUVEAU : BUCKETS PAR BÂTIMENT ----------
 app.get('/api/obsolescence/building-urgency-buckets', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -470,6 +500,65 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
     res.json({ response, updates: false });
   } catch (e) {
     res.status(500).json({ error: 'AI query failed' });
+  }
+});
+
+// ---------- AUTO-CHECK (robuste) ----------
+async function fetchDevicesForAutoCheck(site) {
+  // essaie avec les 3 tables de checks; si l’une manque (42P01), retombe sur une requête simple
+  const sqlFull = `
+    SELECT d.*,
+           s.id AS sb_id,
+           op.manufacture_date, op.avg_temperature, op.avg_humidity, op.operation_cycles, op.avg_life_years,
+           sc.status AS selectivity_status, fc.status AS fault_status, ac.status AS arc_status
+    FROM devices d
+    JOIN switchboards s ON d.switchboard_id = s.id
+    LEFT JOIN obsolescence_parameters op ON op.device_id = d.id AND op.switchboard_id = s.id AND op.site = $1
+    LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id
+    LEFT JOIN fault_checks fc      ON d.id = fc.device_id
+    LEFT JOIN arcflash_checks ac   ON d.id = ac.device_id
+    WHERE d.site = $1
+  `;
+  const sqlSimple = `
+    SELECT d.*,
+           s.id AS sb_id,
+           op.manufacture_date, op.avg_temperature, op.avg_humidity, op.operation_cycles, op.avg_life_years
+    FROM devices d
+    JOIN switchboards s ON d.switchboard_id = s.id
+    LEFT JOIN obsolescence_parameters op ON op.device_id = d.id AND op.switchboard_id = s.id AND op.site = $1
+    WHERE d.site = $1
+  `;
+  try {
+    const r = await pool.query(sqlFull, [site]);
+    return r.rows;
+  } catch (e) {
+    if (e.code === '42P01') {
+      const r2 = await pool.query(sqlSimple, [site]);
+      return r2.rows;
+    }
+    throw e;
+  }
+}
+
+app.post('/api/obsolescence/auto-check', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const rows = await fetchDevicesForAutoCheck(site);
+    for (const row of rows) {
+      const obs = calculateObsolescence(row);
+      await pool.query(`
+        INSERT INTO obsolescence_checks (device_id, switchboard_id, site, remaining_life_years, urgency_score, status)
+        VALUES ($1,$2,$3,$4,$5,$6)
+        ON CONFLICT (device_id, switchboard_id, site) DO UPDATE
+        SET remaining_life_years=$4, urgency_score=$5, status=$6, checked_at=NOW()
+      `, [row.id, row.sb_id || row.switchboard_id, site, obs.remaining_life_years, obs.urgency_score, obs.status]);
+    }
+    res.json({ message: 'Auto check done' });
+  } catch (e) {
+    console.error('[OBS AUTO-CHECK]', e.message);
+    res.status(500).json({ error: 'Auto check failed' });
   }
 });
 
