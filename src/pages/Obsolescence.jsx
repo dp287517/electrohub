@@ -1,5 +1,5 @@
-// Obsolescence.jsx (final)
-import React, { useEffect, useState, useRef, Fragment } from 'react';
+// Obsolescence.jsx (gallery + per-building doughnuts + clean lines)
+import React, { useEffect, useState, Fragment } from 'react';
 import { get, post } from '../lib/api.js';
 import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil } from 'lucide-react';
 import { Line, Doughnut } from 'react-chartjs-2';
@@ -14,6 +14,14 @@ import annotationPlugin from 'chartjs-plugin-annotation';
 import zoomPlugin from 'chartjs-plugin-zoom';
 
 ChartJS.register(CategoryScale, LinearScale, BarController, BarElement, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, annotationPlugin, zoomPlugin);
+
+const PALETTE = ['#2563eb','#16a34a','#dc2626','#7c3aed','#f59e0b','#0ea5e9','#059669','#d946ef','#ef4444','#3b82f6'];
+const withAlpha = (hex, a) => {
+  const h = hex.replace('#','');
+  const bigint = parseInt(h, 16);
+  const r = (bigint >> 16) & 255, g = (bigint >> 8) & 255, b = bigint & 255;
+  return `rgba(${r},${g},${b},${a})`;
+};
 
 function useUserSite() {
   try { return (JSON.parse(localStorage.getItem('eh_user') || '{}')?.site) || '' } catch { return '' }
@@ -49,6 +57,7 @@ export default function Obsolescence() {
   const [ganttTasks, setGanttTasks] = useState([]);
   const [doughnutData, setDoughnutData] = useState([]);
   const [capexForecast, setCapexForecast] = useState({});
+  const [buildingBuckets, setBuildingBuckets] = useState({});
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [avgUrgency, setAvgUrgency] = useState(45);
@@ -66,7 +75,11 @@ export default function Obsolescence() {
 
   useEffect(() => {
     if (tab === 'roll-up') loadGanttData();
-    if (tab === 'analysis') { loadDoughnutData(); loadCapexForecast(); }
+    if (tab === 'analysis') {
+      loadDoughnutData();
+      loadCapexForecast();
+      loadBuildingBuckets();
+    }
   }, [tab, selectedFilter]);
 
   const autoCheck = async () => {
@@ -74,7 +87,7 @@ export default function Obsolescence() {
       await post('/api/obsolescence/auto-check');
       loadBuildings();
       if (tab === 'roll-up') loadGanttData();
-      if (tab === 'analysis') { loadDoughnutData(); loadCapexForecast(); }
+      if (tab === 'analysis') { loadDoughnutData(); loadCapexForecast(); loadBuildingBuckets(); }
     } catch {}
   };
 
@@ -83,9 +96,11 @@ export default function Obsolescence() {
       setBusy(true);
       const data = await get('/api/obsolescence/buildings');
       setBuildings(data.data || []);
-      await post('/api/obsolescence/ai-fill'); // seed+defaults
-      const u = await get('/api/obsolescence/avg-urgency'); setAvgUrgency(Number(u.avg || 45));
-      const c = await get('/api/obsolescence/total-capex'); setTotalCapex(Number(c.total || 50000));
+      // 1) assurer les paramètres 2) calculer de suite l'urgence
+      await post('/api/obsolescence/ai-fill');
+      await post('/api/obsolescence/auto-check');            // <-- calcule tout de suite l'urgence
+      const u = await get('/api/obsolescence/avg-urgency');   setAvgUrgency(Number(u.avg || 45));
+      const c = await get('/api/obsolescence/total-capex');   setTotalCapex(Number(c.total || 50000));
     } catch (e) {
       setToast({ msg: `Failed to load buildings: ${e.message}`, type: 'error' });
     } finally { setBusy(false); }
@@ -108,7 +123,6 @@ export default function Obsolescence() {
 
   const loadGanttData = async () => {
     try {
-      // N’envoie PAS de null/undefined
       const params = {};
       if (selectedFilter.building) params.building = selectedFilter.building;
       if (selectedFilter.switchboard) params.switchboard = selectedFilter.switchboard;
@@ -143,38 +157,87 @@ export default function Obsolescence() {
     }
   };
 
-  const getDoughnutChartData = (data) => ({
-    labels: data.map(d => d.label || 'Unknown'),
-    datasets: [
-      { label: 'OK', data: data.map(d => d.ok || 0), backgroundColor: '#00ff00' },
-      { label: 'Warning', data: data.map(d => d.warning || 0), backgroundColor: '#ffa500' },
-      { label: 'Critical', data: data.map(d => d.critical || 0), backgroundColor: '#ff0000' },
-    ],
-  });
+  const loadBuildingBuckets = async () => {
+    try {
+      const data = await get('/api/obsolescence/building-urgency-buckets');
+      setBuildingBuckets(data.buckets || {});
+    } catch (e) {
+      setToast({ msg: `Buckets failed: ${e.message}`, type: 'error' });
+      setBuildingBuckets({});
+    }
+  };
 
+  // ---- Charts helpers
   const computeYears = () => Array.from({ length: 30 }, (_, i) => new Date().getFullYear() + i);
 
   const getCapexChartData = (forecasts) => {
     const years = computeYears();
     const datasets = [];
-    Object.keys(forecasts).forEach(group => {
+    const keys = Object.keys(forecasts);
+    keys.forEach((group, idx) => {
+      const color = PALETTE[idx % PALETTE.length];
       const annual = years.map(y => forecasts[group].reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
       const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
-      datasets.push({ type:'bar', label:`${group} Annual (£)`, data: annual, backgroundColor:'#1e90ff' });
-      datasets.push({ type:'line', label:`${group} Cumulative (£)`, data: cumul, borderColor:'#32cd32', borderWidth:2, tension:0.3, fill:false });
+      datasets.push({
+        type:'bar',
+        label:`${group} Annual (£)`,
+        data: annual,
+        backgroundColor: (ctx) => {
+          const { chartArea, ctx: c } = ctx.chart;
+          if (!chartArea) return color;
+          const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+          g.addColorStop(0, withAlpha(color, 0.9));
+          g.addColorStop(1, withAlpha(color, 0.25));
+          return g;
+        },
+        borderRadius: 6
+      });
+      datasets.push({
+        type:'line',
+        label:`${group} Cumulative (£)`,
+        data: cumul,
+        borderColor: color,
+        tension: 0.35,
+        borderWidth: 3,
+        pointRadius: 0,
+        fill: false,
+      });
     });
     return { labels: years, datasets };
   };
 
-  const getCapexChartDataSingle = (forecasts, group) => {
+  const getCapexChartDataSingle = (forecasts, group, idx) => {
+    const color = PALETTE[idx % PALETTE.length];
     const years = computeYears();
     const annual = years.map(y => (forecasts[group] || []).reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
     const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
     return {
       labels: years,
       datasets: [
-        { type:'bar', label:'Annual (£)', data: annual, backgroundColor:'#1e90ff' },
-        { type:'line', label:'Cumulative (£)', data: cumul, borderColor:'#32cd32', borderWidth:2, tension:0.3, fill:false }
+        {
+          type:'bar',
+          label:'Annual (£)',
+          data: annual,
+          backgroundColor: (ctx) => {
+            const { chartArea, ctx: c } = ctx.chart;
+            if (!chartArea) return color;
+            const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            g.addColorStop(0, withAlpha(color, 0.9));
+            g.addColorStop(1, withAlpha(color, 0.25));
+            return g;
+          },
+          borderRadius: 6
+        },
+        {
+          type:'line',
+          label:'Cumulative (£)',
+          data: cumul,
+          borderColor: color,
+          tension: 0.35,
+          borderWidth: 3,
+          pointRadius: 0,
+          fill:false
+        }
       ]
     };
   };
@@ -183,6 +246,7 @@ export default function Obsolescence() {
     responsive: true,
     maintainAspectRatio: false,
     interaction: { mode: 'index', intersect: false },
+    elements: { point: { radius: 0, hoverRadius: 3 }, line: { borderWidth: 3, tension: 0.35 } },
     scales: {
       x: { grid: { display: false } },
       y: { ticks: { callback: v => `£${Number(v).toLocaleString('en-GB')}` } }
@@ -194,6 +258,16 @@ export default function Obsolescence() {
     },
     animation: { duration: 600 }
   };
+
+  const getBuildingDoughnutData = (b) => ({
+    labels: ['Urgent <5y', 'Medium 5–10y', 'Low >10y'],
+    datasets: [{
+      data: [b?.urgent || 0, b?.medium || 0, b?.low || 0],
+      backgroundColor: ['#ef4444','#f59e0b','#16a34a'],
+      borderWidth: 0
+    }]
+  });
+  const doughnutSmallOptions = { responsive:true, plugins:{ legend:{ position:'bottom' } }, cutout:'70%' };
 
   const downloadICS = (sb) => {
     const y = sb.forecast_year || (new Date().getFullYear() + 1);
@@ -304,7 +378,7 @@ END:VCALENDAR`;
                       <td className="p-4"></td>
                     </tr>
 
-                    {expandedBuildings[b.building] && (switchboards[b.building] || []).map(sb => (
+                    {expandedBuildings[b.building] && (switchboards[b.building] || []).map((sb, idx) => (
                       <tr key={`sb-${sb.id}`} className="bg-orange-50 hover:bg-orange-100 transition-colors">
                         <td className="p-4 pl-8">{sb.name}</td>
                         <td className="p-4">{sb.service_year ?? 'N/A'}</td>
@@ -314,8 +388,7 @@ END:VCALENDAR`;
                           <button onClick={() => openQuick(sb)} className="text-green-700 hover:text-green-900" title="Quick edit"><Pencil size={16} /></button>
                           <button onClick={() => {
                             const y = sb.forecast_year ?? (new Date().getFullYear() + 1);
-                            const dt = `${y}-01-01`;
-                            downloadICS({ ...sb, forecast_year: y, dt });
+                            downloadICS({ ...sb, forecast_year: y });
                           }} className="text-blue-700 hover:text-blue-900" title="Add to calendar"><Calendar size={16} /></button>
                         </td>
                       </tr>
@@ -333,7 +406,7 @@ END:VCALENDAR`;
           {ganttTasks.length ? (
             <Gantt
               tasks={ganttTasks}
-              viewMode={ViewMode.Year}        // plus universel que "Decade"
+              viewMode={ViewMode.Year}
               columnWidth={120}
               listCellWidth="250px"
               todayColor="#ff6b00"
@@ -352,22 +425,48 @@ END:VCALENDAR`;
             ) : <p className="text-gray-600 text-center py-20">No data.</p>}
           </div>
 
-          {/* Doughnut */}
+          {/* Répartition globale (checks) */}
           <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgency Distribution</h2>
-            {doughnutData.length ? <Doughnut data={getDoughnutChartData(doughnutData)} /> : <p className="text-gray-600 text-center py-20">No data.</p>}
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Urgency Distribution (checks)</h2>
+            {doughnutData.length ? <Doughnut data={{
+              labels: doughnutData.map(d=>d.label||'Unknown'),
+              datasets:[{
+                data: doughnutData.map(d=>(d.ok||0)+(d.warning||0)+(d.critical||0)),
+                backgroundColor: doughnutData.map((_,i)=>withAlpha(PALETTE[i%PALETTE.length], .85)),
+                borderWidth:0
+              }]}
+            } /> : <p className="text-gray-600 text-center py-20">No data.</p>}
+          </div>
+
+          {/* Doughnuts par bâtiment : <5y / 5–10y / >10y */}
+          <div>
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Replacement Horizon — by Building</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {Object.keys(buildingBuckets).map(b => (
+                <div key={b} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {b}</h3>
+                  <Doughnut data={getBuildingDoughnutData(buildingBuckets[b])} options={doughnutSmallOptions} />
+                  <div className="text-xs mt-2 text-gray-600">
+                    Total: {buildingBuckets[b]?.total || 0} switchboards
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Mini-charts par bâtiment */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {Object.keys(capexForecast).map(group => (
-              <div key={group} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5 h-[320px]">
-                <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {group}</h3>
-                <Line data={getCapexChartDataSingle(capexForecast, group)} options={{
-                  ...chartBigOptions, maintainAspectRatio:false, animation:{ duration:500 }
-                }} />
-              </div>
-            ))}
+          <div>
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX — per Building</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {Object.keys(capexForecast).map((group, idx) => (
+                <div key={group} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5 h-[320px]">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {group}</h3>
+                  <Line data={getCapexChartDataSingle(capexForecast, group, idx)} options={{
+                    ...chartBigOptions, maintainAspectRatio:false, animation:{ duration:500 }
+                  }} />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
