@@ -1,4 +1,4 @@
-// server_obsolescence.js (final)
+// server_obsolescence.js (gallery + web-cost + buckets)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -34,6 +34,7 @@ app.use((req, res, next) => {
 });
 
 const GBP = v => Math.max(0, Math.round(Number(v || 0)));
+const webCostCache = new Map();
 
 function siteOf(req) {
   return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
@@ -73,13 +74,12 @@ async function ensureSchema() {
 }
 ensureSchema().catch(console.error);
 
-// ---------- UTIL: coûts ----------
+// ---------- COÛTS ----------
 function estimateDeviceCostGBP(type = '', inAmps = 0) {
   const t = String(type || '').toUpperCase();
   const A = Number(inAmps || 0);
+  let base = 600; // fallback matériel
 
-  // Barèmes (matériel) +30% installation
-  let base = 600; // fallback
   if (t.includes('MCCB')) {
     if (A <= 125) base = 450;
     else if (A <= 250) base = 900;
@@ -96,28 +96,33 @@ function estimateDeviceCostGBP(type = '', inAmps = 0) {
   } else if (t.includes('FUSE')) {
     base = 150;
   }
-  return GBP(base * 1.3); // installé
+  return GBP(base * 1.3); // +~30% pose
 }
 
-// Optionnel: raffinement web (si ENABLE_WEB_COST=1 et clé OpenAI dispo)
 async function estimateFromWeb(type = '', inAmps = 0) {
   try {
     if (!process.env.ENABLE_WEB_COST || !openai) return null;
+    const key = `${String(type).toUpperCase()}_${Number(inAmps)}`;
+    if (webCostCache.has(key)) return webCostCache.get(key);
+
     const q = encodeURIComponent(`${type} ${inAmps}A price UK installed`);
     const r = await axios.get(`https://api.duckduckgo.com/?q=${q}&format=json&no_redirect=1&no_html=1`);
     const abstract = r?.data?.AbstractText || '';
     if (!abstract) return null;
+
     const comp = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: 'Return a single GBP integer for an installed cost (materials+labour), conservative.' },
-        { role: 'user', content: `From this snippet, infer a realistic installed price for ${type} ${inAmps}A in the UK: "${abstract}". Only the number.` }
+        { role: 'system', content: 'Return ONE integer: installed cost in GBP (materials+labour), conservative, no symbols.' },
+        { role: 'user', content: `Infer a realistic installed price for ${type} ${inAmps}A in the UK from: "${abstract}". Return just the number.` }
       ],
       max_tokens: 10,
       temperature: 0.2
     });
     const n = parseInt((comp.choices?.[0]?.message?.content || '').replace(/[^0-9]/g, ''), 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
+    const val = Number.isFinite(n) && n > 0 ? n : null;
+    if (val) webCostCache.set(key, val);
+    return val;
   } catch {
     return null;
   }
@@ -134,8 +139,7 @@ async function computeSwitchboardTotals(site) {
   const r = await pool.query(`
     SELECT s.id AS switchboard_id, s.name, s.building_code, s.floor,
            d.id AS device_id, d.device_type, d.in_amps,
-           op.replacement_cost,
-           op.manufacture_date, op.avg_life_years
+           op.replacement_cost, op.manufacture_date, op.avg_life_years
     FROM switchboards s
     LEFT JOIN devices d ON d.switchboard_id = s.id
     LEFT JOIN obsolescence_parameters op
@@ -366,7 +370,7 @@ app.post('/api/obsolescence/ai-fill', async (req, res) => {
   }
 });
 
-// ---------- DOUGHNUT ----------
+// ---------- DOUGHNUT GLOBAL ----------
 app.get('/api/obsolescence/doughnut', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -390,6 +394,33 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
     res.json({ data: rows.rows });
   } catch (e) {
     res.status(500).json({ error: 'Doughnut data failed' });
+  }
+});
+
+// ---------- NOUVEAU : BUCKETS PAR BÂTIMENT (switchboards) ----------
+app.get('/api/obsolescence/building-urgency-buckets', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const sbs = await computeSwitchboardTotals(site);
+    const now = new Date().getFullYear();
+
+    const byB = new Map(); // building -> { urgent, medium, low, total }
+    for (const sb of sbs) {
+      const service = sb.service_year ?? (now - 10);
+      const life = sb.avg_life_years ?? 25;
+      const remaining = service + life - now;
+      const b = sb.building_code || 'Unknown';
+      if (!byB.has(b)) byB.set(b, { urgent:0, medium:0, low:0, total:0 });
+
+      if (remaining < 5) byB.get(b).urgent += 1;
+      else if (remaining <= 10) byB.get(b).medium += 1;
+      else byB.get(b).low += 1;
+      byB.get(b).total += 1;
+    }
+    res.json({ buckets: Object.fromEntries(byB) });
+  } catch (e) {
+    console.error('[OBS BUCKETS]', e.message);
+    res.status(500).json({ error: 'Buckets failed' });
   }
 });
 
@@ -442,13 +473,12 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
   }
 });
 
-// ---------- GANTT-DATA (normalisation des filtres) ----------
+// ---------- GANTT-DATA ----------
 app.get('/api/obsolescence/gantt-data', async (req, res) => {
   try {
     const site = siteOf(req);
     const rawB = req.query.building;
     const rawS = req.query.switchboard;
-
     const building = (rawB && !['', 'null', 'undefined'].includes(String(rawB).toLowerCase())) ? String(rawB) : null;
     const switchboard = (rawS && !['', 'null', 'undefined'].includes(String(rawS).toLowerCase())) ? Number(rawS) : null;
 
@@ -457,8 +487,6 @@ app.get('/api/obsolescence/gantt-data', async (req, res) => {
       (!building || sb.building_code === building) &&
       (!switchboard || sb.switchboard_id === switchboard)
     );
-
-    // Fallback si filtre invalide
     if (!filtered.length) filtered = sbTotals;
 
     const tasks = filtered.map(sb => {
