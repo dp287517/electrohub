@@ -158,6 +158,7 @@ app.post('/api/arcflash/parameters', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const { device_id, switchboard_id, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka, settings, parent_id } = req.body;
+    const cleanParentId = (parent_id === '' || parent_id === undefined) ? null : Number(parent_id);
     if (!device_id || !switchboard_id) return res.status(400).json({ error: 'Missing IDs' });
 
     await pool.query(`
@@ -171,12 +172,12 @@ app.post('/api/arcflash/parameters', async (req, res) => {
         fault_current_ka = EXCLUDED.fault_current_ka
     `, [device_id, switchboard_id, site, working_distance || 455, enclosure_type || 'VCB', electrode_gap || 32, arcing_time || 0.2, fault_current_ka]);
 
-    if (settings || parent_id) {
+    if (typeof settings !== 'undefined' || typeof parent_id !== 'undefined') {
       await pool.query(`
         UPDATE devices
         SET settings = $1, parent_id = $2
         WHERE id = $3 AND site = $4
-      `, [settings, parent_id, device_id, site]);
+      `, [settings || {}, cleanParentId, device_id, site]);
     }
 
     if (parent_id) {
@@ -402,6 +403,7 @@ app.post('/api/arcflash/ai-tip', async (req, res) => {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
 
     const { query } = req.body;
+    const cleanParentId = (parent_id === '' || parent_id === undefined) ? null : Number(parent_id);
     const context = query || 'Arc flash advice';
 
     const completion = await openai.chat.completions.create({
