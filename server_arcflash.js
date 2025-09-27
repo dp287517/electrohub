@@ -49,6 +49,7 @@ app.get('/api/arcflash/health', (_req, res) => res.json({ ok: true, ts: Date.now
 function siteOf(req) {
   return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
 }
+function n(x, def) { const v = Number(x); return Number.isFinite(v) ? v : def; }
 
 const WHITELIST_SORT = ['name','code','building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
@@ -123,9 +124,10 @@ app.get('/api/arcflash/points', async (req, res) => {
     const limit = Math.min(parseInt(pageSize,10) || 18, 100);
     const offset = ((parseInt(page,10) || 1) - 1) * limit;
 
+    const orderCol = sortSafe(sort);
     const sql = `
       SELECT 
-        d.id AS device_id, d.name AS device_name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings, d.poles,
+        d.id AS device_id, d.name AS device_name, d.device_type, d.in_amps, d.icu_ka, d.voltage_v, d.settings, d.poles, d.parent_id,
         s.id AS switchboard_id, s.name AS switchboard_name, s.building_code, s.floor, s.room,
         ac.status, ac.incident_energy, ac.ppe_category,
         ap.working_distance, ap.enclosure_type, ap.electrode_gap, ap.arcing_time, ap.fault_current_ka
@@ -134,7 +136,7 @@ app.get('/api/arcflash/points', async (req, res) => {
       LEFT JOIN arcflash_checks ac ON d.id = ac.device_id AND s.id = ac.switchboard_id AND ac.site = $1
       LEFT JOIN arcflash_parameters ap ON d.id = ap.device_id AND s.id = ap.switchboard_id AND ap.site = $1
       WHERE ${where.join(' AND ')}
-      ORDER BY d.name ${dirSafe(dir)}
+      ORDER BY ${orderCol === 'name' ? 'd.name' : (orderCol === 'code' ? 'd.code' : 's.building_code')} ${dirSafe(dir)}
       LIMIT $${i} OFFSET $${i+1}
     `;
     vals.push(limit, offset);
@@ -152,66 +154,99 @@ app.get('/api/arcflash/points', async (req, res) => {
   }
 });
 
-// UPDATE Parameters
+// UPDATE Parameters (non-bloquant sur parent_id)
 app.post('/api/arcflash/parameters', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { device_id, switchboard_id, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka, settings, parent_id } = req.body;
-    if (!device_id || !switchboard_id) return res.status(400).json({ error: 'Missing IDs' });
 
-    const cleanParentId = (parent_id === '' || parent_id === undefined) ? null : Number(parent_id);
+    const {
+      device_id, switchboard_id,
+      working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka,
+      settings, parent_id
+    } = req.body;
 
-    // Validate parent_id: must exist in devices for the same site and not equal to self
-    let validatedParentId = null;
-    if (cleanParentId !== null) {
-      if (cleanParentId === Number(device_id)) {
-        return res.status(400).json({ error: 'Parameters update failed', details: 'parent_id cannot equal device_id' });
-      }
-      const { rows: parentRows } = await pool.query(`SELECT 1 FROM devices WHERE id = $1 AND site = $2`, [cleanParentId, site]);
-      if (!parentRows.length) {
-        return res.status(400).json({ error: 'Parameters update failed', details: 'parent_id does not reference a valid device for this site' });
-      }
-      validatedParentId = cleanParentId;
+    if (!device_id || !switchboard_id) {
+      return res.status(400).json({ error: 'Missing IDs' });
     }
 
+    // Upsert des paramètres d’arc flash
     await pool.query(`
-      INSERT INTO arcflash_parameters (device_id, switchboard_id, site, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      INSERT INTO arcflash_parameters
+        (device_id, switchboard_id, site, working_distance, enclosure_type, electrode_gap, arcing_time, fault_current_ka)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET
         working_distance = EXCLUDED.working_distance,
-        enclosure_type = EXCLUDED.enclosure_type,
-        electrode_gap = EXCLUDED.electrode_gap,
-        arcing_time = EXCLUDED.arcing_time,
+        enclosure_type   = EXCLUDED.enclosure_type,
+        electrode_gap    = EXCLUDED.electrode_gap,
+        arcing_time      = EXCLUDED.arcing_time,
         fault_current_ka = EXCLUDED.fault_current_ka
-    `, [device_id, switchboard_id, site, working_distance || 455, enclosure_type || 'VCB', electrode_gap || 32, arcing_time || 0.2, fault_current_ka]);
+    `, [
+      Number(device_id), Number(switchboard_id), site,
+      n(working_distance, 455), enclosure_type || 'VCB', n(electrode_gap, 32), n(arcing_time, 0.2),
+      (fault_current_ka === null || fault_current_ka === '' || typeof fault_current_ka === 'undefined') ? null : Number(fault_current_ka)
+    ]);
 
-    // Update devices settings/parent conditionally; keep existing when undefined
-    const settingsValue = (typeof settings === 'undefined') ? null : settings;
-    await pool.query(`
-      UPDATE devices
-      SET settings = COALESCE($1, settings),
-          parent_id = $2
-      WHERE id = $3 AND site = $4
-    `, [settingsValue, validatedParentId, device_id, site]);
+    const warnings = [];
 
+    // Mise à jour settings & parent_id dans devices
+    let validatedParentId = null;
+    const cleanParentId = (parent_id === '' || typeof parent_id === 'undefined') ? null : Number(parent_id);
+
+    if (cleanParentId !== null) {
+      if (cleanParentId === Number(device_id)) {
+        warnings.push('parent_id equals device_id and was ignored');
+      } else {
+        const { rows: parentRows } = await pool.query(
+          `SELECT 1 FROM devices WHERE id = $1 AND site = $2`,
+          [cleanParentId, site]
+        );
+        if (parentRows.length) {
+          validatedParentId = cleanParentId;
+        } else {
+          warnings.push('parent_id does not reference a valid device for this site and was ignored');
+        }
+      }
+    }
+
+    // construit la requête UPDATE devices dynamiquement pour éviter d’écraser inutilement
+    const updates = [];
+    const params = [];
+    let p = 1;
+    if (typeof settings !== 'undefined') {
+      updates.push(`settings = $${p++}`);
+      params.push(settings || {});
+    }
+    if (cleanParentId !== null) {
+      updates.push(`parent_id = $${p++}`);
+      params.push(validatedParentId); // peut être null si invalide → pas d’erreur FK
+    }
+    if (updates.length) {
+      params.push(Number(device_id), site);
+      await pool.query(
+        `UPDATE devices SET ${updates.join(', ')} WHERE id = $${p++} AND site = $${p}`,
+        params
+      );
+    }
+
+    // Si parent valide → (re)crée le lien de sélectivité
     if (validatedParentId) {
       await pool.query(`
         INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status)
         VALUES ($1, $2, $3, 'incomplete')
         ON CONFLICT (upstream_id, downstream_id, site) DO UPDATE SET status = 'incomplete'
-      `, [validatedParentId, device_id, site]);
+      `, [validatedParentId, Number(device_id), site]);
     }
 
-    console.log(`[ARC PARAMS] Updated for device=${device_id}, switchboard=${switchboard_id}`);
-    res.json({ message: 'Parameters updated' });
+    console.log(`[ARC PARAMS] Updated for device=${device_id}, switchboard=${switchboard_id} ${warnings.length ? 'with warnings' : ''}`);
+    res.json({ message: 'Parameters updated', warnings });
   } catch (e) {
     console.error('[ARC PARAMS] error:', e.message, e.stack);
     res.status(500).json({ error: 'Parameters update failed', details: e.message });
   }
 });
 
-// Autofill missing parameters using OpenAI
+// Autofill missing parameters using OpenAI (inchangé sauf robustesse)
 app.post('/api/arcflash/autofill', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -253,11 +288,11 @@ app.post('/api/arcflash/autofill', async (req, res) => {
         console.log(`[ARC AUTOFILL] Generated settings for device ${id}: ${JSON.stringify(settings)}`);
       }
 
-      // Generate parent_id if missing
+      // Generate parent_id if missing (best-effort)
       if (!device.parent_id) {
         const upstream = await pool.query(`
           SELECT id FROM devices
-          WHERE site = $1 AND switchboard_id = $2 AND in_amps >= $3 AND id != $4 AND (name LIKE '%PRINCIPAL%' OR is_main_incoming = true)
+          WHERE site = $1 AND switchboard_id = $2 AND in_amps >= $3 AND id != $4 AND (name ILIKE '%PRINCIPAL%' OR is_main_incoming = true)
           LIMIT 1
         `, [site, switchboard_id, in_amps, id]);
         if (upstream.rows.length) {
@@ -309,40 +344,47 @@ app.get('/api/arcflash/check', async (req, res) => {
     const working_distance = Math.max(point.working_distance || 455, 100);
     const enclosure_type = point.enclosure_type || 'VCB';
     const electrode_gap = point.electrode_gap || 32;
-    const fault_current_ka = point.fault_current_ka || point.fault_level_ka || point.icu_ka || 20;
+    const fault_current_ka = n(point.fault_current_ka, n(point.fault_level_ka, n(point.icu_ka, 20)));
 
     let arcing_time = point.arcing_time || 0.2;
     if (point.upstream_id) {
       const upstream = { settings: point.upstream_settings || {}, in_amps: point.upstream_in_amps || 100 };
       const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000);
-      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
+      arcing_time = Number.isFinite(calculated_time) ? calculated_time : arcing_time;
     }
 
     if (!point.voltage_v || !fault_current_ka) {
       await pool.query(`
         INSERT INTO arcflash_checks (device_id, switchboard_id, site, incident_energy, ppe_category, status)
         VALUES ($1, $2, $3, 0, 0, 'incomplete')
-        ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET status = 'incomplete'
+        ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET status = 'incomplete', checked_at = NOW()
       `, [device, switchboard, site]);
       return res.json({ status: 'incomplete', missing: ['voltage_v or fault_current_ka'] });
     }
 
-    const { incident_energy, ppe_category, riskZones } = calculateArcFlash(point, fault_current_ka, arcing_time, working_distance, enclosure_type, electrode_gap);
-    const isSafe = ppe_category <= 2;
-    const status = isSafe ? 'safe' : 'at-risk';
-    const details = `Incident Energy: ${incident_energy} cal/cm², PPE: ${ppe_category}`;
+    const { incident_energy, ppe_category, riskZones } =
+      calculateArcFlash(point, fault_current_ka, arcing_time, working_distance, enclosure_type, electrode_gap);
+
+    const status = ppe_category <= 2 ? 'safe' : 'at-risk';
 
     await pool.query(`
       INSERT INTO arcflash_checks (device_id, switchboard_id, site, incident_energy, ppe_category, status)
       VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (device_id, switchboard_id, site) DO UPDATE SET
         incident_energy = EXCLUDED.incident_energy,
-        ppe_category = EXCLUDED.ppe_category,
-        status = EXCLUDED.status,
-        checked_at = NOW()
+        ppe_category    = EXCLUDED.ppe_category,
+        status          = EXCLUDED.status,
+        checked_at      = NOW()
     `, [device, switchboard, site, incident_energy, ppe_category, status]);
 
-    res.json({ status, incident_energy, ppe_category, details, remediation: getRemediations(point, incident_energy, ppe_category), riskZones });
+    res.json({
+      status,
+      incident_energy,
+      ppe_category,
+      details: `Incident Energy: ${incident_energy} cal/cm², PPE: ${ppe_category}`,
+      remediation: getRemediations(point, incident_energy, ppe_category),
+      riskZones
+    });
   } catch (e) {
     console.error('[ARC CHECK] error:', e.message, e.stack);
     res.status(500).json({ error: 'Check failed', details: e.message });
@@ -373,7 +415,7 @@ app.get('/api/arcflash/curves', async (req, res) => {
     const point = r.rows[0];
     point.voltage_v = point.voltage_v || 400;
     const working_distance = Math.max(point.working_distance || 455, 100);
-    const fault_current_ka = point.fault_current_ka || point.fault_level_ka || point.icu_ka || 20;
+    const fault_current_ka = n(point.fault_current_ka, n(point.fault_level_ka, n(point.icu_ka, 20)));
     const enclosure_type = point.enclosure_type || 'VCB';
     const electrode_gap = point.electrode_gap || 32;
     
@@ -381,7 +423,7 @@ app.get('/api/arcflash/curves', async (req, res) => {
     if (point.upstream_id) {
       const upstream = { settings: point.upstream_settings || {}, in_amps: point.upstream_in_amps || 100 };
       const calculated_time = calculateTripTime(upstream, fault_current_ka * 1000);
-      arcing_time = calculated_time !== Infinity ? calculated_time : arcing_time;
+      arcing_time = Number.isFinite(calculated_time) ? calculated_time : arcing_time;
     }
 
     const curve = generateArcCurve(point, fault_current_ka, arcing_time, enclosure_type, electrode_gap, working_distance);
@@ -422,35 +464,59 @@ app.post('/api/arcflash/ai-tip', async (req, res) => {
   }
 });
 
-// Helper functions
+/** ---------- Calculs (IEEE 1584 simplifié & garde-fous) ---------- */
+
+function enclosureK1(type) {
+  // Coefficients simplifiés pour différents types d’enceintes / ouvertures
+  switch ((type || 'VCB').toUpperCase()) {
+    case 'VCB':  return -0.097;
+    case 'VCBB': return -0.153; // légèrement plus pénalisant que VCB
+    case 'HCB':  return -0.277;
+    case 'HOA':  return -0.555; // open air horizontal
+    case 'VOA':  return -0.473; // open air vertical
+    default:     return -0.097;
+  }
+}
+
+function applyMitigations(t, settings = {}) {
+  // ERMS actif → légère réduction de t (best-effort)
+  if (settings && settings.erms === true) {
+    return Math.max(0.01, t * 0.85);
+  }
+  return t;
+}
+
 function calculateArcFlash(point, faultKa, arcingTime, workingDistMm, enclosure, gap) {
-  const V = point.voltage_v / 1000; // kV
-  const Ibf = faultKa; // kA
-  const t = Math.max(arcingTime, 0.01); // Minimum 10 ms
-  const D = Math.max(workingDistMm / 25.4, 3.94); // Minimum 100 mm (3.94 inches)
-  const G = gap / 25.4; // inches
+  const V = n(point.voltage_v, 400) / 1000;                 // kV
+  const Ibf = Math.max(n(faultKa, 0), 0.001);               // kA (éviter log10(0))
+  const k1 = enclosureK1(enclosure);
 
-  // Arcing current Ia (simplifié)
+  let t = Math.max(n(arcingTime, 0.2), 0.01);               // s
+  t = Math.min(applyMitigations(t, point.settings), 2.0);   // clamp 2s
+
+  const Dmm = Math.max(n(workingDistMm, 455), 100);         // mm
+  const Din = Dmm / 25.4;                                   // "
+  const G   = Math.max(n(gap, 32) / 25.4, 0.02);            // " (≥0.02")
+
+  // Arcing current Ia (très simplifié LV)
   const lgIa = 0.00402 + 0.983 * Math.log10(Ibf);
-  const Ia = Math.pow(10, lgIa);
+  const Ia   = Math.pow(10, lgIa);
 
-  // Incident energy E (simplifié)
-  const k1 = enclosure === 'VCB' ? -0.097 : -0.555;
+  // Incident energy E (simplifié + normalisation distance)
   const lgE = 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) + k1 + 1.0;
-  let E = Math.pow(10, lgE) * 4.184 * (610 / workingDistMm) ** 2;
+  let E = Math.pow(10, lgE) * 4.184 * Math.pow(610 / Dmm, 2); // cal/cm²
+  E = Math.min(Math.max(E, 0.1), 200); // borne haute par précaution d’affichage
 
-  E = Math.max(E, 0.1); // Minimum 0.1 cal/cm²
-
-  // PPE category
+  // PPE category (seuils usuels)
   let ppe = 0;
   if (E > 40) ppe = 4;
   else if (E > 25) ppe = 3;
-  else if (E > 8) ppe = 2;
+  else if (E > 8)  ppe = 2;
   else if (E > 1.2) ppe = 1;
 
   const riskZones = E > 1.2 ? [{ min: 1.2, max: E }] : [];
 
-  console.log(`[ARC CALC] E=${E} cal/cm², PPE=${ppe} for V=${V}kV, Ibf=${Ibf}kA, t=${t}s, D=${workingDistMm}mm`);
+  console.log(`[ARC CALC] E=${E.toFixed(2)} cal/cm², PPE=${ppe} (V=${V}kV, Ibf=${Ibf}kA, t=${t}s, D=${Dmm}mm, G=${G}", k1=${k1})`);
 
   return { incident_energy: Math.round(E * 100) / 100, ppe_category: ppe, riskZones };
 }
@@ -464,40 +530,41 @@ function getRemediations(point, E, ppe) {
 }
 
 function generateArcCurve(point, faultKa, arcingTime, enclosure, gap) {
-  const points = [];
-  const V = point.voltage_v / 1000;
-  const Ibf = faultKa;
-  const t = Math.max(arcingTime, 0.01);
-  const G = gap / 25.4;
+  const pts = [];
+  const Ibf = Math.max(n(faultKa, 0), 0.001);
+  let t = Math.max(n(arcingTime, 0.2), 0.01);
+  t = Math.min(applyMitigations(t, point.upstream_settings || point.settings || {}), 2.0);
+  const G = Math.max(n(gap, 32) / 25.4, 0.02);
+  const k1 = enclosureK1(enclosure);
 
   const lgIa = 0.00402 + 0.983 * Math.log10(Ibf);
-  const Ia = Math.pow(10, lgIa);
+  const Ia   = Math.pow(10, lgIa);
 
   for (let dist = 100; dist <= 1000; dist += 50) { // mm
-    const D = dist / 25.4;
-    const k1 = enclosure === 'VCB' ? -0.097 : -0.555;
     const lgE = 1.081 * Math.log10(Ia) + 0.0011 * G + 1.9593 * Math.log10(t) + k1 + 1.0;
-    let E = Math.pow(10, lgE) * 4.184 * (610 / dist) ** 2; // cal/cm²
-    E = Math.max(E, 0.1);
-    points.push({ distance: dist, energy: Math.round(E * 100) / 100 });
+    let E = Math.pow(10, lgE) * 4.184 * Math.pow(610 / dist, 2);
+    E = Math.min(Math.max(E, 0.1), 200);
+    pts.push({ distance: dist, energy: Math.round(E * 100) / 100 });
   }
-  
-  console.log(`[ARC CURVES] Generated ${points.length} points, sample: ${JSON.stringify(points[0])}`);
-  
-  return points;
+  console.log(`[ARC CURVES] Generated ${pts.length} points, sample: ${JSON.stringify(pts[0])}`);
+  return pts;
 }
 
 function calculateTripTime(device, I) {
-  const { settings = {}, in_amps: In = 100 } = device;
-  const Ir = settings.ir || 1;
-  const Tr = settings.tr || 10;
-  const Isd = settings.isd || 6;
-  const Tsd = settings.tsd || 0.1;
-  const Ii = settings.ii || 10;
+  const { settings = {}, in_amps: In = 100 } = device || {};
+  const Ir  = n(settings.ir, 1);
+  const Tr  = n(settings.tr, 10);       // s (long time constant)
+  const Isd = n(settings.isd, 6);
+  const Tsd = n(settings.tsd, 0.1);     // s
+  const Ii  = n(settings.ii, 10);
 
   if (I > Ii * Ir * In) return 0.01;
-  if (I > Isd * Ir * In) return Tsd;
-  if (I > Ir * In) return Tr / ((I / (Ir * In)) ** 2 - 1);
+  if (I > Isd * Ir * In) return Math.max(0.01, Math.min(Tsd, 2));
+  if (I > Ir * In) {
+    const denom = (I / (Ir * In)) ** 2 - 1;
+    if (denom <= 0) return 2;
+    return Math.max(0.05, Math.min(Tr / denom, 2));
+  }
   return Infinity;
 }
 
