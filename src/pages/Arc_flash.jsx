@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { get, post } from '../lib/api.js';
-import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Flame, Download, ChevronRight, Settings } from 'lucide-react';
+import { HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Download, ChevronRight } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
 import Confetti from 'react-confetti';
 import jsPDF from 'jspdf';
@@ -36,7 +36,7 @@ function useUserSite() {
   try {
     const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
     const site = user?.site || '';
-    console.log('Site from useUserSite:', site); // debug (peut être retiré si besoin)
+    console.log('Site from useUserSite:', site);
     return site;
   } catch (e) {
     console.error('Error in useUserSite:', e.message);
@@ -49,9 +49,10 @@ function Toast({ msg, type }) {
     success: 'bg-green-600 text-white',
     error: 'bg-red-600 text-white',
     info: 'bg-blue-600 text-white',
+    warn: 'bg-amber-500 text-black',
   };
   return (
-    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-sm ${colors[type]}`}>
+    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-sm ${colors[type] || colors.info}`}>
       {msg}
     </div>
   );
@@ -101,41 +102,34 @@ export default function ArcFlash() {
   const [showGraph, setShowGraph] = useState(false);
   const [showSidebar, setShowSidebar] = useState(false);
   const [showParamsModal, setShowParamsModal] = useState(false);
-  const [paramForm, setParamForm] = useState({ device_id: null, switchboard_id: null, working_distance: 455, enclosure_type: 'VCB', electrode_gap: 32, arcing_time: 0.2, fault_current_ka: null, settings: {}, parent_id: null });
+  const [paramForm, setParamForm] = useState({
+    device_id: null, switchboard_id: null,
+    working_distance: 455, enclosure_type: 'VCB', electrode_gap: 32, arcing_time: 0.2,
+    fault_current_ka: null, settings: {}, parent_id: null
+  });
   const [paramTips, setParamTips] = useState({});
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
   const [showConfetti, setShowConfetti] = useState(false);
   const [tipContent, setTipContent] = useState('');
   const chartRef = useRef(null);
-  const pageSize = 18;
 
   useEffect(() => {
-    console.log('useEffect triggered with query:', q);
     loadPoints();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
 
   const loadPoints = async () => {
     try {
       setBusy(true);
-      const params = {
-        ...q,
-        switchboard: isNaN(Number(q.switchboard)) ? '' : q.switchboard,
-      };
-      console.log('Calling /api/arcflash/points with params:', params);
+      const params = { ...q, switchboard: isNaN(Number(q.switchboard)) ? '' : q.switchboard };
       const data = await get('/api/arcflash/points', params);
-      console.log('Data received from /api/arcflash/points:', data);
       setPoints(data?.data || []);
       setTotal(data?.total || 0);
       const initialStatuses = {};
-      data?.data.forEach(point => {
-        if (point.status) {
-          initialStatuses[point.device_id] = point.status;
-        }
-      });
+      (data?.data || []).forEach(p => { if (p.status) initialStatuses[p.device_id] = p.status; });
       setStatuses(initialStatuses);
     } catch (e) {
-      console.error('Error in loadPoints:', e.message);
       setToast({ msg: `Failed to load points: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -160,19 +154,17 @@ export default function ArcFlash() {
       setBusy(true);
       if (!deviceId || !switchboardId) throw new Error('Missing device or switchboard ID');
       const params = { device: deviceId, switchboard: switchboardId };
-      console.log('Checking arcflash with params:', params);
       const result = await get('/api/arcflash/check', params);
       setCheckResult(result);
       setSelectedPoint({ deviceId, switchboardId });
       setStatuses(prev => ({ ...prev, [`${deviceId}`]: result.status }));
-      setParamTips(result.paramTips || {});
 
       const curves = await get('/api/arcflash/curves', params);
-      const validData = curves.curve.map(p => p.energy).filter(v => !isNaN(v) && v > 0);
+      // Utiliser la forme {x,y} pour un axe X linéaire propre
+      const dataXY = (curves.curve || []).map(p => ({ x: p.distance, y: p.energy }));
       const datasets = {
-        labels: curves.curve.map(p => p.distance.toFixed(0)),
         datasets: [
-          { label: 'Incident Energy (cal/cm²)', data: validData.length ? validData : [0.1, 0.2, 0.3], borderColor: 'orange', tension: 0.1, pointRadius: 0 },
+          { label: 'Incident Energy (cal/cm²)', data: dataXY, borderColor: 'orange', tension: 0.1, pointRadius: 0 },
         ],
       };
       setCurveData(datasets);
@@ -183,8 +175,7 @@ export default function ArcFlash() {
           query: `Explain why this point is ${result.status}: incident_energy: ${result.incident_energy || 'general'}, ppe: ${result.ppe_category}` 
         });
         setTipContent(tipRes.tip || 'No tip available');
-      } catch (tipError) {
-        console.error('AI tip failed:', tipError.message);
+      } catch {
         setTipContent('Failed to load AI tip');
       }
       setShowSidebar(true);
@@ -194,7 +185,6 @@ export default function ArcFlash() {
         setTimeout(() => setShowConfetti(false), 3000);
       }
     } catch (e) {
-      console.error('Error in handleCheck:', e.message);
       setToast({ msg: `Check failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -206,13 +196,13 @@ export default function ArcFlash() {
       setBusy(true);
       for (const { device_id, switchboard_id } of selectedPoints) {
         if (device_id && switchboard_id) {
+          // eslint-disable-next-line no-await-in-loop
           await handleCheck(device_id, switchboard_id, true);
         }
       }
       setToast({ msg: 'Batch check completed', type: 'success' });
       loadPoints();
     } catch (e) {
-      console.error('Error in handleBatchCheck:', e.message);
       setToast({ msg: `Batch failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -226,13 +216,20 @@ export default function ArcFlash() {
       if (!paramForm.device_id || !paramForm.switchboard_id) {
         throw new Error('Device ID or Switchboard ID is missing');
       }
-      const result = await post('/api/arcflash/parameters', { ...paramForm, site });
-      setToast({ msg: result.message, type: 'success' });
-      setParamTips(result.tips || {});
+      const payload = { ...paramForm, site };
+      // s’assurer que parent_id vide → null
+      if (payload.parent_id === '' || typeof payload.parent_id === 'undefined') payload.parent_id = null;
+
+      const result = await post('/api/arcflash/parameters', payload);
+
+      if (result.warnings?.length) {
+        setToast({ msg: `Saved with warnings: ${result.warnings.join(' | ')}`, type: 'warn' });
+      } else {
+        setToast({ msg: result.message, type: 'success' });
+      }
       setShowParamsModal(false);
       loadPoints();
     } catch (e) {
-      console.error('Error in saveParameters:', e.message);
       setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -246,7 +243,6 @@ export default function ArcFlash() {
       setToast({ msg: 'Data reset', type: 'info' });
       loadPoints();
     } catch (e) {
-      console.error('Error in handleReset:', e.message);
       setToast({ msg: `Reset failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -259,11 +255,10 @@ export default function ArcFlash() {
         setToast({ msg: 'No results or graph to export. Run a check first.', type: 'error' });
         return;
       }
-
       setBusy(true);
       const pdf = new jsPDF();
 
-      // 1) Re-génère un graphe propre dans un canvas temporaire (pas de capture DOM)
+      // Re-génère un graphe dans un canvas temporaire
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = 900;
       tempCanvas.height = 450;
@@ -272,17 +267,16 @@ export default function ArcFlash() {
       let chartInstance = null;
       try {
         const data = {
-          labels: curveData.labels,
           datasets: [
             {
               label: 'Incident Energy (cal/cm²)',
               data: curveData.datasets?.[0]?.data || [],
+              parsing: false,
               tension: 0.1,
               pointRadius: 0,
             },
           ],
         };
-
         chartInstance = new ChartJS(ctx, {
           type: 'line',
           data,
@@ -295,30 +289,28 @@ export default function ArcFlash() {
               x: { type: 'linear', title: { display: true, text: 'Working Distance (mm)' } },
               y: { type: 'logarithmic', title: { display: true, text: 'Incident Energy (cal/cm²)' }, min: 0.1, max: 100 },
             },
+            parsing: false,
           }
         });
-
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 300));
       } catch (e) {
         console.error('Temp chart build failed:', e);
       }
 
       const graphImg = tempCanvas.toDataURL('image/png');
 
-      // 2) Composition du PDF (sans \"impressions d'écran\" du DOM)
       if (isLabel) {
         const cat = Number(checkResult?.ppe_category ?? 0);
         const colors = {
           0: [67,160,71],   // vert
-          1: [255,193,7],   // vert-orangé / ambre
+          1: [255,193,7],   // ambre
           2: [255,152,0],   // orange
           3: [229,57,53],   // rouge
           4: [123,0,44],    // bordeaux
         };
         const [r,g,b] = colors[cat] || colors[0];
-        // Bandeau de couleur en haut
         pdf.setFillColor(r, g, b);
-        pdf.rect(0, 0, 210, 40, 'F'); // A4 largeur 210mm, bandeau 40mm
+        pdf.rect(0, 0, 210, 40, 'F');
 
         pdf.setFontSize(18);
         pdf.setTextColor(255,255,255);
@@ -355,15 +347,6 @@ export default function ArcFlash() {
             if (y > 280) { pdf.addPage(); y = 20; }
           });
         }
-
-        if (Object.keys(paramTips || {}).length) {
-          pdf.addPage();
-          pdf.text('Parameter Optimization Tips:', 20, 20);
-          let y = 28;
-          if (paramTips.working_distance_tip) { pdf.text(`- Working Distance: ${paramTips.working_distance_tip}`, 20, y); y += 6; }
-          if (paramTips.arcing_time_tip) { pdf.text(`- Arcing Time: ${paramTips.arcing_time_tip}`, 20, y); y += 6; }
-          if (paramTips.fault_current_tip) { pdf.text(`- Fault Current: ${paramTips.fault_current_tip}`, 20, y); y += 6; }
-        }
       }
 
       if (chartInstance) chartInstance.destroy();
@@ -372,7 +355,6 @@ export default function ArcFlash() {
       pdf.save(isLabel ? 'arcflash-label.pdf' : 'arcflash-report.pdf');
       setToast({ msg: `PDF ${isLabel ? 'label' : 'report'} generated successfully`, type: 'success' });
     } catch (e) {
-      console.error('PDF export failed:', e);
       setToast({ msg: `PDF export failed: ${e.message}`, type: 'error' });
     } finally {
       setBusy(false);
@@ -417,7 +399,6 @@ export default function ArcFlash() {
         </p>
       </header>
 
-      
       {/* Filtres */}
       <div className="flex flex-wrap gap-4 mb-6 items-center">
         <input
@@ -582,9 +563,6 @@ export default function ArcFlash() {
               placeholder="Minimum: 100"
               min="100"
             />
-            {paramTips.working_distance_tip && (
-              <p className="text-sm text-gray-600 mt-1">{paramTips.working_distance_tip}</p>
-            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Enclosure Type</label>
@@ -622,9 +600,6 @@ export default function ArcFlash() {
               placeholder="Default: 0.2 (from selectivity if available)"
               min="0.01"
             />
-            {paramTips.arcing_time_tip && (
-              <p className="text-sm text-gray-600 mt-1">{paramTips.arcing_time_tip}</p>
-            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Fault Current (kA)</label>
@@ -637,11 +612,8 @@ export default function ArcFlash() {
               }}
               className="input w-full"
               placeholder="From Fault Level or manual"
-              min="1"
+              min="0"
             />
-            {paramTips.fault_current_tip && (
-              <p className="text-sm text-gray-600 mt-1">{paramTips.fault_current_tip}</p>
-            )}
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Protection Settings (Ir)</label>
@@ -664,7 +636,7 @@ export default function ArcFlash() {
               onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, isd: Number(e.target.value) } })}
               className="input w-full"
               placeholder="Short-time pickup (default: 6)"
-              min="1"
+              min="0.1"
             />
           </div>
           <div>
@@ -688,7 +660,7 @@ export default function ArcFlash() {
               onChange={e => setParamForm({ ...paramForm, settings: { ...paramForm.settings, ii: Number(e.target.value) } })}
               className="input w-full"
               placeholder="Instantaneous pickup (default: 10)"
-              min="1"
+              min="0.1"
             />
           </div>
           <div>
@@ -721,6 +693,7 @@ export default function ArcFlash() {
               data={curveData}
               options={{
                 responsive: true,
+                parsing: false,
                 plugins: {
                   zoom: {
                     zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
@@ -738,21 +711,13 @@ export default function ArcFlash() {
                   },
                   tooltip: {
                     callbacks: {
-                      label: (context) => `${context.dataset.label}: ${context.parsed.y.toFixed(2)} cal/cm² at ${context.parsed.x}mm`
+                      label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)} cal/cm² at ${ctx.parsed.x}mm`
                     }
                   }
                 },
                 scales: {
-                  x: { 
-                    type: 'linear', 
-                    title: { display: true, text: 'Working Distance (mm)' }
-                  },
-                  y: { 
-                    type: 'logarithmic', 
-                    title: { display: true, text: 'Incident Energy (cal/cm²)' },
-                    min: 0.1,
-                    max: 100,
-                  },
+                  x: { type: 'linear', title: { display: true, text: 'Working Distance (mm)' } },
+                  y: { type: 'logarithmic', title: { display: true, text: 'Incident Energy (cal/cm²)' }, min: 0.1, max: 100 },
                 },
               }}
             />
