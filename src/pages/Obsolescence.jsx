@@ -224,9 +224,11 @@ export default function Obsolescence() {
       setBuildings(data.data || []);
       await post('/api/obsolescence/ai-fill');
       const urgencyRes = await get('/api/obsolescence/avg-urgency');
-      setAvgUrgency(Number(urgencyRes.avg) || 45);
+      const urgencyValue = Number(urgencyRes.avg);
+      setAvgUrgency(isNaN(urgencyValue) ? 45 : urgencyValue);
       const capexRes = await get('/api/obsolescence/total-capex');
-      setTotalCapex(Number(capexRes.total) || 50000);
+      const capexValue = Number(capexRes.total);
+      setTotalCapex(isNaN(capexValue) ? 50000 : capexValue);
     } catch (e) {
       setToast({ msg: `Échec du chargement des bâtiments : ${e.message}. Vérifiez votre connexion.`, type: 'error' });
     } finally {
@@ -510,11 +512,15 @@ export default function Obsolescence() {
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Urgence Moyenne</h3>
-            <p className="text-3xl font-bold text-orange-600">{Number(avgUrgency).toFixed(1)}%</p>
+            <p className="text-3xl font-bold text-orange-600">
+              {typeof avgUrgency === 'number' && !isNaN(avgUrgency) ? avgUrgency.toFixed(1) : 'N/A'}%
+            </p>
           </div>
           <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
             <h3 className="text-lg font-bold text-gray-800">Prévision CAPEX Totale</h3>
-            <p className="text-3xl font-bold text-green-600">€{Number(totalCapex).toLocaleString()}</p>
+            <p className="text-3xl font-bold text-green-600">
+              €{typeof totalCapex === 'number' && !isNaN(totalCapex) ? totalCapex.toLocaleString() : 'N/A'}
+            </p>
           </div>
         </div>
       )}
@@ -802,7 +808,6 @@ export default function Obsolescence() {
                 setPdfFile(e.target.files[0]);
                 // Optional: Add client-side PDF text extraction using pdfjs-dist
                 if (e.target.files[0]) {
-                  // Placeholder for client-side PDF text extraction
                   setPdfText('Client-side extracted text placeholder');
                 }
               }}
