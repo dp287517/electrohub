@@ -18,6 +18,7 @@ try {
 
 // --- App --------------------------------------------------------------------
 const app = express();
+app.set('trust proxy', true);
 app.use(helmet());
 app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
@@ -323,6 +324,17 @@ app.post('/api/hv/devices/suggest-specs', async (req, res) => {
 app.post('/api/hv/devices/:id/analyze', async (req, res) => {
   try { const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' }); const id = Number(req.params.id); const dev = await pool.query(`SELECT name, manufacturer, reference FROM hv_devices WHERE id = $1 AND site = $2`, [id, site]); if (dev.rows.length !== 1) return res.status(404).json({ error: 'Not found' }); const description = { ...(req.body?.description || {}), ...dev.rows[0] }; const specs = await getAiDeviceSpecs(description); res.json(specs); }
   catch (e) { console.error('[HV ANALYZE] error:', e); res.status(500).json({ error: 'Analyze failed' }); }
+});
+
+// --- 404 & Error handlers (always JSON) ------------------------------------
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found', path: req.path, method: req.method });
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, _next) => {
+  console.error('[HV ERROR]', err);
+  res.status(500).json({ error: 'Internal error', message: err?.message || 'unknown' });
 });
 
 // --- Start ------------------------------------------------------------------
