@@ -1,213 +1,271 @@
-// server_selectivity.js (ESM)
-// - Passage à ES Modules (import ... from) car "type":"module" dans package.json
-// - Même logique que la version précédente : CORS sûr, stabilité numérique, plage de test élargie
-// - Schéma de base de données inchangé
-
-import 'dotenv/config';
 import express from 'express';
-import bodyParser from 'body-parser';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import dotenv from 'dotenv';
 import pg from 'pg';
+import OpenAI from 'openai';
 
+dotenv.config();
 const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
+// OpenAI setup
+let openai = null;
+let openaiError = null;
+
+if (process.env.OPENAI_API_KEY) {
+  try {
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    console.log('[SELECTIVITY] OpenAI initialized');
+  } catch (e) {
+    console.warn('[SELECTIVITY] OpenAI init failed:', e.message);
+    openaiError = e.message;
+  }
+} else {
+  console.warn('[SELECTIVITY] No OPENAI_API_KEY found');
+  openaiError = 'No API key';
+}
 
 const app = express();
-app.use(bodyParser.json());
+app.use(helmet());
+app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
 
-// ------- CORS SÛR (Origin + Credentials) -------
+// CORS
 app.use((req, res, next) => {
-  const allowed = process.env.CORS_ORIGIN; // ex: https://app.mondomaine.com
-  if (allowed) {
-    const origin = req.headers.origin;
-    const useOrigin =
-      origin && (origin === allowed || origin.includes(allowed)) ? origin : allowed;
-    res.setHeader('Access-Control-Allow-Origin', useOrigin);
-    res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-  } else {
-    // Pas d’origin défini -> pas de credentials
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  }
+  res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Site');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-// ------- DB (schéma inchangé) -------
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : false,
-});
+// Health
+app.get('/api/selectivity/health', (_req, res) => res.json({ ok: true, ts: Date.now(), openai: !!openai }));
 
-// Utilitaire : récupération d’un appareil par id (existant dans ton backend)
-async function getDeviceById(id) {
-  const { rows } = await pool.query(
-    `SELECT id, name, in_amps, settings
-     FROM devices
-     WHERE id = $1`,
-    [id]
-  );
-  return rows[0] || null;
+// Helpers
+function siteOf(req) {
+  return (req.header('X-Site') || req.query.site || '').toString();
 }
 
-// --------- Physique/Modèle simplifié ---------
-const EPS = 1e-9;
+const WHITELIST_SORT = ['name','code','building_code'];
+function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
+function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Temps de déclenchement côté "long time" (modèle simple) avec clamp près de Ir·In
-function longTimeTrip(I, In, Ir, Tr) {
-  const Ith = (Ir || 1) * (In || 100); // courant de seuil long time
-  if (I <= Ith * (1 + 1e-6)) return 1e6; // "très long" au lieu d'Infinity
-  return Tr / ((((I / Ith) ** 2) - 1) + EPS);
-}
-
-// Instantanée (Ii) — retourne 0 si on dépasse le seuil instantané, sinon Infinity
-function instantaneousTrip(I, In, Ir, Ii) {
-  const ithInst = (Ii || 10) * (Ir || 1) * (In || 100);
-  return I >= ithInst ? 0 : Infinity;
-}
-
-// Short delay (simplifié) — si I dépasse Isd*Ir*In => TsD, sinon Infinity
-function shortDelayTrip(I, In, Ir, Isd, Tsd) {
-  const ithS = (Isd || 0) * (Ir || 1) * (In || 100);
-  if (!Isd) return Infinity;
-  return I >= ithS ? (Tsd || 0.1) : Infinity;
-}
-
-// Calcul global de temps de déclenchement (min de tous les étages)
-function calculateTripTime(I, device) {
-  const In = device.in_amps || 100;
-  const s = device.settings || {};
-  const Ir = s.ir || 1;
-  const Tr = s.tr || 10;      // constante de temps long time (exemple)
-  const Ii = s.ii || 10;      // multiple instantané
-  const Isd = s.isd || 0;     // multiple short delay (0 = désactivé)
-  const Tsd = s.tsd || 0.1;   // temps de short delay
-
-  const tLT = longTimeTrip(I, In, Ir, Tr);
-  const tSD = shortDelayTrip(I, In, Ir, Isd, Tsd);
-  const tIN = instantaneousTrip(I, In, Ir, Ii);
-
-  return Math.min(tLT, tSD, tIN);
-}
-
-// Génération robuste de la plage de courant (log-spaced)
-function buildCurrentSweep(up, down, faultI) {
-  if (faultI && Number.isFinite(Number(faultI))) {
-    return [Number(faultI)];
-  }
-  const InUp = up.in_amps || 100;
-  const InDown = down.in_amps || 100;
-  const sUp = up.settings || {};
-  const sDown = down.settings || {};
-  const IrUp = sUp.ir || 1;
-  const IrDown = sDown.ir || 1;
-  const IiUp = sUp.ii || 10;
-  const IiDown = sDown.ii || 10;
-
-  const baseMin = 0.1 * Math.max(1, Math.min(InUp, InDown));
-  const maxUp = (IiUp * IrUp * InUp);
-  const maxDown = (IiDown * IrDown * InDown);
-  const baseMax = 20 * Math.max(maxUp, maxDown, InUp, InDown);
-
-  const steps = 60;
-  const logMin = Math.log10(baseMin);
-  const logMax = Math.log10(baseMax);
-  return Array.from({ length: steps }, (_, i) =>
-    10 ** (logMin + (i * (logMax - logMin)) / (steps - 1))
-  );
-}
-
-// Comparaison sélectivité : aval doit déclencher au moins 5% plus vite que amont
-function isSelective(tUp, tDown) {
-  if (!isFinite(tUp) && !isFinite(tDown)) return false;
-  if (!isFinite(tUp)) return false; // amont "inf" => aval doit être fini
-  if (!isFinite(tDown)) return false; // aval inf -> pas acceptable
-  return tDown < (tUp / 1.05); // aval au moins 5% plus rapide
-}
-
-// Point par point
-function checkSelectivity(up, down, currents) {
-  const pointsUp = [];
-  const pointsDown = [];
-  let allSelective = true;
-
-  for (const I of currents) {
-    const tU = calculateTripTime(I, up);
-    const tD = calculateTripTime(I, down);
-    pointsUp.push({ current: I, time: tU });
-    pointsDown.push({ current: I, time: tD });
-
-    const finite = isFinite(tU) && isFinite(tD);
-    if (finite) {
-      const ok = tD < (tU / 1.05);
-      if (!ok) allSelective = false;
-    }
-  }
-
-  return {
-    status: allSelective ? 'selective' : 'non-selective',
-    curves: { upstream: pointsUp, downstream: pointsDown },
-  };
-}
-
-// --------- API ---------
-
-// GET /api/pairs -> paires amont/aval
-app.get('/api/pairs', async (_req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT upstream_id, downstream_id
-       FROM device_pairs
-       ORDER BY downstream_id, upstream_id`
+// Schema - Ajout de la table selectivity_checks
+async function ensureSchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS selectivity_checks (
+      upstream_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+      downstream_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+      site TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('selective', 'non-selective', 'incomplete')),
+      checked_at TIMESTAMPTZ DEFAULT NOW(),
+      PRIMARY KEY (upstream_id, downstream_id, site)
     );
-    res.json({ pairs: rows });
+    CREATE INDEX IF NOT EXISTS idx_selectivity_checks_site ON selectivity_checks(site);
+  `);
+}
+ensureSchema().catch(e => console.error('[SELECTIVITY SCHEMA] error:', e.message));
+
+// LIST Pairs amont/aval
+app.get('/api/selectivity/pairs', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { q, switchboard, building, floor, sort = 'name', dir = 'desc', page = '1', pageSize = '18' } = req.query;
+    const where = ['d.site = $1 AND d.parent_id IS NOT NULL']; const vals = [site]; let i = 2;
+    if (q) { where.push(`(d.name ILIKE $${i} OR u.name ILIKE $${i})`); vals.push(`%${q}%`); i++; }
+    if (switchboard) { where.push(`d.switchboard_id = $${i}`); vals.push(Number(switchboard)); i++; }
+    if (building) { where.push(`s.building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
+    if (floor) { where.push(`s.floor ILIKE $${i}`); vals.push(`%${floor}%`); i++; }
+    const limit = Math.min(parseInt(pageSize,10) || 18, 100);
+    const offset = ((parseInt(page,10) || 1) - 1) * limit;
+
+    const sql = `
+      SELECT 
+        d.id AS downstream_id, d.name AS downstream_name, d.device_type AS downstream_type, d.settings AS downstream_settings,
+        u.id AS upstream_id, u.name AS upstream_name, u.device_type AS upstream_type, u.settings AS upstream_settings,
+        s.id AS switchboard_id, s.name AS switchboard_name,
+        sc.status AS status
+      FROM devices d
+      JOIN devices u ON d.parent_id = u.id
+      JOIN switchboards s ON d.switchboard_id = s.id
+      LEFT JOIN selectivity_checks sc ON d.id = sc.downstream_id AND u.id = sc.upstream_id AND sc.site = $1
+      WHERE ${where.join(' AND ')}
+      ORDER BY s.${sortSafe(sort)} ${dirSafe(dir)}
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+    const rows = await pool.query(sql, vals);
+    const count = await pool.query(`SELECT COUNT(*)::int AS total FROM devices d JOIN devices u ON d.parent_id = u.id JOIN switchboards s ON d.switchboard_id = s.id WHERE ${where.join(' AND ')}`, vals);
+    res.json({ data: rows.rows, total: count.rows[0].total });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'DB error' });
+    console.error('[SELECTIVITY PAIRS] error:', e);
+    res.status(500).json({ error: 'List pairs failed' });
   }
 });
 
-// POST /api/check-selectivity
-app.post('/api/check-selectivity', async (req, res) => {
+// CHECK Selectivity for a pair
+app.get('/api/selectivity/check', async (req, res) => {
   try {
-    let { upstreamId, downstreamId, faultCurrent, upstream, downstream } = req.body || {};
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { upstream, downstream, fault_current } = req.query;
+    const r = await pool.query(`
+      SELECT * FROM devices WHERE id IN ($1, $2) AND site = $3
+    `, [Number(upstream), Number(downstream), site]);
+    if (r.rows.length !== 2) return res.status(404).json({ error: 'Devices not found' });
 
-    if (!upstream || !downstream) {
-      if (!upstreamId || !downstreamId) {
-        return res.status(400).json({ error: 'Missing upstream/downstream identifiers' });
-      }
-      const [up, down] = await Promise.all([
-        getDeviceById(upstreamId),
-        getDeviceById(downstreamId),
-      ]);
-      if (!up || !down) {
-        return res.status(404).json({ error: 'Device not found' });
-      }
-      upstream = up;
-      downstream = down;
+    const up = r.rows.find(d => d.id === Number(upstream));
+    const down = r.rows.find(d => d.id === Number(downstream));
+
+    // Vérification données manquantes
+    const missing = [];
+    if (!up.settings?.ir || !down.settings?.ir) missing.push('Ir missing');
+    if (!up.in_amps || !down.in_amps) missing.push('In amps missing');
+
+    if (missing.length > 0) {
+      await pool.query(`
+        INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status, checked_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (upstream_id, downstream_id, site)
+        DO UPDATE SET status = $4, checked_at = NOW()
+      `, [Number(upstream), Number(downstream), site, 'incomplete']);
+      return res.json({ status: 'incomplete', missing, remediation: 'Complete device settings in Switchboards' });
     }
 
-    const currents = buildCurrentSweep(upstream, downstream, faultCurrent);
-    const result = checkSelectivity(upstream, downstream, currents);
+    // Calcul sélectivité et zones non-sélectives
+    const { isSelective, nonSelectiveZones } = checkSelectivity(up, down, Number(fault_current));
+    const remediation = isSelective ? [] : getRemediations(up, down);
+    const details = { 
+      why: isSelective ? 
+        'Total selectivity achieved: Downstream trip time < upstream for all tested currents (IEC 60947-2).' : 
+        'Partial/non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.'
+    };
 
-    // Optionnel : journaliser (schéma existant)
-    // await pool.query(
-    //   `INSERT INTO selectivity_checks(site_id, upstream_id, downstream_id, status, at)
-    //    VALUES ($1,$2,$3,$4,NOW())`,
-    //   [req.headers['x-site'] || null, upstream.id, downstream.id, result.status]
-    // );
+    // Sauvegarde du statut
+    await pool.query(`
+      INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status, checked_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (upstream_id, downstream_id, site)
+      DO UPDATE SET status = $4, checked_at = NOW()
+    `, [Number(upstream), Number(downstream), site, isSelective ? 'selective' : 'non-selective']);
 
-    res.json({
-      status: result.status,
-      currents,
-      curves: result.curves,
-    });
+    res.json({ status: isSelective ? 'selective' : 'non-selective', details, remediation, nonSelectiveZones });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Server error' });
+    console.error('[SELECTIVITY CHECK] error:', e);
+    res.status(500).json({ error: 'Check failed' });
   }
 });
 
-// Démarrage
+// GET Curves data for graph
+app.get('/api/selectivity/curves', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { upstream, downstream } = req.query;
+    const r = await pool.query(`
+      SELECT * FROM devices WHERE id IN ($1, $2) AND site = $3
+    `, [Number(upstream), Number(downstream), site]);
+    if (r.rows.length !== 2) return res.status(404).json({ error: 'Devices not found' });
+
+    const up = r.rows.find(d => d.id === Number(upstream));
+    const down = r.rows.find(d => d.id === Number(downstream));
+
+    const upCurve = generateCurvePoints(up);
+    const downCurve = generateCurvePoints(down);
+
+    res.json({ upstream: upCurve, downstream: downCurve });
+  } catch (e) {
+    console.error('[SELECTIVITY CURVES] error:', e);
+    res.status(500).json({ error: 'Curves generation failed' });
+  }
+});
+
+// AI TIP for remediation
+app.post('/api/selectivity/ai-tip', async (req, res) => {
+  try {
+    if (!openai) return res.json({ tip: 'AI tips unavailable' });
+
+    const { query } = req.body;
+    const context = query || 'Selectivity advice';
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { 
+          role: 'system', 
+          content: `You are an expert in IEC 60947 selectivity. Provide concise remediation advice based on "${context}". Use standards like time-current curves, adjust Ir/Isd. 1-2 sentences.` 
+        },
+        { role: 'user', content: context }
+      ],
+      max_tokens: 120,
+      temperature: 0.3
+    });
+
+    const tip = completion.choices[0].message.content.trim();
+    res.json({ tip });
+  } catch (e) {
+    console.error('[AI TIP] error:', e.message);
+    res.status(500).json({ error: 'AI tip failed' });
+  }
+});
+
+// Fonctions helpers pour calculs (basés sur recherches IEC)
+function checkSelectivity(up, down, faultI = null) {
+  const currents = faultI ? [Number(faultI)] : Array.from({length: 20}, (_, i) => Math.pow(10, i/5) * Math.min(up.in_amps || 100, down.in_amps || 100));
+  const nonSelectiveZones = [];
+  let zoneStart = null;
+  let isSelective = true;
+
+  for (let i = 0; i < currents.length; i++) {
+    const I = currents[i];
+    const tDown = calculateTripTime(down, I);
+    const tUp = calculateTripTime(up, I);
+    if (tDown >= tUp * 1.05) {
+      isSelective = false;
+      if (zoneStart === null) zoneStart = I;
+    } else if (zoneStart !== null) {
+      nonSelectiveZones.push({ xMin: zoneStart, xMax: I });
+      zoneStart = null;
+    }
+  }
+  if (zoneStart !== null) nonSelectiveZones.push({ xMin: zoneStart, xMax: currents[currents.length - 1] });
+
+  return { isSelective, nonSelectiveZones };
+}
+
+function calculateTripTime(device, I) {
+  const { settings, in_amps: In } = device;
+  const Ir = settings.ir || 1;
+  const Tr = settings.tr || 10;
+  const Isd = settings.isd || 6;
+  const Tsd = settings.tsd || 0.1;
+  const Ii = settings.ii || 10;
+
+  if (I > Ii * Ir * In) return 0.01; // Instantané
+  if (I > Isd * Ir * In) return Tsd; // Short-time
+  if (I > Ir * In) return Tr / ((I / (Ir * In)) ** 2 - 1); // Long-time approx I²t
+  return Infinity; // Pas de trip
+}
+
+function getRemediations(up, down) {
+  return ['Increase upstream Isd to > downstream Isd * 1.6', 'Enable ZSI if available', 'Check curve types compatibility'];
+}
+
+function generateCurvePoints(device) {
+  const points = [];
+  const minI = (device.in_amps || 100) * 0.1;
+  const maxI = (device.icu_ka || 50) * 1000;
+  for (let logI = Math.log10(minI); logI < Math.log10(maxI); logI += 0.1) {
+    const I = Math.pow(10, logI);
+    let t = calculateTripTime(device, I);
+    if (t === Infinity) t = 1000; // Limite pour affichage
+    if (t > 0) points.push({ current: I, time: t });
+  }
+  return points;
+}
+
 const port = process.env.SELECTIVITY_PORT || 3004;
 app.listen(port, () => console.log(`Selectivity service running on :${port}`));
