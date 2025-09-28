@@ -188,7 +188,7 @@ async function computeSwitchboardTotals(site) {
   const enriched = [];
   for (const sb of bySB.values()) {
     const n = sb.devices.filter(d => d.device_id).length;
-    const boardBase = 1500 + 400 * Math.max(0, n - 4); // châssis/barres/coffret
+    const boardBase = 1500 + 400 * Math.max(0, n - 4);
     let sumDevices = 0;
 
     for (const d of sb.devices) {
@@ -508,7 +508,6 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
     if (!openai) return res.status(503).json({ error: 'OpenAI not configured' });
     const { query, site } = req.body || {};
 
-    // Contexte DB
     const db = await pool.query(`
       SELECT s.name AS switchboard, s.building_code, d.name AS device, d.device_type, d.in_amps,
              op.manufacture_date, op.avg_life_years, op.replacement_cost
