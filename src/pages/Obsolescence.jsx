@@ -676,11 +676,12 @@ END:VCALENDAR`;
       <Modal open={aiOpen} onClose={()=>setAiOpen(false)} title={`AI Assistant ${health.web_cost ? ' (web-assist ON)' : ''}`} wide>
         <div className="space-y-3">
           <div className="text-sm text-gray-600">
-            Pose des questions (IEC obsolescence, prix MCCB/ACB/VCB, roadmap par bâtiment, capteurs Temp/HeatTag, monitoring électrique…).  
-            L’IA ajoute des **idées capteurs/monitoring** + un encadré **Estimates & Scope**.
+            Ask questions (IEC obsolescence, MCCB/ACB/VCB pricing, roadmap per building, Temp/HeatTag sensors, electrical monitoring…).
+            The AI adds sensor/monitoring ideas + a dedicated box Estimates & Scope.
+            (I can also speak to you in any language.)
           </div>
           <div className="h-[320px] overflow-y-auto rounded-xl ring-1 ring-black/10 p-3 bg-gray-50">
-            {aiMessages.length === 0 && <div className="text-gray-500 text-sm">🧠 Dis-moi par ex. “prix MCCB 250A installé UK ?” ou “roadmap bâtiment 21”.</div>}
+            {aiMessages.length === 0 && <div className="text-gray-500 text-sm">🧠 Tell me for example: MCCB 250A installed price UK? or building 21 roadmap.</div>}
             {aiMessages.map((m, i) => (
               <div key={i} className={`mb-3 ${m.role==='user'?'text-right':''}`}>
                 <div className={`inline-block px-3 py-2 rounded-xl ${m.role==='user'?'bg-green-600 text-white':'bg-white ring-1 ring-black/10'}`} style={{maxWidth:'80%'}}>
