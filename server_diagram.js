@@ -48,6 +48,13 @@ app.get('/api/diagram/view', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
 
+    // Try to infer site if missing (fallback – optional)
+    if (!site) {
+      try {
+        const s1 = await pool.query(`SELECT site FROM switchboards WHERE site IS NOT NULL LIMIT 1`);
+        if (s1.rows.length) req.query.site = s1.rows[0].site;
+      } catch {}
+    }
     const mode = String(req.query.mode || 'all').toLowerCase();
     const buildingFilter = (req.query.building || '').toString();
     const depth = Math.max(n(req.query.depth, 3) || 3, 1);
@@ -378,16 +385,16 @@ app.get('/api/diagram/view', async (req, res) => {
 
     res.json({ nodes, edges, legend: {
       status: {
-        safe: 'Conforme',
-        'at-risk': 'Non conforme',
-        incomplete: 'Incomplet / données manquantes',
-        unknown: 'Inconnu'
+        safe: 'Compliant',
+        'at-risk': 'Non-compliant',
+        incomplete: 'Incomplete / missing data',
+        unknown: 'Unknown'
       },
       nodeTypes: {
-        switchboard: 'Tableau (BT)',
-        device: 'Appareil (BT)',
-        hv_equipment: 'Équipement (HT)',
-        hv_device: 'Appareil (HT)'
+        switchboard: 'Switchboard (LV)',
+        device: 'Device (LV)',
+        hv_equipment: 'Equipment (HV)',
+        hv_device: 'Device (HV)'
       }
     }});
   } catch (e) {
