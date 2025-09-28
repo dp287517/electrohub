@@ -1,11 +1,14 @@
-// server_selectivity.js
-// Améliorations : CORS sûr, stabilité numérique autour de Ir·In, plage de test élargie, API compatibles.
-// Schéma de base de données conservé (aucun changement de tables ou colonnes).
+// server_selectivity.js (ESM)
+// - Passage à ES Modules (import ... from) car "type":"module" dans package.json
+// - Même logique que la version précédente : CORS sûr, stabilité numérique, plage de test élargie
+// - Schéma de base de données inchangé
 
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const pg = require('pg');
+import 'dotenv/config';
+import express from 'express';
+import bodyParser from 'body-parser';
+import pg from 'pg';
+
+const { Pool } = pg;
 
 const app = express();
 app.use(bodyParser.json());
@@ -15,7 +18,6 @@ app.use((req, res, next) => {
   const allowed = process.env.CORS_ORIGIN; // ex: https://app.mondomaine.com
   if (allowed) {
     const origin = req.headers.origin;
-    // si l'origin courant contient le domaine autorisé, on le renvoie tel quel (utile en multi-sous-domaines)
     const useOrigin =
       origin && (origin === allowed || origin.includes(allowed)) ? origin : allowed;
     res.setHeader('Access-Control-Allow-Origin', useOrigin);
@@ -32,7 +34,7 @@ app.use((req, res, next) => {
 });
 
 // ------- DB (schéma inchangé) -------
-const pool = new pg.Pool({
+const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.PGSSLMODE === 'require' ? { rejectUnauthorized: false } : false,
 });
@@ -49,15 +51,12 @@ async function getDeviceById(id) {
 }
 
 // --------- Physique/Modèle simplifié ---------
-// Hypothèse : settings = { ir, isd, ii, tr, tsd } etc. (inchangé)
 const EPS = 1e-9;
 
 // Temps de déclenchement côté "long time" (modèle simple) avec clamp près de Ir·In
 function longTimeTrip(I, In, Ir, Tr) {
   const Ith = (Ir || 1) * (In || 100); // courant de seuil long time
-  // évite l'infini juste au-dessus de Ith
   if (I <= Ith * (1 + 1e-6)) return 1e6; // "très long" au lieu d'Infinity
-  // formule type Tr / ((I/Ith)^2 - 1) avec EPS
   return Tr / ((((I / Ith) ** 2) - 1) + EPS);
 }
 
@@ -92,7 +91,6 @@ function calculateTripTime(I, device) {
 }
 
 // Génération robuste de la plage de courant (log-spaced)
-// Couvre 0,1·min(In) -> 20·max(Ii·Ir·In) comme garde-fou
 function buildCurrentSweep(up, down, faultI) {
   if (faultI && Number.isFinite(Number(faultI))) {
     return [Number(faultI)];
@@ -124,7 +122,7 @@ function isSelective(tUp, tDown) {
   if (!isFinite(tUp) && !isFinite(tDown)) return false;
   if (!isFinite(tUp)) return false; // amont "inf" => aval doit être fini
   if (!isFinite(tDown)) return false; // aval inf -> pas acceptable
-  return tDown < 1.0 * tUp / 1.05; // équivalent à t_up >= 1.05 * t_down
+  return tDown < (tUp / 1.05); // aval au moins 5% plus rapide
 }
 
 // Point par point
@@ -139,10 +137,9 @@ function checkSelectivity(up, down, currents) {
     pointsUp.push({ current: I, time: tU });
     pointsDown.push({ current: I, time: tD });
 
-    // On ignore les points non-finis dans la décision finale (autour de Ir·In)
     const finite = isFinite(tU) && isFinite(tD);
     if (finite) {
-      const ok = tD < (tU / 1.05); // aval au moins 5% plus rapide
+      const ok = tD < (tU / 1.05);
       if (!ok) allSelective = false;
     }
   }
@@ -155,8 +152,8 @@ function checkSelectivity(up, down, currents) {
 
 // --------- API ---------
 
-// Ex: GET /api/pairs  -> renvoie les paires amont/aval déjà connues (inchangé)
-app.get('/api/pairs', async (req, res) => {
+// GET /api/pairs -> paires amont/aval
+app.get('/api/pairs', async (_req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT upstream_id, downstream_id
@@ -171,8 +168,6 @@ app.get('/api/pairs', async (req, res) => {
 });
 
 // POST /api/check-selectivity
-// Body possible : { upstreamId, downstreamId, faultCurrent? } ou { upstream, downstream, faultCurrent? }
-// "upstream"/"downstream" peuvent être objets device complets -> pas de changement de schéma
 app.post('/api/check-selectivity', async (req, res) => {
   try {
     let { upstreamId, downstreamId, faultCurrent, upstream, downstream } = req.body || {};
@@ -195,7 +190,7 @@ app.post('/api/check-selectivity', async (req, res) => {
     const currents = buildCurrentSweep(upstream, downstream, faultCurrent);
     const result = checkSelectivity(upstream, downstream, currents);
 
-    // Optionnel : consigner le check (schéma existant supposé)
+    // Optionnel : journaliser (schéma existant)
     // await pool.query(
     //   `INSERT INTO selectivity_checks(site_id, upstream_id, downstream_id, status, at)
     //    VALUES ($1,$2,$3,$4,NOW())`,
@@ -205,7 +200,7 @@ app.post('/api/check-selectivity', async (req, res) => {
     res.json({
       status: result.status,
       currents,
-      curves: result.curves, // {upstream:[{current,time}], downstream:[...] }
+      curves: result.curves,
     });
   } catch (e) {
     console.error(e);
