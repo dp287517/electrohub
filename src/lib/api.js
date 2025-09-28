@@ -121,9 +121,12 @@ export const api = {
   hv: {
     list: (params) => get("/api/hv/equipments", params),
     getOne: (id) => get(`/api/hv/equipments/${id}`),
-    create: (id, payload) => post(`/api/hv/equipments/${id}/devices`, payload),  // Adapté pour devices
+    create: (hvEquipmentId, payload) => post(`/api/hv/equipments/${hvEquipmentId}/devices`, payload), // Corrigé pour dispositifs
+    createEquipment: (payload) => post("/api/hv/equipments", payload), // Ajout pour créer équipement
     update: (id, payload) => put(`/api/hv/devices/${id}`, payload),
+    updateEquipment: (id, payload) => put(`/api/hv/equipments/${id}`, payload), // Ajout pour mettre à jour équipement
     duplicate: (id) => post(`/api/hv/equipments/${id}/duplicate`),
-    remove: (id) => del(`/api/hv/equipments/${id}`),
+    remove: (id) => del(`/api/hv/devices/${id}`), // Corrigé pour dispositifs
+    removeEquipment: (id) => del(`/api/hv/equipments/${id}`), // Ajout pour supprimer équipement
   },
 };
