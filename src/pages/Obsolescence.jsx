@@ -1,4 +1,4 @@
-// Obsolescence.jsx (gallery + AI assistant + google gantt + filters + radar + pdf) — FIX .map on null
+// Obsolescence.jsx (CSP-safe, AI assistant, filters, PDF, radar centered, no google charts)
 import React, { useEffect, useState, Fragment } from 'react';
 import { get, post } from '../lib/api.js';
 import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil, SlidersHorizontal } from 'lucide-react';
@@ -6,7 +6,6 @@ import { Line, Doughnut, Radar } from 'react-chartjs-2';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
 import jsPDF from 'jspdf';
-import { Chart as GoogleChart } from 'react-google-charts';
 
 import {
   Chart as ChartJS, CategoryScale, LinearScale, BarController, BarElement,
@@ -61,7 +60,6 @@ export default function Obsolescence() {
   const [showFilters, setShowFilters] = useState(false);
 
   const [ganttTasks, setGanttTasks] = useState([]);
-  const [useGoogleGantt, setUseGoogleGantt] = useState(true);
 
   const [doughnutData, setDoughnutData] = useState([]);
   const [buildingBuckets, setBuildingBuckets] = useState({});
@@ -114,8 +112,10 @@ export default function Obsolescence() {
       setBusy(true);
       const data = await get('/api/obsolescence/buildings');
       setBuildings(Array.isArray(data.data) ? data.data : []);
+      // Seed defaults + checks
       await post('/api/obsolescence/ai-fill');
       await post('/api/obsolescence/auto-check');
+      // KPIs
       const u = await get('/api/obsolescence/avg-urgency');   setAvgUrgency(Number(u.avg || 45));
       const c = await get('/api/obsolescence/total-capex');   setTotalCapex(Number(c.total || 50000));
     } catch (e) {
@@ -284,7 +284,7 @@ export default function Obsolescence() {
   });
   const doughnutSmallOptions = { responsive:true, plugins:{ legend:{ position:'bottom' } }, cutout:'70%' };
 
-  // Radar (style MUI)
+  // Radar (centré)
   const getRadarData = () => {
     const labels = ['Age pressure','Urgency','CAPEX density','Unknowns','Thermal risk'];
     const groups = Object.keys(capexForecast || {});
@@ -308,7 +308,9 @@ export default function Obsolescence() {
     return { labels, datasets };
   };
   const radarOptions = {
-    responsive:true, plugins:{ legend:{ position:'bottom' } },
+    responsive:true,
+    maintainAspectRatio:false,
+    plugins:{ legend:{ position:'bottom' } },
     scales:{ r:{ beginAtZero:true, max:100, grid:{ color:'#eee' } } },
     elements:{ line:{ tension:0.25 } }
   };
@@ -432,38 +434,6 @@ END:VCALENDAR`;
     } finally { setBusy(false); }
   };
 
-  // Google Gantt data
-  const googleGanttData = () => {
-    const header = [
-      { type:'string', label:'Task ID' },
-      { type:'string', label:'Task Name' },
-      { type:'string', label:'Resource' },
-      { type:'date',   label:'Start Date' },
-      { type:'date',   label:'End Date' },
-      { type:'number', label:'Duration' },
-      { type:'number', label:'Percent Complete' },
-      { type:'string', label:'Dependencies' }
-    ];
-    const rows = (ganttTasks || []).map(t => {
-      const res = (t.building || 'Bldg');
-      return [
-        t.id, t.name, res,
-        new Date(t.start), new Date(t.end), null, 0, null
-      ];
-    });
-    return [header, ...rows];
-  };
-  const googleGanttOptions = {
-    height: 560,
-    gantt: {
-      sortTasks: true,
-      trackHeight: 32,
-      labelStyle: { fontName: 'Inter', fontSize: 12, color: '#111827' },
-      barCornerRadius: 6,
-      palette: PALETTE.map(c => ({ color: c, dark: withAlpha(c,.9), light: withAlpha(c,.4) }))
-    }
-  };
-
   return (
     <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-green-50 to-orange-50 rounded-3xl shadow-xl min-h-screen">
       <header className="flex items-center justify-between mb-8">
@@ -547,6 +517,10 @@ END:VCALENDAR`;
                 ))}
               </tbody>
             </table>
+            <p className="text-xs text-gray-500 mt-3">
+              Estimates are indicative, based on current prices and a typical installation in your region.
+              Prices include materials + labour; exclude enclosures, cabling, extra accessories. Web-assist is used if enabled.
+            </p>
           </div>
         </>
       )}
@@ -555,31 +529,17 @@ END:VCALENDAR`;
         <div className="bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xl font-bold text-gray-800">Gantt (Portfolio)</h2>
-            <label className="text-sm text-gray-600 flex items-center gap-2">
-              <input type="checkbox" checked={useGoogleGantt} onChange={e=>setUseGoogleGantt(e.target.checked)} />
-              Use Google Gantt
-            </label>
           </div>
           {ganttTasks.length ? (
-            useGoogleGantt ? (
-              <GoogleChart
-                chartType="Gantt"
-                data={googleGanttData()}
-                width="100%"
-                height="600px"
-                options={googleGanttOptions}
+            <div className="h-[620px] overflow-auto">
+              <Gantt
+                tasks={ganttTasks}
+                viewMode={ViewMode.Year}
+                columnWidth={120}
+                listCellWidth="300px"
+                todayColor="#ff6b00"
               />
-            ) : (
-              <div className="h-[600px] overflow-auto">
-                <Gantt
-                  tasks={ganttTasks}
-                  viewMode={ViewMode.Year}
-                  columnWidth={120}
-                  listCellWidth="300px"
-                  todayColor="#ff6b00"
-                />
-              </div>
-            )
+            </div>
           ) : <p className="text-gray-600 text-center py-20">No data available yet.</p>}
         </div>
       )}
@@ -594,15 +554,22 @@ END:VCALENDAR`;
             ) : <p className="text-gray-600 text-center py-20">No data.</p>}
           </div>
 
-          {/* Radar style MUI */}
+          {/* Radar centré */}
           <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Risk / Readiness Radar</h2>
-            <div className="h-[420px]"><Radar data={getRadarData()} options={radarOptions} /></div>
+            <div className="h-[440px] flex items-center justify-center">
+              <div className="w-full max-w-[720px] h-full">
+                <Radar data={getRadarData()} options={radarOptions} />
+              </div>
+            </div>
           </div>
 
           {/* Doughnuts par bâtiment : <5y / 5–10y / >10y */}
           <div>
-            <h2 className="text-2xl font-bold mb-4 text-gray-800">Replacement Horizon — by Building</h2>
+            <h2 className="text-2xl font-bold mb-2 text-gray-800">Replacement Horizon — by Building</h2>
+            <p className="text-xs text-gray-500 mb-4">
+              Counts of switchboards due per horizon. Estimates exclude enclosures/cables/accessories.
+            </p>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {Object.keys(buildingBuckets || {}).map(b => (
                 <div key={b} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5">
@@ -650,7 +617,6 @@ END:VCALENDAR`;
             <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
               value={selectedFilter.switchboard || ''} onChange={e => setSelectedFilter(s => ({ ...s, switchboard: e.target.value || null }))}>
               <option value="">All</option>
-              {/** FIX: always map an array (no .map on null) */}
               {((selectedFilter.building ? (switchboards[selectedFilter.building] || []) : [])).map(sb =>
                 <option key={sb.id} value={sb.id}>{sb.name}</option>
               )}
