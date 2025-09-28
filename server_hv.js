@@ -62,7 +62,7 @@ const WHITELIST_SORT = ['created_at', 'name', 'code', 'building_code', 'floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema - Adapté pour HV avec champs spécifiques (IEC 62271) et liaison vers devices BT
+// Schema
 async function ensureSchema() {
   try {
     await pool.query(`
@@ -137,10 +137,8 @@ app.get('/api/hv/equipments', async (req, res) => {
   try {
     console.log('[HV LIST] Request:', req.query);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV LIST] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const { q, building, floor, room, sort = 'created_at', dir = 'desc', page = '1', pageSize = '18' } = req.query;
     const where = ['site = $1']; const vals = [site]; let i = 2;
     if (q) { where.push(`(name ILIKE $${i} OR code ILIKE $${i})`); vals.push(`%${q}%`); i++; }
@@ -173,20 +171,17 @@ app.post('/api/hv/equipments', async (req, res) => {
   try {
     console.log('[HV CREATE] Request body:', req.body);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV CREATE] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const { name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality } = req.body;
-    if (!name || !code) {
-      console.error('[HV CREATE] Missing name or code');
-      return res.status(400).json({ error: 'Name and code are required' });
-    }
+    if (!name || !code) return res.status(400).json({ error: 'Name and code are required' });
+
     const r = await pool.query(`
       INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [site, name, code, building_code, floor, room, regime_neutral, is_principal, modes || {}, quality || {}]);
+
     console.log('[HV CREATE] Success: Created equipment', r.rows[0].id);
     res.status(201).json(r.rows[0]);
   } catch (e) {
@@ -195,22 +190,16 @@ app.post('/api/hv/equipments', async (req, res) => {
   }
 });
 
-// GET One HV Equipment
+// GET One HV Equipment (row only)
 app.get('/api/hv/equipments/:id', async (req, res) => {
   try {
     console.log('[HV GET] Request for ID:', req.params.id);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV GET] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
-    const r = await pool.query(`
-      SELECT * FROM hv_equipments WHERE id = $1 AND site = $2
-    `, [Number(req.params.id), site]);
-    if (r.rows.length !== 1) {
-      console.error('[HV GET] Not found for ID:', req.params.id);
-      return res.status(404).json({ error: 'Not found' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const r = await pool.query(`SELECT * FROM hv_equipments WHERE id = $1 AND site = $2`, [Number(req.params.id), site]);
+    if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
+
     res.json(r.rows[0]);
   } catch (e) {
     console.error('[HV GET] Error:', e.message, e.stack);
@@ -223,24 +212,20 @@ app.put('/api/hv/equipments/:id', async (req, res) => {
   try {
     console.log('[HV UPDATE] Request for ID:', req.params.id, 'Body:', req.body);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV UPDATE] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const { name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality } = req.body;
-    if (!name || !code) {
-      console.error('[HV UPDATE] Missing name or code');
-      return res.status(400).json({ error: 'Name and code are required' });
-    }
+    if (!name || !code) return res.status(400).json({ error: 'Name and code are required' });
+
     const r = await pool.query(`
-      UPDATE hv_equipments SET name = $3, code = $4, building_code = $5, floor = $6, room = $7, regime_neutral = $8, is_principal = $9, modes = $10, quality = $11
+      UPDATE hv_equipments 
+      SET name = $3, code = $4, building_code = $5, floor = $6, room = $7, regime_neutral = $8, is_principal = $9, modes = $10, quality = $11
       WHERE id = $1 AND site = $2
       RETURNING *
     `, [Number(req.params.id), site, name, code, building_code, floor, room, regime_neutral, is_principal, modes || {}, quality || {}]);
-    if (r.rows.length !== 1) {
-      console.error('[HV UPDATE] Not found for ID:', req.params.id);
-      return res.status(404).json({ error: 'Not found' });
-    }
+
+    if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
+
     console.log('[HV UPDATE] Success: Updated equipment', r.rows[0].id);
     res.json(r.rows[0]);
   } catch (e) {
@@ -249,27 +234,24 @@ app.put('/api/hv/equipments/:id', async (req, res) => {
   }
 });
 
-// DUPLICATE HV Equipment
+// DUPLICATE HV Equipment (+ devices)
 app.post('/api/hv/equipments/:id/duplicate', async (req, res) => {
   try {
     console.log('[HV DUPLICATE] Request for ID:', req.params.id);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV DUPLICATE] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const id = Number(req.params.id);
     const orig = await pool.query(`SELECT * FROM hv_equipments WHERE id = $1 AND site = $2`, [id, site]);
-    if (orig.rows.length !== 1) {
-      console.error('[HV DUPLICATE] Not found for ID:', id);
-      return res.status(404).json({ error: 'Not found' });
-    }
+    if (orig.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
+
     const o = orig.rows[0];
     const r = await pool.query(`
       INSERT INTO hv_equipments (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [site, `${o.name} (copy)`, `${o.code}-copy`, o.building_code, o.floor, o.room, o.regime_neutral, o.is_principal, o.modes, o.quality]);
+
     const devices = await pool.query(`SELECT * FROM hv_devices WHERE hv_equipment_id = $1`, [id]);
     for (const d of devices.rows) {
       await pool.query(`
@@ -290,15 +272,11 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
   try {
     console.log('[HV DELETE] Request for ID:', req.params.id);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV DELETE] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const r = await pool.query(`DELETE FROM hv_equipments WHERE id = $1 AND site = $2 RETURNING *`, [Number(req.params.id), site]);
-    if (r.rowCount === 0) {
-      console.error('[HV DELETE] Not found for ID:', req.params.id);
-      return res.status(404).json({ error: 'Not found' });
-    }
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+
     console.log('[HV DELETE] Success: Deleted equipment', req.params.id);
     res.json({ message: 'Deleted' });
   } catch (e) {
@@ -307,15 +285,13 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
   }
 });
 
-// LIST HV Devices for a HV Equipment
+// LIST HV Devices for a HV Equipment (flat list)
 app.get('/api/hv/equipments/:id/devices', async (req, res) => {
   try {
     console.log('[HV DEVICES LIST] Request for equipment ID:', req.params.id);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV DEVICES LIST] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const r = await pool.query(`
       WITH RECURSIVE device_tree AS (
         SELECT *, NULL::integer AS parent_id FROM hv_devices WHERE hv_equipment_id = $1 AND parent_id IS NULL
@@ -323,7 +299,7 @@ app.get('/api/hv/equipments/:id/devices', async (req, res) => {
         SELECT d.*, t.id AS parent_id FROM hv_devices d
         JOIN device_tree t ON d.parent_id = t.id
       )
-      SELECT * FROM device_tree WHERE site = $2
+      SELECT * FROM device_tree WHERE site = $2 ORDER BY id ASC
     `, [Number(req.params.id), site]);
     console.log('[HV DEVICES LIST] Success: Returned', r.rows.length, 'devices');
     res.json(r.rows);
@@ -338,21 +314,18 @@ app.post('/api/hv/equipments/:id/devices', async (req, res) => {
   try {
     console.log('[HV DEVICE CREATE] Request for equipment ID:', req.params.id, 'Body:', req.body);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV DEVICE CREATE] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const hv_equipment_id = Number(req.params.id);
     const { name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka, insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings, is_main_incoming, parent_id, downstream_hv_equipment_id, downstream_device_id } = req.body;
-    if (!device_type) {
-      console.error('[HV DEVICE CREATE] Missing device_type');
-      return res.status(400).json({ error: 'Device type is required' });
-    }
+    if (!device_type) return res.status(400).json({ error: 'Device type is required' });
+
     const r = await pool.query(`
       INSERT INTO hv_devices (site, hv_equipment_id, parent_id, downstream_hv_equipment_id, downstream_device_id, name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka, insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings, is_main_incoming)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `, [site, hv_equipment_id, parent_id ? Number(parent_id) : null, downstream_hv_equipment_id ? Number(downstream_hv_equipment_id) : null, downstream_device_id ? Number(downstream_device_id) : null, name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka, insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings || {}, is_main_incoming]);
+
     await triggerAutoChecks(r.rows[0].id, hv_equipment_id);
     console.log('[HV DEVICE CREATE] Success: Created device', r.rows[0].id);
     res.status(201).json(r.rows[0]);
@@ -367,24 +340,20 @@ app.put('/api/hv/devices/:id', async (req, res) => {
   try {
     console.log('[HV DEVICE UPDATE] Request for device ID:', req.params.id, 'Body:', req.body);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV DEVICE UPDATE] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const { name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka, insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings, is_main_incoming, parent_id, downstream_hv_equipment_id, downstream_device_id } = req.body;
-    if (!device_type) {
-      console.error('[HV DEVICE UPDATE] Missing device_type');
-      return res.status(400).json({ error: 'Device type is required' });
-    }
+    if (!device_type) return res.status(400).json({ error: 'Device type is required' });
+
     const r = await pool.query(`
-      UPDATE hv_devices SET name = $3, device_type = $4, manufacturer = $5, reference = $6, voltage_class_kv = $7, short_circuit_current_ka = $8, insulation_type = $9, mechanical_endurance_class = $10, electrical_endurance_class = $11, poles = $12, settings = $13, is_main_incoming = $14, parent_id = $15, downstream_hv_equipment_id = $16, downstream_device_id = $17, updated_at = NOW()
+      UPDATE hv_devices 
+      SET name = $3, device_type = $4, manufacturer = $5, reference = $6, voltage_class_kv = $7, short_circuit_current_ka = $8, insulation_type = $9, mechanical_endurance_class = $10, electrical_endurance_class = $11, poles = $12, settings = $13, is_main_incoming = $14, parent_id = $15, downstream_hv_equipment_id = $16, downstream_device_id = $17, updated_at = NOW()
       WHERE id = $1 AND site = $2
       RETURNING *
     `, [Number(req.params.id), site, name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka, insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings || {}, is_main_incoming, parent_id ? Number(parent_id) : null, downstream_hv_equipment_id ? Number(downstream_hv_equipment_id) : null, downstream_device_id ? Number(downstream_device_id) : null]);
-    if (r.rows.length !== 1) {
-      console.error('[HV DEVICE UPDATE] Not found for ID:', req.params.id);
-      return res.status(404).json({ error: 'Not found' });
-    }
+
+    if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
+
     await triggerAutoChecks(r.rows[0].id, r.rows[0].hv_equipment_id);
     console.log('[HV DEVICE UPDATE] Success: Updated device', r.rows[0].id);
     res.json(r.rows[0]);
@@ -399,15 +368,11 @@ app.delete('/api/hv/devices/:id', async (req, res) => {
   try {
     console.log('[HV DEVICE DELETE] Request for device ID:', req.params.id);
     const site = siteOf(req);
-    if (!site) {
-      console.error('[HV DEVICE DELETE] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
     const r = await pool.query(`DELETE FROM hv_devices WHERE id = $1 AND site = $2 RETURNING *`, [Number(req.params.id), site]);
-    if (r.rowCount === 0) {
-      console.error('[HV DEVICE DELETE] Not found for ID:', req.params.id);
-      return res.status(404).json({ error: 'Not found' });
-    }
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+
     console.log('[HV DEVICE DELETE] Success: Deleted device', req.params.id);
     res.json({ message: 'Deleted' });
   } catch (e) {
@@ -416,32 +381,15 @@ app.delete('/api/hv/devices/:id', async (req, res) => {
   }
 });
 
-// GET LV Devices Suggestions for BT linkage
-app.get('/api/hv/lv-devices', async (req, res) => {
+// AI helper (new): generate HV specs from description
+app.post('/api/hv/ai/specs', async (req, res) => {
   try {
-    console.log('[HV LV SUGGEST] Request:', req.query);
-    const site = siteOf(req);
-    if (!site) {
-      console.error('[HV LV SUGGEST] Missing site');
-      return res.status(400).json({ error: 'Missing site' });
-    }
-    const { q } = req.query;
-    const where = ['d.site = $1']; const vals = [site]; let i = 2;
-    if (q) { where.push(`(d.name ILIKE $${i} OR d.reference ILIKE $${i} OR s.name ILIKE $${i})`); vals.push(`%${q}%`); i++; }
-    const sql = `
-      SELECT d.id, d.name, d.reference, d.device_type, s.name AS switchboard_name
-      FROM devices d
-      JOIN switchboards s ON d.switchboard_id = s.id
-      WHERE ${where.join(' AND ')}
-      ORDER BY d.name ASC
-      LIMIT 50
-    `;
-    const rows = await pool.query(sql, vals);
-    console.log('[HV LV SUGGEST] Success: Returned', rows.rows.length, 'suggestions');
-    res.json(rows.rows);
+    const description = req.body || {};
+    const specs = await getAiDeviceSpecs(description);
+    res.json(specs || {});
   } catch (e) {
-    console.error('[HV LV SUGGEST] Error:', e.message, e.stack);
-    res.status(500).json({ error: 'Suggestions failed', details: e.message });
+    console.error('[HV AI SPECS] Endpoint error:', e.message);
+    res.status(500).json({ error: 'AI specs failed', details: e.message });
   }
 });
 
@@ -461,8 +409,7 @@ async function triggerAutoChecks(hvDeviceId, hvEquipmentId) {
         SELECT * FROM selectivity_checks 
         WHERE upstream_id = $1 AND downstream_id = $2 AND site = $3
       `, [hvDeviceId, d.downstream_device_id, d.site]);
-      // Note: Pas de calcul direct ici pour respecter la contrainte de ne pas modifier les serveurs existants
-      // Les checks doivent être déclenchés manuellement via les pages Selectivity, FaultLevel, ArcFlash
+      // No direct calc (respect existing servers)
     }
   } catch (e) {
     console.error('[HV AUTO CHECKS] Error:', e.message, e.stack);
@@ -483,16 +430,16 @@ async function getAiDeviceSpecs(description) {
     Generate complete technical specifications for this high voltage electrical device per IEC 62271. Use realistic values based on the identified manufacturer and type.
 
     Return JSON with:
-    - device_type: specific type (e.g., "HV Cell", "Transformer", "HV Circuit Breaker")
-    - voltage_class_kv: pure number (rated voltage kV, e.g., 12)
-    - short_circuit_current_ka: pure number (short-circuit breaking current kA)
-    - insulation_type: string ('SF6', 'Vacuum', 'Air')
-    - mechanical_endurance_class: string ('M1', 'M2')
-    - electrical_endurance_class: string ('E1', 'E2')
-    - poles: pure number (1-3 typically)
-    - settings: object with HV protections {distance_zone, differential_bias, overcurrent, etc.} - numbers pure
+    - device_type
+    - voltage_class_kv
+    - short_circuit_current_ka
+    - insulation_type
+    - mechanical_endurance_class
+    - electrical_endurance_class
+    - poles
+    - settings {distance_zone, differential_bias, overcurrent}
 
-    Use IEC 62271 standards. If uncertain, use null. Output ONLY valid JSON.`;
+    If uncertain, use null. Output ONLY valid JSON.`;
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
