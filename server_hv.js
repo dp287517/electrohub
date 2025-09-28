@@ -12,9 +12,8 @@ const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
 // --- OpenAI setup -----------------------------------------------------------
 let openai = null;
-try {
-  if (process.env.OPENAI_API_KEY) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-} catch (e) { console.warn('[HV] OpenAI init failed:', e.message); }
+try { if (process.env.OPENAI_API_KEY) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }); }
+catch (e) { console.warn('[HV] OpenAI init failed:', e.message); }
 
 // --- App --------------------------------------------------------------------
 const app = express();
@@ -39,7 +38,10 @@ app.use((req, res, next) => {
 app.get('/api/hv/health', (_req, res) => res.json({ ok: true, ts: Date.now(), openai: !!openai }));
 
 // Helpers
-function siteOf(req) { return (req.header('X-Site') || req.query.site || '').toString(); }
+function siteOf(req) {
+  // Default site fallback removes the need for localStorage if you prefer.
+  return (req.header('X-Site') || req.query.site || process.env.HV_DEFAULT_SITE || '').toString();
+}
 const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 const sortSafe = (s) => (WHITELIST_SORT.includes(String(s)) ? s : 'created_at');
 const dirSafe = (d) => (String(d).toLowerCase() === 'asc' ? 'ASC' : 'DESC');
@@ -323,6 +325,18 @@ app.post('/api/hv/devices/suggest-specs', async (req, res) => {
 app.post('/api/hv/devices/:id/analyze', async (req, res) => {
   try { const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' }); const id = Number(req.params.id); const dev = await pool.query(`SELECT name, manufacturer, reference FROM hv_devices WHERE id = $1 AND site = $2`, [id, site]); if (dev.rows.length !== 1) return res.status(404).json({ error: 'Not found' }); const description = { ...(req.body?.description || {}), ...dev.rows[0] }; const specs = await getAiDeviceSpecs(description); res.json(specs); }
   catch (e) { console.error('[HV ANALYZE] error:', e); res.status(500).json({ error: 'Analyze failed' }); }
+});
+
+// --- JSON 404 for /api/hv/* -------------------------------------------------
+app.use('/api/hv', (req, res) => {
+  res.status(404).json({ error: 'Not found', method: req.method, path: req.originalUrl });
+});
+
+// --- Global error handler (JSON) -------------------------------------------
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('[HV ERROR]', err);
+  res.status(500).json({ error: 'Internal error', message: String(err?.message || err) });
 });
 
 // --- Start ------------------------------------------------------------------
