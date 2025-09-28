@@ -1,6 +1,6 @@
 // src/pages/High_voltage.jsx
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { api, get, post, put, del } from '../lib/api.js'; // Ajout de l'importation
+import { api, get, post, put, del } from '../lib/api.js';
 import {
   Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle,
   ChevronDown, ChevronRight, ChevronLeft, X
@@ -148,28 +148,45 @@ export default function HighVoltage() {
   // Fetch HV equipments
   useEffect(() => {
     setBusy(true);
-    api.hv.list(q).then(({ data, total }) => {
-      setRows(data);
-      setTotal(total);
-      setBusy(false);
-    }).catch(e => {
-      setBusy(false);
-      setToast({ msg: 'Failed to load HV equipments', type: 'error' });
-    });
+    api.hv.list(q)
+      .then((response) => {
+        if (!response) {
+          throw new Error('No data returned from API');
+        }
+        const { data = [], total = 0 } = response;
+        setRows(data);
+        setTotal(total);
+        setBusy(false);
+      })
+      .catch(e => {
+        console.error('[HV LIST ERROR]', e);
+        setToast({ msg: 'Failed to load HV equipments: ' + e.message, type: 'error' });
+        setBusy(false);
+      });
   }, [q]);
 
   // Fetch all for suggestions
   useEffect(() => {
-    api.hv.list({ pageSize: 1000 }).then(({ data }) => setAllHvEquipments(data));
+    api.hv.list({ pageSize: 1000 })
+      .then((response) => {
+        if (response) {
+          setAllHvEquipments(response.data || []);
+        }
+      })
+      .catch(e => console.error('[HV SUGGESTIONS ERROR]', e));
   }, []);
 
   // Fetch HV devices for expanded panels
   useEffect(() => {
     Object.keys(expandedPanels).forEach(id => {
       if (expandedPanels[id] && !hvDevices[id]) {
-        api.hv.getOne(id).then(data => {
-          setHvDevices(prev => ({ ...prev, [id]: data.devices || [] }));
-        });
+        api.hv.getOne(id)
+          .then(response => {
+            if (response) {
+              setHvDevices(prev => ({ ...prev, [id]: response.devices || [] }));
+            }
+          })
+          .catch(e => console.error('[HV DEVICES ERROR]', e));
       }
     });
   }, [expandedPanels]);
@@ -178,9 +195,9 @@ export default function HighVoltage() {
   const fetchBtSuggestions = useCallback(async (query) => {
     try {
       const res = await get('/api/hv/lv-devices', { q: query });
-      setDownstreamBtSuggestions(res);
+      setDownstreamBtSuggestions(res || []);
     } catch (e) {
-      console.error(e);
+      console.error('[BT SUGGESTIONS ERROR]', e);
       setToast({ msg: 'Failed to load BT devices', type: 'error' });
     }
   }, []);
@@ -188,19 +205,19 @@ export default function HighVoltage() {
   // Fetch parent and downstream suggestions
   const fetchParentSuggestions = useCallback(async (query, hvEquipmentId) => {
     try {
-      const res = await get('/api/hv/equipments/' + hvEquipmentId + '/devices', { q: query });
-      setParentSuggestions(res.filter(d => d.hv_equipment_id === Number(hvEquipmentId)));
+      const res = await get(`/api/hv/equipments/${hvEquipmentId}/devices`, { q: query });
+      setParentSuggestions(res.filter(d => d.hv_equipment_id === Number(hvEquipmentId)) || []);
     } catch (e) {
-      console.error(e);
+      console.error('[PARENT SUGGESTIONS ERROR]', e);
     }
   }, []);
 
   const fetchDownstreamSuggestions = useCallback(async (query) => {
     try {
       const res = await api.hv.list({ q: query, pageSize: 50 });
-      setDownstreamSuggestions(res.data);
+      setDownstreamSuggestions(res.data || []);
     } catch (e) {
-      console.error(e);
+      console.error('[DOWNSTREAM SUGGESTIONS ERROR]', e);
     }
   }, []);
 
@@ -210,10 +227,10 @@ export default function HighVoltage() {
       setBusy(true);
       const payload = { ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, site } };
       if (editingHvEquipment) {
-        await api.hv.update(editingHvEquipment.id, payload);
-        setRows(rows.map(r => r.id === editingHvEquipment.id ? { ...r, ...payload } : r));
+        const res = await api.hv.updateEquipment(editingHvEquipment.id, payload);
+        setRows(rows.map(r => r.id === editingHvEquipment.id ? { ...r, ...res } : r));
       } else {
-        const res = await api.hv.create(payload);
+        const res = await api.hv.createEquipment(payload);
         setRows([...rows, res]);
       }
       setOpenHvEquipment(false);
@@ -221,24 +238,29 @@ export default function HighVoltage() {
       setHvEquipmentForm(emptyHvEquipmentForm);
       setToast({ msg: 'HV Equipment saved', type: 'success' });
     } catch (e) {
-      setToast({ msg: 'Failed to save HV Equipment', type: 'error' });
+      console.error('[HV EQUIPMENT SUBMIT ERROR]', e);
+      setToast({ msg: 'Failed to save HV Equipment: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
     }
   };
 
   const handleHvDeviceSubmit = async () => {
+    if (!currentPanelId || isNaN(Number(currentPanelId))) {
+      setToast({ msg: 'Invalid HV Equipment ID', type: 'error' });
+      return;
+    }
     try {
       setBusy(true);
       const payload = { ...hvDeviceForm };
       if (editingHvDevice) {
-        await api.hv.update(editingHvDevice.id, payload);
+        const res = await api.hv.update(editingHvDevice.id, payload);
         setHvDevices(prev => ({
           ...prev,
-          [currentPanelId]: prev[currentPanelId].map(d => d.id === editingHvDevice.id ? { ...d, ...payload } : d)
+          [currentPanelId]: prev[currentPanelId].map(d => d.id === editingHvDevice.id ? { ...d, ...res } : d)
         }));
       } else {
-        const res = await api.hv.create(currentPanelId, payload);
+        const res = await api.hv.create(Number(currentPanelId), payload);
         setHvDevices(prev => ({
           ...prev,
           [currentPanelId]: [...(prev[currentPanelId] || []), res]
@@ -249,7 +271,8 @@ export default function HighVoltage() {
       setHvDeviceForm(emptyHvDeviceForm);
       setToast({ msg: 'HV Device saved', type: 'success' });
     } catch (e) {
-      setToast({ msg: 'Failed to save HV Device', type: 'error' });
+      console.error('[HV DEVICE SUBMIT ERROR]', e);
+      setToast({ msg: 'Failed to save HV Device: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -259,11 +282,12 @@ export default function HighVoltage() {
   const handleDeleteHvEquipment = async (id) => {
     try {
       setBusy(true);
-      await api.hv.remove(id);
+      await api.hv.removeEquipment(id);
       setRows(rows.filter(r => r.id !== id));
       setToast({ msg: 'HV Equipment deleted', type: 'success' });
     } catch (e) {
-      setToast({ msg: 'Failed to delete HV Equipment', type: 'error' });
+      console.error('[HV EQUIPMENT DELETE ERROR]', e);
+      setToast({ msg: 'Failed to delete HV Equipment: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -279,7 +303,31 @@ export default function HighVoltage() {
       }));
       setToast({ msg: 'HV Device deleted', type: 'success' });
     } catch (e) {
-      setToast({ msg: 'Failed to delete HV Device', type: 'error' });
+      console.error('[HV DEVICE DELETE ERROR]', e);
+      setToast({ msg: 'Failed to delete HV Device: ' + e.message, type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Handle duplicate (stub)
+  const handleDuplicateHvDevice = async (id, panelId) => {
+    setToast({ msg: 'Duplicate not implemented', type: 'error' });
+  };
+
+  // Handle set main (stub)
+  const handleSetMainHvDevice = async (id, panelId, isMain) => {
+    try {
+      setBusy(true);
+      const res = await api.hv.update(id, { is_main_incoming: isMain });
+      setHvDevices(prev => ({
+        ...prev,
+        [panelId]: prev[panelId].map(d => d.id === id ? { ...d, is_main_incoming: isMain } : d)
+      }));
+      setToast({ msg: isMain ? 'Set as Main' : 'Unset as Main', type: 'success' });
+    } catch (e) {
+      console.error('[HV SET MAIN ERROR]', e);
+      setToast({ msg: 'Failed to update main status: ' + e.message, type: 'error' });
     } finally {
       setBusy(false);
     }
@@ -300,6 +348,7 @@ export default function HighVoltage() {
             setOpenHvEquipment(true);
           }}
           className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          disabled={busy}
         >
           <Plus size={16} className="inline mr-1" /> Add HV Equipment
         </button>
@@ -315,6 +364,7 @@ export default function HighVoltage() {
             value={q.q}
             onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
             className="pl-10 pr-4 py-2 border rounded-lg w-full"
+            disabled={busy}
           />
         </div>
         <input
@@ -323,6 +373,7 @@ export default function HighVoltage() {
           value={q.building}
           onChange={e => setQ({ ...q, building: e.target.value, page: 1 })}
           className="px-4 py-2 border rounded-lg"
+          disabled={busy}
         />
         <input
           type="text"
@@ -330,6 +381,7 @@ export default function HighVoltage() {
           value={q.floor}
           onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })}
           className="px-4 py-2 border rounded-lg"
+          disabled={busy}
         />
         <input
           type="text"
@@ -337,88 +389,103 @@ export default function HighVoltage() {
           value={q.room}
           onChange={e => setQ({ ...q, room: e.target.value, page: 1 })}
           className="px-4 py-2 border rounded-lg"
+          disabled={busy}
         />
       </div>
 
       {/* List */}
-      <div className="space-y-4">
-        {rows.map(row => (
-          <div key={row.id} className="bg-white rounded-lg border border-gray-200 p-6">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <div className="flex-1">
-                <div className="flex items-center gap-2 mb-2">
-                  <button
-                    onClick={() => setExpandedPanels(prev => ({ ...prev, [row.id]: !prev[row.id] }))}
-                    className="p-1"
-                  >
-                    {expandedPanels[row.id] ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
-                  </button>
-                  <span className="font-semibold text-gray-900">{row.name} ({row.code})</span>
-                  {row.is_principal && <Pill color="green">Principal</Pill>}
+      {busy && <div className="text-center py-4">Loading...</div>}
+      {!busy && rows.length === 0 && (
+        <div className="text-center py-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+          <Plus size={24} className="mx-auto text-gray-400 mb-2" />
+          <p className="text-sm text-gray-500">No HV equipments yet</p>
+          <p className="text-xs text-gray-400">Add your first HV equipment using the button above</p>
+        </div>
+      )}
+      {!busy && rows.length > 0 && (
+        <div className="space-y-4">
+          {rows.map(row => (
+            <div key={row.id} className="bg-white rounded-lg border border-gray-200 p-6">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <button
+                      onClick={() => setExpandedPanels(prev => ({ ...prev, [row.id]: !prev[row.id] }))}
+                      className="p-1"
+                      disabled={busy}
+                    >
+                      {expandedPanels[row.id] ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                    </button>
+                    <span className="font-semibold text-gray-900">{row.name} ({row.code})</span>
+                    {row.is_principal && <Pill color="green">Principal</Pill>}
+                  </div>
+                  <div className="text-sm text-gray-500 flex gap-3">
+                    <span>{row.building_code || '—'}</span>
+                    <span>Floor: {row.floor || '—'}</span>
+                    <span>Room: {row.room || '—'}</span>
+                    <span>Regime: {row.regime_neutral || '—'}</span>
+                    <span>Devices: {row.devices_count || 0}</span>
+                  </div>
                 </div>
-                <div className="text-sm text-gray-500 flex gap-3">
-                  <span>{row.building_code || '—'}</span>
-                  <span>Floor: {row.floor || '—'}</span>
-                  <span>Room: {row.room || '—'}</span>
-                  <span>Regime: {row.regime_neutral || '—'}</span>
-                  <span>Devices: {row.devices_count || 0}</span>
+                <div className="flex items-center gap-2">
+                  <Tooltip content="Edit">
+                    <button
+                      onClick={() => {
+                        setEditingHvEquipment(row);
+                        setHvEquipmentForm(row);
+                        setOpenHvEquipment(true);
+                      }}
+                      className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
+                      disabled={busy}
+                    >
+                      <Edit size={16} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip content="Delete">
+                    <button
+                      onClick={() => handleDeleteHvEquipment(row.id)}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                      disabled={busy}
+                    >
+                      <Trash size={16} />
+                    </button>
+                  </Tooltip>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Tooltip content="Edit">
+              {expandedPanels[row.id] && (
+                <div className="mt-4 pt-4 border-t border-gray-100">
                   <button
                     onClick={() => {
-                      setEditingHvEquipment(row);
-                      setHvEquipmentForm(row);
-                      setOpenHvEquipment(true);
+                      setEditingHvDevice(null);
+                      setHvDeviceForm(emptyHvDeviceForm);
+                      setCurrentPanelId(row.id);
+                      setOpenHvDevice(true);
                     }}
-                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
+                    className="mb-4 px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+                    disabled={busy}
                   >
-                    <Edit size={16} />
+                    <Plus size={16} className="inline mr-1" /> Add Device
                   </button>
-                </Tooltip>
-                <Tooltip content="Delete">
-                  <button
-                    onClick={() => handleDeleteHvEquipment(row.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
-                  >
-                    <Trash size={16} />
-                  </button>
-                </Tooltip>
-              </div>
+                  <HvDeviceTree
+                    devices={hvDevices[row.id] || []}
+                    panelId={row.id}
+                    onEdit={(device, panelId) => {
+                      setEditingHvDevice(device);
+                      setHvDeviceForm(device);
+                      setCurrentPanelId(panelId);
+                      setOpenHvDevice(true);
+                    }}
+                    onDuplicate={handleDuplicateHvDevice}
+                    onDelete={handleDeleteHvDevice}
+                    onSetMain={handleSetMainHvDevice}
+                    site={site}
+                  />
+                </div>
+              )}
             </div>
-            {expandedPanels[row.id] && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <button
-                  onClick={() => {
-                    setEditingHvDevice(null);
-                    setHvDeviceForm(emptyHvDeviceForm);
-                    setCurrentPanelId(row.id);
-                    setOpenHvDevice(true);
-                  }}
-                  className="mb-4 px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
-                >
-                  <Plus size={16} className="inline mr-1" /> Add Device
-                </button>
-                <HvDeviceTree
-                  devices={hvDevices[row.id] || []}
-                  panelId={row.id}
-                  onEdit={(device, panelId) => {
-                    setEditingHvDevice(device);
-                    setHvDeviceForm(device);
-                    setCurrentPanelId(panelId);
-                    setOpenHvDevice(true);
-                  }}
-                  onDuplicate={() => {}}
-                  onDelete={handleDeleteHvDevice}
-                  onSetMain={() => {}}
-                  site={site}
-                />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* HV Equipment Modal */}
       <Modal
@@ -438,6 +505,7 @@ export default function HighVoltage() {
               value={hvEquipmentForm.name}
               onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, name: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -447,6 +515,7 @@ export default function HighVoltage() {
               value={hvEquipmentForm.code}
               onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, code: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -456,6 +525,7 @@ export default function HighVoltage() {
               value={hvEquipmentForm.meta.building_code}
               onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, building_code: e.target.value } })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -465,6 +535,7 @@ export default function HighVoltage() {
               value={hvEquipmentForm.meta.floor}
               onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, floor: e.target.value } })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -474,6 +545,7 @@ export default function HighVoltage() {
               value={hvEquipmentForm.meta.room}
               onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, room: e.target.value } })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -482,6 +554,7 @@ export default function HighVoltage() {
               value={hvEquipmentForm.regime_neutral}
               onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, regime_neutral: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             >
               {regimes.map(r => <option key={r} value={r}>{r}</option>)}
             </select>
@@ -493,6 +566,7 @@ export default function HighVoltage() {
                 checked={hvEquipmentForm.is_principal}
                 onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, is_principal: e.target.checked })}
                 className="rounded border-gray-300"
+                disabled={busy}
               />
               <span className="ml-2 text-sm text-gray-700">Principal Equipment</span>
             </label>
@@ -502,7 +576,7 @@ export default function HighVoltage() {
           <button
             onClick={handleHvEquipmentSubmit}
             disabled={busy}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
           >
             {busy ? 'Saving...' : 'Save'}
           </button>
@@ -517,6 +591,7 @@ export default function HighVoltage() {
           setEditingHvDevice(null);
           setHvDeviceForm(emptyHvDeviceForm);
           setPhotoFile(null);
+          setShowDownstreamBtSuggestions(false);
         }}
         title={editingHvDevice ? 'Edit HV Device' : 'Add HV Device'}
       >
@@ -528,6 +603,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.name}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, name: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -536,6 +612,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.device_type}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, device_type: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             >
               {hvDeviceTypes.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
@@ -547,6 +624,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.manufacturer}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, manufacturer: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -556,6 +634,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.reference}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, reference: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -565,6 +644,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.voltage_class_kv || ''}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, voltage_class_kv: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -574,6 +654,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.short_circuit_current_ka || ''}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, short_circuit_current_ka: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
@@ -582,6 +663,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.insulation_type}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, insulation_type: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             >
               <option value="">Select...</option>
               {insulationTypes.map(t => <option key={t} value={t}>{t}</option>)}
@@ -593,6 +675,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.mechanical_endurance_class}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, mechanical_endurance_class: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             >
               <option value="">Select...</option>
               {mechanicalEnduranceClasses.map(t => <option key={t} value={t}>{t}</option>)}
@@ -604,6 +687,7 @@ export default function HighVoltage() {
               value={hvDeviceForm.electrical_endurance_class}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, electrical_endurance_class: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             >
               <option value="">Select...</option>
               {electricalEnduranceClasses.map(t => <option key={t} value={t}>{t}</option>)}
@@ -616,37 +700,44 @@ export default function HighVoltage() {
               value={hvDeviceForm.poles || ''}
               onChange={e => setHvDeviceForm({ ...hvDeviceForm, poles: e.target.value })}
               className="mt-1 block w-full border-gray-300 rounded-lg"
+              disabled={busy}
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700">Downstream BT Device</label>
-            <input
-              type="text"
-              value={downstreamBtSuggestions.find(s => s.id === hvDeviceForm.downstream_device_id)?.name || ''}
-              onFocus={() => {
-                setShowDownstreamBtSuggestions(true);
-                fetchBtSuggestions('');
-              }}
-              onChange={e => fetchBtSuggestions(e.target.value)}
-              className="mt-1 block w-full border-gray-300 rounded-lg"
-              placeholder="Search BT device..."
-            />
-            {showDownstreamBtSuggestions && (
-              <ul className="absolute z-10 bg-white border rounded-lg max-h-40 overflow-y-auto w-full">
-                {downstreamBtSuggestions.map(s => (
-                  <li
-                    key={s.id}
-                    onClick={() => {
-                      setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: s.id });
-                      setShowDownstreamBtSuggestions(false);
-                    }}
-                    className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
-                  >
-                    {s.name} ({s.reference}) - SB: {s.switchboard_name}
-                  </li>
-                ))}
-              </ul>
-            )}
+            <div className="relative">
+              <input
+                type="text"
+                value={downstreamBtSuggestions.find(s => s.id === hvDeviceForm.downstream_device_id)?.name || ''}
+                onFocus={() => {
+                  setShowDownstreamBtSuggestions(true);
+                  fetchBtSuggestions('');
+                }}
+                onChange={e => {
+                  setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: null });
+                  fetchBtSuggestions(e.target.value);
+                }}
+                className="mt-1 block w-full border-gray-300 rounded-lg"
+                placeholder="Search BT device..."
+                disabled={busy}
+              />
+              {showDownstreamBtSuggestions && (
+                <ul className="absolute z-10 bg-white border rounded-lg max-h-40 overflow-y-auto w-full mt-1">
+                  {downstreamBtSuggestions.map(s => (
+                    <li
+                      key={s.id}
+                      onClick={() => {
+                        setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: s.id });
+                        setShowDownstreamBtSuggestions(false);
+                      }}
+                      className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                    >
+                      {s.name} ({s.reference}) - SB: {s.switchboard_name}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
           <div className="col-span-2">
             <label className="inline-flex items-center">
@@ -655,6 +746,7 @@ export default function HighVoltage() {
                 checked={hvDeviceForm.is_main_incoming}
                 onChange={e => setHvDeviceForm({ ...hvDeviceForm, is_main_incoming: e.target.checked })}
                 className="rounded border-gray-300"
+                disabled={busy}
               />
               <span className="ml-2 text-sm text-gray-700">Main Incoming</span>
             </label>
@@ -663,8 +755,8 @@ export default function HighVoltage() {
         <div className="mt-6 flex justify-end">
           <button
             onClick={handleHvDeviceSubmit}
-            disabled={busy}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            disabled={busy || !currentPanelId}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
           >
             {busy ? 'Saving...' : 'Save'}
           </button>
