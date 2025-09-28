@@ -209,7 +209,5 @@ app.post('/api/check-selectivity', async (req, res) => {
 });
 
 // Démarrage
-const port = process.env.PORT || 8080;
-app.listen(port, () => {
-  console.log(`selectivity server listening on ${port}`);
-});
+const port = process.env.SELECTIVITY_PORT || 3004;
+app.listen(port, () => console.log(`Selectivity service running on :${port}`));
