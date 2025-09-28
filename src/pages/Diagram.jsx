@@ -1,84 +1,76 @@
 // src/pages/Diagram.jsx
-import { useEffect, useState } from 'react';
-import ReactFlow, {
-  Background,
-  Controls,
-  MiniMap,
-  useNodesState,
-  useEdgesState,
-} from 'reactflow';
-import 'reactflow/dist/style.css';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import createEngine, { DefaultNodeModel, DiagramModel } from '@projectstorm/react-diagrams';
+import { CanvasWidget } from '@projectstorm/react-canvas-core';
+import { RightAngleLinkFactory, RightAngleLinkModel, PathFindingLinkFactory } from '@projectstorm/react-diagrams-routing';
 import { api } from '../lib/api.js';
-import { CheckCircle, AlertTriangle, HelpCircle, Zap } from 'lucide-react';
 
-const statusIcon = (status) => {
-  if (status === 'safe') return <CheckCircle className="w-3 h-3 inline-block" />;
-  if (status === 'at-risk') return <AlertTriangle className="w-3 h-3 inline-block" />;
-  if (status === 'incomplete') return <HelpCircle className="w-3 h-3 inline-block" />;
-  return <HelpCircle className="w-3 h-3 inline-block" />;
+// Simple color palette per node type
+const COLORS = {
+  switchboard: 'rgb(59,130,246)', // blue
+  device: 'rgb(15,118,110)',      // teal
+  hv_equipment: 'rgb(168,85,247)',// purple
+  hv_device: 'rgb(124,45,18)',    // brown
 };
 
-function DeviceNode({ data }) {
-  const af = data?.metrics?.arc;
-  const fl = data?.metrics?.fault;
-  const afStatus = af?.status || 'unknown';
-  const flStatus = fl?.status || 'unknown';
+function buildModelFromGraph(graph) {
+  const model = new DiagramModel();
+  const idToNode = new Map();
 
-  const bg =
-    data.isMain ? 'bg-emerald-50 border-emerald-400' :
-    afStatus === 'at-risk' || flStatus === 'at-risk' ? 'bg-red-50 border-red-400' :
-    afStatus === 'incomplete' || flStatus === 'incomplete' ? 'bg-yellow-50 border-yellow-400' :
-    'bg-white border-slate-300';
+  // 1) Create nodes with in/out ports
+  for (const n of graph.nodes || []) {
+    const color = COLORS[n.type] || 'rgb(51,65,85)';
+    const node = new DefaultNodeModel({ name: n?.data?.label || n.id, color });
+    // Ports: one IN (left) and one OUT (right)
+    const inPort = node.addInPort('in');
+    const outPort = node.addOutPort('out');
+    // Position hint from backend (if any)
+    const px = n?.position?.x ?? 0;
+    const py = n?.position?.y ?? 0;
+    node.setPosition(px, py);
 
-  return (
-    <div className={`rounded-xl border px-3 py-2 shadow-sm ${bg}`}>
-      <div className="text-sm font-medium">{data.label}</div>
-      <div className="text-[11px] opacity-80">{data.device_type}</div>
-      <div className="mt-1 flex items-center gap-2 text-[11px]">
-        <span title="Arc flash">{statusIcon(afStatus)}</span>
-        <span title="Fault level">{statusIcon(flStatus)}</span>
-        {af?.ppe_category != null && <span className="inline-flex items-center gap-1"><Zap className="w-3 h-3" /> PPE {af.ppe_category}</span>}
-      </div>
-    </div>
-  );
+    // annotate
+    node.options.extras = { ...n.data, nodeType: n.type };
+
+    idToNode.set(n.id, { node, inPort, outPort });
+    model.addNode(node);
+  }
+
+  // 2) Create orthogonal links (right-angle) with smart pathfinding registered on engine
+  for (const e of graph.edges || []) {
+    const src = idToNode.get(e.source);
+    const dst = idToNode.get(e.target);
+    if (!src || !dst) continue;
+
+    const link = new RightAngleLinkModel();
+    link.setSourcePort(src.outPort);
+    link.setTargetPort(dst.inPort);
+    if (e.label) link.getOptions().labels = [e.label];
+    model.addLink(link);
+  }
+
+  return model;
 }
-
-function SwitchboardNode({ data }) {
-  return (
-    <div className={`rounded-xl border px-3 py-2 shadow-sm bg-sky-50 border-sky-400`}>
-      <div className="text-sm font-semibold">{data.label}</div>
-      <div className="text-[11px] opacity-80">{[data.building, data.floor, data.room].filter(Boolean).join(' · ')}</div>
-      {data.isPrincipal && <div className="text-[11px] mt-1">Principal</div>}
-    </div>
-  );
-}
-
-function HvEquipmentNode({ data }) {
-  return (
-    <div className="rounded-xl border px-3 py-2 shadow-sm bg-purple-50 border-purple-400">
-      <div className="text-sm font-semibold">{data.label}</div>
-      <div className="text-[11px] opacity-80">{data.building || ''}</div>
-    </div>
-  );
-}
-
-const nodeTypes = {
-  device: DeviceNode,
-  switchboard: SwitchboardNode,
-  hv_equipment: HvEquipmentNode,
-  hv_device: DeviceNode,
-};
 
 export default function Diagram() {
-  const [loading, setLoading] = useState(false);
+  // Filters
   const [mode, setMode] = useState('all'); // lv | hv | all
   const [building, setBuilding] = useState('');
   const [depth, setDepth] = useState(3);
   const [rootSwitch, setRootSwitch] = useState('');
   const [rootHv, setRootHv] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  // ProjectStorm engine (stable ref)
+  const engineRef = useRef(null);
+  if (!engineRef.current) {
+    const engine = createEngine();
+    // Enable right-angle routing + smart pathfinding (avoids nodes)
+    engine.getLinkFactories().registerFactory(new RightAngleLinkFactory());
+    engine.getLinkFactories().registerFactory(new PathFindingLinkFactory());
+    engineRef.current = engine;
+  }
+  const engine = engineRef.current;
 
   const fetchGraph = async () => {
     setLoading(true);
@@ -92,11 +84,18 @@ export default function Diagram() {
         include_metrics: true,
       };
       const data = await api.diagram.view(params);
-      setNodes(data.nodes);
-      setEdges(data.edges.map(e => ({ ...e, markerEnd: 'arrowclosed' })));
+      const model = buildModelFromGraph(data);
+      engine.setModel(model);
+      // Zoom to fit after model load
+      setTimeout(() => {
+        try {
+          engine.getModel().setZoomLevel(70);
+          engine.repaintCanvas();
+        } catch {}
+      }, 10);
     } catch (e) {
       console.error(e);
-      alert('Erreur de chargement du diagramme');
+      alert('Failed to load diagram: ' + e.message);
     } finally {
       setLoading(false);
     }
@@ -113,53 +112,41 @@ export default function Diagram() {
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Mode</label>
           <select className="border rounded-md px-2 py-1" value={mode} onChange={e => setMode(e.target.value)}>
-            <option value="all">BT + HT</option>
-            <option value="lv">BT uniquement</option>
-            <option value="hv">HT uniquement</option>
+            <option value="all">LV + HV</option>
+            <option value="lv">LV only</option>
+            <option value="hv">HV only</option>
           </select>
         </div>
         <div className="flex flex-col">
-          <label className="text-xs font-medium mb-1">Bâtiment (filtre)</label>
-          <input className="border rounded-md px-2 py-1" placeholder="ex: B1" value={building} onChange={e => setBuilding(e.target.value)} />
+          <label className="text-xs font-medium mb-1">Building (filter)</label>
+          <input className="border rounded-md px-2 py-1" placeholder="e.g. B1" value={building} onChange={e => setBuilding(e.target.value)} />
         </div>
         <div className="flex flex-col">
-          <label className="text-xs font-medium mb-1">Profondeur</label>
+          <label className="text-xs font-medium mb-1">Depth</label>
           <input type="number" min={1} max={8} className="border rounded-md px-2 py-1 w-24" value={depth} onChange={e => setDepth(parseInt(e.target.value || 3))} />
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Root Switchboard ID</label>
-          <input className="border rounded-md px-2 py-1 w-36" placeholder="id numérique" value={rootSwitch} onChange={e => setRootSwitch(e.target.value)} />
+          <input className="border rounded-md px-2 py-1 w-36" placeholder="numeric id" value={rootSwitch} onChange={e => setRootSwitch(e.target.value)} />
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Root HV Equipment ID</label>
-          <input className="border rounded-md px-2 py-1 w-36" placeholder="id numérique" value={rootHv} onChange={e => setRootHv(e.target.value)} />
+          <input className="border rounded-md px-2 py-1 w-36" placeholder="numeric id" value={rootHv} onChange={e => setRootHv(e.target.value)} />
         </div>
         <button
           className="px-3 py-2 rounded-md bg-blue-600 text-white disabled:opacity-50"
           disabled={loading}
           onClick={fetchGraph}
         >
-          {loading ? 'Chargement…' : 'Actualiser'}
+          {loading ? 'Loading…' : 'Refresh'}
         </button>
         <div className="ml-auto text-sm opacity-70">
-          Légende: <CheckCircle className="w-3 h-3 inline-block" /> Conforme · <AlertTriangle className="w-3 h-3 inline-block" /> Non conforme · <HelpCircle className="w-3 h-3 inline-block" /> Incomplet
+          Legend: blue=Switchboard · teal=LV Device · purple=HV Equipment · brown=HV Device
         </div>
       </div>
 
       <div style={{ width: '100%', height: '72vh' }} className="border rounded-xl overflow-hidden">
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodeTypes={nodeTypes}
-          fitView
-          fitViewOptions={{ padding: 0.2 }}
-        >
-          <MiniMap />
-          <Controls />
-          <Background gap={24} />
-        </ReactFlow>
+        <CanvasWidget engine={engine} className="w-full h-full bg-white" />
       </div>
     </div>
   );
