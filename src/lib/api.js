@@ -130,7 +130,7 @@ export const api = {
     removeEquipment: (id) => del(`/api/hv/equipments/${id}`),
   },
   diagram: {
-    view: (params) => get("/api/diagram/view", params),
+    view: (params) => get("/api/diagram/view", { ...(params||{}), site: currentSite() }),
     health: () => get("/api/diagram/health"),
   }
 };
