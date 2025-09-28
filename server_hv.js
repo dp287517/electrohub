@@ -1,4 +1,3 @@
-// server_hv.js
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -31,11 +30,11 @@ if (process.env.OPENAI_API_KEY) {
 
 const app = express();
 app.use(helmet());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 
 // Upload setup for photo
-const upload = multer({ memoryStorage: true });
+const upload = multer({ memoryStorage: true, limits: { fileSize: 10 * 1024 * 1024 } }); // 10MB/photo
 
 // CORS
 app.use((req, res, next) => {
@@ -59,7 +58,7 @@ const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema - Adapté pour HV avec champs spécifiques (IEC 62271) et liaison vers devices BT
+// Schema - HV with IEC 62271 specific fields and BT link
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hv_equipments (
@@ -86,18 +85,18 @@ async function ensureSchema() {
       hv_equipment_id INTEGER REFERENCES hv_equipments(id) ON DELETE CASCADE,
       parent_id INTEGER REFERENCES hv_devices(id) ON DELETE SET NULL,
       downstream_hv_equipment_id INTEGER REFERENCES hv_equipments(id) ON DELETE SET NULL,
-      downstream_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,  -- Liaison vers BT devices pour sélectivité
+      downstream_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL,
       name TEXT,
       device_type TEXT NOT NULL,
       manufacturer TEXT,
       reference TEXT,
-      voltage_class_kv NUMERIC,  -- HV specific (IEC 62271)
-      short_circuit_current_ka NUMERIC,  -- HV breaking capacity
-      insulation_type TEXT,  -- 'SF6', 'Vacuum', 'Air' (IEC 62271)
-      mechanical_endurance_class TEXT,  -- 'M1', 'M2' (IEC 62271)
-      electrical_endurance_class TEXT,  -- 'E1', 'E2' (IEC 62271)
+      voltage_class_kv NUMERIC,
+      short_circuit_current_ka NUMERIC,
+      insulation_type TEXT,
+      mechanical_endurance_class TEXT,
+      electrical_endurance_class TEXT,
       poles INTEGER,
-      settings JSONB DEFAULT '{}'::jsonb,  -- Adapted for HV protections (e.g., distance, differential)
+      settings JSONB DEFAULT '{}'::jsonb,
       is_main_incoming BOOLEAN DEFAULT FALSE,
       pv_tests BYTEA,
       photos BYTEA[],
@@ -111,21 +110,19 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_hv_devices_downstream ON hv_devices(downstream_hv_equipment_id);
     CREATE INDEX IF NOT EXISTS idx_hv_devices_manufacturer ON hv_devices(manufacturer);
     CREATE INDEX IF NOT EXISTS idx_hv_devices_name ON hv_devices(name);
-    CREATE INDEX IF NOT EXISTS idx_hv_devices_downstream_device ON hv_devices(downstream_device_id);  -- Index pour liaisons BT
+    CREATE INDEX IF NOT EXISTS idx_hv_devices_downstream_device ON hv_devices(downstream_device_id);
 
-    -- Add columns if missing (for HV specifics and BT link)
     DO $$
     BEGIN
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'hv_devices' AND column_name = 'downstream_device_id') THEN
         ALTER TABLE hv_devices ADD COLUMN downstream_device_id INTEGER REFERENCES devices(id) ON DELETE SET NULL;
       END IF;
-      -- Ajouter d'autres si nécessaire
     END $$;
   `);
 }
 ensureSchema().catch(e => console.error('[HV SCHEMA] error:', e.message));
 
-// LIST HV Equipments
+// --- HV Equipments CRUD -----------------------------------------------------
 app.get('/api/hv/equipments', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -156,14 +153,11 @@ app.get('/api/hv/equipments', async (req, res) => {
   }
 });
 
-// GET One HV Equipment
 app.get('/api/hv/equipments/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const r = await pool.query(`
-      SELECT * FROM hv_equipments WHERE id = $1 AND site = $2
-    `, [Number(req.params.id), site]);
+    const r = await pool.query(`SELECT * FROM hv_equipments WHERE id = $1 AND site = $2`, [Number(req.params.id), site]);
     if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
     res.json(r.rows[0]);
   } catch (e) {
@@ -172,7 +166,6 @@ app.get('/api/hv/equipments/:id', async (req, res) => {
   }
 });
 
-// CREATE HV Equipment
 app.post('/api/hv/equipments', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -190,7 +183,6 @@ app.post('/api/hv/equipments', async (req, res) => {
   }
 });
 
-// UPDATE HV Equipment
 app.put('/api/hv/equipments/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -209,7 +201,6 @@ app.put('/api/hv/equipments/:id', async (req, res) => {
   }
 });
 
-// DUPLICATE HV Equipment
 app.post('/api/hv/equipments/:id/duplicate', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -223,7 +214,7 @@ app.post('/api/hv/equipments/:id/duplicate', async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [site, `${o.name} (copy)`, `${o.code}-copy`, o.building_code, o.floor, o.room, o.regime_neutral, o.is_principal, o.modes, o.quality]);
-    // Duplicate devices
+
     const devices = await pool.query(`SELECT * FROM hv_devices WHERE hv_equipment_id = $1`, [id]);
     for (const d of devices.rows) {
       await pool.query(`
@@ -238,7 +229,6 @@ app.post('/api/hv/equipments/:id/duplicate', async (req, res) => {
   }
 });
 
-// DELETE HV Equipment
 app.delete('/api/hv/equipments/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -251,7 +241,7 @@ app.delete('/api/hv/equipments/:id', async (req, res) => {
   }
 });
 
-// GET LV Devices Suggestions for BT linkage
+// --- Suggestions / Search ---------------------------------------------------
 app.get('/api/hv/lv-devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -275,19 +265,53 @@ app.get('/api/hv/lv-devices', async (req, res) => {
   }
 });
 
-// LIST HV Devices for a HV Equipment
+app.get('/api/hv/devices/search', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { q } = req.query;
+    if (!q) return res.json([]);
+    const rows = await pool.query(`
+      SELECT id, name, device_type, manufacturer, reference
+      FROM hv_devices
+      WHERE site = $1 AND (name ILIKE $2 OR reference ILIKE $2 OR manufacturer ILIKE $2)
+      ORDER BY name ASC
+      LIMIT 50
+    `, [site, `%${q}%`]);
+    res.json(rows.rows);
+  } catch (e) {
+    console.error('[HV DEV SEARCH] error:', e);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+app.get('/api/hv/equipments/search', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { q } = req.query;
+    if (!q) return res.json([]);
+    const rows = await pool.query(`
+      SELECT id, name, code
+      FROM hv_equipments
+      WHERE site = $1 AND (name ILIKE $2 OR code ILIKE $2)
+      ORDER BY name ASC
+      LIMIT 50
+    `, [site, `%${q}%`]);
+    res.json(rows.rows);
+  } catch (e) {
+    console.error('[HV EQ SEARCH] error:', e);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// --- HV Devices CRUD --------------------------------------------------------
 app.get('/api/hv/equipments/:id/devices', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const r = await pool.query(`
-      WITH RECURSIVE device_tree AS (
-        SELECT *, NULL::integer AS parent_id FROM hv_devices WHERE hv_equipment_id = $1 AND parent_id IS NULL
-        UNION ALL
-        SELECT d.*, t.id AS parent_id FROM hv_devices d
-        JOIN device_tree t ON d.parent_id = t.id
-      )
-      SELECT * FROM device_tree WHERE site = $2
+      SELECT * FROM hv_devices WHERE hv_equipment_id = $1 AND site = $2 ORDER BY id ASC
     `, [Number(req.params.id), site]);
     res.json(r.rows);
   } catch (e) {
@@ -296,7 +320,6 @@ app.get('/api/hv/equipments/:id/devices', async (req, res) => {
   }
 });
 
-// CREATE HV Device
 app.post('/api/hv/equipments/:id/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -308,7 +331,6 @@ app.post('/api/hv/equipments/:id/devices', async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
     `, [site, hv_equipment_id, parent_id ? Number(parent_id) : null, downstream_hv_equipment_id ? Number(downstream_hv_equipment_id) : null, downstream_device_id ? Number(downstream_device_id) : null, name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka, insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings || {}, is_main_incoming]);
-    // Trigger auto checks
     await triggerAutoChecks(r.rows[0].id, hv_equipment_id);
     res.status(201).json(r.rows[0]);
   } catch (e) {
@@ -317,7 +339,6 @@ app.post('/api/hv/equipments/:id/devices', async (req, res) => {
   }
 });
 
-// UPDATE HV Device
 app.put('/api/hv/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -329,7 +350,6 @@ app.put('/api/hv/devices/:id', async (req, res) => {
       RETURNING *
     `, [Number(req.params.id), site, name, device_type, manufacturer, reference, voltage_class_kv, short_circuit_current_ka, insulation_type, mechanical_endurance_class, electrical_endurance_class, poles, settings || {}, is_main_incoming, parent_id ? Number(parent_id) : null, downstream_hv_equipment_id ? Number(downstream_hv_equipment_id) : null, downstream_device_id ? Number(downstream_device_id) : null]);
     if (r.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
-    // Trigger auto checks
     await triggerAutoChecks(r.rows[0].id, r.rows[0].hv_equipment_id);
     res.json(r.rows[0]);
   } catch (e) {
@@ -338,96 +358,5 @@ app.put('/api/hv/devices/:id', async (req, res) => {
   }
 });
 
-// DELETE HV Device
 app.delete('/api/hv/devices/:id', async (req, res) => {
   try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    await pool.query(`DELETE FROM hv_devices WHERE id = $1 AND site = $2`, [Number(req.params.id), site]);
-    res.json({ message: 'Deleted' });
-  } catch (e) {
-    console.error('[HV DEVICE DELETE] error:', e);
-    res.status(500).json({ error: 'Delete failed' });
-  }
-});
-
-// Fonction pour trigger auto checks (piocher dans tables existantes sans modifier servers)
-async function triggerAutoChecks(hvDeviceId, hvEquipmentId) {
-  try {
-    const hvDev = await pool.query(`SELECT * FROM hv_devices WHERE id = $1`, [hvDeviceId]);
-    if (hvDev.rows.length === 0) return;
-    const d = hvDev.rows[0];
-    if (d.downstream_device_id) {
-      // Piocher selectivity_checks
-      const sel = await pool.query(`
-        SELECT * FROM selectivity_checks 
-        WHERE upstream_id = $1 AND downstream_id = $2 AND site = $3
-      `, [hvDeviceId, d.downstream_device_id, d.site]);  // Assume hvDeviceId comme upstream pour lien
-      // Similaire pour fault_checks, arcflash_checks (calculer ou updater si besoin)
-      // Note: Pas de calcul ici, juste piocher/update existant; pour auto, query et insert if not exists
-    }
-  } catch (e) {
-    console.error('[HV AUTO CHECKS] error:', e);
-  }
-}
-
-// AI pour specs HV
-async function getAiDeviceSpecs(description) {
-  if (!openai) return {};
-
-  try {
-    const prompt = `Based on this HV device description: "${JSON.stringify(description)}"
-
-    Generate complete technical specifications for this high voltage electrical device per IEC 62271. Use realistic values based on the identified manufacturer and type.
-
-    Return JSON with:
-    - device_type: specific type (e.g., "HV Cell", "Transformer", "HV Circuit Breaker")
-    - voltage_class_kv: pure number (rated voltage kV, e.g., 12)
-    - short_circuit_current_ka: pure number (short-circuit breaking current kA)
-    - insulation_type: string ('SF6', 'Vacuum', 'Air')
-    - mechanical_endurance_class: string ('M1', 'M2')
-    - electrical_endurance_class: string ('E1', 'E2')
-    - poles: pure number (1-3 typically)
-    - settings: object with HV protections {distance_zone, differential_bias, overcurrent, etc.} - numbers pure
-
-    Use IEC 62271 standards. If uncertain, use null. Output ONLY valid JSON.`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You are an electrical engineering expert in HV. Generate realistic specs.' },
-        { role: 'user', content: prompt }
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-      max_tokens: 600
-    });
-
-    const specs = JSON.parse(completion.choices[0].message.content);
-
-    // Safe numbers
-    const safeNumber = (val) => {
-      const num = Number(val);
-      return isNaN(num) ? null : num;
-    };
-
-    return {
-      device_type: specs.device_type || 'HV Circuit Breaker',
-      voltage_class_kv: safeNumber(specs.voltage_class_kv),
-      short_circuit_current_ka: safeNumber(specs.short_circuit_current_ka),
-      insulation_type: specs.insulation_type || null,
-      mechanical_endurance_class: specs.mechanical_endurance_class || null,
-      electrical_endurance_class: specs.electrical_endurance_class || null,
-      poles: safeNumber(specs.poles) ?? 3,
-      settings: specs.settings || {}
-    };
-  } catch (e) {
-    console.error('[HV AI SPECS] error:', e);
-    return {};
-  }
-}
-
-// ... (Autres fonctions : photo upload/analysis, PDF gen, tips AI - similaires à switchboard)
-
-const port = process.env.HV_PORT || 3009;
-app.listen(port, () => console.log(`HV service running on :${port}`));
