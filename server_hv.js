@@ -360,3 +360,137 @@ app.put('/api/hv/devices/:id', async (req, res) => {
 
 app.delete('/api/hv/devices/:id', async (req, res) => {
   try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    await pool.query(`DELETE FROM hv_devices WHERE id = $1 AND site = $2`, [Number(req.params.id), site]);
+    res.json({ message: 'Deleted' });
+  } catch (e) {
+    console.error('[HV DEVICE DELETE] error:', e);
+    res.status(500).json({ error: 'Delete failed' });
+  }
+});
+
+// --- Photos -----------------------------------------------------------------
+app.post('/api/hv/devices/:id/photos', upload.array('photos', 12), async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const id = Number(req.params.id);
+    const dev = await pool.query(`SELECT id, photos FROM hv_devices WHERE id = $1 AND site = $2`, [id, site]);
+    if (dev.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
+    const photos = dev.rows[0].photos || [];
+    for (const f of req.files || []) {
+      photos.push(f.buffer);
+    }
+    await pool.query(`UPDATE hv_devices SET photos = $2, updated_at = NOW() WHERE id = $1`, [id, photos]);
+    res.json({ ok: true, count: photos.length });
+  } catch (e) {
+    console.error('[HV PHOTO UPLOAD] error:', e);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
+app.get('/api/hv/devices/:id/photos/:idx', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const id = Number(req.params.id);
+    const idx = Number(req.params.idx);
+    const dev = await pool.query(`SELECT photos FROM hv_devices WHERE id = $1 AND site = $2`, [id, site]);
+    if (dev.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
+    const arr = dev.rows[0].photos || [];
+    if (!arr[idx]) return res.status(404).json({ error: 'No photo at idx' });
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.send(arr[idx]);
+  } catch (e) {
+    console.error('[HV PHOTO GET] error:', e);
+    res.status(500).json({ error: 'Get photo failed' });
+  }
+});
+
+// --- AI ---------------------------------------------------------------------
+async function getAiDeviceSpecs(description) {
+  if (!openai) return {};
+  try {
+    const prompt = `Based on this HV device description: "${JSON.stringify(description)}"\n\nGenerate complete technical specifications for this high voltage electrical device per IEC 62271. Use realistic values based on the identified manufacturer and type.\n\nReturn JSON with:\n- device_type: specific type (e.g., "HV Cell", "Transformer", "HV Circuit Breaker")\n- voltage_class_kv: pure number (rated voltage kV, e.g., 12)\n- short_circuit_current_ka: pure number (kA)\n- insulation_type: string ('SF6', 'Vacuum', 'Air')\n- mechanical_endurance_class: string ('M1', 'M2')\n- electrical_endurance_class: string ('E1', 'E2')\n- poles: pure number (1-3 typically)\n- settings: object with HV protections {distance_zone, differential_bias, overcurrent}\nIf uncertain, use null. Output ONLY valid JSON.`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are an electrical engineering expert in HV. Generate realistic specs.' },
+        { role: 'user', content: prompt }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+      max_tokens: 600
+    });
+
+    const specs = JSON.parse(completion.choices[0].message.content);
+    const safeNumber = (val) => { const num = Number(val); return Number.isFinite(num) ? num : null; };
+
+    // Basic plausibility checks
+    const vc = safeNumber(specs.voltage_class_kv);
+    const icc = safeNumber(specs.short_circuit_current_ka);
+    const poles = safeNumber(specs.poles);
+
+    return {
+      device_type: specs.device_type || 'HV Circuit Breaker',
+      voltage_class_kv: vc !== null && vc >= 3 && vc <= 245 ? vc : null,
+      short_circuit_current_ka: icc !== null && icc >= 10 && icc <= 80 ? icc : null,
+      insulation_type: specs.insulation_type || null,
+      mechanical_endurance_class: specs.mechanical_endurance_class || null,
+      electrical_endurance_class: specs.electrical_endurance_class || null,
+      poles: poles !== null && poles >= 1 && poles <= 3 ? poles : null,
+      settings: specs.settings || {}
+    };
+  } catch (e) {
+    console.error('[HV AI SPECS] error:', e);
+    return {};
+  }
+}
+
+app.post('/api/hv/devices/suggest-specs', async (req, res) => {
+  try {
+    const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
+    const { description } = req.body;
+    const specs = await getAiDeviceSpecs(description || {});
+    res.json(specs);
+  } catch (e) {
+    console.error('[HV SUGGEST SPECS] error:', e);
+    res.status(500).json({ error: 'Suggest failed' });
+  }
+});
+
+app.post('/api/hv/devices/:id/analyze', async (req, res) => {
+  try {
+    const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
+    const id = Number(req.params.id);
+    // Optionnel: récupérer photos pour vision
+    const dev = await pool.query(`SELECT name, manufacturer, reference FROM hv_devices WHERE id = $1 AND site = $2`, [id, site]);
+    if (dev.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
+    const description = { ...(req.body?.description || {}), ...dev.rows[0] };
+    const specs = await getAiDeviceSpecs(description);
+    res.json(specs);
+  } catch (e) {
+    console.error('[HV ANALYZE] error:', e);
+    res.status(500).json({ error: 'Analyze failed' });
+  }
+});
+
+// --- Auto checks glue (example) --------------------------------------------
+async function triggerAutoChecks(hvDeviceId, hvEquipmentId) {
+  try {
+    const hvDev = await pool.query(`SELECT * FROM hv_devices WHERE id = $1`, [hvDeviceId]);
+    if (hvDev.rows.length === 0) return;
+    const d = hvDev.rows[0];
+    if (d.downstream_device_id) {
+      // Example: selectivity checks (no-op if not present)
+      await pool.query('/* hook point for selectivity/arcflash checks */ SELECT 1');
+    }
+  } catch (e) {
+    console.error('[HV AUTO CHECKS] error:', e);
+  }
+}
+
+const port = process.env.HV_PORT || 3009;
+app.listen(port, () => console.log(`HV service running on :${port}`));
