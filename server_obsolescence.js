@@ -1,4 +1,4 @@
-// server_obsolescence.js (gallery + web-cost + buckets + auto-check + robust + AI assistant + pdf-ready health)
+// server_obsolescence.js (CSP-safe, web-cost, brackets, AI, auto-check, buckets, pdf-ready health)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -98,7 +98,7 @@ function estimateDeviceCostGBP(type = '', inAmps = 0) {
   const A = Number(inAmps || 0);
   let base = 600; // fallback matériel
 
-  // Barème "générique disjoncteur" par intensité
+  // Barème générique par intensité
   if (t.includes('MCB') || t.includes('BREAKER') || t.includes('DISJONCTEUR')) {
     base = bracketBreakerCostGBP(A);
   }
@@ -518,7 +518,7 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
     `, [site]);
     const context = db.rows.length ? JSON.stringify(db.rows.slice(0, 300)) : 'No data';
 
-    // Si la question porte sur un prix, tenter une estimation web instantanée
+    // Si question "prix X A", tenter estimation web instantanée
     let inlinePrice = '';
     const m = String(query||'').match(/(mccb|acb|vcb|breaker|disjoncteur)\s*([0-9]{1,4})\s*a/i);
     if (m) {
@@ -535,7 +535,7 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
       messages: [
         { role: 'system', content:
 `You are an experienced IEC/IEEE asset-management engineer.
-You answer in concise bullet points, with actionable recommendations.
+Answer in concise bullet points, with actionable recommendations.
 When relevant, propose sensors (cabinet temperature probes, cable overheat tags like HeatTag, electrical monitoring/IoT, trend analysis, thermal imaging routines).
 Always add a short "Estimates & Scope" note: prices are indicative, include materials+labour, exclude enclosures/cabling/accessories; confirm locally.` },
         { role: 'user', content: `SITE DB (trimmed): ${context}` },
@@ -552,7 +552,7 @@ Always add a short "Estimates & Scope" note: prices are indicative, include mate
   }
 });
 
-// ---------- AUTO-CHECK (robuste) ----------
+// ---------- AUTO-CHECK ----------
 async function fetchDevicesForAutoCheck(site) {
   const sqlFull = `
     SELECT d.*,
