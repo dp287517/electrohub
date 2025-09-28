@@ -14,7 +14,8 @@ import Selectivity from './pages/Selectivity.jsx';
 import FaultLevelAssessment from './pages/Fault_level_assessment.jsx';
 import ArcFlash from './pages/Arc_flash.jsx';
 import Obsolescence from './pages/Obsolescence.jsx';
-import HighVoltage from './pages/High_voltage.jsx'; // AJOUT
+import HighVoltage from './pages/High_voltage.jsx';
+import Diagram from './pages/Diagram.jsx'; // NEW
 
 export default function App() {
   return (
@@ -33,7 +34,8 @@ export default function App() {
         <Route path="/app/fault-level" element={<ProtectedRoute><FaultLevelAssessment /></ProtectedRoute>} />
         <Route path="/app/arc-flash" element={<ProtectedRoute><ArcFlash /></ProtectedRoute>} />
         <Route path="/app/obsolescence" element={<ProtectedRoute><Obsolescence /></ProtectedRoute>} />
-        <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} /> {/* AJOUT ROUTE */}
+        <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} />
+        <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} /> {/* NEW ROUTE */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
