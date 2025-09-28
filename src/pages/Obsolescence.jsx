@@ -1,7 +1,7 @@
-// Obsolescence.jsx (gallery + AI assistant + google gantt + filters + radar + pdf)
+// Obsolescence.jsx (gallery + AI assistant + google gantt + filters + radar + pdf) — FIX .map on null
 import React, { useEffect, useState, Fragment } from 'react';
 import { get, post } from '../lib/api.js';
-import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil, SlidersHorizontal, X } from 'lucide-react';
+import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil, SlidersHorizontal } from 'lucide-react';
 import { Line, Doughnut, Radar } from 'react-chartjs-2';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
@@ -113,7 +113,7 @@ export default function Obsolescence() {
     try {
       setBusy(true);
       const data = await get('/api/obsolescence/buildings');
-      setBuildings(data.data || []);
+      setBuildings(Array.isArray(data.data) ? data.data : []);
       await post('/api/obsolescence/ai-fill');
       await post('/api/obsolescence/auto-check');
       const u = await get('/api/obsolescence/avg-urgency');   setAvgUrgency(Number(u.avg || 45));
@@ -126,7 +126,7 @@ export default function Obsolescence() {
   const loadSwitchboards = async (building) => {
     try {
       const data = await get('/api/obsolescence/switchboards', { building });
-      setSwitchboards(prev => ({ ...prev, [building]: data.data || [] }));
+      setSwitchboards(prev => ({ ...prev, [building]: Array.isArray(data.data) ? data.data : [] }));
     } catch (e) { setToast({ msg: `Switchboards failed: ${e.message}`, type: 'error' }); }
   };
 
@@ -155,7 +155,7 @@ export default function Obsolescence() {
   const loadDoughnutData = async () => {
     try {
       const data = await get('/api/obsolescence/doughnut', { group:'building', ...selectedFilter });
-      setDoughnutData(data.data || []);
+      setDoughnutData(Array.isArray(data.data) ? data.data : []);
     } catch (e) {
       setToast({ msg: `Doughnut failed: ${e.message}`, type: 'error' });
       setDoughnutData([]);
@@ -165,7 +165,7 @@ export default function Obsolescence() {
   const loadCapexForecast = async () => {
     try {
       const data = await get('/api/obsolescence/capex-forecast', { group:'building', ...selectedFilter });
-      setCapexForecast(data.forecasts || {});
+      setCapexForecast(data && data.forecasts && typeof data.forecasts === 'object' ? data.forecasts : {});
     } catch (e) {
       setToast({ msg: `CAPEX failed: ${e.message}`, type: 'error' });
       setCapexForecast({});
@@ -175,7 +175,7 @@ export default function Obsolescence() {
   const loadBuildingBuckets = async () => {
     try {
       const data = await get('/api/obsolescence/building-urgency-buckets');
-      setBuildingBuckets(data.buckets || {});
+      setBuildingBuckets(data && data.buckets && typeof data.buckets === 'object' ? data.buckets : {});
     } catch (e) {
       setToast({ msg: `Buckets failed: ${e.message}`, type: 'error' });
       setBuildingBuckets({});
@@ -188,10 +188,10 @@ export default function Obsolescence() {
   const getCapexChartData = (forecasts) => {
     const years = computeYears();
     const datasets = [];
-    const keys = Object.keys(forecasts);
+    const keys = Object.keys(forecasts || {});
     keys.forEach((group, idx) => {
       const color = PALETTE[idx % PALETTE.length];
-      const annual = years.map(y => forecasts[group].reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
+      const annual = years.map(y => (forecasts[group] || []).reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
       const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
       datasets.push({
         type:'bar',
@@ -287,7 +287,7 @@ export default function Obsolescence() {
   // Radar (style MUI)
   const getRadarData = () => {
     const labels = ['Age pressure','Urgency','CAPEX density','Unknowns','Thermal risk'];
-    const groups = Object.keys(capexForecast);
+    const groups = Object.keys(capexForecast || {});
     if (!groups.length) return { labels, datasets: [] };
     const datasets = groups.slice(0, 6).map((g,idx) => {
       const color = PALETTE[idx%PALETTE.length];
@@ -434,7 +434,6 @@ END:VCALENDAR`;
 
   // Google Gantt data
   const googleGanttData = () => {
-    // https://developers.google.com/chart/interactive/docs/gallery/ganttchart#data-format
     const header = [
       { type:'string', label:'Task ID' },
       { type:'string', label:'Task Name' },
@@ -445,7 +444,7 @@ END:VCALENDAR`;
       { type:'number', label:'Percent Complete' },
       { type:'string', label:'Dependencies' }
     ];
-    const rows = ganttTasks.map(t => {
+    const rows = (ganttTasks || []).map(t => {
       const res = (t.building || 'Bldg');
       return [
         t.id, t.name, res,
@@ -590,7 +589,7 @@ END:VCALENDAR`;
           {/* Grand graphique plein écran */}
           <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5 h-[640px]">
             <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX Forecast — All Buildings</h2>
-            {Object.keys(capexForecast).length ? (
+            {Object.keys(capexForecast || {}).length ? (
               <Line data={getCapexChartData(capexForecast)} options={chartBigOptions} />
             ) : <p className="text-gray-600 text-center py-20">No data.</p>}
           </div>
@@ -605,7 +604,7 @@ END:VCALENDAR`;
           <div>
             <h2 className="text-2xl font-bold mb-4 text-gray-800">Replacement Horizon — by Building</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {Object.keys(buildingBuckets).map(b => (
+              {Object.keys(buildingBuckets || {}).map(b => (
                 <div key={b} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5">
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {b}</h3>
                   <Doughnut data={getBuildingDoughnutData(buildingBuckets[b])} options={doughnutSmallOptions} />
@@ -621,7 +620,7 @@ END:VCALENDAR`;
           <div>
             <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX — per Building</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-              {Object.keys(capexForecast).map((group, idx) => (
+              {Object.keys(capexForecast || {}).map((group, idx) => (
                 <div key={group} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5 h-[320px]">
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {group}</h3>
                   <Line data={getCapexChartDataSingle(capexForecast, group, idx)} options={{
@@ -651,7 +650,8 @@ END:VCALENDAR`;
             <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
               value={selectedFilter.switchboard || ''} onChange={e => setSelectedFilter(s => ({ ...s, switchboard: e.target.value || null }))}>
               <option value="">All</option>
-              {(selectedFilter.building && (switchboards[selectedFilter.building] || [])).map(sb =>
+              {/** FIX: always map an array (no .map on null) */}
+              {((selectedFilter.building ? (switchboards[selectedFilter.building] || []) : [])).map(sb =>
                 <option key={sb.id} value={sb.id}>{sb.name}</option>
               )}
             </select>
