@@ -1,4 +1,4 @@
-// server_obsolescence.js (CSP-safe, web-cost, brackets, AI, auto-check, buckets, pdf-ready health)
+// server_obsolescence.js (CSP-safe, hybrid pricing with your bracket as floor, web-cost optional, better Gantt payload)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -96,32 +96,38 @@ function bracketBreakerCostGBP(amps) {
 function estimateDeviceCostGBP(type = '', inAmps = 0) {
   const t = String(type || '').toUpperCase();
   const A = Number(inAmps || 0);
-  let base = 600; // fallback matériel
 
-  // Barème générique par intensité
-  if (t.includes('MCB') || t.includes('BREAKER') || t.includes('DISJONCTEUR')) {
-    base = bracketBreakerCostGBP(A);
-  }
+  // 1) Ton barème “installé” sert de plancher pour tout disjoncteur
+  let base = bracketBreakerCostGBP(A);
 
-  // Heuristiques par famille
+  // 2) Ajustements par familles (jamais en-dessous du barème)
   if (t.includes('MCCB')) {
-    if (A <= 125) base = Math.max(base, 450);
-    else if (A <= 250) base = Math.max(base, 900);
-    else if (A <= 400) base = Math.max(base, 1800);
-    else if (A <= 630) base = Math.max(base, 3200);
-    else if (A <= 800) base = Math.max(base, 5200);
-    else base = Math.max(base, 8500);
+    const fam =
+      A <= 160 ? 600 :
+      A <= 250 ? 1000 :
+      A <= 400 ? 1800 :
+      A <= 630 ? 3200 :
+      A <= 800 ? 5200 : 8500;
+    base = Math.max(base, fam);
   } else if (t.includes('ACB')) {
-    base = Math.max(base, A <= 3200 ? 9000 : 14000);
+    const fam = A <= 3200 ? 9000 : 14000;
+    base = Math.max(base, fam);
   } else if (t.includes('VCB') || t.includes('VACUUM')) {
     base = Math.max(base, 15000);
+  } else if (t.includes('MCB') || t.includes('MINIATURE')) {
+    // Miniature circuit breakers: barème suffit (déjà “installé”)
+    base = Math.max(base, base);
   } else if (t.includes('RELAY') || t.includes('PROTECTION')) {
     base = Math.max(base, 2500);
   } else if (t.includes('FUSE')) {
     base = Math.max(base, 150);
+  } else if (t.includes('BREAKER') || t.includes('DISJONCTEUR')) {
+    // générique -> barème
+    base = Math.max(base, base);
   }
 
-  return GBP(base * 1.3); // +~30% pose
+  // Pas de multiplicateur caché : barème déjà “installé”
+  return GBP(base);
 }
 
 // Optionnel: raffinement web (si ENABLE_WEB_COST=1 et clé OpenAI dispo)
@@ -188,7 +194,7 @@ async function computeSwitchboardTotals(site) {
   const enriched = [];
   for (const sb of bySB.values()) {
     const n = sb.devices.filter(d => d.device_id).length;
-    const boardBase = 1500 + 400 * Math.max(0, n - 4);
+    const boardBase = 1500 + 400 * Math.max(0, n - 4); // châssis/barres/coffret (hors câbles/accessoires)
     let sumDevices = 0;
 
     for (const d of sb.devices) {
@@ -197,7 +203,8 @@ async function computeSwitchboardTotals(site) {
       sumDevices += c;
     }
 
-    const total = GBP((boardBase + sumDevices) * 1.15); // +15% gestion
+    // +15% gestion/études, pas de “*1.3” supplémentaire (déjà inclus dans barème si pertinent)
+    const total = GBP((boardBase + sumDevices) * 1.15);
     const years = sb.devices.map(d => d.manufacture_date).filter(Boolean).map(x => new Date(x).getFullYear()).filter(y => Number.isFinite(y));
     const service_year = years.length ? years.sort((a,b)=>a-b)[Math.floor(years.length/2)] : null;
     const lifeVals = sb.devices.map(d => Number(d.avg_life_years)).filter(v => Number.isFinite(v) && v>0);
@@ -520,7 +527,7 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
 
     // Si question "prix X A", tenter estimation web instantanée
     let inlinePrice = '';
-    const m = String(query||'').match(/(mccb|acb|vcb|breaker|disjoncteur)\s*([0-9]{1,4})\s*a/i);
+    const m = String(query||'').match(/(mccb|acb|vcb|breaker|disjoncteur|mcb)\s*([0-9]{1,4})\s*a/i);
     if (m) {
       const typ = m[1];
       const amps = Number(m[2]);
