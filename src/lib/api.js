@@ -121,12 +121,16 @@ export const api = {
   hv: {
     list: (params) => get("/api/hv/equipments", params),
     getOne: (id) => get(`/api/hv/equipments/${id}`),
-    create: (hvEquipmentId, payload) => post(`/api/hv/equipments/${hvEquipmentId}/devices`, payload), // Corrigé pour dispositifs
-    createEquipment: (payload) => post("/api/hv/equipments", payload), // Ajout pour créer équipement
+    create: (hvEquipmentId, payload) => post(`/api/hv/equipments/${hvEquipmentId}/devices`, payload),
+    createEquipment: (payload) => post("/api/hv/equipments", payload),
     update: (id, payload) => put(`/api/hv/devices/${id}`, payload),
-    updateEquipment: (id, payload) => put(`/api/hv/equipments/${id}`, payload), // Ajout pour mettre à jour équipement
+    updateEquipment: (id, payload) => put(`/api/hv/equipments/${id}`, payload),
     duplicate: (id) => post(`/api/hv/equipments/${id}/duplicate`),
-    remove: (id) => del(`/api/hv/devices/${id}`), // Corrigé pour dispositifs
-    removeEquipment: (id) => del(`/api/hv/equipments/${id}`), // Ajout pour supprimer équipement
+    remove: (id) => del(`/api/hv/devices/${id}`),
+    removeEquipment: (id) => del(`/api/hv/equipments/${id}`),
   },
+  diagram: {
+    view: (params) => get("/api/diagram/view", params),
+    health: () => get("/api/diagram/health"),
+  }
 };
