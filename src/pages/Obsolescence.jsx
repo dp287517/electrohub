@@ -1,4 +1,4 @@
-// Obsolescence.jsx (CSP-safe, AI assistant, filters, PDF, radar centered, no google charts)
+// Obsolescence.jsx (CSP-safe, AI assistant, filters, PDF, radar centered, Gantt colors per building, pricing note)
 import React, { useEffect, useState, Fragment } from 'react';
 import { get, post } from '../lib/api.js';
 import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil, SlidersHorizontal } from 'lucide-react';
@@ -80,6 +80,13 @@ export default function Obsolescence() {
   const [showQuick, setShowQuick] = useState(false);
   const [quick, setQuick] = useState({ switchboard_id:null, service_year:'', avg_life_years:30, override_cost_per_device:'' });
 
+  // palette “par bâtiment” stable
+  const buildingColor = new Map();
+  const colorForBuilding = (b) => {
+    if (!buildingColor.has(b)) buildingColor.set(b, PALETTE[buildingColor.size % PALETTE.length]);
+    return buildingColor.get(b);
+  };
+
   useEffect(() => {
     (async () => {
       try { const h = await get('/api/obsolescence/health'); setHealth(h); } catch {}
@@ -143,8 +150,25 @@ export default function Obsolescence() {
       if (selectedFilter.switchboard) params.switchboard = selectedFilter.switchboard;
 
       const data = await get('/api/obsolescence/gantt-data', params);
-      const tasks = (data.tasks || []).map(t => ({ ...t, start:new Date(t.start), end:new Date(t.end) }))
-                       .filter(t => !isNaN(t.start.getTime()) && !isNaN(t.end.getTime()));
+      const tasks = (data.tasks || [])
+        .map(t => ({ ...t, start:new Date(t.start), end:new Date(t.end) }))
+        .filter(t => !isNaN(t.start.getTime()) && !isNaN(t.end.getTime()))
+        .map(t => {
+          const nowY = new Date().getFullYear();
+          const remaining = t.end.getFullYear() - nowY;
+          const base = colorForBuilding(t.building || 'Unknown');
+          // plus chaud quand imminent
+          const hue = remaining < 5 ? '#ef4444' : remaining <= 10 ? '#f59e0b' : base;
+          return {
+            ...t,
+            styles: {
+              backgroundColor: withAlpha(hue, 0.9),
+              backgroundSelectedColor: withAlpha(hue, 1),
+              progressColor: '#111827',
+              progressSelectedColor: '#111827'
+            }
+          };
+        });
       setGanttTasks(tasks);
     } catch (e) {
       setToast({ msg: `Gantt failed: ${e.message}`, type: 'error' });
@@ -424,7 +448,7 @@ END:VCALENDAR`;
       pdf.text([
         '— Values are indicative, based on current prices and a typical installation in your region.',
         '— Prices include materials + labour; they exclude enclosures, cabling, and extra accessories.',
-        '— Web-assisted pricing is used when enabled; otherwise a calibrated heuristic/ampere bracket is applied.'
+        '— Web-assisted pricing is used when enabled; otherwise a calibrated ampere bracket / family heuristic is applied.'
       ], margin, y);
 
       pdf.save('obsolescence-report.pdf');
