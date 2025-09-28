@@ -28,7 +28,6 @@ app.use((req, res, next) => {
 function siteOf(req) {
   return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
 }
-// small util to coerce numbers
 const n = (v, d=null) => {
   const x = Number(v);
   return Number.isFinite(x) ? x : d;
@@ -43,17 +42,7 @@ const bool = (v, d=false) => {
 // ---- Health
 app.get('/api/diagram/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// ---- Graph builder (LV + HV)
-/**
- * Returns a combined graph (nodes, edges) across LV switchboards/devices and HV equipments/devices.
- * Filters:
- *   - mode: 'lv' | 'hv' | 'all'
- *   - building: like filter on building_code
- *   - root_switchboard: focus on this LV board id (optional)
- *   - root_hv: focus on this HV equipment id (optional)
- *   - depth: BFS depth from roots (default 3)
- *   - include_metrics: include status metrics (arcflash/fault/selectivity) (default true)
- */
+// ---- Graph builder
 app.get('/api/diagram/view', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -89,7 +78,6 @@ app.get('/api/diagram/view', async (req, res) => {
 
     // ---------- LV SECTION ----------
     if (mode === 'lv' || mode === 'all') {
-      // Limit to chosen switchboard or by building/site
       let sbWhere = ['site = $1'];
       const sbVals = [site]; let i = 2;
       if (rootSwitchId) { sbWhere.push(`id = $${i++}`); sbVals.push(rootSwitchId); }
@@ -102,7 +90,6 @@ app.get('/api/diagram/view', async (req, res) => {
         sbVals
       );
 
-      // Fetch all LV devices for those boards
       const sbIds = sbRows.rows.map(r => r.id);
       if (sbIds.length) {
         const devRows = await pool.query(
@@ -114,7 +101,6 @@ app.get('/api/diagram/view', async (req, res) => {
           [site, sbIds]
         );
 
-        // Metrics (optionally)
         let faultMap = new Map(), arcMap = new Map(), selMap = new Map();
         if (includeMetrics) {
           const faults = await pool.query(
@@ -129,14 +115,13 @@ app.get('/api/diagram/view', async (req, res) => {
             [site, sbIds]
           );
           arcs.rows.forEach(r => arcMap.set(`${r.device_id}:${r.switchboard_id}`, r));
-          // selectivity is optional (service might not be running yet)
           try {
             const sels = await pool.query(
               `SELECT upstream_id, downstream_id, status FROM selectivity_checks WHERE site = $1`,
               [site]
             );
             sels.rows.forEach(r => selMap.set(`${r.upstream_id}->${r.downstream_id}`, r.status));
-          } catch { /* table may not exist yet */ }
+          } catch {}
         }
 
         // Build adjacency
@@ -175,14 +160,16 @@ app.get('/api/diagram/view', async (req, res) => {
         // BFS layout per switchboard
         const colWidth = 380;
         const rowHeight = 140;
+
         for (const sb of sbRows.rows) {
           const roots = rootsPerSb.get(sb.id) || [];
-          let col = 1;
+
           // place roots
-          roots.forEach((rid, idx) => {
+          for (let idx = 0; idx < roots.length; idx++) {
+            const rid = roots[idx];
             const d = byId.get(rid);
             const nodeId = `dev:${d.id}`;
-            const positions = { x: colWidth * col, y: rowHeight * (idx + 1) };
+            const positions = { x: colWidth * 1, y: rowHeight * (idx + 1) };
             const metrics = includeMetrics ? {
               fault: faultMap.get(`${d.id}:${sb.id}`) || null,
               arc: arcMap.get(`${d.id}:${sb.id}`) || null,
@@ -202,16 +189,17 @@ app.get('/api/diagram/view', async (req, res) => {
               position: positions,
             });
             pushEdge({ source: `sb:${sb.id}`, target: nodeId, type: 'smoothstep' });
-          });
+          }
 
-          // BFS
           const queue = roots.map(id => ({ id, depth: 1, xcol: 2 }));
           const nextRowForCol = { 2: 1, 3: 1, 4: 1, 5: 1 };
+
           while (queue.length) {
             const { id, depth: dep, xcol } = queue.shift();
             if (dep >= depth) continue;
+
             const ch = children.get(id) || [];
-            ch.forEach(cid => {
+            for (const cid of ch) {
               const d = byId.get(cid);
               const nodeId = `dev:${d.id}`;
               const r = nextRowForCol[xcol] || 1;
@@ -241,15 +229,13 @@ app.get('/api/diagram/view', async (req, res) => {
 
               // downstream to other switchboard
               if (d.downstream_switchboard_id) {
-                const dsw = sbRows.rows.find(sx => sx.id === d.downstream_switchboard_id);
-                // If downstream board isn't in initial selection, fetch minimal info
-                let targetBoard = dsw;
+                let targetBoard = sbRows.rows.find(sx => sx.id === d.downstream_switchboard_id);
                 if (!targetBoard) {
-                  const r = await pool.query(
+                  const rdsw = await pool.query(
                     `SELECT id, name, code, building_code FROM switchboards WHERE id = $1 AND site=$2`,
                     [d.downstream_switchboard_id, site]
                   );
-                  if (r.rows.length) targetBoard = r.rows[0];
+                  if (rdsw.rows.length) targetBoard = rdsw.rows[0];
                 }
                 if (targetBoard) {
                   pushNode({
@@ -274,7 +260,7 @@ app.get('/api/diagram/view', async (req, res) => {
               }
 
               queue.push({ id: cid, depth: dep + 1, xcol: Math.min(xcol + 1, 5) });
-            });
+            }
           }
         }
       }
@@ -319,7 +305,6 @@ app.get('/api/diagram/view', async (req, res) => {
           }
         }
 
-        // equipment nodes
         for (const hv of hvRows.rows) {
           const nodeId = `hv:${hv.id}`;
           pushNode({
@@ -337,7 +322,8 @@ app.get('/api/diagram/view', async (req, res) => {
         const rowHeight = 140;
         for (const hv of hvRows.rows) {
           const roots = rootsPerHv.get(hv.id) || [];
-          roots.forEach((rid, idx) => {
+          for (let idx = 0; idx < roots.length; idx++) {
+            const rid = roots[idx];
             const d = byId.get(rid);
             const nodeId = `hvdev:${d.id}`;
             pushNode({
@@ -351,7 +337,7 @@ app.get('/api/diagram/view', async (req, res) => {
               position: { x: colWidth, y: rowHeight * (idx + 1) },
             });
             pushEdge({ source: `hv:${hv.id}`, target: nodeId, type: 'smoothstep' });
-          });
+          }
 
           const queue = roots.map(id => ({ id, depth: 1, xcol: 2 }));
           const nextRowForCol = { 2: 1, 3: 1, 4: 1, 5: 1 };
@@ -359,7 +345,7 @@ app.get('/api/diagram/view', async (req, res) => {
             const { id, depth: dep, xcol } = queue.shift();
             if (dep >= depth) continue;
             const ch = children.get(id) || [];
-            ch.forEach(cid => {
+            for (const cid of ch) {
               const d = byId.get(cid);
               const nodeId = `hvdev:${d.id}`;
               const r = nextRowForCol[xcol] || 1;
@@ -378,14 +364,13 @@ app.get('/api/diagram/view', async (req, res) => {
               });
               pushEdge({ source: `hvdev:${id}`, target: nodeId, type: 'step' });
 
-              // Cross-link to other HV equipment
               if (d.downstream_hv_equipment_id) {
                 pushNode({ id: `hv:${d.downstream_hv_equipment_id}`, type: 'hv_equipment', data: { label: `HV #${d.downstream_hv_equipment_id}` }, position: { x: colWidth * (xcol + 1), y: rowHeight } });
                 pushEdge({ source: nodeId, target: `hv:${d.downstream_hv_equipment_id}`, type: 'default', label: '↪ downstream HV' });
               }
 
               queue.push({ id: cid, depth: dep + 1, xcol: Math.min(xcol + 1, 5) });
-            });
+            }
           }
         }
       }
@@ -406,7 +391,7 @@ app.get('/api/diagram/view', async (req, res) => {
       }
     }});
   } catch (e) {
-    console.error('[DIAGRAM VIEW] error:', e.message, e.stack);
+    console.error('[DIAGRAM VIEW] error:', e);
     res.status(500).json({ error: 'View failed', details: e.message });
   }
 });
