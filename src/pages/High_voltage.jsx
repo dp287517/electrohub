@@ -3,10 +3,11 @@ import { get, post, put, del, API_BASE } from '../lib/api.js';
 import { Edit, Copy, Trash, Plus, Search, ChevronDown, ChevronRight, X, ImagePlus, Sparkles, AlertCircle } from 'lucide-react';
 
 /**
- * High Voltage — Frontend UI (React) — FINAL
+ * High Voltage — Frontend UI (React) — FINAL v3
  * - EN-only labels
  * - Professional theme: white bg / black text
  * - Robust API handling: guards when backend returns HTML (404) -> no destructuring crash
+ * - Clear banner hints to fix API_BASE
  * - Full CRUD for HV Boards & Devices
  * - Upstream link (parent HV device), downstream HV equipment, LV link (switchboard device by name)
  * - Multi-photos
@@ -105,9 +106,13 @@ export function useHvApi() {
         [...files].forEach(f => form.append('photos', f));
         const path = withSite(`/devices/${deviceId}/photos`);
         const siteHdr = useUserSite();
-        const res = await fetch(`${API_BASE}${path}`, { method: 'POST', body: form, credentials: 'include', headers: { ...(siteHdr ? { 'X-Site': siteHdr } : {}) } });
-        if (!res.ok) throw new Error(await res.text());
-        return res.json();
+        const res = await fetch(/^https?:\/\//i.test(path) ? path : `${API_BASE}${path}`, {
+          method: 'POST', body: form, credentials: 'include',
+          headers: { Accept: 'application/json', ...(siteHdr ? { 'X-Site': siteHdr } : {}) }
+        });
+        const text = await res.text();
+        if (!res.ok) throw new Error(text);
+        try { return JSON.parse(text); } catch { return { ok: true }; }
       },
       photoUrl: (deviceId, idx) => withSite(`/devices/${deviceId}/photos/${idx}`),
 
@@ -319,7 +324,7 @@ export default function HighVoltage() {
     <section className="container mx-auto max-w-6xl py-8 bg-white">
       {hvErr && (
         <div className="mb-4">
-          <Banner title="High Voltage API error" details={`${hvErr}\n\nTip: if you see \"Cannot POST /api/hv/equipments\", the frontend is hitting the wrong origin. Set VITE_API_BASE (or window.__API_BASE) to your API host (e.g. http://localhost:3009).`} />
+          <Banner title="High Voltage API error" details={`${hvErr}\n\nTip: If you see HTML (e.g. \"Cannot POST /api/hv/equipments\"), your frontend is NOT talking to the HV backend.\nSet VITE_API_BASE (or window.__API_BASE) to your API host (e.g. http://localhost:3009).\nCurrent API_BASE: ${API_BASE || '(empty)'}\nOptional: set window.__HV_BASE = '/api/hv' if your path prefix differs.`} />
         </div>
       )}
 
