@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "concurrently -k \"node server_atex.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server.js\""
+    "start": "concurrently -k \"node server_atex.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server_diagram.js\" \"node server.js\""
   },
   "dependencies": {
     "@radix-ui/react-tooltip": "^1.1.2",
@@ -42,7 +42,8 @@
     "react-google-charts": "^4.0.1",
     "pdfjs-dist": "^4.7.21",
     "gantt-task-react": "^0.3.8",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "reactflow": "^11.10.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
