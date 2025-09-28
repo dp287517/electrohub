@@ -118,4 +118,12 @@ export const api = {
     analyzePdf: (formData) => upload("/api/obsolescence/analyze-pdf", formData),
     exportPdf: () => get("/api/obsolescence/export-pdf"),
   },
+  hv: {
+    list: (params) => get("/api/hv/equipments", params),
+    getOne: (id) => get(`/api/hv/equipments/${id}`),
+    create: (id, payload) => post(`/api/hv/equipments/${id}/devices`, payload),  // Adapté pour devices
+    update: (id, payload) => put(`/api/hv/devices/${id}`, payload),
+    duplicate: (id) => post(`/api/hv/equipments/${id}/duplicate`),
+    remove: (id) => del(`/api/hv/equipments/${id}`),
+  },
 };
