@@ -1,5 +1,5 @@
 // src/pages/Diagram.jsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactFlow, {
   Background,
   Controls,
@@ -8,7 +8,7 @@ import ReactFlow, {
   useEdgesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { api } from '../api.js';
+import { api } from '../lib/api.js';
 import { CheckCircle, AlertTriangle, HelpCircle, Zap } from 'lucide-react';
 
 const statusIcon = (status) => {
