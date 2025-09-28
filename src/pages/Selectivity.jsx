@@ -1,404 +1,547 @@
-// Selectivity.jsx
-// Améliorations : bouton afficher/masquer les filtres (design conservé),
-// datasets Chart.js en (x,y) pour axe X logarithmique, debounce sur slider,
-// clé de statut composée upstreamId-downstreamId, nettoyage import.
-
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { jsPDF } from 'jspdf';
+import { useEffect, useState, useRef } from 'react';
+import { get, post } from '../lib/api.js';
+import { Search, HelpCircle, AlertTriangle, CheckCircle, XCircle, X, Zap, Download, ChevronRight } from 'lucide-react';
+import { Line } from 'react-chartjs-2';
+import Confetti from 'react-confetti';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 import {
-  Chart,
-  LineController,
-  LineElement,
-  PointElement,
-  LinearScale,
-  LogarithmicScale,
-  TimeScale,
+  Chart as ChartJS,
   CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
   Tooltip,
   Legend,
-} from 'chart.js';
-
-Chart.register(
-  LineController,
-  LineElement,
-  PointElement,
-  LinearScale,
   LogarithmicScale,
-  TimeScale,
+} from 'chart.js';
+import Annotation from 'chartjs-plugin-annotation';
+import Zoom from 'chartjs-plugin-zoom';
+
+// Enregistrement des plugins
+ChartJS.register(
   CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
   Tooltip,
-  Legend
+  Legend,
+  LogarithmicScale,
+  Annotation,
+  Zoom
 );
 
-const API_BASE = process.env.REACT_APP_API_BASE || '';
+function useUserSite() {
+  try {
+    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+    return user?.site || '';
+  } catch { return ''; }
+}
 
-function keyFor(upId, downId) {
-  return `${upId}-${downId}`;
+function Toast({ msg, type }) {
+  const colors = {
+    success: 'bg-green-600 text-white',
+    error: 'bg-red-600 text-white',
+    info: 'bg-blue-600 text-white',
+  };
+  return (
+    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-sm ${colors[type]}`}>
+      {msg}
+    </div>
+  );
+}
+
+function Modal({ open, onClose, children, title }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-2xl max-h-[80vh] bg-white rounded-2xl shadow-2xl overflow-hidden">
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-gray-50">
+          <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-200">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="p-6 overflow-y-auto max-h-[calc(80vh-100px)]">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Sidebar({ open, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl z-40 overflow-y-auto p-6 transition-transform duration-300 ease-in-out transform translate-x-0">
+      <button onClick={onClose} className="absolute top-4 right-4 p-1 hover:bg-gray-200 rounded">
+        <X size={20} />
+      </button>
+      {children}
+    </div>
+  );
 }
 
 export default function Selectivity() {
+  const site = useUserSite();
   const [pairs, setPairs] = useState([]);
   const [statuses, setStatuses] = useState({});
-  const [loading, setLoading] = useState(false);
-
+  const [selectedPairs, setSelectedPairs] = useState([]);
+  const [q, setQ] = useState({ q: '', switchboard: '', building: '', floor: '', sort: 'name', dir: 'desc', page: 1 });
+  const [total, setTotal] = useState(0);
   const [selectedPair, setSelectedPair] = useState(null);
-  const [curves, setCurves] = useState(null);
-  const [faultCurrent, setFaultCurrent] = useState(null);
-
-  // Filtres (masqués par défaut, design conservé)
-  const [showFilters, setShowFilters] = useState(false);
-
-  // exemples de filtres existants (garde le markup identique dans ton code)
-  const [search, setSearch] = useState('');
-  const [onlyNonSelective, setOnlyNonSelective] = useState(false);
-
+  const [checkResult, setCheckResult] = useState(null);
+  const [curveData, setCurveData] = useState(null);
+  const [showGraph, setShowGraph] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(false);
+  const [tipContent, setTipContent] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [faultCurrent, setFaultCurrent] = useState(1000);
+  const [showConfetti, setShowConfetti] = useState(false);
   const chartRef = useRef(null);
-  const chartInstanceRef = useRef(null);
-  const debounceRef = useRef(null);
+  const pageSize = 18;
 
   useEffect(() => {
-    const fetchPairs = async () => {
-      try {
-        const r = await fetch(`${API_BASE}/api/pairs`, { credentials: 'include' });
-        const data = await r.json();
-        setPairs(data.pairs || []);
-      } catch (e) {
-        console.error(e);
-      }
-    };
-    fetchPairs();
-  }, []);
+    loadPairs();
+  }, [q]);
 
-  // Déclenche un check pour une paire (option : à un courant de défaut précis)
-  const handleCheck = async (upstreamId, downstreamId, currentOverride) => {
-    setLoading(true);
+  const loadPairs = async () => {
     try {
-      const r = await fetch(`${API_BASE}/api/check-selectivity`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          upstreamId,
-          downstreamId,
-          faultCurrent: currentOverride ?? faultCurrent ?? undefined,
-        }),
+      setBusy(true);
+      const data = await get('/api/selectivity/pairs', q);
+      setPairs(data?.data || []);
+      setTotal(data?.total || 0);
+      // Initialiser les statuts depuis l'API
+      const initialStatuses = {};
+      data?.data.forEach(pair => {
+        if (pair.status) {
+          initialStatuses[pair.downstream_id] = pair.status;
+        }
       });
-      const data = await r.json();
+      setStatuses(initialStatuses);
+    } catch (e) {
+      setToast({ msg: 'Failed to load pairs', type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
 
-      // Enregistre statut avec clé composée
-      setStatuses((prev) => ({
-        ...prev,
-        [keyFor(upstreamId, downstreamId)]: data.status,
-      }));
+  const handleCheck = async (upstreamId, downstreamId, faultI = null, isBatch = false) => {
+    try {
+      setBusy(true);
+      const params = { upstream: upstreamId, downstream: downstreamId, fault_current: faultI };
+      const result = await get('/api/selectivity/check', params);
+      setCheckResult(result);
+      setSelectedPair({ upstreamId, downstreamId });
+      setStatuses(prev => ({ ...prev, [`${downstreamId}`]: result.status }));
 
-      // Si la paire est sélectionnée, on met à jour les courbes
-      if (
-        selectedPair &&
-        selectedPair.upstreamId === upstreamId &&
-        selectedPair.downstreamId === downstreamId
-      ) {
-        setCurves(data.curves || null);
+      const curves = await get('/api/selectivity/curves', params);
+      const datasets = {
+        labels: curves.upstream.map(p => p.current.toFixed(0)),
+        datasets: [
+          { label: 'Upstream', data: curves.upstream.map(p => Math.min(p.time, 1000)), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
+          { label: 'Downstream', data: curves.downstream.map(p => Math.min(p.time, 1000)), borderColor: 'green', tension: 0.1, pointRadius: 0 },
+        ],
+      };
+      setCurveData(datasets);
+      setShowGraph(true);
+
+      const tipRes = await post('/api/selectivity/ai-tip', { 
+        query: `Explain why this pair is ${result.status}: upstream ${upstreamId}, downstream ${downstreamId}, fault_current: ${faultI || 'general'}` 
+      });
+      setTipContent(tipRes.tip);
+      setShowSidebar(true);
+
+      if (result.status === 'selective' && !isBatch) {
+        setShowConfetti(true);
+        setTimeout(() => setShowConfetti(false), 3000);
       }
     } catch (e) {
-      console.error(e);
+      setToast({ msg: 'Check failed', type: 'error' });
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
-  // Sélection d’une paire -> charge les courbes
-  const onSelectPair = async (pair) => {
-    setSelectedPair(pair);
-    setCurves(null);
-    await handleCheck(pair.upstream_id || pair.upstreamId, pair.downstream_id || pair.downstreamId);
+  const handleBatchCheck = async () => {
+    try {
+      setBusy(true);
+      for (const id of selectedPairs) {
+        const pair = pairs.find(p => p.downstream_id === id);
+        if (pair) await handleCheck(pair.upstream_id, pair.downstream_id, null, true);
+      }
+      setToast({ msg: 'Batch check completed!', type: 'success' });
+    } catch (e) {
+      setToast({ msg: 'Batch check failed', type: 'error' });
+    } finally {
+      setBusy(false);
+      setSelectedPairs([]);
+    }
   };
 
-  // Données Chart.js en (x,y) pour axe log X ; clamp du Y pour lisibilité PDF
-  const chartData = useMemo(() => {
-    if (!curves) return null;
-    const clampY = (t) => Math.min(t, 1000); // 1000s max visuel
-    return {
-      datasets: [
-        {
-          label: 'Upstream',
-          data: (curves.upstream || []).map((p) => ({ x: p.current, y: clampY(p.time) })),
-          borderWidth: 2,
-          fill: false,
-          tension: 0.1,
-          pointRadius: 0,
-        },
-        {
-          label: 'Downstream',
-          data: (curves.downstream || []).map((p) => ({ x: p.current, y: clampY(p.time) })),
-          borderWidth: 2,
-          fill: false,
-          tension: 0.1,
-          pointRadius: 0,
-        },
-      ],
-    };
-  }, [curves]);
+  const autoEvaluateAll = async () => {
+    try {
+      setBusy(true);
+      const results = [];
+      for (const pair of pairs.slice(0, 10)) {
+        const res = await get('/api/selectivity/check', { upstream: pair.upstream_id, downstream: pair.downstream_id });
+        results.push({ pair: pair.downstream_name, status: res.status });
+        setStatuses(prev => ({ ...prev, [`${pair.downstream_id}`]: res.status }));
+      }
+      const compliant = results.filter(r => r.status === 'selective').length;
+      setToast({ 
+        msg: `${compliant}/${results.length} pairs selective.`, 
+        type: compliant === results.length ? 'success' : 'info' 
+      });
+      if (compliant === results.length) setShowConfetti(true);
+    } catch (e) {
+      setToast({ msg: 'Auto-evaluation failed', type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
 
-  const chartOptions = useMemo(
-    () => ({
-      responsive: true,
-      maintainAspectRatio: false,
-      parsing: false, // IMPORTANT: on fournit déjà (x,y)
-      scales: {
-        x: {
-          type: 'logarithmic',
-          title: { display: true, text: 'Courant (A)' },
-          ticks: { callback: (v) => v },
-        },
-        y: {
-          type: 'linear',
-          title: { display: true, text: 'Temps (s)' },
-        },
-      },
-      plugins: {
-        legend: { position: 'bottom' },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => {
-              const x = ctx.parsed.x;
-              const y = ctx.parsed.y;
-              return `${ctx.dataset.label}: I=${x.toFixed(2)} A, t=${y.toFixed(3)} s`;
+  const testFaultCurrent = (value) => {
+    setFaultCurrent(value);
+    if (selectedPair) handleCheck(selectedPair.upstreamId, selectedPair.downstreamId, value);
+  };
+
+  const exportPDF = async () => {
+    const pdf = new jsPDF();
+    pdf.setFontSize(16);
+    pdf.text('Selectivity Report', 10, 10);
+    pdf.setFontSize(12);
+    pdf.text(`Date: ${new Date().toLocaleString()}`, 10, 20);
+    
+    // Tableau des paires
+    pdf.text('Pairs Status:', 10, 30);
+    let y = 40;
+    pairs.forEach(pair => {
+      const status = statuses[pair.downstream_id] || 'Pending';
+      pdf.text(`${pair.downstream_name} vs ${pair.upstream_name}: ${status}`, 10, y);
+      y += 10;
+    });
+
+    // Graphiques pour chaque paire vérifiée
+    const canvas = document.createElement('canvas');
+    canvas.width = 600;
+    canvas.height = 300;
+    const ctx = canvas.getContext('2d');
+    let chartInstance = null;
+
+    for (const pair of pairs.filter(p => statuses[p.downstream_id])) {
+      try {
+        const curves = await get('/api/selectivity/curves', {
+          upstream: pair.upstream_id,
+          downstream: pair.downstream_id,
+        });
+        const data = {
+          labels: curves.upstream.map(p => p.current.toFixed(0)),
+          datasets: [
+            { label: 'Upstream', data: curves.upstream.map(p => Math.min(p.time, 1000)), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
+            { label: 'Downstream', data: curves.downstream.map(p => Math.min(p.time, 1000)), borderColor: 'green', tension: 0.1, pointRadius: 0 },
+          ],
+        };
+        const status = statuses[pair.downstream_id];
+        const nonSelectiveZones = status === 'non-selective' ? (await get('/api/selectivity/check', {
+          upstream: pair.upstream_id,
+          downstream: pair.downstream_id,
+        })).nonSelectiveZones : [];
+
+        pdf.addPage();
+        pdf.setFontSize(14);
+        pdf.text(`Selectivity Curve for Pair: ${pair.downstream_name} vs ${pair.upstream_name}`, 10, 10);
+        pdf.setFontSize(12);
+        pdf.text(`Status: ${status}`, 10, 20);
+
+        // Créer un graphique temporaire
+        chartInstance = new ChartJS(ctx, {
+          type: 'line',
+          data: data,
+          options: {
+            responsive: false,
+            plugins: {
+              annotation: {
+                annotations: nonSelectiveZones.map((zone, i) => ({
+                  type: 'box',
+                  xMin: zone.xMin,
+                  xMax: zone.xMax,
+                  backgroundColor: 'rgba(255, 0, 0, 0.2)',
+                  borderColor: 'red',
+                  label: { content: 'Non-Selective', display: true, position: 'center' }
+                }))
+              },
+              title: { display: true, text: `Curve: ${pair.downstream_name} vs ${pair.upstream_name}` },
+              tooltip: {
+                callbacks: {
+                  label: (context) => {
+                    const nonSelective = context.datasetIndex === 1 && context.parsed.y >= data.datasets[0].data[context.dataIndex] * 1.05;
+                    return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}s at ${context.parsed.x}A ${nonSelective ? '(Non-selective)' : ''}`;
+                  }
+                }
+              }
             },
-          },
-        },
-      },
-    }),
-    []
-  );
+            scales: {
+              x: { 
+                type: 'logarithmic', 
+                title: { display: true, text: 'Current (A)' },
+                ticks: { callback: (value) => Number(value).toFixed(0) + 'A' }
+              },
+              y: { 
+                type: 'linear', 
+                title: { display: true, text: 'Time (s)' },
+                min: 0.001,
+                max: 1000,
+                ticks: { 
+                  callback: (value) => Number(value).toFixed(2) + 's',
+                  maxTicksLimit: 10 
+                }
+              },
+            },
+          }
+        });
 
-  // (Re)crée le chart à chaque changement de data
-  useEffect(() => {
-    const canvas = chartRef.current;
-    if (!canvas) return;
-
-    // détruire l’instance précédente
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.destroy();
-      chartInstanceRef.current = null;
-    }
-    if (!chartData) return;
-
-    chartInstanceRef.current = new Chart(canvas, {
-      type: 'line',
-      data: chartData,
-      options: chartOptions,
-    });
-  }, [chartData, chartOptions]);
-
-  // Export PDF
-  const exportPDF = () => {
-    const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-    const margin = 40;
-    let y = margin;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(14);
-    doc.text('Analyse de sélectivité', margin, y);
-    y += 24;
-
-    if (selectedPair) {
-      doc.setFontSize(11);
-      doc.text(
-        `Paire: Upstream #${selectedPair.upstream_id || selectedPair.upstreamId}  —  Downstream #${
-          selectedPair.downstream_id || selectedPair.downstreamId
-        }`,
-        margin,
-        y
-      );
-      y += 18;
+        // Attendre que le graphique soit rendu
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const imgData = canvas.toDataURL('image/png');
+        pdf.addImage(imgData, 'PNG', 10, 30, 180, 100);
+        chartInstance.destroy();
+      } catch (e) {
+        console.error('Failed to generate chart for PDF:', e);
+        pdf.text('Error generating curve', 10, 30);
+      }
     }
 
-    // Ajoute l’image du chart
-    const canvas = chartRef.current;
-    if (canvas) {
-      const img = canvas.toDataURL('image/png', 1.0);
-      const imgW = doc.internal.pageSize.getWidth() - margin * 2;
-      const imgH = (canvas.height / canvas.width) * imgW;
-      doc.addImage(img, 'PNG', margin, y, imgW, imgH, undefined, 'FAST');
-      y += imgH + 20;
-    }
-
-    // Ajoute statut
-    if (selectedPair) {
-      const st =
-        statuses[keyFor(selectedPair.upstream_id || selectedPair.upstreamId, selectedPair.downstream_id || selectedPair.downstreamId)];
-      doc.setFontSize(12);
-      doc.text(`Statut: ${st || 'indéterminé'}`, margin, y);
-      y += 16;
-    }
-
-    doc.save('selectivity.pdf');
+    canvas.remove();
+    pdf.save('selectivity_report.pdf');
   };
 
-  // Filtrage local (UX inchangée)
-  const filteredPairs = useMemo(() => {
-    const q = (search || '').toLowerCase();
-    return (pairs || []).filter((p) => {
-      const k = `${p.upstream_id || p.upstreamId}-${p.downstream_id || p.downstreamId}`;
-      const st = (statuses[k] || '').toLowerCase();
-      const txt = JSON.stringify(p).toLowerCase();
-      if (q && !txt.includes(q)) return false;
-      if (onlyNonSelective && st && st !== 'non-selective') return false;
-      return true;
-    });
-  }, [pairs, statuses, search, onlyNonSelective]);
+  const toggleSelect = (id) => {
+    setSelectedPairs(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
+  };
 
-  // Slider de courant de défaut — debounce pour ne pas spammer le backend
-  const onChangeFaultCurrent = (val) => {
-    const v = Number(val);
-    setFaultCurrent(v);
-    if (!selectedPair) return;
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      handleCheck(
-        selectedPair.upstream_id || selectedPair.upstreamId,
-        selectedPair.downstream_id || selectedPair.downstreamId,
-        v
-      );
-    }, 250);
+  const toggleSelectAll = () => {
+    setSelectedPairs(selectedPairs.length === pairs.length ? [] : pairs.map(p => p.downstream_id));
   };
 
   return (
-    <div className="p-4">
-      <header className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Sélectivité</h1>
-
-        {/* Bouton afficher/masquer les filtres (design conservé, juste caché/affiché) */}
-        <button
-          onClick={() => setShowFilters((v) => !v)}
-          className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
-          aria-expanded={showFilters}
-          aria-controls="filters-panel"
-        >
-          {showFilters ? 'Masquer les filtres' : 'Afficher les filtres'}
-        </button>
+    <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
+      {showConfetti && <Confetti width={window.innerWidth} height={window.innerHeight} />}
+      <header className="mb-8">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4 drop-shadow-md">Selectivity Analysis</h1>
+        <p className="text-gray-600 max-w-3xl">
+          This page verifies selectivity between upstream and downstream circuit breakers based on switchboard data. 
+          Selectivity ensures that only the downstream breaker trips during a fault, preventing unnecessary outages (per IEC 60947-2 and 60898-1 standards). 
+          Upstream/downstream links are defined via parent_id in devices. Use filters to target pairs, view time-current curves, 
+          and get remediations if non-selective. If data is missing, edit via the Switchboards page.
+        </p>
       </header>
 
-      {/* Bloc filtres existant, simplement masqué par défaut */}
-      {showFilters && (
-        <div id="filters-panel" className="mb-4 flex flex-wrap gap-3 items-center">
-          <input
-            type="text"
-            placeholder="Rechercher…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="px-3 py-2 border rounded-md"
-          />
-          <label className="inline-flex items-center gap-2 text-sm">
+      {/* Filters */}
+      <div className="flex flex-wrap gap-4 mb-6 items-center">
+        <input
+          className="input flex-1 shadow-sm"
+          placeholder="Search by name..."
+          value={q.q}
+          onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
+        />
+        <input className="input w-32 shadow-sm" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
+        <input className="input w-32 shadow-sm" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
+        <input className="input w-32 shadow-sm" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
+        <button 
+          onClick={autoEvaluateAll} 
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md transition-transform hover:scale-105"
+          disabled={busy}
+        >
+          Auto-Evaluate All
+        </button>
+        <button 
+          onClick={exportPDF} 
+          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-md transition-transform hover:scale-105"
+        >
+          <Download size={16} className="inline mr-1" /> Export PDF
+        </button>
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto shadow-xl rounded-lg">
+        <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+          <thead className="bg-gradient-to-r from-blue-500 to-indigo-600 text-white">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">
+                <input type="checkbox" onChange={toggleSelectAll} checked={selectedPairs.length === pairs.length} />
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Downstream</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Upstream</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Switchboard</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Status</th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {pairs.map(pair => (
+              <tr key={`${pair.downstream_id}-${pair.upstream_id}`} className="hover:bg-gray-50 transition-colors">
+                <td className="px-6 py-4">
+                  <input 
+                    type="checkbox" 
+                    checked={selectedPairs.includes(pair.downstream_id)} 
+                    onChange={() => toggleSelect(pair.downstream_id)} 
+                  />
+                </td>
+                <td className="px-6 py-4 text-sm text-gray-900">{pair.downstream_name} ({pair.downstream_type})</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{pair.upstream_name} ({pair.upstream_type})</td>
+                <td className="px-6 py-4 text-sm text-gray-900">{pair.switchboard_name}</td>
+                <td className="px-6 py-4 text-sm">
+                  {statuses[pair.downstream_id] === 'selective' ? <CheckCircle className="text-green-600" /> :
+                   statuses[pair.downstream_id] === 'non-selective' ? <XCircle className="text-red-600" /> :
+                   statuses[pair.downstream_id] === 'incomplete' ? <AlertTriangle className="text-yellow-600" /> : 'Pending'}
+                </td>
+                <td className="px-6 py-4 text-sm">
+                  <button
+                    onClick={() => handleCheck(pair.upstream_id, pair.downstream_id)}
+                    className="text-blue-600 hover:underline mr-2"
+                  >
+                    Check
+                  </button>
+                  <a href={`/app/switchboards?edit=${pair.downstream_id}`} className="text-green-600 hover:underline">Edit</a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selectedPairs.length > 0 && (
+        <button 
+          onClick={handleBatchCheck} 
+          className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 shadow-md transition-transform hover:scale-105"
+          disabled={busy}
+        >
+          Check Selected ({selectedPairs.length})
+        </button>
+      )}
+
+      {/* Interactive Fault Test */}
+      {selectedPair && (
+        <div className="mt-6 p-6 bg-white rounded-lg shadow-md transition-opacity duration-500 opacity-100">
+          <h3 className="font-semibold mb-2 text-lg">Test Specific Fault Current</h3>
+          <p className="text-sm text-gray-500 mb-4">Simulate a specific fault current (A) to test trip times and check if downstream trips before upstream. Slide to see live updates!</p>
+          <div className="flex gap-4 items-center">
             <input
-              type="checkbox"
-              checked={onlyNonSelective}
-              onChange={(e) => setOnlyNonSelective(e.target.checked)}
+              type="range"
+              min="100"
+              max="10000"
+              value={faultCurrent}
+              onChange={e => testFaultCurrent(e.target.value)}
+              className="flex-1 accent-indigo-600"
             />
-            Non-sélectives uniquement
-          </label>
+            <span className="text-sm font-medium">{faultCurrent} A</span>
+          </div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Liste des paires */}
-        <div className="md:col-span-1 border rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="font-medium">Paires</h2>
-            {loading && <span className="text-xs opacity-60">…</span>}
+      {/* Results */}
+      {checkResult && (
+        <div className="mt-8 p-6 bg-white rounded-lg shadow-md transition-all duration-500 transform scale-100">
+          <h2 className="text-2xl font-semibold mb-4 text-indigo-800">Analysis Result</h2>
+          <div className="flex items-center gap-2 mb-4">
+            {checkResult.status === 'selective' ? <CheckCircle className="text-green-600 animate-bounce" size={24} /> :
+             checkResult.status === 'non-selective' ? <XCircle className="text-red-600" size={24} /> :
+             <AlertTriangle className="text-yellow-600" size={24} />}
+            <span className="text-xl capitalize">{checkResult.status}</span>
           </div>
-          <ul className="divide-y">
-            {filteredPairs.map((p) => {
-              const upId = p.upstream_id || p.upstreamId;
-              const downId = p.downstream_id || p.downstreamId;
-              const st = statuses[keyFor(upId, downId)];
-              const isSelected =
-                selectedPair &&
-                (selectedPair.upstream_id || selectedPair.upstreamId) === upId &&
-                (selectedPair.downstream_id || selectedPair.downstreamId) === downId;
-
-              return (
-                <li key={keyFor(upId, downId)} className="py-2 flex items-center justify-between">
-                  <button
-                    className={`text-left hover:underline ${isSelected ? 'font-semibold' : ''}`}
-                    onClick={() => onSelectPair({ upstream_id: upId, downstream_id: downId })}
-                  >
-                    #{upId} → #{downId}
-                  </button>
-                  <span
-                    className={`text-xs px-2 py-1 rounded ${
-                      st === 'selective'
-                        ? 'bg-green-100 text-green-700'
-                        : st === 'non-selective'
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-gray-100 text-gray-600'
-                    }`}
-                  >
-                    {st || '–'}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-
-        {/* Graphe + réglages */}
-        <div className="md:col-span-2 border rounded-lg p-3 flex flex-col">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="font-medium">Courbes</h2>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={exportPDF}
-                className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
-                disabled={!curves}
-              >
-                Export PDF
-              </button>
+          {checkResult.missing?.length > 0 && (
+            <div className="mb-4 text-yellow-600 flex items-center">
+              <AlertTriangle className="mr-2" />
+              Missing data: {checkResult.missing.join(', ')}
             </div>
-          </div>
-
-          <div className="h-72">
-            <canvas ref={chartRef} />
-          </div>
-
-          {/* Slider courant de défaut (déboursé) */}
-          <div className="mt-4 flex items-center gap-3">
-            <label className="text-sm">Courant de défaut (A)</label>
-            <input
-              type="range"
-              min="10"
-              max="100000"
-              step="10"
-              value={faultCurrent || 10}
-              onChange={(e) => onChangeFaultCurrent(e.target.value)}
-              className="flex-1"
-              disabled={!selectedPair}
-            />
-            <input
-              type="number"
-              min="1"
-              value={faultCurrent || 10}
-              onChange={(e) => onChangeFaultCurrent(e.target.value)}
-              className="w-28 px-2 py-1 border rounded-md text-sm"
-              disabled={!selectedPair}
-            />
-            <button
-              onClick={() =>
-                selectedPair &&
-                handleCheck(
-                  selectedPair.upstream_id || selectedPair.upstreamId,
-                  selectedPair.downstream_id || selectedPair.downstreamId,
-                  faultCurrent
-                )
-              }
-              className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm"
-              disabled={!selectedPair}
-            >
-              Tester
-            </button>
-          </div>
+          )}
+          {checkResult.remediation?.length > 0 && (
+            <ul className="list-disc pl-5 mb-4 text-gray-700">
+              {checkResult.remediation.map((r, i) => <li key={i} className="mb-1">{r}</li>)}
+            </ul>
+          )}
+          <button 
+            onClick={() => setShowSidebar(true)} 
+            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 flex items-center gap-2"
+          >
+            <ChevronRight size={16} /> View Explanation
+          </button>
         </div>
-      </div>
-    </div>
+      )}
+
+      {/* Graph Modal */}
+      <Modal open={showGraph} onClose={() => setShowGraph(false)} title="Time-Current Curves (Zoom & Pan Enabled)">
+        <div ref={chartRef}>
+          {curveData && (
+            <Line
+              data={curveData}
+              options={{
+                responsive: true,
+                plugins: {
+                  zoom: {
+                    zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
+                    pan: { enabled: true, mode: 'xy' },
+                  },
+                  annotation: {
+                    annotations: checkResult?.nonSelectiveZones?.map((zone, i) => ({
+                      type: 'box',
+                      xMin: zone.xMin,
+                      xMax: zone.xMax,
+                      backgroundColor: 'rgba(255, 0, 0, 0.2)',
+                      borderColor: 'red',
+                      label: { content: 'Non-Selective', display: true, position: 'center' }
+                    })) || []
+                  },
+                  tooltip: {
+                    callbacks: {
+                      label: (context) => {
+                        const nonSelective = context.datasetIndex === 1 && context.parsed.y >= curveData.datasets[0].data[context.dataIndex] * 1.05;
+                        return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}s at ${context.parsed.x}A ${nonSelective ? '(Non-selective)' : ''}`;
+                      }
+                    }
+                  }
+                },
+                scales: {
+                  x: { 
+                    type: 'logarithmic', 
+                    title: { display: true, text: 'Current (A)' },
+                    ticks: { callback: (value) => Number(value).toFixed(0) + 'A' }
+                  },
+                  y: { 
+                    type: 'linear', 
+                    title: { display: true, text: 'Time (s)' },
+                    min: 0.001,
+                    max: 1000,
+                    ticks: { 
+                      callback: (value) => Number(value).toFixed(2) + 's',
+                      maxTicksLimit: 10 
+                    }
+                  },
+                },
+              }}
+            />
+          )}
+        </div>
+        <button 
+          onClick={() => setShowGraph(false)} 
+          className="mt-4 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+        >
+          Close Graph
+        </button>
+      </Modal>
+
+      {/* Sidebar for Tips */}
+      <Sidebar open={showSidebar} onClose={() => setShowSidebar(false)}>
+        <h3 className="text-xl font-bold mb-4">Explanation Tip</h3>
+        <p className="text-gray-700 whitespace-pre-wrap mb-4">{tipContent}</p>
+        <HelpCircle className="text-blue-500 inline" size={24} />
+      </Sidebar>
+
+      {toast && <Toast {...toast} />}
+      {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/30 z-50">
+        <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-indigo-600"></div>
+      </div>}
+    </section>
   );
 }
