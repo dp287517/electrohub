@@ -100,6 +100,17 @@ app.use(
   })
 );
 
+// --- PROXY HV (AJOUT: place BEFORE body parsing) ---
+const hvTarget = process.env.HV_BASE_URL || 'http://127.0.0.1:3009';
+app.use(
+  '/api/hv',
+  createProxyMiddleware({
+    target: hvTarget,
+    changeOrigin: true,
+    logLevel: 'debug',  // 'debug' pour plus de logs pendant le test
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
