@@ -1,17 +1,29 @@
 // src/pages/High_voltage.jsx
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { get, post, put, del } from '../lib/api.js';
+import { api, get, post, put, del } from '../lib/api.js'; // Ajout de l'importation
 import {
   Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle,
   ChevronDown, ChevronRight, ChevronLeft, X
 } from 'lucide-react';
 
-// Utilities (similaires à Switchboards)
+// Utilities
 const regimes = ['TN-S', 'TN-C-S', 'IT', 'TT'];
-const hvDeviceTypes = [  // Adapté HV
+const hvDeviceTypes = [
   'HV Cell', 'HV Disconnect Switch', 'HV Circuit Breaker', 'Transformer',
   'HV Cable', 'Busbar', 'SEPAM Relay', 'Meter'
 ];
+const insulationTypes = ['SF6', 'Vacuum', 'Air'];
+const mechanicalEnduranceClasses = ['M1', 'M2'];
+const electricalEnduranceClasses = ['E1', 'E2'];
+
+function useUserSite() {
+  try {
+    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
+    return user?.site || '';
+  } catch {
+    return '';
+  }
+}
 
 function Pill({ children, color = 'blue' }) {
   const colors = {
@@ -67,14 +79,7 @@ function Modal({ open, onClose, children, title }) {
   );
 }
 
-function useUserSite() {
-  try {
-    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-    return user?.site || '';
-  } catch { return ''; }
-}
-
-const emptyHvEquipmentForm = {  // Adapté
+const emptyHvEquipmentForm = {
   name: '',
   code: '',
   meta: { site: '', building_code: '', floor: '', room: '' },
@@ -84,7 +89,7 @@ const emptyHvEquipmentForm = {  // Adapté
   quality: { thd: '', flicker: '' }
 };
 
-const emptyHvDeviceForm = {  // Adapté avec champs HV et downstream_device_id
+const emptyHvDeviceForm = {
   name: '',
   device_type: 'HV Circuit Breaker',
   manufacturer: '',
@@ -95,16 +100,15 @@ const emptyHvDeviceForm = {  // Adapté avec champs HV et downstream_device_id
   mechanical_endurance_class: '',
   electrical_endurance_class: '',
   poles: null,
-  settings: {  // Adapté HV protections
+  settings: {
     distance_zone: null,
     differential_bias: null,
     overcurrent: null,
-    // ...
   },
   is_main_incoming: false,
   parent_id: null,
   downstream_hv_equipment_id: null,
-  downstream_device_id: null,  // Liaison BT
+  downstream_device_id: null,
   pv_tests: null,
   photos: []
 };
@@ -133,12 +137,13 @@ export default function HighVoltage() {
   const [photoFile, setPhotoFile] = useState(null);
   const [parentSuggestions, setParentSuggestions] = useState([]);
   const [downstreamSuggestions, setDownstreamSuggestions] = useState([]);
-  const [downstreamBtSuggestions, setDownstreamBtSuggestions] = useState([]);  // Suggestions BT
+  const [downstreamBtSuggestions, setDownstreamBtSuggestions] = useState([]);
   const [referenceSuggestions, setReferenceSuggestions] = useState([]);
   const [showParentSuggestions, setShowParentSuggestions] = useState(false);
   const [showDownstreamSuggestions, setShowDownstreamSuggestions] = useState(false);
-  const [showDownstreamBtSuggestions, setShowDownstreamBtSuggestions] = useState(false);  // Pour BT
+  const [showDownstreamBtSuggestions, setShowDownstreamBtSuggestions] = useState(false);
   const [showReferenceSuggestions, setShowReferenceSuggestions] = useState(false);
+  const [toast, setToast] = useState(null);
 
   // Fetch HV equipments
   useEffect(() => {
@@ -147,13 +152,27 @@ export default function HighVoltage() {
       setRows(data);
       setTotal(total);
       setBusy(false);
-    }).catch(() => setBusy(false));
+    }).catch(e => {
+      setBusy(false);
+      setToast({ msg: 'Failed to load HV equipments', type: 'error' });
+    });
   }, [q]);
 
   // Fetch all for suggestions
   useEffect(() => {
     api.hv.list({ pageSize: 1000 }).then(({ data }) => setAllHvEquipments(data));
   }, []);
+
+  // Fetch HV devices for expanded panels
+  useEffect(() => {
+    Object.keys(expandedPanels).forEach(id => {
+      if (expandedPanels[id] && !hvDevices[id]) {
+        api.hv.getOne(id).then(data => {
+          setHvDevices(prev => ({ ...prev, [id]: data.devices || [] }));
+        });
+      }
+    });
+  }, [expandedPanels]);
 
   // Fetch LV devices for BT suggestions
   const fetchBtSuggestions = useCallback(async (query) => {
@@ -162,43 +181,502 @@ export default function HighVoltage() {
       setDownstreamBtSuggestions(res);
     } catch (e) {
       console.error(e);
+      setToast({ msg: 'Failed to load BT devices', type: 'error' });
     }
   }, []);
 
-  // ... (Autres fetches similaires pour parents, references, etc.)
-
-  // Form handlers (adaptés avec downstream_device_id)
-  const handleHvDeviceSubmit = async () => {
-    // ... Similaire à Switchboards, inclure downstream_device_id
-    const payload = { ...hvDeviceForm };
-    if (editingHvDevice) {
-      await api.hv.update(editingHvDevice.id, payload);
-    } else {
-      await api.hv.create(currentPanelId, payload);
+  // Fetch parent and downstream suggestions
+  const fetchParentSuggestions = useCallback(async (query, hvEquipmentId) => {
+    try {
+      const res = await get('/api/hv/equipments/' + hvEquipmentId + '/devices', { q: query });
+      setParentSuggestions(res.filter(d => d.hv_equipment_id === Number(hvEquipmentId)));
+    } catch (e) {
+      console.error(e);
     }
-    // Refresh
+  }, []);
+
+  const fetchDownstreamSuggestions = useCallback(async (query) => {
+    try {
+      const res = await api.hv.list({ q: query, pageSize: 50 });
+      setDownstreamSuggestions(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  // Handle form submissions
+  const handleHvEquipmentSubmit = async () => {
+    try {
+      setBusy(true);
+      const payload = { ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, site } };
+      if (editingHvEquipment) {
+        await api.hv.update(editingHvEquipment.id, payload);
+        setRows(rows.map(r => r.id === editingHvEquipment.id ? { ...r, ...payload } : r));
+      } else {
+        const res = await api.hv.create(payload);
+        setRows([...rows, res]);
+      }
+      setOpenHvEquipment(false);
+      setEditingHvEquipment(null);
+      setHvEquipmentForm(emptyHvEquipmentForm);
+      setToast({ msg: 'HV Equipment saved', type: 'success' });
+    } catch (e) {
+      setToast({ msg: 'Failed to save HV Equipment', type: 'error' });
+    } finally {
+      setBusy(false);
+    }
   };
 
+  const handleHvDeviceSubmit = async () => {
+    try {
+      setBusy(true);
+      const payload = { ...hvDeviceForm };
+      if (editingHvDevice) {
+        await api.hv.update(editingHvDevice.id, payload);
+        setHvDevices(prev => ({
+          ...prev,
+          [currentPanelId]: prev[currentPanelId].map(d => d.id === editingHvDevice.id ? { ...d, ...payload } : d)
+        }));
+      } else {
+        const res = await api.hv.create(currentPanelId, payload);
+        setHvDevices(prev => ({
+          ...prev,
+          [currentPanelId]: [...(prev[currentPanelId] || []), res]
+        }));
+      }
+      setOpenHvDevice(false);
+      setEditingHvDevice(null);
+      setHvDeviceForm(emptyHvDeviceForm);
+      setToast({ msg: 'HV Device saved', type: 'success' });
+    } catch (e) {
+      setToast({ msg: 'Failed to save HV Device', type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Handle delete
+  const handleDeleteHvEquipment = async (id) => {
+    try {
+      setBusy(true);
+      await api.hv.remove(id);
+      setRows(rows.filter(r => r.id !== id));
+      setToast({ msg: 'HV Equipment deleted', type: 'success' });
+    } catch (e) {
+      setToast({ msg: 'Failed to delete HV Equipment', type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeleteHvDevice = async (id, panelId) => {
+    try {
+      setBusy(true);
+      await api.hv.remove(id);
+      setHvDevices(prev => ({
+        ...prev,
+        [panelId]: prev[panelId].filter(d => d.id !== id)
+      }));
+      setToast({ msg: 'HV Device deleted', type: 'success' });
+    } catch (e) {
+      setToast({ msg: 'Failed to delete HV Device', type: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Render
   return (
     <section className="container-narrow py-10">
-      {/* UI similaire à Switchboards, avec inputs supplémentaires pour HV champs et downstream BT */}
-      {/* Dans modal device : Input pour downstream BT avec suggestions */}
-      <input
-        type="text"
-        onFocus={() => setShowDownstreamBtSuggestions(true)}
-        onChange={(e) => fetchBtSuggestions(e.target.value)}
-        // ...
-      />
-      {showDownstreamBtSuggestions && (
-        <ul>
-          {downstreamBtSuggestions.map(s => (
-            <li key={s.id} onClick={() => setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: s.id })}>
-              {s.name} ({s.reference}) - SB: {s.switchboard_name}
-            </li>
-          ))}
-        </ul>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">High Voltage Equipments</h1>
+          <p className="text-gray-600">Manage HV cells, transformers, cables, busbars, and BT links.</p>
+        </div>
+        <button
+          onClick={() => {
+            setEditingHvEquipment(null);
+            setHvEquipmentForm(emptyHvEquipmentForm);
+            setOpenHvEquipment(true);
+          }}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+        >
+          <Plus size={16} className="inline mr-1" /> Add HV Equipment
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="mb-6 grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <div className="relative">
+          <Search size={18} className="absolute top-2.5 left-3 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search by name or code..."
+            value={q.q}
+            onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
+            className="pl-10 pr-4 py-2 border rounded-lg w-full"
+          />
+        </div>
+        <input
+          type="text"
+          placeholder="Building..."
+          value={q.building}
+          onChange={e => setQ({ ...q, building: e.target.value, page: 1 })}
+          className="px-4 py-2 border rounded-lg"
+        />
+        <input
+          type="text"
+          placeholder="Floor..."
+          value={q.floor}
+          onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })}
+          className="px-4 py-2 border rounded-lg"
+        />
+        <input
+          type="text"
+          placeholder="Room..."
+          value={q.room}
+          onChange={e => setQ({ ...q, room: e.target.value, page: 1 })}
+          className="px-4 py-2 border rounded-lg"
+        />
+      </div>
+
+      {/* List */}
+      <div className="space-y-4">
+        {rows.map(row => (
+          <div key={row.id} className="bg-white rounded-lg border border-gray-200 p-6">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <button
+                    onClick={() => setExpandedPanels(prev => ({ ...prev, [row.id]: !prev[row.id] }))}
+                    className="p-1"
+                  >
+                    {expandedPanels[row.id] ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                  </button>
+                  <span className="font-semibold text-gray-900">{row.name} ({row.code})</span>
+                  {row.is_principal && <Pill color="green">Principal</Pill>}
+                </div>
+                <div className="text-sm text-gray-500 flex gap-3">
+                  <span>{row.building_code || '—'}</span>
+                  <span>Floor: {row.floor || '—'}</span>
+                  <span>Room: {row.room || '—'}</span>
+                  <span>Regime: {row.regime_neutral || '—'}</span>
+                  <span>Devices: {row.devices_count || 0}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Tooltip content="Edit">
+                  <button
+                    onClick={() => {
+                      setEditingHvEquipment(row);
+                      setHvEquipmentForm(row);
+                      setOpenHvEquipment(true);
+                    }}
+                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
+                  >
+                    <Edit size={16} />
+                  </button>
+                </Tooltip>
+                <Tooltip content="Delete">
+                  <button
+                    onClick={() => handleDeleteHvEquipment(row.id)}
+                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                  >
+                    <Trash size={16} />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+            {expandedPanels[row.id] && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                <button
+                  onClick={() => {
+                    setEditingHvDevice(null);
+                    setHvDeviceForm(emptyHvDeviceForm);
+                    setCurrentPanelId(row.id);
+                    setOpenHvDevice(true);
+                  }}
+                  className="mb-4 px-3 py-1 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
+                >
+                  <Plus size={16} className="inline mr-1" /> Add Device
+                </button>
+                <HvDeviceTree
+                  devices={hvDevices[row.id] || []}
+                  panelId={row.id}
+                  onEdit={(device, panelId) => {
+                    setEditingHvDevice(device);
+                    setHvDeviceForm(device);
+                    setCurrentPanelId(panelId);
+                    setOpenHvDevice(true);
+                  }}
+                  onDuplicate={() => {}}
+                  onDelete={handleDeleteHvDevice}
+                  onSetMain={() => {}}
+                  site={site}
+                />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* HV Equipment Modal */}
+      <Modal
+        open={openHvEquipment}
+        onClose={() => {
+          setOpenHvEquipment(false);
+          setEditingHvEquipment(null);
+          setHvEquipmentForm(emptyHvEquipmentForm);
+        }}
+        title={editingHvEquipment ? 'Edit HV Equipment' : 'Add HV Equipment'}
+      >
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Name</label>
+            <input
+              type="text"
+              value={hvEquipmentForm.name}
+              onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, name: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Code</label>
+            <input
+              type="text"
+              value={hvEquipmentForm.code}
+              onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, code: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Building</label>
+            <input
+              type="text"
+              value={hvEquipmentForm.meta.building_code}
+              onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, building_code: e.target.value } })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Floor</label>
+            <input
+              type="text"
+              value={hvEquipmentForm.meta.floor}
+              onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, floor: e.target.value } })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Room</label>
+            <input
+              type="text"
+              value={hvEquipmentForm.meta.room}
+              onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, meta: { ...hvEquipmentForm.meta, room: e.target.value } })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Regime Neutral</label>
+            <select
+              value={hvEquipmentForm.regime_neutral}
+              onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, regime_neutral: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            >
+              {regimes.map(r => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2">
+            <label className="inline-flex items-center">
+              <input
+                type="checkbox"
+                checked={hvEquipmentForm.is_principal}
+                onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, is_principal: e.target.checked })}
+                className="rounded border-gray-300"
+              />
+              <span className="ml-2 text-sm text-gray-700">Principal Equipment</span>
+            </label>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end">
+          <button
+            onClick={handleHvEquipmentSubmit}
+            disabled={busy}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            {busy ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </Modal>
+
+      {/* HV Device Modal */}
+      <Modal
+        open={openHvDevice}
+        onClose={() => {
+          setOpenHvDevice(false);
+          setEditingHvDevice(null);
+          setHvDeviceForm(emptyHvDeviceForm);
+          setPhotoFile(null);
+        }}
+        title={editingHvDevice ? 'Edit HV Device' : 'Add HV Device'}
+      >
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Name</label>
+            <input
+              type="text"
+              value={hvDeviceForm.name}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, name: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Device Type</label>
+            <select
+              value={hvDeviceForm.device_type}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, device_type: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            >
+              {hvDeviceTypes.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Manufacturer</label>
+            <input
+              type="text"
+              value={hvDeviceForm.manufacturer}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, manufacturer: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Reference</label>
+            <input
+              type="text"
+              value={hvDeviceForm.reference}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, reference: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Voltage Class (kV)</label>
+            <input
+              type="number"
+              value={hvDeviceForm.voltage_class_kv || ''}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, voltage_class_kv: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Short-Circuit Current (kA)</label>
+            <input
+              type="number"
+              value={hvDeviceForm.short_circuit_current_ka || ''}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, short_circuit_current_ka: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Insulation Type</label>
+            <select
+              value={hvDeviceForm.insulation_type}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, insulation_type: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            >
+              <option value="">Select...</option>
+              {insulationTypes.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Mechanical Endurance</label>
+            <select
+              value={hvDeviceForm.mechanical_endurance_class}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, mechanical_endurance_class: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            >
+              <option value="">Select...</option>
+              {mechanicalEnduranceClasses.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Electrical Endurance</label>
+            <select
+              value={hvDeviceForm.electrical_endurance_class}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, electrical_endurance_class: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            >
+              <option value="">Select...</option>
+              {electricalEnduranceClasses.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Poles</label>
+            <input
+              type="number"
+              value={hvDeviceForm.poles || ''}
+              onChange={e => setHvDeviceForm({ ...hvDeviceForm, poles: e.target.value })}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Downstream BT Device</label>
+            <input
+              type="text"
+              value={downstreamBtSuggestions.find(s => s.id === hvDeviceForm.downstream_device_id)?.name || ''}
+              onFocus={() => {
+                setShowDownstreamBtSuggestions(true);
+                fetchBtSuggestions('');
+              }}
+              onChange={e => fetchBtSuggestions(e.target.value)}
+              className="mt-1 block w-full border-gray-300 rounded-lg"
+              placeholder="Search BT device..."
+            />
+            {showDownstreamBtSuggestions && (
+              <ul className="absolute z-10 bg-white border rounded-lg max-h-40 overflow-y-auto w-full">
+                {downstreamBtSuggestions.map(s => (
+                  <li
+                    key={s.id}
+                    onClick={() => {
+                      setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: s.id });
+                      setShowDownstreamBtSuggestions(false);
+                    }}
+                    className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
+                  >
+                    {s.name} ({s.reference}) - SB: {s.switchboard_name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="col-span-2">
+            <label className="inline-flex items-center">
+              <input
+                type="checkbox"
+                checked={hvDeviceForm.is_main_incoming}
+                onChange={e => setHvDeviceForm({ ...hvDeviceForm, is_main_incoming: e.target.checked })}
+                className="rounded border-gray-300"
+              />
+              <span className="ml-2 text-sm text-gray-700">Main Incoming</span>
+            </label>
+          </div>
+        </div>
+        <div className="mt-6 flex justify-end">
+          <button
+            onClick={handleHvDeviceSubmit}
+            disabled={busy}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+          >
+            {busy ? 'Saving...' : 'Save'}
+          </button>
+        </div>
+      </Modal>
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed bottom-4 right-4 px-4 py-2 rounded-lg ${toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`}>
+          {toast.msg}
+        </div>
       )}
-      {/* DeviceTree adapté avec display liens BT */}
     </section>
   );
 }
@@ -219,23 +697,92 @@ function HvDeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMa
                 </span>
                 {device.is_main_incoming && <Pill color="green">MAIN INCOMING</Pill>}
                 {device.downstream_hv_equipment_id && <Pill color="blue">HV EQ #{device.downstream_hv_equipment_id}</Pill>}
-                {device.downstream_device_id && <Pill color="blue">BT Device #{device.downstream_device_id}</Pill>}  {/* Affichage lien BT */}
+                {device.downstream_device_id && <Pill color="blue">BT Device #{device.downstream_device_id}</Pill>}
               </div>
               <div className="text-xs text-gray-500 flex flex-wrap gap-3">
-                <span>{device.voltage_class_kv || '—'} kV</span>
-                <span>Isc: {device.short_circuit_current_ka || '—'} kA</span>
-                <span>Insul: {device.insulation_type || '—'}</span>
-                <span>Mech: {device.mechanical_endurance_class || '—'}</span>
-                <span>Elec: {device.electrical_endurance_class || '—'}</span>
-                <span>{device.poles || '—'}P</span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                  {device.voltage_class_kv || '—'} kV
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                  Isc: {device.short_circuit_current_ka || '—'} kA
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                  Insul: {device.insulation_type || '—'}
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                  Mech: {device.mechanical_endurance_class || '—'}
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                  Elec: {device.electrical_endurance_class || '—'}
+                </span>
+                <span className="flex items-center gap-1">
+                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
+                  {device.poles || '—'}P
+                </span>
               </div>
             </div>
-            {/* Buttons similaires */}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={() => onEdit(device, panelId)}
+                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                title="Edit Device"
+              >
+                <Edit size={16} />
+              </button>
+              <button
+                onClick={() => onDuplicate(device.id, panelId)}
+                className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                title="Duplicate Device"
+              >
+                <Copy size={16} />
+              </button>
+              <button
+                onClick={() => onDelete(device.id, panelId)}
+                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                title="Delete Device"
+              >
+                <Trash size={16} />
+              </button>
+              <button
+                onClick={() => onSetMain(device.id, panelId, !device.is_main_incoming)}
+                className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
+                  device.is_main_incoming
+                    ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                    : 'bg-green-100 text-green-700 hover:bg-green-200'
+                }`}
+              >
+                {device.is_main_incoming ? 'Unset Main' : 'Set Main'}
+              </button>
+            </div>
           </div>
-          {/* Children similaire */}
+          {device.children && device.children.length > 0 && (
+            <div className={`mt-4 pt-3 border-t border-gray-100 ${level > 1 ? 'ml-4 pl-4 border-l border-gray-300' : ''}`}>
+              <HvDeviceTree
+                devices={device.children}
+                panelId={panelId}
+                onEdit={onEdit}
+                onDuplicate={onDuplicate}
+                onDelete={onDelete}
+                onSetMain={onSetMain}
+                level={level + 1}
+                site={site}
+              />
+            </div>
+          )}
         </div>
       ))}
-      {/* No devices message similaire */}
+      {devices.length === 0 && (
+        <div className="text-center py-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+          <Plus size={24} className="mx-auto text-gray-400 mb-2" />
+          <p className="text-sm text-gray-500">No devices yet</p>
+          <p className="text-xs text-gray-400">Add your first device using the button above</p>
+        </div>
+      )}
     </div>
   );
 }
