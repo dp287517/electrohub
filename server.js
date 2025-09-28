@@ -111,6 +111,17 @@ app.use(
   })
 );
 
+// --- PROXY DIAGRAM (NOUVEAU, port 3010 ; AVANT body parsing) ---
+const diagramTarget = process.env.DIAGRAM_BASE_URL || 'http://127.0.0.1:3010';
+app.use(
+  '/api/diagram',
+  createProxyMiddleware({
+    target: diagramTarget,
+    changeOrigin: true,
+    logLevel: 'warn',
+  })
+);
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
