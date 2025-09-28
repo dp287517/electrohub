@@ -1,371 +1,283 @@
 // server_selectivity.js
-// Express + Postgres + (optionnel) OpenAI
-// Correctifs inclus : CORS en whitelist, vérification parentage up/down,
-// datasets {x,y} servis au front, marge configurable, échantillonnage densifié.
-
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
+import rateLimit from 'express-rate-limit';
+import crypto from 'crypto';
 import cors from 'cors';
-import OpenAI from 'openai';
 
 dotenv.config();
+
 const { Pool } = pg;
-const pool = new Pool({
-  connectionString: process.env.NEON_DATABASE_URL,
-  // ssl: { rejectUnauthorized: false } // active si nécessaire pour Neon
-});
+const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
-const app = express();
-app.use(express.json({ limit: '1mb' }));
-app.use(cookieParser());
-app.use(helmet({
-  contentSecurityPolicy: false,
-}));
-
-/* ---------- CORS (whitelist + credentials sûrs) ---------- */
-const ORIGIN_WHITELIST = (process.env.CORS_ORIGINS || '')
+/* ----------------------- CORS (whitelist) ----------------------- */
+const ORIGINS = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
-app.use(cors({
-  origin: function (origin, cb) {
-    // autoriser outils locaux sans origin (curl, Postman)
-    if (!origin) return cb(null, true);
-    if (ORIGIN_WHITELIST.includes(origin)) return cb(null, true);
-    return cb(new Error('Not allowed by CORS'));
+const corsOptions = {
+  origin: function (origin, callback) {
+    // allow same-origin / curl / server-to-server (no origin header)
+    if (!origin) return callback(null, true);
+    if (ORIGINS.includes(origin)) return callback(null, true);
+    return callback(new Error('Not allowed by CORS'), false);
   },
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Site'],
-}));
+};
+ 
+/* ----------------------- App & security ------------------------- */
+const app = express();
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cookieParser());
+app.use(express.json({ limit: '2mb' }));
+app.use(cors(corsOptions));
 
-/* ---------- OpenAI (optionnel) ---------- */
-let openai = null;
-let openaiError = null;
-if (process.env.OPENAI_API_KEY) {
-  try {
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  } catch (e) {
-    openaiError = e?.message || String(e);
-  }
-}
-
-/* ---------- Helpers ---------- */
+/* ----------------------- Helpers -------------------------------- */
 function siteOf(req) {
-  // IMPORTANT : en prod, mapper le site depuis l’auth et non le client
   return (req.header('X-Site') || req.query.site || '').toString();
 }
 
-const WHITELIST_SORT = ['name', 'building_code', 'floor']; // colonnes existantes côté switchboards
-function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
-function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
+const WHITELIST_SORT = ['name', 'building_code']; // retire "code" si la colonne n'existe pas
+function sortSafe(sort) {
+  return WHITELIST_SORT.includes(String(sort)) ? sort : 'name';
+}
+function dirSafe(dir) {
+  return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+}
 
-const MARGIN_PCT = Number(process.env.MARGIN_PCT || 0.10); // 10% par défaut (au lieu de 5%)
-const MAX_PAGE_SIZE = 100;
+const SELECTIVITY_MARGIN = Number(process.env.SELECTIVITY_MARGIN || '0.05'); // 5% par défaut
+const EPS = 1e-9;
 
-/* ---------- Schéma : selectivity_checks ---------- */
+/* ----------------------- DB bootstrap (facultatif) --------------- */
+// Appelle à l’init si besoin pour créer une table d’audit des checks
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS selectivity_checks (
-      site TEXT NOT NULL,
-      upstream_id INTEGER NOT NULL,
-      downstream_id INTEGER NOT NULL,
-      non_selective BOOLEAN NOT NULL,
-      margin_pct REAL NOT NULL,
-      checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY (site, upstream_id, downstream_id)
+      id SERIAL PRIMARY KEY,
+      site TEXT,
+      upstream_id INTEGER,
+      downstream_id INTEGER,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      ok BOOLEAN,
+      non_selective_zones JSONB
     );
   `);
-  // Index utiles si volumétrie
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_selectivity_checks_site ON selectivity_checks(site);`);
 }
 ensureSchema().catch(console.error);
 
-/* ---------- Modèle de courbes (simplifié) ---------- */
+/* ----------------------- Modèle de calcul ------------------------ */
 /**
- * Device attendu (colonnes principales) :
- * id, site, name, parent_id, switchboard_id,
- * in_amps (In), ir (mult In pour LT), tr (s), isd (mult Ir pour STD), tsd (s),
- * ii (mult Ir pour INST), icu_ka (Icu en kA)
+ * Modèle simplifié pour courbe temps-courant en s fonction de I (A).
+ * Supporte quelques paramètres courants (Ir, In, Tr, Isd, Ii).
+ * On reste volontairement simple mais stable numériquement.
  */
-function calculateTripTime(device, I) {
-  // Approx indicatives : LT (I²t), STD (temporisée), INST (quasi instant)
-  const In = device.in_amps || 100;
-  const Ir = (device.ir || 1.0) * In;
-  const Tr = Math.max(0, device.tr ?? 0.2); // s
-  const Isd = (device.isd || 8) * Ir;       // seuil STD
-  const Tsd = Math.max(0, device.tsd ?? 0.15);
-  const Ii  = (device.ii  || 12) * Ir;      // seuil INST
+function tripTime(device, I) {
+  const In = Number(device?.in_amps) || 100;        // courant nominal
+  const Ir = Number(device?.ir || 1);               // long time pickup (en In)
+  const Tr = Number(device?.tr_s || 5);             // long time delay (s)
+  const Isd = Number(device?.isd || 5);             // short delay pickup (en Ir)
+  const Tsd = Number(device?.tsd_s || 0.1);         // short delay time (s)
+  const Ii = Number(device?.ii || 10);              // instant pickup (en Ir)
+  const Iamp = Math.max(I, EPS);
 
-  if (I < Ir) return Infinity; // pas de déclenchement en dessous de LT
-  if (I >= Ii) return 0.03;    // instantané ~30ms
-  if (I >= Isd) return Tsd;    // short delay
-  // Long time (I²t) – éviter division par zéro aux abords de Ir
-  const denom = (I / Ir) ** 2 - 1;
-  if (denom <= 1e-6) return 1000;
-  return Math.min(1000, Tr / denom);
-}
+  // Zones : LT (I < Isd*Ir*In), STD (entre Isd et Ii), INST (>= Ii*Ir*In)
+  const LT_pick = Ir * In;
+  const SD_pick = Isd * Ir * In;
+  const INST_pick = Ii * Ir * In;
 
-function around(value, pct = 0.2, n = 3) {
-  // points autour d’un seuil : ±pct
-  const out = [];
-  for (let k = -n; k <= n; k++) {
-    const f = 1 + (k / n) * pct;
-    out.push(value * f);
+  if (Iamp < LT_pick * (1 + EPS)) {
+    // En-dessous du pickup LT, pas de déclenchement dans la fenêtre -> bornons haut
+    return Infinity;
   }
-  return out;
+
+  if (Iamp < SD_pick) {
+    // Long Time : loi type I^2t (simplifiée) avec EPS pour stabilité
+    const ratio = Iamp / (Ir * In);
+    const denom = Math.max(ratio * ratio - 1, EPS);
+    return Math.max(Tr / denom, EPS);
+  }
+
+  if (Iamp < INST_pick) {
+    // Short Time : palier temporisé
+    return Math.max(Tsd, EPS);
+  }
+
+  // Instantané : très rapide, bornons bas
+  return 0.01;
 }
 
-function generateCurvePoints(device) {
+/**
+ * Construit des points {x,y} d’une courbe temps-courant pour un device.
+ * Echelle log en X => on échantillonne en log10(I).
+ */
+function buildCurve(device) {
   const points = [];
-  const In = device.in_amps || 100;
-  const Imin = Math.max(0.1 * In, 1);
-  const Imax = Math.max((device.icu_ka || 50) * 1000, 10 * In);
+  const In = Number(device?.in_amps) || 100;
+  const Icu_kA = Number(device?.icu_ka) || 50;
 
-  // grille logarithmique globale
-  for (let logI = Math.log10(Imin); logI <= Math.log10(Imax); logI += 0.05) {
-    const I = 10 ** logI;
-    let t = calculateTripTime(device, I);
-    if (!isFinite(t)) t = 1000;
-    if (t >= 0) points.push({ x: I, y: t });
+  // Plage robuste : 0.2×In → (Icu_kA*1000) A
+  const Imin = Math.max(0.2 * In, 1);
+  const Imax = Math.max(Icu_kA * 1000, 10 * In);
+
+  const logMin = Math.log10(Imin);
+  const logMax = Math.log10(Imax);
+  const step = 0.08; // résolution fine
+
+  for (let l = logMin; l <= logMax + EPS; l += step) {
+    const I = Math.pow(10, l);
+    let t = tripTime(device, I);
+    if (!isFinite(t) || t > 1000) t = 1000; // bornage pour affichage
+    if (t < EPS) t = EPS;
+    points.push({ x: I, y: t });
   }
+  return points;
+}
 
-  // densifier autour des seuils
-  const Ir = (device.ir || 1.0) * In;
-  const Isd = (device.isd || 8) * Ir;
-  const Ii  = (device.ii  || 12) * Ir;
+/**
+ * Détecte les zones non sélectives : t_down >= (1 + margin) * t_up
+ * Retourne une liste de bandes [xMin,xMax].
+ */
+function findNonSelectiveZones(upPts, downPts, margin = SELECTIVITY_MARGIN) {
+  // On suppose les deux séries sur un maillage log similaire
+  const zones = [];
+  let current = null;
 
-  [Ir, Isd, Ii].forEach(S => {
-    if (!S || !isFinite(S)) return;
-    around(S, 0.25, 4).forEach(I => {
-      if (I < Imin || I > Imax) return;
-      let t = calculateTripTime(device, I);
-      if (!isFinite(t)) t = 1000;
-      points.push({ x: I, y: t });
-    });
-  });
+  const n = Math.min(upPts.length, downPts.length);
+  for (let i = 0; i < n; i++) {
+    const u = upPts[i];
+    const d = downPts[i];
+    const nonSel = d.y >= (1 + margin) * u.y; // down plus lent qu’up => non sélectif
 
-  // trier par X croissant puis dédoublonner grossièrement
-  points.sort((a, b) => a.x - b.x);
-  const dedup = [];
-  let prevX = -Infinity;
-  for (const p of points) {
-    if (Math.abs(Math.log10(p.x) - Math.log10(prevX)) > 1e-3) {
-      dedup.push(p);
-      prevX = p.x;
+    if (nonSel && !current) {
+      current = { xMin: Math.min(u.x, d.x), xMax: Math.max(u.x, d.x) };
+    } else if (nonSel && current) {
+      current.xMax = Math.max(current.xMax, u.x, d.x);
+    } else if (!nonSel && current) {
+      zones.push(current);
+      current = null;
     }
   }
-  return dedup;
-}
-
-// simple interpolation linéaire en log-x sur deux courbes
-function interpolateYAtX(points, x) {
-  // points: [{x,y}] triés
-  if (!points.length) return Infinity;
-  if (x <= points[0].x) return points[0].y;
-  if (x >= points[points.length - 1].x) return points[points.length - 1].y;
-
-  // recherche binaire
-  let lo = 0, hi = points.length - 1;
-  while (hi - lo > 1) {
-    const mid = (lo + hi) >> 1;
-    if (points[mid].x <= x) lo = mid; else hi = mid;
-  }
-  const p1 = points[lo], p2 = points[hi];
-  const t = (Math.log(x) - Math.log(p1.x)) / (Math.log(p2.x) - Math.log(p1.x));
-  return p1.y + t * (p2.y - p1.y);
-}
-
-function computeNonSelectiveZones(upPts, downPts, margin = MARGIN_PCT) {
-  // renvoie segments [xMin,xMax] où t_down < (1+margin)*t_up
-  const zones = [];
-  const xs = [...upPts.map(p => p.x), ...downPts.map(p => p.x)].sort((a, b) => a - b);
-  if (!xs.length) return zones;
-
-  let inZone = false;
-  let start = null;
-
-  for (const x of xs) {
-    const tu = interpolateYAtX(upPts, x);
-    const td = interpolateYAtX(downPts, x);
-    const bad = td < (1 + margin) * tu;
-    if (bad && !inZone) { inZone = true; start = x; }
-    if (!bad && inZone) { inZone = false; zones.push({ xMin: start, xMax: x }); start = null; }
-  }
-  if (inZone && start != null) {
-    zones.push({ xMin: start, xMax: xs[xs.length - 1] });
-  }
+  if (current) zones.push(current);
   return zones;
 }
 
-/* ---------- Endpoints ---------- */
+/* ----------------------- API ------------------------------------ */
 
-// Liste de couples possibles (downstream ayant un parent)
-app.get('/pairs', async (req, res) => {
-  const site = siteOf(req);
-  const page = Math.max(1, parseInt(req.query.page || '1', 10));
-  const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, parseInt(req.query.pageSize || '20', 10)));
-  const sort = sortSafe(req.query.sort);
-  const dir = dirSafe(req.query.dir);
-
+// Liste de paires (amont/aval) avec filtres
+app.get('/api/selectivity/pairs', async (req, res) => {
   try {
-    const params = [site];
-    const baseFrom = `
-      FROM devices d
-      JOIN devices u ON u.id = d.parent_id AND u.site = d.site
-      LEFT JOIN switchboards s ON s.id = d.switchboard_id
-      WHERE d.site = $1
-    `;
+    const site = siteOf(req);
+    const { q = '', switchboard = '', building = '', floor = '', sort = 'name', dir = 'desc', page = 1 } = req.query;
 
-    const countSql = `SELECT COUNT(*) ${baseFrom}`;
-    const { rows: countRows } = await pool.query(countSql, params);
-    const total = Number(countRows[0].count || 0);
+    const s = sortSafe(sort);
+    const d = dirSafe(dir);
+    const limit = 20;
+    const offset = (Math.max(Number(page) || 1, 1) - 1) * limit;
 
-    const offset = (page - 1) * pageSize;
-    const listSql = `
-      SELECT
-        d.id AS down_id, d.name AS down_name, d.in_amps AS down_in,
-        u.id AS up_id,   u.name AS up_name,   u.in_amps AS up_in,
-        s.name AS switchboard, s.building_code, s.floor
-      ${baseFrom}
-      ORDER BY s.${sort} ${dir} NULLS LAST, d.id ASC
-      LIMIT $2 OFFSET $3
-    `;
-    const { rows } = await pool.query(listSql, [site, pageSize, offset]);
+    // Exemple simplifié : suppose une vue materialized "device_pairs" (id_up, id_down, name, building_code, ...)
+    const { rows } = await pool.query(
+      `
+      SELECT id_up, id_down, name, building_code, floor, switchboard
+      FROM device_pairs
+      WHERE ($1 = '' OR name ILIKE '%'||$1||'%')
+        AND ($2 = '' OR switchboard = $2)
+        AND ($3 = '' OR building_code = $3)
+        AND ($4 = '' OR floor = $4)
+        AND ($5 = '' OR site = $5)
+      ORDER BY ${s} ${d}
+      LIMIT ${limit} OFFSET ${offset}
+      `,
+      [q, switchboard, building, floor, site, site]
+    );
 
-    res.json({ total, page, pageSize, sort, dir, rows });
+    const { rows: totalRows } = await pool.query(
+      `
+      SELECT count(*)::int AS total
+      FROM device_pairs
+      WHERE ($1 = '' OR name ILIKE '%'||$1||'%')
+        AND ($2 = '' OR switchboard = $2)
+        AND ($3 = '' OR building_code = $3)
+        AND ($4 = '' OR floor = $4)
+        AND ($5 = '' OR site = $5)
+      `,
+      [q, switchboard, building, floor, site, site]
+    );
+
+    res.json({ pairs: rows, total: totalRows[0]?.total || 0 });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'pairs_failed', details: e?.message });
+    res.status(500).json({ error: 'pairs_list_failed' });
   }
 });
 
-// Calcul + sauvegarde du statut de sélectivité pour un couple
-app.post('/check', async (req, res) => {
-  const site = siteOf(req);
-  const { upstream_id, downstream_id, margin_pct } = req.body || {};
-  const margin = isFinite(margin_pct) ? Number(margin_pct) : MARGIN_PCT;
+// Récupération d’un device par id (simplifiée)
+async function getDeviceById(id) {
+  const { rows } = await pool.query(`SELECT * FROM devices WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
 
-  if (!site || !upstream_id || !downstream_id) {
-    return res.status(400).json({ error: 'missing_params' });
-  }
-
+// Check sélectivité entre 2 équipements
+app.post('/api/selectivity/check', async (req, res) => {
   try {
-    // Charger les deux appareils
-    const { rows: devs } = await pool.query(
-      `SELECT * FROM devices WHERE site = $1 AND id IN ($2,$3)`,
-      [site, upstream_id, downstream_id]
-    );
-    if (devs.length !== 2) return res.status(404).json({ error: 'devices_not_found' });
-    const up = devs.find(d => d.id === Number(upstream_id));
-    const down = devs.find(d => d.id === Number(downstream_id));
+    const { upstream_id, downstream_id } = req.body || {};
+    if (!upstream_id || !downstream_id) return res.status(400).json({ error: 'missing_ids' });
 
-    if (!up || !down) return res.status(404).json({ error: 'devices_not_found' });
+    const [up, down] = await Promise.all([getDeviceById(upstream_id), getDeviceById(downstream_id)]);
+    if (!up || !down) return res.status(404).json({ error: 'device_not_found' });
 
-    // Vérifier le parentage : downstream.parent_id = upstream.id
-    if (down.parent_id !== up.id) {
-      return res.status(400).json({ error: 'invalid_relation', message: 'downstream is not a child of upstream' });
-    }
+    const upPts = buildCurve(up);
+    const downPts = buildCurve(down);
 
-    const upPts = generateCurvePoints(up);
-    const downPts = generateCurvePoints(down);
-    const zones = computeNonSelectiveZones(upPts, downPts, margin);
-    const nonSelective = zones.length > 0;
+    const zones = findNonSelectiveZones(upPts, downPts);
+    const ok = zones.length === 0;
 
-    // upsert du résultat
-    await pool.query(`
-      INSERT INTO selectivity_checks (site, upstream_id, downstream_id, non_selective, margin_pct)
-      VALUES ($1,$2,$3,$4,$5)
-      ON CONFLICT (site, upstream_id, downstream_id)
-      DO UPDATE SET non_selective = EXCLUDED.non_selective,
-                    margin_pct = EXCLUDED.margin_pct,
-                    checked_at = now()
-    `, [site, up.id, down.id, nonSelective, margin]);
+    // Audit (best-effort)
+    const site = (await pool.query(`SELECT site FROM devices WHERE id = $1`, [upstream_id])).rows[0]?.site || null;
+    pool.query(
+      `INSERT INTO selectivity_checks (site, upstream_id, downstream_id, ok, non_selective_zones)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [site, upstream_id, downstream_id, ok, JSON.stringify(zones)]
+    ).catch(() => {});
 
     res.json({
-      site,
-      upstream_id: up.id,
-      downstream_id: down.id,
-      margin_pct: margin,
-      non_selective: nonSelective,
+      ok,
       nonSelectiveZones: zones,
+      upstream: { id: up.id, name: up.name, points: upPts },
+      downstream: { id: down.id, name: down.name, points: downPts },
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: 'check_failed', details: e?.message });
+    res.status(500).json({ error: 'check_failed' });
   }
 });
 
-// Renvoie courbes {x,y} pour affichage (log-x côté front) + zones calculées
-app.get('/curves', async (req, res) => {
-  const site = siteOf(req);
-  const upId = Number(req.query.upstream_id);
-  const downId = Number(req.query.downstream_id);
-  const margin = isFinite(req.query.margin_pct) ? Number(req.query.margin_pct) : MARGIN_PCT;
+/* ----------------------- AI Tip (rate-limited) ------------------- */
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10, // 10 req/min par IP
+  keyGenerator: (req) => {
+    const site = siteOf(req) || '';
+    const ip = req.ip || req.headers['x-forwarded-for'] || '';
+    return crypto.createHash('sha1').update(String(site) + '|' + String(ip)).digest('hex');
+  },
+});
 
-  if (!site || !upId || !downId) return res.status(400).json({ error: 'missing_params' });
-
+app.post('/api/selectivity/ai-tip', limiter, async (req, res) => {
+  // Remplace par ton moteur IA favori si besoin — placeholder sans external call
   try {
-    const { rows: devs } = await pool.query(
-      `SELECT * FROM devices WHERE site = $1 AND id IN ($2,$3)`,
-      [site, upId, downId]
-    );
-    if (devs.length !== 2) return res.status(404).json({ error: 'devices_not_found' });
-
-    const up = devs.find(d => d.id === upId);
-    const down = devs.find(d => d.id === downId);
-
-    const upstream = generateCurvePoints(up);
-    const downstream = generateCurvePoints(down);
-    const zones = computeNonSelectiveZones(upstream, downstream, margin);
-
-    res.json({
-      site,
-      upstream_id: up.id,
-      downstream_id: down.id,
-      margin_pct: margin,
-      upstream,
-      downstream,
-      nonSelectiveZones: zones,
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'curves_failed', details: e?.message });
+    const { query } = req.body || {};
+    const tip = `Pour améliorer la sélectivité, augmente légèrement le temps de déclenchement en amont (LT/STD)
+et vérifie la zone autour de Ir*In et Isd*Ir*In. Marge actuelle ${(SELECTIVITY_MARGIN * 100).toFixed(1)}%.`;
+    res.json({ tip, for: query || null });
+  } catch {
+    res.status(500).json({ error: 'ai_tip_failed' });
   }
 });
 
-// Astuce IA (optionnel) – throttler côté reverse proxy recommandé
-app.post('/ai-tip', async (req, res) => {
-  if (!openai) {
-    return res.status(503).json({ error: 'ai_unavailable', details: openaiError || 'Missing OPENAI_API_KEY' });
-  }
-  try {
-    const { context } = req.body || {};
-    const prompt = `
-Tu es un expert coordination/sélectivité BT. Contexte JSON:
-${JSON.stringify(context ?? {}, null, 2)}
-
-Donne 2 à 3 conseils concrets et actionnables (ajustements de réglages, ZSI si pertinent, alternatives d’appareillage).
-    `.trim();
-
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.2,
-      max_tokens: 220,
-    });
-
-    const text = completion.choices?.[0]?.message?.content || '';
-    res.json({ tips: text });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'ai_failed', details: e?.message });
-  }
-});
-
-/* ---------- Démarrage ---------- */
-const port = process.env.SELECTIVITY_PORT || 3004;
+/* ----------------------- Boot ----------------------------------- */
+const port = Number(process.env.SELECTIVITY_PORT || 3004);
 app.listen(port, () => console.log(`Selectivity service running on :${port}`));
