@@ -1,19 +1,16 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { get, post, put, del } from '../lib/api.js';
-import { Edit, Copy, Trash, Plus, Search, ChevronDown, ChevronRight, X, ImagePlus, Sparkles } from 'lucide-react';
+import { get, post, put, del, API_BASE } from '../lib/api.js';
+import { Edit, Copy, Trash, Plus, Search, ChevronDown, ChevronRight, X, ImagePlus, Sparkles, AlertCircle } from 'lucide-react';
 
 /**
- * High Voltage — Frontend UI (React)
- *
- * Changes in this version (EN):
- * - All UI text in EN only
- * - Professional theme: white background, black text, subtle borders (no dark buttons)
- * - Fixed API layer + base path override (window.__HV_BASE or "/api/hv")
- * - Full CRUD for HV Equipments & HV Devices
- * - Upstream link (parent HV device), downstream HV equipment (e.g., transformer), and LV link (switchboard device by name)
- * - Multi-photos upload + previews
- * - AI "Suggest specs" with safe merges
- * - Proper refresh after create/update/delete
+ * High Voltage — Frontend UI (React) — FINAL
+ * - EN-only labels
+ * - Professional theme: white bg / black text
+ * - Robust API handling: guards when backend returns HTML (404) -> no destructuring crash
+ * - Full CRUD for HV Boards & Devices
+ * - Upstream link (parent HV device), downstream HV equipment, LV link (switchboard device by name)
+ * - Multi-photos
+ * - AI suggest with plausibility bounds (server side)
  */
 
 const NEUTRAL_REGIMES = ['TN-S', 'TN-C-S', 'IT', 'TT'];
@@ -27,6 +24,20 @@ function Chip({ children }) {
     <span className="inline-flex items-center rounded-full border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-800">
       {children}
     </span>
+  );
+}
+
+function Banner({ kind = 'error', title, details }) {
+  const Icon = AlertCircle;
+  const tone = kind === 'error' ? 'text-red-700 border-red-300 bg-red-50' : 'text-amber-700 border-amber-300 bg-amber-50';
+  return (
+    <div className={`flex items-start gap-3 border rounded-xl px-3 py-2 ${tone}`}>
+      <Icon size={18} className="mt-0.5"/>
+      <div className="text-sm">
+        <div className="font-medium">{title}</div>
+        {details && <div className="opacity-90 whitespace-pre-wrap">{details}</div>}
+      </div>
+    </div>
   );
 }
 
@@ -52,22 +63,24 @@ function useUserSite() {
   try { return JSON.parse(localStorage.getItem('eh_user') || '{}')?.site || ''; } catch { return ''; }
 }
 
-// --- API layer --------------------------------------------------------------
+// ---- API layer (local helpers) --------------------------------------------
 export function useHvApi() {
   const site = useUserSite();
   const BASE = (typeof window !== 'undefined' && window.__HV_BASE) || '/api/hv';
-  const withSite = (path, params) => {
-    const u = new URL(path.startsWith('http') ? path : `${BASE}${path.replace(/^\/api\/hv/, '')}`, window.location.origin);
+
+  const join = (p) => `${BASE}${p}`; // Always relative; App-wide API_BASE (from lib/api.js) prepends host if needed
+  const withSite = (p, params) => {
+    const u = new URL(join(p), 'http://dummy'); // create URL safely without origin issues
     if (params && typeof params === 'object') {
       Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') u.searchParams.set(k, v); });
     }
-    if (site) u.searchParams.set('site', site); // fallback if X-Site header isn’t set in helpers
-    return u.pathname + u.search;
+    if (site) u.searchParams.set('site', site); // fallback if helpers didn’t send X-Site
+    return u.pathname + u.search; // relative
   };
 
-  const api = {
+  return {
     hv: {
-      // HV Equipments
+      // Boards
       list: (q) => get(withSite('/equipments', q)),
       getOne: (id) => get(withSite(`/equipments/${id}`)),
       createEq: (body) => post(withSite('/equipments'), body),
@@ -75,7 +88,7 @@ export function useHvApi() {
       deleteEq: (id) => del(withSite(`/equipments/${id}`)),
       duplicateEq: (id) => post(withSite(`/equipments/${id}/duplicate`)),
 
-      // HV Devices
+      // Devices
       listDevices: (hvEquipmentId) => get(withSite(`/equipments/${hvEquipmentId}/devices`)),
       createDevice: (hvEquipmentId, body) => post(withSite(`/equipments/${hvEquipmentId}/devices`), body),
       updateDevice: (id, body) => put(withSite(`/devices/${id}`), body),
@@ -90,8 +103,9 @@ export function useHvApi() {
       uploadPhotos: async (deviceId, files) => {
         const form = new FormData();
         [...files].forEach(f => form.append('photos', f));
-        const url = withSite(`/devices/${deviceId}/photos`);
-        const res = await fetch(url, { method: 'POST', body: form });
+        const path = withSite(`/devices/${deviceId}/photos`);
+        const siteHdr = useUserSite();
+        const res = await fetch(`${API_BASE}${path}`, { method: 'POST', body: form, credentials: 'include', headers: { ...(siteHdr ? { 'X-Site': siteHdr } : {}) } });
         if (!res.ok) throw new Error(await res.text());
         return res.json();
       },
@@ -102,7 +116,6 @@ export function useHvApi() {
       analyzeDevice: (id, payload) => post(withSite(`/devices/${id}/analyze`), payload),
     }
   };
-  return api;
 }
 
 const EMPTY_EQ = {
@@ -132,6 +145,7 @@ export default function HighVoltage() {
   const [rows, setRows] = useState([]);
   const [q, setQ] = useState({ q: '', building: '', floor: '', room: '', sort: 'created_at', dir: 'desc', page: 1, pageSize: 18 });
   const [total, setTotal] = useState(0);
+  const [hvErr, setHvErr] = useState(null);
 
   const [openEq, setOpenEq] = useState(false);
   const [editingEq, setEditingEq] = useState(null);
@@ -153,22 +167,42 @@ export default function HighVoltage() {
 
   const fileInputRef = useRef(null);
 
-  // Load equipments
+  // Load equipments (with guard when backend returns HTML)
   useEffect(() => {
-    api.hv.list(q).then(({ data, total }) => { setRows(data); setTotal(total); }).catch(console.error);
+    (async () => {
+      try {
+        setHvErr(null);
+        const resp = await api.hv.list(q);
+        if (!resp || typeof resp !== 'object' || !('data' in resp)) {
+          throw new Error('HV API returned a non-JSON response. Check API_BASE / reverse proxy.');
+        }
+        setRows(resp.data || []);
+        setTotal(resp.total || 0);
+      } catch (e) {
+        console.error('[HV list] failed', e);
+        setRows([]); setTotal(0); setHvErr(String(e.message || e));
+      }
+    })();
   }, [q.page, q.q, q.building, q.floor, q.room, q.sort, q.dir]);
 
   const toggleExpand = async (panelId) => {
     setExpanded(prev => ({ ...prev, [panelId]: !prev[panelId] }));
     if (!panelDevices[panelId]) {
-      const devs = await api.hv.listDevices(panelId);
-      setPanelDevices(prev => ({ ...prev, [panelId]: devs }));
+      try {
+        const devs = await api.hv.listDevices(panelId);
+        setPanelDevices(prev => ({ ...prev, [panelId]: Array.isArray(devs) ? devs : [] }));
+      } catch (e) {
+        console.error('[HV devices] failed', e);
+        setPanelDevices(prev => ({ ...prev, [panelId]: [] }));
+      }
     }
   };
 
   const refreshPanel = async (panelId) => {
-    const devs = await api.hv.listDevices(panelId);
-    setPanelDevices(prev => ({ ...prev, [panelId]: devs }));
+    try {
+      const devs = await api.hv.listDevices(panelId);
+      setPanelDevices(prev => ({ ...prev, [panelId]: Array.isArray(devs) ? devs : [] }));
+    } catch (e) { console.error('[HV devices refresh] failed', e); }
   };
 
   // Suggestions
@@ -206,10 +240,14 @@ export default function HighVoltage() {
       regime_neutral: eqForm.regime_neutral, is_principal: eqForm.is_principal,
       modes: eqForm.modes, quality: eqForm.quality
     };
-    if (editingEq) await api.hv.updateEq(editingEq.id, body);
-    else await api.hv.createEq(body);
-    setOpenEq(false);
-    setQ(q => ({ ...q }));
+    try {
+      if (editingEq) await api.hv.updateEq(editingEq.id, body);
+      else await api.hv.createEq(body);
+      setOpenEq(false);
+      setQ(q => ({ ...q }));
+    } catch (e) {
+      setHvErr(`Create/Update failed: ${String(e.message || e)}`);
+    }
   };
 
   // Device form handlers
@@ -239,42 +277,52 @@ export default function HighVoltage() {
       short_circuit_current_ka: devForm.short_circuit_current_ka === '' ? null : Number(devForm.short_circuit_current_ka),
       poles: devForm.poles === '' ? null : Number(devForm.poles),
     };
-    if (editingDev) await api.hv.updateDevice(editingDev.id, payload);
-    else await api.hv.createDevice(currentPanelId, payload);
-    await refreshPanel(currentPanelId);
-    setOpenDev(false);
+    try {
+      if (editingDev) await api.hv.updateDevice(editingDev.id, payload);
+      else await api.hv.createDevice(currentPanelId, payload);
+      await refreshPanel(currentPanelId);
+      setOpenDev(false);
+    } catch (e) { setHvErr(`Device save failed: ${String(e.message || e)}`); }
   };
 
   const deleteDev = async (deviceId) => {
     if (!window.confirm('Delete this device?')) return;
-    await api.hv.deleteDevice(deviceId);
-    await refreshPanel(currentPanelId);
+    try { await api.hv.deleteDevice(deviceId); await refreshPanel(currentPanelId); }
+    catch (e) { setHvErr(`Delete failed: ${String(e.message || e)}`); }
   };
 
   const uploadPhotos = async (files) => {
     if (!editingDev) { alert('Save the device first, then upload photos.'); return; }
-    await api.hv.uploadPhotos(editingDev.id, files);
-    await refreshPanel(currentPanelId);
+    try { await api.hv.uploadPhotos(editingDev.id, files); await refreshPanel(currentPanelId); }
+    catch (e) { setHvErr(`Upload failed: ${String(e.message || e)}`); }
   };
 
   const suggestSpecs = async () => {
-    const desc = { name: devForm.name, manufacturer: devForm.manufacturer, reference: devForm.reference, device_type_hint: devForm.device_type };
-    const res = await api.hv.suggestSpecs({ description: desc });
-    setDevForm(f => ({
-      ...f,
-      device_type: res.device_type || f.device_type,
-      voltage_class_kv: res.voltage_class_kv ?? f.voltage_class_kv,
-      short_circuit_current_ka: res.short_circuit_current_ka ?? f.short_circuit_current_ka,
-      insulation_type: res.insulation_type || f.insulation_type,
-      mechanical_endurance_class: res.mechanical_endurance_class || f.mechanical_endurance_class,
-      electrical_endurance_class: res.electrical_endurance_class || f.electrical_endurance_class,
-      poles: res.poles ?? f.poles,
-      settings: { ...f.settings, ...(res.settings || {}) }
-    }));
+    try {
+      const desc = { name: devForm.name, manufacturer: devForm.manufacturer, reference: devForm.reference, device_type_hint: devForm.device_type };
+      const res = await api.hv.suggestSpecs({ description: desc });
+      setDevForm(f => ({
+        ...f,
+        device_type: res.device_type || f.device_type,
+        voltage_class_kv: res.voltage_class_kv ?? f.voltage_class_kv,
+        short_circuit_current_ka: res.short_circuit_current_ka ?? f.short_circuit_current_ka,
+        insulation_type: res.insulation_type || f.insulation_type,
+        mechanical_endurance_class: res.mechanical_endurance_class || f.mechanical_endurance_class,
+        electrical_endurance_class: res.electrical_endurance_class || f.electrical_endurance_class,
+        poles: res.poles ?? f.poles,
+        settings: { ...f.settings, ...(res.settings || {}) }
+      }));
+    } catch (e) { setHvErr(`AI suggest failed: ${String(e.message || e)}`); }
   };
 
   return (
     <section className="container mx-auto max-w-6xl py-8 bg-white">
+      {hvErr && (
+        <div className="mb-4">
+          <Banner title="High Voltage API error" details={`${hvErr}\n\nTip: if you see \"Cannot POST /api/hv/equipments\", the frontend is hitting the wrong origin. Set VITE_API_BASE (or window.__API_BASE) to your API host (e.g. http://localhost:3009).`} />
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-2">
           <h2 className="text-2xl font-semibold text-black">High Voltage Equipments</h2>
@@ -457,7 +505,7 @@ export default function HighVoltage() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
                 {Array.from({ length: 12 }).map((_, idx) => (
                   <img key={idx} alt="photo" className="w-full h-28 object-cover rounded-lg border border-gray-200"
-                       src={api.hv.photoUrl(editingDev.id, idx)}
+                       src={`${API_BASE}${api.hv.photoUrl(editingDev.id, idx)}`}
                        onError={(e)=>{ e.currentTarget.style.display='none'; }}/>
                 ))}
               </div>
