@@ -299,7 +299,6 @@ function checkSelectivity(up, down, faultI = null) {
     if (tDown >= tUp * threshold) {
       isSelective = false;
       if (zoneStart === null) zoneStart = I;
-      if (I > maxEval) isPartial = true;
     } else if (zoneStart !== null) {
       nonSelectiveZones.push({ xMin: zoneStart, xMax: I });
       zoneStart = null;
@@ -307,7 +306,7 @@ function checkSelectivity(up, down, faultI = null) {
   }
   if (zoneStart !== null) nonSelectiveZones.push({ xMin: zoneStart, xMax: currents[currents.length - 1] });
 
-  isPartial = !isSelective && nonSelectiveZones.every(z => z.xMin > maxEval); // Réassignation au lieu de redéclaration
+  isPartial = !isSelective && nonSelectiveZones.every(z => z.xMin > maxIcu);
 
   return { isSelective, isPartial, nonSelectiveZones };
 }
