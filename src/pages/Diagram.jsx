@@ -16,7 +16,17 @@ const COLORS = {
   hv_device: 'rgb(124,45,18)',
 };
 
-function buildModelFromGraph(graph, useSmart = false, onNodeClick) {
+function nodeCaption(n) {
+  const d = n?.data || {};
+  const L1 = d.label || n.id;
+  const L2 = d.code ? `(${d.code})` : '';
+  const L3a = d.building_code || d.building || '';
+  const L3b = d.room ? `, Rm ${d.room}` : '';
+  const L3 = L3a ? `Bld ${L3a}${L3b}` : (d.floor ? `Fl ${d.floor}` : '');
+  return [L1, L2, L3].filter(Boolean).join('\n');
+}
+
+function buildModelFromGraph(graph, useSmart = false, onNodeSelect) {
   const model = new DiagramModel();
   const idToNode = new Map();
 
@@ -25,26 +35,21 @@ function buildModelFromGraph(graph, useSmart = false, onNodeClick) {
 
   for (const n of nodes) {
     const color = COLORS[n.type] || 'rgb(51,65,85)';
-    const node = new DefaultNodeModel({ name: n?.data?.label || n.id, color });
+    const node = new DefaultNodeModel({ name: nodeCaption(n), color });
     const inPort = node.addInPort('in');
     const outPort = node.addOutPort('out');
     const px = Number.isFinite(n?.position?.x) ? n.position.x : 0;
     const py = Number.isFinite(n?.position?.y) ? n.position.y : 0;
     node.setPosition(px, py);
     node.getOptions().extras = { ...n.data, nodeType: n.type, nodeId: n.id };
-    // Hook click → panneau détails
     node.registerListener({
-      selectionChanged: (e) => {
-        if (e.isSelected) {
-          onNodeClick?.({ id: n.id, type: n.type, data: n.data });
-        }
-      },
+      selectionChanged: (e) => { if (e.isSelected) onNodeSelect?.({ id: n.id, type: n.type, data: n.data }); }
     });
     idToNode.set(n.id, { node, inPort, outPort });
     model.addNode(node);
   }
 
-  const safeSmart = useSmart && nodes.length >= 2; // évite PathFinding si graphe trop petit
+  const safeSmart = useSmart && nodes.length >= 2;
 
   for (const e of edges) {
     const src = idToNode.get(e.source);
@@ -65,20 +70,18 @@ function buildModelFromGraph(graph, useSmart = false, onNodeClick) {
 }
 
 export default function Diagram() {
-  // Filtres & options
   const [site, setSite] = useState('Nyon');
   const [mode, setMode] = useState('all');
-  const [building, setBuilding] = useState(''); // ← vide = "voir tout" par défaut
+  const [building, setBuilding] = useState(''); // empty => show ALL
   const [depth, setDepth] = useState(3);
   const [rootSwitch, setRootSwitch] = useState('');
   const [rootHv, setRootHv] = useState('');
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState('');
-  const [smart, setSmart] = useState(false); // OFF par défaut
+  const [smart, setSmart] = useState(false);
 
-  // Détails / panneau latéral
   const [activeNode, setActiveNode] = useState(null);
-  const [tab, setTab] = useState('details'); // details | selectivity | arc | fla
+  const [tab, setTab] = useState('details');
   const [analysis, setAnalysis] = useState({ loading: false, data: null, error: '' });
 
   const engineRef = useRef(null);
@@ -100,7 +103,7 @@ export default function Diagram() {
         site: site?.trim() || undefined,
         mode,
         depth,
-        // IMPORTANT : si aucun filtre → on n’envoie PAS building/root → on affiche tout
+        // IMPORTANT: do not send empty filters
         building: building?.trim() || undefined,
         root_switchboard: rootSwitch?.trim() || undefined,
         root_hv: rootHv?.trim() || undefined,
@@ -121,12 +124,8 @@ export default function Diagram() {
       const model = buildModelFromGraph(data, smart, setActiveNode);
       engine.setModel(model);
 
-      // Zoom doux
       setTimeout(() => {
-        try {
-          engine.getModel().setZoomLevel(80);
-          engine.repaintCanvas();
-        } catch {}
+        try { engine.getModel().setZoomLevel(80); engine.repaintCanvas(); } catch {}
       }, 10);
     } catch (e) {
       console.error(e);
@@ -137,34 +136,49 @@ export default function Diagram() {
     }
   };
 
-  useEffect(() => {
-    // Au premier chargement → affiche TOUT le site (building vide)
-    fetchGraph();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { fetchGraph(); /* initial show-all */ }, []);
+  useEffect(() => { fetchGraph(); }, [site, mode]);
 
-  // (Re)charger quand on change un filtre important
-  useEffect(() => {
-    fetchGraph();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [site, mode]);
+  const onClear = () => { setBuilding(''); setRootSwitch(''); setRootHv(''); setTimeout(fetchGraph, 0); };
 
-  const onClear = () => {
-    setBuilding('');
-    setRootSwitch('');
-    setRootHv('');
-    setTimeout(fetchGraph, 0);
+  // --- Analyses ---
+  const runSelectivityForNode = async (node) => {
+    // Only makes sense for device nodes that have a parent
+    const devId = Number(node?.data?.id || String(node?.id||'').split(':')[1]);
+    const sbId = Number(node?.data?.switchboard_id);
+    if (!devId || !sbId) return setAnalysis({ loading:false, data:null, error:'Missing device/switchboard id' });
+    // get pairs within the same switchboard and pick the pair where devId is downstream
+    const pairs = await api.selectivity.pairs({ switchboard: sbId, pageSize: 100 });
+    const hit = pairs?.data?.find(p => p.downstream_id === devId) || pairs?.data?.find(p => p.upstream_id === devId);
+    if (!hit) return setAnalysis({ loading:false, data:null, error:'No selectivity pair found for this device' });
+    const upstream = hit.upstream_id;
+    const downstream = hit.downstream_id;
+    const res = await api.selectivity.check({ upstream, downstream });
+    return res;
   };
 
-  // --- Chargement des analyses (sélectivité / arc flash / FLA) ---
+  const runArcForNode = async (node) => {
+    const devId = Number(node?.data?.id || String(node?.id||'').split(':')[1]);
+    const sbId = Number(node?.data?.switchboard_id);
+    if (!devId || !sbId) return { error: 'Missing device/switchboard id' };
+    return api.arcflash.check({ device: devId, switchboard: sbId });
+  };
+
+  const runFlaForNode = async (node) => {
+    const devId = Number(node?.data?.id || String(node?.id||'').split(':')[1]);
+    const sbId = Number(node?.data?.switchboard_id);
+    if (!devId || !sbId) return { error: 'Missing device/switchboard id' };
+    return api.faultlevel.check({ device: devId, switchboard: sbId });
+  };
+
   const runAnalysis = async (kind, node) => {
     if (!node?.id) return;
     setAnalysis({ loading: true, data: null, error: '' });
     try {
       let res;
-      if (kind === 'selectivity') res = await api.selectivity.node(node.id);
-      else if (kind === 'arc') res = await api.arcflash.node(node.id);
-      else if (kind === 'fla') res = await api.fla.node(node.id);
+      if (kind === 'selectivity') res = await runSelectivityForNode(node);
+      else if (kind === 'arc') res = await runArcForNode(node);
+      else if (kind === 'fla') res = await runFlaForNode(node);
       setAnalysis({ loading: false, data: res, error: '' });
     } catch (e) {
       setAnalysis({ loading: false, data: null, error: e?.message || 'analysis failed' });
@@ -172,33 +186,21 @@ export default function Diagram() {
   };
 
   useEffect(() => {
-    // recharge l’onglet d’analyse lorsqu’on change de node ou d’onglet
     if (!activeNode) return;
     if (tab === 'details') return setAnalysis({ loading: false, data: null, error: '' });
     runAnalysis(tab, activeNode);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeNode, tab]);
+  }, [activeNode, tab]); // eslint-disable-line
 
   return (
     <div className="p-4 grid grid-cols-12 gap-4">
-      {/* Barre de filtres */}
       <div className="col-span-12 flex flex-wrap items-end gap-3">
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Site</label>
-          <input
-            className="border rounded-md px-2 py-1 w-40"
-            placeholder="ex: Nyon"
-            value={site}
-            onChange={(e) => setSite(e.target.value)}
-          />
+          <input className="border rounded-md px-2 py-1 w-40" placeholder="ex: Nyon" value={site} onChange={(e) => setSite(e.target.value)} />
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Mode</label>
-          <select
-            className="border rounded-md px-2 py-1"
-            value={mode}
-            onChange={(e) => setMode(e.target.value)}
-          >
+          <select className="border rounded-md px-2 py-1" value={mode} onChange={(e) => setMode(e.target.value)}>
             <option value="all">LV + HV</option>
             <option value="lv">LV only</option>
             <option value="hv">HV only</option>
@@ -206,41 +208,19 @@ export default function Diagram() {
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Building</label>
-          <input
-            className="border rounded-md px-2 py-1"
-            placeholder="(vide = tout)"
-            value={building}
-            onChange={(e) => setBuilding(e.target.value)}
-          />
+          <input className="border rounded-md px-2 py-1" placeholder="(vide = tout)" value={building} onChange={(e) => setBuilding(e.target.value)} />
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Depth</label>
-          <input
-            type="number"
-            min={1}
-            max={8}
-            className="border rounded-md px-2 py-1 w-24"
-            value={depth}
-            onChange={(e) => setDepth(parseInt(e.target.value || 3, 10))}
-          />
+          <input type="number" min={1} max={8} className="border rounded-md px-2 py-1 w-24" value={depth} onChange={(e) => setDepth(parseInt(e.target.value || 3, 10))} />
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Root Switchboard ID</label>
-          <input
-            className="border rounded-md px-2 py-1 w-36"
-            placeholder="numeric id"
-            value={rootSwitch}
-            onChange={(e) => setRootSwitch(e.target.value)}
-          />
+          <input className="border rounded-md px-2 py-1 w-36" placeholder="numeric id" value={rootSwitch} onChange={(e) => setRootSwitch(e.target.value)} />
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Root HV Equipment ID</label>
-          <input
-            className="border rounded-md px-2 py-1 w-36"
-            placeholder="numeric id"
-            value={rootHv}
-            onChange={(e) => setRootHv(e.target.value)}
-          />
+          <input className="border rounded-md px-2 py-1 w-36" placeholder="numeric id" value={rootHv} onChange={(e) => setRootHv(e.target.value)} />
         </div>
         <div className="flex items-center gap-2">
           <input id="smart" type="checkbox" checked={smart} onChange={(e) => setSmart(e.target.checked)} />
@@ -249,19 +229,13 @@ export default function Diagram() {
         <button className="px-3 py-2 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={loading} onClick={fetchGraph}>
           {loading ? 'Loading…' : 'Refresh'}
         </button>
-        {hasFilters && (
-          <button className="px-3 py-2 rounded-md bg-slate-200" onClick={onClear}>Clear filters</button>
-        )}
+        {hasFilters && (<button className="px-3 py-2 rounded-md bg-slate-200" onClick={onClear}>Clear filters</button>)}
       </div>
 
-      {/* Messages */}
       <div className="col-span-12 text-xs text-amber-700" style={{ minHeight: '1.25rem' }}>
-        {banner && (
-          <span className="inline-block bg-amber-50 border border-amber-300 rounded px-2 py-1">{banner}</span>
-        )}
+        {banner && (<span className="inline-block bg-amber-50 border border-amber-300 rounded px-2 py-1">{banner}</span>)}
       </div>
 
-      {/* Canvas + Panneau latéral */}
       <div className="col-span-9 border rounded-xl overflow-hidden" style={{ height: '75vh' }}>
         <CanvasWidget engine={engine} className="w-full h-full bg-white" />
       </div>
@@ -275,25 +249,15 @@ export default function Diagram() {
               <div><span className="font-medium">Type:</span> {activeNode.type}</div>
               {activeNode?.data?.label && <div><span className="font-medium">Label:</span> {activeNode.data.label}</div>}
               {activeNode?.data?.code && <div><span className="font-medium">Code:</span> {activeNode.data.code}</div>}
-              {activeNode?.data?.building_code && <div><span className="font-medium">Building:</span> {activeNode.data.building_code}</div>}
-              {activeNode?.data?.status && (
-                <div className="mt-1">
-                  <span className="font-medium">Status:</span>{' '}
-                  <span className="px-2 py-0.5 rounded text-xs border">
-                    {activeNode.data.status}
-                  </span>
-                </div>
-              )}
+              {(activeNode?.data?.building_code || activeNode?.data?.building) && <div><span className="font-medium">Building:</span> {activeNode.data.building_code || activeNode.data.building}</div>}
+              {activeNode?.data?.room && <div><span className="font-medium">Room:</span> {activeNode.data.room}</div>}
+              {activeNode?.data?.regime && <div><span className="font-medium">Regime:</span> {activeNode.data.regime}</div>}
+              {activeNode?.data?.status && (<div className="mt-1"><span className="font-medium">Status:</span>{' '}<span className="px-2 py-0.5 rounded text-xs border">{activeNode.data.status}</span></div>)}
             </div>
 
-            {/* Tabs */}
             <div className="flex gap-2 mt-3 text-sm">
               {['details','selectivity','arc','fla'].map(k => (
-                <button
-                  key={k}
-                  className={`px-2 py-1 rounded border ${tab===k? 'bg-slate-900 text-white':'bg-white'}`}
-                  onClick={() => setTab(k)}
-                >
+                <button key={k} className={`px-2 py-1 rounded border ${tab===k? 'bg-slate-900 text-white':'bg-white'}`} onClick={() => setTab(k)}>
                   {k === 'details' && 'Détails'}
                   {k === 'selectivity' && 'Sélectivité'}
                   {k === 'arc' && 'Arc Flash'}
@@ -303,19 +267,13 @@ export default function Diagram() {
             </div>
 
             <div className="mt-2 text-sm">
-              {tab === 'details' && (
-                <pre className="text-xs bg-slate-50 p-2 rounded border overflow-auto">{JSON.stringify(activeNode.data, null, 2)}</pre>
-              )}
+              {tab === 'details' && (<pre className="text-xs bg-slate-50 p-2 rounded border overflow-auto">{JSON.stringify(activeNode.data, null, 2)}</pre>)}
               {tab !== 'details' && (
                 <div>
                   {analysis.loading && <div>Analyse en cours…</div>}
                   {analysis.error && <div className="text-red-600">{analysis.error}</div>}
-                  {!analysis.loading && !analysis.error && analysis.data && (
-                    <pre className="text-xs bg-slate-50 p-2 rounded border overflow-auto">{JSON.stringify(analysis.data, null, 2)}</pre>
-                  )}
-                  {!analysis.loading && !analysis.error && !analysis.data && (
-                    <div className="text-slate-500">Sélectionne un onglet pour lancer l’analyse.</div>
-                  )}
+                  {!analysis.loading && !analysis.error && analysis.data && (<pre className="text-xs bg-slate-50 p-2 rounded border overflow-auto">{JSON.stringify(analysis.data, null, 2)}</pre>)}
+                  {!analysis.loading && !analysis.error && !analysis.data && (<div className="text-slate-500">Sélectionne un onglet pour lancer l’analyse.</div>)}
                 </div>
               )}
             </div>
