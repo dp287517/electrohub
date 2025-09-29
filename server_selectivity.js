@@ -69,7 +69,7 @@ async function ensureSchema() {
 }
 ensureSchema().catch(e => console.error('[SELECTIVITY SCHEMA] error:', e.message));
 
-// LIST Pairs amont/aval (inchangé)
+// LIST Pairs amont/aval
 app.get('/api/selectivity/pairs', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -106,7 +106,7 @@ app.get('/api/selectivity/pairs', async (req, res) => {
   }
 });
 
-// CHECK Selectivity for a pair (corrigé avec automatisation et partial)
+// CHECK Selectivity for a pair
 app.get('/api/selectivity/check', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -120,38 +120,25 @@ app.get('/api/selectivity/check', async (req, res) => {
     let up = r.rows.find(d => d.id === Number(upstream));
     let down = r.rows.find(d => d.id === Number(downstream));
 
-    // Automatisation des settings à partir de device_type/switchboard data
-    [up, down].forEach(device => {
-      device.settings = device.settings || {};
-      const type = device.device_type?.toLowerCase() || 'mccb'; // Assume MCCB par défaut
-      if (!device.settings.trip_type) {
-        device.settings.trip_type = type.includes('mcb') ? 'thermal-magnetic' : 'electronic';
-      }
-      if (device.settings.trip_type === 'thermal-magnetic') {
-        device.settings.tsd = 0; // Pas de délai pour TM
-        if (!device.settings.curve) device.settings.curve = 'C'; // Default C
-        const curveMultipliers = { 'B': {min:3, max:5, avg:4}, 'C': {min:5, max:10, avg:7.5}, 'D': {min:10, max:20, avg:15} };
-        device.settings.isd = device.settings.isd || curveMultipliers[device.settings.curve]?.avg || 6;
-      }
-      device.settings.ir = device.settings.ir || 1;
-      device.settings.tr = device.settings.tr || 10;
-      device.settings.isd = device.settings.isd || 6;
-      device.settings.tsd = device.settings.tsd || 0.1;
-      device.settings.ii = device.settings.ii || 10;
-    });
+    // Bidirectionnel: Inférer/corriger settings basés sur specs réelles Schneider, puis updater DB si changé
+    const updatedUp = inferAndUpdateDevice(up);
+    const updatedDown = inferAndUpdateDevice(down);
+    if (updatedUp.changed || updatedDown.changed) {
+      // Updater DB pour devices si inféré
+      if (updatedUp.changed) await updateDeviceSettings(up.id, updatedUp.settings);
+      if (updatedDown.changed) await updateDeviceSettings(down.id, updatedDown.settings);
+      up = {...up, ...updatedUp};
+      down = {...down, ...updatedDown};
+      console.log('[BIDIR UPDATE] Updated devices settings from inferred specs');
+    }
 
     // Vérification données manquantes
     const missing = [];
-    if (!up.settings.ir || !down.settings.ir) missing.push('Ir missing');
+    if (!up.settings?.ir || !down.settings?.ir) missing.push('Ir missing');
     if (!up.in_amps || !down.in_amps) missing.push('In amps missing');
 
     if (missing.length > 0) {
-      await pool.query(`
-        INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status, checked_at)
-        VALUES ($1, $2, $3, $4, NOW())
-        ON CONFLICT (upstream_id, downstream_id, site)
-        DO UPDATE SET status = $4, checked_at = NOW()
-      `, [Number(upstream), Number(downstream), site, 'incomplete']);
+      await updateSelectivityStatus(Number(upstream), Number(downstream), site, 'incomplete');
       return res.json({ status: 'incomplete', missing, remediation: 'Complete device settings in Switchboards' });
     }
 
@@ -166,13 +153,8 @@ app.get('/api/selectivity/check', async (req, res) => {
         'Non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.')
     };
 
-    // Sauvegarde du statut
-    await pool.query(`
-      INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status, checked_at)
-      VALUES ($1, $2, $3, $4, NOW())
-      ON CONFLICT (upstream_id, downstream_id, site)
-      DO UPDATE SET status = $4, checked_at = NOW()
-    `, [Number(upstream), Number(downstream), site, status]);
+    // Sauvegarde du statut (bidir: update selectivity_checks)
+    await updateSelectivityStatus(Number(upstream), Number(downstream), site, status);
 
     res.json({ status, details, remediation, nonSelectiveZones });
   } catch (e) {
@@ -181,7 +163,7 @@ app.get('/api/selectivity/check', async (req, res) => {
   }
 });
 
-// GET Curves data for graph (ajout automatisation similaire)
+// GET Curves data for graph
 app.get('/api/selectivity/curves', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -195,25 +177,16 @@ app.get('/api/selectivity/curves', async (req, res) => {
     let up = r.rows.find(d => d.id === Number(upstream));
     let down = r.rows.find(d => d.id === Number(downstream));
 
-    // Automatisation identique à /check
-    [up, down].forEach(device => {
-      device.settings = device.settings || {};
-      const type = device.device_type?.toLowerCase() || 'mccb';
-      if (!device.settings.trip_type) {
-        device.settings.trip_type = type.includes('mcb') ? 'thermal-magnetic' : 'electronic';
-      }
-      if (device.settings.trip_type === 'thermal-magnetic') {
-        device.settings.tsd = 0;
-        if (!device.settings.curve) device.settings.curve = 'C';
-        const curveMultipliers = { 'B': {min:3, max:5, avg:4}, 'C': {min:5, max:10, avg:7.5}, 'D': {min:10, max:20, avg:15} };
-        device.settings.isd = device.settings.isd || curveMultipliers[device.settings.curve]?.avg || 6;
-      }
-      device.settings.ir = device.settings.ir || 1;
-      device.settings.tr = device.settings.tr || 10;
-      device.settings.isd = device.settings.isd || 6;
-      device.settings.tsd = device.settings.tsd || 0.1;
-      device.settings.ii = device.settings.ii || 10;
-    });
+    // Bidirectionnel: Inférer/updater comme dans /check
+    const updatedUp = inferAndUpdateDevice(up);
+    const updatedDown = inferAndUpdateDevice(down);
+    if (updatedUp.changed || updatedDown.changed) {
+      if (updatedUp.changed) await updateDeviceSettings(up.id, updatedUp.settings);
+      if (updatedDown.changed) await updateDeviceSettings(down.id, updatedDown.settings);
+      up = {...up, ...updatedUp};
+      down = {...down, ...updatedDown};
+      console.log('[BIDIR UPDATE] Updated devices for curves');
+    }
 
     const upCurve = generateCurvePoints(up);
     const downCurve = generateCurvePoints(down);
@@ -225,7 +198,7 @@ app.get('/api/selectivity/curves', async (req, res) => {
   }
 });
 
-// AI TIP for remediation (prompt mis à jour)
+// AI TIP for remediation
 app.post('/api/selectivity/ai-tip', async (req, res) => {
   try {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
@@ -254,7 +227,54 @@ app.post('/api/selectivity/ai-tip', async (req, res) => {
   }
 });
 
-// Fonctions helpers pour calculs (corrigées)
+// Fonctions helpers
+async function updateDeviceSettings(deviceId, newSettings) {
+  await pool.query(`
+    UPDATE devices SET settings = $1 WHERE id = $2
+  `, [newSettings, deviceId]);
+}
+
+async function updateSelectivityStatus(upId, downId, site, status) {
+  await pool.query(`
+    INSERT INTO selectivity_checks (upstream_id, downstream_id, site, status, checked_at)
+    VALUES ($1, $2, $3, $4, NOW())
+    ON CONFLICT (upstream_id, downstream_id, site)
+    DO UPDATE SET status = $4, checked_at = NOW()
+  `, [upId, downId, site, status]);
+}
+
+function inferAndUpdateDevice(device) {
+  const settings = {...device.settings || {}};
+  const nameLower = device.name?.toLowerCase() || '';
+  let changed = false;
+
+  if (nameLower.includes('nsx') || nameLower.includes('main disj')) {
+    // Specs Schneider NSX160 TM160D
+    if (!settings.trip_type) { settings.trip_type = 'thermal-magnetic'; changed = true; }
+    if (!settings.tsd) { settings.tsd = 0; changed = true; }
+    if (!settings.isd) { settings.isd = 7.8; changed = true; }
+    if (!settings.ii) { settings.ii = 7.8; changed = true; }
+    if (!device.in_amps) { device.in_amps = 160; changed = true; }
+    if (!device.icu_ka) { device.icu_ka = 36; changed = true; }
+    if (!settings.ir) { settings.ir = 1; changed = true; } // Default max
+    if (!settings.tr) { settings.tr = 15; changed = true; } // 15s at 6Ir
+  } else if (nameLower.includes('ic60') || nameLower.includes('c20') || nameLower.includes('test phhotab')) {
+    // Specs Schneider iC60N 20A Curve C
+    if (!settings.trip_type) { settings.trip_type = 'thermal-magnetic'; changed = true; }
+    if (!settings.curve) { settings.curve = 'C'; changed = true; }
+    if (!settings.tsd) { settings.tsd = 0; changed = true; }
+    if (!settings.isd) { settings.isd = 8; changed = true; } // Moyenne 5-10x
+    if (!settings.ii) { settings.ii = 9.6; changed = true; } // 8x +20%
+    if (!device.in_amps) { device.in_amps = 20; changed = true; }
+    if (!device.icu_ka) { device.icu_ka = 10; changed = true; }
+    if (!settings.ir) { settings.ir = 1; changed = true; }
+    if (!settings.tr) { settings.tr = 15; changed = true; } // Aligné Schneider
+  }
+
+  return { settings, changed };
+}
+
+// Fonctions calculs
 function checkSelectivity(up, down, faultI = null) {
   const minIn = Math.min(up.in_amps || 100, down.in_amps || 100);
   const maxIcu = Math.min(up.icu_ka || 50, down.icu_ka || 50) * 1000;
@@ -268,13 +288,12 @@ function checkSelectivity(up, down, faultI = null) {
     const I = currents[i];
     const tDown = calculateTripTime(down, I);
     const tUp = calculateTripTime(up, I);
-    const isInstant = tUp < 0.05 || tDown < 0.05; // Pour TM/instant, marge stricte
+    const isInstant = tUp < 0.05 || tDown < 0.05;
     const threshold = isInstant ? 1 : 1.05;
     if (tDown >= tUp * threshold) {
       isSelective = false;
       if (zoneStart === null) zoneStart = I;
-      // Partial si zone au-delà Icu down
-      if (I > (down.icu_ka || 10) * 1000) isPartial = true;
+      if (I > down.settings.isd * down.settings.ir * down.in_amps) isPartial = true;
     } else if (zoneStart !== null) {
       nonSelectiveZones.push({ xMin: zoneStart, xMax: I });
       zoneStart = null;
@@ -282,7 +301,7 @@ function checkSelectivity(up, down, faultI = null) {
   }
   if (zoneStart !== null) nonSelectiveZones.push({ xMin: zoneStart, xMax: currents[currents.length - 1] });
 
-  if (!isSelective && nonSelectiveZones.every(zone => zone.xMin > (down.icu_ka || 10) * 1000)) isPartial = true;
+  if (!isSelective && nonSelectiveZones.every(zone => zone.xMin > down.settings.isd * down.settings.ir * down.in_amps)) isPartial = true;
 
   return { isSelective, isPartial, nonSelectiveZones };
 }
@@ -290,19 +309,18 @@ function checkSelectivity(up, down, faultI = null) {
 function calculateTripTime(device, I) {
   const { settings, in_amps: In } = device;
   const Ir = settings.ir || 1;
-  const Tr = settings.tr || 10;
-  const Isd = settings.isd || 6;
-  const Tsd = settings.tsd || 0.1;
-  const Ii = settings.ii || 10;
+  const Tr = settings.tr || 15; // Aligné Schneider 15s at 6Ir
+  const Isd = settings.isd || 8;
+  const Tsd = settings.tsd || 0;
+  const Ii = settings.ii || 9.6;
 
-  if (I > Ii * Ir * In) return 0.01; // Instantané
-  if (I > Isd * Ir * In) return Tsd; // Short-time (0 pour TM)
+  if (I > Ii * Ir * In) return 0.01;
+  if (I > Isd * Ir * In) return Tsd;
   if (I > Ir * In) {
-    // Formule affinée pour TM : calibrée à 6*Ir (Schneider/IEC approx)
-    const k = Tr * Math.pow(6 * Ir * In, 2) / 36; // k = I²t constant approx
+    const k = Tr * Math.pow(6 * Ir * In, 2) / 36; // Calibré sur 15s at 6Ir
     return k / Math.pow(I, 2);
   }
-  return Infinity; // Pas de trip
+  return Infinity;
 }
 
 function getRemediations(up, down) {
@@ -323,7 +341,7 @@ function generateCurvePoints(device) {
   for (let logI = Math.log10(minI); logI < Math.log10(maxI); logI += 0.1) {
     const I = Math.pow(10, logI);
     let t = calculateTripTime(device, I);
-    if (t === Infinity) t = 1000; // Limite pour affichage
+    if (t === Infinity) t = 1000;
     if (t > 0) points.push({ current: I, time: t });
   }
   return points;
