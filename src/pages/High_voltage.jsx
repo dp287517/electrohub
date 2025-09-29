@@ -1,8 +1,8 @@
 // src/pages/High_voltage.jsx
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import { api, get, post, put, del } from '../lib/api.js';
+import { useEffect, useState, useCallback } from 'react';
+import { api, get, del } from '../lib/api.js';
 import {
-  Edit, Copy, Trash, Plus, Search, SlidersHorizontal,
+  Edit, Trash, Plus, Search, SlidersHorizontal,
   ChevronDown, ChevronRight, X, Sparkles, Image as ImageIcon
 } from 'lucide-react';
 
@@ -114,9 +114,8 @@ export default function HighVoltage() {
   const [showDownstreamBtSuggestions, setShowDownstreamBtSuggestions] = useState(false);
   const [toast, setToast] = useState(null);
 
-  // Photos pour IA (local avant envoi)
+  // Photos pour IA (local avant envoi) — sans preview
   const [localPhotos, setLocalPhotos] = useState([]); // File[]
-  const [localPhotoPreviews, setLocalPhotoPreviews] = useState([]); // string[]
 
   // Fetch list
   useEffect(() => {
@@ -145,7 +144,6 @@ export default function HighVoltage() {
       const res = await get('/api/hv/lv-devices', { q: query || '' });
       setDownstreamBtSuggestions(res || []);
     } catch (e) {
-      // fail-soft: ne remonte plus d'erreur bloquante
       console.warn('[BT SUGGESTIONS ERROR]', e?.message || e);
       setDownstreamBtSuggestions([]);
     }
@@ -178,8 +176,7 @@ export default function HighVoltage() {
       setBusy(true);
       const payload = { ...hvDeviceForm };
       if (editingHvDevice) {
-        const res = await api.hv.update(editingHvDevice.id, payload);
-        // refetch flat tree
+        await api.hv.update(editingHvDevice.id, payload);
         const flat = await get(`/api/hv/equipments/${currentPanelId}/devices`);
         setHvDevices(prev => ({ ...prev, [currentPanelId]: buildDeviceTree(flat || []) }));
       } else {
@@ -190,27 +187,22 @@ export default function HighVoltage() {
       setOpenHvDevice(false);
       setEditingHvDevice(null);
       setHvDeviceForm(emptyHvDeviceForm);
-      setLocalPhotos([]); setLocalPhotoPreviews([]);
+      setLocalPhotos([]);
       setToast({ type:'success', msg:'HV Device saved' });
     } catch (e) { setToast({ type:'error', msg:'Failed to save HV Device: ' + e.message }); }
     finally { setBusy(false); }
   };
 
-  // Photos handlers
+  // Photos handlers (sans preview)
   const onPickPhotos = (e) => {
     const files = Array.from(e.target.files || []).slice(0, 5);
     setLocalPhotos(files);
-    const previews = files.map(f => {
-      try { return URL.createObjectURL(f); } catch { return ''; }
-    }).filter(Boolean);
-    setLocalPhotoPreviews(previews);
   };
   const removeLocalPhoto = (idx) => {
     setLocalPhotos(prev => prev.filter((_, i) => i !== idx));
-    setLocalPhotoPreviews(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // IA from photos
+  // IA from photos (envoi des fichiers choisis, pas d’affichage)
   const handleAISuggestFromPhotos = async () => {
     try {
       setBusy(true);
@@ -391,7 +383,7 @@ export default function HighVoltage() {
       {/* Modal HV Device */}
       <Modal open={openHvDevice} onClose={() => {
         setOpenHvDevice(false); setEditingHvDevice(null); setHvDeviceForm(emptyHvDeviceForm);
-        setLocalPhotos([]); setLocalPhotoPreviews([]); setShowDownstreamBtSuggestions(false);
+        setLocalPhotos([]); setShowDownstreamBtSuggestions(false);
       }} title={editingHvDevice ? 'Edit HV Device' : 'Add HV Device'}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {/* champs texte */}
@@ -428,7 +420,7 @@ export default function HighVoltage() {
             </div>
           </div>
 
-          {/* Photos + IA */}
+          {/* Photos + IA (sans preview) */}
           <div className="sm:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">Photos (pour l’IA)</label>
             <div className="flex items-center gap-3">
@@ -442,15 +434,17 @@ export default function HighVoltage() {
                 <Sparkles size={16}/> Analyser les photos (IA)
               </button>
             </div>
-            {localPhotoPreviews.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-3">
-                {localPhotoPreviews.map((src, i) => (
-                  <div key={i} className="relative w-24 h-24 border rounded-lg overflow-hidden">
-                    {src ? <img src={src} alt={`Photo ${i+1}`} className="w-full h-full object-cover" /> : <div className="w-full h-full bg-gray-100" />}
-                    <button onClick={() => removeLocalPhoto(i)} className="absolute top-1 right-1 bg-white/80 rounded-full px-1 text-xs">✕</button>
-                  </div>
+
+            {/* Liste simple des fichiers choisis */}
+            {localPhotos.length > 0 && (
+              <ul className="mt-3 space-y-2">
+                {localPhotos.map((f, i) => (
+                  <li key={i} className="flex items-center justify-between text-sm border rounded-lg px-3 py-2">
+                    <span className="truncate">{f.name} {f.size ? `(${Math.round(f.size/1024)} KB)` : ''}</span>
+                    <button onClick={() => removeLocalPhoto(i)} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">✕</button>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
             <p className="text-xs text-gray-500 mt-2">Astuce: plaque signalétique, vue d’ensemble, intérieur de la cellule…</p>
           </div>
