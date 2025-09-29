@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import createEngine, { DefaultNodeModel, DiagramModel } from '@projectstorm/react-diagrams';
 import { CanvasWidget } from '@projectstorm/react-canvas-core';
-import { RightAngleLinkFactory, PathFindingLinkFactory, PathFindingLinkModel } from '@projectstorm/react-diagrams-routing';
+import { RightAngleLinkFactory, RightAngleLinkModel, PathFindingLinkFactory, PathFindingLinkModel } from '@projectstorm/react-diagrams-routing';
 import { api } from '../lib/api.js';
 
 const COLORS = {
@@ -12,7 +12,7 @@ const COLORS = {
   hv_device: 'rgb(124,45,18)',
 };
 
-function buildModelFromGraph(graph) {
+function buildModelFromGraph(graph, useSmart=true) {
   const model = new DiagramModel();
   const idToNode = new Map();
 
@@ -33,7 +33,12 @@ function buildModelFromGraph(graph) {
     const src = idToNode.get(e.source);
     const dst = idToNode.get(e.target);
     if (!src || !dst) continue;
-    const link = new PathFindingLinkModel();
+    let link;
+    try {
+      link = useSmart ? new PathFindingLinkModel() : new RightAngleLinkModel();
+    } catch {
+      link = new RightAngleLinkModel();
+    }
     link.setSourcePort(src.outPort);
     link.setTargetPort(dst.inPort);
     model.addLink(link);
@@ -50,14 +55,14 @@ export default function Diagram() {
   const [rootHv, setRootHv] = useState('');
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState('');
+  const [smart, setSmart] = useState(true);
 
   const engineRef = useRef(null);
   if (!engineRef.current) {
     const engine = createEngine();
     engine.getLinkFactories().registerFactory(new RightAngleLinkFactory());
     engine.getLinkFactories().registerFactory(new PathFindingLinkFactory());
-    // initialize with empty model so CanvasWidget never receives null
-    engine.setModel(new DiagramModel());
+    engine.setModel(new DiagramModel()); // never null
     engineRef.current = engine;
   }
   const engine = engineRef.current;
@@ -75,7 +80,7 @@ export default function Diagram() {
       };
       const data = await api.diagram.view(params);
       if (data?.warning) setBanner(data.warning);
-      const model = buildModelFromGraph(data);
+      const model = buildModelFromGraph(data, smart);
       engine.setModel(model);
       if (!data?.nodes?.length) {
         setBanner(prev => prev || 'No nodes found for current site/filters');
@@ -119,6 +124,10 @@ export default function Diagram() {
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Root HV Equipment ID</label>
           <input className="border rounded-md px-2 py-1 w-36" placeholder="numeric id" value={rootHv} onChange={e => setRootHv(e.target.value)} />
+        </div>
+        <div className="flex items-center gap-2">
+          <input id="smart" type="checkbox" checked={smart} onChange={e => setSmart(e.target.checked)} />
+          <label htmlFor="smart" className="text-sm">Smart routing</label>
         </div>
         <button className="px-3 py-2 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={loading} onClick={fetchGraph}>
           {loading ? 'Loading…' : 'Refresh'}
