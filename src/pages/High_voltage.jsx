@@ -6,7 +6,6 @@ import {
   ChevronDown, ChevronRight, X, Sparkles, Image as ImageIcon
 } from 'lucide-react';
 
-// Constants
 const regimes = ['TN-S', 'TN-C-S', 'IT', 'TT'];
 const hvDeviceTypes = ['HV Cell','HV Disconnect Switch','HV Circuit Breaker','Transformer','HV Cable','Busbar','Relay','Meter'];
 const insulationTypes = ['SF6','Vacuum','Air'];
@@ -44,7 +43,6 @@ function Modal({ open, onClose, children, title }) {
   );
 }
 
-// HV Equipment mapping
 const emptyHvEquipmentForm = {
   name: '', code: '',
   meta: { site: '', building_code: '', floor: '', room: '' },
@@ -74,7 +72,6 @@ function formToPayload(f, site) {
   };
 }
 
-// HV Devices
 const emptyHvDeviceForm = {
   name:'', device_type:'HV Circuit Breaker', manufacturer:'', reference:'',
   voltage_class_kv:null, short_circuit_current_ka:null,
@@ -114,11 +111,8 @@ export default function HighVoltage() {
   const [downstreamBtSuggestions, setDownstreamBtSuggestions] = useState([]);
   const [showDownstreamBtSuggestions, setShowDownstreamBtSuggestions] = useState(false);
   const [toast, setToast] = useState(null);
-
-  // Photos for AI (local before upload) — no preview
   const [localPhotos, setLocalPhotos] = useState([]); // File[]
 
-  // Fetch list
   useEffect(() => {
     setBusy(true);
     api.hv.list(q).then((resp) => {
@@ -127,7 +121,6 @@ export default function HighVoltage() {
       .finally(() => setBusy(false));
   }, [q]);
 
-  // Devices on expand
   useEffect(() => {
     Object.keys(expandedPanels).forEach(async (id) => {
       if (expandedPanels[id] && !hvDevices[id]) {
@@ -139,7 +132,6 @@ export default function HighVoltage() {
     });
   }, [expandedPanels]); // eslint-disable-line
 
-  // BT suggestions
   const fetchBtSuggestions = useCallback(async (query) => {
     try {
       const res = await get('/api/hv/lv-devices', { q: query || '' });
@@ -150,7 +142,6 @@ export default function HighVoltage() {
     }
   }, []);
 
-  // Submit Equipment
   const handleHvEquipmentSubmit = async () => {
     try {
       setBusy(true);
@@ -170,7 +161,6 @@ export default function HighVoltage() {
     finally { setBusy(false); }
   };
 
-  // Submit Device
   const handleHvDeviceSubmit = async () => {
     if (!currentPanelId) { setToast({ type:'error', msg:'Invalid HV Equipment ID' }); return; }
     try {
@@ -194,7 +184,6 @@ export default function HighVoltage() {
     finally { setBusy(false); }
   };
 
-  // Photos handlers (no preview)
   const onPickPhotos = (e) => {
     const files = Array.from(e.target.files || []).slice(0, 5);
     setLocalPhotos(files);
@@ -203,7 +192,6 @@ export default function HighVoltage() {
     setLocalPhotos(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // AI from photos (upload files, no display)
   const handleAISuggestFromPhotos = async () => {
     try {
       setAnalyzing(true);
@@ -231,7 +219,6 @@ export default function HighVoltage() {
       let specs = {};
       try { specs = await res.json(); } catch { specs = {}; }
 
-      // empty?
       const empty = !specs || Object.keys(specs).length === 0 ||
         Object.values(specs).every(v => v === null || v === '' || (typeof v === 'object' && Object.keys(v||{}).length===0));
       if (empty) {
@@ -239,7 +226,6 @@ export default function HighVoltage() {
         return;
       }
 
-      // compute diff to show useful feedback
       const before = hvDeviceForm;
       const after = { ...before, ...specs, settings: { ...(before.settings||{}), ...(specs?.settings||{}) } };
       const changed = [];
@@ -256,7 +242,6 @@ export default function HighVoltage() {
     } finally { setAnalyzing(false); }
   };
 
-  // Helpers
   const toggleExpand = (id) => setExpandedPanels(p => ({ ...p, [id]: !p[id] }));
 
   return (
@@ -427,11 +412,10 @@ export default function HighVoltage() {
             <button type="button" onClick={handleAISuggestFromPhotos}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
               disabled={analyzing || localPhotos.length === 0}>
-              <Sparkles size={16}/>{analyzing ? 'Analyzing…' : 'Analyze photos (AI)'}
+              <Sparkles size={16}/>{analyzing ? 'Analyzing (Vision + Web)…' : 'Analyze photos (AI)'}
             </button>
           </div>
 
-          {/* Simple list of chosen files */}
           {localPhotos.length > 0 && (
             <ul className="mt-3 space-y-2">
               {localPhotos.map((f, i) => (
@@ -459,7 +443,6 @@ export default function HighVoltage() {
           <FieldSelect label="Electrical Endurance" value={hvDeviceForm.electrical_endurance_class} options={['',...electricalEnduranceClasses]} onChange={v => setHvDeviceForm({ ...hvDeviceForm, electrical_endurance_class: v })} disabled={busy}/>
           <FieldNumber label="Poles" value={hvDeviceForm.poles} onChange={v => setHvDeviceForm({ ...hvDeviceForm, poles: v })} disabled={busy}/>
 
-          {/* Downstream LV */}
           <div className="sm:col-span-2">
             <label className="block text-sm font-medium text-gray-700">Downstream LV Device</label>
             <div className="relative">
@@ -487,7 +470,6 @@ export default function HighVoltage() {
             </div>
           </div>
 
-          {/* Main incoming + Save */}
           <div className="sm:col-span-2 flex items-center justify-between">
             <label className="inline-flex items-center">
               <input
@@ -507,7 +489,6 @@ export default function HighVoltage() {
         </div>
       </Modal>
 
-      {/* Toast */}
       {toast && (
         <div className={`fixed bottom-4 right-4 px-4 py-2 rounded-lg shadow ${toast.type === 'error' ? 'bg-red-600 text-white' : 'bg-green-600 text-white'}`}>
           {toast.msg}
