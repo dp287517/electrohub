@@ -33,11 +33,12 @@ function buildModelFromGraph(graph) {
     const src = idToNode.get(e.source);
     const dst = idToNode.get(e.target);
     if (!src || !dst) continue;
-    const link = new PathFindingLinkModel(); // smart orthogonal path
+    const link = new PathFindingLinkModel();
     link.setSourcePort(src.outPort);
     link.setTargetPort(dst.inPort);
     model.addLink(link);
   }
+
   return model;
 }
 
@@ -48,19 +49,16 @@ export default function Diagram() {
   const [rootSwitch, setRootSwitch] = useState('');
   const [rootHv, setRootHv] = useState('');
   const [loading, setLoading] = useState(false);
+  const [banner, setBanner] = useState('');
 
   const engineRef = useRef(null);
-  const readyRef = useRef(false);
-
   if (!engineRef.current) {
     const engine = createEngine();
     engine.getLinkFactories().registerFactory(new RightAngleLinkFactory());
     engine.getLinkFactories().registerFactory(new PathFindingLinkFactory());
-    // IMPORTANT: set an initial empty model so CanvasWidget never receives a null model
-    const initial = new DiagramModel();
-    engine.setModel(initial);
+    // initialize with empty model so CanvasWidget never receives null
+    engine.setModel(new DiagramModel());
     engineRef.current = engine;
-    readyRef.current = true;
   }
   const engine = engineRef.current;
 
@@ -76,22 +74,18 @@ export default function Diagram() {
         include_metrics: true,
       };
       const data = await api.diagram.view(params);
+      if (data?.warning) setBanner(data.warning);
       const model = buildModelFromGraph(data);
       engine.setModel(model);
-      // Zoom-to-fit after layout
-      setTimeout(() => {
-        try {
-          const canvas = document.querySelector('.storm-diagrams-canvas, .react-canvas-core__canvas');
-          if (canvas) {
-            // crude fit: center + zoom level
-            engine.getModel().setZoomLevel(80);
-          }
-          engine.repaintCanvas();
-        } catch {}
-      }, 10);
+      if (!data?.nodes?.length) {
+        setBanner(prev => prev || 'No nodes found for current site/filters');
+      } else {
+        setBanner('');
+      }
+      setTimeout(() => { try { engine.getModel().setZoomLevel(80); engine.repaintCanvas(); } catch {} }, 10);
     } catch (e) {
       console.error(e);
-      alert('Failed to load diagram: ' + e.message);
+      setBanner('Failed to load diagram: ' + (e?.message || 'unknown error'));
     } finally {
       setLoading(false);
     }
@@ -99,8 +93,6 @@ export default function Diagram() {
 
   useEffect(() => { fetchGraph(); /* eslint-disable-next-line */ }, []);
 
-  // Guard: never render without an engine + model
-  const hasModel = !!engine && !!engine.getModel();
   return (
     <div className="p-4 space-y-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -133,8 +125,12 @@ export default function Diagram() {
         </button>
       </div>
 
+      <div className="mb-2 text-xs text-amber-700" style={{minHeight: '1.25rem'}}>
+        {banner && <span className="inline-block bg-amber-50 border border-amber-300 rounded px-2 py-1">{banner}</span>}
+      </div>
+
       <div style={{ width: '100%', height: '72vh' }} className="border rounded-xl overflow-hidden">
-        {hasModel ? <CanvasWidget engine={engine} className="w-full h-full bg-white" /> : <div className="p-6 text-sm">Initializing…</div>}
+        <CanvasWidget engine={engine} className="w-full h-full bg-white" />
       </div>
     </div>
   );
