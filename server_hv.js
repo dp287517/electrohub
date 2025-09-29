@@ -276,7 +276,6 @@ app.post('/api/hv/devices/:id/photos', upload.array('photos', 5), async (req, re
 
     const current = await pool.query(`SELECT photos FROM hv_devices WHERE id=$1 AND site=$2`, [id, site]);
     if (current.rows.length !== 1) return res.status(404).json({ error: 'Not found' });
-
     const existing = current.rows[0].photos || [];
     const updated = existing.concat(buffers);
 
@@ -313,12 +312,40 @@ app.delete('/api/hv/devices/:id/photo/:idx', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Delete photo failed', details: e.message }); }
 });
 
+// ---------- Helpers (AI parsing/normalization) ----------
+const parseNum = (v) => {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  const s = String(v).replace(',', '.');
+  const m = s.match(/-?\d+(\.\d+)?/);
+  return m ? Number(m[0]) : null;
+};
+const parsePoles = (v) => {
+  const n = parseNum(v);
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
+const sanitizeClass = (v, allowed) => {
+  if (!v) return null;
+  const up = String(v).toUpperCase().trim();
+  return allowed.includes(up) ? up : null;
+};
+const safeJsonFromContent = (content) => {
+  if (!content) return {};
+  // strip fences
+  const fenced = content.replace(/```json|```/g, '');
+  // first {...}
+  const start = fenced.indexOf('{');
+  const end = fenced.lastIndexOf('}');
+  const slice = (start >= 0 && end > start) ? fenced.slice(start, end + 1) : fenced;
+  try { return JSON.parse(slice); } catch { return {}; }
+};
+
 // ---------------- IA: specs à partir de texte + photos (robuste) ----------------
 app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
   try {
-    const manufacturer = req.body.manufacturer || '';
-    const reference = req.body.reference || '';
-    const device_type = req.body.device_type || '';
+    const manufacturer_hint = req.body.manufacturer || '';
+    const reference_hint = req.body.reference || '';
+    const device_type_hint = req.body.device_type || '';
     const files = req.files || [];
 
     if (!openai) {
@@ -333,14 +360,21 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     });
 
     const messages = [
-      { role: 'system', content: 'You are an electrical engineering expert (IEC 62271 HV). Extract realistic specs.' },
+      { role: 'system', content: 'You are an electrical engineering expert (IEC 62271 HV). Extract realistic specs as pure JSON.' },
       { role: 'user', content: [
         { type: 'text', text:
-`Manufacturer: ${manufacturer}
-Reference: ${reference}
-Device type: ${device_type}
+`Manufacturer (hint): ${manufacturer_hint}
+Reference (hint): ${reference_hint}
+Device type (hint): ${device_type_hint}
 
-If visible on the images, extract realistic specs and infer missing ones. Return a compact JSON.` },
+From these images, extract fields if visible:
+- manufacturer, reference
+- device_type
+- voltage_class_kv, short_circuit_current_ka, poles
+- insulation_type (SF6/Vacuum/Air)
+- mechanical_endurance_class (M1/M2)
+- electrical_endurance_class (E1/E2)
+Return ONLY a JSON object, no prose.` },
         ...imageParts
       ]}
     ];
@@ -348,31 +382,38 @@ If visible on the images, extract realistic specs and infer missing ones. Return
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages,
-      temperature: 0.2,
+      temperature: 0.1,
       response_format: { type: 'json_object' },
       max_tokens: 700
     });
 
-    let json = {};
-    try { json = JSON.parse(completion.choices?.[0]?.message?.content || '{}'); } catch { json = {}; }
+    const content = completion.choices?.[0]?.message?.content || '';
+    let json = safeJsonFromContent(content);
 
-    const num = (v) => {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const out = {
-      device_type: json.device_type || device_type || 'HV Circuit Breaker',
-      voltage_class_kv: num(json.voltage_class_kv),
-      short_circuit_current_ka: num(json.short_circuit_current_ka),
+    // Normalize
+    const outRaw = {
+      manufacturer: json.manufacturer ?? null,
+      reference: json.reference ?? null,
+      device_type: json.device_type ?? null,
+      voltage_class_kv: parseNum(json.voltage_class_kv),
+      short_circuit_current_ka: parseNum(json.short_circuit_current_ka),
       insulation_type: json.insulation_type ?? null,
-      mechanical_endurance_class: json.mechanical_endurance_class ?? null,
-      electrical_endurance_class: json.electrical_endurance_class ?? null,
-      poles: num(json.poles) ?? null,
+      mechanical_endurance_class: sanitizeClass(json.mechanical_endurance_class, ['M1','M2']),
+      electrical_endurance_class: sanitizeClass(json.electrical_endurance_class, ['E1','E2']),
+      poles: parsePoles(json.poles),
       settings: json.settings || {}
     };
 
-    return res.json(out);
+    // Drop non-informative values & avoid blocking "empty" detection on front
+    const out = {};
+    for (const [k, v] of Object.entries(outRaw)) {
+      if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) continue;
+      // don't include device_type if it's only equal to the hint
+      if (k === 'device_type' && v === device_type_hint) continue;
+      out[k] = v;
+    }
+
+    return res.json(out); // could be {} if nothing useful
   } catch (e) {
     const status = e?.status || e?.response?.status || 500;
     const detail =
