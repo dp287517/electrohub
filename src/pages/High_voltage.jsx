@@ -218,6 +218,16 @@ export default function HighVoltage() {
         headers: { 'X-Site': site }
       });
 
+      // NEW: handle non-200 responses with informative message
+      if (!res.ok) {
+        let err = {};
+        try { err = await res.json(); } catch {}
+        const msg = err?.error || `AI error (${res.status})`;
+        const details = err?.details ? ` — ${err.details}` : '';
+        setToast({ type: 'error', msg: `${msg}${details}`.slice(0, 300) });
+        return;
+      }
+
       let specs = {};
       try { specs = await res.json(); } catch { specs = {}; }
 
