@@ -36,7 +36,10 @@ app.use((req, res, next) => {
 });
 
 // Multer (photos)
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024, files: 5 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 5 }
+});
 
 // Utils
 function siteOf(req) {
@@ -46,7 +49,7 @@ const WHITELIST_SORT = ['created_at', 'name', 'code', 'building_code', 'floor'];
 const sortSafe = (s) => WHITELIST_SORT.includes(String(s)) ? s : 'created_at';
 const dirSafe = (d) => String(d).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
-// Ensure schema (idem que précédent, raccourci ici)
+// Ensure schema
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS hv_equipments (
@@ -93,7 +96,7 @@ ensureSchema().catch(e => console.error('[HV SCHEMA] Init error:', e.message));
 // Health
 app.get('/api/hv/health', (_req, res) => res.json({ ok: true, ts: Date.now(), openai: !!openai }));
 
-// ---------------- HV Equipments CRUD (identiques à la version précédente) ----------------
+// ---------------- HV Equipments CRUD ----------------
 app.get('/api/hv/equipments', async (req, res) => {
   try {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
@@ -215,13 +218,13 @@ app.delete('/api/hv/devices/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Delete failed', details: e.message }); }
 });
 
-// ---------------- BT devices suggestions (NO MORE 404) ----------------
+// ---------------- BT devices suggestions (fail-soft) ----------------
 app.get('/api/hv/lv-devices', async (req, res) => {
   try {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
     const q = (req.query.q || '').toString().trim();
 
-    // Vérifie si la table "devices" existe
+    // Check existence of "devices" table
     const exists = await pool.query(`
       SELECT EXISTS (
         SELECT 1 FROM information_schema.tables
@@ -230,7 +233,7 @@ app.get('/api/hv/lv-devices', async (req, res) => {
     `);
     if (!exists.rows[0].present) return res.json([]);
 
-    // Colonnes optionnelles
+    // Optional columns
     const cols = await pool.query(`
       SELECT column_name FROM information_schema.columns
       WHERE table_name='devices' AND table_schema='public'
@@ -241,7 +244,7 @@ app.get('/api/hv/lv-devices', async (req, res) => {
 
     const where = ['site = $1']; const vals = [site]; let i = 2;
     if (q) {
-      if (hasReference) { where.push(`(name ILIKE $${i} OR ${hasReference ? 'reference' : 'name'} ILIKE $${i})`); }
+      if (hasReference) { where.push(`(name ILIKE $${i} OR reference ILIKE $${i})`); }
       else { where.push(`name ILIKE $${i}`); }
       vals.push(`%${q}%`); i++;
     }
@@ -310,7 +313,7 @@ app.delete('/api/hv/devices/:id/photo/:idx', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Delete photo failed', details: e.message }); }
 });
 
-// ---------------- IA: specs à partir de texte + photos ----------------
+// ---------------- IA: specs à partir de texte + photos (FIX) ----------------
 app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
   try {
     const manufacturer = req.body.manufacturer || '';
@@ -318,13 +321,21 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     const device_type = req.body.device_type || '';
     const files = req.files || [];
 
-    if (!openai) return res.json({}); // fail-soft si pas de clé
+    // Avant : renvoyait {} silencieusement si pas de clé -> ambigu côté front.
+    if (!openai) return res.status(503).json({ error: 'OpenAI not available' });
+
+    // IMPORTANT : envoyer les images comme "image_url" (data URL) pour l’API Vision
+    const imageParts = files.map(f => {
+      const base64 = Buffer.from(f.buffer).toString('base64');
+      const mime = f.mimetype || 'image/jpeg';
+      return { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } };
+    });
 
     const messages = [
       { role: 'system', content: 'You are an electrical engineering expert (IEC 62271 HV). Extract realistic specs.' },
       { role: 'user', content: [
           { type: 'text', text: `Manufacturer: ${manufacturer}\nReference: ${reference}\nDevice type: ${device_type}\n\nPlease infer specs if visible.` },
-          ...files.map(f => ({ type: 'input_image', image_data: Buffer.from(f.buffer).toString('base64'), mime_type: f.mimetype || 'image/jpeg' }))
+          ...imageParts
         ]
       }
     ];
@@ -338,7 +349,7 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     });
 
     let json = {};
-    try { json = JSON.parse(completion.choices?.[0]?.message?.content || '{}'); } catch(_) {}
+    try { json = JSON.parse(completion.choices?.[0]?.message?.content || '{}'); } catch { json = {}; }
 
     const num = (v) => {
       const n = Number(v);
@@ -357,8 +368,8 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     };
     res.json(out);
   } catch (e) {
-    console.error('[HV AI SPECS] Error:', e.message);
-    res.status(200).json({}); // fail-soft
+    console.error('[HV AI SPECS] Error:', e);
+    res.status(500).json({ error: 'AI specs extraction failed' });
   }
 });
 
