@@ -106,12 +106,12 @@ app.get('/api/selectivity/pairs', async (req, res) => {
   }
 });
 
-// CHECK Selectivity for a pair
+// CHECK Selectivity for a pair (modif pour ignorer fault_current par défaut)
 app.get('/api/selectivity/check', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { upstream, downstream, fault_current } = req.query;
+    const { upstream, downstream, fault_current, force_fault_current } = req.query;
     const r = await pool.query(`
       SELECT * FROM devices WHERE id IN ($1, $2) AND site = $3
     `, [Number(upstream), Number(downstream), site]);
@@ -142,8 +142,9 @@ app.get('/api/selectivity/check', async (req, res) => {
       return res.json({ status: 'incomplete', missing, remediation: 'Complete device settings in Switchboards' });
     }
 
-    // Calcul sélectivité et zones non-sélectives
-    const { isSelective, isPartial, nonSelectiveZones } = checkSelectivity(up, down, Number(fault_current));
+    // Calcul sélectivité : Ignorer fault_current sauf si forcé
+    const faultI = force_fault_current === 'true' ? Number(fault_current) : null;
+    const { isSelective, isPartial, nonSelectiveZones } = checkSelectivity(up, down, faultI);
     const status = isSelective ? 'selective' : (isPartial ? 'partial-selective' : 'non-selective');
     const remediation = isSelective ? [] : getRemediations(up, down);
     const details = { 
@@ -153,7 +154,7 @@ app.get('/api/selectivity/check', async (req, res) => {
         'Non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.')
     };
 
-    // Sauvegarde du statut (bidir: update selectivity_checks)
+    // Sauvegarde du statut
     await updateSelectivityStatus(Number(upstream), Number(downstream), site, status);
 
     res.json({ status, details, remediation, nonSelectiveZones });
@@ -230,7 +231,7 @@ app.post('/api/selectivity/ai-tip', async (req, res) => {
 // Fonctions helpers
 async function updateDeviceSettings(deviceId, newSettings) {
   await pool.query(`
-    UPDATE devices SET settings = $1 WHERE id = $2
+    UPDATE devices SET settings = $1::jsonb WHERE id = $2
   `, [newSettings, deviceId]);
 }
 
