@@ -1,74 +1,68 @@
 // src/pages/Diagram.jsx
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import createEngine, { DefaultNodeModel, DiagramModel } from '@projectstorm/react-diagrams';
 import { CanvasWidget } from '@projectstorm/react-canvas-core';
-import { RightAngleLinkFactory, RightAngleLinkModel, PathFindingLinkFactory } from '@projectstorm/react-diagrams-routing';
+import { RightAngleLinkFactory, PathFindingLinkFactory, PathFindingLinkModel } from '@projectstorm/react-diagrams-routing';
+import '@projectstorm/react-canvas-core/dist/style.min.css';
+import '@projectstorm/react-diagrams/dist/style.min.css';
 import { api } from '../lib/api.js';
 
-// Simple color palette per node type
 const COLORS = {
-  switchboard: 'rgb(59,130,246)', // blue
-  device: 'rgb(15,118,110)',      // teal
-  hv_equipment: 'rgb(168,85,247)',// purple
-  hv_device: 'rgb(124,45,18)',    // brown
+  switchboard: 'rgb(59,130,246)',
+  device: 'rgb(15,118,110)',
+  hv_equipment: 'rgb(168,85,247)',
+  hv_device: 'rgb(124,45,18)',
 };
 
 function buildModelFromGraph(graph) {
   const model = new DiagramModel();
   const idToNode = new Map();
 
-  // 1) Create nodes with in/out ports
-  for (const n of graph.nodes || []) {
+  for (const n of (graph.nodes || [])) {
     const color = COLORS[n.type] || 'rgb(51,65,85)';
     const node = new DefaultNodeModel({ name: n?.data?.label || n.id, color });
-    // Ports: one IN (left) and one OUT (right)
     const inPort = node.addInPort('in');
     const outPort = node.addOutPort('out');
-    // Position hint from backend (if any)
     const px = n?.position?.x ?? 0;
     const py = n?.position?.y ?? 0;
     node.setPosition(px, py);
-
-    // annotate
-    node.options.extras = { ...n.data, nodeType: n.type };
-
+    node.getOptions().extras = { ...n.data, nodeType: n.type };
     idToNode.set(n.id, { node, inPort, outPort });
     model.addNode(node);
   }
 
-  // 2) Create orthogonal links (right-angle) with smart pathfinding registered on engine
-  for (const e of graph.edges || []) {
+  for (const e of (graph.edges || [])) {
     const src = idToNode.get(e.source);
     const dst = idToNode.get(e.target);
     if (!src || !dst) continue;
-
-    const link = new RightAngleLinkModel();
+    const link = new PathFindingLinkModel(); // smart orthogonal path
     link.setSourcePort(src.outPort);
     link.setTargetPort(dst.inPort);
-    if (e.label) link.getOptions().labels = [e.label];
     model.addLink(link);
   }
-
   return model;
 }
 
 export default function Diagram() {
-  // Filters
-  const [mode, setMode] = useState('all'); // lv | hv | all
+  const [mode, setMode] = useState('all');
   const [building, setBuilding] = useState('');
   const [depth, setDepth] = useState(3);
   const [rootSwitch, setRootSwitch] = useState('');
   const [rootHv, setRootHv] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // ProjectStorm engine (stable ref)
   const engineRef = useRef(null);
+  const readyRef = useRef(false);
+
   if (!engineRef.current) {
     const engine = createEngine();
-    // Enable right-angle routing + smart pathfinding (avoids nodes)
     engine.getLinkFactories().registerFactory(new RightAngleLinkFactory());
     engine.getLinkFactories().registerFactory(new PathFindingLinkFactory());
+    // IMPORTANT: set an initial empty model so CanvasWidget never receives a null model
+    const initial = new DiagramModel();
+    engine.setModel(initial);
     engineRef.current = engine;
+    readyRef.current = true;
   }
   const engine = engineRef.current;
 
@@ -86,10 +80,14 @@ export default function Diagram() {
       const data = await api.diagram.view(params);
       const model = buildModelFromGraph(data);
       engine.setModel(model);
-      // Zoom to fit after model load
+      // Zoom-to-fit after layout
       setTimeout(() => {
         try {
-          engine.getModel().setZoomLevel(70);
+          const canvas = document.querySelector('.storm-diagrams-canvas, .react-canvas-core__canvas');
+          if (canvas) {
+            // crude fit: center + zoom level
+            engine.getModel().setZoomLevel(80);
+          }
           engine.repaintCanvas();
         } catch {}
       }, 10);
@@ -101,11 +99,10 @@ export default function Diagram() {
     }
   };
 
-  useEffect(() => {
-    fetchGraph();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  useEffect(() => { fetchGraph(); /* eslint-disable-next-line */ }, []);
 
+  // Guard: never render without an engine + model
+  const hasModel = !!engine && !!engine.getModel();
   return (
     <div className="p-4 space-y-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -133,20 +130,13 @@ export default function Diagram() {
           <label className="text-xs font-medium mb-1">Root HV Equipment ID</label>
           <input className="border rounded-md px-2 py-1 w-36" placeholder="numeric id" value={rootHv} onChange={e => setRootHv(e.target.value)} />
         </div>
-        <button
-          className="px-3 py-2 rounded-md bg-blue-600 text-white disabled:opacity-50"
-          disabled={loading}
-          onClick={fetchGraph}
-        >
+        <button className="px-3 py-2 rounded-md bg-blue-600 text-white disabled:opacity-50" disabled={loading} onClick={fetchGraph}>
           {loading ? 'Loading…' : 'Refresh'}
         </button>
-        <div className="ml-auto text-sm opacity-70">
-          Legend: blue=Switchboard · teal=LV Device · purple=HV Equipment · brown=HV Device
-        </div>
       </div>
 
       <div style={{ width: '100%', height: '72vh' }} className="border rounded-xl overflow-hidden">
-        <CanvasWidget engine={engine} className="w-full h-full bg-white" />
+        {hasModel ? <CanvasWidget engine={engine} className="w-full h-full bg-white" /> : <div className="p-6 text-sm">Initializing…</div>}
       </div>
     </div>
   );
