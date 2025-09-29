@@ -224,7 +224,6 @@ app.get('/api/hv/lv-devices', async (req, res) => {
     const site = siteOf(req); if (!site) return res.status(400).json({ error: 'Missing site' });
     const q = (req.query.q || '').toString().trim();
 
-    // Check existence of "devices" table
     const exists = await pool.query(`
       SELECT EXISTS (
         SELECT 1 FROM information_schema.tables
@@ -233,7 +232,6 @@ app.get('/api/hv/lv-devices', async (req, res) => {
     `);
     if (!exists.rows[0].present) return res.json([]);
 
-    // Optional columns
     const cols = await pool.query(`
       SELECT column_name FROM information_schema.columns
       WHERE table_name='devices' AND table_schema='public'
@@ -312,7 +310,7 @@ app.delete('/api/hv/devices/:id/photo/:idx', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Delete photo failed', details: e.message }); }
 });
 
-// ---------- Helpers (AI parsing/normalization) ----------
+// ---------- Helpers (parsing / web) ----------
 const parseNum = (v) => {
   if (v === null || v === undefined) return null;
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -331,16 +329,148 @@ const sanitizeClass = (v, allowed) => {
 };
 const safeJsonFromContent = (content) => {
   if (!content) return {};
-  // strip fences
   const fenced = content.replace(/```json|```/g, '');
-  // first {...}
   const start = fenced.indexOf('{');
   const end = fenced.lastIndexOf('}');
   const slice = (start >= 0 && end > start) ? fenced.slice(start, end + 1) : fenced;
   try { return JSON.parse(slice); } catch { return {}; }
 };
 
-// ---------------- IA: specs à partir de texte + photos (robuste) ----------------
+// --- Web search providers (one of them must be configured) ---
+const preferredDomains = (process.env.DATASHEET_PREFERRED_DOMAINS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+async function webSearchDatasheet(q) {
+  const results = [];
+  const add = (arr) => arr.forEach(r => {
+    if (!r?.url) return;
+    // simple de-dup
+    if (!results.find(x => x.url === r.url)) results.push(r);
+  });
+
+  if (process.env.SERPAPI_KEY) {
+    const u = new URL('https://serpapi.com/search.json');
+    u.searchParams.set('engine', 'google');
+    u.searchParams.set('q', q);
+    u.searchParams.set('num', '10');
+    u.searchParams.set('api_key', process.env.SERPAPI_KEY);
+    const r = await fetch(u); if (r.ok) {
+      const j = await r.json();
+      const org = j.organic_results || [];
+      add(org.map(o => ({ url: o.link, title: o.title || '' })));
+    }
+  } else if (process.env.BING_SEARCH_KEY) {
+    const u = new URL('https://api.bing.microsoft.com/v7.0/search');
+    u.searchParams.set('q', q);
+    const r = await fetch(u, { headers: { 'Ocp-Apim-Subscription-Key': process.env.BING_SEARCH_KEY }});
+    if (r.ok) {
+      const j = await r.json();
+      const org = (j.webPages && j.webPages.value) || [];
+      add(org.map(o => ({ url: o.url, title: o.name || '' })));
+    }
+  } else if (process.env.GOOGLE_API_KEY && process.env.GOOGLE_CSE_ID) {
+    const u = new URL('https://www.googleapis.com/customsearch/v1');
+    u.searchParams.set('q', q);
+    u.searchParams.set('key', process.env.GOOGLE_API_KEY);
+    u.searchParams.set('cx', process.env.GOOGLE_CSE_ID);
+    u.searchParams.set('num', '10');
+    const r = await fetch(u);
+    if (r.ok) {
+      const j = await r.json();
+      const items = j.items || [];
+      add(items.map(o => ({ url: o.link, title: o.title || '' })));
+    }
+  }
+  // Rank: prefer preferred domains and PDFs
+  const score = (u) => {
+    const url = new URL(u);
+    let s = 0;
+    if (url.pathname.toLowerCase().endsWith('.pdf')) s += 3;
+    if (preferredDomains.includes(url.hostname.replace(/^www\./,''))) s += 5;
+    if (/datasheet|catalog|technical/i.test(u)) s += 2;
+    return s;
+  };
+  return results
+    .map(r => ({ ...r, s: score(r.url) }))
+    .sort((a,b) => b.s - a.s)
+    .slice(0, 5);
+}
+
+async function extractTextFromUrl(u) {
+  // Lazy import pdf-parse if installed
+  let pdfParse = null;
+  try { const m = await import('pdf-parse'); pdfParse = m.default || m; } catch { /* optional */ }
+
+  const res = await fetch(u, { redirect: 'follow' });
+  if (!res.ok) throw new Error(`Fetch failed ${res.status}`);
+  const ctype = (res.headers.get('content-type') || '').toLowerCase();
+  if (ctype.includes('pdf')) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!pdfParse) return ''; // cannot parse pdf without lib
+    const parsed = await pdfParse(buf);
+    return (parsed.text || '').slice(0, 200000);
+  }
+  const html = await res.text();
+  // strip tags
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.slice(0, 200000);
+}
+
+async function enrichFromWeb({ manufacturer, reference, device_type }) {
+  // Build queries
+  const baseQ = [manufacturer, reference, device_type, 'datasheet'].filter(Boolean).join(' ');
+  const queries = [
+    `${baseQ} filetype:pdf`,
+    `${baseQ} technical data`,
+    `${manufacturer} ${reference} IEC 62271 datasheet`
+  ];
+  const texts = [];
+  for (const q of queries) {
+    try {
+      const hits = await webSearchDatasheet(q);
+      for (const h of hits) {
+        try {
+          const t = await extractTextFromUrl(h.url);
+          if (t && t.length > 500) texts.push(t);
+          if (texts.length >= 2) break; // enough
+        } catch(_) { /* next */ }
+      }
+      if (texts.length >= 2) break;
+    } catch(_) { /* next query */ }
+  }
+  if (texts.length === 0) return {};
+
+  // Ask LLM to extract specs from concatenated text (truncated)
+  const text = texts.join('\n\n---\n\n').slice(0, 14000);
+  const messages = [
+    { role: 'system', content: 'You extract HV device specs (IEC 62271) as strict JSON. Prefer explicit values from text; infer cautiously.' },
+    { role: 'user', content:
+`Given this datasheet content, extract:
+manufacturer, reference, device_type,
+voltage_class_kv, short_circuit_current_ka, insulation_type (SF6/Vacuum/Air),
+mechanical_endurance_class (M1/M2), electrical_endurance_class (E1/E2), poles.
+
+TEXT:
+${text}
+
+Return ONLY a JSON object.`}
+  ];
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages,
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+    max_tokens: 700
+  });
+  return safeJsonFromContent(completion.choices?.[0]?.message?.content || '');
+}
+
+// ---------------- IA: specs à partir de texte + photos (Vision + Web enrich) ----------------
 app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
   try {
     const manufacturer_hint = req.body.manufacturer || '';
@@ -348,18 +478,15 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     const device_type_hint = req.body.device_type || '';
     const files = req.files || [];
 
-    if (!openai) {
-      return res.status(503).json({ error: 'OpenAI not available. Set OPENAI_API_KEY.' });
-    }
+    if (!openai) return res.status(503).json({ error: 'OpenAI not available. Set OPENAI_API_KEY.' });
 
-    // Convert images to data URLs for Vision
+    // 1) Vision on photos
     const imageParts = (files || []).map(f => {
       const base64 = Buffer.from(f.buffer).toString('base64');
       const mime = f.mimetype || 'image/jpeg';
       return { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } };
     });
-
-    const messages = [
+    const vMessages = [
       { role: 'system', content: 'You are an electrical engineering expert (IEC 62271 HV). Extract realistic specs as pure JSON.' },
       { role: 'user', content: [
         { type: 'text', text:
@@ -378,64 +505,88 @@ Return ONLY a JSON object, no prose.` },
         ...imageParts
       ]}
     ];
-
-    const completion = await openai.chat.completions.create({
+    const vision = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
-      messages,
+      messages: vMessages,
       temperature: 0.1,
       response_format: { type: 'json_object' },
       max_tokens: 700
     });
+    const vjson = safeJsonFromContent(vision.choices?.[0]?.message?.content || '');
 
-    const content = completion.choices?.[0]?.message?.content || '';
-    let json = safeJsonFromContent(content);
-
-    // Normalize
-    const outRaw = {
-      manufacturer: json.manufacturer ?? null,
-      reference: json.reference ?? null,
-      device_type: json.device_type ?? null,
-      voltage_class_kv: parseNum(json.voltage_class_kv),
-      short_circuit_current_ka: parseNum(json.short_circuit_current_ka),
-      insulation_type: json.insulation_type ?? null,
-      mechanical_endurance_class: sanitizeClass(json.mechanical_endurance_class, ['M1','M2']),
-      electrical_endurance_class: sanitizeClass(json.electrical_endurance_class, ['E1','E2']),
-      poles: parsePoles(json.poles),
-      settings: json.settings || {}
+    // Normalize Vision result
+    const visionOut = {
+      manufacturer: vjson.manufacturer ?? manufacturer_hint || null,
+      reference: vjson.reference ?? reference_hint || null,
+      device_type: vjson.device_type ?? device_type_hint || null,
+      voltage_class_kv: parseNum(vjson.voltage_class_kv),
+      short_circuit_current_ka: parseNum(vjson.short_circuit_current_ka),
+      insulation_type: vjson.insulation_type ?? null,
+      mechanical_endurance_class: sanitizeClass(vjson.mechanical_endurance_class, ['M1','M2']),
+      electrical_endurance_class: sanitizeClass(vjson.electrical_endurance_class, ['E1','E2']),
+      poles: parsePoles(vjson.poles),
+      settings: vjson.settings || {}
     };
 
-    // Drop non-informative values & avoid blocking "empty" detection on front
-    const out = {};
-    for (const [k, v] of Object.entries(outRaw)) {
-      if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) continue;
-      // don't include device_type if it's only equal to the hint
-      if (k === 'device_type' && v === device_type_hint) continue;
-      out[k] = v;
+    // 2) Web enrichment (optional, only if we have at least manufacturer or reference)
+    let webOut = {};
+    const hasSearchKeys = process.env.SERPAPI_KEY || process.env.BING_SEARCH_KEY || (process.env.GOOGLE_API_KEY && process.env.GOOGLE_CSE_ID);
+    const canSearch = hasSearchKeys && (visionOut.manufacturer || visionOut.reference);
+    if (canSearch) {
+      try {
+        const enriched = await enrichFromWeb({
+          manufacturer: visionOut.manufacturer || manufacturer_hint,
+          reference: visionOut.reference || reference_hint,
+          device_type: visionOut.device_type || device_type_hint
+        });
+        // normalize enriched
+        webOut = {
+          manufacturer: enriched.manufacturer ?? null,
+          reference: enriched.reference ?? null,
+          device_type: enriched.device_type ?? null,
+          voltage_class_kv: parseNum(enriched.voltage_class_kv),
+          short_circuit_current_ka: parseNum(enriched.short_circuit_current_ka),
+          insulation_type: enriched.insulation_type ?? null,
+          mechanical_endurance_class: sanitizeClass(enriched.mechanical_endurance_class, ['M1','M2']),
+          electrical_endurance_class: sanitizeClass(enriched.electrical_endurance_class, ['E1','E2']),
+          poles: parsePoles(enriched.poles),
+          settings: enriched.settings || {}
+        };
+      } catch (e) {
+        console.warn('[WEB ENRICH] failed:', e.message);
+      }
     }
 
+    // 3) Merge (Vision wins for manufacturer/reference if present; then fill gaps with web)
+    const merged = {
+      manufacturer: visionOut.manufacturer || webOut.manufacturer || null,
+      reference: visionOut.reference || webOut.reference || null,
+      device_type: visionOut.device_type || webOut.device_type || device_type_hint || 'HV Circuit Breaker',
+      voltage_class_kv: visionOut.voltage_class_kv ?? webOut.voltage_class_kv ?? null,
+      short_circuit_current_ka: visionOut.short_circuit_current_ka ?? webOut.short_circuit_current_ka ?? null,
+      insulation_type: visionOut.insulation_type || webOut.insulation_type || null,
+      mechanical_endurance_class: visionOut.mechanical_endurance_class || webOut.mechanical_endurance_class || null,
+      electrical_endurance_class: visionOut.electrical_endurance_class || webOut.electrical_endurance_class || null,
+      poles: visionOut.poles ?? webOut.poles ?? null,
+      settings: { ...(webOut.settings || {}), ...(visionOut.settings || {}) }
+    };
+
+    // Drop empty keys
+    const out = {};
+    for (const [k,v] of Object.entries(merged)) {
+      if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) continue;
+      out[k] = v;
+    }
     return res.json(out); // could be {} if nothing useful
   } catch (e) {
     const status = e?.status || e?.response?.status || 500;
-    const detail =
-      e?.response?.data?.error?.message ||
-      e?.error?.message ||
-      e?.message ||
-      'Unknown error';
-
-    console.error('[HV AI SPECS] OpenAI error:', {
-      status,
-      code: e?.code,
-      type: e?.type,
-      message: e?.message,
-      response: e?.response?.data || null
-    });
-
+    const detail = e?.response?.data?.error?.message || e?.error?.message || e?.message || 'Unknown error';
+    console.error('[HV AI SPECS] Error:', { status, detail });
     if (status === 401) return res.status(401).json({ error: 'Unauthorized (check OPENAI_API_KEY)', details: detail });
     if (status === 404) return res.status(404).json({ error: 'Model not found', details: detail });
     if (status === 429) return res.status(429).json({ error: 'Rate limit or quota exceeded', details: detail });
     if (status === 400) return res.status(400).json({ error: 'Invalid request to OpenAI', details: detail });
     if (status === 503) return res.status(503).json({ error: 'OpenAI service unavailable', details: detail });
-
     return res.status(500).json({ error: 'AI specs extraction failed', details: detail });
   }
 });
