@@ -307,8 +307,7 @@ function checkSelectivity(up, down, faultI = null) {
   }
   if (zoneStart !== null) nonSelectiveZones.push({ xMin: zoneStart, xMax: currents[currents.length - 1] });
 
-  const isPartialByI = !isSelective && nonSelectiveZones.every(z => z.xMin > maxEval);
-  const isPartial = isPartialByI;
+  isPartial = !isSelective && nonSelectiveZones.every(z => z.xMin > maxEval); // Réassignation au lieu de redéclaration
 
   return { isSelective, isPartial, nonSelectiveZones };
 }
