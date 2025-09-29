@@ -336,7 +336,7 @@ const safeJsonFromContent = (content) => {
   try { return JSON.parse(slice); } catch { return {}; }
 };
 
-// --- Web search providers (one of them must be configured) ---
+// --- Web search providers (optional) ---
 const preferredDomains = (process.env.DATASHEET_PREFERRED_DOMAINS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
 
@@ -380,7 +380,7 @@ async function webSearchDatasheet(q) {
       add(items.map(o => ({ url: o.link, title: o.title || '' })));
     }
   }
-  // Rank: prefer preferred domains and PDFs
+
   const score = (u) => {
     const url = new URL(u);
     let s = 0;
@@ -423,7 +423,7 @@ async function enrichFromWeb({ manufacturer, reference, device_type }) {
   const queries = [
     `${baseQ} filetype:pdf`,
     `${baseQ} technical data`,
-    `${manufacturer} ${reference} IEC 62271 datasheet`
+    `${manufacturer} ${reference} IEC datasheet`
   ];
   const texts = [];
   for (const q of queries) {
@@ -443,17 +443,25 @@ async function enrichFromWeb({ manufacturer, reference, device_type }) {
 
   const text = texts.join('\n\n---\n\n').slice(0, 14000);
   const messages = [
-    { role: 'system', content: 'You extract HV device specs (IEC 62271) as strict JSON. Prefer explicit values from text; infer cautiously.' },
+    { role: 'system', content: 'You extract HV device specs as strict JSON. Prefer explicit values from text; infer cautiously. Map device-specific attributes into settings.*' },
     { role: 'user', content:
-`Given this datasheet content, extract:
+`Extract these keys:
+
 manufacturer, reference, device_type,
-voltage_class_kv, short_circuit_current_ka, insulation_type (SF6/Vacuum/Air),
-mechanical_endurance_class (M1/M2), electrical_endurance_class (E1/E2), poles.
+voltage_class_kv, short_circuit_current_ka, insulation_type,
+mechanical_endurance_class, electrical_endurance_class, poles,
+settings (object) with device-specific attributes:
+- Transformer: capacity_kva, rated_voltage_primary_kv, rated_voltage_secondary_v, vector_group, cooling, connection, standard, frequency_hz, oil_kg, weight_kg, tap_info
+- HV Circuit Breaker: standard, rated_current_a, rated_short_time_current_ka, opening_time_ms, insulation_medium (SF6/Vacuum/Air), poles
+- HV Cell/Switchgear: standard, internal_arc_class, protection_relay_model, protection_functions
+- Cable: voltage_class_kv, conductor_material, cross_section_mm2, insulation_material (XLPE/EPR/Paper), screen_type
+- Relay: standard, model, functions_ansi, setting_examples
+
+Return ONLY a JSON object.
 
 TEXT:
 ${text}
-
-Return ONLY a JSON object.`}
+`}
   ];
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
@@ -475,41 +483,58 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
 
     if (!openai) return res.status(503).json({ error: 'OpenAI not available. Set OPENAI_API_KEY.' });
 
-    // 1) Vision on photos
+    // 1) Vision on photos — schema stricte
     const imageParts = (files || []).map(f => {
       const base64 = Buffer.from(f.buffer).toString('base64');
       const mime = f.mimetype || 'image/jpeg';
       return { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } };
     });
+
     const vMessages = [
-      { role: 'system', content: 'You are an electrical engineering expert (IEC 62271 HV). Extract realistic specs as pure JSON.' },
+      { role: 'system', content: `
+You are an HV expert (IEC 62271/60076/60228). Read nameplates and diagrams.
+Return only STRICT JSON with these keys:
+
+manufacturer, reference, device_type,
+voltage_class_kv (number|null),
+short_circuit_current_ka (number|null),
+insulation_type (one of: Oil, SF6, Vacuum, Air, XLPE, EPR, Paper, Resin, or null),
+mechanical_endurance_class (M1/M2|null),
+electrical_endurance_class (E1/E2|null),
+poles (integer|null),
+settings (object) for device-specific attributes:
+  transformer: capacity_kva, rated_voltage_primary_kv, rated_voltage_secondary_v,
+               vector_group, cooling, connection, standard, frequency_hz, oil_kg, weight_kg, tap_info
+  hv_circuit_breaker: standard, rated_current_a, rated_short_time_current_ka, opening_time_ms, poles
+  hv_cell_switchgear: standard, internal_arc_class, protection_relay_model, protection_functions
+  cable: voltage_class_kv, conductor_material, cross_section_mm2, insulation_material
+  relay: model, standard, functions_ansi, setting_examples
+If primary/secondary voltages appear, set voltage_class_kv to the HIGHEST voltage in kV (e.g. 22 kV for 22/0.4 kV).` },
       { role: 'user', content: [
         { type: 'text', text:
-`Manufacturer (hint): ${manufacturer_hint}
-Reference (hint): ${reference_hint}
-Device type (hint): ${device_type_hint}
-
-From these images, extract fields if visible:
-- manufacturer, reference
-- device_type
-- voltage_class_kv, short_circuit_current_ka, poles
-- insulation_type (SF6/Vacuum/Air)
-- mechanical_endurance_class (M1/M2)
-- electrical_endurance_class (E1/E2)
-Return ONLY a JSON object, no prose.` },
+`Hints:
+manufacturer: ${manufacturer_hint || '(none)'}
+reference: ${reference_hint || '(none)'}
+device_type: ${device_type_hint || '(unknown)'}
+Please read all photos, transcribe the nameplate and extract as per schema.` },
         ...imageParts
       ]}
     ];
+
     const vision = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: vMessages,
       temperature: 0.1,
       response_format: { type: 'json_object' },
-      max_tokens: 700
+      max_tokens: 800
     });
     const vjson = safeJsonFromContent(vision.choices?.[0]?.message?.content || '');
 
-    // Normalize Vision result (⚠️ parenthesize ?? with ||)
+    if (process.env.HV_DEBUG === '1') {
+      console.log('[VISION RAW]', vjson);
+    }
+
+    // Normalize Vision result
     const visionOut = {
       manufacturer: (vjson.manufacturer ?? manufacturer_hint) ?? null,
       reference: (vjson.reference ?? reference_hint) ?? null,
@@ -534,6 +559,8 @@ Return ONLY a JSON object, no prose.` },
           reference: visionOut.reference || reference_hint,
           device_type: visionOut.device_type || device_type_hint
         });
+        if (process.env.HV_DEBUG === '1') console.log('[WEB RAW]', enriched);
+
         webOut = {
           manufacturer: enriched.manufacturer ?? null,
           reference: enriched.reference ?? null,
@@ -551,7 +578,7 @@ Return ONLY a JSON object, no prose.` },
       }
     }
 
-    // 3) Merge (no illegal ?? / || mixing)
+    // 3) Merge
     const merged = {
       manufacturer: visionOut.manufacturer || webOut.manufacturer || null,
       reference: visionOut.reference || webOut.reference || null,
