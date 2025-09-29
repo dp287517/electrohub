@@ -11,6 +11,9 @@
   },
   "dependencies": {
     "@radix-ui/react-tooltip": "^1.1.2",
+    "@projectstorm/react-diagrams": "^7.0.4",
+    "@projectstorm/react-diagrams-defaults": "^7.1.1",
+    "@projectstorm/react-diagrams-routing": "^7.1.3",
     "axios": "^1.7.7",
     "express-rate-limit": "^7.4.0",
     "bcryptjs": "^2.4.3",
@@ -43,9 +46,6 @@
     "pdfjs-dist": "^4.7.21",
     "gantt-task-react": "^0.3.8",
     "cors": "^2.8.5",
-    "@projectstorm/react-diagrams": "^7.1.3",
-    "@projectstorm/react-diagrams-defaults": "^7.1.1",
-    "@projectstorm/react-diagrams-routing": "^7.1.3",
     "reactflow": "^11.10.2"
   },
   "devDependencies": {
