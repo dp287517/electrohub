@@ -53,14 +53,14 @@ const WHITELIST_SORT = ['name','code','building_code'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'name'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema - Ajout de la table selectivity_checks
+// Schema - Ajout de la table selectivity_checks avec statut étendu
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS selectivity_checks (
       upstream_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
       downstream_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
       site TEXT NOT NULL,
-      status TEXT NOT NULL CHECK (status IN ('selective', 'non-selective', 'incomplete')),
+      status TEXT NOT NULL CHECK (status IN ('selective', 'partial-selective', 'non-selective', 'incomplete')),
       checked_at TIMESTAMPTZ DEFAULT NOW(),
       PRIMARY KEY (upstream_id, downstream_id, site)
     );
@@ -69,7 +69,7 @@ async function ensureSchema() {
 }
 ensureSchema().catch(e => console.error('[SELECTIVITY SCHEMA] error:', e.message));
 
-// LIST Pairs amont/aval
+// LIST Pairs amont/aval (inchangé)
 app.get('/api/selectivity/pairs', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -106,7 +106,7 @@ app.get('/api/selectivity/pairs', async (req, res) => {
   }
 });
 
-// CHECK Selectivity for a pair
+// CHECK Selectivity for a pair (corrigé avec automatisation et partial)
 app.get('/api/selectivity/check', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -117,12 +117,32 @@ app.get('/api/selectivity/check', async (req, res) => {
     `, [Number(upstream), Number(downstream), site]);
     if (r.rows.length !== 2) return res.status(404).json({ error: 'Devices not found' });
 
-    const up = r.rows.find(d => d.id === Number(upstream));
-    const down = r.rows.find(d => d.id === Number(downstream));
+    let up = r.rows.find(d => d.id === Number(upstream));
+    let down = r.rows.find(d => d.id === Number(downstream));
+
+    // Automatisation des settings à partir de device_type/switchboard data
+    [up, down].forEach(device => {
+      device.settings = device.settings || {};
+      const type = device.device_type?.toLowerCase() || 'mccb'; // Assume MCCB par défaut
+      if (!device.settings.trip_type) {
+        device.settings.trip_type = type.includes('mcb') ? 'thermal-magnetic' : 'electronic';
+      }
+      if (device.settings.trip_type === 'thermal-magnetic') {
+        device.settings.tsd = 0; // Pas de délai pour TM
+        if (!device.settings.curve) device.settings.curve = 'C'; // Default C
+        const curveMultipliers = { 'B': {min:3, max:5, avg:4}, 'C': {min:5, max:10, avg:7.5}, 'D': {min:10, max:20, avg:15} };
+        device.settings.isd = device.settings.isd || curveMultipliers[device.settings.curve]?.avg || 6;
+      }
+      device.settings.ir = device.settings.ir || 1;
+      device.settings.tr = device.settings.tr || 10;
+      device.settings.isd = device.settings.isd || 6;
+      device.settings.tsd = device.settings.tsd || 0.1;
+      device.settings.ii = device.settings.ii || 10;
+    });
 
     // Vérification données manquantes
     const missing = [];
-    if (!up.settings?.ir || !down.settings?.ir) missing.push('Ir missing');
+    if (!up.settings.ir || !down.settings.ir) missing.push('Ir missing');
     if (!up.in_amps || !down.in_amps) missing.push('In amps missing');
 
     if (missing.length > 0) {
@@ -136,12 +156,14 @@ app.get('/api/selectivity/check', async (req, res) => {
     }
 
     // Calcul sélectivité et zones non-sélectives
-    const { isSelective, nonSelectiveZones } = checkSelectivity(up, down, Number(fault_current));
+    const { isSelective, isPartial, nonSelectiveZones } = checkSelectivity(up, down, Number(fault_current));
+    const status = isSelective ? 'selective' : (isPartial ? 'partial-selective' : 'non-selective');
     const remediation = isSelective ? [] : getRemediations(up, down);
     const details = { 
       why: isSelective ? 
         'Total selectivity achieved: Downstream trip time < upstream for all tested currents (IEC 60947-2).' : 
-        'Partial/non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.'
+        (isPartial ? 'Partial selectivity: Selective up to Icu downstream, but non-selective beyond (adjust for Isc max).' :
+        'Non-selectivity: Downstream trip time >= upstream at some currents; adjust settings for better coordination.')
     };
 
     // Sauvegarde du statut
@@ -150,16 +172,16 @@ app.get('/api/selectivity/check', async (req, res) => {
       VALUES ($1, $2, $3, $4, NOW())
       ON CONFLICT (upstream_id, downstream_id, site)
       DO UPDATE SET status = $4, checked_at = NOW()
-    `, [Number(upstream), Number(downstream), site, isSelective ? 'selective' : 'non-selective']);
+    `, [Number(upstream), Number(downstream), site, status]);
 
-    res.json({ status: isSelective ? 'selective' : 'non-selective', details, remediation, nonSelectiveZones });
+    res.json({ status, details, remediation, nonSelectiveZones });
   } catch (e) {
     console.error('[SELECTIVITY CHECK] error:', e);
     res.status(500).json({ error: 'Check failed' });
   }
 });
 
-// GET Curves data for graph
+// GET Curves data for graph (ajout automatisation similaire)
 app.get('/api/selectivity/curves', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -170,8 +192,28 @@ app.get('/api/selectivity/curves', async (req, res) => {
     `, [Number(upstream), Number(downstream), site]);
     if (r.rows.length !== 2) return res.status(404).json({ error: 'Devices not found' });
 
-    const up = r.rows.find(d => d.id === Number(upstream));
-    const down = r.rows.find(d => d.id === Number(downstream));
+    let up = r.rows.find(d => d.id === Number(upstream));
+    let down = r.rows.find(d => d.id === Number(downstream));
+
+    // Automatisation identique à /check
+    [up, down].forEach(device => {
+      device.settings = device.settings || {};
+      const type = device.device_type?.toLowerCase() || 'mccb';
+      if (!device.settings.trip_type) {
+        device.settings.trip_type = type.includes('mcb') ? 'thermal-magnetic' : 'electronic';
+      }
+      if (device.settings.trip_type === 'thermal-magnetic') {
+        device.settings.tsd = 0;
+        if (!device.settings.curve) device.settings.curve = 'C';
+        const curveMultipliers = { 'B': {min:3, max:5, avg:4}, 'C': {min:5, max:10, avg:7.5}, 'D': {min:10, max:20, avg:15} };
+        device.settings.isd = device.settings.isd || curveMultipliers[device.settings.curve]?.avg || 6;
+      }
+      device.settings.ir = device.settings.ir || 1;
+      device.settings.tr = device.settings.tr || 10;
+      device.settings.isd = device.settings.isd || 6;
+      device.settings.tsd = device.settings.tsd || 0.1;
+      device.settings.ii = device.settings.ii || 10;
+    });
 
     const upCurve = generateCurvePoints(up);
     const downCurve = generateCurvePoints(down);
@@ -183,7 +225,7 @@ app.get('/api/selectivity/curves', async (req, res) => {
   }
 });
 
-// AI TIP for remediation
+// AI TIP for remediation (prompt mis à jour)
 app.post('/api/selectivity/ai-tip', async (req, res) => {
   try {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
@@ -196,7 +238,7 @@ app.post('/api/selectivity/ai-tip', async (req, res) => {
       messages: [
         { 
           role: 'system', 
-          content: `You are an expert in IEC 60947 selectivity. Provide concise remediation advice based on "${context}". Use standards like time-current curves, adjust Ir/Isd. 1-2 sentences.` 
+          content: `You are an expert in IEC 60947 selectivity. Provide concise remediation advice based on "${context}". Consider trip_type (thermal-magnetic or electronic) and curve (B/C/D). For TM, ensure Im_up >=2*Im_down max. Use standards like time-current curves, adjust Ir/Isd. 1-2 sentences.` 
         },
         { role: 'user', content: context }
       ],
@@ -212,20 +254,27 @@ app.post('/api/selectivity/ai-tip', async (req, res) => {
   }
 });
 
-// Fonctions helpers pour calculs (basés sur recherches IEC)
+// Fonctions helpers pour calculs (corrigées)
 function checkSelectivity(up, down, faultI = null) {
-  const currents = faultI ? [Number(faultI)] : Array.from({length: 20}, (_, i) => Math.pow(10, i/5) * Math.min(up.in_amps || 100, down.in_amps || 100));
+  const minIn = Math.min(up.in_amps || 100, down.in_amps || 100);
+  const maxIcu = Math.min(up.icu_ka || 50, down.icu_ka || 50) * 1000;
+  const currents = faultI ? [Number(faultI)] : Array.from({length: 20}, (_, i) => Math.pow(10, i/5) * minIn).filter(I => I <= maxIcu);
   const nonSelectiveZones = [];
   let zoneStart = null;
   let isSelective = true;
+  let isPartial = false;
 
   for (let i = 0; i < currents.length; i++) {
     const I = currents[i];
     const tDown = calculateTripTime(down, I);
     const tUp = calculateTripTime(up, I);
-    if (tDown >= tUp * 1.05) {
+    const isInstant = tUp < 0.05 || tDown < 0.05; // Pour TM/instant, marge stricte
+    const threshold = isInstant ? 1 : 1.05;
+    if (tDown >= tUp * threshold) {
       isSelective = false;
       if (zoneStart === null) zoneStart = I;
+      // Partial si zone au-delà Icu down
+      if (I > (down.icu_ka || 10) * 1000) isPartial = true;
     } else if (zoneStart !== null) {
       nonSelectiveZones.push({ xMin: zoneStart, xMax: I });
       zoneStart = null;
@@ -233,7 +282,9 @@ function checkSelectivity(up, down, faultI = null) {
   }
   if (zoneStart !== null) nonSelectiveZones.push({ xMin: zoneStart, xMax: currents[currents.length - 1] });
 
-  return { isSelective, nonSelectiveZones };
+  if (!isSelective && nonSelectiveZones.every(zone => zone.xMin > (down.icu_ka || 10) * 1000)) isPartial = true;
+
+  return { isSelective, isPartial, nonSelectiveZones };
 }
 
 function calculateTripTime(device, I) {
@@ -245,13 +296,24 @@ function calculateTripTime(device, I) {
   const Ii = settings.ii || 10;
 
   if (I > Ii * Ir * In) return 0.01; // Instantané
-  if (I > Isd * Ir * In) return Tsd; // Short-time
-  if (I > Ir * In) return Tr / ((I / (Ir * In)) ** 2 - 1); // Long-time approx I²t
+  if (I > Isd * Ir * In) return Tsd; // Short-time (0 pour TM)
+  if (I > Ir * In) {
+    // Formule affinée pour TM : calibrée à 6*Ir (Schneider/IEC approx)
+    const k = Tr * Math.pow(6 * Ir * In, 2) / 36; // k = I²t constant approx
+    return k / Math.pow(I, 2);
+  }
   return Infinity; // Pas de trip
 }
 
 function getRemediations(up, down) {
-  return ['Increase upstream Isd to > downstream Isd * 1.6', 'Enable ZSI if available', 'Check curve types compatibility'];
+  const rem = [];
+  if (up.settings.trip_type === 'thermal-magnetic' || down.settings.trip_type === 'thermal-magnetic') {
+    rem.push('For TM: Ensure Im_up >= 2 * Im_down max (IEC ratio)');
+  }
+  rem.push('Increase upstream Isd to > downstream Isd * 1.6');
+  rem.push('Enable ZSI if available (for electronic)');
+  rem.push('Check curve types compatibility (B/C/D)');
+  return rem;
 }
 
 function generateCurvePoints(device) {
