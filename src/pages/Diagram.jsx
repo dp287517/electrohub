@@ -3,8 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import createEngine, { DefaultNodeModel, DiagramModel } from '@projectstorm/react-diagrams';
 import { CanvasWidget } from '@projectstorm/react-canvas-core';
 import { RightAngleLinkFactory, PathFindingLinkFactory, PathFindingLinkModel } from '@projectstorm/react-diagrams-routing';
-import '@projectstorm/react-canvas-core/dist/style.min.css';
-import '@projectstorm/react-diagrams/dist/style.min.css';
 import { api } from '../lib/api.js';
 
 const COLORS = {
