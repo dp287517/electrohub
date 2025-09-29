@@ -14,7 +14,6 @@ app.use(helmet());
 app.use(express.json({ limit: '12mb' }));
 app.use(cookieParser());
 
-// ---- CORS
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
@@ -24,13 +23,34 @@ app.use((req, res, next) => {
   next();
 });
 
-function siteOf(req) {
-  return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
-}
+function siteOf(req) { return (req.header('X-Site') || req.query.site || req.body.site || '').toString(); }
 const n = (v, d=null) => Number.isFinite(Number(v)) ? Number(v) : d;
 const bool = (v, d=false) => (v===true || v==='true' || v==='1') ? true : (v===false || v==='false' || v==='0') ? false : d;
 
 app.get('/api/diagram/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// Debug endpoint to quickly see available sites and counts
+app.get('/api/diagram/debug', async (req, res) => {
+  try {
+    const sites = new Set();
+    const r1 = await pool.query(`SELECT site, COUNT(*)::int AS boards FROM switchboards GROUP BY site ORDER BY site`);
+    const r2 = await pool.query(`SELECT site, COUNT(*)::int AS hv FROM hv_equipments GROUP BY site ORDER BY site`);
+    r1.rows.forEach(r => sites.add(r.site));
+    r2.rows.forEach(r => sites.add(r.site));
+    const list = [...sites];
+    const detail = {};
+    for (const s of list) {
+      const sb = r1.rows.find(x => x.site === s)?.boards || 0;
+      const hv = r2.rows.find(x => x.site === s)?.hv || 0;
+      const dev = (await pool.query(`SELECT COUNT(*)::int AS c FROM devices WHERE site=$1`, [s])).rows[0].c;
+      detail[s] = { switchboards: sb, hv_equipments: hv, devices: dev };
+    }
+    res.json({ sites: list, detail });
+  } catch (e) {
+    console.error('[DIAGRAM DEBUG]', e);
+    res.status(500).json({ error: 'debug failed', details: e.message });
+  }
+});
 
 app.get('/api/diagram/view', async (req, res) => {
   try {
@@ -43,11 +63,9 @@ app.get('/api/diagram/view', async (req, res) => {
           const s2 = await pool.query(`SELECT site FROM hv_equipments WHERE site IS NOT NULL LIMIT 1`);
           if (s2.rows.length) site = s2.rows[0].site;
         }
-      } catch (e) {
-        console.warn('[diagram][fallback-site] query failed', e.message);
-      }
+      } catch {}
     }
-    if (!site) return res.json({ nodes: [], edges: [], warning: 'No site configured / no data found' });
+    if (!site) return res.json({ nodes: [], edges: [], warning: 'No site configured / no data found', debug: { site: null } });
 
     const mode = String(req.query.mode || 'all').toLowerCase();
     const buildingFilter = (req.query.building || '').toString();
@@ -61,51 +79,22 @@ app.get('/api/diagram/view', async (req, res) => {
     const seenNode = new Set();
     const seenEdge = new Set();
     const pushNode = (node) => { if (!seenNode.has(node.id)) { seenNode.add(node.id); nodes.push(node); } };
-    const pushEdge = (edge) => {
-      const id = `${edge.source}::${edge.target}::${edge.type || 'default'}`;
-      if (!seenEdge.has(id)) { seenEdge.add(id); edges.push({ animated: true, ...edge }); }
-    };
+    const pushEdge = (edge) => { const id = `${edge.source}::${edge.target}::${edge.type || 'default'}`; if (!seenEdge.has(id)) { seenEdge.add(id); edges.push({ animated: true, ...edge }); } };
 
-    // ---------- LV SECTION ----------
+    let debug = { site, mode, filters: { building: buildingFilter, rootSwitchId, rootHvId }, counts: {} };
+
+    // LV
     if (mode === 'lv' || mode === 'all') {
       let sbWhere = ['site = $1'];
       const sbVals = [site]; let i = 2;
       if (rootSwitchId) { sbWhere.push(`id = $${i++}`); sbVals.push(rootSwitchId); }
       if (buildingFilter) { sbWhere.push(`building_code ILIKE $${i++}`); sbVals.push(`%${buildingFilter}%`); }
-
-      const sbRows = await pool.query(
-        `SELECT id, name, code, building_code, floor, room, regime_neutral, is_principal
-         FROM switchboards WHERE ${sbWhere.join(' AND ')}
-         ORDER BY is_principal DESC, created_at ASC`,
-        sbVals
-      );
-
+      const sbRows = await pool.query(`SELECT id, name, code, building_code, floor, room, regime_neutral, is_principal FROM switchboards WHERE ${sbWhere.join(' AND ')} ORDER BY is_principal DESC, created_at ASC`, sbVals);
+      debug.counts.lv_switchboards = sbRows.rowCount;
       const sbIds = sbRows.rows.map(r => r.id);
       if (sbIds.length) {
-        const devRows = await pool.query(
-          `SELECT d.*, s.name AS switchboard_name, s.code AS switchboard_code, s.building_code, s.floor, s.room
-           FROM devices d
-           JOIN switchboards s ON d.switchboard_id = s.id
-           WHERE s.site = $1 AND d.switchboard_id = ANY($2::int[])
-           ORDER BY d.created_at ASC`,
-          [site, sbIds]
-        );
-
-        let faultMap = new Map(), arcMap = new Map();
-        if (includeMetrics) {
-          const faults = await pool.query(
-            `SELECT device_id, switchboard_id, status, fault_level_ka, phase_type
-             FROM fault_checks WHERE site = $1 AND switchboard_id = ANY($2::int[])`,
-            [site, sbIds]
-          );
-          faults.rows.forEach(r => faultMap.set(`${r.device_id}:${r.switchboard_id}`, r));
-          const arcs = await pool.query(
-            `SELECT device_id, switchboard_id, status, incident_energy, ppe_category
-             FROM arcflash_checks WHERE site = $1 AND switchboard_id = ANY($2::int[])`,
-            [site, sbIds]
-          );
-          arcs.rows.forEach(r => arcMap.set(`${r.device_id}:${r.switchboard_id}`, r));
-        }
+        const devRows = await pool.query(`SELECT d.*, s.name AS switchboard_name, s.code AS switchboard_code, s.building_code, s.floor, s.room FROM devices d JOIN switchboards s ON d.switchboard_id = s.id WHERE s.site = $1 AND d.switchboard_id = ANY($2::int[]) ORDER BY d.created_at ASC`, [site, sbIds]);
+        debug.counts.lv_devices = devRows.rowCount;
 
         const byId = new Map();
         devRows.rows.forEach(d => byId.set(d.id, d));
@@ -122,48 +111,17 @@ app.get('/api/diagram/view', async (req, res) => {
         }
 
         for (const sb of sbRows.rows) {
-          pushNode({
-            id: `sb:${sb.id}`,
-            type: 'switchboard',
-            data: {
-              label: `${sb.name} (${sb.code})`,
-              building: sb.building_code || '',
-              floor: sb.floor || '',
-              room: sb.room || '',
-              regime: sb.regime_neutral || '',
-              isPrincipal: !!sb.is_principal,
-            },
-            position: { x: 0, y: 0 },
-          });
+          pushNode({ id: `sb:${sb.id}`, type: 'switchboard', data: { label: `${sb.name} (${sb.code})`, building: sb.building_code || '', floor: sb.floor || '', room: sb.room || '', regime: sb.regime_neutral || '', isPrincipal: !!sb.is_principal }, position: { x: 0, y: 0 } });
         }
 
         const colWidth = 380, rowHeight = 140;
         for (const sb of sbRows.rows) {
           const roots = rootsPerSb.get(sb.id) || [];
-          // place roots
           for (let idx=0; idx<roots.length; idx++) {
             const rid = roots[idx];
             const d = byId.get(rid);
             const nodeId = `dev:${d.id}`;
-            const positions = { x: colWidth * 1, y: rowHeight * (idx + 1) };
-            const metrics = includeMetrics ? {
-              fault: faultMap.get(`${d.id}:${sb.id}`) || null,
-              arc: arcMap.get(`${d.id}:${sb.id}`) || null,
-            } : {};
-            pushNode({
-              id: nodeId,
-              type: 'device',
-              data: {
-                label: d.name || d.reference || d.device_type,
-                device_type: d.device_type,
-                switchboard_id: sb.id,
-                switchboard_name: sb.name,
-                building: d.building_code || sb.building_code || '',
-                metrics,
-                isMain: !!d.is_main_incoming,
-              },
-              position: positions,
-            });
+            pushNode({ id: nodeId, type: 'device', data: { label: d.name || d.reference || d.device_type, device_type: d.device_type, switchboard_id: sb.id, switchboard_name: sb.name, building: d.building_code || sb.building_code || '', isMain: !!d.is_main_incoming }, position: { x: colWidth * 1, y: rowHeight * (idx + 1) } });
             pushEdge({ source: `sb:${sb.id}`, target: nodeId, type: 'smoothstep' });
           }
 
@@ -179,55 +137,8 @@ app.get('/api/diagram/view', async (req, res) => {
               const r = nextRowForCol[xcol] || 1;
               const pos = { x: colWidth * xcol, y: rowHeight * r };
               nextRowForCol[xcol] = r + 1;
-
-              const metrics = includeMetrics ? {
-                fault: faultMap.get(`${d.id}:${d.switchboard_id}`) || null,
-                arc: arcMap.get(`${d.id}:${d.switchboard_id}`) || null,
-              } : {};
-
-              pushNode({
-                id: nodeId,
-                type: 'device',
-                data: {
-                  label: d.name || d.reference || d.device_type,
-                  device_type: d.device_type,
-                  switchboard_id: d.switchboard_id,
-                  switchboard_name: d.switchboard_name,
-                  building: d.building_code || '',
-                  metrics,
-                  isMain: !!d.is_main_incoming,
-                },
-                position: pos,
-              });
+              pushNode({ id: nodeId, type: 'device', data: { label: d.name || d.reference || d.device_type, device_type: d.device_type, switchboard_id: d.switchboard_id, switchboard_name: d.switchboard_name, building: d.building_code || '', isMain: !!d.is_main_incoming }, position: pos });
               pushEdge({ source: `dev:${id}`, target: nodeId, type: 'step' });
-
-              if (d.downstream_switchboard_id) {
-                let targetBoard = sbRows.rows.find(sx => sx.id === d.downstream_switchboard_id);
-                if (!targetBoard) {
-                  const rdsw = await pool.query(
-                    `SELECT id, name, code, building_code FROM switchboards WHERE id = $1 AND site=$2`,
-                    [d.downstream_switchboard_id, site]
-                  );
-                  if (rdsw.rows.length) targetBoard = rdsw.rows[0];
-                }
-                if (targetBoard) {
-                  pushNode({
-                    id: `sb:${targetBoard.id}`,
-                    type: 'switchboard',
-                    data: { label: `${targetBoard.name} (${targetBoard.code})`, building: targetBoard.building_code || '' },
-                    position: { x: colWidth * (xcol + 1), y: rowHeight },
-                  });
-                  const inter = (targetBoard.building_code || '') !== (d.building_code || sb.building_code || '');
-                  pushEdge({
-                    source: nodeId,
-                    target: `sb:${targetBoard.id}`,
-                    type: inter ? 'default' : 'smoothstep',
-                    label: inter ? '↪ inter-building' : undefined,
-                    style: inter ? { strokeDasharray: '6 4' } : undefined
-                  });
-                }
-              }
-
               queue.push({ id: cid, depth: dep + 1, xcol: Math.min(xcol + 1, 5) });
             }
           }
@@ -235,30 +146,18 @@ app.get('/api/diagram/view', async (req, res) => {
       }
     }
 
-    // ---------- HV SECTION ----------
+    // HV
     if (mode === 'hv' || mode === 'all') {
       let hvWhere = ['site = $1'];
       const hvVals = [site]; let j = 2;
       if (rootHvId) { hvWhere.push(`id = $${j++}`); hvVals.push(rootHvId); }
       if (buildingFilter) { hvWhere.push(`building_code ILIKE $${j++}`); hvVals.push(`%${buildingFilter}%`); }
-
-      const hvRows = await pool.query(
-        `SELECT id, name, code, building_code, floor, room, is_principal
-         FROM hv_equipments WHERE ${hvWhere.join(' AND ')}
-         ORDER BY is_principal DESC, created_at ASC`,
-        hvVals
-      );
-
+      const hvRows = await pool.query(`SELECT id, name, code, building_code, floor, room, is_principal FROM hv_equipments WHERE ${hvWhere.join(' AND ')} ORDER BY is_principal DESC, created_at ASC`, hvVals);
+      debug.counts.hv_equipments = hvRows.rowCount;
       const hvIds = hvRows.rows.map(r => r.id);
       if (hvIds.length) {
-        const devRows = await pool.query(
-          `SELECT d.*, h.name AS hv_name, h.code AS hv_code, h.building_code
-           FROM hv_devices d
-           JOIN hv_equipments h ON d.hv_equipment_id = h.id
-           WHERE h.site = $1 AND d.hv_equipment_id = ANY($2::int[])
-           ORDER BY d.created_at ASC`,
-          [site, hvIds]
-        );
+        const devRows = await pool.query(`SELECT d.*, h.name AS hv_name, h.code AS hv_code, h.building_code FROM hv_devices d JOIN hv_equipments h ON d.hv_equipment_id = h.id WHERE h.site = $1 AND d.hv_equipment_id = ANY($2::int[]) ORDER BY d.created_at ASC`, [site, hvIds]);
+        debug.counts.hv_devices = devRows.rowCount;
 
         const byId = new Map();
         devRows.rows.forEach(d => byId.set(d.id, d));
@@ -275,12 +174,7 @@ app.get('/api/diagram/view', async (req, res) => {
         }
 
         for (const hv of hvRows.rows) {
-          pushNode({
-            id: `hv:${hv.id}`,
-            type: 'hv_equipment',
-            data: { label: `${hv.name} (${hv.code})`, building: hv.building_code || '' },
-            position: { x: 0, y: 0 },
-          });
+          pushNode({ id: `hv:${hv.id}`, type: 'hv_equipment', data: { label: `${hv.name} (${hv.code})`, building: hv.building_code || '' }, position: { x: 0, y: 0 } });
         }
 
         const colWidth = 380, rowHeight = 140;
@@ -290,12 +184,7 @@ app.get('/api/diagram/view', async (req, res) => {
             const rid = roots[idx];
             const d = byId.get(rid);
             const nodeId = `hvdev:${d.id}`;
-            pushNode({
-              id: nodeId,
-              type: 'hv_device',
-              data: { label: d.name || d.reference || d.device_type, device_type: d.device_type, hv_equipment_id: d.hv_equipment_id },
-              position: { x: colWidth, y: rowHeight * (idx + 1) },
-            });
+            pushNode({ id: nodeId, type: 'hv_device', data: { label: d.name || d.reference || d.device_type, device_type: d.device_type, hv_equipment_id: d.hv_equipment_id }, position: { x: colWidth, y: rowHeight * (idx + 1) } });
             pushEdge({ source: `hv:${hv.id}`, target: nodeId, type: 'smoothstep' });
           }
 
@@ -311,20 +200,8 @@ app.get('/api/diagram/view', async (req, res) => {
               const r = nextRowForCol[xcol] || 1;
               const pos = { x: colWidth * xcol, y: rowHeight * r };
               nextRowForCol[xcol] = r + 1;
-
-              pushNode({
-                id: nodeId,
-                type: 'hv_device',
-                data: { label: d.name || d.reference || d.device_type, device_type: d.device_type, hv_equipment_id: d.hv_equipment_id },
-                position: pos,
-              });
+              pushNode({ id: nodeId, type: 'hv_device', data: { label: d.name || d.reference || d.device_type, device_type: d.device_type, hv_equipment_id: d.hv_equipment_id }, position: pos });
               pushEdge({ source: `hvdev:${id}`, target: nodeId, type: 'step' });
-
-              if (d.downstream_hv_equipment_id) {
-                pushNode({ id: `hv:${d.downstream_hv_equipment_id}`, type: 'hv_equipment', data: { label: `HV #${d.downstream_hv_equipment_id}` }, position: { x: colWidth * (xcol + 1), y: rowHeight } });
-                pushEdge({ source: nodeId, target: `hv:${d.downstream_hv_equipment_id}`, type: 'default', label: '↪ downstream HV' });
-              }
-
               queue.push({ id: cid, depth: dep + 1, xcol: Math.min(xcol + 1, 5) });
             }
           }
@@ -333,19 +210,9 @@ app.get('/api/diagram/view', async (req, res) => {
     }
 
     res.json({ nodes, edges, legend: {
-      status: {
-        safe: 'Compliant',
-        'at-risk': 'Non-compliant',
-        incomplete: 'Incomplete / missing data',
-        unknown: 'Unknown'
-      },
-      nodeTypes: {
-        switchboard: 'Switchboard (LV)',
-        device: 'Device (LV)',
-        hv_equipment: 'Equipment (HV)',
-        hv_device: 'Device (HV)'
-      }
-    }});
+      status: { safe: 'Compliant', 'at-risk': 'Non-compliant', incomplete: 'Incomplete / missing data', unknown: 'Unknown' },
+      nodeTypes: { switchboard: 'Switchboard (LV)', device: 'Device (LV)', hv_equipment: 'Equipment (HV)', hv_device: 'Device (HV)' }
+    }, debug });
   } catch (e) {
     console.error('[DIAGRAM VIEW] error:', e);
     res.status(500).json({ error: 'View failed', details: e.message });
