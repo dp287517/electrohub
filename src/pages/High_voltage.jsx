@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronRight, X, Sparkles, Image as ImageIcon
 } from 'lucide-react';
 
-// Consts
+// Constants
 const regimes = ['TN-S', 'TN-C-S', 'IT', 'TT'];
 const hvDeviceTypes = ['HV Cell','HV Disconnect Switch','HV Circuit Breaker','Transformer','HV Cable','Busbar','Relay','Meter'];
 const insulationTypes = ['SF6','Vacuum','Air'];
@@ -44,7 +44,7 @@ function Modal({ open, onClose, children, title }) {
   );
 }
 
-// Mapping HV Equipment
+// HV Equipment mapping
 const emptyHvEquipmentForm = {
   name: '', code: '',
   meta: { site: '', building_code: '', floor: '', room: '' },
@@ -74,7 +74,7 @@ function formToPayload(f, site) {
   };
 }
 
-// Devices
+// HV Devices
 const emptyHvDeviceForm = {
   name:'', device_type:'HV Circuit Breaker', manufacturer:'', reference:'',
   voltage_class_kv:null, short_circuit_current_ka:null,
@@ -114,7 +114,7 @@ export default function HighVoltage() {
   const [showDownstreamBtSuggestions, setShowDownstreamBtSuggestions] = useState(false);
   const [toast, setToast] = useState(null);
 
-  // Photos pour IA (local avant envoi) — sans preview
+  // Photos for AI (local before upload) — no preview
   const [localPhotos, setLocalPhotos] = useState([]); // File[]
 
   // Fetch list
@@ -193,7 +193,7 @@ export default function HighVoltage() {
     finally { setBusy(false); }
   };
 
-  // Photos handlers (sans preview)
+  // Photos handlers (no preview)
   const onPickPhotos = (e) => {
     const files = Array.from(e.target.files || []).slice(0, 5);
     setLocalPhotos(files);
@@ -202,7 +202,7 @@ export default function HighVoltage() {
     setLocalPhotos(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // IA from photos (envoi des fichiers choisis, pas d’affichage)
+  // AI from photos (upload files, no display)
   const handleAISuggestFromPhotos = async () => {
     try {
       setBusy(true);
@@ -211,13 +211,24 @@ export default function HighVoltage() {
       fd.append('reference', hvDeviceForm.reference || '');
       fd.append('device_type', hvDeviceForm.device_type || '');
       localPhotos.forEach(f => fd.append('photos', f));
+
       const res = await fetch('/api/hv/ai/specs', {
         method: 'POST',
         body: fd,
         headers: { 'X-Site': site }
       });
+
       let specs = {};
       try { specs = await res.json(); } catch { specs = {}; }
+
+      // Explicit feedback if AI is disabled or nothing extracted
+      const empty = !specs || Object.keys(specs).length === 0 ||
+        Object.values(specs).every(v => v === null || v === '' || (typeof v === 'object' && Object.keys(v||{}).length===0));
+      if (empty) {
+        setToast({ type:'error', msg:'No specs extracted (AI disabled or unreadable photo).' });
+        return;
+      }
+
       setHvDeviceForm(prev => ({ ...prev, ...specs, settings: { ...(prev.settings||{}), ...(specs?.settings||{}) } }));
       setToast({ type:'success', msg:'Specs suggested from photos (AI)' });
     } catch (e) {
@@ -233,7 +244,7 @@ export default function HighVoltage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">High Voltage Equipments</h1>
-          <p className="text-gray-600">Manage HV cells, transformers, cables, and BT links.</p>
+          <p className="text-gray-600">Manage HV cells, transformers, cables, and LV links.</p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => setShowFilters(v => !v)} className="px-3 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 inline-flex items-center gap-2" disabled={busy}>
@@ -339,7 +350,7 @@ export default function HighVoltage() {
         </div>
       )}
 
-      {/* Modal HV Equipment */}
+      {/* HV Equipment modal */}
       <Modal open={openHvEquipment} onClose={() => { setOpenHvEquipment(false); setEditingHvEquipment(null); setHvEquipmentForm(emptyHvEquipmentForm); }}
         title={editingHvEquipment ? 'Edit HV Equipment' : 'Add HV Equipment'}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -359,7 +370,7 @@ export default function HighVoltage() {
             );
           })}
           <div>
-            <label className="block text-sm font-medium text-gray-700">Regime Neutral</label>
+            <label className="block text-sm font-medium text-gray-700">Neutral Regime</label>
             <select value={hvEquipmentForm.regime_neutral} onChange={e => setHvEquipmentForm({ ...hvEquipmentForm, regime_neutral: e.target.value })}
               className="mt-1 block w-full border border-gray-300 rounded-lg bg-white text-gray-900" disabled={busy}>
               {regimes.map(r => <option key={r} value={r}>{r}</option>)}
@@ -380,13 +391,13 @@ export default function HighVoltage() {
         </div>
       </Modal>
 
-      {/* Modal HV Device */}
+      {/* HV Device modal */}
       <Modal open={openHvDevice} onClose={() => {
         setOpenHvDevice(false); setEditingHvDevice(null); setHvDeviceForm(emptyHvDeviceForm);
         setLocalPhotos([]); setShowDownstreamBtSuggestions(false);
       }} title={editingHvDevice ? 'Edit HV Device' : 'Add HV Device'}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {/* champs texte */}
+          {/* text fields */}
           <FieldText label="Name" value={hvDeviceForm.name} onChange={v => setHvDeviceForm({ ...hvDeviceForm, name: v })} disabled={busy}/>
           <FieldSelect label="Device Type" value={hvDeviceForm.device_type} options={hvDeviceTypes} onChange={v => setHvDeviceForm({ ...hvDeviceForm, device_type: v })} disabled={busy}/>
           <FieldText label="Manufacturer" value={hvDeviceForm.manufacturer} onChange={v => setHvDeviceForm({ ...hvDeviceForm, manufacturer: v })} disabled={busy}/>
@@ -398,14 +409,14 @@ export default function HighVoltage() {
           <FieldSelect label="Electrical Endurance" value={hvDeviceForm.electrical_endurance_class} options={['',...electricalEnduranceClasses]} onChange={v => setHvDeviceForm({ ...hvDeviceForm, electrical_endurance_class: v })} disabled={busy}/>
           <FieldNumber label="Poles" value={hvDeviceForm.poles} onChange={v => setHvDeviceForm({ ...hvDeviceForm, poles: v })} disabled={busy}/>
 
-          {/* Downstream BT */}
+          {/* Downstream LV */}
           <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700">Downstream BT Device</label>
+            <label className="block text-sm font-medium text-gray-700">Downstream LV Device</label>
             <div className="relative">
               <input type="text" value={downstreamBtSuggestions.find(s => s.id === hvDeviceForm.downstream_device_id)?.name || ''}
                 onFocus={() => { setShowDownstreamBtSuggestions(true); fetchBtSuggestions(''); }}
                 onChange={e => { setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: null }); fetchBtSuggestions(e.target.value); }}
-                className="mt-1 block w-full border border-gray-300 rounded-lg bg-white text-gray-900 placeholder-gray-400" placeholder="Search BT device..." disabled={busy}/>
+                className="mt-1 block w-full border border-gray-300 rounded-lg bg-white text-gray-900 placeholder-gray-400" placeholder="Search LV device..." disabled={busy}/>
               {showDownstreamBtSuggestions && (
                 <ul className="absolute z-10 bg-white border rounded-lg max-h-40 overflow-y-auto w-full mt-1">
                   {downstreamBtSuggestions.map(s => (
@@ -420,22 +431,22 @@ export default function HighVoltage() {
             </div>
           </div>
 
-          {/* Photos + IA (sans preview) */}
+          {/* Photos + AI (no preview) */}
           <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Photos (pour l’IA)</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Photos (for AI)</label>
             <div className="flex items-center gap-3">
               <label className="inline-flex items-center px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer">
-                <ImageIcon size={16} className="mr-2"/> Choisir des photos
+                <ImageIcon size={16} className="mr-2"/> Choose photos
                 <input type="file" accept="image/*" multiple className="hidden" onChange={onPickPhotos} />
               </label>
               <button type="button" onClick={handleAISuggestFromPhotos}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
                 disabled={busy || localPhotos.length === 0}>
-                <Sparkles size={16}/> Analyser les photos (IA)
+                <Sparkles size={16}/> Analyze photos (AI)
               </button>
             </div>
 
-            {/* Liste simple des fichiers choisis */}
+            {/* Simple list of chosen files */}
             {localPhotos.length > 0 && (
               <ul className="mt-3 space-y-2">
                 {localPhotos.map((f, i) => (
@@ -446,7 +457,7 @@ export default function HighVoltage() {
                 ))}
               </ul>
             )}
-            <p className="text-xs text-gray-500 mt-2">Astuce: plaque signalétique, vue d’ensemble, intérieur de la cellule…</p>
+            <p className="text-xs text-gray-500 mt-2">Tip: nameplate, overall view, inside the cell…</p>
           </div>
 
           {/* Main incoming */}
@@ -521,7 +532,7 @@ function HvDeviceTree({ devices, panelId, onEdit, onDelete, level = 0 }) {
                 </span>
                 {device.is_main_incoming && <Pill color="green">MAIN INCOMING</Pill>}
                 {device.downstream_hv_equipment_id && <Pill color="blue">HV EQ #{device.downstream_hv_equipment_id}</Pill>}
-                {device.downstream_device_id && <Pill color="blue">BT Device #{device.downstream_device_id}</Pill>}
+                {device.downstream_device_id && <Pill color="blue">LV Device #{device.downstream_device_id}</Pill>}
               </div>
               <div className="text-xs text-gray-600 flex flex-wrap gap-3">
                 <span>{device.voltage_class_kv ?? '—'} kV</span>
