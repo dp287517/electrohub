@@ -97,7 +97,6 @@ export default function Selectivity() {
   const [tipContent, setTipContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
-  const [faultCurrent, setFaultCurrent] = useState(1000);
   const [showConfetti, setShowConfetti] = useState(false);
   const chartRef = useRef(null);
   const pageSize = 18;
@@ -133,8 +132,8 @@ export default function Selectivity() {
   const handleCheck = async (upstreamId, downstreamId, faultI = null, isBatch = false) => {
     try {
       setBusy(true);
-      const params = { upstream: upstreamId, downstream: downstreamId, fault_current: faultI };
-      const result = await get('/api/selectivity/check', params);
+      const params = { upstream: upstreamId, downstream: downstreamId };
+      const result = await get('/api/selectivity/check', params); // Pas de fault_current sauf force
       setCheckResult(result);
       setSelectedPair({ upstreamId, downstreamId });
       setStatuses(prev => ({ ...prev, [`${downstreamId}`]: result.status }));
@@ -203,11 +202,6 @@ export default function Selectivity() {
     } finally {
       setBusy(false);
     }
-  };
-
-  const testFaultCurrent = (value) => {
-    setFaultCurrent(value);
-    if (selectedPair) handleCheck(selectedPair.upstreamId, selectedPair.downstreamId, value);
   };
 
   const exportPDF = async () => {
@@ -346,7 +340,7 @@ export default function Selectivity() {
         onClick={() => setShowFilters(!showFilters)} 
         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md transition-transform hover:scale-105 mb-4"
       >
-        {showFilters ? 'Cacher Filtres' : 'Afficher Filtres'}
+        {showFilters ? 'Hide Filters' : 'Show Filters'}
       </button>
 
       {/* Filters (cachés par défaut) */}
@@ -432,25 +426,6 @@ export default function Selectivity() {
         >
           Check Selected ({selectedPairs.length})
         </button>
-      )}
-
-      {/* Interactive Fault Test */}
-      {selectedPair && (
-        <div className="mt-6 p-6 bg-white rounded-lg shadow-md transition-opacity duration-500 opacity-100">
-          <h3 className="font-semibold mb-2 text-lg">Test Specific Fault Current</h3>
-          <p className="text-sm text-gray-500 mb-4">Simulate a specific fault current (A) to test trip times and check if downstream trips before upstream. Slide to see live updates!</p>
-          <div className="flex gap-4 items-center">
-            <input
-              type="range"
-              min="100"
-              max="10000"
-              value={faultCurrent}
-              onChange={e => testFaultCurrent(e.target.value)}
-              className="flex-1 accent-indigo-600"
-            />
-            <span className="text-sm font-medium">{faultCurrent} A</span>
-          </div>
-        </div>
       )}
 
       {/* Results */}
