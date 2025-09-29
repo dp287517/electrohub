@@ -7,6 +7,7 @@ import {
   PathFindingLinkFactory,
   PathFindingLinkModel,
 } from '@projectstorm/react-diagrams-routing';
+import dagre from 'dagre';
 import { api } from '../lib/api.js';
 
 const COLORS = {
@@ -16,8 +17,35 @@ const COLORS = {
   hv_device: 'rgb(124,45,18)',
 };
 
-// --------- helper for multi-line captions on nodes ----------
-function caption(n) {
+/* ---------- AUTO LAYOUT (Dagre) ---------- */
+function autoLayout(nodes, edges, opts = { rankdir: 'LR', nodesep: 80, ranksep: 140 }) {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph(opts);
+  g.setDefaultEdgeLabel(() => ({}));
+
+  // dimensions approximatives des nodes (DefaultNodeModel)
+  nodes.forEach(n => {
+    const w = 180;
+    const h = 60;
+    g.setNode(n.id, { width: w, height: h });
+  });
+  edges.forEach(e => g.setEdge(e.source, e.target));
+
+  dagre.layout(g);
+
+  return nodes.map(n => {
+    const p = g.node(n.id);
+    return {
+      ...n,
+      position: n.position && Number.isFinite(n.position.x) && Number.isFinite(n.position.y)
+        ? n.position
+        : { x: p?.x ?? 0, y: p?.y ?? 0 },
+    };
+  });
+}
+
+/* ---------- CAPTION / BADGES DANS LE NODE ---------- */
+function makeCaption(n, extrasAnalysis) {
   const d = n?.data || {};
   const L1 = d.label || n.id;
   const L2 = d.code ? `(${d.code})` : '';
@@ -25,9 +53,18 @@ function caption(n) {
   const L3b = d.room ? `Rm ${d.room}` : (d.floor ? `Fl ${d.floor}` : '');
   const L3 = L3a || L3b ? [L3a, L3b].filter(Boolean).join(' · ') : '';
   const L4 = d.regime ? `Regime: ${d.regime}` : '';
-  return [ `${L1} ${L2}`.trim(), L3, L4 ].filter(Boolean).join('\n');
+
+  // Petites infos d’analyse (si présentes)
+  const A = [];
+  if (extrasAnalysis?.sel) A.push(`SEL ${extrasAnalysis.sel}`);
+  if (extrasAnalysis?.arc) A.push(`ARC ${extrasAnalysis.arc}`);
+  if (extrasAnalysis?.fla) A.push(`FLA ${extrasAnalysis.fla}`);
+  const L5 = A.length ? A.join(' · ') : '';
+
+  return [ `${L1} ${L2}`.trim(), L3, L4, L5 ].filter(Boolean).join('\n');
 }
 
+/* ---------- CONSTRUCTION DU MODELE ---------- */
 function buildModelFromGraph(graph, useSmart = false, onNodeSelect) {
   const model = new DiagramModel();
   const idToNode = new Map();
@@ -36,18 +73,29 @@ function buildModelFromGraph(graph, useSmart = false, onNodeSelect) {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
 
   for (const n of nodes) {
+    const analysis = {}; // placeholder pour les badges (rempli plus tard)
     const color = COLORS[n.type] || 'rgb(51,65,85)';
-    const node = new DefaultNodeModel({ name: caption(n), color });
+    const node = new DefaultNodeModel({ name: makeCaption(n, analysis), color });
     const inPort = node.addInPort('in');
     const outPort = node.addOutPort('out');
-    node.setPosition(n?.position?.x || 0, n?.position?.y || 0);
 
-    node.getOptions().extras = { ...n.data, __id: n.id, __type: n.type };
+    const px = Number.isFinite(n?.position?.x) ? n.position.x : 0;
+    const py = Number.isFinite(n?.position?.y) ? n.position.y : 0;
+    node.setPosition(px, py);
+
+    // stocker infos utiles pour enrichissement async
+    node.getOptions().extras = {
+      ...n.data,
+      __id: n.id,
+      __type: n.type,
+      __analysis: analysis, // sera rempli après les appels API
+    };
+
     node.registerListener({
       selectionChanged: (e) => { if (e.isSelected) onNodeSelect?.({ id: n.id, type: n.type, data: n.data }); }
     });
 
-    idToNode.set(n.id, { node, inPort, outPort });
+    idToNode.set(n.id, { node, inPort, outPort, raw: n });
     model.addNode(node);
   }
 
@@ -63,7 +111,69 @@ function buildModelFromGraph(graph, useSmart = false, onNodeSelect) {
     link.setTargetPort(dst.inPort);
     model.addLink(link);
   }
-  return model;
+
+  return { model, idToNode };
+}
+
+/* ---------- ENRICHISSEMENT ASYNC (SEL / ARC / FLA) ---------- */
+async function enrichAnalysesForDevices(engine, idToNode) {
+  const pairsBySb = new Map(); // cache des paires par switchboard
+
+  const updates = [];
+  idToNode.forEach(({ node, raw }) => {
+    const t = raw?.type || node.getOptions()?.extras?.__type;
+    if (t !== 'device' && t !== 'hv_device') return; // analyses sur devices
+    updates.push({ node, raw });
+  });
+
+  // Limiter la charge (petits jeux de promesses en série)
+  for (const { node, raw } of updates) {
+    const extras = node.getOptions().extras || {};
+    const devId = Number(extras.id || String(extras.__id||'').split(':')[1]);
+    const sbId  = Number(extras.switchboard_id);
+    const analysis = extras.__analysis || {};
+
+    try {
+      // Sélectivité: chercher la paire où ce device apparaît (downstream en priorité)
+      if (sbId && devId) {
+        if (!pairsBySb.has(sbId)) {
+          const respPairs = await api.selectivity.listPairs({ switchboard: sbId, pageSize: 100 });
+          pairsBySb.set(sbId, respPairs?.data || []);
+        }
+        const pairs = pairsBySb.get(sbId);
+        const hit = pairs.find(p => p.downstream_id === devId) || pairs.find(p => p.upstream_id === devId);
+        if (hit) {
+          const r = await api.selectivity.checkPair(hit.upstream_id, hit.downstream_id);
+          // simple statut (OK / NOK)
+          const ok = r?.result?.ok ?? r?.ok ?? false;
+          analysis.sel = ok ? 'OK' : 'NOK';
+        }
+      }
+
+      // Arc flash
+      if (devId && sbId) {
+        const r = await api.arcflash.checkPoint(devId, sbId);
+        // essaye d'extraire une catégorie
+        const cat = r?.category || r?.result?.category || r?.cat;
+        if (cat) analysis.arc = `Cat ${cat}`;
+      }
+
+      // Fault level
+      if (devId && sbId) {
+        const r = await api.faultlevel.checkPoint(devId, sbId);
+        // essaye d'extraire un courant de court-circuit (kA)
+        const ik = r?.ik || r?.result?.ik || r?.ik3 || r?.ik1;
+        if (ik) analysis.fla = `${Number(ik).toFixed(1)}kA`;
+      }
+
+      // Mettre à jour le label multi-ligne avec badges
+      node.setName(makeCaption({ id: extras.__id, data: extras }, analysis));
+      engine.repaintCanvas();
+    } catch (e) {
+      // silencieux: si un service n'est pas dispo on n'empêche pas le reste
+      // console.warn('analysis failed for node', devId, e);
+    }
+  }
 }
 
 export default function Diagram() {
@@ -107,13 +217,27 @@ export default function Diagram() {
       };
       const data = await api.diagram.view(params);
       if (data?.warning) setBanner(data.warning); else setBanner('');
-      if (!data?.nodes?.length) {
+
+      let nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+      const edges = Array.isArray(data?.edges) ? data.edges : [];
+
+      if (!nodes.length) {
         engine.setModel(new DiagramModel());
         setBanner('No nodes found for current site/filters');
         return;
       }
-      const model = buildModelFromGraph(data, smart, setActiveNode);
+
+      // Auto-layout si aucune position fournie
+      const needLayout = nodes.every(n => !n?.position || !Number.isFinite(n?.position?.x) || !Number.isFinite(n?.position?.y));
+      if (needLayout) nodes = autoLayout(nodes, edges);
+
+      const { model, idToNode } = buildModelFromGraph({ nodes, edges }, smart, setActiveNode);
       engine.setModel(model);
+
+      // enrichir les labels des devices avec SEL/ARC/FLA (async, après affichage)
+      enrichAnalysesForDevices(engine, idToNode);
+
+      // petit zoom
       setTimeout(() => { try { engine.getModel().setZoomLevel(80); engine.repaintCanvas(); } catch {} }, 10);
     } catch (e) {
       console.error(e);
@@ -129,7 +253,7 @@ export default function Diagram() {
 
   const onClear = () => { setBuilding(''); setRootSwitch(''); setRootHv(''); setTimeout(fetchGraph, 0); };
 
-  // --- Analyses (using your api.js methods) ---
+  // --- Panneau latéral (analyses à la demande) ---
   const runSelectivityForNode = async (node) => {
     const devId = Number(node?.data?.id || String(node?.id||'').split(':')[1]);
     const sbId = Number(node?.data?.switchboard_id);
@@ -165,17 +289,18 @@ export default function Diagram() {
 
   return (
     <div className="p-4 grid grid-cols-12 gap-4">
+      {/* CSS: permettre les sauts de ligne dans le libellé du node */}
       <style>{`
         .srd-default-node__name, .rdl-default-node__name { 
           white-space: pre-wrap; line-height: 1.1; font-size: 12px;
         }
       `}</style>
 
-      {/* filters */}
+      {/* Filtres */}
       <div className="col-span-12 flex flex-wrap items-end gap-3">
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Site</label>
-          <input className="border rounded-md px-2 py-1 w-40" value={site} onChange={(e) => setSite(e.target.value)} />
+          <input className="border rounded-md px-2 py-1 w-40" placeholder="e.g. Nyon" value={site} onChange={(e) => setSite(e.target.value)} />
         </div>
         <div className="flex flex-col">
           <label className="text-xs font-medium mb-1">Mode</label>
@@ -203,12 +328,12 @@ export default function Diagram() {
         {hasFilters && (<button className="px-3 py-2 rounded-md bg-slate-200" onClick={onClear}>Clear filters</button>)}
       </div>
 
-      {/* banner */}
+      {/* Messages */}
       <div className="col-span-12 text-xs text-amber-700" style={{ minHeight: '1.25rem' }}>
         {banner && (<span className="inline-block bg-amber-50 border border-amber-300 rounded px-2 py-1">{banner}</span>)}
       </div>
 
-      {/* diagram + side panel */}
+      {/* Canvas + Panneau latéral */}
       <div className="col-span-9 border rounded-xl overflow-hidden" style={{ height: '75vh' }}>
         <CanvasWidget engine={engine} className="w-full h-full bg-white" />
       </div>
@@ -228,7 +353,7 @@ export default function Diagram() {
               {activeNode?.data?.regime && <div><b>Regime:</b> {activeNode.data.regime}</div>}
             </div>
 
-            {/* Tabs */}
+            {/* Onglets */}
             <div className="flex gap-2 mt-3 text-sm">
               {['details','selectivity','arc','fla'].map(k => (
                 <button key={k} className={`px-2 py-1 rounded border ${tab===k? 'bg-slate-900 text-white':'bg-white'}`} onClick={() => setTab(k)}>
