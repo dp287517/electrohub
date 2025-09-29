@@ -396,7 +396,38 @@ export default function HighVoltage() {
         setOpenHvDevice(false); setEditingHvDevice(null); setHvDeviceForm(emptyHvDeviceForm);
         setLocalPhotos([]); setShowDownstreamBtSuggestions(false);
       }} title={editingHvDevice ? 'Edit HV Device' : 'Add HV Device'}>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* 1) AI PHOTOS FIRST */}
+        <div className="sm:col-span-2 mb-6">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Photos (for AI)</label>
+          <div className="flex items-center gap-3">
+            <label className="inline-flex items-center px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer">
+              <ImageIcon size={16} className="mr-2"/> Choose photos
+              <input type="file" accept="image/*" multiple className="hidden" onChange={onPickPhotos} />
+            </label>
+            <button type="button" onClick={handleAISuggestFromPhotos}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+              disabled={busy || localPhotos.length === 0}>
+              <Sparkles size={16}/> Analyze photos (AI)
+            </button>
+          </div>
+
+          {/* Simple list of chosen files */}
+          {localPhotos.length > 0 && (
+            <ul className="mt-3 space-y-2">
+              {localPhotos.map((f, i) => (
+                <li key={i} className="flex items-center justify-between text-sm border rounded-lg px-3 py-2">
+                  <span className="truncate">{f.name} {f.size ? `(${Math.round(f.size/1024)} KB)` : ''}</span>
+                  <button onClick={() => removeLocalPhoto(i)} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">✕</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-gray-500 mt-2">Tip: nameplate, overall view, inside the cell…</p>
+          <hr className="mt-6"/>
+        </div>
+
+        {/* 2) THEN THE FIELDS */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
           {/* text fields */}
           <FieldText label="Name" value={hvDeviceForm.name} onChange={v => setHvDeviceForm({ ...hvDeviceForm, name: v })} disabled={busy}/>
           <FieldSelect label="Device Type" value={hvDeviceForm.device_type} options={hvDeviceTypes} onChange={v => setHvDeviceForm({ ...hvDeviceForm, device_type: v })} disabled={busy}/>
@@ -413,14 +444,20 @@ export default function HighVoltage() {
           <div className="sm:col-span-2">
             <label className="block text-sm font-medium text-gray-700">Downstream LV Device</label>
             <div className="relative">
-              <input type="text" value={downstreamBtSuggestions.find(s => s.id === hvDeviceForm.downstream_device_id)?.name || ''}
+              <input
+                type="text"
+                value={downstreamBtSuggestions.find(s => s.id === hvDeviceForm.downstream_device_id)?.name || ''}
                 onFocus={() => { setShowDownstreamBtSuggestions(true); fetchBtSuggestions(''); }}
                 onChange={e => { setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: null }); fetchBtSuggestions(e.target.value); }}
-                className="mt-1 block w-full border border-gray-300 rounded-lg bg-white text-gray-900 placeholder-gray-400" placeholder="Search LV device..." disabled={busy}/>
+                className="mt-1 block w-full border border-gray-300 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+                placeholder="Search LV device..."
+                disabled={busy}
+              />
               {showDownstreamBtSuggestions && (
                 <ul className="absolute z-10 bg-white border rounded-lg max-h-40 overflow-y-auto w-full mt-1">
                   {downstreamBtSuggestions.map(s => (
-                    <li key={s.id} onClick={() => { setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: s.id }); setShowDownstreamBtSuggestions(false); }}
+                    <li key={s.id}
+                      onClick={() => { setHvDeviceForm({ ...hvDeviceForm, downstream_device_id: s.id }); setShowDownstreamBtSuggestions(false); }}
                       className="px-3 py-2 hover:bg-gray-100 cursor-pointer text-gray-900">
                       {s.name} {s.reference ? `(${s.reference})` : ''} {s.switchboard_name ? `— SB: ${s.switchboard_name}` : ''}
                     </li>
@@ -431,41 +468,16 @@ export default function HighVoltage() {
             </div>
           </div>
 
-          {/* Photos + AI (no preview) */}
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Photos (for AI)</label>
-            <div className="flex items-center gap-3">
-              <label className="inline-flex items-center px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 cursor-pointer">
-                <ImageIcon size={16} className="mr-2"/> Choose photos
-                <input type="file" accept="image/*" multiple className="hidden" onChange={onPickPhotos} />
-              </label>
-              <button type="button" onClick={handleAISuggestFromPhotos}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-                disabled={busy || localPhotos.length === 0}>
-                <Sparkles size={16}/> Analyze photos (AI)
-              </button>
-            </div>
-
-            {/* Simple list of chosen files */}
-            {localPhotos.length > 0 && (
-              <ul className="mt-3 space-y-2">
-                {localPhotos.map((f, i) => (
-                  <li key={i} className="flex items-center justify-between text-sm border rounded-lg px-3 py-2">
-                    <span className="truncate">{f.name} {f.size ? `(${Math.round(f.size/1024)} KB)` : ''}</span>
-                    <button onClick={() => removeLocalPhoto(i)} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">✕</button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p className="text-xs text-gray-500 mt-2">Tip: nameplate, overall view, inside the cell…</p>
-          </div>
-
-          {/* Main incoming */}
+          {/* Main incoming + Save */}
           <div className="sm:col-span-2 flex items-center justify-between">
             <label className="inline-flex items-center">
-              <input type="checkbox" checked={hvDeviceForm.is_main_incoming}
+              <input
+                type="checkbox"
+                checked={hvDeviceForm.is_main_incoming}
                 onChange={e => setHvDeviceForm({ ...hvDeviceForm, is_main_incoming: e.target.checked })}
-                className="rounded border-gray-300" disabled={busy}/>
+                className="rounded border-gray-300"
+                disabled={busy}
+              />
               <span className="ml-2 text-sm text-gray-700">Main Incoming</span>
             </label>
             <button onClick={handleHvDeviceSubmit} disabled={busy || !currentPanelId}
@@ -499,8 +511,13 @@ function FieldNumber({ label, value, onChange, disabled }) {
   return (
     <div>
       <label className="block text-sm font-medium text-gray-700">{label}</label>
-      <input type="number" value={value ?? ''} onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
-        className="mt-1 block w-full border border-gray-300 rounded-lg bg-white text-gray-900 placeholder-gray-400" disabled={disabled}/>
+      <input
+        type="number"
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
+        className="mt-1 block w-full border border-gray-300 rounded-lg bg-white text-gray-900 placeholder-gray-400"
+        disabled={disabled}
+      />
     </div>
   );
 }
