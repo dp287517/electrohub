@@ -102,6 +102,9 @@ export default function Selectivity() {
   const chartRef = useRef(null);
   const pageSize = 18;
 
+  // Ajout pour toggle filtres (cachés par défaut)
+  const [showFilters, setShowFilters] = useState(false);
+
   useEffect(() => {
     loadPairs();
   }, [q]);
@@ -338,31 +341,41 @@ export default function Selectivity() {
         </p>
       </header>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-4 mb-6 items-center">
-        <input
-          className="input flex-1 shadow-sm"
-          placeholder="Search by name..."
-          value={q.q}
-          onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
-        />
-        <input className="input w-32 shadow-sm" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
-        <input className="input w-32 shadow-sm" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
-        <input className="input w-32 shadow-sm" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
-        <button 
-          onClick={autoEvaluateAll} 
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md transition-transform hover:scale-105"
-          disabled={busy}
-        >
-          Auto-Evaluate All
-        </button>
-        <button 
-          onClick={exportPDF} 
-          className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-md transition-transform hover:scale-105"
-        >
-          <Download size={16} className="inline mr-1" /> Export PDF
-        </button>
-      </div>
+      {/* Bouton toggle pour filtres */}
+      <button 
+        onClick={() => setShowFilters(!showFilters)} 
+        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md transition-transform hover:scale-105 mb-4"
+      >
+        {showFilters ? 'Cacher Filtres' : 'Afficher Filtres'}
+      </button>
+
+      {/* Filters (cachés par défaut) */}
+      {showFilters && (
+        <div className="flex flex-wrap gap-4 mb-6 items-center">
+          <input
+            className="input flex-1 shadow-sm"
+            placeholder="Search by name..."
+            value={q.q}
+            onChange={e => setQ({ ...q, q: e.target.value, page: 1 })}
+          />
+          <input className="input w-32 shadow-sm" placeholder="Switchboard ID" value={q.switchboard} onChange={e => setQ({ ...q, switchboard: e.target.value, page: 1 })} />
+          <input className="input w-32 shadow-sm" placeholder="Building" value={q.building} onChange={e => setQ({ ...q, building: e.target.value, page: 1 })} />
+          <input className="input w-32 shadow-sm" placeholder="Floor" value={q.floor} onChange={e => setQ({ ...q, floor: e.target.value, page: 1 })} />
+          <button 
+            onClick={autoEvaluateAll} 
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md transition-transform hover:scale-105"
+            disabled={busy}
+          >
+            Auto-Evaluate All
+          </button>
+          <button 
+            onClick={exportPDF} 
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-md transition-transform hover:scale-105"
+          >
+            <Download size={16} className="inline mr-1" /> Export PDF
+          </button>
+        </div>
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto shadow-xl rounded-lg">
