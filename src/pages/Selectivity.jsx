@@ -133,17 +133,16 @@ export default function Selectivity() {
     try {
       setBusy(true);
       const params = { upstream: upstreamId, downstream: downstreamId };
-      const result = await get('/api/selectivity/check', params); // Pas de fault_current sauf force
+      const result = await get('/api/selectivity/check', params);
       setCheckResult(result);
       setSelectedPair({ upstreamId, downstreamId });
       setStatuses(prev => ({ ...prev, [`${downstreamId}`]: result.status }));
 
       const curves = await get('/api/selectivity/curves', params);
       const datasets = {
-        labels: curves.upstream.map(p => p.current.toFixed(0)),
         datasets: [
-          { label: 'Upstream', data: curves.upstream.map(p => Math.min(p.time, 1000)), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
-          { label: 'Downstream', data: curves.downstream.map(p => Math.min(p.time, 1000)), borderColor: 'green', tension: 0.1, pointRadius: 0 },
+          { label: 'Upstream', data: curves.upstream.map(p => ({ x: p.current, y: Math.min(p.time, 1000) })), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
+          { label: 'Downstream', data: curves.downstream.map(p => ({ x: p.current, y: Math.min(p.time, 1000) })), borderColor: 'green', tension: 0.1, pointRadius: 0 },
         ],
       };
       setCurveData(datasets);
@@ -234,10 +233,9 @@ export default function Selectivity() {
           downstream: pair.downstream_id,
         });
         const data = {
-          labels: curves.upstream.map(p => p.current.toFixed(0)),
           datasets: [
-            { label: 'Upstream', data: curves.upstream.map(p => Math.min(p.time, 1000)), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
-            { label: 'Downstream', data: curves.downstream.map(p => Math.min(p.time, 1000)), borderColor: 'green', tension: 0.1, pointRadius: 0 },
+            { label: 'Upstream', data: curves.upstream.map(p => ({ x: p.current, y: Math.min(p.time, 1000) })), borderColor: 'blue', tension: 0.1, pointRadius: 0 },
+            { label: 'Downstream', data: curves.downstream.map(p => ({ x: p.current, y: Math.min(p.time, 1000) })), borderColor: 'green', tension: 0.1, pointRadius: 0 },
           ],
         };
         const status = statuses[pair.downstream_id];
@@ -257,7 +255,12 @@ export default function Selectivity() {
           type: 'line',
           data: data,
           options: {
+            parsing: { xAxisKey: 'x', yAxisKey: 'y' },
             responsive: false,
+            scales: {
+              x: { type: 'logarithmic', title: { display: true, text: 'Current (A)' }, ticks: { callback: (value) => Number(value).toFixed(0) + 'A' } },
+              y: { type: 'linear', title: { display: true, text: 'Time (s)' }, min: 0.001, max: 1000, ticks: { callback: (value) => Number(value).toFixed(2) + 's', maxTicksLimit: 10 } },
+            },
             plugins: {
               annotation: {
                 annotations: nonSelectiveZones.map((zone, i) => ({
@@ -273,28 +276,11 @@ export default function Selectivity() {
               tooltip: {
                 callbacks: {
                   label: (context) => {
-                    const nonSelective = context.datasetIndex === 1 && context.parsed.y >= data.datasets[0].data[context.dataIndex] * 1.05;
+                    const nonSelective = context.datasetIndex === 1 && context.parsed.y >= data.datasets[0].data[context.dataIndex]?.y * 1.05;
                     return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}s at ${context.parsed.x}A ${nonSelective ? '(Non-selective)' : ''}`;
                   }
                 }
               }
-            },
-            scales: {
-              x: { 
-                type: 'logarithmic', 
-                title: { display: true, text: 'Current (A)' },
-                ticks: { callback: (value) => Number(value).toFixed(0) + 'A' }
-              },
-              y: { 
-                type: 'linear', 
-                title: { display: true, text: 'Time (s)' },
-                min: 0.001,
-                max: 1000,
-                ticks: { 
-                  callback: (value) => Number(value).toFixed(2) + 's',
-                  maxTicksLimit: 10 
-                }
-              },
             },
           }
         });
@@ -465,7 +451,12 @@ export default function Selectivity() {
             <Line
               data={curveData}
               options={{
+                parsing: { xAxisKey: 'x', yAxisKey: 'y' },
                 responsive: true,
+                scales: {
+                  x: { type: 'logarithmic', title: { display: true, text: 'Current (A)' }, ticks: { callback: (value) => Number(value).toFixed(0) + 'A' } },
+                  y: { type: 'linear', title: { display: true, text: 'Time (s)' }, min: 0.001, max: 1000, ticks: { callback: (value) => Number(value).toFixed(2) + 's', maxTicksLimit: 10 } },
+                },
                 plugins: {
                   zoom: {
                     zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'xy' },
@@ -484,28 +475,11 @@ export default function Selectivity() {
                   tooltip: {
                     callbacks: {
                       label: (context) => {
-                        const nonSelective = context.datasetIndex === 1 && context.parsed.y >= curveData.datasets[0].data[context.dataIndex] * 1.05;
+                        const nonSelective = context.datasetIndex === 1 && context.parsed.y >= (data.datasets[0].data[context.dataIndex]?.y || Infinity) * 1.05;
                         return `${context.dataset.label}: ${context.parsed.y.toFixed(2)}s at ${context.parsed.x}A ${nonSelective ? '(Non-selective)' : ''}`;
                       }
                     }
                   }
-                },
-                scales: {
-                  x: { 
-                    type: 'logarithmic', 
-                    title: { display: true, text: 'Current (A)' },
-                    ticks: { callback: (value) => Number(value).toFixed(0) + 'A' }
-                  },
-                  y: { 
-                    type: 'linear', 
-                    title: { display: true, text: 'Time (s)' },
-                    min: 0.001,
-                    max: 1000,
-                    ticks: { 
-                      callback: (value) => Number(value).toFixed(2) + 's',
-                      maxTicksLimit: 10 
-                    }
-                  },
                 },
               }}
             />
