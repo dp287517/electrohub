@@ -1,5 +1,3 @@
-# src/pages/Diagram.jsx
-
 import { useEffect, useRef, useState } from 'react';
 import createEngine, { DefaultNodeModel, DiagramModel } from '@projectstorm/react-diagrams';
 import { CanvasWidget } from '@projectstorm/react-canvas-core';
@@ -38,7 +36,7 @@ function buildModelFromGraph(graph, useSmart = false) {
     model.addNode(node);
   }
 
-  const safeSmart = useSmart && nodes.length >= 2; // évite PathFinding si graphe trop petit
+  const safeSmart = useSmart && nodes.length >= 2; // avoid PathFinding when graph is tiny/empty
 
   for (const e of edges) {
     const src = idToNode.get(e.source);
@@ -59,7 +57,7 @@ function buildModelFromGraph(graph, useSmart = false) {
 }
 
 export default function Diagram() {
-  const [site, setSite] = useState('Nyon'); // ← passe explicitement le site
+  const [site, setSite] = useState('Nyon'); // pass explicit site
   const [mode, setMode] = useState('all');
   const [building, setBuilding] = useState('');
   const [depth, setDepth] = useState(3);
@@ -67,7 +65,7 @@ export default function Diagram() {
   const [rootHv, setRootHv] = useState('');
   const [loading, setLoading] = useState(false);
   const [banner, setBanner] = useState('');
-  const [smart, setSmart] = useState(false); // ← OFF par défaut pour éviter le crash au chargement
+  const [smart, setSmart] = useState(false); // OFF by default to avoid crash on empty
 
   const engineRef = useRef(null);
   if (!engineRef.current) {
@@ -83,7 +81,7 @@ export default function Diagram() {
     setLoading(true);
     try {
       const params = {
-        site: site?.trim() || undefined, // ← important
+        site: site?.trim() || undefined,
         mode,
         depth,
         building: building?.trim() || undefined,
@@ -97,7 +95,6 @@ export default function Diagram() {
 
       if (data?.warning) setBanner(data.warning);
 
-      // Si pas de nœuds, évite la génération PathFinding et affiche le message
       if (!nodesCount) {
         engine.setModel(new DiagramModel());
         setBanner((prev) => prev || 'No nodes found for current site/filters');
@@ -108,7 +105,6 @@ export default function Diagram() {
       engine.setModel(model);
       setBanner('');
 
-      // zoom doux
       setTimeout(() => {
         try {
           engine.getModel().setZoomLevel(80);
