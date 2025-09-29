@@ -36,7 +36,13 @@ async function jsonFetch(url, options = {}) {
 
 /** Generic helpers */
 export async function get(path, params) {
-  const qs = params ? `?${new URLSearchParams(params).toString()}` : "";
+  const qs = params
+    ? `?${new URLSearchParams(
+        Object.entries(params).filter(
+          ([, v]) => v !== undefined && v !== null && v !== ""
+        )
+      ).toString()}`
+    : "";
   return jsonFetch(`${path}${qs}`);
 }
 
@@ -82,25 +88,31 @@ export const api = {
   },
   selectivity: {
     listPairs: (params) => get("/api/selectivity/pairs", params),
-    checkPair: (upstreamId, downstreamId) => get(`/api/selectivity/check?upstream=${upstreamId}&downstream=${downstreamId}`),
-    getCurves: (upstreamId, downstreamId) => get(`/api/selectivity/curves?upstream=${upstreamId}&downstream=${downstreamId}`),
+    checkPair: (upstreamId, downstreamId) =>
+      get(`/api/selectivity/check?upstream=${upstreamId}&downstream=${downstreamId}`),
+    getCurves: (upstreamId, downstreamId) =>
+      get(`/api/selectivity/curves?upstream=${upstreamId}&downstream=${downstreamId}`),
     getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
   },
   faultlevel: {
     listPoints: (params) => get("/api/faultlevel/points", params),
-    checkPoint: (deviceId, switchboardId, phaseType = 'three') => 
-      get(`/api/faultlevel/check?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`),
-    getCurves: (deviceId, switchboardId, phaseType = 'three') => 
-      get(`/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`),
+    checkPoint: (deviceId, switchboardId, phaseType = "three") =>
+      get(
+        `/api/faultlevel/check?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`
+      ),
+    getCurves: (deviceId, switchboardId, phaseType = "three") =>
+      get(
+        `/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`
+      ),
     getAiTip: (payload) => post("/api/faultlevel/ai-tip", payload),
     updateParameters: (payload) => post("/api/faultlevel/parameters", payload),
     reset: () => post("/api/faultlevel/reset", {}),
   },
   arcflash: {
     listPoints: (params) => get("/api/arcflash/points", params),
-    checkPoint: (deviceId, switchboardId) => 
+    checkPoint: (deviceId, switchboardId) =>
       get(`/api/arcflash/check?device=${deviceId}&switchboard=${switchboardId}`),
-    getCurves: (deviceId, switchboardId) => 
+    getCurves: (deviceId, switchboardId) =>
       get(`/api/arcflash/curves?device=${deviceId}&switchboard=${switchboardId}`),
     getAiTip: (payload) => post("/api/arcflash/ai-tip", payload),
     updateParameters: (payload) => post("/api/arcflash/parameters", payload),
@@ -108,7 +120,7 @@ export const api = {
   },
   obsolescence: {
     listPoints: (params) => get("/api/obsolescence/points", params),
-    checkPoint: (deviceId, switchboardId) => 
+    checkPoint: (deviceId, switchboardId) =>
       get(`/api/obsolescence/check?device=${deviceId}&switchboard=${switchboardId}`),
     getGantt: () => get("/api/obsolescence/gantt"),
     getCapexForecast: () => get("/api/obsolescence/capex-forecast"),
@@ -121,7 +133,8 @@ export const api = {
   hv: {
     list: (params) => get("/api/hv/equipments", params),
     getOne: (id) => get(`/api/hv/equipments/${id}`),
-    create: (hvEquipmentId, payload) => post(`/api/hv/equipments/${hvEquipmentId}/devices`, payload),
+    create: (hvEquipmentId, payload) =>
+      post(`/api/hv/equipments/${hvEquipmentId}/devices`, payload),
     createEquipment: (payload) => post("/api/hv/equipments", payload),
     update: (id, payload) => put(`/api/hv/devices/${id}`, payload),
     updateEquipment: (id, payload) => put(`/api/hv/equipments/${id}`, payload),
@@ -130,7 +143,7 @@ export const api = {
     removeEquipment: (id) => del(`/api/hv/equipments/${id}`),
   },
   diagram: {
-    view: (params) => get("/api/diagram/view", { ...(params||{}), site: currentSite() }),
+    view: (params) => get("/api/diagram/view", { ...(params || {}), site: currentSite() }),
     health: () => get("/api/diagram/health"),
-  }
+  },
 };
