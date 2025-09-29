@@ -103,6 +103,7 @@ export default function HighVoltage() {
   const [editingHvEquipment, setEditingHvEquipment] = useState(null);
   const [hvEquipmentForm, setHvEquipmentForm] = useState(emptyHvEquipmentForm);
   const [busy, setBusy] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [total, setTotal] = useState(0);
   const [expandedPanels, setExpandedPanels] = useState({});
   const [hvDevices, setHvDevices] = useState({});
@@ -205,7 +206,7 @@ export default function HighVoltage() {
   // AI from photos (upload files, no display)
   const handleAISuggestFromPhotos = async () => {
     try {
-      setBusy(true);
+      setAnalyzing(true);
       const fd = new FormData();
       fd.append('manufacturer', hvDeviceForm.manufacturer || '');
       fd.append('reference', hvDeviceForm.reference || '');
@@ -218,7 +219,6 @@ export default function HighVoltage() {
         headers: { 'X-Site': site }
       });
 
-      // NEW: handle non-200 responses with informative message
       if (!res.ok) {
         let err = {};
         try { err = await res.json(); } catch {}
@@ -231,19 +231,29 @@ export default function HighVoltage() {
       let specs = {};
       try { specs = await res.json(); } catch { specs = {}; }
 
-      // Explicit feedback if AI is disabled or nothing extracted
+      // empty?
       const empty = !specs || Object.keys(specs).length === 0 ||
         Object.values(specs).every(v => v === null || v === '' || (typeof v === 'object' && Object.keys(v||{}).length===0));
       if (empty) {
-        setToast({ type:'error', msg:'No specs extracted (AI disabled or unreadable photo).' });
+        setToast({ type:'error', msg:'No specs extracted (photos unreadable or no visible data).' });
         return;
       }
 
-      setHvDeviceForm(prev => ({ ...prev, ...specs, settings: { ...(prev.settings||{}), ...(specs?.settings||{}) } }));
-      setToast({ type:'success', msg:'Specs suggested from photos (AI)' });
+      // compute diff to show useful feedback
+      const before = hvDeviceForm;
+      const after = { ...before, ...specs, settings: { ...(before.settings||{}), ...(specs?.settings||{}) } };
+      const changed = [];
+      for (const k of ['manufacturer','reference','device_type','voltage_class_kv','short_circuit_current_ka','insulation_type','mechanical_endurance_class','electrical_endurance_class','poles']) {
+        if (JSON.stringify(before[k]) !== JSON.stringify(after[k]) && after[k] !== undefined && after[k] !== null && `${after[k]}` !== '') {
+          changed.push(k);
+        }
+      }
+
+      setHvDeviceForm(after);
+      setToast({ type: changed.length ? 'success' : 'error', msg: changed.length ? `Prefilled: ${changed.join(', ')}` : 'No new info detected from photos.' });
     } catch (e) {
       setToast({ type:'error', msg:'AI suggestion failed' });
-    } finally { setBusy(false); }
+    } finally { setAnalyzing(false); }
   };
 
   // Helpers
@@ -416,8 +426,8 @@ export default function HighVoltage() {
             </label>
             <button type="button" onClick={handleAISuggestFromPhotos}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-              disabled={busy || localPhotos.length === 0}>
-              <Sparkles size={16}/> Analyze photos (AI)
+              disabled={analyzing || localPhotos.length === 0}>
+              <Sparkles size={16}/>{analyzing ? 'Analyzing…' : 'Analyze photos (AI)'}
             </button>
           </div>
 
@@ -438,7 +448,6 @@ export default function HighVoltage() {
 
         {/* 2) THEN THE FIELDS */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
-          {/* text fields */}
           <FieldText label="Name" value={hvDeviceForm.name} onChange={v => setHvDeviceForm({ ...hvDeviceForm, name: v })} disabled={busy}/>
           <FieldSelect label="Device Type" value={hvDeviceForm.device_type} options={hvDeviceTypes} onChange={v => setHvDeviceForm({ ...hvDeviceForm, device_type: v })} disabled={busy}/>
           <FieldText label="Manufacturer" value={hvDeviceForm.manufacturer} onChange={v => setHvDeviceForm({ ...hvDeviceForm, manufacturer: v })} disabled={busy}/>
