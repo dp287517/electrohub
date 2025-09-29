@@ -313,7 +313,7 @@ app.delete('/api/hv/devices/:id/photo/:idx', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Delete photo failed', details: e.message }); }
 });
 
-// ---------------- IA: specs à partir de texte + photos (FIX) ----------------
+// ---------------- IA: specs à partir de texte + photos (robuste) ----------------
 app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
   try {
     const manufacturer = req.body.manufacturer || '';
@@ -321,11 +321,12 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     const device_type = req.body.device_type || '';
     const files = req.files || [];
 
-    // Avant : renvoyait {} silencieusement si pas de clé -> ambigu côté front.
-    if (!openai) return res.status(503).json({ error: 'OpenAI not available' });
+    if (!openai) {
+      return res.status(503).json({ error: 'OpenAI not available. Set OPENAI_API_KEY.' });
+    }
 
-    // IMPORTANT : envoyer les images comme "image_url" (data URL) pour l’API Vision
-    const imageParts = files.map(f => {
+    // Convert images to data URLs for Vision
+    const imageParts = (files || []).map(f => {
       const base64 = Buffer.from(f.buffer).toString('base64');
       const mime = f.mimetype || 'image/jpeg';
       return { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } };
@@ -334,10 +335,14 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
     const messages = [
       { role: 'system', content: 'You are an electrical engineering expert (IEC 62271 HV). Extract realistic specs.' },
       { role: 'user', content: [
-          { type: 'text', text: `Manufacturer: ${manufacturer}\nReference: ${reference}\nDevice type: ${device_type}\n\nPlease infer specs if visible.` },
-          ...imageParts
-        ]
-      }
+        { type: 'text', text:
+`Manufacturer: ${manufacturer}
+Reference: ${reference}
+Device type: ${device_type}
+
+If visible on the images, extract realistic specs and infer missing ones. Return a compact JSON.` },
+        ...imageParts
+      ]}
     ];
 
     const completion = await openai.chat.completions.create({
@@ -366,10 +371,31 @@ app.post('/api/hv/ai/specs', upload.array('photos', 5), async (req, res) => {
       poles: num(json.poles) ?? null,
       settings: json.settings || {}
     };
-    res.json(out);
+
+    return res.json(out);
   } catch (e) {
-    console.error('[HV AI SPECS] Error:', e);
-    res.status(500).json({ error: 'AI specs extraction failed' });
+    const status = e?.status || e?.response?.status || 500;
+    const detail =
+      e?.response?.data?.error?.message ||
+      e?.error?.message ||
+      e?.message ||
+      'Unknown error';
+
+    console.error('[HV AI SPECS] OpenAI error:', {
+      status,
+      code: e?.code,
+      type: e?.type,
+      message: e?.message,
+      response: e?.response?.data || null
+    });
+
+    if (status === 401) return res.status(401).json({ error: 'Unauthorized (check OPENAI_API_KEY)', details: detail });
+    if (status === 404) return res.status(404).json({ error: 'Model not found', details: detail });
+    if (status === 429) return res.status(429).json({ error: 'Rate limit or quota exceeded', details: detail });
+    if (status === 400) return res.status(400).json({ error: 'Invalid request to OpenAI', details: detail });
+    if (status === 503) return res.status(503).json({ error: 'OpenAI service unavailable', details: detail });
+
+    return res.status(500).json({ error: 'AI specs extraction failed', details: detail });
   }
 });
 
