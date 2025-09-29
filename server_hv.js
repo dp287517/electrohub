@@ -344,7 +344,6 @@ async function webSearchDatasheet(q) {
   const results = [];
   const add = (arr) => arr.forEach(r => {
     if (!r?.url) return;
-    // simple de-dup
     if (!results.find(x => x.url === r.url)) results.push(r);
   });
 
@@ -397,7 +396,6 @@ async function webSearchDatasheet(q) {
 }
 
 async function extractTextFromUrl(u) {
-  // Lazy import pdf-parse if installed
   let pdfParse = null;
   try { const m = await import('pdf-parse'); pdfParse = m.default || m; } catch { /* optional */ }
 
@@ -406,12 +404,11 @@ async function extractTextFromUrl(u) {
   const ctype = (res.headers.get('content-type') || '').toLowerCase();
   if (ctype.includes('pdf')) {
     const buf = Buffer.from(await res.arrayBuffer());
-    if (!pdfParse) return ''; // cannot parse pdf without lib
+    if (!pdfParse) return '';
     const parsed = await pdfParse(buf);
     return (parsed.text || '').slice(0, 200000);
   }
   const html = await res.text();
-  // strip tags
   const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -422,7 +419,6 @@ async function extractTextFromUrl(u) {
 }
 
 async function enrichFromWeb({ manufacturer, reference, device_type }) {
-  // Build queries
   const baseQ = [manufacturer, reference, device_type, 'datasheet'].filter(Boolean).join(' ');
   const queries = [
     `${baseQ} filetype:pdf`,
@@ -437,15 +433,14 @@ async function enrichFromWeb({ manufacturer, reference, device_type }) {
         try {
           const t = await extractTextFromUrl(h.url);
           if (t && t.length > 500) texts.push(t);
-          if (texts.length >= 2) break; // enough
-        } catch(_) { /* next */ }
+          if (texts.length >= 2) break;
+        } catch(_) {}
       }
       if (texts.length >= 2) break;
-    } catch(_) { /* next query */ }
+    } catch(_) {}
   }
   if (texts.length === 0) return {};
 
-  // Ask LLM to extract specs from concatenated text (truncated)
   const text = texts.join('\n\n---\n\n').slice(0, 14000);
   const messages = [
     { role: 'system', content: 'You extract HV device specs (IEC 62271) as strict JSON. Prefer explicit values from text; infer cautiously.' },
@@ -514,11 +509,11 @@ Return ONLY a JSON object, no prose.` },
     });
     const vjson = safeJsonFromContent(vision.choices?.[0]?.message?.content || '');
 
-    // Normalize Vision result
+    // Normalize Vision result (⚠️ parenthesize ?? with ||)
     const visionOut = {
-      manufacturer: vjson.manufacturer ?? manufacturer_hint || null,
-      reference: vjson.reference ?? reference_hint || null,
-      device_type: vjson.device_type ?? device_type_hint || null,
+      manufacturer: (vjson.manufacturer ?? manufacturer_hint) ?? null,
+      reference: (vjson.reference ?? reference_hint) ?? null,
+      device_type: (vjson.device_type ?? device_type_hint) ?? null,
       voltage_class_kv: parseNum(vjson.voltage_class_kv),
       short_circuit_current_ka: parseNum(vjson.short_circuit_current_ka),
       insulation_type: vjson.insulation_type ?? null,
@@ -528,7 +523,7 @@ Return ONLY a JSON object, no prose.` },
       settings: vjson.settings || {}
     };
 
-    // 2) Web enrichment (optional, only if we have at least manufacturer or reference)
+    // 2) Web enrichment (optional)
     let webOut = {};
     const hasSearchKeys = process.env.SERPAPI_KEY || process.env.BING_SEARCH_KEY || (process.env.GOOGLE_API_KEY && process.env.GOOGLE_CSE_ID);
     const canSearch = hasSearchKeys && (visionOut.manufacturer || visionOut.reference);
@@ -539,7 +534,6 @@ Return ONLY a JSON object, no prose.` },
           reference: visionOut.reference || reference_hint,
           device_type: visionOut.device_type || device_type_hint
         });
-        // normalize enriched
         webOut = {
           manufacturer: enriched.manufacturer ?? null,
           reference: enriched.reference ?? null,
@@ -557,17 +551,17 @@ Return ONLY a JSON object, no prose.` },
       }
     }
 
-    // 3) Merge (Vision wins for manufacturer/reference if present; then fill gaps with web)
+    // 3) Merge (no illegal ?? / || mixing)
     const merged = {
       manufacturer: visionOut.manufacturer || webOut.manufacturer || null,
       reference: visionOut.reference || webOut.reference || null,
       device_type: visionOut.device_type || webOut.device_type || device_type_hint || 'HV Circuit Breaker',
-      voltage_class_kv: visionOut.voltage_class_kv ?? webOut.voltage_class_kv ?? null,
-      short_circuit_current_ka: visionOut.short_circuit_current_ka ?? webOut.short_circuit_current_ka ?? null,
+      voltage_class_kv: (visionOut.voltage_class_kv ?? webOut.voltage_class_kv) ?? null,
+      short_circuit_current_ka: (visionOut.short_circuit_current_ka ?? webOut.short_circuit_current_ka) ?? null,
       insulation_type: visionOut.insulation_type || webOut.insulation_type || null,
       mechanical_endurance_class: visionOut.mechanical_endurance_class || webOut.mechanical_endurance_class || null,
       electrical_endurance_class: visionOut.electrical_endurance_class || webOut.electrical_endurance_class || null,
-      poles: visionOut.poles ?? webOut.poles ?? null,
+      poles: (visionOut.poles ?? webOut.poles) ?? null,
       settings: { ...(webOut.settings || {}), ...(visionOut.settings || {}) }
     };
 
@@ -577,7 +571,7 @@ Return ONLY a JSON object, no prose.` },
       if (v === null || v === '' || (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)) continue;
       out[k] = v;
     }
-    return res.json(out); // could be {} if nothing useful
+    return res.json(out);
   } catch (e) {
     const status = e?.status || e?.response?.status || 500;
     const detail = e?.response?.data?.error?.message || e?.error?.message || e?.message || 'Unknown error';
