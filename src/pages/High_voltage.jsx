@@ -6,9 +6,15 @@ import {
   ChevronDown, ChevronRight, X, Sparkles, Image as ImageIcon
 } from 'lucide-react';
 
+/**
+ * Small helpers
+ */
 const regimes = ['TN-S', 'TN-C-S', 'IT', 'TT'];
-const hvDeviceTypes = ['HV Cell','HV Disconnect Switch','HV Circuit Breaker','Transformer','HV Cable','Busbar','Relay','Meter'];
-const insulationTypes = ['SF6','Vacuum','Air'];
+const hvDeviceTypes = [
+  'HV Cell', 'HV Disconnect Switch', 'HV Circuit Breaker',
+  'Transformer', 'HV Cable', 'Busbar', 'Relay', 'Meter'
+];
+const insulationTypes = ['Oil','SF6','Vacuum','Air','XLPE','EPR','Paper','Resin'];
 const mechanicalEnduranceClasses = ['M1','M2'];
 const electricalEnduranceClasses = ['E1','E2'];
 
@@ -43,6 +49,7 @@ function Modal({ open, onClose, children, title }) {
   );
 }
 
+/** ---------------- HV EQUIPMENT FORMS ---------------- */
 const emptyHvEquipmentForm = {
   name: '', code: '',
   meta: { site: '', building_code: '', floor: '', room: '' },
@@ -72,6 +79,7 @@ function formToPayload(f, site) {
   };
 }
 
+/** ---------------- HV DEVICE FORMS ---------------- */
 const emptyHvDeviceForm = {
   name:'', device_type:'HV Circuit Breaker', manufacturer:'', reference:'',
   voltage_class_kv:null, short_circuit_current_ka:null,
@@ -91,6 +99,7 @@ function buildDeviceTree(list) {
   return roots;
 }
 
+/** ---------------- PAGE ---------------- */
 export default function HighVoltage() {
   const site = useUserSite();
   const [rows, setRows] = useState([]);
@@ -113,14 +122,16 @@ export default function HighVoltage() {
   const [toast, setToast] = useState(null);
   const [localPhotos, setLocalPhotos] = useState([]); // File[]
 
+  // Load equipments
   useEffect(() => {
     setBusy(true);
     api.hv.list(q).then((resp) => {
-      const data = resp?.data || []; setRows(data); setTotal(resp?.total || 0);
+      setRows(resp?.data || []); setTotal(resp?.total || 0);
     }).catch(e => setToast({ type:'error', msg: 'Failed to load HV equipments: ' + e.message }))
       .finally(() => setBusy(false));
   }, [q]);
 
+  // Expand -> fetch devices
   useEffect(() => {
     Object.keys(expandedPanels).forEach(async (id) => {
       if (expandedPanels[id] && !hvDevices[id]) {
@@ -132,6 +143,7 @@ export default function HighVoltage() {
     });
   }, [expandedPanels]); // eslint-disable-line
 
+  // LV device suggestions
   const fetchBtSuggestions = useCallback(async (query) => {
     try {
       const res = await get('/api/hv/lv-devices', { q: query || '' });
@@ -142,6 +154,7 @@ export default function HighVoltage() {
     }
   }, []);
 
+  /** ---------------- SAVE ---------------- */
   const handleHvEquipmentSubmit = async () => {
     try {
       setBusy(true);
@@ -168,13 +181,11 @@ export default function HighVoltage() {
       const payload = { ...hvDeviceForm };
       if (editingHvDevice) {
         await api.hv.update(editingHvDevice.id, payload);
-        const flat = await get(`/api/hv/equipments/${currentPanelId}/devices`);
-        setHvDevices(prev => ({ ...prev, [currentPanelId]: buildDeviceTree(flat || []) }));
       } else {
         await api.hv.create(Number(currentPanelId), payload);
-        const flat = await get(`/api/hv/equipments/${currentPanelId}/devices`);
-        setHvDevices(prev => ({ ...prev, [currentPanelId]: buildDeviceTree(flat || []) }));
       }
+      const flat = await get(`/api/hv/equipments/${currentPanelId}/devices`);
+      setHvDevices(prev => ({ ...prev, [currentPanelId]: buildDeviceTree(flat || []) }));
       setOpenHvDevice(false);
       setEditingHvDevice(null);
       setHvDeviceForm(emptyHvDeviceForm);
@@ -184,6 +195,7 @@ export default function HighVoltage() {
     finally { setBusy(false); }
   };
 
+  /** ---------------- PHOTOS + AI ---------------- */
   const onPickPhotos = (e) => {
     const files = Array.from(e.target.files || []).slice(0, 5);
     setLocalPhotos(files);
@@ -192,6 +204,7 @@ export default function HighVoltage() {
     setLocalPhotos(prev => prev.filter((_, i) => i !== idx));
   };
 
+  // NEW: can analyze even with zero photo (uses hints + web)
   const handleAISuggestFromPhotos = async () => {
     try {
       setAnalyzing(true);
@@ -222,12 +235,13 @@ export default function HighVoltage() {
       const empty = !specs || Object.keys(specs).length === 0 ||
         Object.values(specs).every(v => v === null || v === '' || (typeof v === 'object' && Object.keys(v||{}).length===0));
       if (empty) {
-        setToast({ type:'error', msg:'No specs extracted (photos unreadable or no visible data).' });
+        setToast({ type:'error', msg:'No specs extracted (photo unreadable or no public data).' });
         return;
       }
 
       const before = hvDeviceForm;
       const after = { ...before, ...specs, settings: { ...(before.settings||{}), ...(specs?.settings||{}) } };
+
       const changed = [];
       for (const k of ['manufacturer','reference','device_type','voltage_class_kv','short_circuit_current_ka','insulation_type','mechanical_endurance_class','electrical_endurance_class','poles']) {
         if (JSON.stringify(before[k]) !== JSON.stringify(after[k]) && after[k] !== undefined && after[k] !== null && `${after[k]}` !== '') {
@@ -236,7 +250,7 @@ export default function HighVoltage() {
       }
 
       setHvDeviceForm(after);
-      setToast({ type: changed.length ? 'success' : 'error', msg: changed.length ? `Prefilled: ${changed.join(', ')}` : 'No new info detected from photos.' });
+      setToast({ type: changed.length ? 'success' : 'error', msg: changed.length ? `Prefilled: ${changed.join(', ')}` : 'No new info detected.' });
     } catch (e) {
       setToast({ type:'error', msg:'AI suggestion failed' });
     } finally { setAnalyzing(false); }
@@ -244,12 +258,13 @@ export default function HighVoltage() {
 
   const toggleExpand = (id) => setExpandedPanels(p => ({ ...p, [id]: !p[id] }));
 
+  /** ---------------- RENDER ---------------- */
   return (
     <section className="container-narrow py-10">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">High Voltage Equipments</h1>
-          <p className="text-gray-600">Manage HV cells, transformers, cables, and LV links.</p>
+          <p className="text-gray-600">Manage HV cells, transformers, cables, relays, and LV links.</p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => setShowFilters(v => !v)} className="px-3 py-2 bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 inline-flex items-center gap-2" disabled={busy}>
@@ -411,7 +426,7 @@ export default function HighVoltage() {
             </label>
             <button type="button" onClick={handleAISuggestFromPhotos}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
-              disabled={analyzing || localPhotos.length === 0}>
+              disabled={analyzing /* allow click even if no photos to use hints+web */}>
               <Sparkles size={16}/>{analyzing ? 'Analyzing (Vision + Web)…' : 'Analyze photos (AI)'}
             </button>
           </div>
@@ -498,6 +513,7 @@ export default function HighVoltage() {
   );
 }
 
+/** ---------------- SMALL FIELD COMPONENTS ---------------- */
 function FieldText({ label, value, onChange, disabled }) {
   return (
     <div>
