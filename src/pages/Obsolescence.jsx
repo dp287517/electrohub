@@ -1,4 +1,5 @@
-// Obsolescence.jsx (CSP-safe, AI assistant, filters, PDF, radar centered, Gantt colors per building, pricing note)
+// Obsolescence.jsx
+// (CSP-safe, AI assistant, filters incl. Asset Type, PDF, radar centered, Gantt colors per building)
 import React, { useEffect, useState, Fragment } from 'react';
 import { get, post } from '../lib/api.js';
 import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil, SlidersHorizontal } from 'lucide-react';
@@ -56,7 +57,8 @@ export default function Obsolescence() {
   const [buildings, setBuildings] = useState([]);
   const [expandedBuildings, setExpandedBuildings] = useState({});
   const [switchboards, setSwitchboards] = useState({});
-  const [selectedFilter, setSelectedFilter] = useState({ building: null, switchboard: null });
+  // Ajout: asset ('all' | 'sb' | 'hv')
+  const [selectedFilter, setSelectedFilter] = useState({ building: null, switchboard: null, asset: 'all' });
   const [showFilters, setShowFilters] = useState(false);
 
   const [ganttTasks, setGanttTasks] = useState([]);
@@ -76,11 +78,10 @@ export default function Obsolescence() {
   const [aiMessages, setAiMessages] = useState([]);
   const [health, setHealth] = useState({ openai:false, web_cost:false });
 
-  // Quick Edit modal
+  // Quick Edit modal (SB seulement)
   const [showQuick, setShowQuick] = useState(false);
   const [quick, setQuick] = useState({ switchboard_id:null, service_year:'', avg_life_years:30, override_cost_per_device:'' });
 
-  // palette “par bâtiment” stable
   const buildingColor = new Map();
   const colorForBuilding = (b) => {
     if (!buildingColor.has(b)) buildingColor.set(b, PALETTE[buildingColor.size % PALETTE.length]);
@@ -99,7 +100,7 @@ export default function Obsolescence() {
   useEffect(() => {
     if (tab === 'roll-up') loadGanttData();
     if (tab === 'analysis') {
-      loadDoughnutData();
+      loadDoughnutData(); // (SB only metric today)
       loadCapexForecast();
       loadBuildingBuckets();
     }
@@ -117,9 +118,9 @@ export default function Obsolescence() {
   const loadBuildings = async () => {
     try {
       setBusy(true);
-      const data = await get('/api/obsolescence/buildings');
+      const data = await get('/api/obsolescence/buildings', { asset: selectedFilter.asset });
       setBuildings(Array.isArray(data.data) ? data.data : []);
-      // Seed defaults + checks
+      // Seed defaults + checks (SB)
       await post('/api/obsolescence/ai-fill');
       await post('/api/obsolescence/auto-check');
       // KPIs
@@ -132,9 +133,9 @@ export default function Obsolescence() {
 
   const loadSwitchboards = async (building) => {
     try {
-      const data = await get('/api/obsolescence/switchboards', { building });
+      const data = await get('/api/obsolescence/switchboards', { building, asset: selectedFilter.asset });
       setSwitchboards(prev => ({ ...prev, [building]: Array.isArray(data.data) ? data.data : [] }));
-    } catch (e) { setToast({ msg: `Switchboards failed: ${e.message}`, type: 'error' }); }
+    } catch (e) { setToast({ msg: `Switchboards/HV failed: ${e.message}`, type: 'error' }); }
   };
 
   const toggleBuilding = (building) => {
@@ -148,6 +149,7 @@ export default function Obsolescence() {
       const params = {};
       if (selectedFilter.building) params.building = selectedFilter.building;
       if (selectedFilter.switchboard) params.switchboard = selectedFilter.switchboard;
+      params.asset = selectedFilter.asset;
 
       const data = await get('/api/obsolescence/gantt-data', params);
       const tasks = (data.tasks || [])
@@ -157,7 +159,6 @@ export default function Obsolescence() {
           const nowY = new Date().getFullYear();
           const remaining = t.end.getFullYear() - nowY;
           const base = colorForBuilding(t.building || 'Unknown');
-          // plus chaud quand imminent
           const hue = remaining < 5 ? '#ef4444' : remaining <= 10 ? '#f59e0b' : base;
           return {
             ...t,
@@ -178,7 +179,8 @@ export default function Obsolescence() {
 
   const loadDoughnutData = async () => {
     try {
-      const data = await get('/api/obsolescence/doughnut', { group:'building', ...selectedFilter });
+      // Doughnut actuel (SB) – pas de param asset pour garder la logique d’origine
+      const data = await get('/api/obsolescence/doughnut', { group:'building' });
       setDoughnutData(Array.isArray(data.data) ? data.data : []);
     } catch (e) {
       setToast({ msg: `Doughnut failed: ${e.message}`, type: 'error' });
@@ -188,7 +190,7 @@ export default function Obsolescence() {
 
   const loadCapexForecast = async () => {
     try {
-      const data = await get('/api/obsolescence/capex-forecast', { group:'building', ...selectedFilter });
+      const data = await get('/api/obsolescence/capex-forecast', { asset: selectedFilter.asset });
       setCapexForecast(data && data.forecasts && typeof data.forecasts === 'object' ? data.forecasts : {});
     } catch (e) {
       setToast({ msg: `CAPEX failed: ${e.message}`, type: 'error' });
@@ -198,7 +200,7 @@ export default function Obsolescence() {
 
   const loadBuildingBuckets = async () => {
     try {
-      const data = await get('/api/obsolescence/building-urgency-buckets');
+      const data = await get('/api/obsolescence/building-urgency-buckets', { asset: selectedFilter.asset });
       setBuildingBuckets(data && data.buckets && typeof data.buckets === 'object' ? data.buckets : {});
     } catch (e) {
       setToast({ msg: `Buckets failed: ${e.message}`, type: 'error' });
@@ -308,7 +310,6 @@ export default function Obsolescence() {
   });
   const doughnutSmallOptions = { responsive:true, plugins:{ legend:{ position:'bottom' } }, cutout:'70%' };
 
-  // Radar (centré)
   const getRadarData = () => {
     const labels = ['Age pressure','Urgency','CAPEX density','Unknowns','Thermal risk'];
     const groups = Object.keys(capexForecast || {});
@@ -319,7 +320,7 @@ export default function Obsolescence() {
       const urg = Number(avgUrgency)||45;
       const age = 50; // proxy
       const unknowns = Math.max(0, 100 - (buildingBuckets[g]?.total||1)*5);
-      const thermal = 40; // placeholder metric
+      const thermal = 40; // placeholder
       return {
         label: `Bldg ${g}`,
         data: [age, urg, Math.min(100, capexSum/10000), unknowns, thermal],
@@ -361,7 +362,6 @@ END:VCALENDAR`;
     URL.revokeObjectURL(url);
   };
 
-  // Quick edit
   const openQuick = (sb) => {
     setQuick({
       switchboard_id: sb.id,
@@ -388,7 +388,6 @@ END:VCALENDAR`;
     }
   };
 
-  // AI assistant
   const sendAi = async () => {
     if (!aiQuery.trim()) return;
     const q = aiQuery.trim();
@@ -403,7 +402,6 @@ END:VCALENDAR`;
     }
   };
 
-  // Export PDF
   const exportPdf = async () => {
     try {
       setBusy(true);
@@ -423,7 +421,7 @@ END:VCALENDAR`;
       pdf.text('Buildings overview:', margin, y); y += 16;
 
       buildings.forEach(b => {
-        pdf.text(`• ${b.building} — switchboards: ${b.count}, total est.: £${Number(b.total_cost||0).toLocaleString('en-GB')}`, margin, y);
+        pdf.text(`• ${b.building} — assets: ${b.count}, total est.: £${Number(b.total_cost||0).toLocaleString('en-GB')}`, margin, y);
         y += 16;
         if (y > 760) { pdf.addPage(); y = margin; }
       });
@@ -514,7 +512,7 @@ END:VCALENDAR`;
                     <tr className="hover:bg-green-50/50 transition-colors">
                       <td className="p-4 cursor-pointer" onClick={() => { toggleBuilding(b.building); }}>
                         {expandedBuildings[b.building] ? <ChevronDown className="inline mr-2" /> : <ChevronRight className="inline mr-2" />}
-                        {b.building} ({b.count} switchboards)
+                        {b.building} ({b.count} {selectedFilter.asset === 'hv' ? 'HV' : selectedFilter.asset === 'sb' ? 'switchboards' : 'assets'})
                       </td>
                       <td className="p-4"></td>
                       <td className="p-4">£{Number(b.total_cost || 0).toLocaleString('en-GB')}</td>
@@ -529,7 +527,13 @@ END:VCALENDAR`;
                         <td className="p-4">£{Number(sb.total_cost || 0).toLocaleString('en-GB')}</td>
                         <td className="p-4">{sb.forecast_year ?? 'N/A'}</td>
                         <td className="p-4 flex gap-3">
-                          <button onClick={() => openQuick(sb)} className="text-green-700 hover:text-green-900" title="Quick edit"><Pencil size={16} /></button>
+                          {/* Quick edit reste pertinent pour SB uniquement */}
+                          {selectedFilter.asset !== 'hv' && (
+                            <button onClick={() => openQuick(sb)} className="text-green-700 hover:text-green-900" title="Quick edit"><Pencil size={16} /></button>
+                          )}
+                          {selectedFilter.asset === 'hv' && (
+                            <span className="text-xs text-gray-500 italic">Quick edit (SB only)</span>
+                          )}
                           <button onClick={() => {
                             const y = sb.forecast_year ?? (new Date().getFullYear() + 1);
                             downloadICS({ ...sb, forecast_year: y });
@@ -592,7 +596,7 @@ END:VCALENDAR`;
           <div>
             <h2 className="text-2xl font-bold mb-2 text-gray-800">Replacement Horizon — by Building</h2>
             <p className="text-xs text-gray-500 mb-4">
-              Counts of switchboards due per horizon. Estimates exclude enclosures/cables/accessories.
+              Counts of assets due per horizon (SB/HV depending on filter). Estimates exclude enclosures/cables/accessories.
             </p>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {Object.keys(buildingBuckets || {}).map(b => (
@@ -600,7 +604,7 @@ END:VCALENDAR`;
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {b}</h3>
                   <Doughnut data={getBuildingDoughnutData(buildingBuckets[b])} options={doughnutSmallOptions} />
                   <div className="text-xs mt-2 text-gray-600">
-                    Total: {buildingBuckets[b]?.total || 0} switchboards
+                    Total: {buildingBuckets[b]?.total || 0} {selectedFilter.asset==='hv' ? 'HV' : selectedFilter.asset==='sb' ? 'switchboards' : 'assets'}
                   </div>
                 </div>
               ))}
@@ -626,7 +630,7 @@ END:VCALENDAR`;
 
       {/* Filters drawer */}
       <Modal open={showFilters} onClose={()=>setShowFilters(false)} title="Filters" wide>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Building</label>
             <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
@@ -637,7 +641,17 @@ END:VCALENDAR`;
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Switchboard</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Asset Type</label>
+            <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
+              value={selectedFilter.asset} onChange={e => setSelectedFilter(s => ({ ...s, asset: e.target.value }))}>
+              <option value="all">All</option>
+              <option value="sb">Switchboards</option>
+              <option value="hv">High Voltage</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Switchboard / HV</label>
             <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
               value={selectedFilter.switchboard || ''} onChange={e => setSelectedFilter(s => ({ ...s, switchboard: e.target.value || null }))}>
               <option value="">All</option>
@@ -648,12 +662,18 @@ END:VCALENDAR`;
           </div>
         </div>
         <div className="mt-4 flex justify-between">
-          <button onClick={()=>setSelectedFilter({ building:null, switchboard:null })} className="px-3 py-2 rounded-lg ring-1 ring-black/10 bg-gray-50">Clear</button>
-          <button onClick={()=>{ setShowFilters(false); if (tab==='roll-up') loadGanttData(); if (tab==='analysis'){ loadCapexForecast(); loadDoughnutData(); }}} className="px-4 py-2 bg-green-600 text-white rounded-lg">Apply</button>
+          <button onClick={()=>setSelectedFilter({ building:null, switchboard:null, asset:'all' })} className="px-3 py-2 rounded-lg ring-1 ring-black/10 bg-gray-50">Clear</button>
+          <button onClick={async ()=>{
+            setShowFilters(false);
+            await loadBuildings();
+            if (selectedFilter.building) await loadSwitchboards(selectedFilter.building);
+            if (tab==='roll-up') loadGanttData();
+            if (tab==='analysis'){ loadCapexForecast(); loadDoughnutData(); loadBuildingBuckets(); }
+          }} className="px-4 py-2 bg-green-600 text-white rounded-lg">Apply</button>
         </div>
       </Modal>
 
-      {/* Quick edit */}
+      {/* Quick edit (SB) */}
       <Modal open={showQuick} onClose={() => setShowQuick(false)} title="Quick edit (Switchboard)">
         <div className="space-y-4">
           <div>
@@ -678,10 +698,9 @@ END:VCALENDAR`;
           <div className="text-sm text-gray-600">
             Ask questions (IEC obsolescence, MCCB/ACB/VCB pricing, roadmap per building, Temp/HeatTag sensors, electrical monitoring…).
             The AI adds sensor/monitoring ideas + a dedicated box Estimates & Scope.
-            (I can also speak to you in any language.)
           </div>
           <div className="h-[320px] overflow-y-auto rounded-xl ring-1 ring-black/10 p-3 bg-gray-50">
-            {aiMessages.length === 0 && <div className="text-gray-500 text-sm">🧠 Tell me for example: MCCB 250A installed price UK? or building 21 roadmap.</div>}
+            {aiMessages.length === 0 && <div className="text-gray-500 text-sm">🧠 Try: “building 21 roadmap (HV only)” or “MCCB 250A installed price UK?”.</div>}
             {aiMessages.map((m, i) => (
               <div key={i} className={`mb-3 ${m.role==='user'?'text-right':''}`}>
                 <div className={`inline-block px-3 py-2 rounded-xl ${m.role==='user'?'bg-green-600 text-white':'bg-white ring-1 ring-black/10'}`} style={{maxWidth:'80%'}}>
