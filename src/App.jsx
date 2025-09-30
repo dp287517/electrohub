@@ -48,8 +48,6 @@ export default function App() {
           <Route path="/app/obsolescence" element={<ProtectedRoute><Obsolescence /></ProtectedRoute>} />
           <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} />
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
-
-          {/* NEW: Controls */}
           <Route path="/app/controls" element={<ProtectedRoute><Controls /></ProtectedRoute>} />
 
           {/* Fallback */}
