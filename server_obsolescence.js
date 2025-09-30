@@ -1,4 +1,5 @@
-// server_obsolescence.js (CSP-safe, hybrid pricing with your bracket as floor, web-cost optional, better Gantt payload)
+// server_obsolescence.js
+// (CSP-safe, hybrid pricing with your bracket as floor, web-cost optional, + HV support + asset filter)
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -41,7 +42,7 @@ function siteOf(req) {
   return (req.header('X-Site') || req.query.site || req.body.site || '').toString();
 }
 
-// ---------- SCHEMA ----------
+// ---------- SCHEMA (SB-side only; HV vient d'un service/table dédié qu'on lit en lecture) ----------
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS obsolescence_checks (
@@ -75,7 +76,7 @@ async function ensureSchema() {
 }
 ensureSchema().catch(console.error);
 
-// ---------- COÛTS ----------
+// ---------- COÛTS (SB) ----------
 function bracketBreakerCostGBP(amps) {
   const A = Number(amps || 0);
   if (A <= 10) return 20;
@@ -97,10 +98,8 @@ function estimateDeviceCostGBP(type = '', inAmps = 0) {
   const t = String(type || '').toUpperCase();
   const A = Number(inAmps || 0);
 
-  // 1) Ton barème “installé” sert de plancher pour tout disjoncteur
   let base = bracketBreakerCostGBP(A);
 
-  // 2) Ajustements par familles (jamais en-dessous du barème)
   if (t.includes('MCCB')) {
     const fam =
       A <= 160 ? 600 :
@@ -115,18 +114,15 @@ function estimateDeviceCostGBP(type = '', inAmps = 0) {
   } else if (t.includes('VCB') || t.includes('VACUUM')) {
     base = Math.max(base, 15000);
   } else if (t.includes('MCB') || t.includes('MINIATURE')) {
-    // Miniature circuit breakers: barème suffit (déjà “installé”)
     base = Math.max(base, base);
   } else if (t.includes('RELAY') || t.includes('PROTECTION')) {
     base = Math.max(base, 2500);
   } else if (t.includes('FUSE')) {
     base = Math.max(base, 150);
   } else if (t.includes('BREAKER') || t.includes('DISJONCTEUR')) {
-    // générique -> barème
     base = Math.max(base, base);
   }
 
-  // Pas de multiplicateur caché : barème déjà “installé”
   return GBP(base);
 }
 
@@ -194,16 +190,13 @@ async function computeSwitchboardTotals(site) {
   const enriched = [];
   for (const sb of bySB.values()) {
     const n = sb.devices.filter(d => d.device_id).length;
-    const boardBase = 1500 + 400 * Math.max(0, n - 4); // châssis/barres/coffret (hors câbles/accessoires)
+    const boardBase = 1500 + 400 * Math.max(0, n - 4);
     let sumDevices = 0;
-
     for (const d of sb.devices) {
       if (!d.device_id) continue;
       const c = await deviceEstimatedOrParamCostGBP(d);
       sumDevices += c;
     }
-
-    // +15% gestion/études, pas de “*1.3” supplémentaire (déjà inclus dans barème si pertinent)
     const total = GBP((boardBase + sumDevices) * 1.15);
     const years = sb.devices.map(d => d.manufacture_date).filter(Boolean).map(x => new Date(x).getFullYear()).filter(y => Number.isFinite(y));
     const service_year = years.length ? years.sort((a,b)=>a-b)[Math.floor(years.length/2)] : null;
@@ -211,6 +204,7 @@ async function computeSwitchboardTotals(site) {
     const avg_life_years = lifeVals.length ? Math.round(lifeVals.reduce((a,b)=>a+b,0)/lifeVals.length) : 25;
 
     enriched.push({
+      kind: 'sb',
       switchboard_id: sb.switchboard_id,
       name: sb.name,
       building_code: sb.building_code,
@@ -222,6 +216,71 @@ async function computeSwitchboardTotals(site) {
     });
   }
   return enriched;
+}
+
+// ---------- COÛTS (HV) ----------
+function estimateHvDeviceCostGBP(dev) {
+  const t = String(dev?.device_type || '').toUpperCase();
+  // fallback length for cables (if length_m column absent or null)
+  const lengthM = Number(dev?.length_m || 0) || 50;
+
+  if (t.includes('TRANSFORMER'))       return 25000;
+  if (t.includes('CIRCUIT BREAKER'))   return 15000;
+  if (t.includes('VCB') || t.includes('SWITCHGEAR') || t.includes('CELL')) return 20000;
+  if (t.includes('RELAY'))             return 4000;
+  if (t.includes('CABLE'))             return 120 * lengthM;
+  return 8000; // générique HV
+}
+
+async function computeHvTotals(site) {
+  // On lit les tables HV existantes (pas de modif server_hv)
+  const eq = await pool.query(`
+    SELECT e.id AS hv_equipment_id, e.name, e.building_code, e.floor
+    FROM hv_equipments e
+    WHERE e.site = $1
+    ORDER BY e.id ASC
+  `, [site]);
+
+  const out = [];
+  for (const row of eq.rows) {
+    const devs = await pool.query(`
+      SELECT d.*
+      FROM hv_devices d
+      WHERE d.site = $1 AND d.hv_equipment_id = $2
+      ORDER BY d.id ASC
+    `, [site, row.hv_equipment_id]);
+
+    const n = devs.rows.length;
+    const base = 5000 + 2000 * Math.max(0, n - 2); // châssis/liaisons HV
+    let sum = 0;
+    for (const d of devs.rows) sum += estimateHvDeviceCostGBP(d);
+    const estimated_cost_gbp = GBP((base + sum) * 1.10);
+
+    const service_year = null; // si tu as une source, connecte-la ici
+    const avg_life_years = 30; // défaut HV
+
+    out.push({
+      kind: 'hv',
+      hv_equipment_id: row.hv_equipment_id,
+      name: row.name,
+      building_code: row.building_code || 'Unknown',
+      floor: row.floor || '',
+      device_count: n,
+      service_year,
+      avg_life_years,
+      estimated_cost_gbp
+    });
+  }
+  return out;
+}
+
+// ---------- Sélecteur selon le filtre asset ----------
+async function pickTotalsByAsset(site, asset = 'all') {
+  const sbs = await computeSwitchboardTotals(site);
+  if (asset === 'sb') return sbs;
+  const hvs = await computeHvTotals(site);
+  if (asset === 'hv') return hvs;
+  return [...sbs, ...hvs];
 }
 
 // ---------- Obsolescence calc ----------
@@ -290,24 +349,25 @@ app.post('/api/obsolescence/reset', async (req, res) => {
     await pool.query('DELETE FROM obsolescence_parameters WHERE site=$1', [site]);
     res.json({ message: 'Reset ok' });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Reset failed' });
   }
 });
 
-// ---------- BUILDINGS ----------
+// ---------- BUILDINGS (asset filter) ----------
 app.get('/api/obsolescence/buildings', async (req, res) => {
   try {
     const site = siteOf(req);
+    const { asset = 'all' } = req.query;
     if (!site) return res.status(400).json({ error: 'Missing site' });
 
-    const sbTotals = await computeSwitchboardTotals(site);
+    const totals = await pickTotalsByAsset(site, String(asset));
     const grouped = new Map();
-    for (const sb of sbTotals) {
-      const key = sb.building_code || 'Unknown';
+    for (const it of totals) {
+      const key = it.building_code || 'Unknown';
       if (!grouped.has(key)) grouped.set(key, { building: key, count: 0, total_cost: 0 });
       const g = grouped.get(key);
       g.count += 1;
-      g.total_cost += sb.estimated_cost_gbp;
+      g.total_cost += it.estimated_cost_gbp;
     }
     res.json({ data: Array.from(grouped.values()) });
   } catch (e) {
@@ -316,29 +376,35 @@ app.get('/api/obsolescence/buildings', async (req, res) => {
   }
 });
 
-// ---------- SWITCHBOARDS ----------
+// ---------- SWITCHBOARDS/HV (asset filter) ----------
 app.get('/api/obsolescence/switchboards', async (req, res) => {
   try {
     const site = siteOf(req);
-    const { building } = req.query;
+    const { building, asset = 'sb' } = req.query;
     if (!site || !building) return res.status(400).json({ error: 'Missing params' });
 
-    const sbTotals = await computeSwitchboardTotals(site);
     const now = new Date().getFullYear();
-    const result = sbTotals
-      .filter(sb => (sb.building_code || '') === String(building))
-      .map(sb => {
-        const forecast_year = (sb.service_year || now - 10) + (sb.avg_life_years || 25);
+    const items = await pickTotalsByAsset(site, String(asset));
+
+    // On conserve le même format d’objets retournés pour le front
+    const result = items
+      .filter(it => (it.building_code || '') === String(building))
+      .map(it => {
+        const service_year = it.service_year;
+        const avg_life_years = it.avg_life_years;
+        const forecast_year = (service_year || now - 10) + (avg_life_years || (it.kind === 'hv' ? 30 : 25));
         return {
-          id: sb.switchboard_id,
-          name: sb.name,
-          floor: sb.floor || '',
-          device_count: sb.device_count,
-          total_cost: sb.estimated_cost_gbp,
-          service_year: sb.service_year,
+          id: it.kind === 'hv' ? it.hv_equipment_id : it.switchboard_id,
+          name: it.name,
+          floor: it.floor || '',
+          device_count: it.device_count || 0,
+          total_cost: it.estimated_cost_gbp,
+          service_year,
+          avg_life_years,
           forecast_year
         };
       });
+
     res.json({ data: result });
   } catch (e) {
     console.error('[OBS SWITCHBOARDS]', e.message);
@@ -346,7 +412,7 @@ app.get('/api/obsolescence/switchboards', async (req, res) => {
   }
 });
 
-// ---------- DEVICES ----------
+// ---------- DEVICES (SB uniquement — Quick edit reste SB) ----------
 app.get('/api/obsolescence/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -365,7 +431,7 @@ app.get('/api/obsolescence/devices', async (req, res) => {
   }
 });
 
-// ---------- QUICK SET ----------
+// ---------- QUICK SET (SB) ----------
 app.post('/api/obsolescence/quick-set', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -407,7 +473,7 @@ app.post('/api/obsolescence/quick-set', async (req, res) => {
   }
 });
 
-// ---------- AI-FILL ----------
+// ---------- AI-FILL (SB) ----------
 app.post('/api/obsolescence/ai-fill', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -435,7 +501,7 @@ app.post('/api/obsolescence/ai-fill', async (req, res) => {
   }
 });
 
-// ---------- DOUGHNUT GLOBAL ----------
+// ---------- DOUGHNUT GLOBAL (SB uniquement — indicateurs existants) ----------
 app.get('/api/obsolescence/doughnut', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -462,19 +528,20 @@ app.get('/api/obsolescence/doughnut', async (req, res) => {
   }
 });
 
-// ---------- BUCKETS PAR BÂTIMENT ----------
+// ---------- BUCKETS PAR BÂTIMENT (asset filter) ----------
 app.get('/api/obsolescence/building-urgency-buckets', async (req, res) => {
   try {
     const site = siteOf(req);
-    const sbs = await computeSwitchboardTotals(site);
+    const { asset = 'all' } = req.query;
+    const totals = await pickTotalsByAsset(site, String(asset));
     const now = new Date().getFullYear();
 
     const byB = new Map(); // building -> { urgent, medium, low, total }
-    for (const sb of sbs) {
-      const service = sb.service_year ?? (now - 10);
-      const life = sb.avg_life_years ?? 25;
+    for (const it of totals) {
+      const service = it.service_year ?? (now - 10);
+      const life = it.avg_life_years ?? (it.kind === 'hv' ? 30 : 25);
       const remaining = service + life - now;
-      const b = sb.building_code || 'Unknown';
+      const b = it.building_code || 'Unknown';
       if (!byB.has(b)) byB.set(b, { urgent:0, medium:0, low:0, total:0 });
 
       if (remaining < 5) byB.get(b).urgent += 1;
@@ -489,19 +556,20 @@ app.get('/api/obsolescence/building-urgency-buckets', async (req, res) => {
   }
 });
 
-// ---------- CAPEX-FORECAST ----------
+// ---------- CAPEX-FORECAST (asset filter) ----------
 app.get('/api/obsolescence/capex-forecast', async (req, res) => {
   try {
     const site = siteOf(req);
-    const sbTotals = await computeSwitchboardTotals(site);
+    const { asset = 'all' } = req.query;
+    const totals = await pickTotalsByAsset(site, String(asset));
     const now = new Date().getFullYear();
 
     const forecasts = {};
-    for (const sb of sbTotals) {
-      const label = sb.building_code || 'Unknown';
+    for (const it of totals) {
+      const label = it.building_code || 'Unknown';
       if (!forecasts[label]) forecasts[label] = [];
-      const year = (sb.service_year || now - 10) + (sb.avg_life_years || 25);
-      forecasts[label].push({ year, capex_year: sb.estimated_cost_gbp });
+      const year = (it.service_year || now - 10) + (it.avg_life_years || (it.kind === 'hv' ? 30 : 25));
+      forecasts[label].push({ year, capex_year: it.estimated_cost_gbp });
     }
     res.json({ forecasts });
   } catch (e) {
@@ -509,7 +577,7 @@ app.get('/api/obsolescence/capex-forecast', async (req, res) => {
   }
 });
 
-// ---------- AI-QUERY (assistant complet + prix Web si question) ----------
+// ---------- AI-QUERY ----------
 app.post('/api/obsolescence/ai-query', async (req, res) => {
   try {
     if (!openai) return res.status(503).json({ error: 'OpenAI not configured' });
@@ -525,7 +593,6 @@ app.post('/api/obsolescence/ai-query', async (req, res) => {
     `, [site]);
     const context = db.rows.length ? JSON.stringify(db.rows.slice(0, 300)) : 'No data';
 
-    // Si question "prix X A", tenter estimation web instantanée
     let inlinePrice = '';
     const m = String(query||'').match(/(mccb|acb|vcb|breaker|disjoncteur|mcb)\s*([0-9]{1,4})\s*a/i);
     if (m) {
@@ -559,7 +626,7 @@ Always add a short "Estimates & Scope" note: prices are indicative, include mate
   }
 });
 
-// ---------- AUTO-CHECK ----------
+// ---------- AUTO-CHECK (SB) ----------
 async function fetchDevicesForAutoCheck(site) {
   const sqlFull = `
     SELECT d.*,
@@ -617,34 +684,36 @@ app.post('/api/obsolescence/auto-check', async (req, res) => {
   }
 });
 
-// ---------- GANTT-DATA ----------
+// ---------- GANTT-DATA (asset filter) ----------
 app.get('/api/obsolescence/gantt-data', async (req, res) => {
   try {
     const site = siteOf(req);
     const rawB = req.query.building;
     const rawS = req.query.switchboard;
+    const { asset = 'all' } = req.query;
+
     const building = (rawB && !['', 'null', 'undefined'].includes(String(rawB).toLowerCase())) ? String(rawB) : null;
     const switchboard = (rawS && !['', 'null', 'undefined'].includes(String(rawS).toLowerCase())) ? Number(rawS) : null;
 
-    const sbTotals = await computeSwitchboardTotals(site);
-    let filtered = sbTotals.filter(sb =>
-      (!building || sb.building_code === building) &&
-      (!switchboard || sb.switchboard_id === switchboard)
+    const totals = await pickTotalsByAsset(site, String(asset));
+    let filtered = totals.filter(it =>
+      (!building || it.building_code === building) &&
+      (!switchboard || it.switchboard_id === switchboard)
     );
-    if (!filtered.length) filtered = sbTotals;
+    if (!filtered.length) filtered = totals;
 
-    const tasks = filtered.map(sb => {
-      const mfgYear = sb.service_year || (new Date().getFullYear() - 10);
-      const life = sb.avg_life_years || 25;
+    const tasks = filtered.map(it => {
+      const mfgYear = it.service_year || (new Date().getFullYear() - 10);
+      const life = it.avg_life_years || (it.kind === 'hv' ? 30 : 25);
       return {
         start: new Date(mfgYear, 0, 1),
         end: new Date(mfgYear + life, 0, 1),
-        name: `${sb.building_code || 'Bldg'} — ${sb.name}`,
-        id: String(sb.switchboard_id),
+        name: `${it.building_code || 'Bldg'} — ${it.name}`,
+        id: String(it.kind === 'hv' ? it.hv_equipment_id : it.switchboard_id),
         progress: 0,
         type: 'task',
-        cost: sb.estimated_cost_gbp,
-        building: sb.building_code || 'Unknown'
+        cost: it.estimated_cost_gbp,
+        building: it.building_code || 'Unknown'
       };
     });
     res.json({ tasks });
@@ -668,8 +737,8 @@ app.get('/api/obsolescence/avg-urgency', async (req, res) => {
 app.get('/api/obsolescence/total-capex', async (req, res) => {
   try {
     const site = siteOf(req);
-    const sbTotals = await computeSwitchboardTotals(site);
-    const total = sbTotals.reduce((a, b) => a + b.estimated_cost_gbp, 0);
+    const totals = await pickTotalsByAsset(site, 'all');
+    const total = totals.reduce((a, b) => a + b.estimated_cost_gbp, 0);
     res.json({ total: GBP(total) });
   } catch {
     res.status(500).json({ error: 'Total CAPEX failed' });
