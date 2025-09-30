@@ -9,7 +9,8 @@ const apps = [
   { label: 'Arc Flash', to: '/app/arc-flash', description: 'Incident energy & PPE categories', icon: '⚠️' },
   { label: 'Loop Calculation', to: '/app/loopcalc', description: 'Intrinsic safety loop calculations & compliance', icon: '🔄' },
   { label: 'High Voltage Equipment', to: '/app/hv', description: 'Manage HV cells, cables, transformers, busbars & analyses', icon: '⚡' },
-  { label: 'Diagram', to: '/app/diagram', description: 'Interactive LV/HV map with filters & statuses (arc flash, fault level, selectivity)', icon: '🗺️' },
+  { label: 'Diagram', to: '/app/diagram', description: 'Interactive LV/HV map with filters & statuses (arc flash, fault level, selectivity)', icon: '📐' },
+  { label: 'Maintenance Controls', to: '/app/controls', description: 'Follow-up of electrical equipment maintenance tasks', icon: '🛠️' },
 ];
 
 export default function Dashboard() {
