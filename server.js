@@ -23,111 +23,51 @@ const app = express();
 // ---- Sécurité de base
 app.use(helmet());
 
-// ---- PROXY ATEX AVANT TOUT PARSING DU CORPS (important pour éviter 408/aborted)
+// ---- PROXY ATEX (avant parsing corps)
 const atexTarget = process.env.ATEX_BASE_URL || 'http://127.0.0.1:3001';
-app.use(
-  '/api/atex',
-  createProxyMiddleware({
-    target: atexTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/atex', createProxyMiddleware({ target: atexTarget, changeOrigin: true, logLevel: 'warn' }));
 
-// ---- PROXY LOOPCALC AVANT TOUT PARSING DU CORPS (même logique)
+// ---- PROXY LOOPCALC
 const loopTarget = process.env.LOOPCALC_BASE_URL || 'http://127.0.0.1:3002';
-app.use(
-  '/api/loopcalc',
-  createProxyMiddleware({
-    target: loopTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/loopcalc', createProxyMiddleware({ target: loopTarget, changeOrigin: true, logLevel: 'warn' }));
 
-// --- PROXY SWITCHBOARD (place BEFORE body parsing like /api/atex & /api/loopcalc) ---
+// --- PROXY SWITCHBOARD
 const switchboardTarget = process.env.SWITCHBOARD_BASE_URL || 'http://127.0.0.1:3003';
-app.use(
-  '/api/switchboard',
-  createProxyMiddleware({
-    target: switchboardTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/switchboard', createProxyMiddleware({ target: switchboardTarget, changeOrigin: true, logLevel: 'warn' }));
 
-// --- PROXY SELECTIVITY (AJOUT: place BEFORE body parsing) ---
+// --- PROXY SELECTIVITY
 const selectivityTarget = process.env.SELECTIVITY_BASE_URL || 'http://127.0.0.1:3004';
-app.use(
-  '/api/selectivity',
-  createProxyMiddleware({
-    target: selectivityTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/selectivity', createProxyMiddleware({ target: selectivityTarget, changeOrigin: true, logLevel: 'warn' }));
 
-// --- PROXY FLA (AJOUT: place BEFORE body parsing) ---
+// --- PROXY FLA
 const flaTarget = process.env.FLA_BASE_URL || 'http://127.0.0.1:3005';
-app.use(
-  '/api/faultlevel',
-  createProxyMiddleware({
-    target: flaTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/faultlevel', createProxyMiddleware({ target: flaTarget, changeOrigin: true, logLevel: 'warn' }));
 
-// --- PROXY ARCFLASH (AJOUT: place BEFORE body parsing) ---
+// --- PROXY ARCFLASH
 const arcflashTarget = process.env.ARCFLASH_BASE_URL || 'http://127.0.0.1:3006';
-app.use(
-  '/api/arcflash',
-  createProxyMiddleware({
-    target: arcflashTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/arcflash', createProxyMiddleware({ target: arcflashTarget, changeOrigin: true, logLevel: 'warn' }));
 
-// --- PROXY OBSOLESCENCE (AJOUT: place BEFORE body parsing) ---
+// --- PROXY OBSOLESCENCE
 const obsolescenceTarget = process.env.OBSOLESCENCE_BASE_URL || 'http://127.0.0.1:3007';
-app.use(
-  '/api/obsolescence',
-  createProxyMiddleware({
-    target: obsolescenceTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/obsolescence', createProxyMiddleware({ target: obsolescenceTarget, changeOrigin: true, logLevel: 'warn' }));
 
-// --- PROXY HV (AJOUT: place BEFORE body parsing) ---
+// --- PROXY HV
 const hvTarget = process.env.HV_BASE_URL || 'http://127.0.0.1:3009';
-app.use(
-  '/api/hv',
-  createProxyMiddleware({
-    target: hvTarget,
-    changeOrigin: true,
-    logLevel: 'debug',  // 'debug' pour plus de logs pendant le test
-  })
-);
+app.use('/api/hv', createProxyMiddleware({ target: hvTarget, changeOrigin: true, logLevel: 'debug' }));
 
-// --- PROXY DIAGRAM (NOUVEAU, port 3010 ; AVANT body parsing) ---
+// --- PROXY DIAGRAM
 const diagramTarget = process.env.DIAGRAM_BASE_URL || 'http://127.0.0.1:3010';
-app.use(
-  '/api/diagram',
-  createProxyMiddleware({
-    target: diagramTarget,
-    changeOrigin: true,
-    logLevel: 'warn',
-  })
-);
+app.use('/api/diagram', createProxyMiddleware({ target: diagramTarget, changeOrigin: true, logLevel: 'warn' }));
+
+// --- PROXY CONTROLS
+const controlsTarget = process.env.CONTROLS_BASE_URL || 'http://127.0.0.1:3011';
+app.use('/api/controls', createProxyMiddleware({ target: controlsTarget, changeOrigin: true, logLevel: 'warn' }));
 
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
 
-// ---- CORS (pour les routes servies par ce serveur-ci ;
-// les routes /api/atex et /api/loopcalc gèrent déjà CORS côté services dédiés)
+// ---- CORS (routes servies par ce serveur)
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
@@ -137,7 +77,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---- Health (mets bien /api/health dans Render)
+// ---- Health
 app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ---- Auth placeholders
