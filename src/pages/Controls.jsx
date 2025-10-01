@@ -104,8 +104,8 @@ export default function Controls() {
   const [lang, setLang] = useState(localStorage.getItem('eh_lang') || 'en');
 
   // Filters / suggests
-  const [suggests, setSuggests] = useState({ building: [], room: [], module: [], equipment_type: [] });
-  const [filter, setFilter] = useState({ q: '', building: '', module: '', status: '' });
+  const [suggests, setSuggests] = useState({ building: [], switchboard: [], device: [] });
+  const [filter, setFilter] = useState({ q: '', building: '', switchboard: '', status: '' });
 
   // Entities & tasks
   const [entities, setEntities] = useState([]);
@@ -117,6 +117,12 @@ export default function Controls() {
   const [gantt, setGantt] = useState({ tasks: [] });
   const [viewMode, setViewMode] = useState(ViewMode.Month);
 
+  // AI Modal
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiTask, setAiTask] = useState(null);
+  const [aiInput, setAiInput] = useState('');
+  const [aiMsgs, setAiMsgs] = useState([]);
+
   useEffect(() => {
     localStorage.setItem('eh_lang', lang);
   }, [lang]);
@@ -124,7 +130,6 @@ export default function Controls() {
   useEffect(() => {
     (async () => {
       try {
-        // Seed DB if empty
         const { data: health } = await api.get('/api/controls/health');
         if (!health.ok) throw new Error('Health check failed');
         const { data: taskCount } = await api.get('/api/controls/tasks?limit=1');
@@ -132,16 +137,18 @@ export default function Controls() {
           await api.get('/api/controls/init-from-pdf');
         }
 
-        // Suggests
         const s = await api.get('/api/controls/suggests');
         setSuggests(s.data || {});
-      } catch { /* ignore */ }
+      } catch (e) {
+        console.error('Init error:', e);
+      }
     })();
   }, []);
 
   const loadEntities = async () => {
     const params = new URLSearchParams();
     if (filter.building) params.set('building', filter.building);
+    if (filter.switchboard) params.set('switchboard', filter.switchboard);
     if (filter.q) params.set('q', filter.q);
     setLoading(true);
     try {
@@ -188,7 +195,25 @@ export default function Controls() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter.building, filter.status]);
 
-  // ---------- Derived ----------
+  // AI Actions
+  const aiAsk = async () => {
+    if (!aiInput.trim() || !aiTask) return;
+    console.log('Ask AI clicked for task:', aiTask.id);
+    const msg = aiInput.trim();
+    setAiMsgs((m) => [...m, { role: 'user', content: msg }]);
+    setAiInput('');
+    try {
+      const r = await api.post('/api/controls/ai/assistant', { query: msg, lang, context: { filter }, task_id: aiTask.id });
+      const content = r.data?.response || '—';
+      setAiMsgs((m) => [...m, { role: 'assistant', content }]);
+      setAiOpen(true);
+    } catch (e) {
+      console.error('AI request failed:', e);
+      setAiMsgs((m) => [...m, { role: 'assistant', content: 'AI unavailable.' }]);
+    }
+  };
+
+  // Derived
   const groupedByBuilding = useMemo(() => {
     const map = {};
     for (const t of tasks) {
@@ -199,28 +224,7 @@ export default function Controls() {
     return map;
   }, [tasks]);
 
-  // ---------- AI Modal ----------
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiTask, setAiTask] = useState(null);
-  const [aiInput, setAiInput] = useState('');
-  const [aiMsgs, setAiMsgs] = useState([]);
-
-  const aiAsk = async () => {
-    if (!aiInput.trim() || !aiTask) return;
-    const msg = aiInput.trim();
-    setAiMsgs((m) => [...m, { role: 'user', content: msg }]);
-    setAiInput('');
-    try {
-      const r = await api.post('/api/controls/ai/assistant', { query: msg, lang, context: { filter }, task_id: aiTask.id });
-      const content = r.data?.response || '—';
-      setAiMsgs((m) => [...m, { role: 'assistant', content }]);
-      setAiOpen(true);
-    } catch (e) {
-      setAiMsgs((m) => [...m, { role: 'assistant', content: 'AI unavailable.' }]);
-    }
-  };
-
-  // ---------- Charts data ----------
+  // Charts data
   const doughnutData = useMemo(() => {
     const s = analytics?.stats || {};
     return {
@@ -249,7 +253,6 @@ export default function Controls() {
     return { labels: months, datasets: [{ label: 'Due tasks per month', data: counts }] };
   }, [tasks]);
 
-  // ---------- Render ----------
   return (
     <section className="container-narrow py-8 bg-white">
       <div className="flex items-start justify-between mb-6">
@@ -268,7 +271,6 @@ export default function Controls() {
         </div>
       </div>
 
-      {/* Filters */}
       <div className="card p-4 mb-4 bg-white">
         <div className="grid sm:grid-cols-5 gap-3">
           <div className="sm:col-span-2">
@@ -281,6 +283,12 @@ export default function Controls() {
             placeholder="Filter by building"
           />
           <Select
+            value={filter.switchboard}
+            onChange={(v) => setFilter({ ...filter, switchboard: v })}
+            options={suggests.switchboard || []}
+            placeholder="Filter by switchboard"
+          />
+          <Select
             value={filter.status}
             onChange={(v) => setFilter({ ...filter, status: v })}
             options={['Planned', 'Due', 'Overdue', 'Done', 'Compliant', 'Non-compliant']}
@@ -288,24 +296,21 @@ export default function Controls() {
           />
           <div className="flex gap-2">
             <button className="btn w-full bg-gray-200 text-black border-gray-300" onClick={() => { loadEntities(); loadTasks(); loadAnalytics(); loadGantt(); }}>Apply</button>
-            <button className="btn-secondary w-full bg-white text-gray-700 border-gray-300" onClick={() => setFilter({ q: '', building: '', module: '', status: '' })}>Reset</button>
+            <button className="btn-secondary w-full bg-white text-gray-700 border-gray-300" onClick={() => setFilter({ q: '', building: '', switchboard: '', status: '' })}>Reset</button>
           </div>
         </div>
       </div>
 
-      {/* Tabs */}
       <div className="flex items-center gap-2 mb-4">
         <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>Overview</TabButton>
         <TabButton active={tab === 'roadmap'} onClick={() => setTab('roadmap')}>Roadmap</TabButton>
         <TabButton active={tab === 'analysis'} onClick={() => setTab('analysis')}>Analysis</TabButton>
       </div>
 
-      {/* Content */}
       {tab === 'overview' && (
         <div className="space-y-4">
           {loading && <div className="text-sm text-gray-500">Loading…</div>}
 
-          {/* Task groups by building */}
           {Object.keys(groupedByBuilding).length === 0 && !loading && (
             <div className="text-sm text-gray-500">No tasks yet. Initializing from PDF…</div>
           )}
@@ -320,7 +325,8 @@ export default function Controls() {
                 <table className="w-full text-sm text-black">
                   <thead>
                     <tr className="text-left text-gray-600 border-b">
-                      <th className="py-2 pr-2">Entity</th>
+                      <th className="py-2 pr-2">Switchboard</th>
+                      <th className="py-2 pr-2">Device</th>
                       <th className="py-2 pr-2">Task</th>
                       <th className="py-2 pr-2">Freq</th>
                       <th className="py-2 pr-2">Last</th>
@@ -332,7 +338,8 @@ export default function Controls() {
                   <tbody>
                     {list.map(t => (
                       <tr key={t.id} className="border-b last:border-b-0">
-                        <td className="py-2 pr-2 whitespace-nowrap">{t.entity_name || '—'} <span className="text-gray-400">({t.room || '—'})</span></td>
+                        <td className="py-2 pr-2 whitespace-nowrap">{t.switchboard_name || '—'}</td>
+                        <td className="py-2 pr-2">{t.device_name || '—'}</td>
                         <td className="py-2 pr-2">{t.task_name}</td>
                         <td className="py-2 pr-2">
                           {t.frequency_months_max ? `${t.frequency_months_min || '—'}–${t.frequency_months_max} mo` : (t.frequency_months ? `${t.frequency_months} mo` : '—')}
@@ -343,9 +350,7 @@ export default function Controls() {
                           <Badge color={statusColor(t.status)}>{t.status || 'Planned'}</Badge>
                         </td>
                         <td className="py-2 pr-2">
-                          <div className="flex gap-2">
-                            <button className="btn-xs bg-gray-200 text-black border-gray-300" onClick={() => setAiTask(t)}>Ask AI</button>
-                          </div>
+                          <button className="btn-xs bg-gray-200 text-black border-gray-300" onClick={() => { setAiTask(t); setAiOpen(true); }}>Ask AI</button>
                         </td>
                       </tr>
                     ))}
@@ -355,14 +360,13 @@ export default function Controls() {
             </SectionCard>
           ))}
 
-          {/* Entities quick view */}
           <SectionCard title="Entities">
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {entities.map(e => (
                 <div key={e.id} className="border rounded p-3 bg-white">
                   <div className="font-medium text-black">{e.name}</div>
-                  <div className="text-xs text-gray-600">{e.equipment_type || '—'} · {e.equipment_ref || '—'}</div>
-                  <div className="text-xs text-gray-500 mt-1">Bldg {e.building || '—'} · Room {e.room || '—'}</div>
+                  <div className="text-xs text-gray-600">{e.equipment_type || '—'}</div>
+                  <div className="text-xs text-gray-500 mt-1">Bldg {e.building || '—'}</div>
                 </div>
               ))}
             </div>
@@ -412,7 +416,6 @@ export default function Controls() {
         </div>
       )}
 
-      {/* AI Modal */}
       {aiOpen && aiTask && (
         <div className="modal">
           <div className="modal-card max-w-2xl bg-white">
@@ -446,7 +449,6 @@ export default function Controls() {
 .btn { @apply inline-flex items-center px-3 py-2 rounded-md bg-gray-200 text-black border-gray-300 hover:bg-gray-300; }
 .btn-secondary { @apply inline-flex items-center px-3 py-2 rounded-md border text-sm text-gray-700 bg-white border-gray-300 hover:bg-gray-50; }
 .btn-xs { @apply inline-flex items-center px-2 py-1 rounded border text-xs text-black bg-gray-200 border-gray-300; }
-.btn-xs-secondary { @apply inline-flex items-center px-2 py-1 rounded border text-xs text-gray-700 bg-white border-gray-300; }
 .card { @apply border rounded-md bg-white; }
 .modal { @apply fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50; }
 .modal-card { @apply bg-white w-full max-w-2xl rounded-md border shadow; }
