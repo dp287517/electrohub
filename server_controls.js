@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import pg from 'pg';
 import OpenAI from 'openai';
+import pdfParse from 'pdf-parse'; // Ajouté pour parser le PDF
 
 dotenv.config();
 
@@ -52,7 +53,6 @@ function addMonths(dateStr, months) {
   if (isNaN(d)) return null;
   const day = d.getDate();
   d.setMonth(d.getMonth() + Number(months));
-  // correct month rollover
   if (d.getDate() < day) d.setDate(0);
   return toISODate(d);
 }
@@ -74,7 +74,7 @@ function bool(v) {
 function computeNextControl({ last_control, frequency_months, frequency_months_min, frequency_months_max }) {
   const base = last_control || todayISO();
   const months = clampInt(frequency_months_max, null) ?? clampInt(frequency_months, null) ?? clampInt(frequency_months_min, null);
-  return months ? addMonths(base, months) : todayISO(); // Fallback to today if null to avoid errors
+  return months ? addMonths(base, months) : todayISO(); // Fallback to today
 }
 
 /** ---------------- Schema ---------------- */
@@ -526,8 +526,8 @@ app.get('/api/controls/gantt-data', async (req, res) => {
       id: String(r.id),
       name: `${r.entity_name || 'Entity'} · ${r.task_name}`,
       building: r.building || '—',
-      start: r.last_control || todayISO(), // Fallback
-      end: r.next_control || addMonths(todayISO(), 12), // Fallback
+      start: r.last_control || todayISO(),
+      end: r.next_control || addMonths(todayISO(), 12),
       progress: r.last_control ? 100 : 0
     }));
     res.json({ tasks });
@@ -580,7 +580,7 @@ app.post('/api/controls/ai/analyze', upload.array('photos', 8), async (req, res)
   try {
     if (!openai) return res.status(501).json({ error: 'AI not configured' });
     const lang = (req.body?.lang || 'en').toString();
-    const taskId = clampInt(req.body.task_id); // Pour contexte historique
+    const taskId = clampInt(req.body.task_id);
     const instructions = `You are a maintenance QA assistant. Extract clear, structured inspection results from photos. 
 - Language: ${lang}
 - Output a JSON object with keys: status ("Compliant"|"Non-compliant"|"To review"), observations (array of strings), measurements (object of key->value), risks (array), hints (array). Keep it concise.`;
@@ -601,14 +601,15 @@ app.post('/api/controls/ai/analyze', upload.array('photos', 8), async (req, res)
       parsed = JSON.parse(resp.choices?.[0]?.message?.content || '{}');
     } catch { parsed = { raw: resp.choices?.[0]?.message?.content || '' }; }
 
-    // Ajouter historique si taskId
     if (taskId) {
       const history = (await pool.query(`SELECT ai_result FROM controls_records WHERE task_id = $1 ORDER BY performed_at DESC LIMIT 5`, [taskId])).rows.map(r => r.ai_result);
-      parsed.history = history; // Pour contexte futur
+      parsed.history = history;
     }
 
     res.json({ ok: true, result: parsed });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/controls/ai/assistant', async (req, res) => {
@@ -621,7 +622,6 @@ app.post('/api/controls/ai/assistant', async (req, res) => {
 - If the task has a periodicity range (e.g., 3–8 years) ALWAYS plan the next date using the longest interval.
 - If no equipment is linked, help the user link the task to a building/zone.`;
 
-    // Ajouter contexte historique si task_id
     let extraContext = '';
     if (task_id) {
       const task = (await pool.query(`SELECT ai_notes FROM controls_tasks WHERE id = $1`, [task_id])).rows[0];
@@ -640,9 +640,6 @@ app.post('/api/controls/ai/assistant', async (req, res) => {
 });
 
 /** ---------------- Seed helpers ---------------- */
-/** Accept a JSON payload of tasks or (optional) a PDF text that was pre-parsed on the client.
- *  The important rule is enforced: for ranges, we store min/max and compute next_control with the max.
- */
 app.post('/api/controls/seed', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -680,34 +677,87 @@ app.post('/api/controls/seed', async (req, res) => {
       createdTasks.push(out.rows[0]);
     }
     res.json({ ok: true, entities: createdEntities.length, tasks: createdTasks.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /** New endpoint for auto-seed from PDF */
 app.get('/api/controls/init-from-pdf', async (req, res) => {
   try {
     const site = siteOf(req);
-    // Parse PDF text (simulé ici basé sur browsed pages; en prod, use PDF parser library like pdf-parse)
-    // Extrait des pages 1-3: types d'équipements du TOC
-    const pdfText = ` // Coller ici le text extrait des pages browsées
-Table of Contents ... 3.2.1 Earthing Systems ... frequency example: 3-8 years -> min 3 max 8
-    `; // Remplacer par real parse
 
-    // Parse simple: extraire equipments et freq
-    const equipments = [
-      { type: 'Earthing Systems', freq_min: 3, freq_max: 8, procedure: 'Visual check, resistance test', hazards: 'Shock risk', ppe: 'Gloves', tools: 'Multimeter', schema: [{key: 'Resistance', type: 'number'}] },
-      // Ajouter plus en parsant plus de pages (ex. call browse for 6-9 etc.)
-      // Ex: High Voltage Switchgear: freq 1-3 ans, etc.
-    ];
+    // Lire et parser le PDF (simulé ici, à adapter avec vrai chemin)
+    const pdfPath = 'G2.1 Maintenance, Inspection and Testing of Electrical Equipment TSD (1).pdf'; // Ajuster chemin réel
+    const pdfBuffer = await require('fs').promises.readFile(pdfPath); // Nécessite fs
+    const pdfData = await pdfParse(pdfBuffer);
+    const pdfText = pdfData.text;
 
-    const entities = equipments.map(e => ({ name: e.type, equipment_type: e.type, building: 'Default Bldg' })); // Auto create entities
-    const tasks = equipments.map((e, i) => ({ entity_id: i + 1, task_name: `Maintain ${e.type}`, frequency_months_min: e.freq_min, frequency_months_max: e.freq_max, procedure_md: e.procedure, hazards_md: e.hazards, ppe_md: e.ppe, tools_md: e.tools, result_schema: e.schema }));
+    // Parse basique : extraire équipements et fréquences du TOC
+    const equipments = [];
+    const lines = pdfText.split('\n');
+    for (const line of lines) {
+      if (line.includes('3.2.')) {
+        const match = line.match(/3\.2\.(\d+)\s+([A-Za-z\s]+)\s*\(?(\d+-\d+\s*years)?\)?/);
+        if (match) {
+          const [, section, name, freqRange] = match;
+          let freqMin = null, freqMax = null;
+          if (freqRange) {
+            const [min, max] = freqRange.split('-').map(n => parseInt(n));
+            freqMin = min; freqMax = max; // Toujours prendre max
+          }
+          equipments.push({ type: name.trim(), freq_min: freqMin, freq_max: freqMax });
+        }
+      }
+    }
 
-    // Seed
-    await app.post('/api/controls/seed', { body: { entities, tasks, site } }); // Call internal
+    // Générer entities et tasks
+    const entities = equipments.map((e, i) => ({
+      name: e.type,
+      equipment_type: e.type,
+      building: `Bldg-${i + 1}`,
+      site
+    }));
+    const tasks = equipments.map((e, i) => ({
+      entity_id: i + 1,
+      task_name: `Maintain ${e.type}`,
+      frequency_months_min: e.freq_min,
+      frequency_months_max: e.freq_max,
+      procedure_md: `Step-by-step for ${e.type}`,
+      hazards_md: `Risks for ${e.type}`,
+      ppe_md: `PPE for ${e.type}`,
+      tools_md: `Tools for ${e.type}`,
+      result_schema: [{ key: 'Status', type: 'text' }]
+    }));
 
-    res.json({ ok: true, seeded: equipments.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    // Seed directement dans la DB
+    const createdEntities = [];
+    for (const e of entities) {
+      const out = await pool.query(`
+        INSERT INTO controls_entities (site, name, equipment_type, building)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT DO NOTHING
+        RETURNING *
+      `, [e.site, e.name, e.equipment_type, e.building]);
+      if (out.rows[0]) createdEntities.push(out.rows[0]);
+    }
+
+    const createdTasks = [];
+    for (const t of tasks) {
+      const next = computeNextControl({ frequency_months_min: t.frequency_months_min, frequency_months_max: t.frequency_months_max });
+      const out = await pool.query(`
+        INSERT INTO controls_tasks (site, entity_id, task_name, frequency_months_min, frequency_months_max, next_control, procedure_md, hazards_md, ppe_md, tools_md, result_schema)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING *
+      `, [site, t.entity_id, t.task_name, t.frequency_months_min, t.frequency_months_max, next, t.procedure_md, t.hazards_md, t.ppe_md, t.tools_md, JSON.stringify(t.result_schema)]);
+      if (out.rows[0]) createdTasks.push(out.rows[0]);
+    }
+
+    res.json({ ok: true, entities: createdEntities.length, tasks: createdTasks.length });
+  } catch (e) {
+    console.error('Init from PDF error:', e); // Log pour debug
+    res.status(500).json({ error: e.message });
+  }
 });
 
 /** ---------------- Start ---------------- */
