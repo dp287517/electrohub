@@ -45,6 +45,7 @@
     "react-google-charts": "^4.0.1",
     "pdfjs-dist": "^4.7.21",
     "gantt-task-react": "^0.3.8",
+    "csv-stringify": "^6.5.0",
     "cors": "^2.8.5"
   },
   "devDependencies": {
