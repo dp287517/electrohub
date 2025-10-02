@@ -15,7 +15,7 @@ app.use(helmet());
 app.use(express.json({ limit: "20mb" }));
 app.use(cookieParser());
 
-// CORS (utile en local ; derrière le proxy en prod)
+// CORS (utile en local ; derrière proxy en prod)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
@@ -25,7 +25,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Site par défaut si X-Site manquant (évite les listes vides)
+// Site par défaut si X-Site manquant (évite listes vides au refresh)
 const DEFAULT_SITE = process.env.OIBT_DEFAULT_SITE || "Nyon";
 function siteOf(req) {
   return (
@@ -34,7 +34,7 @@ function siteOf(req) {
   );
 }
 
-// Upload en mémoire (stockage DB en BYTEA)
+// Upload en mémoire (stockage DB BYTEA)
 const upload = multer({ storage: multer.memoryStorage() });
 
 /* ------------------------------------------------------------------ */
@@ -74,6 +74,8 @@ async function ensureSchema() {
       confirmation_filename TEXT,
       confirmation_mime TEXT,
 
+      -- flags
+      report_received BOOLEAN DEFAULT FALSE,
       defect_report_received BOOLEAN DEFAULT FALSE,
       confirmation_received BOOLEAN DEFAULT FALSE,
 
@@ -84,7 +86,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_oibt_periodics_building ON oibt_periodics(building);
   `);
 
-  // Table des pièces jointes par action de PROJET
+  // Pièces jointes par action de PROJET (avis/protocole/rapport/reception)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS oibt_project_files (
       id SERIAL PRIMARY KEY,
@@ -100,7 +102,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_oibt_projfiles_site ON oibt_project_files(site);
   `);
 
-  // Sécuriser l'existence des colonnes (auto-migration légère)
+  // Auto-migration douce si tables déjà existantes
   await pool.query(`
     ALTER TABLE oibt_periodics
       ADD COLUMN IF NOT EXISTS report_url TEXT,
@@ -113,6 +115,7 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS confirmation_file BYTEA,
       ADD COLUMN IF NOT EXISTS confirmation_filename TEXT,
       ADD COLUMN IF NOT EXISTS confirmation_mime TEXT,
+      ADD COLUMN IF NOT EXISTS report_received BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS defect_report_received BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS confirmation_received BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
@@ -224,7 +227,7 @@ app.put("/api/oibt/projects/:id", async (req, res) => {
     const receptionIdx = next.findIndex(a => (a.key === "reception") || a.name === "Contrôle de réception");
 
     if (prevRapport && nextRapport && !prevRapport.done && nextRapport.done) {
-      // Si on a déjà la ligne "réception" mais sans due -> calcule +6 mois
+      // Si "réception" existe mais sans due -> calcule +6 mois
       if (receptionIdx >= 0) {
         const current = next[receptionIdx] || {};
         if (!current.due) {
@@ -323,7 +326,7 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
 /* ------------------------------------------------------------------ */
 /*                              PERIODICS                             */
 /* ------------------------------------------------------------------ */
-// LIST (tolérant ancien champ report_url et nouveaux fichiers)
+// LIST (tolérant ancien champ report_url et nouveaux fichiers + flags)
 app.get("/api/oibt/periodics", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -331,14 +334,14 @@ app.get("/api/oibt/periodics", async (req, res) => {
 
     const { rows } = await pool.query(
       q
-        ? `SELECT id, site, building, defect_report_received, confirmation_received, created_at, updated_at,
+        ? `SELECT id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
                  (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
                  (defect_filename IS NOT NULL) AS has_defect,
                  (confirmation_filename IS NOT NULL) AS has_confirmation
            FROM oibt_periodics
            WHERE site=$1 AND LOWER(building) LIKE $2
            ORDER BY created_at DESC`
-        : `SELECT id, site, building, defect_report_received, confirmation_received, created_at, updated_at,
+        : `SELECT id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
                  (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
                  (defect_filename IS NOT NULL) AS has_defect,
                  (confirmation_filename IS NOT NULL) AS has_confirmation
@@ -364,7 +367,7 @@ app.post("/api/oibt/periodics", async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO oibt_periodics (site, building) VALUES ($1,$2) RETURNING
-        id, site, building, defect_report_received, confirmation_received, created_at, updated_at,
+        id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
         false AS has_report, false AS has_defect, false AS has_confirmation`,
       [site, building]
     );
@@ -375,24 +378,25 @@ app.post("/api/oibt/periodics", async (req, res) => {
   }
 });
 
-// UPDATE (flags défaut/confirmation)
+// UPDATE (report_received / defect_report_received / confirmation_received)
 app.put("/api/oibt/periodics/:id", async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
-    const { defect_report_received, confirmation_received } = req.body;
+    const { report_received, defect_report_received, confirmation_received } = req.body;
 
     const { rows } = await pool.query(
       `UPDATE oibt_periodics
-       SET defect_report_received = COALESCE($1, defect_report_received),
-           confirmation_received = COALESCE($2, confirmation_received),
+       SET report_received = COALESCE($1, report_received),
+           defect_report_received = COALESCE($2, defect_report_received),
+           confirmation_received = COALESCE($3, confirmation_received),
            updated_at = NOW()
-       WHERE id=$3 AND site=$4
-       RETURNING id, site, building, defect_report_received, confirmation_received, created_at, updated_at,
+       WHERE id=$4 AND site=$5
+       RETURNING id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
          (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
          (defect_filename IS NOT NULL) AS has_defect,
          (confirmation_filename IS NOT NULL) AS has_confirmation`,
-      [defect_report_received, confirmation_received, id, site]
+      [report_received, defect_report_received, confirmation_received, id, site]
     );
     if (!rows.length) return res.status(404).json({ error: "Not found" });
     res.json(rows[0]);
@@ -428,7 +432,7 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
     if (!req.file) return res.status(400).json({ error: "No file" });
 
     const setCols = {
-      report: "report_file=$1, report_filename=$2, report_mime=$3",
+      report: "report_file=$1, report_filename=$2, report_mime=$3, report_received=TRUE",
       defect: "defect_file=$1, defect_filename=$2, defect_mime=$3, defect_report_received=TRUE",
       confirmation: "confirmation_file=$1, confirmation_filename=$2, confirmation_mime=$3, confirmation_received=TRUE",
     }[type];
@@ -437,7 +441,7 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
       `UPDATE oibt_periodics
        SET ${setCols}, updated_at=NOW()
        WHERE id=$4 AND site=$5
-       RETURNING id, site, building, defect_report_received, confirmation_received, created_at, updated_at,
+       RETURNING id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
          (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
          (defect_filename IS NOT NULL) AS has_defect,
          (confirmation_filename IS NOT NULL) AS has_confirmation`,
