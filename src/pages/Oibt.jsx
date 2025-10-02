@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
-  Folder, FileText, CalendarClock, Upload, Download, Trash2, BarChart3, AlertTriangle, CheckCircle2, XCircle
+  Folder, FileText, CalendarClock, Upload, Download, Trash2, BarChart3,
+  AlertTriangle, CheckCircle2, XCircle
 } from "lucide-react";
 
 /* ----------------------------- UI HELPERS ----------------------------- */
@@ -58,6 +59,64 @@ const ConfirmModal = ({ open, title, message, onConfirm, onCancel }) => {
     </div>
   );
 };
+
+/* --------------------------- RESPONSIVE TABS --------------------------- */
+function Tabs({ tabs, active, onChange }) {
+  // clavier: flèche gauche/droite
+  const onKeyDown = useCallback(
+    (e) => {
+      const idx = tabs.findIndex(t => t.id === active);
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        const next = tabs[(idx + 1) % tabs.length];
+        onChange(next.id);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        const prev = tabs[(idx - 1 + tabs.length) % tabs.length];
+        onChange(prev.id);
+      }
+    },
+    [active, onChange, tabs]
+  );
+
+  return (
+    <div className="relative -mx-4 px-4 md:mx-0 md:px-0">
+      <div
+        role="tablist"
+        aria-label="Onglets OIBT"
+        className="mb-6 flex gap-2 overflow-x-auto border-b pb-1"
+        onKeyDown={onKeyDown}
+        style={{ scrollSnapType: "x mandatory" }}
+      >
+        {tabs.map(t => {
+          const isActive = active === t.id;
+          return (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={isActive}
+              aria-controls={`panel-${t.id}`}
+              onClick={() => onChange(t.id)}
+              className={`px-4 py-2 -mb-px border-b-2 min-w-max scroll-snap-align-start ${
+                isActive ? "border-blue-600 text-blue-600" : "border-transparent text-gray-600"
+              }`}
+              title={t.label}
+            >
+              <span className="inline-flex items-center gap-2">
+                {t.icon}{t.label}
+                {"count" in t ? (
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${isActive ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}>
+                    {t.count}
+                  </span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /* ------------------------------ PAGE OIBT ------------------------------ */
 export default function Oibt() {
@@ -116,7 +175,7 @@ export default function Oibt() {
     return Math.round((flags.reduce((a, b) => a + b, 0) / 3) * 100);
   };
 
-  /* ---------------------------- PROJECT ACTIONS --------------------------- */
+  /* ------------------------------ ACTIONS ------------------------------ */
   async function createProject() {
     if (!title.trim()) return;
     try {
@@ -152,7 +211,6 @@ export default function Oibt() {
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
-  /* --------------------------- PERIODIC ACTIONS --------------------------- */
   async function addPeriodic() {
     if (!building.trim()) return;
     try {
@@ -233,11 +291,12 @@ export default function Oibt() {
             if (days <= 30) out.periodic.push({ level: "info", text: `Périodique « ${c.building} » — correction à effectuer sous ${days} jours (jalon 3 mois).` });
           }
         }
-        // Optionnel: on pourrait aussi alerter si confirmation trop tard… (à adapter si besoin)
       }
     }
     return out;
   }, [projects, periodics]);
+
+  const hasAnyAlert = (alerts.project.length + alerts.periodic.length) > 0;
 
   const AlertBanner = ({ item }) => {
     const color =
@@ -257,6 +316,12 @@ export default function Oibt() {
   };
 
   /* -------------------------------- RENDER ------------------------------- */
+  const TABS = [
+    { id: "projects", label: "Projets", icon: null, count: filteredProjects.length },
+    { id: "periodics", label: "Périodiques", icon: null, count: filteredPeriodics.length },
+    { id: "analysis", label: "Analysis", icon: null },
+  ];
+
   return (
     <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
       <header className="mb-4">
@@ -266,226 +331,246 @@ export default function Oibt() {
         <p className="text-gray-600">Avis d’installation, protocoles, rapports de sécurité, contrôle de réception et contrôles périodiques.</p>
       </header>
 
-      {/* Alertes globales (projets + périodiques) */}
-      {(alerts.project.length > 0 || alerts.periodic.length > 0) && (
-        <div className="mb-6 grid gap-2">
-          {alerts.project.map((a, i) => <AlertBanner key={`pa-${i}`} item={a} />)}
-          {alerts.periodic.map((a, i) => <AlertBanner key={`pe-${i}`} item={a} />)}
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="mb-6 flex gap-2 border-b">
-        {[
-          { id: "projects", label: "Projets" },
-          { id: "periodics", label: "Périodiques" },
-          { id: "analysis", label: "Analysis" },
-        ].map(t => (
-          <button key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2 -mb-px border-b-2 ${tab===t.id ? "border-blue-600 text-blue-600" : "border-transparent text-gray-600"}`}>
-            {t.label}
-          </button>
-        ))}
+      {/* Statut global */}
+      <div className="mb-4">
+        {hasAnyAlert ? (
+          <div className="grid gap-2">
+            {alerts.project.map((a, i) => <AlertBanner key={`pa-${i}`} item={a} />)}
+            {alerts.periodic.map((a, i) => <AlertBanner key={`pe-${i}`} item={a} />)}
+          </div>
+        ) : (
+          <div className="px-3 py-2 rounded border bg-emerald-100 text-emerald-800 border-emerald-200 flex items-center gap-2">
+            <CheckCircle2 size={16} /> <span className="text-sm">Aucune alerte en cours — tout est OK ✅</span>
+          </div>
+        )}
       </div>
 
+      {/* Onglets responsives */}
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+
       {/* ------------------------------ PROJETS ------------------------------ */}
-      {tab === "projects" && (
-        <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200 mb-8">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2"><Folder /> Projets</h2>
-            <div className="flex gap-2">
-              <input value={qProj} onChange={e => setQProj(e.target.value)} placeholder="Filtrer par titre…" className={clsInput()} style={{ maxWidth: 280 }} />
-              <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
+      <div
+        id="panel-projects"
+        role="tabpanel"
+        aria-labelledby="projects"
+        hidden={tab !== "projects"}
+      >
+        {tab === "projects" && (
+          <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200 mb-8">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2"><Folder /> Projets</h2>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <input value={qProj} onChange={e => setQProj(e.target.value)} placeholder="Filtrer par titre…" className={clsInput()} />
+                <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
+              </div>
+            </div>
+
+            <div className="mt-4 flex gap-2 flex-col sm:flex-row">
+              <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Titre du projet" className={clsInput()} />
+              <button onClick={createProject} className={btnPrimary()}>Créer</button>
+            </div>
+
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              {filteredProjects.map(p => {
+                const progress = projectProgress(p);
+                const reception = (p.status || []).find(a => (a.key==="reception") || a.name==="Contrôle de réception");
+                const late = (() => {
+                  if (!reception?.due || reception.done) return false;
+                  const [d,m,y] = reception.due.split("/").map(Number);
+                  const due = new Date(y, m-1, d);
+                  return due < new Date();
+                })();
+                return (
+                  <div key={p.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Folder className="text-indigo-500" />
+                        <h3 className="font-medium text-gray-900">{p.title}</h3>
+                      </div>
+                      <button onClick={() => setConfirm({ open: true, id: p.id })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
+                    </div>
+
+                    <div className="mt-3">
+                      <Progress value={progress} />
+                      <div className="mt-1 text-xs text-gray-600">{progress}%</div>
+                      {reception?.due && !reception.done && (
+                        <div className={`mt-1 text-xs flex items-center gap-1 ${late ? "text-red-600" : "text-gray-600"}`}>
+                          <CalendarClock size={14} /> Réception avant le {reception.due} {late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
+                        </div>
+                      )}
+                    </div>
+
+                    <ul className="mt-3 space-y-3">
+                      {(p.status || []).map((a, i) => {
+                        const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : "reception");
+                        const hasFile = !!p.attachments?.[key];
+                        return (
+                          <li key={i} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
+                            <div className="flex items-center justify-between gap-3">
+                              <label className="flex items-center gap-2 text-sm text-gray-900">
+                                <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
+                                <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
+                                {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
+                              </label>
+                              <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} />
+                            </div>
+
+                            <div className="mt-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                              <input
+                                type="file"
+                                onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
+                                className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
+                                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                              />
+                              {hasFile && (
+                                <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
+                                   className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                                  <Download size={16} /> Télécharger
+                                </a>
+                              )}
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                );
+              })}
+              {filteredProjects.length === 0 && (
+                <div className="text-sm text-gray-600">Aucun projet.</div>
+              )}
             </div>
           </div>
-
-          <div className="mt-4 flex gap-2">
-            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Titre du projet" className={clsInput()} />
-            <button onClick={createProject} className={btnPrimary()}>Créer</button>
-          </div>
-
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            {filteredProjects.map(p => {
-              const progress = projectProgress(p);
-              const reception = (p.status || []).find(a => (a.key==="reception") || a.name==="Contrôle de réception");
-              const late = (() => {
-                if (!reception?.due || reception.done) return false;
-                const [d,m,y] = reception.due.split("/").map(Number);
-                const due = new Date(y, m-1, d);
-                return due < new Date();
-              })();
-              return (
-                <div key={p.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Folder className="text-indigo-500" />
-                      <h3 className="font-medium text-gray-900">{p.title}</h3>
-                    </div>
-                    <button onClick={() => setConfirm({ open: true, id: p.id })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
-                  </div>
-
-                  <div className="mt-3">
-                    <Progress value={progress} />
-                    <div className="mt-1 text-xs text-gray-600">{progress}%</div>
-                    {reception?.due && !reception.done && (
-                      <div className={`mt-1 text-xs flex items-center gap-1 ${late ? "text-red-600" : "text-gray-600"}`}>
-                        <CalendarClock size={14} /> Réception avant le {reception.due} {late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
-                      </div>
-                    )}
-                  </div>
-
-                  <ul className="mt-3 space-y-3">
-                    {(p.status || []).map((a, i) => {
-                      const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : "reception");
-                      const hasFile = !!p.attachments?.[key];
-                      return (
-                        <li key={i} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
-                          <div className="flex items-center justify-between gap-3">
-                            <label className="flex items-center gap-2 text-sm text-gray-900">
-                              <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
-                              <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
-                              {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
-                            </label>
-                            <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} />
-                          </div>
-
-                          <div className="mt-2 flex items-center gap-3">
-                            <input
-                              type="file"
-                              onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
-                              className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                            />
-                            {hasFile && (
-                              <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
-                                 className="text-sm text-blue-600 hover:underline flex items-center gap-1">
-                                <Download size={16} /> Télécharger
-                              </a>
-                            )}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              );
-            })}
-            {filteredProjects.length === 0 && (
-              <div className="text-sm text-gray-600">Aucun projet.</div>
-            )}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ---------------------------- PÉRIODIQUES ---------------------------- */}
-      {tab === "periodics" && (
-        <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2"><FileText /> Contrôles périodiques</h2>
-            <div className="flex gap-2">
-              <input value={qBuild} onChange={e => setQBuild(e.target.value)} placeholder="Filtrer par bâtiment…" className={clsInput()} style={{ maxWidth: 280 }} />
-              <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
+      <div
+        id="panel-periodics"
+        role="tabpanel"
+        aria-labelledby="periodics"
+        hidden={tab !== "periodics"}
+      >
+        {tab === "periodics" && (
+          <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2"><FileText /> Contrôles périodiques</h2>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <input value={qBuild} onChange={e => setQBuild(e.target.value)} placeholder="Filtrer par bâtiment…" className={clsInput()} />
+                <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <input value={building} onChange={e => setBuilding(e.target.value)} placeholder="Nom du bâtiment" className={clsInput()} />
+              <input type="file" onChange={e => setFileReport(e.target.files?.[0] || null)}
+                     className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
+                     accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+              <button onClick={addPeriodic} className={btnPrimary()}>Ajouter</button>
+            </div>
+
+            <div className="mt-4 grid gap-4">
+              {filteredPeriodics.map(c => {
+                const progress = periodicProgress(c);
+                return (
+                  <div key={c.id} className="p-4 rounded-xl border border-gray-200 bg-white">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-gray-900">{c.building}</div>
+                        <div className="mt-2">
+                          <Progress value={progress} />
+                          <div className="mt-1 text-xs text-gray-600">{progress}%</div>
+                        </div>
+                      </div>
+                      <button onClick={() => setConfirm({ open: true, id: `per-${c.id}` })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
+                    </div>
+
+                    <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                      {/* Rapport de contrôle périodique */}
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-gray-900">Rapport de contrôle périodique</div>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                          <label className="flex items-center gap-2 text-sm text-gray-900">
+                            <input type="checkbox" checked={!!c.report_received} onChange={() => togglePeriodic(c, "report")} />
+                            Reçu
+                          </label>
+                          <input type="file" onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
+                                 className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
+                                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+                          <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} />
+                          {c.has_report && (
+                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
+                              <Download size={16}/> Télécharger
+                            </a>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Élimination des défauts */}
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-gray-900">Élimination des défauts</div>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                          <label className="flex items-center gap-2 text-sm text-gray-900">
+                            <input type="checkbox" checked={!!c.defect_report_received} onChange={() => togglePeriodic(c, "defect")} />
+                            Reçus
+                          </label>
+                          <input type="file" onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
+                                 className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
+                                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+                          <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} />
+                          {c.has_defect && (
+                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
+                              <Download size={16}/> Télécharger
+                            </a>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Confirmation */}
+                      <div className="space-y-2">
+                        <div className="text-sm font-medium text-gray-900">Confirmation</div>
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                          <label className="flex items-center gap-2 text-sm text-gray-900">
+                            <input type="checkbox" checked={!!c.confirmation_received} onChange={() => togglePeriodic(c, "confirm")} />
+                            Reçue
+                          </label>
+                          <input type="file" onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
+                                 className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
+                                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+                          <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} />
+                          {c.has_confirmation && (
+                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
+                              <Download size={16}/> Télécharger
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {filteredPeriodics.length === 0 && <div className="text-sm text-gray-600">Aucun contrôle périodique.</div>}
             </div>
           </div>
-
-          <div className="mt-3 grid gap-3 sm:grid-cols-3">
-            <input value={building} onChange={e => setBuilding(e.target.value)} placeholder="Nom du bâtiment" className={clsInput()} />
-            <input type="file" onChange={e => setFileReport(e.target.files?.[0] || null)}
-                   className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-            <button onClick={addPeriodic} className={btnPrimary()}>Ajouter</button>
-          </div>
-
-          <div className="mt-4 grid gap-4">
-            {filteredPeriodics.map(c => {
-              const progress = periodicProgress(c);
-              return (
-                <div key={c.id} className="p-4 rounded-xl border border-gray-200 bg-white">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="font-medium text-gray-900">{c.building}</div>
-                      <div className="mt-2">
-                        <Progress value={progress} />
-                        <div className="mt-1 text-xs text-gray-600">{progress}%</div>
-                      </div>
-                    </div>
-                    <button onClick={() => setConfirm({ open: true, id: `per-${c.id}` })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
-                  </div>
-
-                  <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                    {/* Rapport de contrôle périodique */}
-                    <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Rapport de contrôle périodique</div>
-                      <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 text-sm text-gray-900">
-                          <input type="checkbox" checked={!!c.report_received} onChange={() => togglePeriodic(c, "report")} />
-                          Reçu
-                        </label>
-                        <input type="file" onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
-                               className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                               accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                        <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} />
-                        {c.has_report && (
-                          <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
-                            <Download size={16}/> Télécharger
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Élimination des défauts */}
-                    <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Élimination des défauts</div>
-                      <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 text-sm text-gray-900">
-                          <input type="checkbox" checked={!!c.defect_report_received} onChange={() => togglePeriodic(c, "defect")} />
-                          Reçus
-                        </label>
-                        <input type="file" onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
-                               className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                               accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                        <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} />
-                        {c.has_defect && (
-                          <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
-                            <Download size={16}/> Télécharger
-                          </a>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Confirmation */}
-                    <div className="space-y-2">
-                      <div className="text-sm font-medium text-gray-900">Confirmation</div>
-                      <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 text-sm text-gray-900">
-                          <input type="checkbox" checked={!!c.confirmation_received} onChange={() => togglePeriodic(c, "confirm")} />
-                          Reçue
-                        </label>
-                        <input type="file" onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
-                               className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                               accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                        <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} />
-                        {c.has_confirmation && (
-                          <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
-                            <Download size={16}/> Télécharger
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            {filteredPeriodics.length === 0 && <div className="text-sm text-gray-600">Aucun contrôle périodique.</div>}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ------------------------------ ANALYSIS ----------------------------- */}
-      {tab === "analysis" && (
-        <Analysis projects={projects} periodics={periodics} projectProgress={projectProgress} periodicProgress={periodicProgress} />
-      )}
+      <div
+        id="panel-analysis"
+        role="tabpanel"
+        aria-labelledby="analysis"
+        hidden={tab !== "analysis"}
+      >
+        {tab === "analysis" && (
+          <Analysis
+            projects={projects}
+            periodics={periodics}
+            projectProgress={projectProgress}
+            periodicProgress={periodicProgress}
+          />
+        )}
+      </div>
 
       {/* Confirm delete (projet ou périodique) */}
       <ConfirmModal
