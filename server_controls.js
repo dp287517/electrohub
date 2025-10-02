@@ -247,12 +247,12 @@ async function syncAllExternal(site = 'Default') {
   for (const inc of incoming) {
     if (!EQUIPMENT_TYPES.includes(inc.equipment_type)) continue;
     const { rows: existing } = await pool.query(
-      'SELECT * FROM controls_equipments WHERE site = $1 AND equipment_type = $2 AND id::text = $3',
+      'SELECT * FROM controls_entities WHERE site = $1 AND equipment_type = $2 AND id::text = $3',
       [inc.site, inc.equipment_type, inc.id.toString()]
     );
     if (existing.length === 0) {
       await pool.query(
-        'INSERT INTO controls_equipments (site, building, equipment_type, name, code) VALUES ($1, $2, $3, $4, $5)',
+        'INSERT INTO controls_entities (site, building, equipment_type, name, code) VALUES ($1, $2, $3, $4, $5)',
         [inc.site, inc.building, inc.equipment_type, inc.name, inc.code]
       );
       added++;
@@ -260,7 +260,7 @@ async function syncAllExternal(site = 'Default') {
       const prev = existing[0];
       if (prev.name !== inc.name || prev.code !== inc.code || prev.building !== inc.building) {
         await pool.query(
-          'UPDATE controls_equipments SET building = $1, name = $2, code = $3 WHERE id = $4',
+          'UPDATE controls_entities SET building = $1, name = $2, code = $3 WHERE id = $4',
           [inc.building, inc.name, inc.code, prev.id]
         );
         updated++;
@@ -397,9 +397,9 @@ app.post('/api/controls/sync', async (req, res) => {
 });
 
 // ---- Catalog équipements
-app.get('/api/controls/catalog', async (req, res) => {
+aapp.get('/api/controls/catalog', async (req, res) => {
   const { site = 'Default', building, type } = req.query;
-  let query = 'SELECT * FROM controls_equipments WHERE site = $1';
+  let query = 'SELECT * FROM controls_entities WHERE site = $1';
   const values = [site];
   let i = 2;
   if (building) {
@@ -418,18 +418,18 @@ app.get('/api/controls/catalog', async (req, res) => {
 
 app.post('/api/controls/catalog', async (req, res) => {
   const { site = 'Default', building, equipment_type, name, code } = req.body || {};
-  if (!building || !equipment_type || !name) return res.status(400).json({ error: 'Missing fields' });
-  if (!EQUIPMENT_TYPES.includes(equipment_type)) return res.status(400).json({ error: 'Unknown equipment_type' });
+  if (!building || !equipment_type || !name) return res.status(400).json({ error: 'Champs manquants' });
+  if (!EQUIPMENT_TYPES.includes(equipment_type)) return res.status(400).json({ error: 'Type d’équipement inconnu' });
   const { rows } = await pool.query(
-    'INSERT INTO controls_equipments (site, building, equipment_type, name, code) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    'INSERT INTO controls_entities (site, building, equipment_type, name, code) VALUES ($1, $2, $3, $4, $5) RETURNING *',
     [site, building, equipment_type, name, code || null]
   );
   res.status(201).json(rows[0]);
 });
 
 app.delete('/api/controls/catalog/:id', async (req, res) => {
-  const { rowCount } = await pool.query('DELETE FROM controls_equipments WHERE id = $1', [req.params.id]);
-  if (rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  const { rowCount } = await pool.query('DELETE FROM controls_entities WHERE id = $1', [req.params.id]);
+  if (rowCount === 0) return res.status(404).json({ error: 'Non trouvé' });
   res.json({ success: true });
 });
 
@@ -487,114 +487,166 @@ app.get('/api/controls/library', (_req, res) => {
 
 // ---- Tâches: list / generate / details
 app.get('/api/controls/tasks', async (req, res) => {
-  const { site = 'Default', building, type, status, q, page = 1, pageSize = 50 } = req.query;
-  await ensureOverdueFlags();
-  let query = 'SELECT * FROM controls_tasks WHERE site = $1';
-  const values = [site];
-  let i = 2;
-  if (building) {
-    query += ` AND building = $${i}`;
-    values.push(building);
-    i++;
+  try {
+    const { site = 'Default', building, type, status, q, page = 1, pageSize = 50 } = req.query;
+    await ensureOverdueFlags();
+    let query = `
+      SELECT ct.*, ce.equipment_type 
+      FROM controls_tasks ct 
+      LEFT JOIN controls_entities ce ON ct.entity_id = ce.id 
+      WHERE ct.site = $1`;
+    const values = [site];
+    let i = 2;
+    if (building) {
+      query += ` AND ce.building = $${i}`;
+      values.push(building);
+      i++;
+    }
+    if (type) {
+      query += ` AND ce.equipment_type = $${i}`;
+      values.push(type);
+      i++;
+    }
+    if (status) {
+      query += ` AND ct.status = $${i}`;
+      values.push(status);
+      i++;
+    }
+    if (q) {
+      query += ` AND (ct.task_name ILIKE $${i} OR ct.task_code ILIKE $${i})`;
+      values.push(`%${q}%`);
+      i++;
+    }
+    query += ` ORDER BY ct.next_control ASC LIMIT $${i} OFFSET $${i + 1}`;
+    values.push(Number(pageSize));
+    values.push((Number(page) - 1) * Number(pageSize));
+    const { rows } = await pool.query(query, values);
+    const { rows: totalRows } = await pool.query('SELECT COUNT(*) FROM controls_tasks WHERE site = $1', [site]);
+    res.json({ data: rows, total: totalRows[0].count });
+  } catch (e) {
+    log('Erreur dans /api/controls/tasks:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
   }
-  if (type) {
-    query += ` AND equipment_type = $${i}`;
-    values.push(type);
-    i++;
-  }
-  if (status) {
-    query += ` AND status = $${i}`;
-    values.push(status);
-    i++;
-  }
-  if (q) {
-    query += ` AND (task_name ILIKE $${i} OR task_code ILIKE $${i})`;
-    values.push(`%${q}%`);
-    i++;
-  }
-  query += ' ORDER BY next_control ASC LIMIT $' + i + ' OFFSET $' + (i + 1);
-  values.push(Number(pageSize));
-  values.push((Number(page) - 1) * Number(pageSize));
-  const { rows } = await pool.query(query, values);
-  const { rows: totalRows } = await pool.query('SELECT COUNT(*) FROM controls_tasks WHERE site = $1', [site]);
-  res.json({ data: rows, total: totalRows[0].count });
 });
 
 app.post('/api/controls/generate', async (req, res) => {
-  const site = req.body?.site || 'Default';
-  const created = await regenerateTasks(site);
-  res.json({ created });
+  try {
+    const site = req.body?.site || 'Default';
+    const created = await regenerateTasks(site);
+    res.json({ created });
+  } catch (e) {
+    log('Erreur dans /api/controls/generate:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 app.get('/api/controls/tasks/:id/details', async (req, res) => {
-  const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [req.params.id]);
-  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
-  const t = task[0];
-  const { rows: equip } = await pool.query('SELECT * FROM controls_equipments WHERE equipment_type = $1 AND id = $2', [t.equipment_type, t.entity_id]);
-  const item = TSD_LIBRARY[t.equipment_type]?.find(i => i.id === t.task_code) || null;
-  res.json({ ...t, equipment: equip[0] || null, tsd_item: item });
+  try {
+    const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [req.params.id]);
+    if (task.length === 0) return res.status(404).json({ error: 'Tâche non trouvée' });
+    const t = task[0];
+    const { rows: equip } = await pool.query(
+      'SELECT * FROM controls_entities WHERE id = $1',
+      [t.entity_id]
+    );
+    const equipment_type = equip[0]?.equipment_type || 'UNKNOWN';
+    const item = TSD_LIBRARY[equipment_type]?.find(i => i.id === t.task_code) || null;
+    res.json({ ...t, equipment: equip[0] || null, tsd_item: item });
+  } catch (e) {
+    log('Erreur dans /api/controls/tasks/:id/details:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 // ---- Pièces jointes
 app.post('/api/controls/tasks/:id/upload', upload.array('files', 12), async (req, res) => {
-  const id = Number(req.params.id);
-  const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [id]);
-  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
-  if (task[0].status === 'Completed') return res.status(400).json({ error: 'Task is completed' });
-  const files = (req.files || []).map(f => ({
-    filename: f.originalname,
-    size: f.size,
-    mimetype: f.mimetype,
-    data: f.buffer,
-    uploaded_at: new Date().toISOString()
-  }));
-  for (const file of files) {
-    await pool.query(
-      'INSERT INTO controls_attachments (task_id, filename, size, mimetype, data, uploaded_at) VALUES ($1, $2, $3, $4, $5, $6)',
-      [id, file.filename, file.size, file.mimetype, file.data, file.uploaded_at]
-    );
+  try {
+    const id = Number(req.params.id);
+    const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [id]);
+    if (task.length === 0) return res.status(404).json({ error: 'Tâche non trouvée' });
+    if (task[0].status === 'Completed') return res.status(400).json({ error: 'Tâche déjà complétée' });
+    const files = (req.files || []).map(f => ({
+      filename: f.originalname,
+      size: f.size,
+      mimetype: f.mimetype,
+      data: f.buffer,
+      uploaded_at: new Date().toISOString()
+    }));
+    for (const file of files) {
+      await pool.query(
+        'INSERT INTO controls_attachments (task_id, filename, size, mimetype, data, uploaded_at) VALUES ($1, $2, $3, $4, $5, $6)',
+        [id, file.filename, file.size, file.mimetype, file.data, file.uploaded_at]
+      );
+    }
+    res.json({ uploaded: files.length });
+  } catch (e) {
+    log('Erreur dans /api/controls/tasks/:id/upload:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
   }
-  res.json({ uploaded: files.length });
 });
 
 app.get('/api/controls/tasks/:id/attachments', async (req, res) => {
-  const { rows: attachments } = await pool.query('SELECT id, filename, size, mimetype, uploaded_at FROM controls_attachments WHERE task_id = $1', [req.params.id]);
-  res.json(attachments);
+  try {
+    const { rows: attachments } = await pool.query(
+      'SELECT id, filename, size, mimetype, uploaded_at FROM controls_attachments WHERE task_id = $1',
+      [req.params.id]
+    );
+    res.json(attachments);
+  } catch (e) {
+    log('Erreur dans /api/controls/tasks/:id/attachments:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 app.get('/api/controls/tasks/:id/attachments/:attId', async (req, res) => {
-  const { rows: attachment } = await pool.query('SELECT * FROM controls_attachments WHERE id = $1 AND task_id = $2', [req.params.attId, req.params.id]);
-  if (attachment.length === 0) return res.status(404).json({ error: 'Attachment not found' });
-  const att = attachment[0];
-  res.setHeader('Content-Type', att.mimetype);
-  res.setHeader('Content-Disposition', `attachment; filename="${att.filename}"`);
-  res.send(att.data);
+  try {
+    const { rows: attachment } = await pool.query(
+      'SELECT * FROM controls_attachments WHERE id = $1 AND task_id = $2',
+      [req.params.attId, req.params.id]
+    );
+    if (attachment.length === 0) return res.status(404).json({ error: 'Pièce jointe non trouvée' });
+    const att = attachment[0];
+    res.setHeader('Content-Type', att.mimetype);
+    res.setHeader('Content-Disposition', `attachment; filename="${att.filename}"`);
+    res.send(att.data);
+  } catch (e) {
+    log('Erreur dans /api/controls/tasks/:id/attachments/:attId:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 app.delete('/api/controls/attachments/:taskId/:attId', async (req, res) => {
-  const taskId = Number(req.params.taskId);
-  const attId = Number(req.params.attId);
-  const { rowCount } = await pool.query('DELETE FROM controls_attachments WHERE id = $1 AND task_id = $2', [attId, taskId]);
-  if (rowCount === 0) return res.status(404).json({ error: 'Attachment not found' });
-  res.json({ success: true });
+  try {
+    const taskId = Number(req.params.taskId);
+    const attId = Number(req.params.attId);
+    const { rowCount } = await pool.query(
+      'DELETE FROM controls_attachments WHERE id = $1 AND task_id = $2',
+      [attId, taskId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Pièce jointe non trouvée' });
+    res.json({ success: true });
+  } catch (e) {
+    log('Erreur dans /api/controls/attachments/:taskId/:attId:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 // ---- IA Vision: score de risque et tags avec OpenAI
 app.post('/api/controls/ai/vision-score', upload.array('files', 8), async (req, res) => {
-  if (!openai) return res.status(503).json({ error: 'AI unavailable' });
-  const hints = (req.body?.hints || '').toLowerCase();
-  const files = req.files || [];
-  const imageParts = files.map(f => ({
-    type: "image_url",
-    image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` }
-  }));
-
   try {
+    if (!openai) return res.status(503).json({ error: 'IA indisponible' });
+    const hints = (req.body?.hints || '').toLowerCase();
+    const files = req.files || [];
+    const imageParts = files.map(f => ({
+      type: "image_url",
+      image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` }
+    }));
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: 'You are an expert in electrical equipment maintenance. Analyze images for risks like overheating, corrosion, loose connections, IP breaches. Output JSON: { ai_risk_score: number 0-1, tags: array of strings }' },
-        { role: 'user', content: [{ type: "text", text: `Hints: ${hints}. Analyze for risks.` }, ...imageParts] }
+        { role: 'system', content: 'Vous êtes un expert en maintenance électrique. Analysez les images pour détecter des risques comme la surchauffe, la corrosion, les connexions desserrées, les violations IP. Retournez un JSON : { ai_risk_score: number 0-1, tags: array of strings }' },
+        { role: 'user', content: [{ type: "text", text: `Indices : ${hints}. Analysez les risques.` }, ...imageParts] }
       ],
       response_format: { type: 'json_object' },
       temperature: 0.3
@@ -602,132 +654,173 @@ app.post('/api/controls/ai/vision-score', upload.array('files', 8), async (req, 
     const json = JSON.parse(completion.choices[0].message.content);
     res.json({ ai_risk_score: Number(json.ai_risk_score || 0), tags: json.tags || [] });
   } catch (e) {
-    res.status(500).json({ error: 'AI analysis failed', details: e.message });
+    log('Erreur dans /api/controls/ai/vision-score:', e.message);
+    res.status(500).json({ error: 'Échec de l’analyse IA', details: e.message });
   }
 });
 
 // ---- Compléter une tâche
 app.post('/api/controls/tasks/:id/complete', async (req, res) => {
-  const id = Number(req.params.id);
-  const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [id]);
-  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
-  const t = task[0];
-  if (t.status === 'Completed') return res.status(400).json({ error: 'Task is completed' });
+  try {
+    const id = Number(req.params.id);
+    const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [id]);
+    if (task.length === 0) return res.status(404).json({ error: 'Tâche non trouvée' });
+    const t = task[0];
+    if (t.status === 'Completed') return res.status(400).json({ error: 'Tâche déjà complétée' });
 
-  const user = req.body?.user || 'unknown';
-  const results = req.body?.results || {};
-  const ai_risk_score = Number(req.body?.ai_risk_score) || null;
+    const user = req.body?.user || 'unknown';
+    const results = req.body?.results || {};
+    const ai_risk_score = Number(req.body?.ai_risk_score) || null;
 
-  const item = TSD_LIBRARY[t.equipment_type]?.find(i => i.id === t.task_code) || null;
-  const verdict = evaluate(item, results, ai_risk_score);
+    const { rows: entity } = await pool.query('SELECT equipment_type FROM controls_entities WHERE id = $1', [t.entity_id]);
+    const equipment_type = entity[0]?.equipment_type || 'UNKNOWN';
+    const item = TSD_LIBRARY[equipment_type]?.find(i => i.id === t.task_code) || null;
+    const verdict = evaluate(item, results, ai_risk_score);
 
-  await pool.query(
-    `UPDATE controls_tasks SET 
-      status = 'Completed', 
-      last_control = CURRENT_DATE, 
-      created_by = $1, 
-      results = $2, 
-      ai_notes = ai_notes || $3::jsonb, 
-      updated_at = CURRENT_TIMESTAMP 
-    WHERE id = $4`,
-    [user, JSON.stringify({ ...results, verdict }), JSON.stringify([{ score: ai_risk_score, timestamp: new Date().toISOString() }]), id]
-  );
-
-  // Update EQUIP_DONE
-  if (item && t.equipment_type !== 'NOT_PRESENT') {
     await pool.query(
-      'UPDATE controls_equipments SET done = done || jsonb_build_object($1, $2) WHERE equipment_type = $3 AND id = $4',
-      [t.task_code, todayISO(), t.equipment_type, t.entity_id]
+      `UPDATE controls_tasks SET 
+        status = 'Completed', 
+        last_control = CURRENT_DATE, 
+        created_by = $1, 
+        results = $2, 
+        ai_notes = ai_notes || $3::jsonb, 
+        updated_at = CURRENT_TIMESTAMP 
+      WHERE id = $4`,
+      [user, JSON.stringify({ ...results, verdict }), JSON.stringify([{ score: ai_risk_score, timestamp: new Date().toISOString() }]), id]
     );
+
+    // Update EQUIP_DONE
+    if (item && equipment_type !== 'NOT_PRESENT') {
+      await pool.query(
+        'UPDATE controls_entities SET done = done || jsonb_build_object($1, $2) WHERE equipment_type = $3 AND id = $4',
+        [t.task_code, todayISO(), equipment_type, t.entity_id]
+      );
+    }
+
+    await pool.query('INSERT INTO controls_history (task_id, "user", results) VALUES ($1, $2, $3)', [id, user, { ...results, verdict }]);
+
+    res.json({ message: 'Tâche complétée', verdict });
+  } catch (e) {
+    log('Erreur dans /api/controls/tasks/:id/complete:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
   }
-
-  await pool.query('INSERT INTO controls_history (task_id, "user", results) VALUES ($1, $2, $3)', [id, user, { ...results, verdict }]);
-
-  res.json({ message: 'Task completed', verdict });
 });
 
 // ---- Historique & export
 app.get('/api/controls/history', async (req, res) => {
-  const { user, q, page = 1, pageSize = 50 } = req.query;
-  let query = 'SELECT * FROM controls_history';
-  const values = [];
-  let i = 1;
-  if (user) {
-    query += ` WHERE "user" = $${i}`;
-    values.push(user);
-    i++;
+  try {
+    const { user, q, page = 1, pageSize = 50 } = req.query;
+    let query = 'SELECT * FROM controls_history';
+    const values = [];
+    let i = 1;
+    if (user) {
+      query += ` WHERE "user" = $${i}`;
+      values.push(user);
+      i++;
+    }
+    if (q) {
+      query += user ? ' AND' : ' WHERE';
+      query += ` results::text ILIKE $${i}`;
+      values.push(`%${q}%`);
+      i++;
+    }
+    query += ` ORDER BY date DESC LIMIT $${i} OFFSET $${i + 1}`;
+    values.push(Number(pageSize));
+    values.push((Number(page) - 1) * Number(pageSize));
+    const { rows } = await pool.query(query, values);
+    const { rows: totalRows } = await pool.query('SELECT COUNT(*) FROM controls_history');
+    res.json({ data: rows, total: totalRows[0].count });
+  } catch (e) {
+    log('Erreur dans /api/controls/history:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
   }
-  if (q) {
-    query += user ? ' AND' : ' WHERE';
-    query += ` results::text ILIKE $${i}`;
-    values.push(`%${q}%`);
-    i++;
-  }
-  query += ' ORDER BY date DESC LIMIT $' + i + ' OFFSET $' + (i + 1);
-  values.push(Number(pageSize));
-  values.push((Number(page) - 1) * Number(pageSize));
-  const { rows } = await pool.query(query, values);
-  const { rows: totalRows } = await pool.query('SELECT COUNT(*) FROM controls_history');
-  res.json({ data: rows, total: totalRows[0].count });
 });
 
 app.get('/api/controls/history/export', async (_req, res) => {
-  const { rows } = await pool.query('SELECT * FROM controls_history');
-  const csv = toCSV(rows);
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', 'attachment; filename=controls_history.csv');
-  res.send(csv);
+  try {
+    const { rows } = await pool.query('SELECT * FROM controls_history');
+    const csv = toCSV(rows);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename=controls_history.csv');
+    res.send(csv);
+  } catch (e) {
+    log('Erreur dans /api/controls/history/export:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 // ---- Analytics
 app.get('/api/controls/analytics', async (_req, res) => {
-  await ensureOverdueFlags();
-  const { rows: stats } = await pool.query(`
-    SELECT 
-      COUNT(*) AS total,
-      COUNT(*) FILTER (WHERE status = 'Completed') AS completed,
-      COUNT(*) FILTER (WHERE status = 'Planned') AS planned,
-      COUNT(*) FILTER (WHERE status = 'Overdue') AS overdue
-    FROM controls_tasks
-  `);
-  const { rows: byBuilding } = await pool.query('SELECT building, COUNT(*) FROM controls_tasks GROUP BY building');
-  const { rows: byType } = await pool.query('SELECT equipment_type, COUNT(*) FROM controls_tasks GROUP BY equipment_type');
-  const gaps = await Promise.all(
-    EQUIPMENT_TYPES.map(async ty => {
-      const hasEquip = (await pool.query('SELECT COUNT(*) FROM controls_equipments WHERE equipment_type = $1', [ty])).rows[0].count > 0;
-      const hasNP = (await pool.query('SELECT COUNT(*) FROM controls_not_present WHERE equipment_type = $1', [ty])).rows[0].count > 0;
-      return !hasEquip && !hasNP ? ty : null;
-    })
-  ).then(results => results.filter(ty => ty));
-  res.json({
-    ...stats[0],
-    byBuilding: byBuilding.reduce((acc, r) => ({ ...acc, [r.building]: r.count }), {}),
-    byType: byType.reduce((acc, r) => ({ ...acc, [r.equipment_type]: r.count }), {}),
-    gaps
-  });
+  try {
+    await ensureOverdueFlags();
+    const { rows: stats } = await pool.query(`
+      SELECT 
+        COUNT(*) AS total,
+        COUNT(*) FILTER (WHERE status = 'Completed') AS completed,
+        COUNT(*) FILTER (WHERE status = 'Planned') AS planned,
+        COUNT(*) FILTER (WHERE status = 'Overdue') AS overdue
+      FROM controls_tasks
+    `);
+    const { rows: byBuilding } = await pool.query(`
+      SELECT ce.building, COUNT(*) 
+      FROM controls_tasks ct 
+      LEFT JOIN controls_entities ce ON ct.entity_id = ce.id 
+      GROUP BY ce.building
+    `);
+    const { rows: byType } = await pool.query(`
+      SELECT ce.equipment_type, COUNT(*) 
+      FROM controls_tasks ct 
+      LEFT JOIN controls_entities ce ON ct.entity_id = ce.id 
+      GROUP BY ce.equipment_type
+    `);
+    const gaps = await Promise.all(
+      EQUIPMENT_TYPES.map(async ty => {
+        const hasEquip = (await pool.query('SELECT COUNT(*) FROM controls_entities WHERE equipment_type = $1', [ty])).rows[0].count > 0;
+        const hasNP = (await pool.query('SELECT COUNT(*) FROM controls_not_present WHERE equipment_type = $1', [ty])).rows[0].count > 0;
+        return !hasEquip && !hasNP ? ty : null;
+      })
+    ).then(results => results.filter(ty => ty));
+    res.json({
+      ...stats[0],
+      byBuilding: byBuilding.reduce((acc, r) => ({ ...acc, [r.building]: r.count }), {}),
+      byType: byType.reduce((acc, r) => ({ ...acc, [r.equipment_type]: r.count }), {}),
+      gaps
+    });
+  } catch (e) {
+    log('Erreur dans /api/controls/analytics:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 // ---- Roadmap
 app.get('/api/controls/roadmap', async (_req, res) => {
-  const { rows } = await pool.query(`
-    SELECT equipment_type, COUNT(*) AS count, MIN(next_control) AS start, MAX(next_control) AS end
-    FROM controls_tasks WHERE status IN ('Planned', 'Overdue') GROUP BY equipment_type
-  `);
-  const roadmap = rows.map((r, idx) => ({
-    id: idx + 1,
-    title: `Q4 — ${r.equipment_type} (${r.count} tasks)`,
-    start: r.start,
-    end: r.end
-  }));
-  res.json(roadmap);
+  try {
+    const { rows } = await pool.query(`
+      SELECT ce.equipment_type, COUNT(*) AS count, MIN(ct.next_control) AS start, MAX(ct.next_control) AS end
+      FROM controls_tasks ct
+      LEFT JOIN controls_entities ce ON ct.entity_id = ce.id
+      WHERE ct.status IN ('Planned', 'Overdue')
+      GROUP BY ce.equipment_type
+    `);
+    const roadmap = rows.map((r, idx) => ({
+      id: idx + 1,
+      title: `Q4 — ${r.equipment_type} (${r.count} tâches)`,
+      start: r.start,
+      end: r.end
+    }));
+    res.json(roadmap);
+  } catch (e) {
+    log('Erreur dans /api/controls/roadmap:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
+  }
 });
 
 // ---- Assistant IA
 app.post('/api/controls/ai/assistant', async (req, res) => {
-  const { mode, text, lang = 'fr' } = req.body || {};
-  if (!openai) return res.status(503).json({ error: 'IA indisponible' });
-  if (mode === 'text') {
-    try {
+  try {
+    const { mode, text, lang = 'fr' } = req.body || {};
+    if (!openai) return res.status(503).json({ error: 'IA indisponible' });
+    if (mode === 'text') {
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -737,13 +830,14 @@ app.post('/api/controls/ai/assistant', async (req, res) => {
         temperature: 0.5
       });
       res.json({ reply: completion.choices[0].message.content });
-    } catch (e) {
-      res.status(500).json({ error: 'Échec de l’analyse IA', details: e.message });
+    } else if (mode === 'vision') {
+      res.json({ suggestion: 'Analyse de vision non implémentée - à intégrer avec OpenAI' });
+    } else {
+      res.status(400).json({ error: 'Mode inconnu' });
     }
-  } else if (mode === 'vision') {
-    res.json({ suggestion: 'Analyse de vision non implémentée - à intégrer avec OpenAI' });
-  } else {
-    res.status(400).json({ error: 'Mode inconnu' });
+  } catch (e) {
+    log('Erreur dans /api/controls/ai/assistant:', e.message);
+    res.status(500).json({ error: 'Erreur serveur', details: e.message });
   }
 });
 
@@ -761,25 +855,29 @@ async function notify(payload) {
       body: JSON.stringify(payload)
     });
   } catch (e) {
-    log('notify error', e.message);
+    log('Erreur de notification:', e.message);
   }
 }
 
 async function dailyMaintenance() {
-  await ensureOverdueFlags();
-  const { rows: overdue } = await pool.query(
-    `SELECT ct.id, ct.task_name AS title, ce.equipment_type, ct.next_control AS due_date
-     FROM controls_tasks ct
-     LEFT JOIN controls_entities ce ON ct.entity_id = ce.id
-     WHERE ct.status = 'Overdue'
-     LIMIT 50`
-  );
-  if (overdue.length > 0) {
-    notify({ type: 'controls.overdue', at: new Date().toISOString(), count: overdue.length, items: overdue });
-    log(`overdue: ${overdue.length}`);
+  try {
+    await ensureOverdueFlags();
+    const { rows: overdue } = await pool.query(
+      `SELECT ct.id, ct.task_name AS title, ce.equipment_type, ct.next_control AS due_date
+       FROM controls_tasks ct
+       LEFT JOIN controls_entities ce ON ct.entity_id = ce.id
+       WHERE ct.status = 'Overdue'
+       LIMIT 50`
+    );
+    if (overdue.length > 0) {
+      notify({ type: 'controls.overdue', at: new Date().toISOString(), count: overdue.length, items: overdue });
+      log(`Tâches en retard: ${overdue.length}`);
+    }
+    await regenerateTasks('Default');
+    log('Tâche quotidienne effectuée');
+  } catch (e) {
+    log('Erreur dans dailyMaintenance:', e.message);
   }
-  await regenerateTasks('Default');
-  log('Tâche quotidienne effectuée');
 }
 
 // Lancement job: toutes les 6h (et au démarrage)
