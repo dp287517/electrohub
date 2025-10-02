@@ -149,19 +149,23 @@ export const api = {
 
   /** ------- OIBT ------- */
   oibt: {
-    // Projets (avis/protocole/rapport + rappel contrôle de réception)
+    // Projets (avis / protocole / rapport / réception)
     listProjects: (params) => get("/api/oibt/projects", params),
     createProject: (payload) => post("/api/oibt/projects", payload),
     updateProject: (id, payload) => put(`/api/oibt/projects/${id}`, payload),
     removeProject: (id) => del(`/api/oibt/projects/${id}`),
 
-    // Contrôles périodiques (bâtiments + actions défaut/confirmation)
+    // Upload pièce jointe par action de projet (avis|protocole|rapport|reception)
+    uploadProjectActionFile: (id, action, formData) =>
+      upload(`/api/oibt/projects/${id}/upload?action=${encodeURIComponent(action)}`, formData),
+
+    // Contrôles périodiques (bâtiments)
     listPeriodics: (params) => get("/api/oibt/periodics", params),
     createPeriodic: (payload) => post("/api/oibt/periodics", payload),
     updatePeriodic: (id, payload) => put(`/api/oibt/periodics/${id}`, payload),
     removePeriodic: (id) => del(`/api/oibt/periodics/${id}`),
 
-    // Upload de pièces jointes (report | defect | confirmation)
+    // Upload de pièces jointes périodiques (report | defect | confirmation)
     uploadPeriodicFile: (id, type, formData) =>
       upload(`/api/oibt/periodics/${id}/upload?type=${encodeURIComponent(type)}`, formData),
   },
