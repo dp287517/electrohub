@@ -551,7 +551,7 @@ async function syncAllExternal(site = 'Default') {
 // Génération des tâches (incl. NOT_PRESENT) + statut Overdue
 // =====================================================================================
 async function ensureOverdueFlags() {
-  await pool.query("UPDATE controls_tasks SET status = 'overdue' WHERE status = 'open' AND due_date < CURRENT_DATE");
+  await pool.query("UPDATE controls_tasks SET status = 'overdue' WHERE status = 'open' AND next_control < CURRENT_DATE");
 }
 
 async function regenerateTasks(site = 'Default') {
@@ -564,14 +564,14 @@ async function regenerateTasks(site = 'Default') {
       const last = done[it.id] || null;
       if (isDue(last, it.frequency_months)) {
         const { rows: exists } = await pool.query(
-          'SELECT * FROM controls_tasks WHERE status IN (\'open\', \'overdue\') AND equipment_type = $1 AND equipment_id = $2 AND item_id = $3',
+          'SELECT * FROM controls_tasks WHERE status IN (\'open\', \'overdue\') AND equipment_type = $1 AND entity_id = $2 AND item_id = $3',
           [equip.equipment_type, equip.id, it.id]
         );
         if (exists.length === 0) {
-          const due_date = todayISO(); // due now if overdue
+          const next_control = todayISO(); // Use next_control instead of due_date
           await pool.query(
-            'INSERT INTO controls_tasks (site, building, title, equipment_type, equipment_id, equipment_code, item_id, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-            [site, equip.building, `${equip.name} • ${it.label}`, equip.equipment_type, equip.id, equip.code, it.id, due_date]
+            'INSERT INTO controls_tasks (site, entity_id, task_name, equipment_type, item_id, task_code, next_control, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+            [site, equip.id, `${equip.name} • ${it.label}`, equip.equipment_type, it.id, equip.code || 'N/A', next_control, 'open', new Date().toISOString()]
           );
           created.push(true);
         }
@@ -584,13 +584,14 @@ async function regenerateTasks(site = 'Default') {
     const last = decl.last_assessment_at;
     if (isDue(last ? last.toISOString().slice(0, 10) : null, 12)) {
       const { rows: exists } = await pool.query(
-        'SELECT * FROM controls_tasks WHERE status IN (\'open\', \'overdue\') AND equipment_type = \'NOT_PRESENT\' AND equipment_id = $1',
+        'SELECT * FROM controls_tasks WHERE status IN (\'open\', \'overdue\') AND equipment_type = \'NOT_PRESENT\' AND entity_id = $1',
         [decl.id]
       );
       if (exists.length === 0) {
+        const next_control = todayISO();
         await pool.query(
-          'INSERT INTO controls_tasks (site, building, title, equipment_type, equipment_id, equipment_code, item_id, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-          [site, decl.building, `[Annual Assessment] ${decl.equipment_type} — declared not present`, 'NOT_PRESENT', decl.id, `NP-${decl.building}-${decl.equipment_type}`, 'annual_assessment', todayISO()]
+          'INSERT INTO controls_tasks (site, entity_id, task_name, equipment_type, item_id, task_code, next_control, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          [site, decl.id, `[Annual Assessment] ${decl.equipment_type} — declared not present`, 'NOT_PRESENT', 'annual_assessment', `NP-${decl.building}-${decl.equipment_type}`, next_control, 'open', new Date().toISOString()]
         );
         created.push(true);
       }
