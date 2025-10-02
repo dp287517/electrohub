@@ -1,459 +1,294 @@
-// Controls.jsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import axios from 'axios';
-import { Gantt, ViewMode } from 'gantt-task-react';
-import 'gantt-task-react/dist/index.css';
+// src/pages/Controls.jsx
+import { useEffect, useState } from "react";
+import { get, post, upload } from "../lib/api.js";
 import {
-  Chart as ChartJS,
-  ArcElement, Tooltip, Legend,
-  CategoryScale, LinearScale, BarElement, PointElement, LineElement
-} from 'chart.js';
-import { Doughnut, Bar, Line } from 'react-chartjs-2';
+  Plus, CheckCircle, XCircle, Upload, History, BarChart2, Calendar, Sparkles, FileText
+} from "lucide-react";
+import { Line, Pie } from "react-chartjs-2";
+import "chart.js/auto";
 
-ChartJS.register(
-  ArcElement, Tooltip, Legend,
-  CategoryScale, LinearScale, BarElement, PointElement, LineElement
-);
+function TabButton({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-2 rounded-lg font-medium ${
+        active ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
 
-const api = axios.create();
-api.interceptors.request.use((cfg) => {
-  try {
-    const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
-    cfg.headers['X-Site'] = user?.site || '';
-  } catch {}
-  return cfg;
-});
-
-// ---------- Small UI helpers ----------
-const Badge = ({ color = 'gray', children }) => (
-  <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-${color}-100 text-${color}-800`}>
-    {children}
-  </span>
-);
-
-const Pill = ({ active, onClick, children }) => (
-  <button
-    onClick={onClick}
-    className={`px-3 py-1.5 rounded-full text-sm font-medium border ${active ? 'bg-gray-200 text-black border-gray-300' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-  >
-    {children}
-  </button>
-);
-
-const Input = (props) => (
-  <input
-    {...props}
-    className={`w-full border rounded px-3 py-2 text-sm text-black bg-white ${props.className || ''}`}
-  />
-);
-const Textarea = (props) => (
-  <textarea
-    {...props}
-    className={`w-full border rounded px-3 py-2 text-sm text-black bg-white ${props.className || ''}`}
-  />
-);
-const Select = ({ options = [], value, onChange, placeholder, className }) => (
-  <select value={value || ''} onChange={e => onChange(e.target.value)} className={`w-full border rounded px-3 py-2 text-sm text-black bg-white ${className || ''}`}>
-    <option value="">{placeholder || '—'}</option>
-    {options.map((o) => <option key={String(o)} value={o}>{o}</option>)}
-  </select>
-);
-
-const SectionCard = ({ title, right, children }) => (
-  <div className="card p-4 bg-white">
-    <div className="flex items-center justify-between mb-3">
-      <h3 className="font-semibold text-black">{title}</h3>
-      {right}
-    </div>
-    {children}
-  </div>
-);
-
-const statusColor = (s) => {
-  const m = String(s || '').toLowerCase();
-  if (m.includes('overdue') || m === 'non-compliant') return 'red';
-  if (m.includes('due') || m.includes('planned')) return 'amber';
-  if (m.includes('done') || m.includes('compliant')) return 'green';
-  return 'gray';
-};
-
-const toISO = (d) => {
-  if (!d) return '';
-  const dt = new Date(d);
-  if (isNaN(dt)) return '';
-  const y = dt.getFullYear();
-  const m = String(dt.getMonth() + 1).padStart(2, '0');
-  const da = String(dt.getDate()).padStart(2, '0');
-  return `${y}-${m}-${da}`;
-};
-
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : '—';
-
-const TabButton = ({ active, onClick, children }) => (
-  <button
-    onClick={onClick}
-    className={`px-4 py-2 rounded-md text-sm font-medium border ${active ? 'bg-gray-200 text-black border-gray-300' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}
-  >
-    {children}
-  </button>
-);
-
-// ---------- Main Page ----------
 export default function Controls() {
-  const [tab, setTab] = useState('overview'); // overview | roadmap | analysis
-  const [lang, setLang] = useState(localStorage.getItem('eh_lang') || 'en');
-
-  // Filters / suggests
-  const [suggests, setSuggests] = useState({ building: [], switchboard: [], device: [] });
-  const [filter, setFilter] = useState({ q: '', building: '', switchboard: '', status: '' });
-
-  // Entities & tasks
-  const [entities, setEntities] = useState([]);
+  const [tab, setTab] = useState("controls");
+  const [suggests, setSuggests] = useState({});
   const [tasks, setTasks] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  // Analytics / Gantt
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [checklistResults, setChecklistResults] = useState({});
+  const [attachments, setAttachments] = useState([]);
+  const [history, setHistory] = useState([]);
   const [analytics, setAnalytics] = useState(null);
-  const [gantt, setGantt] = useState({ tasks: [] });
-  const [viewMode, setViewMode] = useState(ViewMode.Month);
+  const [roadmap, setRoadmap] = useState([]);
+  const [aiReply, setAiReply] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
 
-  // AI Modal
-  const [aiOpen, setAiOpen] = useState(false);
-  const [aiTask, setAiTask] = useState(null);
-  const [aiInput, setAiInput] = useState('');
-  const [aiMsgs, setAiMsgs] = useState([]);
-
+  // ---------- LOAD DATA ----------
   useEffect(() => {
-    localStorage.setItem('eh_lang', lang);
-  }, [lang]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { data: health } = await api.get('/api/controls/health');
-        if (!health.ok) throw new Error('Health check failed');
-        const { data: taskCount } = await api.get('/api/controls/tasks?limit=1');
-        if (taskCount.length === 0) {
-          await api.get('/api/controls/init-from-pdf');
-        }
-
-        const s = await api.get('/api/controls/suggests');
-        setSuggests(s.data || {});
-      } catch (e) {
-        console.error('Init error:', e);
-      }
-    })();
+    get("/api/controls/suggests").then(setSuggests).catch(console.error);
+    loadTasks();
+    loadHistory();
+    loadAnalytics();
+    loadRoadmap();
   }, []);
 
-  const loadEntities = async () => {
-    const params = new URLSearchParams();
-    if (filter.building) params.set('building', filter.building);
-    if (filter.switchboard) params.set('switchboard', filter.switchboard);
-    if (filter.q) params.set('q', filter.q);
-    setLoading(true);
-    try {
-      const r = await api.get(`/api/controls/entities?${params.toString()}`);
-      setEntities(r.data || []);
-    } finally { setLoading(false); }
+  const loadTasks = () => get("/api/controls/tasks").then(setTasks).catch(console.error);
+  const loadHistory = () => get("/api/controls/history").then(setHistory).catch(console.error);
+  const loadAnalytics = () => get("/api/controls/analytics").then(setAnalytics).catch(console.error);
+  const loadRoadmap = () => get("/api/controls/roadmap").then(setRoadmap).catch(console.error);
+
+  // ---------- TASK ACTIONS ----------
+  const openTask = async (t) => {
+    const details = await get(`/api/controls/tasks/${t.id}/details`);
+    setSelectedTask(details);
+    setChecklistResults({});
+    const atts = await get(`/api/controls/tasks/${t.id}/attachments`);
+    setAttachments(atts || []);
   };
 
-  const loadTasks = async () => {
-    const params = new URLSearchParams();
-    if (filter.q) params.set('q', filter.q);
-    if (filter.status) params.set('status', filter.status);
-    if (filter.building) params.set('building', filter.building);
-    params.set('sort', 'next_control');
-    params.set('dir', 'asc');
-    setLoading(true);
-    try {
-      const r = await api.get(`/api/controls/tasks?${params.toString()}`);
-      setTasks(r.data || []);
-    } finally { setLoading(false); }
-  };
-
-  const loadAnalytics = async () => {
-    try {
-      const r = await api.get('/api/controls/analytics');
-      setAnalytics(r.data || null);
-    } catch {}
-  };
-
-  const loadGantt = async () => {
-    try {
-      const params = new URLSearchParams();
-      if (filter.building) params.set('building', filter.building);
-      const r = await api.get(`/api/controls/gantt-data?${params.toString()}`);
-      setGantt(r.data || { tasks: [] });
-    } catch {}
-  };
-
-  useEffect(() => {
-    loadEntities();
-    loadTasks();
-    loadAnalytics();
-    loadGantt();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter.building, filter.status]);
-
-  // AI Actions
-  const aiAsk = async () => {
-    if (!aiInput.trim() || !aiTask) return;
-    console.log('Ask AI clicked for task:', aiTask.id);
-    const msg = aiInput.trim();
-    setAiMsgs((m) => [...m, { role: 'user', content: msg }]);
-    setAiInput('');
-    try {
-      const r = await api.post('/api/controls/ai/assistant', { query: msg, lang, context: { filter }, task_id: aiTask.id });
-      const content = r.data?.response || '—';
-      setAiMsgs((m) => [...m, { role: 'assistant', content }]);
-      setAiOpen(true);
-    } catch (e) {
-      console.error('AI request failed:', e);
-      setAiMsgs((m) => [...m, { role: 'assistant', content: 'AI unavailable.' }]);
-    }
-  };
-
-  // Derived
-  const groupedByBuilding = useMemo(() => {
-    const map = {};
-    for (const t of tasks) {
-      const key = t.building || '—';
-      if (!map[key]) map[key] = [];
-      map[key].push(t);
-    }
-    return map;
-  }, [tasks]);
-
-  // Charts data
-  const doughnutData = useMemo(() => {
-    const s = analytics?.stats || {};
-    return {
-      labels: ['Overdue', 'Due < 90d', 'Future'],
-      datasets: [{ data: [s.overdue || 0, s.due_90_days || 0, s.future || 0] }]
-    };
-  }, [analytics]);
-
-  const barByBuilding = useMemo(() => {
-    const items = analytics?.byBuilding || [];
-    return {
-      labels: items.map(i => i.building || '—'),
-      datasets: [{ label: 'Tasks', data: items.map(i => i.count || 0) }]
-    };
-  }, [analytics]);
-
-  const lineDue = useMemo(() => {
-    const months = Array.from({ length: 12 }, (_, i) => {
-      const d = new Date();
-      d.setMonth(d.getMonth() + i);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const completeTask = async () => {
+    if (!selectedTask) return;
+    await post(`/api/controls/tasks/${selectedTask.id}/complete`, {
+      user: "demo_user",
+      results: checklistResults
     });
-    const counts = months.map((label) =>
-      tasks.filter(t => (t.next_control || '').startsWith(label)).length
-    );
-    return { labels: months, datasets: [{ label: 'Due tasks per month', data: counts }] };
-  }, [tasks]);
+    setSelectedTask(null);
+    loadTasks();
+    loadHistory();
+  };
 
+  const uploadFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    const formData = new FormData();
+    files.forEach(f => formData.append("files", f));
+    await upload(`/api/controls/tasks/${selectedTask.id}/upload`, formData);
+    const atts = await get(`/api/controls/tasks/${selectedTask.id}/attachments`);
+    setAttachments(atts || []);
+  };
+
+  // ---------- AI ----------
+  const askAI = async (msg) => {
+    setAiBusy(true);
+    try {
+      const res = await post("/api/controls/ai/assistant", { mode: "text", text: msg });
+      setAiReply(res.reply || "No response");
+    } catch {
+      setAiReply("AI error");
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  // ---------- RENDER ----------
   return (
-    <section className="container-narrow py-8 bg-white">
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h1 className="text-3xl font-bold text-black">Electrical Maintenance Controls</h1>
-          <p className="text-gray-600">Automated tracking and analysis of electrical equipment maintenance.</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Select
-            value={lang}
-            onChange={setLang}
-            options={['en', 'fr', 'de', 'es', 'pt', 'it', 'pl']}
-            placeholder="Select language"
-            className="w-40"
-          />
-        </div>
+    <section className="container mx-auto py-8">
+      <div className="flex gap-2 mb-6">
+        <TabButton active={tab === "controls"} onClick={() => setTab("controls")}>
+          <CheckCircle size={16} className="inline mr-1" /> Controls
+        </TabButton>
+        <TabButton active={tab === "roadmap"} onClick={() => setTab("roadmap")}>
+          <Calendar size={16} className="inline mr-1" /> Roadmap
+        </TabButton>
+        <TabButton active={tab === "analytics"} onClick={() => setTab("analytics")}>
+          <BarChart2 size={16} className="inline mr-1" /> Analytics
+        </TabButton>
+        <TabButton active={tab === "history"} onClick={() => setTab("history")}>
+          <History size={16} className="inline mr-1" /> History
+        </TabButton>
       </div>
 
-      <div className="card p-4 mb-4 bg-white">
-        <div className="grid sm:grid-cols-5 gap-3">
-          <div className="sm:col-span-2">
-            <Input placeholder="Search (entity/task)…" value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} />
-          </div>
-          <Select
-            value={filter.building}
-            onChange={(v) => setFilter({ ...filter, building: v })}
-            options={suggests.building || []}
-            placeholder="Filter by building"
-          />
-          <Select
-            value={filter.switchboard}
-            onChange={(v) => setFilter({ ...filter, switchboard: v })}
-            options={suggests.switchboard || []}
-            placeholder="Filter by switchboard"
-          />
-          <Select
-            value={filter.status}
-            onChange={(v) => setFilter({ ...filter, status: v })}
-            options={['Planned', 'Due', 'Overdue', 'Done', 'Compliant', 'Non-compliant']}
-            placeholder="Filter by status"
-          />
-          <div className="flex gap-2">
-            <button className="btn w-full bg-gray-200 text-black border-gray-300" onClick={() => { loadEntities(); loadTasks(); loadAnalytics(); loadGantt(); }}>Apply</button>
-            <button className="btn-secondary w-full bg-white text-gray-700 border-gray-300" onClick={() => setFilter({ q: '', building: '', switchboard: '', status: '' })}>Reset</button>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2 mb-4">
-        <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>Overview</TabButton>
-        <TabButton active={tab === 'roadmap'} onClick={() => setTab('roadmap')}>Roadmap</TabButton>
-        <TabButton active={tab === 'analysis'} onClick={() => setTab('analysis')}>Analysis</TabButton>
-      </div>
-
-      {tab === 'overview' && (
-        <div className="space-y-4">
-          {loading && <div className="text-sm text-gray-500">Loading…</div>}
-
-          {Object.keys(groupedByBuilding).length === 0 && !loading && (
-            <div className="text-sm text-gray-500">No tasks yet. Initializing from PDF…</div>
-          )}
-
-          {Object.entries(groupedByBuilding).map(([b, list]) => (
-            <SectionCard
-              key={b}
-              title={`Building: ${b}`}
-              right={<span className="text-sm text-gray-500">{list.length} task(s)</span>}
-            >
-              <div className="overflow-auto">
-                <table className="w-full text-sm text-black">
-                  <thead>
-                    <tr className="text-left text-gray-600 border-b">
-                      <th className="py-2 pr-2">Switchboard</th>
-                      <th className="py-2 pr-2">Device</th>
-                      <th className="py-2 pr-2">Task</th>
-                      <th className="py-2 pr-2">Freq</th>
-                      <th className="py-2 pr-2">Last</th>
-                      <th className="py-2 pr-2">Next</th>
-                      <th className="py-2 pr-2">Status</th>
-                      <th className="py-2 pr-2">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {list.map(t => (
-                      <tr key={t.id} className="border-b last:border-b-0">
-                        <td className="py-2 pr-2 whitespace-nowrap">{t.switchboard_name || '—'}</td>
-                        <td className="py-2 pr-2">{t.device_name || '—'}</td>
-                        <td className="py-2 pr-2">{t.task_name}</td>
-                        <td className="py-2 pr-2">
-                          {t.frequency_months_max ? `${t.frequency_months_min || '—'}–${t.frequency_months_max} mo` : (t.frequency_months ? `${t.frequency_months} mo` : '—')}
-                        </td>
-                        <td className="py-2 pr-2">{fmtDate(t.last_control)}</td>
-                        <td className="py-2 pr-2">{fmtDate(t.next_control)}</td>
-                        <td className="py-2 pr-2">
-                          <Badge color={statusColor(t.status)}>{t.status || 'Planned'}</Badge>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <button className="btn-xs bg-gray-200 text-black border-gray-300" onClick={() => { setAiTask(t); setAiOpen(true); }}>Ask AI</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </SectionCard>
-          ))}
-
-          <SectionCard title="Entities">
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {entities.map(e => (
-                <div key={e.id} className="border rounded p-3 bg-white">
-                  <div className="font-medium text-black">{e.name}</div>
-                  <div className="text-xs text-gray-600">{e.equipment_type || '—'}</div>
-                  <div className="text-xs text-gray-500 mt-1">Bldg {e.building || '—'}</div>
-                </div>
+      {/* ---------- CONTROLS TAB ---------- */}
+      {tab === "controls" && (
+        <div className="grid md:grid-cols-2 gap-6">
+          {/* Task list */}
+          <div className="bg-white rounded-xl shadow p-4">
+            <h2 className="font-semibold text-lg mb-3">Tasks</h2>
+            <ul className="space-y-2">
+              {tasks.map((t) => (
+                <li
+                  key={t.id}
+                  onClick={() => openTask(t)}
+                  className="p-3 border rounded-lg cursor-pointer hover:bg-gray-50"
+                >
+                  <div className="font-medium">{t.title}</div>
+                  <div className="text-xs text-gray-500">{t.building} • {t.category}</div>
+                  <div className="text-xs">
+                    Status:{" "}
+                    {t.locked ? (
+                      <span className="text-green-600">Completed</span>
+                    ) : (
+                      <span className="text-orange-600">Open</span>
+                    )}
+                  </div>
+                </li>
               ))}
-            </div>
-          </SectionCard>
+            </ul>
+          </div>
+
+          {/* Task detail */}
+          <div className="bg-white rounded-xl shadow p-4">
+            {selectedTask ? (
+              <>
+                <h2 className="font-semibold text-lg mb-3">{selectedTask.title}</h2>
+                <ul className="space-y-2 mb-4">
+                  {selectedTask.checklist.map((item, idx) => (
+                    <li key={idx} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        disabled={selectedTask.locked}
+                        onChange={(e) =>
+                          setChecklistResults((prev) => ({
+                            ...prev,
+                            [item]: e.target.checked
+                          }))
+                        }
+                      />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="mb-3">
+                  <input type="file" multiple onChange={uploadFiles} disabled={selectedTask.locked} />
+                  <ul className="mt-2 text-sm text-gray-600">
+                    {attachments.map((a) => (
+                      <li key={a.id}>📎 {a.filename} ({a.size} bytes)</li>
+                    ))}
+                  </ul>
+                </div>
+                {!selectedTask.locked && (
+                  <button
+                    onClick={completeTask}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    Complete Task
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="text-gray-500">Select a task to see details</p>
+            )}
+          </div>
         </div>
       )}
 
-      {tab === 'roadmap' && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Pill active={viewMode === ViewMode.Week} onClick={() => setViewMode(ViewMode.Week)}>Week</Pill>
-            <Pill active={viewMode === ViewMode.Month} onClick={() => setViewMode(ViewMode.Month)}>Month</Pill>
-            <Pill active={viewMode === ViewMode.Year} onClick={() => setViewMode(ViewMode.Year)}>Year</Pill>
+      {/* ---------- ROADMAP ---------- */}
+      {tab === "roadmap" && (
+        <div className="bg-white rounded-xl shadow p-4">
+          <h2 className="font-semibold text-lg mb-3">Roadmap</h2>
+          <ul className="divide-y">
+            {roadmap.map((r) => (
+              <li key={r.id} className="py-2">
+                <span className="font-medium">{r.title}</span>
+                <span className="ml-2 text-gray-500 text-sm">
+                  {r.start} → {r.end}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* ---------- ANALYTICS ---------- */}
+      {tab === "analytics" && analytics && (
+        <div className="grid md:grid-cols-2 gap-6">
+          <div className="bg-white rounded-xl shadow p-4">
+            <h2 className="font-semibold mb-2">Status Overview</h2>
+            <Pie
+              data={{
+                labels: ["Completed", "Open"],
+                datasets: [
+                  {
+                    data: [analytics.completed, analytics.open],
+                    backgroundColor: ["#10B981", "#F59E0B"]
+                  }
+                ]
+              }}
+            />
           </div>
-          <div className="border rounded overflow-hidden bg-white">
-            <Gantt
-              tasks={(gantt.tasks || []).map(t => ({
-                ...t,
-                start: new Date(t.start),
-                end: new Date(t.end),
-                type: 'task',
-                isDisabled: true,
-                progress: t.progress || 0
-              }))}
-              viewMode={viewMode}
-              listCellWidth="200px"
+          <div className="bg-white rounded-xl shadow p-4">
+            <h2 className="font-semibold mb-2">Tasks per Building</h2>
+            <Line
+              data={{
+                labels: Object.keys(analytics.byBuilding),
+                datasets: [
+                  {
+                    label: "Tasks",
+                    data: Object.values(analytics.byBuilding),
+                    borderColor: "#3B82F6",
+                    backgroundColor: "#93C5FD"
+                  }
+                ]
+              }}
             />
           </div>
         </div>
       )}
 
-      {tab === 'analysis' && (
-        <div className="space-y-4">
-          {analytics && (
-            <>
-              <SectionCard title="Status Overview">
-                <Doughnut data={doughnutData} />
-              </SectionCard>
-              <SectionCard title="Tasks by Building">
-                <Bar data={barByBuilding} />
-              </SectionCard>
-              <SectionCard title="Due Tasks Trend">
-                <Line data={lineDue} />
-              </SectionCard>
-            </>
-          )}
+      {/* ---------- HISTORY ---------- */}
+      {tab === "history" && (
+        <div className="bg-white rounded-xl shadow p-4">
+          <h2 className="font-semibold text-lg mb-3">History</h2>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b">
+                <th className="p-2">Task ID</th>
+                <th className="p-2">User</th>
+                <th className="p-2">Date</th>
+                <th className="p-2">Results</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.id} className="border-b">
+                  <td className="p-2">{h.task_id}</td>
+                  <td className="p-2">{h.user}</td>
+                  <td className="p-2">{h.date}</td>
+                  <td className="p-2 text-gray-600">{JSON.stringify(h.results)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <a
+            href="/api/controls/history/export"
+            className="mt-4 inline-flex items-center px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900"
+          >
+            <FileText size={16} className="mr-2" /> Export CSV
+          </a>
         </div>
       )}
 
-      {aiOpen && aiTask && (
-        <div className="modal">
-          <div className="modal-card max-w-2xl bg-white">
-            <div className="modal-head">
-              <h3 className="font-semibold text-black">AI Assistant - {aiTask.task_name}</h3>
-            </div>
-            <div className="modal-body space-y-4 p-4">
-              <div className="h-64 overflow-y-auto border rounded p-2 bg-white">
-                {aiMsgs.map((m, i) => (
-                  <div key={i} className={`p-2 ${m.role === 'user' ? 'bg-gray-100' : 'bg-white'}`}>
-                    <strong>{m.role === 'user' ? 'You' : 'AI'}:</strong> {m.content}
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <Input value={aiInput} onChange={(e) => setAiInput(e.target.value)} placeholder="Ask about this task…" />
-                <button className="btn bg-gray-200 text-black border-gray-300" onClick={aiAsk}>Send</button>
-              </div>
-            </div>
-            <div className="modal-foot">
-              <button className="btn-secondary bg-white text-gray-700 border-gray-300" onClick={() => setAiOpen(false)}>Close</button>
-            </div>
-          </div>
+      {/* ---------- AI Assistant ---------- */}
+      <div className="bg-white rounded-xl shadow p-4 mt-6">
+        <h2 className="font-semibold text-lg mb-3 flex items-center gap-2">
+          <Sparkles size={18} /> AI Assistant
+        </h2>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            className="flex-1 border rounded-lg px-3 py-2"
+            placeholder="Ask AI..."
+            onKeyDown={(e) => e.key === "Enter" && askAI(e.target.value)}
+          />
+          <button
+            onClick={() => askAI("Give me a tip for HV inspection")}
+            className="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            disabled={aiBusy}
+          >
+            Ask
+          </button>
         </div>
-      )}
+        {aiReply && <p className="mt-2 text-gray-700">{aiReply}</p>}
+      </div>
     </section>
   );
 }
-
-/* --- Minimal tailwind-ish utility classes used above (if not globally present):
-.btn { @apply inline-flex items-center px-3 py-2 rounded-md bg-gray-200 text-black border-gray-300 hover:bg-gray-300; }
-.btn-secondary { @apply inline-flex items-center px-3 py-2 rounded-md border text-sm text-gray-700 bg-white border-gray-300 hover:bg-gray-50; }
-.btn-xs { @apply inline-flex items-center px-2 py-1 rounded border text-xs text-black bg-gray-200 border-gray-300; }
-.card { @apply border rounded-md bg-white; }
-.modal { @apply fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50; }
-.modal-card { @apply bg-white w-full max-w-2xl rounded-md border shadow; }
-.modal-head { @apply p-4 border-b; }
-.modal-body { @apply p-4; }
-.modal-foot { @apply p-4 border-t flex justify-end gap-2; }
-.container-narrow { @apply max-w-6xl mx-auto px-4; }
-*/
