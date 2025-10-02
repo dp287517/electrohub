@@ -559,13 +559,4 @@ async function regenerateTasks(site = 'Default') {
             'INSERT INTO controls_tasks (site, building, title, equipment_type, equipment_id, equipment_code, item_id, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
             [site, equip.building, `${equip.name} • ${it.label}`, equip.equipment_type, equip.id, equip.code, it.id, due_date]
           );
-          created.push(true);
-        }
-      }
-    }
-  }
-  // NOT_PRESENT
-  const { rows: decls } = await pool.query('SELECT * FROM controls_not_present WHERE site = $1', [site]);
-  for (const decl of decls) {
-    const last = decl.last_assessment_at;
-    if (isDue(last ? last.toISOString().slice(0,10
+          created.push(true
