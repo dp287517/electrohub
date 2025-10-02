@@ -396,32 +396,6 @@ const TSD_LIBRARY = {
 
 async function ensureSchema() {
   try {
-    // Création de controls_entities (équivalent de controls_equipments)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS controls_entities (
-        id SERIAL PRIMARY KEY,
-        site TEXT NOT NULL,
-        building TEXT NOT NULL,
-        equipment_type TEXT NOT NULL,
-        name TEXT NOT NULL,
-        code TEXT,
-        done JSONB DEFAULT '{}'::jsonb,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
-    `);
-    // Création de controls_not_present
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS controls_not_present (
-        id SERIAL PRIMARY KEY,
-        site TEXT NOT NULL,
-        building TEXT NOT NULL,
-        equipment_type TEXT NOT NULL,
-        declared_by TEXT NOT NULL,
-        declared_at TIMESTAMPTZ DEFAULT NOW(),
-        last_assessment_at TIMESTAMPTZ,
-        note TEXT
-      );
-    `);
     // Mise à jour de controls_tasks (aligné avec la structure existante)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_tasks (
@@ -440,7 +414,7 @@ async function ensureSchema() {
         FOREIGN KEY (entity_id) REFERENCES controls_entities(id) ON DELETE CASCADE
       );
     `);
-    // Création de controls_history
+    // Création de controls_history (si nécessaire)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_history (
         id SERIAL PRIMARY KEY,
@@ -457,6 +431,7 @@ async function ensureSchema() {
     throw e;
   }
 }
+ensureSchema().catch(e => console.error('[CONTROLS SCHEMA] Init error:', e.message));
 
 // =====================================================================================
 // Adapters: Switchboards / HV / ATEX
