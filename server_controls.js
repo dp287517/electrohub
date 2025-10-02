@@ -1001,7 +1001,10 @@ async function notify(payload) {
 async function dailyMaintenance() {
   await ensureOverdueFlags();
   const { rows: overdue } = await pool.query(
-    'SELECT id, title, building, equipment_type, due_date FROM controls_tasks WHERE status = \'overdue\' LIMIT 50'
+    `SELECT id, task_name AS title, equipment_type, next_control AS due_date
+     FROM controls_tasks
+     WHERE status = 'overdue'
+     LIMIT 50`
   );
   if (overdue.length > 0) {
     notify({ type: 'controls.overdue', at: new Date().toISOString(), count: overdue.length, items: overdue });
