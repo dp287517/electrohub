@@ -395,56 +395,71 @@ const TSD_LIBRARY = {
 // =====================================================================================
 
 async function ensureSchema() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS controls_equipments (
-      id SERIAL PRIMARY KEY,
-      site TEXT NOT NULL,
-      building TEXT NOT NULL,
-      equipment_type TEXT NOT NULL,
-      name TEXT NOT NULL,
-      code TEXT,
-      done JSONB DEFAULT '{}'::jsonb,
-      created_at TIMESTAMPTZ DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS controls_not_present (
-      id SERIAL PRIMARY KEY,
-      site TEXT NOT NULL,
-      building TEXT NOT NULL,
-      equipment_type TEXT NOT NULL,
-      declared_by TEXT NOT NULL,
-      declared_at TIMESTAMPTZ DEFAULT NOW(),
-      last_assessment_at TIMESTAMPTZ,
-      note TEXT
-    );
-    CREATE TABLE IF NOT EXISTS controls_tasks (
-      id SERIAL PRIMARY KEY,
-      site TEXT NOT NULL,
-      building TEXT NOT NULL,
-      title TEXT NOT NULL,
-      equipment_type TEXT NOT NULL,
-      equipment_id INTEGER NOT NULL,
-      equipment_code TEXT,
-      item_id TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open',
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      due_date DATE NOT NULL,
-      operator TEXT,
-      results JSONB DEFAULT '{}'::jsonb,
-      locked BOOLEAN DEFAULT false,
-      attachments JSONB DEFAULT '[]'::jsonb,
-      ai_risk_score NUMERIC,
-      completed_at TIMESTAMPTZ
-    );
-    CREATE TABLE IF NOT EXISTS controls_history (
-      id SERIAL PRIMARY KEY,
-      task_id INTEGER NOT NULL,
-      user TEXT NOT NULL,
-      results JSONB NOT NULL,
-      date TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
+  try {
+    // Création de controls_equipments
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS controls_equipments (
+        id SERIAL PRIMARY KEY,
+        site TEXT NOT NULL,
+        building TEXT NOT NULL,
+        equipment_type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        code TEXT,
+        done JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    // Création de controls_not_present
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS controls_not_present (
+        id SERIAL PRIMARY KEY,
+        site TEXT NOT NULL,
+        building TEXT NOT NULL,
+        equipment_type TEXT NOT NULL,
+        declared_by TEXT NOT NULL,
+        declared_at TIMESTAMPTZ DEFAULT NOW(),
+        last_assessment_at TIMESTAMPTZ,
+        note TEXT
+      );
+    `);
+    // Création de controls_tasks avec vérification explicite de due_date
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS controls_tasks (
+        id SERIAL PRIMARY KEY,
+        site TEXT NOT NULL,
+        building TEXT NOT NULL,
+        title TEXT NOT NULL,
+        equipment_type TEXT NOT NULL,
+        equipment_id INTEGER NOT NULL,
+        equipment_code TEXT,
+        item_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        due_date DATE NOT NULL DEFAULT CURRENT_DATE, -- Défaut explicite pour due_date
+        operator TEXT,
+        results JSONB DEFAULT '{}'::jsonb,
+        locked BOOLEAN DEFAULT FALSE,
+        attachments JSONB DEFAULT '[]'::jsonb,
+        ai_risk_score NUMERIC,
+        completed_at TIMESTAMPTZ
+      );
+    `);
+    // Création de controls_history
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS controls_history (
+        id SERIAL PRIMARY KEY,
+        task_id INTEGER NOT NULL,
+        user TEXT NOT NULL,
+        results JSONB NOT NULL,
+        date TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    log('[CONTROLS SCHEMA] Schema ensured successfully');
+  } catch (e) {
+    console.error('[CONTROLS SCHEMA] Init error:', e.message);
+    throw e; // Relance l'erreur pour un diagnostic plus clair
+  }
 }
-ensureSchema().catch(e => console.error('[CONTROLS SCHEMA] Init error:', e.message));
 
 // =====================================================================================
 // Adapters: Switchboards / HV / ATEX
