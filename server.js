@@ -63,6 +63,10 @@ app.use('/api/diagram', createProxyMiddleware({ target: diagramTarget, changeOri
 const controlsTarget = process.env.CONTROLS_BASE_URL || 'http://127.0.0.1:3011';
 app.use('/api/controls', createProxyMiddleware({ target: controlsTarget, changeOrigin: true, logLevel: 'warn' }));
 
+// --- PROXY OIBT (NOUVEAU)
+const oibtTarget = process.env.OIBT_BASE_URL || 'http://127.0.0.1:3012';
+app.use('/api/oibt', createProxyMiddleware({ target: oibtTarget, changeOrigin: true, logLevel: 'warn' }));
+
 // ---- Parsers (après les proxies)
 app.use(express.json());
 app.use(cookieParser());
