@@ -396,9 +396,9 @@ const TSD_LIBRARY = {
 
 async function ensureSchema() {
   try {
-    // Création de controls_equipments
+    // Vérification et création de controls_entities (équivalent de controls_equipments)
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS controls_equipments (
+      CREATE TABLE IF NOT EXISTS controls_entities (
         id SERIAL PRIMARY KEY,
         site TEXT NOT NULL,
         building TEXT NOT NULL,
@@ -409,7 +409,7 @@ async function ensureSchema() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-    // Création de controls_not_present
+    // Vérification et création de controls_not_present
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_not_present (
         id SERIAL PRIMARY KEY,
@@ -422,42 +422,39 @@ async function ensureSchema() {
         note TEXT
       );
     `);
-    // Création de controls_tasks avec vérification explicite de due_date
+    // Vérification et mise à jour de controls_tasks (aligné avec la structure existante)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_tasks (
         id SERIAL PRIMARY KEY,
         site TEXT NOT NULL,
-        building TEXT NOT NULL,
-        title TEXT NOT NULL,
-        equipment_type TEXT NOT NULL,
-        equipment_id INTEGER NOT NULL,
-        equipment_code TEXT,
+        entity_id INTEGER NOT NULL,
+        task_name TEXT NOT NULL,
+        task_code TEXT,
         item_id TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'open',
         created_at TIMESTAMPTZ DEFAULT NOW(),
-        due_date DATE NOT NULL DEFAULT CURRENT_DATE, -- Défaut explicite pour due_date
-        operator TEXT,
-        results JSONB DEFAULT '{}'::jsonb,
-        locked BOOLEAN DEFAULT FALSE,
-        attachments JSONB DEFAULT '[]'::jsonb,
-        ai_risk_score NUMERIC,
-        completed_at TIMESTAMPTZ
+        next_control DATE NOT NULL DEFAULT CURRENT_DATE,
+        result_schema JSONB DEFAULT '{}'::jsonb,
+        ai_notes JSONB DEFAULT '[]'::jsonb,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        FOREIGN KEY (entity_id) REFERENCES controls_entities(id) ON DELETE CASCADE
       );
     `);
-    // Création de controls_history
+    // Vérification et création de controls_history
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_history (
         id SERIAL PRIMARY KEY,
         task_id INTEGER NOT NULL,
         user TEXT NOT NULL,
         results JSONB NOT NULL,
-        date TIMESTAMPTZ DEFAULT NOW()
+        date TIMESTAMPTZ DEFAULT NOW(),
+        FOREIGN KEY (task_id) REFERENCES controls_tasks(id) ON DELETE CASCADE
       );
     `);
     log('[CONTROLS SCHEMA] Schema ensured successfully');
   } catch (e) {
-    console.error('[CONTROLS SCHEMA] Init error:', e.message);
-    throw e; // Relance l'erreur pour un diagnostic plus clair
+    console.error('[CONTROLS SCHEMA] Init error:', e.message, 'Stack:', e.stack);
+    throw e;
   }
 }
 
@@ -1003,7 +1000,7 @@ async function dailyMaintenance() {
   const { rows: overdue } = await pool.query(
     `SELECT ct.id, ct.task_name AS title, ce.equipment_type, ct.next_control AS due_date
      FROM controls_tasks ct
-     LEFT JOIN controls_equipments ce ON ct.entity_id = ce.id
+     LEFT JOIN controls_entities ce ON ct.entity_id = ce.id
      WHERE ct.status = 'overdue'
      LIMIT 50`
   );
