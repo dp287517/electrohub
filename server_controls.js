@@ -552,23 +552,23 @@ async function ensureOverdueFlags() {
 }
 
 async function regenerateTasks(site = 'Default') {
-  const { rows: equipments } = await pool.query('SELECT * FROM controls_equipments WHERE site = $1', [site]);
+  const { rows: entities } = await pool.query('SELECT * FROM controls_entities WHERE site = $1', [site]);
   const created = [];
-  for (const equip of equipments) {
-    const items = TSD_LIBRARY[equip.equipment_type] || [];
-    let done = equip.done || {};
+  for (const entity of entities) {
+    const items = TSD_LIBRARY[entity.equipment_type] || [];
+    let done = entity.done || {};
     for (const it of items) {
       const last = done[it.id] || null;
       if (isDue(last, it.frequency_months)) {
         const { rows: exists } = await pool.query(
-          'SELECT * FROM controls_tasks WHERE status IN (\'open\', \'overdue\') AND equipment_type = $1 AND entity_id = $2 AND item_id = $3',
-          [equip.equipment_type, equip.id, it.id]
+          'SELECT * FROM controls_tasks WHERE status IN (\'open\', \'overdue\') AND entity_id = $1 AND item_id = $2',
+          [entity.id, it.id]
         );
         if (exists.length === 0) {
-          const next_control = todayISO(); // Use next_control instead of due_date
+          const next_control = todayISO();
           await pool.query(
-            'INSERT INTO controls_tasks (site, entity_id, task_name, equipment_type, item_id, task_code, next_control, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-            [site, equip.id, `${equip.name} • ${it.label}`, equip.equipment_type, it.id, equip.code || 'N/A', next_control, 'open', new Date().toISOString()]
+            'INSERT INTO controls_tasks (site, entity_id, task_name, item_id, task_code, next_control, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+            [site, entity.id, `${entity.name} • ${it.label}`, it.id, entity.code || 'N/A', next_control, 'open', new Date().toISOString()]
           );
           created.push(true);
         }
