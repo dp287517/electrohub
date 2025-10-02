@@ -1,38 +1,47 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
-  Folder, FileText, CalendarClock, Upload, Download, Trash2, BarChart3, CheckCircle2, XCircle, AlertTriangle
+  Folder, FileText, CalendarClock, Upload, Download, Trash2, BarChart3, AlertTriangle, CheckCircle2, XCircle
 } from "lucide-react";
 
-function clsInput() {
-  return "w-full bg-white text-gray-900 placeholder-gray-400 border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
-}
-function btnPrimary() { return "px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"; }
-function btn() { return "px-3 py-2 rounded bg-gray-900 text-white hover:bg-black/90"; }
-function badge(ok) {
-  return ok ? "inline-flex items-center gap-1 text-xs bg-emerald-100 text-emerald-800 px-2 py-1 rounded"
-            : "inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded";
-}
-function Progress({ value }) {
-  return (
-    <div className="w-full h-2 rounded bg-gray-200 overflow-hidden">
-      <div className="h-2 bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
-    </div>
-  );
-}
-function Toast({ msg, type, onClose }) {
+/* ----------------------------- UI HELPERS ----------------------------- */
+const clsInput = () =>
+  "w-full bg-white text-gray-900 placeholder-gray-400 border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
+const btnPrimary = () => "px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700";
+const btn = () => "px-3 py-2 rounded bg-gray-900 text-white hover:bg-black/90";
+
+const Badge = ({ ok, label }) => (
+  <span
+    className={
+      "inline-flex items-center gap-1 text-xs px-2 py-1 rounded " +
+      (ok ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700")
+    }
+    title={ok ? "Fichier présent" : "Aucune pièce jointe"}
+  >
+    {ok ? <CheckCircle2 size={14} /> : <XCircle size={14} />} {label}
+  </span>
+);
+
+const Progress = ({ value }) => (
+  <div className="w-full h-2 rounded bg-gray-200 overflow-hidden">
+    <div className="h-2 bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+  </div>
+);
+
+const Toast = ({ msg, type, onClose }) => {
   if (!msg) return null;
   const colors = { success: "bg-green-600", error: "bg-red-600", info: "bg-blue-600", warn: "bg-amber-500" };
   return (
     <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg text-sm text-white ${colors[type] || colors.info}`}>
       <div className="flex items-center gap-3">
-        <span>{msg}</span>
+        <span dangerouslySetInnerHTML={{ __html: msg }} />
         <button onClick={onClose} className="bg-white/20 rounded px-2 py-0.5">OK</button>
       </div>
     </div>
   );
-}
-function ConfirmModal({ open, title, message, onConfirm, onCancel }) {
+};
+
+const ConfirmModal = ({ open, title, message, onConfirm, onCancel }) => {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
@@ -48,8 +57,9 @@ function ConfirmModal({ open, title, message, onConfirm, onCancel }) {
       </div>
     </div>
   );
-}
+};
 
+/* ------------------------------ PAGE OIBT ------------------------------ */
 export default function Oibt() {
   const [tab, setTab] = useState("projects"); // projects | periodics | analysis
 
@@ -58,13 +68,13 @@ export default function Oibt() {
   const [qProj, setQProj] = useState("");
   const [title, setTitle] = useState("");
 
-  // Periodiques
+  // Périodiques
   const [periodics, setPeriodics] = useState([]);
   const [qBuild, setQBuild] = useState("");
   const [building, setBuilding] = useState("");
   const [fileReport, setFileReport] = useState(null);
 
-  // UI/State
+  // UI
   const [toast, setToast] = useState(null);
   const [confirm, setConfirm] = useState({ open: false, id: null });
 
@@ -77,11 +87,10 @@ export default function Oibt() {
       ]);
       setProjects(pj?.data || pj || []);
       setPeriodics(per?.data || per || []);
-    } catch (e) {
-      setToast({ msg: e.message || "Erreur de chargement", type: "error" });
-    }
+    } catch (e) { setToast({ msg: e.message || "Erreur de chargement", type: "error" }); }
   }
 
+  /* ---------------------------- FILTERED LISTS ---------------------------- */
   const filteredProjects = useMemo(() => {
     const q = qProj.trim().toLowerCase();
     return !q ? projects : projects.filter(p => p.title?.toLowerCase().includes(q));
@@ -92,22 +101,22 @@ export default function Oibt() {
     return !q ? periodics : periodics.filter(c => c.building?.toLowerCase().includes(q));
   }, [periodics, qBuild]);
 
-  // Helpers progress
-  function projectProgress(p) {
+  /* ------------------------------ PROGRESS ------------------------------ */
+  const projectProgress = (p) => {
     const n = (p.status || []).length || 1;
     const done = (p.status || []).filter(a => a.done).length;
     return Math.round((done / n) * 100);
-  }
-  function periodicProgress(c) {
+  };
+  const periodicProgress = (c) => {
     const flags = [
       c.report_received ? 1 : 0,
       c.defect_report_received ? 1 : 0,
       c.confirmation_received ? 1 : 0,
     ];
     return Math.round((flags.reduce((a, b) => a + b, 0) / 3) * 100);
-  }
+  };
 
-  // ---- Projects actions
+  /* ---------------------------- PROJECT ACTIONS --------------------------- */
   async function createProject() {
     if (!title.trim()) return;
     try {
@@ -143,7 +152,7 @@ export default function Oibt() {
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
-  // ---- Periodics actions
+  /* --------------------------- PERIODIC ACTIONS --------------------------- */
   async function addPeriodic() {
     if (!building.trim()) return;
     try {
@@ -184,42 +193,86 @@ export default function Oibt() {
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
+  /* ------------------------------ FILE URLS ------------------------------ */
   const projFileUrl = (id, action) => `${API_BASE || ""}/api/oibt/projects/${id}/download?action=${encodeURIComponent(action)}`;
   const perFileUrl  = (id, type)   => `${API_BASE || ""}/api/oibt/periodics/${id}/download?type=${encodeURIComponent(type)}`;
 
-  // ---- Analysis data
-  const stats = useMemo(() => {
-    const prCount = projects.length;
-    const prAvg = prCount ? Math.round(projects.map(projectProgress).reduce((a,b)=>a+b,0)/prCount) : 0;
-
-    const peCount = periodics.length;
-    const peAvg = peCount ? Math.round(periodics.map(periodicProgress).reduce((a,b)=>a+b,0)/peCount) : 0;
-
-    // réceptions dues/retard
+  /* ------------------------------ ALERTES ------------------------------ */
+  const alerts = useMemo(() => {
+    const out = { project: [], periodic: [] };
     const today = new Date();
-    const soon = []; // <30j
-    const late = []; // dépassé
+
+    // Projets: Avis manquant + Réception <30j ou en retard
     for (const p of projects) {
-      const rec = (p.status || []).find(a => (a.key==="reception") || a.name==="Contrôle de réception");
+      const att = p.attachments || {};
+      if (!att.avis) {
+        out.project.push({ level: "warn", text: `Projet « ${p.title} » — Avis d’installation manquant.` });
+      }
+      const rec = (p.status || []).find(a => a.key === "reception" || a.name === "Contrôle de réception");
       if (rec?.due && !rec.done) {
-        const [d,m,y] = rec.due.split("/").map(Number); // fr-FR
-        const due = new Date(y, m-1, d);
-        const diff = Math.ceil((due - today) / (1000*60*60*24));
-        if (diff < 0) late.push({ title: p.title, due: rec.due, diff });
-        else if (diff <= 30) soon.push({ title: p.title, due: rec.due, diff });
+        const [d, m, y] = rec.due.split("/").map(Number);
+        const due = new Date(y, m - 1, d);
+        const diff = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
+        if (diff < 0) out.project.push({ level: "error", text: `Projet « ${p.title} » — Contrôle de réception en retard (dû le ${rec.due}).` });
+        else if (diff <= 30) out.project.push({ level: "warn", text: `Projet « ${p.title} » — Réception dans ${diff} jours (dû le ${rec.due}).` });
       }
     }
-    return { prCount, prAvg, peCount, peAvg, soon, late };
+
+    // Périodiques: fenêtres 3/6 mois après report_received_at tant que défaut/confirmation non reçus
+    for (const c of periodics) {
+      if (c.report_received && c.report_received_at) {
+        const base = new Date(c.report_received_at);
+        const plus3 = new Date(base); plus3.setMonth(plus3.getMonth() + 3);
+        const plus6 = new Date(base); plus6.setMonth(plus6.getMonth() + 6);
+
+        if (!c.defect_report_received) {
+          if (today > plus6) out.periodic.push({ level: "error", text: `Périodique « ${c.building} » — délai 6 mois dépassé pour l’élimination des défauts.` });
+          else if (today > plus3) out.periodic.push({ level: "warn", text: `Périodique « ${c.building} » — dépassement 3 mois, corriger avant 6 mois.` });
+          else {
+            const days = Math.ceil((plus3 - today) / (1000 * 60 * 60 * 24));
+            if (days <= 30) out.periodic.push({ level: "info", text: `Périodique « ${c.building} » — correction à effectuer sous ${days} jours (jalon 3 mois).` });
+          }
+        }
+        // Optionnel: on pourrait aussi alerter si confirmation trop tard… (à adapter si besoin)
+      }
+    }
+    return out;
   }, [projects, periodics]);
 
+  const AlertBanner = ({ item }) => {
+    const color =
+      item.level === "error" ? "bg-rose-100 text-rose-800 border-rose-200" :
+      item.level === "warn"  ? "bg-amber-100 text-amber-800 border-amber-200" :
+      "bg-blue-100 text-blue-800 border-blue-200";
+    const Icon =
+      item.level === "error" ? AlertTriangle :
+      item.level === "warn"  ? AlertTriangle :
+      CalendarClock;
+    return (
+      <div className={`px-3 py-2 rounded border ${color} flex items-center gap-2`}>
+        <Icon size={16} />
+        <span className="text-sm">{item.text}</span>
+      </div>
+    );
+  };
+
+  /* -------------------------------- RENDER ------------------------------- */
   return (
     <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
-      <header className="mb-6">
+      <header className="mb-4">
         <h1 className="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">
-          <BarChart3 /> OIBT – Installation & Contrôles
+          <BarChart3 /> OIBT – Installation &amp; Contrôles
         </h1>
         <p className="text-gray-600">Avis d’installation, protocoles, rapports de sécurité, contrôle de réception et contrôles périodiques.</p>
       </header>
+
+      {/* Alertes globales (projets + périodiques) */}
+      {(alerts.project.length > 0 || alerts.periodic.length > 0) && (
+        <div className="mb-6 grid gap-2">
+          {alerts.project.map((a, i) => <AlertBanner key={`pa-${i}`} item={a} />)}
+          {alerts.periodic.map((a, i) => <AlertBanner key={`pe-${i}`} item={a} />)}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="mb-6 flex gap-2 border-b">
@@ -236,14 +289,13 @@ export default function Oibt() {
         ))}
       </div>
 
-      {/* ---------- PROJETS ---------- */}
+      {/* ------------------------------ PROJETS ------------------------------ */}
       {tab === "projects" && (
         <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200 mb-8">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2"><Folder /> Projets</h2>
             <div className="flex gap-2">
-              <input value={qProj} onChange={e => setQProj(e.target.value)} placeholder="Filtrer par titre…"
-                     className={clsInput()} style={{ maxWidth: 280 }} />
+              <input value={qProj} onChange={e => setQProj(e.target.value)} placeholder="Filtrer par titre…" className={clsInput()} style={{ maxWidth: 280 }} />
               <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
             </div>
           </div>
@@ -263,7 +315,6 @@ export default function Oibt() {
                 const due = new Date(y, m-1, d);
                 return due < new Date();
               })();
-
               return (
                 <div key={p.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
                   <div className="flex items-center justify-between">
@@ -287,6 +338,7 @@ export default function Oibt() {
                   <ul className="mt-3 space-y-3">
                     {(p.status || []).map((a, i) => {
                       const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : "reception");
+                      const hasFile = !!p.attachments?.[key];
                       return (
                         <li key={i} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
                           <div className="flex items-center justify-between gap-3">
@@ -295,18 +347,22 @@ export default function Oibt() {
                               <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
                               {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
                             </label>
+                            <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} />
                           </div>
 
-                          {/* pièces jointes par action */}
                           <div className="mt-2 flex items-center gap-3">
-                            <input type="file"
-                                   onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
-                                   className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                                   accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                            <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
-                               className="text-sm text-blue-600 hover:underline flex items-center gap-1">
-                              <Download size={16} /> Télécharger
-                            </a>
+                            <input
+                              type="file"
+                              onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
+                              className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
+                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                            />
+                            {hasFile && (
+                              <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
+                                 className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                                <Download size={16} /> Télécharger
+                              </a>
+                            )}
                           </div>
                         </li>
                       );
@@ -322,7 +378,7 @@ export default function Oibt() {
         </div>
       )}
 
-      {/* ---------- PÉRIODIQUES ---------- */}
+      {/* ---------------------------- PÉRIODIQUES ---------------------------- */}
       {tab === "periodics" && (
         <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
           <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -369,7 +425,8 @@ export default function Oibt() {
                         <input type="file" onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
                                className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
                                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                        {(c.has_report) && (
+                        <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} />
+                        {c.has_report && (
                           <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
                             <Download size={16}/> Télécharger
                           </a>
@@ -388,6 +445,7 @@ export default function Oibt() {
                         <input type="file" onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
                                className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
                                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+                        <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} />
                         {c.has_defect && (
                           <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
                             <Download size={16}/> Télécharger
@@ -407,6 +465,7 @@ export default function Oibt() {
                         <input type="file" onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
                                className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
                                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+                        <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} />
                         {c.has_confirmation && (
                           <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
                             <Download size={16}/> Télécharger
@@ -423,63 +482,9 @@ export default function Oibt() {
         </div>
       )}
 
-      {/* ---------- ANALYSIS ---------- */}
+      {/* ------------------------------ ANALYSIS ----------------------------- */}
       {tab === "analysis" && (
-        <div className="grid gap-6">
-          <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
-            <h3 className="font-semibold text-gray-900 mb-3">Vue d’ensemble</h3>
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-4 rounded-xl border bg-gray-50">
-                <div className="text-sm text-gray-600">Projets</div>
-                <div className="text-2xl font-bold">{stats.prCount}</div>
-              </div>
-              <div className="p-4 rounded-xl border bg-gray-50">
-                <div className="text-sm text-gray-600">Avancement projets</div>
-                <div className="text-2xl font-bold">{stats.prAvg}%</div>
-                <div className="mt-2"><Progress value={stats.prAvg} /></div>
-              </div>
-              <div className="p-4 rounded-xl border bg-gray-50">
-                <div className="text-sm text-gray-600">Périodiques</div>
-                <div className="text-2xl font-bold">{stats.peCount}</div>
-              </div>
-              <div className="p-4 rounded-xl border bg-gray-50">
-                <div className="text-sm text-gray-600">Avancement périodiques</div>
-                <div className="text-2xl font-bold">{stats.peAvg}%</div>
-                <div className="mt-2"><Progress value={stats.peAvg} /></div>
-              </div>
-            </div>
-          </div>
-
-          {(stats.late.length > 0 || stats.soon.length > 0) && (
-            <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
-              <h3 className="font-semibold text-gray-900 mb-3">Contrôles de réception à surveiller</h3>
-              {stats.late.length > 0 && (
-                <div className="mb-4">
-                  <div className="text-sm font-medium text-red-700 flex items-center gap-2"><AlertTriangle /> En retard</div>
-                  <ul className="mt-2 space-y-1">
-                    {stats.late.map((r, i) => (
-                      <li key={`late-${i}`} className="text-sm text-red-700">
-                        {r.title} — dû le {r.due} ({-r.diff} j de retard)
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {stats.soon.length > 0 && (
-                <div>
-                  <div className="text-sm font-medium text-amber-700 flex items-center gap-2"><CalendarClock /> À venir (&lt;= 30j)</div>
-                  <ul className="mt-2 space-y-1">
-                    {stats.soon.map((r, i) => (
-                      <li key={`soon-${i}`} className="text-sm text-amber-700">
-                        {r.title} — dû le {r.due} (dans {r.diff} j)
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <Analysis projects={projects} periodics={periodics} projectProgress={projectProgress} periodicProgress={periodicProgress} />
       )}
 
       {/* Confirm delete (projet ou périodique) */}
@@ -502,5 +507,91 @@ export default function Oibt() {
       {/* Toast */}
       <Toast {...toast} onClose={() => setToast(null)} />
     </section>
+  );
+}
+
+/* ------------------------------ ANALYSIS TAB ------------------------------ */
+function Analysis({ projects, periodics, projectProgress, periodicProgress }) {
+  const stats = useMemo(() => {
+    const prCount = projects.length;
+    const prAvg = prCount ? Math.round(projects.map(projectProgress).reduce((a,b)=>a+b,0)/prCount) : 0;
+
+    const peCount = periodics.length;
+    const peAvg = peCount ? Math.round(periodics.map(periodicProgress).reduce((a,b)=>a+b,0)/peCount) : 0;
+
+    const today = new Date();
+    const soon = []; // <30j
+    const late = []; // dépassé
+    for (const p of projects) {
+      const rec = (p.status || []).find(a => (a.key==="reception") || a.name==="Contrôle de réception");
+      if (rec?.due && !rec.done) {
+        const [d,m,y] = rec.due.split("/").map(Number);
+        const due = new Date(y, m-1, d);
+        const diff = Math.ceil((due - today) / (1000*60*60*24));
+        if (diff < 0) late.push({ title: p.title, due: rec.due, diff });
+        else if (diff <= 30) soon.push({ title: p.title, due: rec.due, diff });
+      }
+    }
+    return { prCount, prAvg, peCount, peAvg, soon, late };
+  }, [projects, periodics, projectProgress, periodicProgress]);
+
+  return (
+    <div className="grid gap-6">
+      <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+        <h3 className="font-semibold text-gray-900 mb-3">Vue d’ensemble</h3>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <CardStat label="Projets" value={stats.prCount} />
+          <CardStat label="Avancement projets" value={`${stats.prAvg}%`} bar={stats.prAvg} />
+          <CardStat label="Périodiques" value={stats.peCount} />
+          <CardStat label="Avancement périodiques" value={`${stats.peAvg}%`} bar={stats.peAvg} />
+        </div>
+      </div>
+
+      {(stats.late.length > 0 || stats.soon.length > 0) && (
+        <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+          <h3 className="font-semibold text-gray-900 mb-3">Contrôles de réception à surveiller</h3>
+          {stats.late.length > 0 && (
+            <div className="mb-4">
+              <div className="text-sm font-medium text-red-700 flex items-center gap-2"><AlertTriangle /> En retard</div>
+              <ul className="mt-2 space-y-1">
+                {stats.late.map((r, i) => (
+                  <li key={`late-${i}`} className="text-sm text-red-700">
+                    {r.title} — dû le {r.due} ({-r.diff} j de retard)
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {stats.soon.length > 0 && (
+            <div>
+              <div className="text-sm font-medium text-amber-700 flex items-center gap-2"><CalendarClock /> À venir (&lt;= 30j)</div>
+              <ul className="mt-2 space-y-1">
+                {stats.soon.map((r, i) => (
+                  <li key={`soon-${i}`} className="text-sm text-amber-700">
+                    {r.title} — dû le {r.due} (dans {r.diff} j)
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CardStat({ label, value, bar }) {
+  return (
+    <div className="p-4 rounded-xl border bg-gray-50">
+      <div className="text-sm text-gray-600">{label}</div>
+      <div className="text-2xl font-bold">{value}</div>
+      {typeof bar === "number" && (
+        <div className="mt-2">
+          <div className="w-full h-2 rounded bg-gray-200 overflow-hidden">
+            <div className="h-2 bg-blue-600" style={{ width: `${Math.max(0, Math.min(100, bar))}%` }} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
