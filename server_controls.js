@@ -535,7 +535,6 @@ async function syncAllExternal(site = 'Default') {
 // =====================================================================================
 // Génération des tâches (incl. NOT_PRESENT) + statut Overdue
 // =====================================================================================
-
 async function ensureOverdueFlags() {
   await pool.query("UPDATE controls_tasks SET status = 'overdue' WHERE status = 'open' AND due_date < CURRENT_DATE");
 }
@@ -559,4 +558,450 @@ async function regenerateTasks(site = 'Default') {
             'INSERT INTO controls_tasks (site, building, title, equipment_type, equipment_id, equipment_code, item_id, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
             [site, equip.building, `${equip.name} • ${it.label}`, equip.equipment_type, equip.id, equip.code, it.id, due_date]
           );
-          created.push(true
+          created.push(true);
+        }
+      }
+    }
+  }
+  // NOT_PRESENT
+  const { rows: decls } = await pool.query('SELECT * FROM controls_not_present WHERE site = $1', [site]);
+  for (const decl of decls) {
+    const last = decl.last_assessment_at;
+    if (isDue(last ? last.toISOString().slice(0, 10) : null, 12)) {
+      const { rows: exists } = await pool.query(
+        'SELECT * FROM controls_tasks WHERE status IN (\'open\', \'overdue\') AND equipment_type = \'NOT_PRESENT\' AND equipment_id = $1',
+        [decl.id]
+      );
+      if (exists.length === 0) {
+        await pool.query(
+          'INSERT INTO controls_tasks (site, building, title, equipment_type, equipment_id, equipment_code, item_id, due_date) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [site, decl.building, `[Annual Assessment] ${decl.equipment_type} — declared not present`, 'NOT_PRESENT', decl.id, `NP-${decl.building}-${decl.equipment_type}`, 'annual_assessment', todayISO()]
+        );
+        created.push(true);
+      }
+    }
+  }
+  await ensureOverdueFlags();
+  return created.length;
+}
+
+// =====================================================================================
+// Évaluations TSD + intégration risk score (vision) dans le verdict
+// =====================================================================================
+
+function evaluate(tsd_item, results, aiRiskScore = null) {
+  if (!tsd_item) return { status: 'To Verify', detail: 'No TSD rule found' };
+
+  const RISK_THRESHOLD = Number(process.env.AI_RISK_THRESHOLD || 0.7);
+
+  const v = results?.[tsd_item.field];
+  let baseVerdict;
+  switch (tsd_item.type) {
+    case 'check': {
+      const ok = (v === true);
+      baseVerdict = { status: ok ? 'Compliant' : 'Non Compliant', detail: ok ? 'OK' : 'Not checked' };
+      break;
+    }
+    case 'number': {
+      const num = Number(v);
+      if (isNaN(num)) baseVerdict = { status: 'To Verify', detail: 'Missing numerical value' };
+      else {
+        const thr = Number(tsd_item.threshold);
+        if (tsd_item.comparator === '>=') baseVerdict = { status: num >= thr ? 'Compliant' : 'Non Compliant', detail: `${num} ${tsd_item.unit || ''} vs ≥ ${thr}` };
+        else if (tsd_item.comparator === '<=') baseVerdict = { status: num <= thr ? 'Compliant' : 'Non Compliant', detail: `${num} ${tsd_item.unit || ''} vs ≤ ${thr}` };
+        else if (tsd_item.comparator === '<') baseVerdict = { status: num < thr ? 'Compliant' : 'Non Compliant', detail: `${num} ${tsd_item.unit || ''} vs < ${thr}` };
+        else if (tsd_item.comparator === '==') baseVerdict = { status: num === thr ? 'Compliant' : 'Non Compliant', detail: `${num} vs == ${thr}` };
+        else baseVerdict = { status: 'To Verify', detail: 'Unhandled comparator' };
+      }
+      break;
+    }
+    default:
+      baseVerdict = { status: 'To Verify', detail: 'Unhandled type' };
+  }
+
+  if (aiRiskScore != null && aiRiskScore >= RISK_THRESHOLD && baseVerdict.status === 'Compliant') {
+    return { status: 'To Verify', detail: `AI risk score ${aiRiskScore.toFixed(2)} ≥ threshold ${RISK_THRESHOLD}` };
+  }
+  return baseVerdict;
+}
+
+// =====================================================================================
+// 7) API
+// =====================================================================================
+
+// Health
+app.get('/api/controls/health', async (_req, res) => {
+  const openaiOk = !!openai;
+  res.json({ ok: true, ts: Date.now(), openai: openaiOk });
+});
+
+// ---- Sync externe
+app.post('/api/controls/sync', async (req, res) => {
+  const site = req.body?.site || 'Default';
+  const r = await syncAllExternal(site);
+  const created = await regenerateTasks(site);
+  res.json({ synced: r, tasks_created: created });
+});
+
+// ---- Catalog équipements
+app.get('/api/controls/catalog', async (req, res) => {
+  const { site = 'Default', building, type } = req.query;
+  let query = 'SELECT * FROM controls_equipments WHERE site = $1';
+  const values = [site];
+  let i = 2;
+  if (building) {
+    query += ` AND building = $${i}`;
+    values.push(building);
+    i++;
+  }
+  if (type) {
+    query += ` AND equipment_type = $${i}`;
+    values.push(type);
+    i++;
+  }
+  const { rows } = await pool.query(query, values);
+  res.json({ data: rows, types: EQUIPMENT_TYPES, buildings: BUILDINGS });
+});
+
+app.post('/api/controls/catalog', async (req, res) => {
+  const { site = 'Default', building, equipment_type, name, code } = req.body || {};
+  if (!building || !equipment_type || !name) return res.status(400).json({ error: 'Missing fields' });
+  if (!EQUIPMENT_TYPES.includes(equipment_type)) return res.status(400).json({ error: 'Unknown equipment_type' });
+  const { rows } = await pool.query(
+    'INSERT INTO controls_equipments (site, building, equipment_type, name, code) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    [site, building, equipment_type, name, code || null]
+  );
+  res.status(201).json(rows[0]);
+});
+
+app.delete('/api/controls/catalog/:id', async (req, res) => {
+  const { rowCount } = await pool.query('DELETE FROM controls_equipments WHERE id = $1', [req.params.id]);
+  if (rowCount === 0) return res.status(404).json({ error: 'Not found' });
+  res.json({ success: true });
+});
+
+// ---- Déclaration Non Présent
+app.get('/api/controls/not-present', async (req, res) => {
+  const { site = 'Default', building } = req.query;
+  let query = 'SELECT * FROM controls_not_present WHERE site = $1';
+  const values = [site];
+  if (building) {
+    query += ' AND building = $2';
+    values.push(building);
+  }
+  const { rows } = await pool.query(query, values);
+  res.json(rows);
+});
+
+app.post('/api/controls/not-present', async (req, res) => {
+  const { site = 'Default', building, equipment_type, declared_by, note } = req.body || {};
+  if (!building || !equipment_type) return res.status(400).json({ error: 'Missing fields' });
+  if (!EQUIPMENT_TYPES.includes(equipment_type)) return res.status(400).json({ error: 'Unknown equipment_type' });
+  const { rows: exists } = await pool.query('SELECT * FROM controls_not_present WHERE site = $1 AND building = $2 AND equipment_type = $3', [site, building, equipment_type]);
+  if (exists.length > 0) return res.status(409).json({ error: 'Already declared' });
+  const { rows } = await pool.query(
+    'INSERT INTO controls_not_present (site, building, equipment_type, declared_by, note) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    [site, building, equipment_type, declared_by || 'unknown', note || '']
+  );
+  await regenerateTasks(site);
+  res.status(201).json(rows[0]);
+});
+
+app.post('/api/controls/not-present/:id/assess', async (req, res) => {
+  const id = Number(req.params.id);
+  const { rows: decl } = await pool.query('SELECT * FROM controls_not_present WHERE id = $1', [id]);
+  if (decl.length === 0) return res.status(404).json({ error: 'Not found' });
+  await pool.query('UPDATE controls_not_present SET last_assessment_at = CURRENT_TIMESTAMP WHERE id = $1', [id]);
+  await pool.query(
+    'UPDATE controls_tasks SET status = \'completed\', locked = true, operator = $1, results = $2, completed_at = CURRENT_TIMESTAMP WHERE equipment_type = \'NOT_PRESENT\' AND equipment_id = $3 AND status IN (\'open\', \'overdue\')',
+    [req.body?.user || 'unknown', JSON.stringify({ note: req.body?.note || '', verdict: { status: 'Compliant', detail: 'Assessment réalisé' } }), id]
+  );
+  const { rows: updatedTask } = await pool.query(
+    'SELECT * FROM controls_tasks WHERE equipment_type = \'NOT_PRESENT\' AND equipment_id = $1 ORDER BY completed_at DESC LIMIT 1',
+    [id]
+  );
+  if (updatedTask.length > 0) {
+    await pool.query('INSERT INTO controls_history (task_id, user, results) VALUES ($1, $2, $3)', [updatedTask[0].id, updatedTask[0].operator, updatedTask[0].results]);
+  }
+  res.json({ success: true });
+});
+
+// ---- Librairie TSD
+app.get('/api/controls/library', (_req, res) => {
+  res.json({ types: EQUIPMENT_TYPES, library: TSD_LIBRARY });
+});
+
+// ---- Tâches: list / generate / details
+app.get('/api/controls/tasks', async (req, res) => {
+  const { site = 'Default', building, type, status, q, page = 1, pageSize = 50 } = req.query;
+  await ensureOverdueFlags();
+  let query = 'SELECT * FROM controls_tasks WHERE site = $1';
+  const values = [site];
+  let i = 2;
+  if (building) {
+    query += ` AND building = $${i}`;
+    values.push(building);
+    i++;
+  }
+  if (type) {
+    query += ` AND equipment_type = $${i}`;
+    values.push(type);
+    i++;
+  }
+  if (status) {
+    query += ` AND status = $${i}`;
+    values.push(status);
+    i++;
+  }
+  if (q) {
+    query += ` AND (title ILIKE $${i} OR equipment_code ILIKE $${i})`;
+    values.push(`%${q}%`);
+    i++;
+  }
+  query += ' ORDER BY due_date ASC LIMIT $' + i + ' OFFSET $' + (i + 1);
+  values.push(Number(pageSize));
+  values.push((Number(page) - 1) * Number(pageSize));
+  const { rows } = await pool.query(query, values);
+  const { rows: totalRows } = await pool.query('SELECT COUNT(*) FROM controls_tasks WHERE site = $1', [site]);
+  res.json({ data: rows, total: totalRows[0].count });
+});
+
+app.post('/api/controls/generate', async (req, res) => {
+  const site = req.body?.site || 'Default';
+  const created = await regenerateTasks(site);
+  res.json({ created });
+});
+
+app.get('/api/controls/tasks/:id/details', async (req, res) => {
+  const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [req.params.id]);
+  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
+  const t = task[0];
+  const { rows: equip } = await pool.query('SELECT * FROM controls_equipments WHERE equipment_type = $1 AND id = $2', [t.equipment_type, t.equipment_id]);
+  const item = TSD_LIBRARY[t.equipment_type]?.find(i => i.id === t.item_id) || null;
+  res.json({ ...t, equipment: equip[0] || null, tsd_item: item });
+});
+
+// ---- Pièces jointes
+app.post('/api/controls/tasks/:id/upload', upload.array('files', 12), async (req, res) => {
+  const id = Number(req.params.id);
+  const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [id]);
+  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
+  if (task[0].locked) return res.status(400).json({ error: 'Task is locked' });
+  const files = (req.files || []).map(f => ({
+    filename: f.originalname, size: f.size, mimetype: f.mimetype, data: f.buffer, uploaded_at: new Date().toISOString()
+  }));
+  await pool.query('UPDATE controls_tasks SET attachments = attachments || $1 WHERE id = $2', [JSON.stringify(files), id]);
+  res.json({ uploaded: files.length });
+});
+
+app.get('/api/controls/tasks/:id/attachments', async (req, res) => {
+  const { rows: task } = await pool.query('SELECT attachments FROM controls_tasks WHERE id = $1', [req.params.id]);
+  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
+  const list = task[0].attachments.map((a, idx) => ({ id: idx, filename: a.filename, size: a.size, mimetype: a.mimetype, uploaded_at: a.uploaded_at }));
+  res.json(list);
+});
+
+app.get('/api/controls/tasks/:id/attachments/:attId', async (req, res) => {
+  const { rows: task } = await pool.query('SELECT attachments FROM controls_tasks WHERE id = $1', [req.params.id]);
+  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
+  const att = task[0].attachments[Number(req.params.attId)];
+  if (!att) return res.status(404).json({ error: 'Attachment not found' });
+  res.setHeader('Content-Type', att.mimetype);
+  res.setHeader('Content-Disposition', `attachment; filename="${att.filename}"`);
+  res.send(att.data);
+});
+
+app.delete('/api/controls/attachments/:taskId/:attId', async (req, res) => {
+  const taskId = Number(req.params.taskId);
+  const attId = Number(req.params.attId);
+  const { rows: task } = await pool.query('SELECT attachments FROM controls_tasks WHERE id = $1', [taskId]);
+  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
+  task[0].attachments.splice(attId, 1);
+  await pool.query('UPDATE controls_tasks SET attachments = $1 WHERE id = $2', [JSON.stringify(task[0].attachments), taskId]);
+  res.json({ success: true });
+});
+
+// ---- IA Vision: score de risque et tags avec OpenAI
+app.post('/api/controls/ai/vision-score', upload.array('files', 8), async (req, res) => {
+  if (!openai) return res.status(503).json({ error: 'AI unavailable' });
+  const hints = (req.body?.hints || '').toLowerCase();
+  const files = req.files || [];
+  const imageParts = files.map(f => ({
+    type: "image_url",
+    image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` }
+  }));
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: 'You are an expert in electrical equipment maintenance. Analyze images for risks like overheating, corrosion, loose connections, IP breaches. Output JSON: { ai_risk_score: number 0-1, tags: array of strings }' },
+        { role: 'user', content: [{ type: "text", text: `Hints: ${hints}. Analyze for risks.` }, ...imageParts] }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3
+    });
+    const json = JSON.parse(completion.choices[0].message.content);
+    res.json({ ai_risk_score: Number(json.ai_risk_score || 0), tags: json.tags || [] });
+  } catch (e) {
+    res.status(500).json({ error: 'AI analysis failed', details: e.message });
+  }
+});
+
+// ---- Compléter une tâche
+app.post('/api/controls/tasks/:id/complete', async (req, res) => {
+  const id = Number(req.params.id);
+  const { rows: task } = await pool.query('SELECT * FROM controls_tasks WHERE id = $1', [id]);
+  if (task.length === 0) return res.status(404).json({ error: 'Not found' });
+  const t = task[0];
+  if (t.locked) return res.status(400).json({ error: 'Already completed' });
+
+  const user = req.body?.user || 'unknown';
+  const results = req.body?.results || {};
+  const ai_risk_score = Number(req.body?.ai_risk_score) || t.ai_risk_score;
+
+  const item = TSD_LIBRARY[t.equipment_type]?.find(i => i.id === t.item_id) || null;
+  const verdict = evaluate(item, results, ai_risk_score);
+
+  await pool.query(
+    'UPDATE controls_tasks SET status = \'completed\', locked = true, operator = $1, results = $2, ai_risk_score = $3, completed_at = CURRENT_TIMESTAMP WHERE id = $4',
+    [user, JSON.stringify({ ...results, verdict }), ai_risk_score, id]
+  );
+
+  // Update EQUIP_DONE
+  if (item && t.equipment_type !== 'NOT_PRESENT') {
+    await pool.query(
+      'UPDATE controls_equipments SET done = done || jsonb_build_object($1, $2) WHERE equipment_type = $3 AND id = $4',
+      [t.item_id, todayISO(), t.equipment_type, t.equipment_id]
+    );
+  }
+
+  await pool.query('INSERT INTO controls_history (task_id, user, results) VALUES ($1, $2, $3)', [id, user, { ...results, verdict }]);
+
+  res.json({ message: 'Task completed', verdict });
+});
+
+// ---- Historique & export
+app.get('/api/controls/history', async (req, res) => {
+  const { user, q, page = 1, pageSize = 50 } = req.query;
+  let query = 'SELECT * FROM controls_history';
+  const values = [];
+  let i = 1;
+  if (user) {
+    query += ` WHERE user = $${i}`;
+    values.push(user);
+    i++;
+  }
+  if (q) {
+    query += user ? ' AND' : ' WHERE';
+    query += ` results::text ILIKE $${i}`;
+    values.push(`%${q}%`);
+    i++;
+  }
+  query += ' ORDER BY date DESC LIMIT $' + i + ' OFFSET $' + (i + 1);
+  values.push(Number(pageSize));
+  values.push((Number(page) - 1) * Number(pageSize));
+  const { rows } = await pool.query(query, values);
+  const { rows: totalRows } = await pool.query('SELECT COUNT(*) FROM controls_history');
+  res.json({ data: rows, total: totalRows[0].count });
+});
+
+app.get('/api/controls/history/export', async (_req, res) => {
+  const { rows } = await pool.query('SELECT * FROM controls_history');
+  const csv = toCSV(rows);
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename=controls_history.csv');
+  res.send(csv);
+});
+
+// ---- Analytics
+app.get('/api/controls/analytics', async (_req, res) => {
+  await ensureOverdueFlags();
+  const { rows: stats } = await pool.query(`
+    SELECT 
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE status = 'completed') AS completed,
+      COUNT(*) FILTER (WHERE status = 'open') AS open,
+      COUNT(*) FILTER (WHERE status = 'overdue') AS overdue
+    FROM controls_tasks
+  `);
+  const { rows: byBuilding } = await pool.query('SELECT building, COUNT(*) FROM controls_tasks GROUP BY building');
+  const { rows: byType } = await pool.query('SELECT equipment_type, COUNT(*) FROM controls_tasks GROUP BY equipment_type');
+  const gaps = EQUIPMENT_TYPES.filter(ty => {
+    const hasEquip = pool.query('SELECT COUNT(*) FROM controls_equipments WHERE equipment_type = $1', [ty]).then(r => r.rows[0].count > 0);
+    const hasNP = pool.query('SELECT COUNT(*) FROM controls_not_present WHERE equipment_type = $1', [ty]).then(r => r.rows[0].count > 0);
+    return !hasEquip && !hasNP;
+  });
+  res.json({ ...stats[0], byBuilding: byBuilding.reduce((acc, r) => ({ ...acc, [r.building]: r.count }), {}), byType: byType.reduce((acc, r) => ({ ...acc, [r.equipment_type]: r.count }), {}), gaps });
+});
+
+// ---- Roadmap
+app.get('/api/controls/roadmap', async (_req, res) => {
+  const { rows } = await pool.query(`
+    SELECT equipment_type, COUNT(*) AS count, MIN(due_date) AS start, MAX(due_date) AS end
+    FROM controls_tasks WHERE status IN ('open', 'overdue') GROUP BY equipment_type
+  `);
+  const roadmap = rows.map((r, idx) => ({ id: idx + 1, title: `Q4 — ${r.equipment_type} (${r.count} tasks)`, start: r.start, end: r.end }));
+  res.json(roadmap);
+});
+
+// ---- Assistant IA
+app.post('/api/controls/ai/assistant', async (req, res) => {
+  const { mode, text, lang = 'en' } = req.body || {};
+  if (!openai) return res.status(503).json({ error: 'AI unavailable' });
+  if (mode === 'text') {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: `You are an electrical maintenance assistant. Respond in ${lang}.` },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.5
+      });
+      res.json({ reply: completion.choices[0].message.content });
+    } catch (e) {
+      res.status(500).json({ error: 'AI text failed' });
+    }
+  } else if (mode === 'vision') {
+    res.json({ suggestion: 'Vision analysis stub - implement with OpenAI' }); // Placeholder, integrate as in vision-score
+  } else {
+    res.status(400).json({ error: 'Unknown mode' });
+  }
+});
+
+// =====================================================================================
+// 8) Scheduler quotidien (Overdue + notifications) — in-process
+// =====================================================================================
+
+const ALERT_WEBHOOK = process.env.ALERT_WEBHOOK || null;
+async function notify(payload) {
+  if (!ALERT_WEBHOOK) return;
+  try {
+    await fetch(ALERT_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  } catch (e) { log('notify error', e.message); }
+}
+
+async function dailyMaintenance() {
+  await ensureOverdueFlags();
+  const { rows: overdue } = await pool.query(
+    'SELECT id, title, building, equipment_type, due_date FROM controls_tasks WHERE status = \'overdue\' LIMIT 50'
+  );
+  if (overdue.length > 0) {
+    notify({ type: 'controls.overdue', at: new Date().toISOString(), count: overdue.length, items: overdue });
+    log(`overdue: ${overdue.length}`);
+  }
+  await regenerateTasks('Default');
+  log('daily maintenance done');
+}
+
+// Lancement job: toutes les 6h (et au démarrage)
+const SIX_HOURS = 6 * 60 * 60 * 1000;
+setTimeout(dailyMaintenance, 5 * 1000);
+setInterval(dailyMaintenance, SIX_HOURS);
+
+// =====================================================================================
+// 9) Démarrage
+// =====================================================================================
+const port = Number(process.env.CONTROLS_PORT || 3011);
+app.listen(port, () => console.log(`[controls] server listening on :${port}`));
