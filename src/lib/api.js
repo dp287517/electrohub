@@ -146,4 +146,19 @@ export const api = {
     view: (params) => get("/api/diagram/view", { ...(params || {}), site: currentSite() }),
     health: () => get("/api/diagram/health"),
   },
+
+  /** ------- OIBT ------- */
+  oibt: {
+    // Projets (avis/protocole/rapport + rappel contrôle de réception)
+    listProjects: (params) => get("/api/oibt/projects", params),
+    createProject: (payload) => post("/api/oibt/projects", payload),
+    updateProject: (id, payload) => put(`/api/oibt/projects/${id}`, payload),
+    removeProject: (id) => del(`/api/oibt/projects/${id}`),
+
+    // Contrôles périodiques (bâtiments + actions défaut/confirmation)
+    listPeriodics: (params) => get("/api/oibt/periodics", params),
+    createPeriodic: (payload) => post("/api/oibt/periodics", payload),
+    updatePeriodic: (id, payload) => put(`/api/oibt/periodics/${id}`, payload),
+    removePeriodic: (id) => del(`/api/oibt/periodics/${id}`),
+  },
 };
