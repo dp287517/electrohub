@@ -19,6 +19,9 @@ import HighVoltage from './pages/High_voltage.jsx';
 import Diagram from './pages/Diagram.jsx';
 import Controls from './pages/Controls.jsx';
 
+// >>> OIBT page
+import Oibt from './pages/Oibt.jsx';
+
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
@@ -49,6 +52,9 @@ export default function App() {
           <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} />
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
           <Route path="/app/controls" element={<ProtectedRoute><Controls /></ProtectedRoute>} />
+
+          {/* >>> OIBT */}
+          <Route path="/app/oibt" element={<ProtectedRoute><Oibt /></ProtectedRoute>} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
