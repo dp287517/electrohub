@@ -15,7 +15,7 @@ app.use(helmet());
 app.use(express.json({ limit: "20mb" }));
 app.use(cookieParser());
 
-// CORS (proxifié par server.js, mais utile en local)
+// CORS (utile en local ; derrière le proxy en prod)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
@@ -25,6 +25,7 @@ app.use((req, res, next) => {
   next();
 });
 
+// Site par défaut si X-Site manquant (évite les listes vides)
 const DEFAULT_SITE = process.env.OIBT_DEFAULT_SITE || "Nyon";
 function siteOf(req) {
   return (
@@ -33,10 +34,11 @@ function siteOf(req) {
   );
 }
 
+// Upload en mémoire (stockage DB en BYTEA)
 const upload = multer({ storage: multer.memoryStorage() });
 
 /* ------------------------------------------------------------------ */
-/*                             SCHEMA                                 */
+/*                               SCHEMA                               */
 /* ------------------------------------------------------------------ */
 async function ensureSchema() {
   await pool.query(`
@@ -48,25 +50,33 @@ async function ensureSchema() {
       status JSONB DEFAULT '[]'::jsonb
     );
     CREATE INDEX IF NOT EXISTS idx_oibt_projects_site ON oibt_projects(site);
+  `);
 
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS oibt_periodics (
       id SERIAL PRIMARY KEY,
       site TEXT NOT NULL,
       building TEXT NOT NULL,
-      -- anciens champs compat
+
+      -- compat ancien champ URL
       report_url TEXT,
-      -- nouveaux champs fichiers
+
+      -- fichiers binaires
       report_file BYTEA,
       report_filename TEXT,
       report_mime TEXT,
+
       defect_file BYTEA,
       defect_filename TEXT,
       defect_mime TEXT,
+
       confirmation_file BYTEA,
       confirmation_filename TEXT,
       confirmation_mime TEXT,
+
       defect_report_received BOOLEAN DEFAULT FALSE,
       confirmation_received BOOLEAN DEFAULT FALSE,
+
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     );
@@ -74,7 +84,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_oibt_periodics_building ON oibt_periodics(building);
   `);
 
-  // Table fichiers par action de projet (avis, protocole, rapport, reception)
+  // Table des pièces jointes par action de PROJET
   await pool.query(`
     CREATE TABLE IF NOT EXISTS oibt_project_files (
       id SERIAL PRIMARY KEY,
@@ -90,7 +100,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_oibt_projfiles_site ON oibt_project_files(site);
   `);
 
-  // Sécurise l'existence des colonnes pour compatibilité (si table déjà créée avant)
+  // Sécuriser l'existence des colonnes (auto-migration légère)
   await pool.query(`
     ALTER TABLE oibt_periodics
       ADD COLUMN IF NOT EXISTS report_url TEXT,
@@ -111,18 +121,19 @@ async function ensureSchema() {
 ensureSchema().catch(e => console.error("[OIBT SCHEMA]", e));
 
 /* ------------------------------------------------------------------ */
-/*                             HEALTH                                  */
+/*                               HEALTH                               */
 /* ------------------------------------------------------------------ */
 app.get("/api/oibt/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 /* ------------------------------------------------------------------ */
-/*                             PROJECTS                                */
+/*                               PROJECTS                             */
 /* ------------------------------------------------------------------ */
 // LIST
 app.get("/api/oibt/projects", async (req, res) => {
   try {
     const site = siteOf(req);
     const q = String(req.query.q || "").trim().toLowerCase();
+
     const rows = (
       await pool.query(
         q
@@ -134,6 +145,7 @@ app.get("/api/oibt/projects", async (req, res) => {
 
     if (!rows.length) return res.json({ data: [] });
 
+    // Indiquer les pièces jointes disponibles par action
     const ids = rows.map(r => r.id);
     const files = (
       await pool.query(
@@ -150,7 +162,6 @@ app.get("/api/oibt/projects", async (req, res) => {
       byProject[f.project_id][f.action_key] = !!f.has_file;
     }
 
-    // assemble flags
     const data = rows.map(r => ({
       ...r,
       attachments: {
@@ -160,6 +171,7 @@ app.get("/api/oibt/projects", async (req, res) => {
         reception: !!byProject[r.id]?.reception,
       },
     }));
+
     res.json({ data });
   } catch (e) {
     console.error("[OIBT PROJECTS LIST]", e);
@@ -167,7 +179,7 @@ app.get("/api/oibt/projects", async (req, res) => {
   }
 });
 
-// CREATE
+// CREATE (4 étapes visibles d’emblée)
 app.post("/api/oibt/projects", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -175,9 +187,10 @@ app.post("/api/oibt/projects", async (req, res) => {
     if (!title) return res.status(400).json({ error: "Missing title" });
 
     const baseActions = [
-      { key: "avis", name: "Avis d'installation", done: false },
-      { key: "protocole", name: "Protocole de mesure", done: false },
-      { key: "rapport", name: "Rapport de sécurité", done: false },
+      { key: "avis",       name: "Avis d'installation",  done: false },
+      { key: "protocole",  name: "Protocole de mesure",  done: false },
+      { key: "rapport",    name: "Rapport de sécurité",  done: false },
+      { key: "reception",  name: "Contrôle de réception", done: false, due: null },
     ];
 
     const r = await pool.query(
@@ -191,7 +204,7 @@ app.post("/api/oibt/projects", async (req, res) => {
   }
 });
 
-// UPDATE (ajout auto réception J+180 quand "rapport" passe à done)
+// UPDATE (+6 mois quand “Rapport de sécurité” passe à done)
 app.put("/api/oibt/projects/:id", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -203,17 +216,32 @@ app.put("/api/oibt/projects/:id", async (req, res) => {
     );
     if (!prevQ.rows.length) return res.status(404).json({ error: "Not found" });
     const prev = prevQ.rows[0];
+
     const next = Array.isArray(req.body?.status) ? req.body.status : [];
 
-    const prevRapport = (prev.status || []).find(a => a.key === "rapport" || a.name === "Rapport de sécurité");
-    const nextRapport = next.find(a => a.key === "rapport" || a.name === "Rapport de sécurité");
-    const hasReception = next.some(a => (a.key === "reception") || a.name?.startsWith("Contrôle de réception"));
+    const prevRapport = (prev.status || []).find(a => (a.key === "rapport") || a.name === "Rapport de sécurité");
+    const nextRapport = next.find(a => (a.key === "rapport") || a.name === "Rapport de sécurité");
+    const receptionIdx = next.findIndex(a => (a.key === "reception") || a.name === "Contrôle de réception");
 
-    if (prevRapport && nextRapport && !prevRapport.done && nextRapport.done && !hasReception) {
-      const due = new Date();
-      due.setMonth(due.getMonth() + 6);
-      const fr = due.toLocaleDateString("fr-FR");
-      next.push({ key: "reception", name: "Contrôle de réception", done: false, due: fr });
+    if (prevRapport && nextRapport && !prevRapport.done && nextRapport.done) {
+      // Si on a déjà la ligne "réception" mais sans due -> calcule +6 mois
+      if (receptionIdx >= 0) {
+        const current = next[receptionIdx] || {};
+        if (!current.due) {
+          const due = new Date();
+          due.setMonth(due.getMonth() + 6);
+          next[receptionIdx] = { ...current, due: due.toLocaleDateString("fr-FR") };
+        }
+      } else {
+        const due = new Date();
+        due.setMonth(due.getMonth() + 6);
+        next.push({
+          key: "reception",
+          name: "Contrôle de réception",
+          done: false,
+          due: due.toLocaleDateString("fr-FR"),
+        });
+      }
     }
 
     const r = await pool.query(
@@ -241,7 +269,7 @@ app.delete("/api/oibt/projects/:id", async (req, res) => {
   }
 });
 
-// UPLOAD fichier d'action (avis|protocole|rapport|reception)
+// UPLOAD fichier d'action de PROJET (avis|protocole|rapport|reception)
 app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res) => {
   try {
     const site = siteOf(req);
@@ -259,6 +287,7 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
          file=EXCLUDED.file, filename=EXCLUDED.filename, mime=EXCLUDED.mime, uploaded_at=NOW()`,
       [site, id, action, req.file.buffer, req.file.originalname, req.file.mimetype]
     );
+
     res.json({ ok: true });
   } catch (e) {
     console.error("[OIBT PROJECT UPLOAD]", e);
@@ -266,7 +295,7 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
   }
 });
 
-// DOWNLOAD fichier d'action
+// DOWNLOAD fichier d'action de PROJET
 app.get("/api/oibt/projects/:id/download", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -278,8 +307,12 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
       [site, id, action]
     );
     if (!q.rows.length || !q.rows[0].file) return res.status(404).send("File not found");
+
     res.setHeader("Content-Type", q.rows[0].mime || "application/octet-stream");
-    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(q.rows[0].filename || "file")}"`);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(q.rows[0].filename || "file")}"`
+    );
     res.send(q.rows[0].file);
   } catch (e) {
     console.error("[OIBT PROJECT DOWNLOAD]", e);
@@ -288,9 +321,9 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
 });
 
 /* ------------------------------------------------------------------ */
-/*                           PERIODICS                                 */
+/*                              PERIODICS                             */
 /* ------------------------------------------------------------------ */
-// LIST (tolérant anciens & nouveaux champs)
+// LIST (tolérant ancien champ report_url et nouveaux fichiers)
 app.get("/api/oibt/periodics", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -314,6 +347,7 @@ app.get("/api/oibt/periodics", async (req, res) => {
            ORDER BY created_at DESC`,
       q ? [site, `%${q}%`] : [site]
     );
+
     res.json({ data: rows });
   } catch (e) {
     console.error("[OIBT PERIODICS LIST]", e);
@@ -321,6 +355,7 @@ app.get("/api/oibt/periodics", async (req, res) => {
   }
 });
 
+// CREATE
 app.post("/api/oibt/periodics", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -340,6 +375,7 @@ app.post("/api/oibt/periodics", async (req, res) => {
   }
 });
 
+// UPDATE (flags défaut/confirmation)
 app.put("/api/oibt/periodics/:id", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -366,6 +402,7 @@ app.put("/api/oibt/periodics/:id", async (req, res) => {
   }
 });
 
+// DELETE
 app.delete("/api/oibt/periodics/:id", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -379,11 +416,12 @@ app.delete("/api/oibt/periodics/:id", async (req, res) => {
   }
 });
 
+// UPLOAD (report|defect|confirmation)
 app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
-    const type = String(req.query.type || "").toLowerCase(); // report|defect|confirmation
+    const type = String(req.query.type || "").toLowerCase();
     if (!["report", "defect", "confirmation"].includes(type)) {
       return res.status(400).json({ error: "Bad type" });
     }
@@ -413,6 +451,7 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
   }
 });
 
+// DOWNLOAD (report|defect|confirmation)
 app.get("/api/oibt/periodics/:id/download", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -432,16 +471,16 @@ app.get("/api/oibt/periodics/:id/download", async (req, res) => {
     );
     if (!q.rows.length) return res.status(404).send("Not found");
 
-    // si ancien champ report_url existe et pas de fichier binaire
-    if (type === "report" && q.rows[0].report_url) {
+    // compat: si on a une URL stockée pour le rapport
+    if (type === "report" && q.rows[0].report_url && !q.rows[0].report_file) {
       return res.redirect(q.rows[0].report_url);
     }
 
     const file = q.rows[0][cols[0]];
     if (!file) return res.status(404).send("File not found");
+
     const name = q.rows[0][cols[1]] || "fichier";
     const mime = q.rows[0][cols[2]] || "application/octet-stream";
-
     res.setHeader("Content-Type", mime);
     res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(name)}"`);
     res.send(file);
@@ -451,5 +490,8 @@ app.get("/api/oibt/periodics/:id/download", async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------ */
+/*                                START                               */
+/* ------------------------------------------------------------------ */
 const port = process.env.OIBT_PORT || 3012;
 app.listen(port, () => console.log(`OIBT service running on :${port}`));
