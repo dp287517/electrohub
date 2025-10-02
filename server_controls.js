@@ -396,7 +396,7 @@ const TSD_LIBRARY = {
 
 async function ensureSchema() {
   try {
-    // Vérification et création de controls_entities (équivalent de controls_equipments)
+    // Création de controls_entities (équivalent de controls_equipments)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_entities (
         id SERIAL PRIMARY KEY,
@@ -409,7 +409,7 @@ async function ensureSchema() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
-    // Vérification et création de controls_not_present
+    // Création de controls_not_present
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_not_present (
         id SERIAL PRIMARY KEY,
@@ -422,7 +422,7 @@ async function ensureSchema() {
         note TEXT
       );
     `);
-    // Vérification et mise à jour de controls_tasks (aligné avec la structure existante)
+    // Mise à jour de controls_tasks (aligné avec la structure existante)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_tasks (
         id SERIAL PRIMARY KEY,
@@ -440,7 +440,7 @@ async function ensureSchema() {
         FOREIGN KEY (entity_id) REFERENCES controls_entities(id) ON DELETE CASCADE
       );
     `);
-    // Vérification et création de controls_history
+    // Création de controls_history
     await pool.query(`
       CREATE TABLE IF NOT EXISTS controls_history (
         id SERIAL PRIMARY KEY,
