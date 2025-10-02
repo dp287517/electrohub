@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
-  Folder, FileText, CalendarClock, Upload, Download, Trash2, BarChart3,
+  Folder, FileText, CalendarClock, Download, Trash2, BarChart3,
   AlertTriangle, CheckCircle2, XCircle
 } from "lucide-react";
 
@@ -11,11 +11,12 @@ const clsInput = () =>
 const btnPrimary = () => "px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700";
 const btn = () => "px-3 py-2 rounded bg-gray-900 text-white hover:bg-black/90";
 
-const Badge = ({ ok, label }) => (
+const Badge = ({ ok, label, className = "" }) => (
   <span
     className={
       "inline-flex items-center gap-1 text-xs px-2 py-1 rounded " +
-      (ok ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700")
+      (ok ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-700") +
+      " " + className
     }
     title={ok ? "Fichier présent" : "Aucune pièce jointe"}
   >
@@ -62,7 +63,6 @@ const ConfirmModal = ({ open, title, message, onConfirm, onCancel }) => {
 
 /* --------------------------- RESPONSIVE TABS --------------------------- */
 function Tabs({ tabs, active, onChange }) {
-  // clavier: flèche gauche/droite
   const onKeyDown = useCallback(
     (e) => {
       const idx = tabs.findIndex(t => t.id === active);
@@ -92,6 +92,7 @@ function Tabs({ tabs, active, onChange }) {
           const isActive = active === t.id;
           return (
             <button
+              id={`tab-${t.id}`}
               key={t.id}
               role="tab"
               aria-selected={isActive}
@@ -103,7 +104,7 @@ function Tabs({ tabs, active, onChange }) {
               title={t.label}
             >
               <span className="inline-flex items-center gap-2">
-                {t.icon}{t.label}
+                {t.label}
                 {"count" in t ? (
                   <span className={`text-xs px-1.5 py-0.5 rounded ${isActive ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}>
                     {t.count}
@@ -317,9 +318,9 @@ export default function Oibt() {
 
   /* -------------------------------- RENDER ------------------------------- */
   const TABS = [
-    { id: "projects", label: "Projets", icon: null, count: filteredProjects.length },
-    { id: "periodics", label: "Périodiques", icon: null, count: filteredPeriodics.length },
-    { id: "analysis", label: "Analysis", icon: null },
+    { id: "projects", label: "Projets", count: filteredProjects.length },
+    { id: "periodics", label: "Périodiques", count: filteredPeriodics.length },
+    { id: "analysis", label: "Analysis" },
   ];
 
   return (
@@ -352,7 +353,7 @@ export default function Oibt() {
       <div
         id="panel-projects"
         role="tabpanel"
-        aria-labelledby="projects"
+        aria-labelledby="tab-projects"
         hidden={tab !== "projects"}
       >
         {tab === "projects" && (
@@ -407,24 +408,24 @@ export default function Oibt() {
                         return (
                           <li key={i} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
                             <div className="flex items-center justify-between gap-3">
-                              <label className="flex items-center gap-2 text-sm text-gray-900">
+                              <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap">
                                 <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
                                 <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
                                 {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
                               </label>
-                              <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} />
+                              <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                             </div>
 
-                            <div className="mt-2 flex flex-col sm:flex-row sm:items-center gap-2">
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
                               <input
                                 type="file"
                                 onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
-                                className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
+                                className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
                                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
                               />
                               {hasFile && (
                                 <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
-                                   className="text-sm text-blue-600 hover:underline flex items-center gap-1">
+                                   className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0">
                                   <Download size={16} /> Télécharger
                                 </a>
                               )}
@@ -448,7 +449,7 @@ export default function Oibt() {
       <div
         id="panel-periodics"
         role="tabpanel"
-        aria-labelledby="periodics"
+        aria-labelledby="tab-periodics"
         hidden={tab !== "periodics"}
       >
         {tab === "periodics" && (
@@ -489,17 +490,20 @@ export default function Oibt() {
                       {/* Rapport de contrôle périodique */}
                       <div className="space-y-2">
                         <div className="text-sm font-medium text-gray-900">Rapport de contrôle périodique</div>
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <label className="flex items-center gap-2 text-sm text-gray-900">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
                             <input type="checkbox" checked={!!c.report_received} onChange={() => togglePeriodic(c, "report")} />
                             Reçu
                           </label>
-                          <input type="file" onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
-                                 className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                          <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} />
+                          <input
+                            type="file"
+                            onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
+                            className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
+                            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                          />
+                          <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                           {c.has_report && (
-                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
+                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
                               <Download size={16}/> Télécharger
                             </a>
                           )}
@@ -509,17 +513,20 @@ export default function Oibt() {
                       {/* Élimination des défauts */}
                       <div className="space-y-2">
                         <div className="text-sm font-medium text-gray-900">Élimination des défauts</div>
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <label className="flex items-center gap-2 text-sm text-gray-900">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
                             <input type="checkbox" checked={!!c.defect_report_received} onChange={() => togglePeriodic(c, "defect")} />
                             Reçus
                           </label>
-                          <input type="file" onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
-                                 className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                          <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} />
+                          <input
+                            type="file"
+                            onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
+                            className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
+                            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                          />
+                          <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                           {c.has_defect && (
-                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
+                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
                               <Download size={16}/> Télécharger
                             </a>
                           )}
@@ -529,17 +536,20 @@ export default function Oibt() {
                       {/* Confirmation */}
                       <div className="space-y-2">
                         <div className="text-sm font-medium text-gray-900">Confirmation</div>
-                        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <label className="flex items-center gap-2 text-sm text-gray-900">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
                             <input type="checkbox" checked={!!c.confirmation_received} onChange={() => togglePeriodic(c, "confirm")} />
                             Reçue
                           </label>
-                          <input type="file" onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
-                                 className="block flex-1 text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
-                          <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} />
+                          <input
+                            type="file"
+                            onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
+                            className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
+                            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                          />
+                          <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                           {c.has_confirmation && (
-                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
+                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
                               <Download size={16}/> Télécharger
                             </a>
                           )}
@@ -559,7 +569,7 @@ export default function Oibt() {
       <div
         id="panel-analysis"
         role="tabpanel"
-        aria-labelledby="analysis"
+        aria-labelledby="tab-analysis"
         hidden={tab !== "analysis"}
       >
         {tab === "analysis" && (
