@@ -397,7 +397,7 @@ app.post('/api/controls/sync', async (req, res) => {
 });
 
 // ---- Catalog équipements
-aapp.get('/api/controls/catalog', async (req, res) => {
+app.get('/api/controls/catalog', async (req, res) => {
   const { site = 'Default', building, type } = req.query;
   let query = 'SELECT * FROM controls_entities WHERE site = $1';
   const values = [site];
