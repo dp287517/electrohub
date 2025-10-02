@@ -79,6 +79,11 @@ async function ensureSchema() {
       defect_report_received BOOLEAN DEFAULT FALSE,
       confirmation_received BOOLEAN DEFAULT FALSE,
 
+      -- horodatages utiles pour les alertes
+      report_received_at TIMESTAMPTZ,
+      defect_report_received_at TIMESTAMPTZ,
+      confirmation_received_at TIMESTAMPTZ,
+
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     );
@@ -118,6 +123,9 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS report_received BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS defect_report_received BOOLEAN DEFAULT FALSE,
       ADD COLUMN IF NOT EXISTS confirmation_received BOOLEAN DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS report_received_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS defect_report_received_at TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS confirmation_received_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
   `);
 }
@@ -326,7 +334,7 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
 /* ------------------------------------------------------------------ */
 /*                              PERIODICS                             */
 /* ------------------------------------------------------------------ */
-// LIST (tolérant ancien champ report_url et nouveaux fichiers + flags)
+// LIST (retourne flags + timestamps pour alertes)
 app.get("/api/oibt/periodics", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -334,14 +342,20 @@ app.get("/api/oibt/periodics", async (req, res) => {
 
     const { rows } = await pool.query(
       q
-        ? `SELECT id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
+        ? `SELECT id, site, building,
+                 report_received, defect_report_received, confirmation_received,
+                 report_received_at, defect_report_received_at, confirmation_received_at,
+                 created_at, updated_at,
                  (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
                  (defect_filename IS NOT NULL) AS has_defect,
                  (confirmation_filename IS NOT NULL) AS has_confirmation
            FROM oibt_periodics
            WHERE site=$1 AND LOWER(building) LIKE $2
            ORDER BY created_at DESC`
-        : `SELECT id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
+        : `SELECT id, site, building,
+                 report_received, defect_report_received, confirmation_received,
+                 report_received_at, defect_report_received_at, confirmation_received_at,
+                 created_at, updated_at,
                  (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
                  (defect_filename IS NOT NULL) AS has_defect,
                  (confirmation_filename IS NOT NULL) AS has_confirmation
@@ -367,7 +381,10 @@ app.post("/api/oibt/periodics", async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO oibt_periodics (site, building) VALUES ($1,$2) RETURNING
-        id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
+        id, site, building,
+        report_received, defect_report_received, confirmation_received,
+        report_received_at, defect_report_received_at, confirmation_received_at,
+        created_at, updated_at,
         false AS has_report, false AS has_defect, false AS has_confirmation`,
       [site, building]
     );
@@ -378,21 +395,29 @@ app.post("/api/oibt/periodics", async (req, res) => {
   }
 });
 
-// UPDATE (report_received / defect_report_received / confirmation_received)
+// UPDATE (report/defect/confirmation flags + timestamps intelligents)
 app.put("/api/oibt/periodics/:id", async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
     const { report_received, defect_report_received, confirmation_received } = req.body;
 
+    // On met à jour les timestamps uniquement quand ça passe à TRUE
     const { rows } = await pool.query(
       `UPDATE oibt_periodics
-       SET report_received = COALESCE($1, report_received),
-           defect_report_received = COALESCE($2, defect_report_received),
-           confirmation_received = COALESCE($3, confirmation_received),
-           updated_at = NOW()
+       SET
+         report_received = COALESCE($1, report_received),
+         report_received_at = CASE WHEN $1 IS TRUE AND (report_received IS DISTINCT FROM TRUE) THEN NOW() ELSE report_received_at END,
+         defect_report_received = COALESCE($2, defect_report_received),
+         defect_report_received_at = CASE WHEN $2 IS TRUE AND (defect_report_received IS DISTINCT FROM TRUE) THEN NOW() ELSE defect_report_received_at END,
+         confirmation_received = COALESCE($3, confirmation_received),
+         confirmation_received_at = CASE WHEN $3 IS TRUE AND (confirmation_received IS DISTINCT FROM TRUE) THEN NOW() ELSE confirmation_received_at END,
+         updated_at = NOW()
        WHERE id=$4 AND site=$5
-       RETURNING id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
+       RETURNING id, site, building,
+         report_received, defect_report_received, confirmation_received,
+         report_received_at, defect_report_received_at, confirmation_received_at,
+         created_at, updated_at,
          (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
          (defect_filename IS NOT NULL) AS has_defect,
          (confirmation_filename IS NOT NULL) AS has_confirmation`,
@@ -420,7 +445,7 @@ app.delete("/api/oibt/periodics/:id", async (req, res) => {
   }
 });
 
-// UPLOAD (report|defect|confirmation)
+// UPLOAD (report|defect|confirmation) + timestamps
 app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, res) => {
   try {
     const site = siteOf(req);
@@ -432,16 +457,19 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
     if (!req.file) return res.status(400).json({ error: "No file" });
 
     const setCols = {
-      report: "report_file=$1, report_filename=$2, report_mime=$3, report_received=TRUE",
-      defect: "defect_file=$1, defect_filename=$2, defect_mime=$3, defect_report_received=TRUE",
-      confirmation: "confirmation_file=$1, confirmation_filename=$2, confirmation_mime=$3, confirmation_received=TRUE",
+      report: "report_file=$1, report_filename=$2, report_mime=$3, report_received=TRUE, report_received_at=COALESCE(report_received_at, NOW())",
+      defect: "defect_file=$1, defect_filename=$2, defect_mime=$3, defect_report_received=TRUE, defect_report_received_at=COALESCE(defect_report_received_at, NOW())",
+      confirmation: "confirmation_file=$1, confirmation_filename=$2, confirmation_mime=$3, confirmation_received=TRUE, confirmation_received_at=COALESCE(confirmation_received_at, NOW())",
     }[type];
 
     const { rows } = await pool.query(
       `UPDATE oibt_periodics
        SET ${setCols}, updated_at=NOW()
        WHERE id=$4 AND site=$5
-       RETURNING id, site, building, report_received, defect_report_received, confirmation_received, created_at, updated_at,
+       RETURNING id, site, building,
+         report_received, defect_report_received, confirmation_received,
+         report_received_at, defect_report_received_at, confirmation_received_at,
+         created_at, updated_at,
          (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
          (defect_filename IS NOT NULL) AS has_defect,
          (confirmation_filename IS NOT NULL) AS has_confirmation`,
