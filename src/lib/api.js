@@ -160,5 +160,9 @@ export const api = {
     createPeriodic: (payload) => post("/api/oibt/periodics", payload),
     updatePeriodic: (id, payload) => put(`/api/oibt/periodics/${id}`, payload),
     removePeriodic: (id) => del(`/api/oibt/periodics/${id}`),
+
+    // Upload de pièces jointes (report | defect | confirmation)
+    uploadPeriodicFile: (id, type, formData) =>
+      upload(`/api/oibt/periodics/${id}/upload?type=${encodeURIComponent(type)}`, formData),
   },
 };
