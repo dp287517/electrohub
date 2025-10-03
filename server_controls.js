@@ -1,7 +1,7 @@
-// server_controls.js — Controls backend complet
+// server_controls.js — Controls backend complet (corrigé EADDRINUSE)
 // Features : Sync (Switchboard/HV/ATEX) → Entities → Tasks depuis TSD, Attachments (multi), AI analyze/assistant,
 // Catalog/Not-Present/History/Records, Filters, Health.
-// Conçu pour fonctionner en local ET sur Render (PORT pris en compte sans casser ton snippet demandé).
+// ECOUTE UNIQUEMENT SUR CONTROLS_PORT (ou 3011) — NE TOUCHE PAS A `PORT`.
 
 import express from "express";
 import helmet from "helmet";
@@ -14,15 +14,11 @@ import fetchPkg from "node-fetch";
 import { TSD_LIBRARY, EQUIPMENT_TYPES } from "./tsd_library.js";
 
 const fetch = (globalThis.fetch || fetchPkg);
+
 // ---------------------------------------------------------------------------
 // ENV & APP
 // ---------------------------------------------------------------------------
 dotenv.config();
-
-// Redirige PORT → CONTROLS_PORT si présent (Render), pour conserver TON snippet d’écoute.
-if (process.env.PORT && !process.env.CONTROLS_PORT) {
-  process.env.CONTROLS_PORT = process.env.PORT;
-}
 
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
@@ -32,7 +28,7 @@ app.use(helmet());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser());
 
-// CORS permissif (dev multi-ports)
+// CORS permissif (si besoin multi-origines)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -412,7 +408,6 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
 
   // joindre l’item TSD correspondant
   let tsd_item = null;
-  // tentatives directes par type (optim)
   const { rows: ent } = await pool.query("SELECT equipment_type FROM controls_entities WHERE id=$1", [t.entity_id]);
   const eqType = ent[0]?.equipment_type;
   if (eqType && TSD_LIBRARY[eqType]) {
@@ -428,6 +423,7 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
 app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
+    the: // (no-op label to avoid accidental "the" typo)
     const { user = "tech", results = {}, ai_risk_score = null } = req.body || {};
     const { rows: trows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
     if (!trows.length) return res.status(404).json({ error: "Not found" });
@@ -603,7 +599,6 @@ app.post("/api/controls/tasks/:id/analyze", async (req, res) => {
           ]
         });
       } else {
-        // Pour les docs non-image: on passe le nom et on demande une synthèse (pas d'OCR complet ici).
         messages.push({
           role: "user",
           content: `Document joint: ${att.filename} (${att.mimetype}, ${Math.round(att.size/1024)} kB). Si lisible, indique les mesures clés à relever.`
@@ -618,7 +613,6 @@ app.post("/api/controls/tasks/:id/analyze", async (req, res) => {
     });
     const reply = completion.choices?.[0]?.message?.content || "Analyse indisponible";
 
-    // Persist suggestions IA
     await pool.query(
       "UPDATE controls_tasks SET ai_notes = ai_notes || $1::jsonb WHERE id=$2",
       [JSON.stringify([{ ts: new Date().toISOString(), note: reply }]), id]
@@ -645,7 +639,6 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
     if (!trows.length) return res.status(404).json({ error: "Task not found" });
     const t = trows[0];
 
-    // joindre TSD item
     const { rows: ent } = await pool.query("SELECT equipment_type,name FROM controls_entities WHERE id=$1", [t.entity_id]);
     const eqType = ent[0]?.equipment_type, eqName = ent[0]?.name;
     let tsd_item = null;
@@ -685,7 +678,7 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
 app.get("/api/controls/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ---------------------------------------------------------------------------
-// START (snippet que tu voulais garder tel quel)
+// START — garde EXACTEMENT ce snippet (pas de PORT)
 // ---------------------------------------------------------------------------
 const port = Number(process.env.CONTROLS_PORT || 3011);
 app.listen(port, () => console.log(`[controls] serveur démarré sur :${port}`));
