@@ -1,18 +1,24 @@
-// server_oibt.js
-// Backend OIBT - stockage JSON + uploads (sans DB)
-// Dossiers créés automatiquement: ./data/oibt-store.json, ./uploads/oibt
+// server_oibt.js (ESM)
+// - Standalone (node server_oibt.js) => monte /api/oibt sur port 3012
+// - Importable => export { registerOibt } pour être monté dans un app existant
 
-const path = require("path");
-const fs = require("fs");
-const fsp = require("fs/promises");
-const express = require("express");
-const multer = require("multer");
+import path from "path";
+import fs from "fs";
+import { promises as fsp } from "fs";
+import express from "express";
+import multer from "multer";
+import cors from "cors";
+import morgan from "morgan";
+import { fileURLToPath, pathToFileURL } from "url";
 
+// ------------------------------------------------------------------
+// Paths (utilise process.cwd() pour rester simple avec Render/Vercel)
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const UPLOAD_DIR = path.resolve(process.cwd(), "uploads", "oibt");
 const STORE_FILE = path.join(DATA_DIR, "oibt-store.json");
 
-// --- Utils FS
+// ------------------------------------------------------------------
+// FS helpers
 async function ensureDirs() {
   await fsp.mkdir(DATA_DIR, { recursive: true });
   await fsp.mkdir(UPLOAD_DIR, { recursive: true });
@@ -33,7 +39,8 @@ async function writeStore(store) {
   await fsp.writeFile(STORE_FILE, JSON.stringify(store, null, 2), "utf-8");
 }
 
-// --- Helpers
+// ------------------------------------------------------------------
+// Utils
 function getSite(req) {
   return (req.headers["x-site"] || req.query.site || "Nyon").toString();
 }
@@ -44,8 +51,7 @@ function addMonths(date, months) {
   const d = new Date(date);
   const day = d.getDate();
   d.setMonth(d.getMonth() + months);
-  // gérer fin de mois
-  if (d.getDate() < day) d.setDate(0);
+  if (d.getDate() < day) d.setDate(0); // fin de mois
   return d;
 }
 function formatDDMMYYYY(d) {
@@ -63,7 +69,7 @@ function autoYear(obj) {
 }
 function sanitizeKey(k) {
   const s = String(k || "").toLowerCase();
-  if (["avis", "protocole", "rapport", "reception"].includes(s)) return s;
+  if (["avis", "protocole", "rapport", "reception", "report", "defect", "confirmation"].includes(s)) return s;
   return s;
 }
 function makeProjectActions() {
@@ -75,7 +81,8 @@ function makeProjectActions() {
   ];
 }
 
-// --- Multer storage
+// ------------------------------------------------------------------
+// Multer storage (ESM)
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
@@ -89,27 +96,25 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// -------------------- Router
-function registerOibt(app) {
+// ------------------------------------------------------------------
+// Router registration (exporté + utilisable en standalone)
+export function registerOibt(app) {
   const router = express.Router();
 
-  // sanity ping
+  // --- PING
   router.get("/health", (_req, res) => res.json({ ok: true }));
 
-  // ------------- PROJECTS
-  // List
+  // -------------------- PROJECTS
   router.get("/projects", async (req, res) => {
     try {
       const site = getSite(req);
       const store = await readStore();
-      const out = store.projects.filter(p => (p.site || "Nyon") === site);
-      res.json(out);
+      res.json(store.projects.filter(p => (p.site || "Nyon") === site));
     } catch (e) {
       res.status(500).json({ error: "List failed", details: String(e?.message || e) });
     }
   });
 
-  // Create
   router.post("/projects", express.json(), async (req, res) => {
     try {
       const site = getSite(req);
@@ -120,7 +125,6 @@ function registerOibt(app) {
       const id = store.seq++;
       const created_at = nowISO();
       const year = Number(req.body?.year ?? new Date().getFullYear());
-
       const project = {
         id,
         site,
@@ -129,7 +133,7 @@ function registerOibt(app) {
         updated_at: created_at,
         year,
         status: makeProjectActions(),
-        attachments: {}, // { avis: "filename", ... }
+        attachments: {},
       };
       store.projects.unshift(project);
       await writeStore(store);
@@ -139,7 +143,6 @@ function registerOibt(app) {
     }
   });
 
-  // Update (status, year, title)
   router.put("/projects/:id", express.json(), async (req, res) => {
     try {
       const site = getSite(req);
@@ -150,7 +153,6 @@ function registerOibt(app) {
 
       const p = store.projects[idx];
       let status = Array.isArray(req.body?.status) ? req.body.status : p.status;
-      // normaliser keys
       status = status.map(a => ({
         key: sanitizeKey(a.key || a.name),
         name: a.name || a.key,
@@ -160,21 +162,14 @@ function registerOibt(app) {
       const year = req.body?.year != null ? Number(req.body.year) : (p.year ?? autoYear(p));
       const title = req.body?.title ? String(req.body.title) : p.title;
 
-      // règle backend: si "rapport" est done et "reception" n'a pas d'échéance -> +6 mois
+      // règle: si "rapport" est done et réception sans due => +6 mois
       const rapport = status.find(a => a.key === "rapport");
       const reception = status.find(a => a.key === "reception");
       if (rapport?.done && reception && !reception.due) {
-        const due = addMonths(new Date(), 6);
-        reception.due = formatDDMMYYYY(due);
+        reception.due = formatDDMMYYYY(addMonths(new Date(), 6));
       }
 
-      const updated = {
-        ...p,
-        title,
-        year,
-        status,
-        updated_at: nowISO(),
-      };
+      const updated = { ...p, title, year, status, updated_at: nowISO() };
       store.projects[idx] = updated;
       await writeStore(store);
       res.json(updated);
@@ -183,7 +178,6 @@ function registerOibt(app) {
     }
   });
 
-  // Delete
   router.delete("/projects/:id", async (req, res) => {
     try {
       const site = getSite(req);
@@ -192,7 +186,6 @@ function registerOibt(app) {
       const idx = store.projects.findIndex(p => p.id === id && (p.site || "Nyon") === site);
       if (idx < 0) return res.status(404).json({ error: "Not found" });
 
-      // supprimer fichiers liés
       const att = store.projects[idx].attachments || {};
       await Promise.all(
         Object.values(att).map(async (fn) => {
@@ -210,14 +203,13 @@ function registerOibt(app) {
     }
   });
 
-  // Upload file for a project action
+  // Upload fichier action projet
   // POST /api/oibt/projects/:id/upload?action=avis|protocole|rapport|reception
   router.post("/projects/:id/upload", upload.single("file"), async (req, res) => {
     try {
       const site = getSite(req);
       const id = Number(req.params.id);
       const action = sanitizeKey(req.query.action);
-
       if (!["avis", "protocole", "rapport", "reception"].includes(action)) {
         return res.status(400).json({ error: "invalid action" });
       }
@@ -231,12 +223,11 @@ function registerOibt(app) {
       const attachments = { ...(p.attachments || {}) };
       attachments[action] = req.file.filename;
 
-      // coche auto l'étape correspondante
       const status = (p.status || []).map(a =>
         sanitizeKey(a.key) === action ? { ...a, done: true } : a
       );
 
-      // si upload "rapport" => fixer due de "reception" à +6 mois si absent
+      // rapport => fixer due de réception +6 mois si absente
       const rec = status.find(a => a.key === "reception");
       if (action === "rapport" && rec && !rec.due) {
         rec.due = formatDDMMYYYY(addMonths(new Date(), 6));
@@ -251,7 +242,6 @@ function registerOibt(app) {
     }
   });
 
-  // Download project file
   router.get("/projects/:id/download", async (req, res) => {
     try {
       const site = getSite(req);
@@ -272,20 +262,17 @@ function registerOibt(app) {
     }
   });
 
-  // ------------- PERIODICS
-  // List
+  // -------------------- PERIODICS
   router.get("/periodics", async (req, res) => {
     try {
       const site = getSite(req);
       const store = await readStore();
-      const out = store.periodics.filter(p => (p.site || "Nyon") === site);
-      res.json(out);
+      res.json(store.periodics.filter(p => (p.site || "Nyon") === site));
     } catch (e) {
       res.status(500).json({ error: "List failed", details: String(e?.message || e) });
     }
   });
 
-  // Create
   router.post("/periodics", express.json(), async (req, res) => {
     try {
       const site = getSite(req);
@@ -304,7 +291,7 @@ function registerOibt(app) {
         created_at,
         updated_at: created_at,
         year,
-        // flags + files
+
         report_received: false,
         report_received_at: null,
         has_report: false,
@@ -325,7 +312,6 @@ function registerOibt(app) {
     }
   });
 
-  // Update
   router.put("/periodics/:id", express.json(), async (req, res) => {
     try {
       const site = getSite(req);
@@ -335,7 +321,6 @@ function registerOibt(app) {
       if (idx < 0) return res.status(404).json({ error: "Not found" });
 
       const row = store.periodics[idx];
-
       const next = {
         ...row,
         report_received: req.body?.report_received ?? row.report_received,
@@ -345,7 +330,6 @@ function registerOibt(app) {
         updated_at: nowISO(),
       };
 
-      // si report passe à true et pas de date -> timestamp
       if (next.report_received && !row.report_received_at) {
         next.report_received_at = nowISO();
       }
@@ -358,7 +342,6 @@ function registerOibt(app) {
     }
   });
 
-  // Delete
   router.delete("/periodics/:id", async (req, res) => {
     try {
       const site = getSite(req);
@@ -384,7 +367,7 @@ function registerOibt(app) {
     }
   });
 
-  // Upload periodic file
+  // Upload périodique
   // POST /api/oibt/periodics/:id/upload?type=report|defect|confirmation
   router.post("/periodics/:id/upload", upload.single("file"), async (req, res) => {
     try {
@@ -405,7 +388,6 @@ function registerOibt(app) {
       files[type] = req.file.filename;
 
       const next = { ...row, files, updated_at: nowISO() };
-
       if (type === "report") {
         next.has_report = true;
         next.report_received = true;
@@ -426,7 +408,6 @@ function registerOibt(app) {
     }
   });
 
-  // Download periodic file
   router.get("/periodics/:id/download", async (req, res) => {
     try {
       const site = getSite(req);
@@ -447,7 +428,32 @@ function registerOibt(app) {
     }
   });
 
+  // Monte le router
   app.use("/api/oibt", router);
 }
 
-module.exports = { registerOibt };
+// ------------------------------------------------------------------
+// Mode standalone (si lancé directement)
+const isRunDirect =
+  import.meta.url === pathToFileURL(process.argv[1]).href ||
+  // cas Render/PM2 qui peut résoudre différemment l’URL
+  (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url);
+
+if (isRunDirect) {
+  const app = express();
+  const PORT = process.env.OIBT_PORT ? Number(process.env.OIBT_PORT) : 3012;
+
+  app.use(cors());
+  app.use(morgan("dev"));
+  app.use(express.json({ limit: "20mb" }));
+  app.use(express.urlencoded({ extended: true }));
+
+  registerOibt(app);
+
+  app.get("/", (_req, res) => res.type("text").send("OIBT backend up"));
+  app.use((req, res) => res.status(404).json({ error: "Not found", path: req.path }));
+
+  app.listen(PORT, () => {
+    console.log(`OIBT service listening on :${PORT}`);
+  });
+}
