@@ -1,28 +1,29 @@
 /** Base API */
 const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-/** Get current site from client-side stored profile */
+/** Get current site from client-side stored profile (fallback to "Default") */
 function currentSite() {
   try {
     const u = JSON.parse(localStorage.getItem("eh_user") || "{}");
-    return u?.site || "";
+    return u?.site || "Default";
   } catch {
-    return "";
+    return "Default";
   }
 }
 
 /** Fetch JSON with automatic X-Site header */
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
-
-  const res = await fetch(`${API_BASE}${url}`, {
+  const finalUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+  const headers = new Headers(options.headers || {});
+  headers.set("X-Site", site);
+  if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+  const res = await fetch(finalUrl, {
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-      ...(site ? { "X-Site": site } : {}),
-    },
     ...options,
+    headers,
   });
 
   if (!res.ok) {
@@ -37,187 +38,125 @@ async function jsonFetch(url, options = {}) {
 /** Generic helpers */
 export async function get(path, params) {
   const qs = params
-    ? `?${new URLSearchParams(
-        Object.entries(params).filter(
-          ([, v]) => v !== undefined && v !== null && v !== ""
-        )
-      ).toString()}`
+    ? `?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null))}`
     : "";
-  return jsonFetch(`${path}${qs}`);
+  return jsonFetch(`${path}${qs}`, { method: "GET" });
 }
-
 export async function post(path, body) {
-  return jsonFetch(path, { method: "POST", body: JSON.stringify(body || {}) });
+  return jsonFetch(path, { method: "POST", body: body instanceof FormData ? body : JSON.stringify(body) });
 }
-
 export async function put(path, body) {
-  return jsonFetch(path, { method: "PUT", body: JSON.stringify(body || {}) });
+  return jsonFetch(path, { method: "PUT", body: body instanceof FormData ? body : JSON.stringify(body) });
 }
-
 export async function del(path) {
   return jsonFetch(path, { method: "DELETE" });
 }
-
-/** Multipart upload */
-export async function upload(path, formData) {
+export async function upload(path, formData /* FormData */) {
+  // ne pas fixer Content-Type: le browser s’en charge (multipart boundary)
   const site = currentSite();
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    body: formData,
-    credentials: "include",
-    headers: {
-      ...(site ? { "X-Site": site } : {}),
-    },
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const url = `${API_BASE}${path}`;
+  const res = await fetch(url, { method: "POST", body: formData, credentials: "include", headers: { "X-Site": site } });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("application/json") ? res.json() : null;
 }
 
-/** Base export */
-export { API_BASE };
-
-/** Convenience clients */
+/** Namespaced API */
 export const api = {
-  switchboard: {
-    list: (params) => get("/api/switchboard/boards", params),
-    getOne: (id) => get(`/api/switchboard/boards/${id}`),
-    create: (payload) => post("/api/switchboard/boards", payload),
-    update: (id, payload) => put(`/api/switchboard/boards/${id}`, payload),
-    duplicate: (id) => post(`/api/switchboard/boards/${id}/duplicate`),
-    remove: (id) => del(`/api/switchboard/boards/${id}`),
+  /** --- AUTH / PROFILE (si utilisés dans l’app) --- */
+  auth: {
+    me: () => get("/api/auth/me"),
+    login: (payload) => post("/api/auth/login", payload),
+    logout: () => post("/api/auth/logout", {}),
   },
 
-  selectivity: {
-    listPairs: (params) => get("/api/selectivity/pairs", params),
-    checkPair: (upstreamId, downstreamId) =>
-      get(`/api/selectivity/check?upstream=${upstreamId}&downstream=${downstreamId}`),
-    getCurves: (upstreamId, downstreamId) =>
-      get(`/api/selectivity/curves?upstream=${upstreamId}&downstream=${downstreamId}`),
-    getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
-  },
-
-  faultlevel: {
-    listPoints: (params) => get("/api/faultlevel/points", params),
-    checkPoint: (deviceId, switchboardId, phaseType = "three") =>
-      get(
-        `/api/faultlevel/check?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`
-      ),
-    getCurves: (deviceId, switchboardId, phaseType = "three") =>
-      get(
-        `/api/faultlevel/curves?device=${deviceId}&switchboard=${switchboardId}&phase_type=${phaseType}`
-      ),
-    getAiTip: (payload) => post("/api/faultlevel/ai-tip", payload),
-    updateParameters: (payload) => post("/api/faultlevel/parameters", payload),
-    reset: () => post("/api/faultlevel/reset", {}),
-  },
-
-  arcflash: {
-    listPoints: (params) => get("/api/arcflash/points", params),
-    checkPoint: (deviceId, switchboardId) =>
-      get(`/api/arcflash/check?device=${deviceId}&switchboard=${switchboardId}`),
-    getCurves: (deviceId, switchboardId) =>
-      get(`/api/arcflash/curves?device=${deviceId}&switchboard=${switchboardId}`),
-    getAiTip: (payload) => post("/api/arcflash/ai-tip", payload),
-    updateParameters: (payload) => post("/api/arcflash/parameters", payload),
-    reset: () => post("/api/arcflash/reset", {}),
-  },
-
-  obsolescence: {
-    listPoints: (params) => get("/api/obsolescence/points", params),
-    checkPoint: (deviceId, switchboardId) =>
-      get(`/api/obsolescence/check?device=${deviceId}&switchboard=${switchboardId}`),
-    getGantt: () => get("/api/obsolescence/gantt"),
-    getCapexForecast: () => get("/api/obsolescence/capex-forecast"),
-    getAiTip: (payload) => post("/api/obsolescence/ai-tip", payload),
-    updateParameters: (payload) => post("/api/obsolescence/parameters", payload),
-    reset: () => post("/api/obsolescence/reset", {}),
-    analyzePdf: (formData) => upload("/api/obsolescence/analyze-pdf", formData),
-    exportPdf: () => get("/api/obsolescence/export-pdf"),
-  },
-
-  hv: {
-    list: (params) => get("/api/hv/equipments", params),
-    getOne: (id) => get(`/api/hv/equipments/${id}`),
-    create: (hvEquipmentId, payload) =>
-      post(`/api/hv/equipments/${hvEquipmentId}/devices`, payload),
-    createEquipment: (payload) => post("/api/hv/equipments", payload),
-    update: (id, payload) => put(`/api/hv/devices/${id}`, payload),
-    updateEquipment: (id, payload) => put(`/api/hv/equipments/${id}`, payload),
-    duplicate: (id) => post(`/api/hv/equipments/${id}/duplicate`),
-    remove: (id) => del(`/api/hv/devices/${id}`),
-    removeEquipment: (id) => del(`/api/hv/equipments/${id}`),
-  },
-
-  diagram: {
-    view: (params) => get("/api/diagram/view", { ...(params || {}), site: currentSite() }),
-    health: () => get("/api/diagram/health"),
-  },
-
-  /** ------- CONTROLS ------- */
-  controls: {
-    // Arborescence Building → Switchboards → (Devices) + HV + ATEX
-    tree: (params) => get("/api/controls/tree", params),
-
-    // Catalogue (équipements)
-    listEntities: (params) => get("/api/controls/catalog", params),
-    createEntity: (payload) => post("/api/controls/catalog", payload),
-    removeEntity: (id) => del(`/api/controls/catalog/${id}`),
-
-    // Tâches
-    listTasks: (params) => get("/api/controls/tasks", params),
-    getTask: (id) => get(`/api/controls/tasks/${id}/details`),
-    completeTask: (id, payload) => post(`/api/controls/tasks/${id}/complete`, payload),
-
-    // Pièces jointes
-    uploadAttachment: (id, formData) => upload(`/api/controls/tasks/${id}/upload`, formData),
-    listAttachments: (id) => get(`/api/controls/tasks/${id}/attachments`),
-    // Pour télécharger un fichier, utilise plutôt un <a href> direct côté UI :
-    // `/api/controls/tasks/${taskId}/attachments/${attachmentId}`
-
-    // Not Present
-    listNotPresent: (params) => get("/api/controls/not-present", params),
-    declareNotPresent: (payload) => post("/api/controls/not-present", payload),
-    assessNotPresent: (id, payload) => post(`/api/controls/not-present/${id}/assess`, payload),
-
-    // Librairie TSD
-    library: () => get("/api/controls/library"),
-
-    // Génération / Sync
-    // -> passe par source=db pour lire directement switchboards/devices/hv/atex depuis Postgres
-    sync: ({ site = currentSite() || "Default", source = "db" } = {}) =>
-      post(`/api/controls/sync?source=${encodeURIComponent(source)}`, { site }),
-    generate: (payload) => post("/api/controls/generate", payload),
-
-    // Historique & Records
-    history: (params) => get("/api/controls/history", params),
-    records: (params) => get("/api/controls/records", params),
-
-    // IA (aligné backend)
-    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),
-    assistant: (taskId, question) =>
-      post(`/api/controls/tasks/${taskId}/assistant`, { question }),
-  },
-
-  /** ------- OIBT ------- */
+  /** --- OIBT (existant) --- */
   oibt: {
-    // Projets (avis / protocole / rapport / réception)
     listProjects: (params) => get("/api/oibt/projects", params),
+    getProject: (id) => get(`/api/oibt/projects/${id}`),
     createProject: (payload) => post("/api/oibt/projects", payload),
     updateProject: (id, payload) => put(`/api/oibt/projects/${id}`, payload),
     removeProject: (id) => del(`/api/oibt/projects/${id}`),
-
-    // Upload pièce jointe par action de projet (avis|protocole|rapport|reception)
     uploadProjectActionFile: (id, action, formData) =>
       upload(`/api/oibt/projects/${id}/upload?action=${encodeURIComponent(action)}`, formData),
 
-    // Contrôles périodiques (bâtiments)
     listPeriodics: (params) => get("/api/oibt/periodics", params),
     createPeriodic: (payload) => post("/api/oibt/periodics", payload),
     updatePeriodic: (id, payload) => put(`/api/oibt/periodics/${id}`, payload),
     removePeriodic: (id) => del(`/api/oibt/periodics/${id}`),
-
-    // Upload de pièces jointes périodiques (report | defect | confirmation)
     uploadPeriodicFile: (id, type, formData) =>
       upload(`/api/oibt/periodics/${id}/upload?type=${encodeURIComponent(type)}`, formData),
+  },
+
+  /** --- PROJECTS (NOUVEAU) --- */
+  projects: {
+    // Projets
+    list: (params) => get("/api/projects/projects", params),
+    create: (payload) => post("/api/projects/projects", payload),
+    update: (id, payload) => put(`/api/projects/projects/${id}`, payload),
+    remove: (id) => del(`/api/projects/projects/${id}`),
+
+    // Statut (étapes)
+    status: (id) => get(`/api/projects/projects/${id}/status`),
+    setStatus: (id, payload) => put(`/api/projects/projects/${id}/status`, payload),
+
+    // Upload multi-fichiers historisés par catégorie
+    upload: (id, category, formData) =>
+      upload(`/api/projects/projects/${id}/upload?category=${encodeURIComponent(category)}`, formData),
+    listFiles: (id, category) => get(`/api/projects/projects/${id}/files`, { category }),
+    downloadFile: (file_id) => get(`/api/projects/download`, { file_id }), // renvoie le flux; pour télécharger directement utiliser window.location
+
+    // Lignes financières
+    addOffer: (id, payload) => post(`/api/projects/projects/${id}/offer`, payload),
+    addOrder: (id, payload) => post(`/api/projects/projects/${id}/order`, payload),
+    addInvoice: (id, payload) => post(`/api/projects/projects/${id}/invoice`, payload),
+    lines: (id) => get(`/api/projects/projects/${id}/lines`),
+
+    // Analyse & IA
+    analysis: (id) => get(`/api/projects/projects/${id}/analysis`),
+    assistant: (id, question) => post(`/api/projects/projects/${id}/assistant`, { question }),
+    health: () => get(`/api/projects/health`),
+  },
+
+  /** --- CONTROLS (NOUVEAU) --- */
+  controls: {
+    // Catalogue / Arborescence
+    tree: (params) => get("/api/controls/tree", { site: currentSite(), ...(params || {}) }),
+    catalog: (params) => get("/api/controls/catalog", { site: currentSite(), ...(params || {}) }),
+
+    // Sync: lit toutes les sources (read_site=*) et insère sous le site courant
+    sync: ({ site = currentSite(), source = "db" } = {}) =>
+      post(`/api/controls/sync?source=${encodeURIComponent(source)}&read_site=*`, { site }),
+
+    // Tasks
+    listTasks: (params) => get("/api/controls/tasks", { site: currentSite(), ...(params || {}) }),
+    tasksByEntity: (entity_id, q = "") =>
+      get("/api/controls/tasks", { site: currentSite(), entity_id, q }),
+
+    taskDetails: (id) => get(`/api/controls/tasks/${id}/details`),
+    completeTask: (id, payload) => post(`/api/controls/tasks/${id}/complete`, payload),
+
+    // Pièces jointes
+    listAttachments: (taskId) => get(`/api/controls/tasks/${taskId}/attachments`),
+    uploadAttachments: (taskId, files, label) => {
+      const fd = new FormData();
+      (files || []).forEach((f) => fd.append("files", f));
+      if (label) fd.append("label", label);
+      return upload(`/api/controls/tasks/${taskId}/upload`, fd);
+    },
+
+    // IA
+    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),
+    assistant: (taskId, question) => post(`/api/controls/tasks/${taskId}/assistant`, { question }),
+
+    // Logs
+    history: (params) => get("/api/controls/history", { site: currentSite(), ...(params || {}) }),
+    records: (params) => get("/api/controls/records", { site: currentSite(), ...(params || {}) }),
+
+    // Health
+    health: () => get(`/api/controls/health`),
   },
 };
