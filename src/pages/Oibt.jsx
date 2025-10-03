@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
   Folder, FileText, CalendarClock, Download, Trash2, BarChart3,
-  AlertTriangle, CheckCircle2, XCircle, ChevronDown
+  AlertTriangle, CheckCircle2, XCircle, ChevronDown, UploadCloud, Filter
 } from "lucide-react";
 
 /* ----------------------------- UI HELPERS ----------------------------- */
@@ -60,6 +60,35 @@ const ConfirmModal = ({ open, title, message, onConfirm, onCancel }) => {
     </div>
   );
 };
+
+/* --------------------------- DRAG & DROP INPUT --------------------------- */
+function DropInput({ label = "Glissez-déposez ou cliquez pour choisir", multiple = false, onFiles, accept }) {
+  const [drag, setDrag] = useState(false);
+  const onDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setDrag(true); };
+  const onDragLeave = () => setDrag(false);
+  const onDrop = (e) => {
+    e.preventDefault(); setDrag(false);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length) onFiles(files);
+  };
+  const onPick = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length) onFiles(files);
+  };
+  return (
+    <label
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={`flex-1 min-w-[240px] cursor-pointer border-2 rounded-lg px-3 py-2 text-sm flex items-center gap-2 ${drag ? "border-blue-500 bg-blue-50" : "border-dashed border-gray-300 bg-white"}`}
+      title="Glisser-déposer vos fichiers ici"
+    >
+      <UploadCloud />
+      <span className="text-gray-700">{label}</span>
+      <input type="file" className="hidden" multiple={multiple} accept={accept} onChange={onPick} />
+    </label>
+  );
+}
 
 /* --------------------------- RESPONSIVE TABS --------------------------- */
 function Tabs({ tabs, active, onChange }) {
@@ -128,6 +157,7 @@ export default function Oibt() {
   const [qProj, setQProj] = useState("");
   const [title, setTitle] = useState("");
   const [yearFilterProjects, setYearFilterProjects] = useState("all");
+  const [statusFilterProjects, setStatusFilterProjects] = useState("all");
   const [expandedProjects, setExpandedProjects] = useState(new Set()); // ids expand
 
   // Périodiques
@@ -136,6 +166,7 @@ export default function Oibt() {
   const [building, setBuilding] = useState("");
   const [fileReport, setFileReport] = useState(null);
   const [yearFilterPeriodics, setYearFilterPeriodics] = useState("all");
+  const [statusFilterPeriodics, setStatusFilterPeriodics] = useState("all");
   const [expandedPeriodics, setExpandedPeriodics] = useState(new Set());
 
   // UI
@@ -174,20 +205,62 @@ export default function Oibt() {
     return Array.from(s).sort((a,b)=>b-a);
   }, [periodics]);
 
+  /* ------------------------------ STATUS HELPERS ------------------------------ */
+  const stepByKey = (status, key) => (status || []).find(a => (a.key === key) || (a.name || "").toLowerCase().includes(key));
+  const hasSporadic = (p) => !!stepByKey(p.status, "sporadic");
+  const ensureSporadicStep = (p) => {
+    // ajoute l'étape sporadique si absente
+    if (hasSporadic(p)) return p.status;
+    const next = [...(p.status||[])];
+    next.push({ key: "sporadic", name: "Contrôle sporadique", done: false });
+    return next;
+  };
+  const removeSporadicStep = (p) => (p.status||[]).filter(a => a.key !== "sporadic");
+
+  const isProjectLate = (p) => {
+    const reception = stepByKey(p.status, "reception");
+    if (!reception?.due || reception.done) return false;
+    const [d,m,y] = reception.due.split("/").map(Number);
+    const due = new Date(y, m-1, d);
+    return due < new Date();
+  };
+  const isProjectDone = (p) => (p.status || []).every(a => !!a.done);
+  const isProjectInProgress = (p) => !isProjectDone(p);
+  const missingAvis = (p) => !(p.attachments?.avis);
+
+  const periodicDone = (c) => !!(c.report_received && c.defect_report_received && c.confirmation_received);
+
   /* ---------------------------- FILTERED LISTS ---------------------------- */
   const filteredProjects = useMemo(() => {
     const q = qProj.trim().toLowerCase();
     return (projects || [])
       .filter(p => (yearFilterProjects === "all" ? true : getYear(p) === Number(yearFilterProjects)))
-      .filter(p => !q ? true : p.title?.toLowerCase().includes(q));
-  }, [projects, qProj, yearFilterProjects]);
+      .filter(p => !q ? true : p.title?.toLowerCase().includes(q))
+      .filter(p => {
+        switch (statusFilterProjects) {
+          case "done": return isProjectDone(p);
+          case "progress": return isProjectInProgress(p);
+          case "late": return isProjectLate(p);
+          case "no-avis": return missingAvis(p);
+          case "sporadic": return hasSporadic(p) && !stepByKey(p.status, "sporadic")?.done;
+          default: return true;
+        }
+      });
+  }, [projects, qProj, yearFilterProjects, statusFilterProjects]);
 
   const filteredPeriodics = useMemo(() => {
     const q = qBuild.trim().toLowerCase();
     return (periodics || [])
       .filter(c => (yearFilterPeriodics === "all" ? true : getYear(c) === Number(yearFilterPeriodics)))
-      .filter(c => !q ? true : c.building?.toLowerCase().includes(q));
-  }, [periodics, qBuild, yearFilterPeriodics]);
+      .filter(c => !q ? true : c.building?.toLowerCase().includes(q))
+      .filter(c => {
+        switch (statusFilterPeriodics) {
+          case "done": return periodicDone(c);
+          case "progress": return !periodicDone(c);
+          default: return true;
+        }
+      });
+  }, [periodics, qBuild, yearFilterPeriodics, statusFilterPeriodics]);
 
   /* ------------------------------ PROGRESS ------------------------------ */
   const projectProgress = (p) => {
@@ -248,25 +321,26 @@ export default function Oibt() {
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
-  // UPLOAD PROJET = coche auto
-  async function uploadProjectFile(id, action, file) {
-    if (!file) return;
-    const fd = new FormData(); fd.append("file", file);
+  // UPLOAD PROJET = coche auto (support drag & drop + multiple UI)
+  async function uploadProjectFiles(id, action, files) {
+    if (!files?.length) return;
     try {
-      await api.oibt.uploadProjectActionFile(id, action, fd);
-      // on coche l'étape correspondante
+      // upload en série pour conserver l'ordre (backend actuel garde 1 fichier par étape)
+      for (const file of files) {
+        const fd = new FormData(); fd.append("file", file);
+        await api.oibt.uploadProjectActionFile(id, action, fd);
+      }
+      // coche l'étape côté front puis sync backend (met +6 mois si rapport)
       setProjects(prev => {
         const pj = prev.find(p => p.id === id);
         if (!pj) return prev;
         const idx = (pj.status || []).findIndex(a => (a.key || "").toLowerCase() === action);
         if (idx < 0) return prev;
         const nextStatus = pj.status.map((a, i) => i === idx ? { ...a, done: true } : a);
-        // pousse l’update côté serveur (déclenche aussi le +6 mois si rapport -> réception)
         api.oibt.updateProject(id, { status: nextStatus, year: pj.year ?? getYear(pj) }).catch(()=>{});
         return prev.map(p => p.id === id ? { ...p, status: nextStatus } : p);
       });
-      setToast({ msg: "Pièce jointe ajoutée (étape cochée)", type: "success" });
-      // rafraîchir pour récupérer aussi les badges + éventuelle due date de Réception
+      setToast({ msg: files.length > 1 ? `${files.length} fichiers ajoutés` : "Fichier ajouté", type: "success" });
       await refreshAll();
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
@@ -278,7 +352,7 @@ export default function Oibt() {
       const upd = await api.oibt.updateProject(id, { status: pj.status, year });
       setProjects(s => s.map(p => p.id === id ? upd : p));
       setToast({ msg: "Année du projet mise à jour", type: "success" });
-    } catch (e) { setToast({ msg: "Échec mise à jour de l'année (backend sans colonne 'year' ?)", type: "error" }); }
+    } catch (e) { setToast({ msg: "Échec mise à jour de l'année", type: "error" }); }
   }
 
   async function addPeriodic() {
@@ -296,13 +370,15 @@ export default function Oibt() {
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
-  async function uploadPeriodic(id, type, file) {
-    if (!file) return;
-    const fd = new FormData(); fd.append("file", file);
+  async function uploadPeriodic(id, type, files) {
+    if (!files?.length) return;
     try {
-      const upd = await api.oibt.uploadPeriodicFile(id, type, fd);
-      setPeriodics(s => s.map(c => c.id === id ? upd : c));
-      setToast({ msg: "Pièce jointe ajoutée", type: "success" });
+      for (const file of files) {
+        const fd = new FormData(); fd.append("file", file);
+        await api.oibt.uploadPeriodicFile(id, type, fd);
+      }
+      await refreshAll();
+      setToast({ msg: files.length > 1 ? `${files.length} fichiers ajoutés` : "Fichier ajouté", type: "success" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
@@ -326,7 +402,7 @@ export default function Oibt() {
       const upd = await api.oibt.updatePeriodic(id, { year });
       setPeriodics(s => s.map(c => c.id === id ? upd : c));
       setToast({ msg: "Année du périodique mise à jour", type: "success" });
-    } catch (e) { setToast({ msg: "Échec mise à jour de l'année (backend sans colonne 'year' ?)", type: "error" }); }
+    } catch (e) { setToast({ msg: "Échec mise à jour de l'année", type: "error" }); }
   }
 
   async function deletePeriodic(id) {
@@ -335,6 +411,31 @@ export default function Oibt() {
       setPeriodics(s => s.filter(c => c.id !== id));
       setToast({ msg: "Bâtiment supprimé", type: "info" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
+  }
+
+  // Sporadique: besoin = floor(nb projets ouverts / 10)
+  const openProjects = useMemo(() => projects.filter(isProjectInProgress), [projects]);
+  const sporadNeeded = Math.floor(openProjects.length / 10);
+  const sporadAssigned = projects.filter(p => hasSporadic(p) && !stepByKey(p.status, "sporadic")?.done).length;
+  const canAssign = sporadAssigned < sporadNeeded;
+
+  async function markProjectSporadic(p, enable) {
+    const next = enable ? ensureSporadicStep(p) : removeSporadicStep(p);
+    try {
+      const upd = await api.oibt.updateProject(p.id, { status: next, year: p.year ?? getYear(p) });
+      setProjects(list => list.map(x => x.id === p.id ? upd : x));
+    } catch (e) { setToast({ msg: e.message, type: "error" }); }
+  }
+
+  async function autoAssignSporadic() {
+    if (!canAssign) return;
+    const eligible = projects.filter(p => stepByKey(p.status, "reception")?.done && !hasSporadic(p));
+    const toPick = Math.max(0, sporadNeeded - sporadAssigned);
+    const pick = eligible.sort(() => 0.5 - Math.random()).slice(0, toPick);
+    for (const p of pick) {
+      await markProjectSporadic(p, true);
+    }
+    if (pick.length) setToast({ msg: `${pick.length} projet(s) marqués en sporadique`, type: "success" });
   }
 
   /* ------------------------------ FILE URLS ------------------------------ */
@@ -352,7 +453,7 @@ export default function Oibt() {
       if (!att.avis) {
         out.project.push({ level: "warn", text: `Projet « ${p.title} » — Avis d’installation manquant.` });
       }
-      const rec = (p.status || []).find(a => a.key === "reception" || a.name === "Contrôle de réception");
+      const rec = stepByKey(p.status, "reception");
       if (rec?.due && !rec.done) {
         const [d, m, y] = rec.due.split("/").map(Number);
         const due = new Date(y, m - 1, d);
@@ -370,12 +471,8 @@ export default function Oibt() {
         const plus6 = new Date(base); plus6.setMonth(plus6.getMonth() + 6);
 
         if (!c.defect_report_received) {
-          if (today > plus6) out.periodic.push({ level: "error", text: `Périodique « ${c.building} » — délai 6 mois dépassé pour l’élimination des défauts.` });
-          else if (today > plus3) out.periodic.push({ level: "warn", text: `Périodique « ${c.building} » — dépassement 3 mois, corriger avant 6 mois.` });
-          else {
-            const days = Math.ceil((plus3 - today) / (1000 * 60 * 60 * 24));
-            if (days <= 30) out.periodic.push({ level: "info", text: `Périodique « ${c.building} » — correction à effectuer sous ${days} jours (jalon 3 mois).` });
-          }
+          if (new Date() > plus6) out.periodic.push({ level: "error", text: `Périodique « ${c.building} » — délai 6 mois dépassé pour l’élimination des défauts.` });
+          else if (new Date() > plus3) out.periodic.push({ level: "warn", text: `Périodique « ${c.building} » — dépassement 3 mois, corriger avant 6 mois.` });
         }
       }
     }
@@ -414,7 +511,7 @@ export default function Oibt() {
         <h1 className="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">
           <BarChart3 /> OIBT – Installation &amp; Contrôles
         </h1>
-        <p className="text-gray-600">Avis d’installation, protocoles, rapports de sécurité, contrôle de réception et contrôles périodiques.</p>
+        <p className="text-gray-600">Avis d’installation, protocoles, rapports de sécurité, contrôle de réception, contrôles périodiques et contrôle sporadique.</p>
       </header>
 
       {/* Statut global */}
@@ -435,17 +532,22 @@ export default function Oibt() {
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
 
       {/* ------------------------------ PROJETS ------------------------------ */}
-      <div
-        id="panel-projects"
-        role="tabpanel"
-        aria-labelledby="tab-projects"
-        hidden={tab !== "projects"}
-      >
+      <div id="panel-projects" role="tabpanel" aria-labelledby="tab-projects" hidden={tab !== "projects"}>
         {tab === "projects" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200 mb-8">
+            {/* bar filtres */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">Projets</h2>
-              <div className="flex gap-2 w-full sm:w-auto">
+              <div className="flex gap-2 w-full sm:w-auto items-center">
+                <Filter className="text-gray-500 hidden sm:block" />
+                <select value={statusFilterProjects} onChange={e=>setStatusFilterProjects(e.target.value)} className={clsInput()} style={{maxWidth:200}}>
+                  <option value="all">Statut : Tous</option>
+                  <option value="progress">En cours</option>
+                  <option value="done">Terminés</option>
+                  <option value="late">En retard (réception)</option>
+                  <option value="no-avis">Sans avis d’installation</option>
+                  <option value="sporadic">Sporadique requis</option>
+                </select>
                 <select value={yearFilterProjects} onChange={e=>setYearFilterProjects(e.target.value)} className={clsInput()} style={{maxWidth:160}}>
                   <option value="all">Année : Toutes</option>
                   {uniqueProjectYears.map(y => <option key={y} value={y}>{y}</option>)}
@@ -455,24 +557,32 @@ export default function Oibt() {
               </div>
             </div>
 
+            {/* sporadique helper */}
+            <div className="mt-3 p-3 rounded-lg bg-indigo-50 text-indigo-900 border border-indigo-200 flex items-center justify-between gap-3">
+              <div className="text-sm">
+                Besoin de <b>{sporadNeeded}</b> projet(s) en <i>contrôle sporadique</i> (5% des {openProjects.length} projets ouverts). Actuellement : <b>{sporadAssigned}</b>.
+              </div>
+              <div className="flex gap-2">
+                <button onClick={autoAssignSporadic} className={`px-3 py-2 rounded ${canAssign ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-gray-200 text-gray-500"}`} disabled={!canAssign}>Assigner automatiquement</button>
+              </div>
+            </div>
+
+            {/* création */}
             <div className="mt-4 flex gap-2 flex-col sm:flex-row">
               <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Titre du projet" className={clsInput()} />
               <button onClick={createProject} className={btnPrimary()}>Créer</button>
             </div>
 
+            {/* liste */}
             <div className="mt-5 grid gap-4">
               {filteredProjects.map(p => {
                 const progress = projectProgress(p);
-                const reception = (p.status || []).find(a => (a.key==="reception") || a.name==="Contrôle de réception");
-                const late = (() => {
-                  if (!reception?.due || reception.done) return false;
-                  const [d,m,y] = reception.due.split("/").map(Number);
-                  const due = new Date(y, m-1, d);
-                  return due < new Date();
-                })();
+                const reception = stepByKey(p.status, "reception");
+                const late = isProjectLate(p);
                 const year = p.year ?? getYear(p);
                 const expanded = expandedProjects.has(p.id);
                 const done = progress === 100;
+                const spor = hasSporadic(p);
 
                 return (
                   <div key={p.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -480,7 +590,10 @@ export default function Oibt() {
                       <div className="flex items-center gap-3">
                         {done ? <CheckCircle2 className="text-emerald-600" /> : <Folder className="text-indigo-500" />}
                         <div>
-                          <div className="font-medium text-gray-900">{p.title}</div>
+                          <div className="font-medium text-gray-900 flex items-center gap-2">
+                            {p.title}
+                            {spor && <span className="text-[11px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">Sporadique</span>}
+                          </div>
                           <div className="text-xs text-gray-600">Année&nbsp;
                             <input
                               type="number"
@@ -493,6 +606,15 @@ export default function Oibt() {
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {/* bouton sporadique si réception ok */}
+                        <button
+                          onClick={() => markProjectSporadic(p, !spor)}
+                          className={`px-2 py-1 rounded border ${stepByKey(p.status, "reception")?.done ? "bg-white text-gray-700 hover:bg-gray-50" : "bg-gray-100 text-gray-400"}`}
+                          title={stepByKey(p.status, "reception")?.done ? (spor ? "Retirer le contrôle sporadique" : "Marquer pour contrôle sporadique") : "Disponible après la réception"}
+                          disabled={!stepByKey(p.status, "reception")?.done}
+                        >
+                          Sporadique
+                        </button>
                         <button
                           onClick={() => toggleExpandProject(p.id)}
                           className="px-2 py-1 rounded border bg-white text-gray-700 hover:bg-gray-50 flex items-center gap-1"
@@ -506,45 +628,53 @@ export default function Oibt() {
 
                     <div className="mt-3">
                       <Progress value={progress} />
-                      <div className="mt-1 text-xs text-gray-600">{progress}%</div>
-                      {reception?.due && !reception.done && (
-                        <div className={`mt-1 text-xs flex items-center gap-1 ${late ? "text-red-600" : "text-gray-600"}`}>
-                          <CalendarClock size={14} /> Réception avant le {reception.due} {late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
-                        </div>
-                      )}
+                      <div className="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-2">
+                        <span>{progress}%</span>
+                        {reception?.due && !reception.done && (
+                          <span className={`flex items-center gap-1 ${late ? "text-red-600" : "text-gray-600"}`}>
+                            <CalendarClock size={14} /> Réception avant le {reception.due} {late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Contenu déroulant */}
                     {expanded && (
                       <ul className="mt-3 space-y-3">
                         {(p.status || []).map((a, i) => {
-                          const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : "reception");
+                          const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : a.name?.toLowerCase().includes("sporad") ? "sporadic" : "reception");
                           const hasFile = !!p.attachments?.[key];
+                          const accept = ".pdf,.doc,.docx,.png,.jpg,.jpeg";
+                          const canUploadMulti = key !== "sporadic"; // backend multi-fichiers non encore dispo
                           return (
-                            <li key={i} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
+                            <li key={`${p.id}-${i}`} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
                               <div className="flex items-center justify-between gap-3">
                                 <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap">
                                   <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
                                   <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
                                   {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
                                 </label>
-                                <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                              </div>
-
-                              <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <input
-                                  type="file"
-                                  onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
-                                  className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                                />
-                                {hasFile && (
-                                  <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
-                                     className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0">
-                                    <Download size={16} /> Télécharger
-                                  </a>
+                                {key !== "sporadic" && (
+                                  <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                                 )}
                               </div>
+
+                              {/* Upload area */}
+                              {key !== "sporadic" && (
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  <DropInput
+                                    multiple={canUploadMulti}
+                                    accept={accept}
+                                    onFiles={(files) => uploadProjectFiles(p.id, key, files)}
+                                  />
+                                  {hasFile && (
+                                    <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
+                                       className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0">
+                                      <Download size={16} /> Télécharger le dernier fichier
+                                    </a>
+                                  )}
+                                </div>
+                              )}
                             </li>
                           );
                         })}
@@ -562,17 +692,18 @@ export default function Oibt() {
       </div>
 
       {/* ---------------------------- PÉRIODIQUES ---------------------------- */}
-      <div
-        id="panel-periodics"
-        role="tabpanel"
-        aria-labelledby="tab-periodics"
-        hidden={tab !== "periodics"}
-      >
+      <div id="panel-periodics" role="tabpanel" aria-labelledby="tab-periodics" hidden={tab !== "periodics"}>
         {tab === "periodics" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">Contrôles périodiques</h2>
-              <div className="flex gap-2 w-full sm:w-auto">
+              <div className="flex gap-2 w-full sm:w-auto items-center">
+                <Filter className="text-gray-500 hidden sm:block" />
+                <select value={statusFilterPeriodics} onChange={e=>setStatusFilterPeriodics(e.target.value)} className={clsInput()} style={{maxWidth:180}}>
+                  <option value="all">Statut : Tous</option>
+                  <option value="progress">En cours</option>
+                  <option value="done">Terminés</option>
+                </select>
                 <select value={yearFilterPeriodics} onChange={e=>setYearFilterPeriodics(e.target.value)} className={clsInput()} style={{maxWidth:160}}>
                   <option value="all">Année : Toutes</option>
                   {uniquePeriodicYears.map(y => <option key={y} value={y}>{y}</option>)}
@@ -584,9 +715,7 @@ export default function Oibt() {
 
             <div className="mt-3 grid gap-3 sm:grid-cols-3">
               <input value={building} onChange={e => setBuilding(e.target.value)} placeholder="Nom du bâtiment" className={clsInput()} />
-              <input type="file" onChange={e => setFileReport(e.target.files?.[0] || null)}
-                     className="block w-full text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white"
-                     accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" />
+              <DropInput label="Glissez-déposez le rapport initial (optionnel)" multiple={false} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> setFileReport(files[0] || null)} />
               <button onClick={addPeriodic} className={btnPrimary()}>Ajouter</button>
             </div>
 
@@ -642,12 +771,7 @@ export default function Oibt() {
                               <input type="checkbox" checked={!!c.report_received} onChange={() => togglePeriodic(c, "report")} />
                               Reçu
                             </label>
-                            <input
-                              type="file"
-                              onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
-                              className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                            />
+                            <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "report", files)} />
                             <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                             {c.has_report && (
                               <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
@@ -665,12 +789,7 @@ export default function Oibt() {
                               <input type="checkbox" checked={!!c.defect_report_received} onChange={() => togglePeriodic(c, "defect")} />
                               Reçus
                             </label>
-                            <input
-                              type="file"
-                              onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
-                              className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                            />
+                            <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "defect", files)} />
                             <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                             {c.has_defect && (
                               <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
@@ -688,12 +807,7 @@ export default function Oibt() {
                               <input type="checkbox" checked={!!c.confirmation_received} onChange={() => togglePeriodic(c, "confirm")} />
                               Reçue
                             </label>
-                            <input
-                              type="file"
-                              onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
-                              className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                            />
+                            <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "confirmation", files)} />
                             <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                             {c.has_confirmation && (
                               <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
@@ -714,18 +828,15 @@ export default function Oibt() {
       </div>
 
       {/* ------------------------------ ANALYSIS ----------------------------- */}
-      <div
-        id="panel-analysis"
-        role="tabpanel"
-        aria-labelledby="tab-analysis"
-        hidden={tab !== "analysis"}
-      >
+      <div id="panel-analysis" role="tabpanel" aria-labelledby="tab-analysis" hidden={tab !== "analysis"}>
         {tab === "analysis" && (
           <Analysis
             projects={projects}
             periodics={periodics}
             projectProgress={projectProgress}
             periodicProgress={periodicProgress}
+            sporadNeeded={sporadNeeded}
+            sporadAssigned={sporadAssigned}
           />
         )}
       </div>
@@ -754,7 +865,7 @@ export default function Oibt() {
 }
 
 /* ------------------------------ ANALYSIS TAB ------------------------------ */
-function Analysis({ projects, periodics, projectProgress, periodicProgress }) {
+function Analysis({ projects, periodics, projectProgress, periodicProgress, sporadNeeded, sporadAssigned }) {
   const stats = useMemo(() => {
     const prCount = projects.length;
     const prAvg = prCount ? Math.round(projects.map(projectProgress).reduce((a,b)=>a+b,0)/prCount) : 0;
@@ -782,11 +893,12 @@ function Analysis({ projects, periodics, projectProgress, periodicProgress }) {
     <div className="grid gap-6">
       <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
         <h3 className="font-semibold text-gray-900 mb-3">Vue d’ensemble</h3>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <CardStat label="Projets" value={stats.prCount} />
           <CardStat label="Avancement projets" value={`${stats.prAvg}%`} bar={stats.prAvg} />
           <CardStat label="Périodiques" value={stats.peCount} />
           <CardStat label="Avancement périodiques" value={`${stats.peAvg}%`} bar={stats.peAvg} />
+          <CardStat label="Sporadique (besoin/assignés)" value={`${sporadNeeded}/${sporadAssigned}`} />
         </div>
       </div>
 
