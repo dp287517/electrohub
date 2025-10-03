@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
   Folder, FileText, CalendarClock, Download, Trash2, BarChart3,
-  AlertTriangle, CheckCircle2, XCircle
+  AlertTriangle, CheckCircle2, XCircle, ChevronDown
 } from "lucide-react";
 
 /* ----------------------------- UI HELPERS ----------------------------- */
@@ -127,12 +127,16 @@ export default function Oibt() {
   const [projects, setProjects] = useState([]);
   const [qProj, setQProj] = useState("");
   const [title, setTitle] = useState("");
+  const [yearFilterProjects, setYearFilterProjects] = useState("all");
+  const [expandedProjects, setExpandedProjects] = useState(new Set()); // ids expand
 
   // Périodiques
   const [periodics, setPeriodics] = useState([]);
   const [qBuild, setQBuild] = useState("");
   const [building, setBuilding] = useState("");
   const [fileReport, setFileReport] = useState(null);
+  const [yearFilterPeriodics, setYearFilterPeriodics] = useState("all");
+  const [expandedPeriodics, setExpandedPeriodics] = useState(new Set());
 
   // UI
   const [toast, setToast] = useState(null);
@@ -150,16 +154,40 @@ export default function Oibt() {
     } catch (e) { setToast({ msg: e.message || "Erreur de chargement", type: "error" }); }
   }
 
+  /* ----------------------------- YEAR HELPERS ---------------------------- */
+  const getYear = (item) => {
+    if (item?.year) return Number(item.year);
+    try {
+      const d = new Date(item?.created_at || item?.createdAt || Date.now());
+      if (!isNaN(d)) return d.getFullYear();
+    } catch {}
+    return new Date().getFullYear();
+  };
+
+  const uniqueProjectYears = useMemo(() => {
+    const s = new Set(projects.map(getYear));
+    return Array.from(s).sort((a,b)=>b-a);
+  }, [projects]);
+
+  const uniquePeriodicYears = useMemo(() => {
+    const s = new Set(periodics.map(getYear));
+    return Array.from(s).sort((a,b)=>b-a);
+  }, [periodics]);
+
   /* ---------------------------- FILTERED LISTS ---------------------------- */
   const filteredProjects = useMemo(() => {
     const q = qProj.trim().toLowerCase();
-    return !q ? projects : projects.filter(p => p.title?.toLowerCase().includes(q));
-  }, [projects, qProj]);
+    return (projects || [])
+      .filter(p => (yearFilterProjects === "all" ? true : getYear(p) === Number(yearFilterProjects)))
+      .filter(p => !q ? true : p.title?.toLowerCase().includes(q));
+  }, [projects, qProj, yearFilterProjects]);
 
   const filteredPeriodics = useMemo(() => {
     const q = qBuild.trim().toLowerCase();
-    return !q ? periodics : periodics.filter(c => c.building?.toLowerCase().includes(q));
-  }, [periodics, qBuild]);
+    return (periodics || [])
+      .filter(c => (yearFilterPeriodics === "all" ? true : getYear(c) === Number(yearFilterPeriodics)))
+      .filter(c => !q ? true : c.building?.toLowerCase().includes(q));
+  }, [periodics, qBuild, yearFilterPeriodics]);
 
   /* ------------------------------ PROGRESS ------------------------------ */
   const projectProgress = (p) => {
@@ -186,15 +214,32 @@ export default function Oibt() {
       setToast({ msg: "Projet créé", type: "success" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
+
+  function toggleExpandProject(id) {
+    setExpandedProjects(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleExpandPeriodic(id) {
+    setExpandedPeriodics(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
   async function toggleAction(projectId, index) {
     const pj = projects.find(p => p.id === projectId);
     if (!pj) return;
     const next = (pj.status || []).map((a, i) => i === index ? { ...a, done: !a.done } : a);
     try {
-      const upd = await api.oibt.updateProject(projectId, { status: next });
+      const upd = await api.oibt.updateProject(projectId, { status: next, year: pj.year ?? getYear(pj) });
       setProjects(s => s.map(p => p.id === projectId ? upd : p));
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
+
   async function deleteProject(id) {
     try {
       await api.oibt.removeProject(id);
@@ -202,14 +247,38 @@ export default function Oibt() {
       setToast({ msg: "Projet supprimé", type: "info" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
+
+  // UPLOAD PROJET = coche auto
   async function uploadProjectFile(id, action, file) {
     if (!file) return;
     const fd = new FormData(); fd.append("file", file);
     try {
       await api.oibt.uploadProjectActionFile(id, action, fd);
+      // on coche l'étape correspondante
+      setProjects(prev => {
+        const pj = prev.find(p => p.id === id);
+        if (!pj) return prev;
+        const idx = (pj.status || []).findIndex(a => (a.key || "").toLowerCase() === action);
+        if (idx < 0) return prev;
+        const nextStatus = pj.status.map((a, i) => i === idx ? { ...a, done: true } : a);
+        // pousse l’update côté serveur (déclenche aussi le +6 mois si rapport -> réception)
+        api.oibt.updateProject(id, { status: nextStatus, year: pj.year ?? getYear(pj) }).catch(()=>{});
+        return prev.map(p => p.id === id ? { ...p, status: nextStatus } : p);
+      });
+      setToast({ msg: "Pièce jointe ajoutée (étape cochée)", type: "success" });
+      // rafraîchir pour récupérer aussi les badges + éventuelle due date de Réception
       await refreshAll();
-      setToast({ msg: "Pièce jointe ajoutée", type: "success" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
+  }
+
+  async function setProjectYear(id, year) {
+    const pj = projects.find(p => p.id === id);
+    if (!pj) return;
+    try {
+      const upd = await api.oibt.updateProject(id, { status: pj.status, year });
+      setProjects(s => s.map(p => p.id === id ? upd : p));
+      setToast({ msg: "Année du projet mise à jour", type: "success" });
+    } catch (e) { setToast({ msg: "Échec mise à jour de l'année (backend sans colonne 'year' ?)", type: "error" }); }
   }
 
   async function addPeriodic() {
@@ -218,32 +287,48 @@ export default function Oibt() {
       const row = await api.oibt.createPeriodic({ building: building.trim() });
       if (fileReport) {
         const fd = new FormData(); fd.append("file", fileReport);
-        await api.oibt.uploadPeriodicFile(row.id, "report", fd);
+        const upd = await api.oibt.uploadPeriodicFile(row.id, "report", fd);
+        setPeriodics(s => s.map(c => c.id === row.id ? upd : c));
       }
       setBuilding(""); setFileReport(null);
       await refreshAll();
       setToast({ msg: "Contrôle périodique ajouté", type: "success" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
+
   async function uploadPeriodic(id, type, file) {
     if (!file) return;
     const fd = new FormData(); fd.append("file", file);
     try {
       const upd = await api.oibt.uploadPeriodicFile(id, type, fd);
       setPeriodics(s => s.map(c => c.id === id ? upd : c));
+      setToast({ msg: "Pièce jointe ajoutée", type: "success" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
+
   async function togglePeriodic(row, key) {
     try {
       const body = {
         report_received: key === "report" ? !row.report_received : row.report_received,
         defect_report_received: key === "defect" ? !row.defect_report_received : row.defect_report_received,
         confirmation_received: key === "confirm" ? !row.confirmation_received : row.confirmation_received,
+        year: row.year ?? getYear(row),
       };
       const upd = await api.oibt.updatePeriodic(row.id, body);
       setPeriodics(s => s.map(c => c.id === row.id ? upd : c));
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
+
+  async function setPeriodicYear(id, year) {
+    const row = periodics.find(p => p.id === id);
+    if (!row) return;
+    try {
+      const upd = await api.oibt.updatePeriodic(id, { year });
+      setPeriodics(s => s.map(c => c.id === id ? upd : c));
+      setToast({ msg: "Année du périodique mise à jour", type: "success" });
+    } catch (e) { setToast({ msg: "Échec mise à jour de l'année (backend sans colonne 'year' ?)", type: "error" }); }
+  }
+
   async function deletePeriodic(id) {
     try {
       await api.oibt.removePeriodic(id);
@@ -261,7 +346,7 @@ export default function Oibt() {
     const out = { project: [], periodic: [] };
     const today = new Date();
 
-    // Projets: Avis manquant + Réception <30j ou en retard
+    // Projets
     for (const p of projects) {
       const att = p.attachments || {};
       if (!att.avis) {
@@ -277,7 +362,7 @@ export default function Oibt() {
       }
     }
 
-    // Périodiques: fenêtres 3/6 mois après report_received_at tant que défaut/confirmation non reçus
+    // Périodiques (jalons 3/6 mois après rapport)
     for (const c of periodics) {
       if (c.report_received && c.report_received_at) {
         const base = new Date(c.report_received_at);
@@ -359,8 +444,12 @@ export default function Oibt() {
         {tab === "projects" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200 mb-8">
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2"><Folder /> Projets</h2>
+              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">Projets</h2>
               <div className="flex gap-2 w-full sm:w-auto">
+                <select value={yearFilterProjects} onChange={e=>setYearFilterProjects(e.target.value)} className={clsInput()} style={{maxWidth:160}}>
+                  <option value="all">Année : Toutes</option>
+                  {uniqueProjectYears.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
                 <input value={qProj} onChange={e => setQProj(e.target.value)} placeholder="Filtrer par titre…" className={clsInput()} />
                 <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
               </div>
@@ -371,7 +460,7 @@ export default function Oibt() {
               <button onClick={createProject} className={btnPrimary()}>Créer</button>
             </div>
 
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <div className="mt-5 grid gap-4">
               {filteredProjects.map(p => {
                 const progress = projectProgress(p);
                 const reception = (p.status || []).find(a => (a.key==="reception") || a.name==="Contrôle de réception");
@@ -381,14 +470,38 @@ export default function Oibt() {
                   const due = new Date(y, m-1, d);
                   return due < new Date();
                 })();
+                const year = p.year ?? getYear(p);
+                const expanded = expandedProjects.has(p.id);
+                const done = progress === 100;
+
                 return (
                   <div key={p.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Folder className="text-indigo-500" />
-                        <h3 className="font-medium text-gray-900">{p.title}</h3>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        {done ? <CheckCircle2 className="text-emerald-600" /> : <Folder className="text-indigo-500" />}
+                        <div>
+                          <div className="font-medium text-gray-900">{p.title}</div>
+                          <div className="text-xs text-gray-600">Année&nbsp;
+                            <input
+                              type="number"
+                              value={year}
+                              onChange={e => setProjectYear(p.id, Number(e.target.value))}
+                              className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 ml-1"
+                            />
+                          </div>
+                        </div>
                       </div>
-                      <button onClick={() => setConfirm({ open: true, id: p.id })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleExpandProject(p.id)}
+                          className="px-2 py-1 rounded border bg-white text-gray-700 hover:bg-gray-50 flex items-center gap-1"
+                          title={expanded ? "Replier" : "Dérouler"}
+                        >
+                          <ChevronDown className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+                        </button>
+                        <button onClick={() => setConfirm({ open: true, id: p.id })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
+                      </div>
                     </div>
 
                     <div className="mt-3">
@@ -401,39 +514,42 @@ export default function Oibt() {
                       )}
                     </div>
 
-                    <ul className="mt-3 space-y-3">
-                      {(p.status || []).map((a, i) => {
-                        const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : "reception");
-                        const hasFile = !!p.attachments?.[key];
-                        return (
-                          <li key={i} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
-                            <div className="flex items-center justify-between gap-3">
-                              <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap">
-                                <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
-                                <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
-                                {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
-                              </label>
-                              <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                            </div>
+                    {/* Contenu déroulant */}
+                    {expanded && (
+                      <ul className="mt-3 space-y-3">
+                        {(p.status || []).map((a, i) => {
+                          const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : "reception");
+                          const hasFile = !!p.attachments?.[key];
+                          return (
+                            <li key={i} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
+                              <div className="flex items-center justify-between gap-3">
+                                <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap">
+                                  <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
+                                  <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
+                                  {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
+                                </label>
+                                <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
+                              </div>
 
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <input
-                                type="file"
-                                onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
-                                className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                              />
-                              {hasFile && (
-                                <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
-                                   className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0">
-                                  <Download size={16} /> Télécharger
-                                </a>
-                              )}
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <input
+                                  type="file"
+                                  onChange={e => uploadProjectFile(p.id, key, e.target.files?.[0])}
+                                  className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
+                                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                                />
+                                {hasFile && (
+                                  <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
+                                     className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0">
+                                    <Download size={16} /> Télécharger
+                                  </a>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
                   </div>
                 );
               })}
@@ -455,8 +571,12 @@ export default function Oibt() {
         {tab === "periodics" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2"><FileText /> Contrôles périodiques</h2>
+              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">Contrôles périodiques</h2>
               <div className="flex gap-2 w-full sm:w-auto">
+                <select value={yearFilterPeriodics} onChange={e=>setYearFilterPeriodics(e.target.value)} className={clsInput()} style={{maxWidth:160}}>
+                  <option value="all">Année : Toutes</option>
+                  {uniquePeriodicYears.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
                 <input value={qBuild} onChange={e => setQBuild(e.target.value)} placeholder="Filtrer par bâtiment…" className={clsInput()} />
                 <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
               </div>
@@ -473,89 +593,117 @@ export default function Oibt() {
             <div className="mt-4 grid gap-4">
               {filteredPeriodics.map(c => {
                 const progress = periodicProgress(c);
+                const year = c.year ?? getYear(c);
+                const expanded = expandedPeriodics.has(c.id);
+                const done = progress === 100;
+
                 return (
                   <div key={c.id} className="p-4 rounded-xl border border-gray-200 bg-white">
                     <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-gray-900">{c.building}</div>
-                        <div className="mt-2">
-                          <Progress value={progress} />
-                          <div className="mt-1 text-xs text-gray-600">{progress}%</div>
+                      <div className="flex items-center gap-3">
+                        {done ? <CheckCircle2 className="text-emerald-600" /> : <FileText className="text-indigo-500" />}
+                        <div>
+                          <div className="font-medium text-gray-900">{c.building}</div>
+                          <div className="text-xs text-gray-600">Année&nbsp;
+                            <input
+                              type="number"
+                              value={year}
+                              onChange={e => setPeriodicYear(c.id, Number(e.target.value))}
+                              className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 ml-1"
+                            />
+                          </div>
                         </div>
                       </div>
-                      <button onClick={() => setConfirm({ open: true, id: `per-${c.id}` })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
-                    </div>
-
-                    <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                      {/* Rapport de contrôle périodique */}
-                      <div className="space-y-2">
-                        <div className="text-sm font-medium text-gray-900">Rapport de contrôle périodique</div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
-                            <input type="checkbox" checked={!!c.report_received} onChange={() => togglePeriodic(c, "report")} />
-                            Reçu
-                          </label>
-                          <input
-                            type="file"
-                            onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
-                            className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                          />
-                          <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                          {c.has_report && (
-                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
-                              <Download size={16}/> Télécharger
-                            </a>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Élimination des défauts */}
-                      <div className="space-y-2">
-                        <div className="text-sm font-medium text-gray-900">Élimination des défauts</div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
-                            <input type="checkbox" checked={!!c.defect_report_received} onChange={() => togglePeriodic(c, "defect")} />
-                            Reçus
-                          </label>
-                          <input
-                            type="file"
-                            onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
-                            className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                          />
-                          <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                          {c.has_defect && (
-                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
-                              <Download size={16}/> Télécharger
-                            </a>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Confirmation */}
-                      <div className="space-y-2">
-                        <div className="text-sm font-medium text-gray-900">Confirmation</div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
-                            <input type="checkbox" checked={!!c.confirmation_received} onChange={() => togglePeriodic(c, "confirm")} />
-                            Reçue
-                          </label>
-                          <input
-                            type="file"
-                            onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
-                            className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
-                            accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                          />
-                          <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                          {c.has_confirmation && (
-                            <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
-                              <Download size={16}/> Télécharger
-                            </a>
-                          )}
-                        </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleExpandPeriodic(c.id)}
+                          className="px-2 py-1 rounded border bg-white text-gray-700 hover:bg-gray-50 flex items-center gap-1"
+                          title={expanded ? "Replier" : "Dérouler"}
+                        >
+                          <ChevronDown className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+                        </button>
+                        <button onClick={() => setConfirm({ open: true, id: `per-${c.id}` })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
                       </div>
                     </div>
+
+                    <div className="mt-3">
+                      <Progress value={progress} />
+                      <div className="mt-1 text-xs text-gray-600">{progress}%</div>
+                    </div>
+
+                    {/* Contenu déroulant */}
+                    {expanded && (
+                      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                        {/* Rapport de contrôle périodique */}
+                        <div className="space-y-2">
+                          <div className="text-sm font-medium text-gray-900">Rapport de contrôle périodique</div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
+                              <input type="checkbox" checked={!!c.report_received} onChange={() => togglePeriodic(c, "report")} />
+                              Reçu
+                            </label>
+                            <input
+                              type="file"
+                              onChange={e => uploadPeriodic(c.id, "report", e.target.files?.[0])}
+                              className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
+                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                            />
+                            <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
+                            {c.has_report && (
+                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
+                                <Download size={16}/> Télécharger
+                              </a>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Élimination des défauts */}
+                        <div className="space-y-2">
+                          <div className="text-sm font-medium text-gray-900">Élimination des défauts</div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
+                              <input type="checkbox" checked={!!c.defect_report_received} onChange={() => togglePeriodic(c, "defect")} />
+                              Reçus
+                            </label>
+                            <input
+                              type="file"
+                              onChange={e => uploadPeriodic(c.id, "defect", e.target.files?.[0])}
+                              className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
+                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                            />
+                            <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
+                            {c.has_defect && (
+                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
+                                <Download size={16}/> Télécharger
+                              </a>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Confirmation */}
+                        <div className="space-y-2">
+                          <div className="text-sm font-medium text-gray-900">Confirmation</div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
+                              <input type="checkbox" checked={!!c.confirmation_received} onChange={() => togglePeriodic(c, "confirm")} />
+                              Reçue
+                            </label>
+                            <input
+                              type="file"
+                              onChange={e => uploadPeriodic(c.id, "confirmation", e.target.files?.[0])}
+                              className="block text-sm text-gray-900 file:mr-3 file:px-3 file:py-2 file:rounded file:border-0 file:bg-gray-200 file:text-gray-900 file:cursor-pointer border border-gray-300 rounded bg-white flex-1 min-w-[220px]"
+                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                            />
+                            <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
+                            {c.has_confirmation && (
+                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
+                                <Download size={16}/> Télécharger
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
