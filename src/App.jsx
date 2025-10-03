@@ -19,8 +19,11 @@ import HighVoltage from './pages/High_voltage.jsx';
 import Diagram from './pages/Diagram.jsx';
 import Controls from './pages/Controls.jsx';
 
-// >>> OIBT page
+// OIBT (existant)
 import Oibt from './pages/Oibt.jsx';
+
+// Project (NOUVEAU)
+import Project from './pages/Project.jsx';
 
 export default function App() {
   return (
@@ -28,10 +31,13 @@ export default function App() {
       <Navbar />
       <div className="max-w-7xl mx-auto px-4 py-6">
         <Routes>
+          {/* Public */}
           <Route path="/" element={<Index />} />
           <Route path="/signin" element={<SignIn />} />
           <Route path="/signup" element={<SignUp />} />
           <Route path="/lost-password" element={<LostPassword />} />
+
+          {/* Dashboard */}
           <Route
             path="/dashboard"
             element={
@@ -41,7 +47,7 @@ export default function App() {
             }
           />
 
-          {/* Apps */}
+          {/* Apps existantes */}
           <Route path="/app/atex" element={<ProtectedRoute><Atex /></ProtectedRoute>} />
           <Route path="/app/loopcalc" element={<ProtectedRoute><LoopCalc /></ProtectedRoute>} />
           <Route path="/app/switchboards" element={<ProtectedRoute><Switchboards /></ProtectedRoute>} />
@@ -53,8 +59,11 @@ export default function App() {
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
           <Route path="/app/controls" element={<ProtectedRoute><Controls /></ProtectedRoute>} />
 
-          {/* >>> OIBT */}
+          {/* OIBT (existant) */}
           <Route path="/app/oibt" element={<ProtectedRoute><Oibt /></ProtectedRoute>} />
+
+          {/* Project (NOUVEAU) */}
+          <Route path="/app/projects" element={<ProtectedRoute><Project /></ProtectedRoute>} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
