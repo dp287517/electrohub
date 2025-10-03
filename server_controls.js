@@ -1,7 +1,10 @@
-// server_controls.js — Controls backend complet (production-ready)
-// Features : Sync (Switchboard/HV/ATEX) → Entities → Tasks (TSD), Tree (building→groups→entities),
-// Attachments (multi + label), AI analyze/assistant, Catalog/Not-Present/History/Records, Filters, Health.
-// IMPORTANT : écoute UNIQUEMENT sur CONTROLS_PORT (ou 3011). Ne jamais utiliser PORT ici.
+// server_controls.js — Controls backend (solide + rétro-compatible)
+// - Fix crash: add IF NOT EXISTS "code" column on controls_entities
+// - Sync "DB mode": lit switchboards/devices/hv/atex depuis Postgres (sans HTTP)
+// - Arbo: Building -> Switchboards -> Devices (enfants) + High Voltage + ATEX
+// - TSD: génération auto des tâches + due dates
+// - Upload multi (drag&drop) + IA Analyze/Assistant (OpenAI)
+// - Démarre UNIQUEMENT sur CONTROLS_PORT (ou 3011). Ne pas utiliser PORT ici.
 
 import express from "express";
 import helmet from "helmet";
@@ -46,9 +49,6 @@ const upload = multer({
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ---------------------------------------------------------------------------
-// UTILS
-// ---------------------------------------------------------------------------
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addMonths(dateStr, months) {
   const d = dateStr ? new Date(dateStr) : new Date();
@@ -64,10 +64,10 @@ function isDue(last, freqMonths) {
 function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args); }
 
 // ---------------------------------------------------------------------------
-// SCHEMA — 7 tables + migrations rétro-compatibles
+// SCHEMA (création + migrations rétro-compatibles)
 // ---------------------------------------------------------------------------
 async function ensureSchema() {
-  // === CREATE (si pas encore là) ===
+  // CREATE si absent
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_entities (
       id SERIAL PRIMARY KEY,
@@ -75,11 +75,11 @@ async function ensureSchema() {
       building TEXT,
       equipment_type TEXT,
       name TEXT,
-      code TEXT,
-      done JSONB DEFAULT '{}'::jsonb,   -- { "<task_code>": "YYYY-MM-DD", ... }
+      code TEXT,                           -- peut manquer sur une ancienne base (cf. ALTER plus bas)
+      done JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
-      parent_code TEXT                 -- (nullable) code du switchboard parent pour un device
+      parent_code TEXT
     );
   `);
 
@@ -105,9 +105,9 @@ async function ensureSchema() {
       frequency_months INTEGER,
       last_control DATE,
       next_control DATE,
-      status TEXT DEFAULT 'Planned',  -- Planned | Completed | Overdue
+      status TEXT DEFAULT 'Planned',
       value_type TEXT DEFAULT 'checklist',
-      result_schema JSONB,            -- { field, type, unit, comparator, threshold, options? }
+      result_schema JSONB,
       procedure_md TEXT,
       hazards_md TEXT,
       ppe_md TEXT,
@@ -141,7 +141,7 @@ async function ensureSchema() {
       size INTEGER,
       mimetype TEXT,
       data BYTEA,
-      label TEXT,                      -- (nullable) tag: "safety", "pre", "during", ...
+      label TEXT,
       uploaded_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -170,14 +170,11 @@ async function ensureSchema() {
     );
   `);
 
-  // === ALTER (rendre compatible les anciennes bases) ===
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_history ALTER COLUMN site SET DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS meta JSONB;`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS task_name TEXT;`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS action TEXT;`);
+  // ALTER (compatibilité avec anciennes bases)
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);            // <— FIX crash “code” missing
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
 
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS value_type TEXT DEFAULT 'checklist';`);
@@ -193,15 +190,18 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Planned';`);
 
-  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
-  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_history ALTER COLUMN site SET DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS meta JSONB;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS task_name TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS action TEXT;`);
 
   await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_not_present ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
 
-  // Index idempotents
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_next ON controls_tasks(next_control);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_site ON controls_entities(site);`);
@@ -211,7 +211,6 @@ async function ensureSchema() {
 }
 await ensureSchema().catch(e => { console.error("[schema] init error:", e); process.exit(1); });
 
-// Marquer Overdue auto
 async function ensureOverdueFlags() {
   await pool.query(`UPDATE controls_tasks SET status='Overdue' WHERE status='Planned' AND next_control < CURRENT_DATE`);
 }
@@ -224,7 +223,7 @@ app.get("/api/controls/library", (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// SYNC (Switchboard/HV/ATEX) → Entities → Tasks (TSD)
+// SOURCES — HTTP (legacy) + DB (recommandé)
 // ---------------------------------------------------------------------------
 async function safeFetchJson(url) {
   try {
@@ -237,7 +236,8 @@ async function safeFetchJson(url) {
   }
 }
 
-async function loadSwitchboards(site="Default") {
+// HTTP (compat)
+async function loadSwitchboardsHTTP(site="Default") {
   const url = process.env.SWITCHBOARD_URL || process.env.SWITCHBOARD_BASE_URL || "";
   if (!url) return [];
   const boards  = await safeFetchJson(`${url}/api/switchboard/boards?site=${encodeURIComponent(site)}`);
@@ -257,14 +257,13 @@ async function loadSwitchboards(site="Default") {
       site, building: d.building || d.building_code || "B00",
       equipment_type: "LV_DEVICE",
       name: d.name || `Device-${d.id}`,
-      code: d.code || `DEV-${d.id}`,
+      code: d.code || d.reference || d.position_number || `DEV-${d.id}`,
       parent_code
     });
   }
   return out;
 }
-
-async function loadHV(site="Default") {
+async function loadHVHTTP(site="Default") {
   const url = process.env.HV_URL || process.env.HV_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/hv/equipments?site=${encodeURIComponent(site)}`);
@@ -275,8 +274,7 @@ async function loadHV(site="Default") {
     code: h.code || `HV-${h.id}`
   }));
 }
-
-async function loadATEX(site="Default") {
+async function loadATEXHTTP(site="Default") {
   const url = process.env.ATEX_URL || process.env.ATEX_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/atex/equipments?site=${encodeURIComponent(site)}`);
@@ -288,6 +286,65 @@ async function loadATEX(site="Default") {
   }));
 }
 
+// DB (recommandé)
+async function loadFromDB(site="Default") {
+  // Switchboards
+  const { rows: sbs } = await pool.query(`
+    SELECT
+      COALESCE(NULLIF(s.site,''),'Default') AS site,
+      COALESCE(NULLIF(s.building_code,''),'B00') AS building,
+      s.name::text AS name,
+      s.code::text AS code
+    FROM public.switchboards s
+    WHERE COALESCE(NULLIF(s.site,''),'Default') = $1
+  `, [site]);
+
+  // Devices (+ parent switchboard_code)
+  const { rows: devs } = await pool.query(`
+    SELECT
+      COALESCE(NULLIF(d.site,''),'Default') AS site,
+      COALESCE(NULLIF(sb.building_code,''),'B00') AS building,
+      COALESCE(NULLIF(d.name,''), d.device_type, ('Device-'||d.id))::text AS name,
+      COALESCE(NULLIF(d.reference,''), NULLIF(d.position_number,''), ('DEV-'||d.id))::text AS code,
+      sb.code::text AS parent_code
+    FROM public.devices d
+    LEFT JOIN public.switchboards sb ON sb.id = d.switchboard_id
+    WHERE COALESCE(NULLIF(d.site,''),'Default') = $1
+  `, [site]);
+
+  // HV
+  const { rows: hvs } = await pool.query(`
+    SELECT
+      COALESCE(NULLIF(hv.site,''),'Default') AS site,
+      COALESCE(NULLIF(hv.building_code,''),'B00') AS building,
+      hv.name::text AS name,
+      hv.code::text AS code
+    FROM public.hv_equipments hv
+    WHERE COALESCE(NULLIF(hv.site,''),'Default') = $1
+  `, [site]);
+
+  // ATEX
+  const { rows: atex } = await pool.query(`
+    SELECT
+      COALESCE(NULLIF(a.site,''),'Default') AS site,
+      COALESCE(NULLIF(a.building,''),'B00') AS building,
+      a.component_type::text AS name,
+      COALESCE(NULLIF(a.manufacturer_ref,''), ('ATEX-'||a.id))::text AS code
+    FROM public.atex_equipments a
+    WHERE COALESCE(NULLIF(a.site,''),'Default') = $1
+  `, [site]);
+
+  const out = [];
+  for (const sb of sbs) out.push({ ...sb, equipment_type: "LV_SWITCHBOARD", parent_code: null });
+  for (const d of devs) out.push({ ...d, equipment_type: "LV_DEVICE" });
+  for (const hv of hvs) out.push({ ...hv, equipment_type: "HV_EQUIPMENT", parent_code: null });
+  for (const ax of atex) out.push({ ...ax, equipment_type: "ATEX_EQUIPMENT", parent_code: null });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Génération TSD
+// ---------------------------------------------------------------------------
 async function regenerateTasks(site="Default") {
   const { rows: entities } = await pool.query("SELECT * FROM controls_entities WHERE site=$1", [site]);
   let created = 0;
@@ -326,17 +383,46 @@ async function regenerateTasks(site="Default") {
   return created;
 }
 
+// ---------------------------------------------------------------------------
+// SYNC
+// ---------------------------------------------------------------------------
 app.post("/api/controls/sync", async (req, res) => {
   try {
     const site = req.body?.site || req.headers["x-site"] || "Default";
-    const incoming = [
-      ...(await loadSwitchboards(site)),
-      ...(await loadHV(site)),
-      ...(await loadATEX(site)),
-    ];
+    const source = (req.query.source || process.env.CONTROLS_SOURCE || "auto").toLowerCase();
+
+    let incoming = [];
+    if (source === "db") {
+      incoming = await loadFromDB(site);
+    } else if (source === "http") {
+      incoming = [
+        ...(await loadSwitchboardsHTTP(site)),
+        ...(await loadHVHTTP(site)),
+        ...(await loadATEXHTTP(site)),
+      ];
+    } else {
+      // auto : tente DB en premier (plus fiable), sinon HTTP si variables présentes
+      try { incoming = await loadFromDB(site); } catch { incoming = []; }
+      if (incoming.length === 0) {
+        incoming = [
+          ...(await loadSwitchboardsHTTP(site)),
+          ...(await loadHVHTTP(site)),
+          ...(await loadATEXHTTP(site)),
+        ];
+      }
+    }
+
+    // déduplication par (equipment_type + code)
+    const map = new Map();
+    for (const x of incoming) {
+      if (!x.code) continue; // on ignore les éléments sans code
+      const key = `${x.equipment_type}:${x.code}`;
+      if (!map.has(key)) map.set(key, x);
+    }
+    const items = Array.from(map.values());
 
     let added = 0, updated = 0, flaggedNotPresent = 0;
-    for (const inc of incoming) {
+    for (const inc of items) {
       if (!EQUIPMENT_TYPES.includes(inc.equipment_type)) {
         await pool.query(
           "INSERT INTO controls_not_present (site, building, equipment_type, declared_by, note) VALUES ($1,$2,$3,$4,$5)",
@@ -346,13 +432,13 @@ app.post("/api/controls/sync", async (req, res) => {
         continue;
       }
       const { rows: exist } = await pool.query(
-        "SELECT * FROM controls_entities WHERE site=$1 AND code=$2",
-        [site, inc.code || null]
+        "SELECT id, building, name, parent_code FROM controls_entities WHERE site=$1 AND code=$2",
+        [site, inc.code]
       );
       if (exist.length === 0) {
         await pool.query(
           "INSERT INTO controls_entities (site, building, equipment_type, name, code, parent_code) VALUES ($1,$2,$3,$4,$5,$6)",
-          [site, inc.building || null, inc.equipment_type, inc.name, inc.code || null, inc.parent_code || null]
+          [site, inc.building || null, inc.equipment_type, inc.name, inc.code, inc.parent_code || null]
         );
         added++;
       } else {
@@ -368,7 +454,7 @@ app.post("/api/controls/sync", async (req, res) => {
     }
 
     const created = await regenerateTasks(site);
-    res.json({ synced: incoming.length, added, updated, not_present_flagged: flaggedNotPresent, tasks_created: created });
+    res.json({ source: source || "auto", synced: items.length, added, updated, not_present_flagged: flaggedNotPresent, tasks_created: created });
   } catch (e) {
     log("sync error:", e);
     res.status(500).json({ error: "Erreur sync", details: e.message });
@@ -474,7 +560,7 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [JSON.stringify(results || {}), todayISO(), addMonths(todayISO(), t.frequency_months || 12), id]
     );
 
-    // Historique + Record + marquer "fait" sur l'entité
+    // Historique + Record + marquer "fait" sur l’entité
     await pool.query(
       "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
       [t.site || "Default", id, t.task_name, user, "Completed", JSON.stringify({ ai_risk_score, results })]
@@ -592,123 +678,6 @@ app.get("/api/controls/records", async (req, res) => {
     [site]
   );
   res.json(rows);
-});
-
-// ---------------------------------------------------------------------------
-// GENERATE (recrée les tâches "due" à partir de la TSD pour le site)
-// ---------------------------------------------------------------------------
-app.post("/api/controls/generate", async (req, res) => {
-  const site = req.body?.site || req.headers["x-site"] || "Default";
-  const created = await regenerateTasks(site);
-  res.json({ created });
-});
-
-// ---------------------------------------------------------------------------
-// AI — Analyze (lit toutes les PJ image/doc et produit extraction + conseils)
-// ---------------------------------------------------------------------------
-app.post("/api/controls/tasks/:id/analyze", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const { rows: trows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
-    if (!trows.length) return res.status(404).json({ error: "Task not found" });
-    const t = trows[0];
-
-    const { rows: atts } = await pool.query("SELECT * FROM controls_attachments WHERE task_id=$1 ORDER BY uploaded_at ASC", [id]);
-    if (!atts.length) return res.status(400).json({ error: "No attachments" });
-
-    const messages = [
-      {
-        role: "system",
-        content:
-          "Tu es un assistant de contrôle électrique. À partir des images et documents fournis, " +
-          "1) extrais les valeurs techniques utiles (ex: ΔT IR, densité SF6, tan δ, résistance d’isolement...), " +
-          "2) détecte anomalies/écarts par rapport à la TSD, " +
-          "3) propose des actions de prévention des risques (safety) et 4) indique la démarche de test (pas à pas) si demandé.",
-      },
-      { role: "user", content: `Tâche: ${t.task_name} — Code: ${t.task_code}. Site: ${t.site || "Default"}.` },
-    ];
-
-    for (const att of atts) {
-      if (att.mimetype?.startsWith("image/")) {
-        messages.push({
-          role: "user",
-          content: [
-            { type: "text", text: `Analyse l'image suivante (${att.filename}) et extrais les valeurs/lectures visibles.` },
-            { type: "image_url", image_url: `data:${att.mimetype};base64,${att.data.toString("base64")}` }
-          ]
-        });
-      } else {
-        messages.push({
-          role: "user",
-          content: `Document joint: ${att.filename} (${att.mimetype}, ${Math.round(att.size/1024)} kB). Si lisible, indique les mesures clés à relever.`
-        });
-      }
-    }
-
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages,
-      temperature: 0.2
-    });
-    const reply = completion.choices?.[0]?.message?.content || "Analyse indisponible";
-
-    await pool.query(
-      "UPDATE controls_tasks SET ai_notes = ai_notes || $1::jsonb WHERE id=$2",
-      [JSON.stringify([{ ts: new Date().toISOString(), note: reply }]), id]
-    );
-    await pool.query(
-      "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
-      [t.site || "Default", id, t.task_name, "ai", "Analyzed", JSON.stringify({ notes: reply })]
-    );
-
-    res.json({ analysis: reply });
-  } catch (e) {
-    res.status(500).json({ error: "Analyze error", details: e.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// AI — Assistant (Q&A guidé sur la tâche/la TSD)
-// ---------------------------------------------------------------------------
-app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const question = (req.body?.question || "").slice(0, 4000);
-    const { rows: trows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
-    if (!trows.length) return res.status(404).json({ error: "Task not found" });
-    const t = trows[0];
-
-    const { rows: ent } = await pool.query("SELECT equipment_type,name FROM controls_entities WHERE id=$1", [t.entity_id]);
-    const eqType = ent[0]?.equipment_type, eqName = ent[0]?.name;
-    let tsd_item = null;
-    if (eqType && TSD_LIBRARY[eqType]) {
-      tsd_item = (TSD_LIBRARY[eqType] || []).find(i => i.id === t.task_code) || null;
-    }
-    if (!tsd_item) {
-      tsd_item = Object.values(TSD_LIBRARY).flat().find(i => i.id === t.task_code) || null;
-    }
-
-    const messages = [
-      { role: "system", content: "Tu es un expert en maintenance/inspection électrique. Donne des réponses pratiques, structurées, basées sur la TSD jointe, sans valider automatiquement le contrôle." },
-      { role: "user", content: `Equipement: ${eqName || "Entity#"+t.entity_id} (${eqType}). Tâche: ${t.task_name} (${t.task_code}).\nTSD: ${tsd_item ? JSON.stringify(tsd_item) : "Non trouvé"}.\nQuestion: ${question || "Comment réaliser le test ?"}\nRéponds en français, avec étapes claires et avertissements safety.` }
-    ];
-
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-      messages,
-      temperature: 0.2
-    });
-    const answer = completion.choices?.[0]?.message?.content || "Pas de réponse";
-
-    await pool.query(
-      "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
-      [t.site || "Default", id, t.task_name, "ai", "Assistant", JSON.stringify({ q: question, a: answer })]
-    );
-
-    res.json({ answer });
-  } catch (e) {
-    res.status(500).json({ error: "Assistant error", details: e.message });
-  }
 });
 
 // ---------------------------------------------------------------------------
