@@ -109,32 +109,20 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_oibt_projfiles_proj ON oibt_project_files(project_id);
   `);
 
-  // === Migrations douces PROJETS ===
-  // 1) S'assurer de la colonne uploaded_at
-  await pool.query(`
-    ALTER TABLE oibt_project_files
-      ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ DEFAULT NOW();
-  `);
-  // 2) Supprimer l'ancienne contrainte UNIQUE (project_id, action_key) si elle existe
+  // Migrations douces
+  await pool.query(`ALTER TABLE oibt_project_files ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`
     DO $$
     BEGIN
-      IF EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'oibt_project_files_project_id_action_key_key'
-      ) THEN
+      IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'oibt_project_files_project_id_action_key_key') THEN
         ALTER TABLE oibt_project_files DROP CONSTRAINT oibt_project_files_project_id_action_key_key;
       END IF;
     END$$;
   `);
-  // 3) Étendre la CHECK constraint pour inclure 'sporadic'
   await pool.query(`
     DO $$
     BEGIN
-      IF EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conname = 'oibt_project_files_action_key_check'
-      ) THEN
+      IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'oibt_project_files_action_key_check') THEN
         ALTER TABLE oibt_project_files DROP CONSTRAINT oibt_project_files_action_key_check;
       END IF;
     END$$;
@@ -193,7 +181,7 @@ app.get("/api/oibt/health", (_req, res) => res.json({ ok: true, ts: Date.now() }
 /* ------------------------------------------------------------------ */
 /*                               PROJECTS                             */
 /* ------------------------------------------------------------------ */
-// LIST
+// LIST (+ attachments + last_uploads)
 app.get("/api/oibt/projects", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -211,6 +199,8 @@ app.get("/api/oibt/projects", async (req, res) => {
     if (!rows.length) return res.json({ data: [] });
 
     const ids = rows.map(r => r.id);
+
+    // attachments flags
     const files = (
       await pool.query(
         `SELECT project_id, action_key, COUNT(*)>0 AS has_file
@@ -220,11 +210,25 @@ app.get("/api/oibt/projects", async (req, res) => {
         [site, ids]
       )
     ).rows;
-
     const byProject = {};
     for (const f of files) {
       byProject[f.project_id] = byProject[f.project_id] || {};
       byProject[f.project_id][f.action_key] = f.has_file === true || f.has_file === "t";
+    }
+
+    // last_uploads (MAX(uploaded_at) par action)
+    const lastQ = await pool.query(
+      `SELECT project_id, action_key, MAX(uploaded_at) AS last_at
+       FROM oibt_project_files
+       WHERE site=$1 AND project_id = ANY($2)
+       GROUP BY project_id, action_key`,
+      [site, ids]
+    );
+    const lastByProject = {};
+    for (const r of lastQ.rows) {
+      lastByProject[r.project_id] = lastByProject[r.project_id] || {};
+      const ts = r.last_at instanceof Date ? r.last_at.toISOString() : r.last_at;
+      lastByProject[r.project_id][r.action_key] = ts;
     }
 
     const data = rows.map(r => ({
@@ -236,6 +240,7 @@ app.get("/api/oibt/projects", async (req, res) => {
         reception: !!byProject[r.id]?.reception,
         sporadic: !!byProject[r.id]?.sporadic,
       },
+      last_uploads: lastByProject[r.id] || null,
     }));
 
     res.json({ data });
@@ -257,7 +262,6 @@ app.post("/api/oibt/projects", async (req, res) => {
       { key: "protocole",  name: "Protocole de mesure",  done: false },
       { key: "rapport",    name: "Rapport de sécurité",  done: false },
       { key: "reception",  name: "Contrôle de réception", done: false, due: null },
-      // l'étape "sporadic" sera ajoutée selon le besoin côté front
     ];
 
     const year = req.body?.year ?? new Date().getFullYear();
@@ -274,7 +278,7 @@ app.post("/api/oibt/projects", async (req, res) => {
 });
 
 // UPDATE (+6 mois quand “Rapport de sécurité” passe à done) + YEAR
-// + renvoie les attachments pour éviter "Aucun fichier" après toggle
+// + renvoie les attachments
 app.put("/api/oibt/projects/:id", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -294,7 +298,6 @@ app.put("/api/oibt/projects/:id", async (req, res) => {
     const receptionIdx = next.findIndex(a => (a.key === "reception") || a.name === "Contrôle de réception");
 
     if (prevRapport && nextRapport && !prevRapport.done && nextRapport.done) {
-      // Si "réception" existe mais sans due -> calcule +6 mois
       if (receptionIdx >= 0) {
         const current = next[receptionIdx] || {};
         if (!current.due) {
@@ -347,8 +350,6 @@ app.delete("/api/oibt/projects/:id", async (req, res) => {
 });
 
 // UPLOAD fichier d'action de PROJET (avis|protocole|rapport|reception|sporadic)
-// -> coche auto l'étape, calcule due +6 mois si action=rapport
-// -> renvoie le projet COMPLET avec attachments
 app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res) => {
   try {
     const site = siteOf(req);
@@ -359,34 +360,26 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
     }
     if (!req.file) return res.status(400).json({ error: "No file" });
 
-    // 1) Enregistre un NOUVEAU fichier (multi-docs)
+    // 1) Historiser un NOUVEAU fichier (multi-docs)
     await pool.query(
       `INSERT INTO oibt_project_files (site, project_id, action_key, file, filename, mime, uploaded_at)
        VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
       [site, id, action, req.file.buffer, req.file.originalname, req.file.mimetype]
     );
 
-    // 2) Récupère le projet et coche l’étape correspondante
-    const prevQ = await pool.query(
-      `SELECT * FROM oibt_projects WHERE id=$1 AND site=$2`,
-      [id, site]
-    );
+    // 2) Récupérer le projet et cocher l’étape
+    const prevQ = await pool.query(`SELECT * FROM oibt_projects WHERE id=$1 AND site=$2`, [id, site]);
     if (!prevQ.rows.length) return res.status(404).json({ error: "Project not found" });
     const prev = prevQ.rows[0];
     const next = Array.isArray(prev.status) ? [...prev.status] : [];
-
     const idx = next.findIndex(a =>
       (a.key && a.key.toLowerCase() === action) ||
       (!a.key && a.name && a.name.toLowerCase().includes(action))
     );
-    if (idx >= 0) {
-      next[idx] = { ...next[idx], done: true };
-    } else if (action === "sporadic") {
-      // si l'étape sporadique n'existait pas encore
-      next.push({ key: "sporadic", name: "Contrôle sporadique", done: true });
-    }
+    if (idx >= 0) next[idx] = { ...next[idx], done: true };
+    else if (action === "sporadic") next.push({ key: "sporadic", name: "Contrôle sporadique", done: true });
 
-    // 3) Si action = rapport -> due de “réception” à +6 mois si absente
+    // 3) Si action = rapport => due réception +6 mois si absente
     const recIdx = next.findIndex(a => (a.key === "reception") || a.name === "Contrôle de réception");
     if (action === "rapport") {
       if (recIdx >= 0) {
@@ -399,16 +392,11 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
       } else {
         const due = new Date();
         due.setMonth(due.getMonth() + 6);
-        next.push({
-          key: "reception",
-          name: "Contrôle de réception",
-          done: false,
-          due: due.toLocaleDateString("fr-FR"),
-        });
+        next.push({ key: "reception", name: "Contrôle de réception", done: false, due: due.toLocaleDateString("fr-FR") });
       }
     }
 
-    // 4) Persiste le status modifié et renvoie le projet + attachments
+    // 4) Persister
     const upQ = await pool.query(
       `UPDATE oibt_projects SET status=$1 WHERE id=$2 AND site=$3 RETURNING *`,
       [JSON.stringify(next), id, site]
@@ -423,7 +411,7 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
   }
 });
 
-// DOWNLOAD fichier d'action de PROJET (dernier fichier)
+// DOWNLOAD dernier fichier d'action de PROJET
 app.get("/api/oibt/projects/:id/download", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -439,10 +427,7 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
     if (!q.rows.length || !q.rows[0].file) return res.status(404).send("File not found");
 
     res.setHeader("Content-Type", q.rows[0].mime || "application/octet-stream");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(q.rows[0].filename || "file")}"`
-    );
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(q.rows[0].filename || "file")}"`);
     res.send(q.rows[0].file);
   } catch (e) {
     console.error("[OIBT PROJECT DOWNLOAD]", e);
@@ -450,10 +435,55 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
   }
 });
 
+// LISTE de TOUS les fichiers d'une action de PROJET
+app.get("/api/oibt/projects/:id/files", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const action = String(req.query.action || "").toLowerCase();
+    if (!["avis", "protocole", "rapport", "reception", "sporadic"].includes(action)) {
+      return res.status(400).json({ error: "Bad action" });
+    }
+    const q = await pool.query(
+      `SELECT id, filename AS original_name, mime, uploaded_at, OCTET_LENGTH(file) AS size
+       FROM oibt_project_files
+       WHERE site=$1 AND project_id=$2 AND action_key=$3
+       ORDER BY uploaded_at DESC`,
+      [site, id, action]
+    );
+    res.json({ files: q.rows });
+  } catch (e) {
+    console.error("[OIBT PROJECT FILES LIST]", e);
+    res.status(500).json({ error: "Files list failed" });
+  }
+});
+
+// DOWNLOAD par file_id (PROJET)
+app.get("/api/oibt/projects/download-file", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const fileId = Number(req.query.file_id);
+    if (!fileId) return res.status(400).send("Missing file_id");
+    const q = await pool.query(
+      `SELECT file, filename, mime FROM oibt_project_files WHERE id=$1 AND site=$2`,
+      [fileId, site]
+    );
+    if (!q.rows.length || !q.rows[0].file) return res.status(404).send("File not found");
+    const name = q.rows[0].filename || "fichier";
+    const mime = q.rows[0].mime || "application/octet-stream";
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(name)}"`);
+    res.send(q.rows[0].file);
+  } catch (e) {
+    console.error("[OIBT PROJECT DOWNLOAD BY ID]", e);
+    res.status(500).send("Download failed");
+  }
+});
+
 /* ------------------------------------------------------------------ */
 /*                              PERIODICS                             */
 /* ------------------------------------------------------------------ */
-// LIST (retourne flags + timestamps pour alertes) + YEAR
+// LIST (flags + timestamps + YEAR)
 app.get("/api/oibt/periodics", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -578,14 +608,14 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
     }
     if (!req.file) return res.status(400).json({ error: "No file" });
 
-    // 1) Historiser CHAQUE fichier
+    // Historiser CHAQUE fichier
     await pool.query(
       `INSERT INTO oibt_periodic_files (site, periodic_id, file_type, file, filename, mime, uploaded_at)
        VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
       [site, id, type, req.file.buffer, req.file.originalname, req.file.mimetype]
     );
 
-    // 2) Conserver aussi le "dernier" fichier pour compat avec l'UI actuelle
+    // Conserver aussi le "dernier" pour compat UI
     const setCols = {
       report: "report_file=$1, report_filename=$2, report_mime=$3, report_received=TRUE, report_received_at=COALESCE(report_received_at, NOW())",
       defect: "defect_file=$1, defect_filename=$2, defect_mime=$3, defect_report_received=TRUE, defect_report_received_at=COALESCE(defect_report_received_at, NOW())",
@@ -613,7 +643,7 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
   }
 });
 
-// DOWNLOAD (report|defect|confirmation) : on sert le "dernier" pour compat
+// DOWNLOAD (dernier fichier) pour compat
 app.get("/api/oibt/periodics/:id/download", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -633,7 +663,6 @@ app.get("/api/oibt/periodics/:id/download", async (req, res) => {
     );
     if (!q.rows.length) return res.status(404).send("Not found");
 
-    // compat: si on a une URL stockée pour le rapport
     if (type === "report" && q.rows[0].report_url && !q.rows[0].report_file) {
       return res.redirect(q.rows[0].report_url);
     }
@@ -648,6 +677,51 @@ app.get("/api/oibt/periodics/:id/download", async (req, res) => {
     res.send(file);
   } catch (e) {
     console.error("[OIBT DOWNLOAD]", e);
+    res.status(500).send("Download failed");
+  }
+});
+
+// LISTE de TOUS les fichiers d’un périodique (par type)
+app.get("/api/oibt/periodics/:id/files", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const type = String(req.query.type || "").toLowerCase();
+    if (!["report", "defect", "confirmation"].includes(type)) {
+      return res.status(400).json({ error: "Bad type" });
+    }
+    const q = await pool.query(
+      `SELECT id, filename AS original_name, mime, uploaded_at, OCTET_LENGTH(file) AS size
+       FROM oibt_periodic_files
+       WHERE site=$1 AND periodic_id=$2 AND file_type=$3
+       ORDER BY uploaded_at DESC`,
+      [site, id, type]
+    );
+    res.json({ files: q.rows });
+  } catch (e) {
+    console.error("[OIBT PERIODIC FILES LIST]", e);
+    res.status(500).json({ error: "Files list failed" });
+  }
+});
+
+// DOWNLOAD par file_id (PÉRIODIQUE)
+app.get("/api/oibt/periodics/download-file", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const fileId = Number(req.query.file_id);
+    if (!fileId) return res.status(400).send("Missing file_id");
+    const q = await pool.query(
+      `SELECT file, filename, mime FROM oibt_periodic_files WHERE id=$1 AND site=$2`,
+      [fileId, site]
+    );
+    if (!q.rows.length || !q.rows[0].file) return res.status(404).send("File not found");
+    const name = q.rows[0].filename || "fichier";
+    const mime = q.rows[0].mime || "application/octet-stream";
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(name)}"`);
+    res.send(q.rows[0].file);
+  } catch (e) {
+    console.error("[OIBT PERIODIC DOWNLOAD BY ID]", e);
     res.status(500).send("Download failed");
   }
 });
