@@ -140,6 +140,23 @@ async function ensureSchema() {
 ensureSchema().catch(e => console.error("[OIBT SCHEMA]", e));
 
 /* ------------------------------------------------------------------ */
+/*                         HELPERS ATTACHMENTS                        */
+/* ------------------------------------------------------------------ */
+async function projectAttachmentsMap(site, projectId) {
+  const filesQ = await pool.query(
+    `SELECT action_key, (filename IS NOT NULL) AS has_file
+     FROM oibt_project_files
+     WHERE site=$1 AND project_id=$2`,
+    [site, projectId]
+  );
+  const att = { avis: false, protocole: false, rapport: false, reception: false };
+  for (const row of filesQ.rows) {
+    if (row.action_key && row.has_file) att[row.action_key] = true;
+  }
+  return att;
+}
+
+/* ------------------------------------------------------------------ */
 /*                               HEALTH                               */
 /* ------------------------------------------------------------------ */
 app.get("/api/oibt/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
@@ -226,6 +243,7 @@ app.post("/api/oibt/projects", async (req, res) => {
 });
 
 // UPDATE (+6 mois quand “Rapport de sécurité” passe à done) + YEAR
+// + renvoie les attachments pour éviter "Aucun fichier" après toggle
 app.put("/api/oibt/projects/:id", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -271,7 +289,13 @@ app.put("/api/oibt/projects/:id", async (req, res) => {
       `UPDATE oibt_projects SET status=$1, year=COALESCE($4, year) WHERE id=$2 AND site=$3 RETURNING *`,
       [JSON.stringify(next), id, site, newYear]
     );
-    res.json(r.rows[0]);
+    if (!r.rows.length) return res.status(404).json({ error: "Not found" });
+    const updated = r.rows[0];
+
+    // Rejoindre les attachments pour éviter l'effet "Aucun fichier"
+    const attachments = await projectAttachmentsMap(site, id);
+
+    res.json({ ...updated, attachments });
   } catch (e) {
     console.error("[OIBT PROJECT UPDATE]", e);
     res.status(500).json({ error: "Update failed" });
@@ -293,6 +317,8 @@ app.delete("/api/oibt/projects/:id", async (req, res) => {
 });
 
 // UPLOAD fichier d'action de PROJET (avis|protocole|rapport|reception)
+// -> coche auto l'étape, calcule due +6 mois si action=rapport
+// -> renvoie le projet COMPLET avec attachments
 app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res) => {
   try {
     const site = siteOf(req);
@@ -303,6 +329,7 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
     }
     if (!req.file) return res.status(400).json({ error: "No file" });
 
+    // 1) Sauvegarde/écrase le fichier pour l’action
     await pool.query(
       `INSERT INTO oibt_project_files (site, project_id, action_key, file, filename, mime)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -311,7 +338,54 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
       [site, id, action, req.file.buffer, req.file.originalname, req.file.mimetype]
     );
 
-    res.json({ ok: true });
+    // 2) Récupère le projet et coche l’étape correspondante
+    const prevQ = await pool.query(
+      `SELECT * FROM oibt_projects WHERE id=$1 AND site=$2`,
+      [id, site]
+    );
+    if (!prevQ.rows.length) return res.status(404).json({ error: "Project not found" });
+    const prev = prevQ.rows[0];
+    const next = Array.isArray(prev.status) ? [...prev.status] : [];
+
+    const idx = next.findIndex(a =>
+      (a.key && a.key.toLowerCase() === action) ||
+      (!a.key && a.name && a.name.toLowerCase().includes(action))
+    );
+    if (idx >= 0) {
+      next[idx] = { ...next[idx], done: true };
+    }
+
+    // 3) Si action = rapport -> due de “réception” à +6 mois si absente
+    const recIdx = next.findIndex(a => (a.key === "reception") || a.name === "Contrôle de réception");
+    if (action === "rapport") {
+      if (recIdx >= 0) {
+        const current = next[recIdx] || {};
+        if (!current.due) {
+          const due = new Date();
+          due.setMonth(due.getMonth() + 6);
+          next[recIdx] = { ...current, due: due.toLocaleDateString("fr-FR") };
+        }
+      } else {
+        const due = new Date();
+        due.setMonth(due.getMonth() + 6);
+        next.push({
+          key: "reception",
+          name: "Contrôle de réception",
+          done: false,
+          due: due.toLocaleDateString("fr-FR"),
+        });
+      }
+    }
+
+    // 4) Persiste le status modifié et renvoie le projet + attachments
+    const upQ = await pool.query(
+      `UPDATE oibt_projects SET status=$1 WHERE id=$2 AND site=$3 RETURNING *`,
+      [JSON.stringify(next), id, site]
+    );
+    const updated = upQ.rows[0];
+    const attachments = await projectAttachmentsMap(site, id);
+
+    res.json({ ...updated, attachments });
   } catch (e) {
     console.error("[OIBT PROJECT UPLOAD]", e);
     res.status(500).json({ error: "Upload failed" });
