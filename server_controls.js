@@ -1,7 +1,7 @@
-// server_controls.js — Controls backend complet (corrigé EADDRINUSE)
-// Features : Sync (Switchboard/HV/ATEX) → Entities → Tasks depuis TSD, Attachments (multi), AI analyze/assistant,
-// Catalog/Not-Present/History/Records, Filters, Health.
-// ECOUTE UNIQUEMENT SUR CONTROLS_PORT (ou 3011) — NE TOUCHE PAS A `PORT`.
+// server_controls.js — Controls backend complet (production-ready)
+// Features : Sync (Switchboard/HV/ATEX) → Entities → Tasks depuis TSD, Attachments (multi),
+// AI analyze/assistant, Catalog/Not-Present/History/Records, Filters, Health.
+// IMPORTANT : écoute UNIQUEMENT sur CONTROLS_PORT (ou 3011). Ne jamais utiliser PORT ici.
 
 import express from "express";
 import helmet from "helmet";
@@ -64,9 +64,10 @@ function isDue(last, freqMonths) {
 function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args); }
 
 // ---------------------------------------------------------------------------
-// SCHEMA — 7 tables requises
+// SCHEMA — 7 tables + migrations rétro-compatibles
 // ---------------------------------------------------------------------------
 async function ensureSchema() {
+  // === CREATE (si pas encore là) ===
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_entities (
       id SERIAL PRIMARY KEY,
@@ -167,7 +168,48 @@ async function ensureSchema() {
     );
   `);
 
-  log("[schema] ok");
+  // === ALTER (rendre compatible les anciennes bases) ===
+  // controls_history : ajouter la colonne "site" si manquante
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_history ALTER COLUMN site SET DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS meta JSONB;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS task_name TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS action TEXT;`);
+
+  // controls_tasks : colonnes parfois manquantes dans d’anciennes versions
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS value_type TEXT DEFAULT 'checklist';`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS result_schema JSONB;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS procedure_md TEXT;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS hazards_md TEXT;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS ppe_md TEXT;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS tools_md TEXT;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS results JSONB;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS ai_notes JSONB DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS created_by TEXT;`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Planned';`);
+
+  // controls_entities : colonne "done" ou "updated_at" parfois absentes
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+
+  // controls_records : colonne "site" si manquante
+  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+
+  // controls_not_present : colonne "site" si manquante
+  await pool.query(`ALTER TABLE controls_not_present ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+
+  // Index idempotents
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_next ON controls_tasks(next_control);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_site ON controls_entities(site);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_history_site_date ON controls_history(site, date DESC);`);
+
+  log("[controls] schema ensured (create + alter ok)");
 }
 await ensureSchema().catch(e => { console.error("[schema] init error:", e); process.exit(1); });
 
@@ -244,10 +286,6 @@ async function loadATEX(site="Default") {
     name: ax.component_type || `ATEX-${ax.id}`,
     code: ax.manufacturer_ref || `ATEX-${ax.id}`
   }));
-}
-
-function tsdItemFor(type, code) {
-  return (TSD_LIBRARY[type] || []).find(i => i.id === code) || null;
 }
 
 async function regenerateTasks(site="Default") {
@@ -420,7 +458,6 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
   res.json({ ...t, tsd_item });
 });
 
-// ---- COMPLETE TASK
 app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
