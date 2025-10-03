@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
   Folder, FileText, CalendarClock, Download, Trash2, BarChart3,
-  AlertTriangle, CheckCircle2, XCircle, ChevronDown, UploadCloud, Filter
+  AlertTriangle, CheckCircle2, XCircle, ChevronDown, UploadCloud, Filter, Paperclip
 } from "lucide-react";
 
 /* ----------------------------- UI HELPERS ----------------------------- */
@@ -152,6 +152,9 @@ function Tabs({ tabs, active, onChange }) {
 function toFR(d) {
   try { return d.toLocaleDateString("fr-FR"); } catch { return ""; }
 }
+function toFRdt(d) {
+  try { return d.toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" }); } catch { return ""; }
+}
 function parseFR(dateStr) { // "dd/mm/yyyy" -> Date
   if (!dateStr) return null;
   const [d,m,y] = dateStr.split("/").map(Number);
@@ -188,6 +191,10 @@ export default function Oibt() {
   // UI
   const [toast, setToast] = useState(null);
   const [confirm, setConfirm] = useState({ open: false, id: null });
+
+  // Files cache (pour lister TOUTES les pièces jointes)
+  const [projFiles, setProjFiles] = useState({});   // key = `${id}:${action}` -> [{id, original_name, uploaded_at, size, mime}]
+  const [perFiles, setPerFiles]   = useState({});   // key = `${id}:${type}`
 
   useEffect(() => { refreshAll(); }, []);
   async function refreshAll() {
@@ -247,13 +254,11 @@ export default function Oibt() {
 
   /* -------------------------- RAPPORT DATE (PROJETS) -------------------------- */
   function getRapportDate(p) {
-    // 1) si le backend expose p.last_uploads?.rapport (ISO), on le formatte
     const iso = p?.last_uploads?.rapport;
     if (iso) {
       const d = new Date(iso);
       if (!isNaN(d)) return toFR(d);
     }
-    // 2) fallback déterministe : due(réception) - 6 mois (logique backend au moment du dépôt du rapport)
     const rec = stepByKey(p.status, "reception");
     if (rec?.due) {
       const due = parseFR(rec.due);
@@ -372,6 +377,8 @@ export default function Oibt() {
       });
       setToast({ msg: files.length > 1 ? `${files.length} fichiers ajoutés` : "Fichier ajouté", type: "success" });
       await refreshAll();
+      // recharger la liste des fichiers pour cet action si la carte est ouverte
+      await loadProjectFiles(id, action, true);
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
@@ -409,6 +416,7 @@ export default function Oibt() {
       }
       await refreshAll();
       setToast({ msg: files.length > 1 ? `${files.length} fichiers ajoutés` : "Fichier ajouté", type: "success" });
+      await loadPeriodicFiles(id, type, true);
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
   }
 
@@ -469,8 +477,54 @@ export default function Oibt() {
   }
 
   /* ------------------------------ FILE URLS ------------------------------ */
-  const projFileUrl = (id, action) => `${API_BASE || ""}/api/oibt/projects/${id}/download?action=${encodeURIComponent(action)}`;
-  const perFileUrl  = (id, type)   => `${API_BASE || ""}/api/oibt/periodics/${id}/download?type=${encodeURIComponent(type)}`;
+  const projFileUrlLatest = (id, action) => `${API_BASE || ""}/api/oibt/projects/${id}/download?action=${encodeURIComponent(action)}`;
+  const perFileUrlLatest  = (id, type)   => `${API_BASE || ""}/api/oibt/periodics/${id}/download?type=${encodeURIComponent(type)}`;
+  const projDownloadById  = (fileId)     => `${API_BASE || ""}/api/oibt/projects/download-file?file_id=${encodeURIComponent(fileId)}`;
+  const perDownloadById   = (fileId)     => `${API_BASE || ""}/api/oibt/periodics/download-file?file_id=${encodeURIComponent(fileId)}`;
+
+  /* ------------------------------ LIST FILES ------------------------------ */
+  async function loadProjectFiles(id, action, force=false) {
+    const key = `${id}:${action}`;
+    if (!force && projFiles[key]) return;
+    try {
+      const r = await fetch(`${API_BASE || ""}/api/oibt/projects/${id}/files?action=${encodeURIComponent(action)}`);
+      if (!r.ok) throw new Error("files list not available");
+      const js = await r.json();
+      setProjFiles(prev => ({ ...prev, [key]: js?.files || js || [] }));
+    } catch {
+      setProjFiles(prev => ({ ...prev, [key]: null })); // pas dispo → fallback lien "dernier fichier"
+    }
+  }
+  async function loadPeriodicFiles(id, type, force=false) {
+    const key = `${id}:${type}`;
+    if (!force && perFiles[key]) return;
+    try {
+      const r = await fetch(`${API_BASE || ""}/api/oibt/periodics/${id}/files?type=${encodeURIComponent(type)}`);
+      if (!r.ok) throw new Error("files list not available");
+      const js = await r.json();
+      setPerFiles(prev => ({ ...prev, [key]: js?.files || js || [] }));
+    } catch {
+      setPerFiles(prev => ({ ...prev, [key]: null }));
+    }
+  }
+
+  // auto-load à l'ouverture d'une carte
+  useEffect(() => {
+    for (const p of projects) {
+      if (!expandedProjects.has(p.id)) continue;
+      const steps = (p.status||[]).map(a => (a.key || "").toLowerCase()).filter(k => k && k !== "sporadic");
+      for (const act of steps) loadProjectFiles(p.id, act).catch(()=>{});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedProjects, projects.length]);
+
+  useEffect(() => {
+    for (const c of periodics) {
+      if (!expandedPeriodics.has(c.id)) continue;
+      ["report", "defect", "confirmation"].forEach(t => loadPeriodicFiles(c.id, t).catch(()=>{}));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedPeriodics, periodics.length]);
 
   /* ------------------------------ ALERTES ------------------------------ */
   const alerts = useMemo(() => {
@@ -613,7 +667,8 @@ export default function Oibt() {
                 const expanded = expandedProjects.has(p.id);
                 const done = progress === 100;
                 const spor = hasSporadic(p);
-                const rapportDate = getRapportDate(p); // << NEW
+                const created = p.created_at || p.createdAt;
+                const rapportDate = getRapportDate(p);
 
                 return (
                   <div key={p.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -625,13 +680,16 @@ export default function Oibt() {
                             {p.title}
                             {spor && <span className="text-[11px] px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">Sporadique</span>}
                           </div>
-                          <div className="text-xs text-gray-600">Année&nbsp;
-                            <input
-                              type="number"
-                              value={year}
-                              onChange={e => setProjectYear(p.id, Number(e.target.value))}
-                              className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 ml-1"
-                            />
+                          <div className="text-xs text-gray-600 flex flex-wrap items-center gap-3">
+                            <span>Année&nbsp;
+                              <input
+                                type="number"
+                                value={year}
+                                onChange={e => setProjectYear(p.id, Number(e.target.value))}
+                                className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 ml-1"
+                              />
+                            </span>
+                            {!!created && <span className="flex items-center gap-1"><CalendarClock size={14}/> Créé le {toFR(new Date(created))}</span>}
                           </div>
                         </div>
                       </div>
@@ -681,11 +739,12 @@ export default function Oibt() {
                       <ul className="mt-3 space-y-3">
                         {(p.status || []).map((a, i) => {
                           const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : a.name?.toLowerCase().includes("sporad") ? "sporadic" : "reception");
+                          const showUpload = key !== "sporadic";
                           const hasFile = !!p.attachments?.[key];
                           const accept = ".pdf,.doc,.docx,.png,.jpg,.jpeg";
                           const canUploadMulti = key !== "sporadic";
-                          const isRapport = key === "rapport";
-                          const rd = isRapport ? rapportDate : null;
+                          const filesKey = `${p.id}:${key}`;
+                          const list = projFiles[filesKey];
 
                           return (
                             <li key={`${p.id}-${i}`} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
@@ -694,31 +753,66 @@ export default function Oibt() {
                                   <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
                                   <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
                                   {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
-                                  {isRapport && hasFile && rd && (
-                                    <span className="text-xs text-gray-500 flex items-center gap-1 ml-2">
-                                      <CalendarClock size={14} /> Déposé le {rd}
-                                    </span>
-                                  )}
                                 </label>
-                                {key !== "sporadic" && (
-                                  <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                                )}
+                                {showUpload && <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />}
                               </div>
 
-                              {/* Upload area */}
-                              {key !== "sporadic" && (
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  <DropInput
-                                    multiple={canUploadMulti}
-                                    accept={accept}
-                                    onFiles={(files) => uploadProjectFiles(p.id, key, files)}
-                                  />
-                                  {hasFile && (
-                                    <a href={projFileUrl(p.id, key)} target="_blank" rel="noreferrer"
-                                       className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0">
-                                      <Download size={16} /> Télécharger le dernier fichier
-                                    </a>
-                                  )}
+                              {/* Upload + Downloads */}
+                              {showUpload && (
+                                <div className="mt-2 flex flex-col gap-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <DropInput
+                                      multiple={canUploadMulti}
+                                      accept={accept}
+                                      onFiles={(files) => uploadProjectFiles(p.id, key, files)}
+                                    />
+                                    {hasFile && (
+                                      <a href={projFileUrlLatest(p.id, key)} target="_blank" rel="noreferrer"
+                                         className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0">
+                                        <Download size={16} /> Télécharger le dernier
+                                      </a>
+                                    )}
+                                  </div>
+
+                                  {/* Liste complète des pièces jointes */}
+                                  <div className="mt-1">
+                                    <div className="text-xs text-gray-600 mb-1 flex items-center gap-2">
+                                      <Paperclip size={14}/> Pièces jointes {list === undefined ? "(chargement auto…)" : ""}
+                                      {list === undefined && (
+                                        <button
+                                          onClick={() => loadProjectFiles(p.id, key, true)}
+                                          className="ml-2 text-blue-600 hover:underline"
+                                        >
+                                          Recharger
+                                        </button>
+                                      )}
+                                    </div>
+                                    {list === null && (
+                                      <div className="text-xs text-gray-500">
+                                        Listing non disponible côté serveur — seul le dernier fichier est téléchargeable via le lien ci-dessus.
+                                      </div>
+                                    )}
+                                    {Array.isArray(list) && list.length === 0 && (
+                                      <div className="text-xs text-gray-500">Aucun fichier.</div>
+                                    )}
+                                    {Array.isArray(list) && list.length > 0 && (
+                                      <ul className="text-sm text-gray-800 flex flex-col gap-1">
+                                        {list.map(f => (
+                                          <li key={f.id} className="flex items-center gap-2">
+                                            <a
+                                              href={projDownloadById(f.id)}
+                                              className="text-blue-600 hover:underline flex items-center gap-1"
+                                              target="_blank" rel="noreferrer"
+                                              title={f.original_name}
+                                            >
+                                              <Download size={16} /> {f.original_name}
+                                            </a>
+                                            <span className="text-xs text-gray-500">({toFRdt(new Date(f.uploaded_at))})</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    )}
+                                  </div>
                                 </div>
                               )}
                             </li>
@@ -771,6 +865,7 @@ export default function Oibt() {
                 const year = c.year ?? getYear(c);
                 const expanded = expandedPeriodics.has(c.id);
                 const done = progress === 100;
+                const created = c.created_at || c.createdAt;
 
                 return (
                   <div key={c.id} className="p-4 rounded-xl border border-gray-200 bg-white">
@@ -779,13 +874,16 @@ export default function Oibt() {
                         {done ? <CheckCircle2 className="text-emerald-600" /> : <FileText className="text-indigo-500" />}
                         <div>
                           <div className="font-medium text-gray-900">{c.building}</div>
-                          <div className="text-xs text-gray-600">Année&nbsp;
-                            <input
-                              type="number"
-                              value={year}
-                              onChange={e => setPeriodicYear(c.id, Number(e.target.value))}
-                              className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 ml-1"
-                            />
+                          <div className="text-xs text-gray-600 flex flex-wrap items-center gap-3">
+                            <span>Année&nbsp;
+                              <input
+                                type="number"
+                                value={year}
+                                onChange={e => setPeriodicYear(c.id, Number(e.target.value))}
+                                className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 ml-1"
+                              />
+                            </span>
+                            {!!created && <span className="flex items-center gap-1"><CalendarClock size={14}/> Créé le {toFR(new Date(created))}</span>}
                           </div>
                         </div>
                       </div>
@@ -820,11 +918,17 @@ export default function Oibt() {
                             <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "report", files)} />
                             <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                             {c.has_report && (
-                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "report")} target="_blank" rel="noreferrer">
-                                <Download size={16}/> Télécharger
+                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrlLatest(c.id, "report")} target="_blank" rel="noreferrer">
+                                <Download size={16}/> Télécharger le dernier
                               </a>
                             )}
                           </div>
+                          {/* liste des fichiers */}
+                          <FilesList
+                            list={perFiles[`${c.id}:report`]}
+                            onLoad={() => loadPeriodicFiles(c.id, "report", true)}
+                            makeHref={(fid)=> perDownloadById(fid)}
+                          />
                         </div>
 
                         {/* Élimination des défauts */}
@@ -838,11 +942,16 @@ export default function Oibt() {
                             <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "defect", files)} />
                             <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                             {c.has_defect && (
-                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "defect")} target="_blank" rel="noreferrer">
-                                <Download size={16}/> Télécharger
+                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrlLatest(c.id, "defect")} target="_blank" rel="noreferrer">
+                                <Download size={16}/> Télécharger le dernier
                               </a>
                             )}
                           </div>
+                          <FilesList
+                            list={perFiles[`${c.id}:defect`]}
+                            onLoad={() => loadPeriodicFiles(c.id, "defect", true)}
+                            makeHref={(fid)=> perDownloadById(fid)}
+                          />
                         </div>
 
                         {/* Confirmation */}
@@ -856,11 +965,16 @@ export default function Oibt() {
                             <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "confirmation", files)} />
                             <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                             {c.has_confirmation && (
-                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrl(c.id, "confirmation")} target="_blank" rel="noreferrer">
-                                <Download size={16}/> Télécharger
+                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrlLatest(c.id, "confirmation")} target="_blank" rel="noreferrer">
+                                <Download size={16}/> Télécharger le dernier
                               </a>
                             )}
                           </div>
+                          <FilesList
+                            list={perFiles[`${c.id}:confirmation`]}
+                            onLoad={() => loadPeriodicFiles(c.id, "confirmation", true)}
+                            makeHref={(fid)=> perDownloadById(fid)}
+                          />
                         </div>
                       </div>
                     )}
@@ -907,6 +1021,52 @@ export default function Oibt() {
       {/* Toast */}
       <Toast {...toast} onClose={() => setToast(null)} />
     </section>
+  );
+}
+
+/* --------------------------- LISTE DE FICHIERS UI --------------------------- */
+function FilesList({ list, onLoad, makeHref }) {
+  return (
+    <div className="mt-1">
+      <div className="text-xs text-gray-600 mb-1 flex items-center gap-2">
+        <Paperclip size={14}/> Pièces jointes
+        {list === undefined && (
+          <button onClick={onLoad} className="ml-2 text-blue-600 hover:underline">
+            Charger
+          </button>
+        )}
+        {list !== undefined && (
+          <button onClick={() => onLoad()} className="ml-2 text-blue-600 hover:underline">
+            Recharger
+          </button>
+        )}
+      </div>
+      {list === null && (
+        <div className="text-xs text-gray-500">
+          Listing non disponible côté serveur — utilisez le lien « Télécharger le dernier ».
+        </div>
+      )}
+      {Array.isArray(list) && list.length === 0 && (
+        <div className="text-xs text-gray-500">Aucun fichier.</div>
+      )}
+      {Array.isArray(list) && list.length > 0 && (
+        <ul className="text-sm text-gray-800 flex flex-col gap-1">
+          {list.map(f => (
+            <li key={f.id} className="flex items-center gap-2">
+              <a
+                href={makeHref(f.id)}
+                className="text-blue-600 hover:underline flex items-center gap-1"
+                target="_blank" rel="noreferrer"
+                title={f.original_name}
+              >
+                <Download size={16} /> {f.original_name}
+              </a>
+              {f.uploaded_at && <span className="text-xs text-gray-500">({toFRdt(new Date(f.uploaded_at))})</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
