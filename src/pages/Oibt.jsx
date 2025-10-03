@@ -209,7 +209,6 @@ export default function Oibt() {
   const stepByKey = (status, key) => (status || []).find(a => (a.key === key) || (a.name || "").toLowerCase().includes(key));
   const hasSporadic = (p) => !!stepByKey(p.status, "sporadic");
   const ensureSporadicStep = (p) => {
-    // ajoute l'étape sporadique si absente
     if (hasSporadic(p)) return p.status;
     const next = [...(p.status||[])];
     next.push({ key: "sporadic", name: "Contrôle sporadique", done: false });
@@ -325,12 +324,10 @@ export default function Oibt() {
   async function uploadProjectFiles(id, action, files) {
     if (!files?.length) return;
     try {
-      // upload en série pour conserver l'ordre (backend actuel garde 1 fichier par étape)
       for (const file of files) {
         const fd = new FormData(); fd.append("file", file);
         await api.oibt.uploadProjectActionFile(id, action, fd);
       }
-      // coche l'étape côté front puis sync backend (met +6 mois si rapport)
       setProjects(prev => {
         const pj = prev.find(p => p.id === id);
         if (!pj) return prev;
@@ -560,7 +557,7 @@ export default function Oibt() {
             {/* sporadique helper */}
             <div className="mt-3 p-3 rounded-lg bg-indigo-50 text-indigo-900 border border-indigo-200 flex items-center justify-between gap-3">
               <div className="text-sm">
-                Besoin de <b>{sporadNeeded}</b> projet(s) en <i>contrôle sporadique</i> (5% des {openProjects.length} projets ouverts). Actuellement : <b>{sporadAssigned}</b>.
+                Besoin de <b>{sporadNeeded}</b> projet(s) en <i>contrôle sporadique</i> (5% des {openProjects.length} projets ouverts). Actuellement : <b>{sporadAssigned}</b>.
               </div>
               <div className="flex gap-2">
                 <button onClick={autoAssignSporadic} className={`px-3 py-2 rounded ${canAssign ? "bg-indigo-600 text-white hover:bg-indigo-700" : "bg-gray-200 text-gray-500"}`} disabled={!canAssign}>Assigner automatiquement</button>
@@ -630,9 +627,11 @@ export default function Oibt() {
                       <Progress value={progress} />
                       <div className="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-2">
                         <span>{progress}%</span>
-                        {reception?.due && !reception.done && (
-                          <span className={`flex items-center gap-1 ${late ? "text-red-600" : "text-gray-600"}`}>
-                            <CalendarClock size={14} /> Réception avant le {reception.due} {late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
+                        {reception?.due && (
+                          <span className={`flex items-center gap-1 ${(!reception.done && late) ? "text-red-600" : "text-gray-600"}`}>
+                            <CalendarClock size={14} />
+                            {reception.done ? <>Réception (échéance {reception.due})</> : <>Réception avant le {reception.due}</>}
+                            {!reception.done && late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
                           </span>
                         )}
                       </div>
@@ -645,7 +644,7 @@ export default function Oibt() {
                           const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : a.name?.toLowerCase().includes("sporad") ? "sporadic" : "reception");
                           const hasFile = !!p.attachments?.[key];
                           const accept = ".pdf,.doc,.docx,.png,.jpg,.jpeg";
-                          const canUploadMulti = key !== "sporadic"; // backend multi-fichiers non encore dispo
+                          const canUploadMulti = key !== "sporadic";
                           return (
                             <li key={`${p.id}-${i}`} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
                               <div className="flex items-center justify-between gap-3">
