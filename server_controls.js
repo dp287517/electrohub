@@ -1,10 +1,8 @@
-// server_controls.js — Controls backend (solide + rétro-compatible)
-// - Fix crash: add IF NOT EXISTS "code" column on controls_entities
-// - Sync "DB mode": lit switchboards/devices/hv/atex depuis Postgres (sans HTTP)
-// - Arbo: Building -> Switchboards -> Devices (enfants) + High Voltage + ATEX
-// - TSD: génération auto des tâches + due dates
-// - Upload multi (drag&drop) + IA Analyze/Assistant (OpenAI)
-// - Démarre UNIQUEMENT sur CONTROLS_PORT (ou 3011). Ne pas utiliser PORT ici.
+// server_controls.js — Controls backend (patched to handle mixed `site` values and display data)
+// - Adds tolerant site filtering (supports `X-Site: *` or query/body `site: "*"`) for reads
+// - Sync can read from DB for any site via `?source=db&read_site=*` while inserting under chosen `site`
+// - /tree, /tasks, /catalog endpoints accept `*` to aggregate across sites
+// - Preserves existing schema, HTTP loaders, TSD generation, uploads, history, etc.
 
 import express from "express";
 import helmet from "helmet";
@@ -63,6 +61,9 @@ function isDue(last, freqMonths) {
 }
 function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args); }
 
+// Helper: tolerant site check SQL fragment
+const siteFilterSQL = (alias = "") => `($1 = '*' OR ${alias ? alias + '.' : ''}site = $1)`;
+
 // ---------------------------------------------------------------------------
 // SCHEMA (création + migrations rétro-compatibles)
 // ---------------------------------------------------------------------------
@@ -75,7 +76,7 @@ async function ensureSchema() {
       building TEXT,
       equipment_type TEXT,
       name TEXT,
-      code TEXT,                           -- peut manquer sur une ancienne base (cf. ALTER plus bas)
+      code TEXT,
       done JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -171,7 +172,7 @@ async function ensureSchema() {
   `);
 
   // ALTER (compatibilité avec anciennes bases)
-  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);            // <— FIX crash “code” missing
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
@@ -237,7 +238,7 @@ async function safeFetchJson(url) {
 }
 
 // HTTP (compat)
-async function loadSwitchboardsHTTP(site="Default") {
+async function loadSwitchboardsHTTP(site = "Default") {
   const url = process.env.SWITCHBOARD_URL || process.env.SWITCHBOARD_BASE_URL || "";
   if (!url) return [];
   const boards  = await safeFetchJson(`${url}/api/switchboard/boards?site=${encodeURIComponent(site)}`);
@@ -263,7 +264,7 @@ async function loadSwitchboardsHTTP(site="Default") {
   }
   return out;
 }
-async function loadHVHTTP(site="Default") {
+async function loadHVHTTP(site = "Default") {
   const url = process.env.HV_URL || process.env.HV_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/hv/equipments?site=${encodeURIComponent(site)}`);
@@ -274,7 +275,7 @@ async function loadHVHTTP(site="Default") {
     code: h.code || `HV-${h.id}`
   }));
 }
-async function loadATEXHTTP(site="Default") {
+async function loadATEXHTTP(site = "Default") {
   const url = process.env.ATEX_URL || process.env.ATEX_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/atex/equipments?site=${encodeURIComponent(site)}`);
@@ -286,58 +287,58 @@ async function loadATEXHTTP(site="Default") {
   }));
 }
 
-// DB (recommandé)
-async function loadFromDB(site="Default") {
+// DB (recommandé) — tolerant read: accepts readSite='*' to read across all source sites
+async function loadFromDB(readSite = "Default") {
   // Switchboards
   const { rows: sbs } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(s.site,''),'Default') AS site,
-      COALESCE(NULLIF(s.building_code,''),'B00') AS building,
+      COALESCE(NULLIF(s.site::text,''),'Default') AS site,
+      COALESCE(NULLIF(s.building_code::text,''),'B00') AS building,
       s.name::text AS name,
       s.code::text AS code
     FROM public.switchboards s
-    WHERE COALESCE(NULLIF(s.site,''),'Default') = $1
-  `, [site]);
+    WHERE ($1 = '*' OR COALESCE(NULLIF(s.site::text,''),'Default') = $1)
+  `, [readSite]);
 
   // Devices (+ parent switchboard_code)
   const { rows: devs } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(d.site,''),'Default') AS site,
-      COALESCE(NULLIF(sb.building_code,''),'B00') AS building,
-      COALESCE(NULLIF(d.name,''), d.device_type, ('Device-'||d.id))::text AS name,
-      COALESCE(NULLIF(d.reference,''), NULLIF(d.position_number,''), ('DEV-'||d.id))::text AS code,
+      COALESCE(NULLIF(d.site::text,''),'Default') AS site,
+      COALESCE(NULLIF(sb.building_code::text,''),'B00') AS building,
+      COALESCE(NULLIF(d.name::text,''), d.device_type::text, ('Device-'||d.id)::text) AS name,
+      COALESCE(NULLIF(d.reference::text,''), NULLIF(d.position_number::text,''), ('DEV-'||d.id)::text) AS code,
       sb.code::text AS parent_code
     FROM public.devices d
     LEFT JOIN public.switchboards sb ON sb.id = d.switchboard_id
-    WHERE COALESCE(NULLIF(d.site,''),'Default') = $1
-  `, [site]);
+    WHERE ($1 = '*' OR COALESCE(NULLIF(d.site::text,''),'Default') = $1)
+  `, [readSite]);
 
   // HV
   const { rows: hvs } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(hv.site,''),'Default') AS site,
-      COALESCE(NULLIF(hv.building_code,''),'B00') AS building,
+      COALESCE(NULLIF(hv.site::text,''),'Default') AS site,
+      COALESCE(NULLIF(hv.building_code::text,''),'B00') AS building,
       hv.name::text AS name,
       hv.code::text AS code
     FROM public.hv_equipments hv
-    WHERE COALESCE(NULLIF(hv.site,''),'Default') = $1
-  `, [site]);
+    WHERE ($1 = '*' OR COALESCE(NULLIF(hv.site::text,''),'Default') = $1)
+  `, [readSite]);
 
   // ATEX
   const { rows: atex } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(a.site,''),'Default') AS site,
-      COALESCE(NULLIF(a.building,''),'B00') AS building,
+      COALESCE(NULLIF(a.site::text,''),'Default') AS site,
+      COALESCE(NULLIF(a.building::text,''),'B00') AS building,
       a.component_type::text AS name,
-      COALESCE(NULLIF(a.manufacturer_ref,''), ('ATEX-'||a.id))::text AS code
+      COALESCE(NULLIF(a.manufacturer_ref::text,''), ('ATEX-'||a.id)::text) AS code
     FROM public.atex_equipments a
-    WHERE COALESCE(NULLIF(a.site,''),'Default') = $1
-  `, [site]);
+    WHERE ($1 = '*' OR COALESCE(NULLIF(a.site::text,''),'Default') = $1)
+  `, [readSite]);
 
   const out = [];
-  for (const sb of sbs) out.push({ ...sb, equipment_type: "LV_SWITCHBOARD", parent_code: null });
-  for (const d of devs) out.push({ ...d, equipment_type: "LV_DEVICE" });
-  for (const hv of hvs) out.push({ ...hv, equipment_type: "HV_EQUIPMENT", parent_code: null });
+  for (const sb of sbs)  out.push({ ...sb,  equipment_type: "LV_SWITCHBOARD", parent_code: null });
+  for (const d of devs)  out.push({ ...d,  equipment_type: "LV_DEVICE" });
+  for (const hv of hvs)  out.push({ ...hv, equipment_type: "HV_EQUIPMENT", parent_code: null });
   for (const ax of atex) out.push({ ...ax, equipment_type: "ATEX_EQUIPMENT", parent_code: null });
   return out;
 }
@@ -345,7 +346,7 @@ async function loadFromDB(site="Default") {
 // ---------------------------------------------------------------------------
 // Génération TSD
 // ---------------------------------------------------------------------------
-async function regenerateTasks(site="Default") {
+async function regenerateTasks(site = "Default") {
   const { rows: entities } = await pool.query("SELECT * FROM controls_entities WHERE site=$1", [site]);
   let created = 0;
   for (const e of entities) {
@@ -388,26 +389,29 @@ async function regenerateTasks(site="Default") {
 // ---------------------------------------------------------------------------
 app.post("/api/controls/sync", async (req, res) => {
   try {
-    const site = req.body?.site || req.headers["x-site"] || "Default";
+    const site = req.body?.site || req.headers["x-site"] || "Default"; // site d'INSERTION
     const source = (req.query.source || process.env.CONTROLS_SOURCE || "auto").toLowerCase();
+    const readSite = (req.query.read_site || process.env.CONTROLS_DB_READ_SITE || '*'); // site de LECTURE (DB)
 
     let incoming = [];
     if (source === "db") {
-      incoming = await loadFromDB(site);
+      incoming = await loadFromDB(readSite);
     } else if (source === "http") {
+      const httpSite = req.query.read_site || site;
       incoming = [
-        ...(await loadSwitchboardsHTTP(site)),
-        ...(await loadHVHTTP(site)),
-        ...(await loadATEXHTTP(site)),
+        ...(await loadSwitchboardsHTTP(httpSite)),
+        ...(await loadHVHTTP(httpSite)),
+        ...(await loadATEXHTTP(httpSite)),
       ];
     } else {
       // auto : tente DB en premier (plus fiable), sinon HTTP si variables présentes
-      try { incoming = await loadFromDB(site); } catch { incoming = []; }
+      try { incoming = await loadFromDB(readSite); } catch { incoming = []; }
       if (incoming.length === 0) {
+        const httpSite = req.query.read_site || site;
         incoming = [
-          ...(await loadSwitchboardsHTTP(site)),
-          ...(await loadHVHTTP(site)),
-          ...(await loadATEXHTTP(site)),
+          ...(await loadSwitchboardsHTTP(httpSite)),
+          ...(await loadHVHTTP(httpSite)),
+          ...(await loadATEXHTTP(httpSite)),
         ];
       }
     }
@@ -415,7 +419,7 @@ app.post("/api/controls/sync", async (req, res) => {
     // déduplication par (equipment_type + code)
     const map = new Map();
     for (const x of incoming) {
-      if (!x.code) continue; // on ignore les éléments sans code
+      if (!x.code) continue; // ignore les éléments sans code
       const key = `${x.equipment_type}:${x.code}`;
       if (!map.has(key)) map.set(key, x);
     }
@@ -454,7 +458,7 @@ app.post("/api/controls/sync", async (req, res) => {
     }
 
     const created = await regenerateTasks(site);
-    res.json({ source: source || "auto", synced: items.length, added, updated, not_present_flagged: flaggedNotPresent, tasks_created: created });
+    res.json({ source: source || "auto", read_site: readSite, insert_site: site, synced: items.length, added, updated, not_present_flagged: flaggedNotPresent, tasks_created: created });
   } catch (e) {
     log("sync error:", e);
     res.status(500).json({ error: "Erreur sync", details: e.message });
@@ -467,14 +471,14 @@ app.post("/api/controls/sync", async (req, res) => {
 app.get("/api/controls/catalog", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Default";
   const { rows } = await pool.query(
-    "SELECT * FROM controls_entities WHERE site=$1 ORDER BY id DESC",
+    `SELECT * FROM controls_entities WHERE ${siteFilterSQL()} ORDER BY id DESC`,
     [site]
   );
   res.json({ data: rows });
 });
 
 app.post("/api/controls/catalog", async (req, res) => {
-  const { site="Default", building, equipment_type, name, code, parent_code=null } = req.body || {};
+  const { site = "Default", building, equipment_type, name, code, parent_code = null } = req.body || {};
   if (!equipment_type || !name) return res.status(400).json({ error: "Champs requis manquants" });
   const { rows: exist } = await pool.query(
     "SELECT id FROM controls_entities WHERE site=$1 AND code=$2",
@@ -502,21 +506,30 @@ app.get("/api/controls/tasks", async (req, res) => {
     const { building, type, status, q, page = 1, pageSize = 200, entity_id } = req.query;
     await ensureOverdueFlags();
 
-    let query = `
+    let i = 1;
+    const values = [];
+    const where = [];
+
+    // site (tolerant)
+    values.push(site); where.push(`${siteFilterSQL('ct')}`.replace('$1', `$${i++}`));
+
+    if (building) { values.push(building); where.push(`ce.building = $${i++}`); }
+    if (type)     { values.push(type);     where.push(`ce.equipment_type = $${i++}`); }
+    if (status)   { values.push(status);   where.push(`ct.status = $${i++}`); }
+    if (entity_id){ values.push(Number(entity_id)); where.push(`ct.entity_id = $${i++}`); }
+    if (q)        { values.push(`%${q}%`); where.push(`(ct.task_name ILIKE $${i} OR ct.task_code ILIKE $${i})`); i++; }
+
+    values.push(Number(pageSize));
+    values.push((Number(page) - 1) * Number(pageSize));
+
+    const query = `
       SELECT ct.*, ce.equipment_type, ce.building, ce.name AS entity_name
       FROM controls_tasks ct
       LEFT JOIN controls_entities ce ON ct.entity_id = ce.id
-      WHERE ct.site = $1`;
-    const values = [site]; let i = 2;
-
-    if (building) { query += ` AND ce.building = $${i++}`; values.push(building); }
-    if (type) { query += ` AND ce.equipment_type = $${i++}`; values.push(type); }
-    if (status) { query += ` AND ct.status = $${i++}`; values.push(status); }
-    if (entity_id) { query += ` AND ct.entity_id = $${i++}`; values.push(Number(entity_id)); }
-    if (q) { query += ` AND (ct.task_name ILIKE $${i} OR ct.task_code ILIKE $${i})`; values.push(`%${q}%`); i++; }
-
-    query += ` ORDER BY ct.next_control ASC NULLS LAST, ct.id DESC LIMIT $${i} OFFSET $${i+1}`;
-    values.push(Number(pageSize), (Number(page) - 1) * Number(pageSize));
+      WHERE ${where.length ? where.join(' AND ') : 'true'}
+      ORDER BY ct.next_control ASC NULLS LAST, ct.id DESC
+      LIMIT $${i++} OFFSET $${i}
+    `;
 
     const { rows } = await pool.query(query, values);
     res.json({ data: rows });
@@ -634,14 +647,14 @@ app.delete("/api/controls/tasks/:id/attachments/:attId", async (req, res) => {
 app.get("/api/controls/not-present", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Default";
   const { rows } = await pool.query(
-    "SELECT * FROM controls_not_present WHERE site=$1 ORDER BY id DESC",
+    `SELECT * FROM controls_not_present WHERE ${siteFilterSQL()} ORDER BY id DESC`,
     [site]
   );
   res.json(rows);
 });
 
 app.post("/api/controls/not-present", async (req, res) => {
-  const { site="Default", building, equipment_type, declared_by="user", note="" } = req.body || {};
+  const { site = "Default", building, equipment_type, declared_by = "user", note = "" } = req.body || {};
   const { rows } = await pool.query(
     "INSERT INTO controls_not_present (site,building,equipment_type,declared_by,note) VALUES ($1,$2,$3,$4,$5) RETURNING *",
     [site, building || null, equipment_type, declared_by, note]
@@ -651,7 +664,7 @@ app.post("/api/controls/not-present", async (req, res) => {
 
 app.post("/api/controls/not-present/:id/assess", async (req, res) => {
   const id = Number(req.params.id);
-  const { action="Assessed", user="system", meta={} } = req.body || {};
+  const { action = "Assessed", user = "system", meta = {} } = req.body || {};
   await pool.query(
     "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
     [req.headers["x-site"] || "Default", null, `not-present#${id}`, user, action, JSON.stringify(meta)]
@@ -665,7 +678,7 @@ app.post("/api/controls/not-present/:id/assess", async (req, res) => {
 app.get("/api/controls/history", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Default";
   const { rows } = await pool.query(
-    "SELECT * FROM controls_history WHERE site=$1 ORDER BY date DESC LIMIT 200",
+    `SELECT * FROM controls_history WHERE ${siteFilterSQL()} ORDER BY date DESC LIMIT 200`,
     [site]
   );
   res.json(rows);
@@ -674,7 +687,7 @@ app.get("/api/controls/history", async (req, res) => {
 app.get("/api/controls/records", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Default";
   const { rows } = await pool.query(
-    "SELECT * FROM controls_records WHERE site=$1 ORDER BY created_at DESC LIMIT 200",
+    `SELECT * FROM controls_records WHERE ${siteFilterSQL()} ORDER BY created_at DESC LIMIT 200`,
     [site]
   );
   res.json(rows);
@@ -687,7 +700,10 @@ app.get("/api/controls/tree", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Default";
 
   const { rows: ents } = await pool.query(
-    "SELECT id, site, building, equipment_type, name, code, parent_code FROM controls_entities WHERE site=$1 ORDER BY building, equipment_type, name",
+    `SELECT id, site, building, equipment_type, name, code, parent_code
+     FROM controls_entities
+     WHERE ${siteFilterSQL()}
+     ORDER BY building, equipment_type, name`,
     [site]
   );
 
@@ -697,8 +713,8 @@ app.get("/api/controls/tree", async (req, res) => {
       SUM((status='Overdue')::int) AS overdue,
       SUM((status='Completed')::int) AS completed,
       MIN(next_control) AS next_due
-    FROM controls_tasks
-    WHERE site=$1
+    FROM controls_tasks ct
+    WHERE ${siteFilterSQL('ct')}
     GROUP BY entity_id
   `, [site]);
 
@@ -737,12 +753,12 @@ app.get("/api/controls/tree", async (req, res) => {
   for (const e of ents) {
     const b = e.building || "B00";
     const bucket = buildings[b].groups;
-    const counts = cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null };
+    const countsFor = cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null };
 
     if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b].boardsByCode[e.parent_code]) continue;
-    if (e.equipment_type === "LV_DEVICE") bucket.LV_DEVICE.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts });
-    if (e.equipment_type === "HV_EQUIPMENT") bucket.HV_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts });
-    if (e.equipment_type === "ATEX_EQUIPMENT") bucket.ATEX_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts });
+    if (e.equipment_type === "LV_DEVICE") bucket.LV_DEVICE.push({ id: e.id, code: e.code, name: e.name, type: e.eipment_type, counts: countsFor });
+    if (e.equipment_type === "HV_EQUIPMENT") bucket.HV_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
+    if (e.equipment_type === "ATEX_EQUIPMENT") bucket.ATEX_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
   }
 
   const out = Object.values(buildings).map(b => ({
