@@ -47,7 +47,8 @@ async function ensureSchema() {
       site TEXT NOT NULL,
       title TEXT NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      status JSONB DEFAULT '[]'::jsonb
+      status JSONB DEFAULT '[]'::jsonb,
+      year INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_oibt_projects_site ON oibt_projects(site);
   `);
@@ -61,7 +62,7 @@ async function ensureSchema() {
       -- compat ancien champ URL
       report_url TEXT,
 
-      -- fichiers binaires
+      -- fichiers "dernier" pour compat
       report_file BYTEA,
       report_filename TEXT,
       report_mime TEXT,
@@ -85,55 +86,82 @@ async function ensureSchema() {
       confirmation_received_at TIMESTAMPTZ,
 
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ
+      updated_at TIMESTAMPTZ,
+      year INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_oibt_periodics_site ON oibt_periodics(site);
     CREATE INDEX IF NOT EXISTS idx_oibt_periodics_building ON oibt_periodics(building);
   `);
 
-  // Pièces jointes par action de PROJET (avis/protocole/rapport/reception)
+  // Pièces jointes PROJETS (multi-fichiers + 'sporadic')
   await pool.query(`
     CREATE TABLE IF NOT EXISTS oibt_project_files (
       id SERIAL PRIMARY KEY,
       site TEXT NOT NULL,
       project_id INTEGER NOT NULL REFERENCES oibt_projects(id) ON DELETE CASCADE,
-      action_key TEXT NOT NULL CHECK (action_key IN ('avis','protocole','rapport','reception')),
+      action_key TEXT NOT NULL,
       file BYTEA,
       filename TEXT,
       mime TEXT,
-      uploaded_at TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE (project_id, action_key)
+      uploaded_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_oibt_projfiles_site ON oibt_project_files(site);
+    CREATE INDEX IF NOT EXISTS idx_oibt_projfiles_proj ON oibt_project_files(project_id);
   `);
 
-  // Auto-migration douce si tables déjà existantes (colonnes diverses)
+  // === Migrations douces PROJETS ===
+  // 1) S'assurer de la colonne uploaded_at
   await pool.query(`
-    ALTER TABLE oibt_periodics
-      ADD COLUMN IF NOT EXISTS report_url TEXT,
-      ADD COLUMN IF NOT EXISTS report_file BYTEA,
-      ADD COLUMN IF NOT EXISTS report_filename TEXT,
-      ADD COLUMN IF NOT EXISTS report_mime TEXT,
-      ADD COLUMN IF NOT EXISTS defect_file BYTEA,
-      ADD COLUMN IF NOT EXISTS defect_filename TEXT,
-      ADD COLUMN IF NOT EXISTS defect_mime TEXT,
-      ADD COLUMN IF NOT EXISTS confirmation_file BYTEA,
-      ADD COLUMN IF NOT EXISTS confirmation_filename TEXT,
-      ADD COLUMN IF NOT EXISTS confirmation_mime TEXT,
-      ADD COLUMN IF NOT EXISTS report_received BOOLEAN DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS defect_report_received BOOLEAN DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS confirmation_received BOOLEAN DEFAULT FALSE,
-      ADD COLUMN IF NOT EXISTS report_received_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS defect_report_received_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS confirmation_received_at TIMESTAMPTZ,
-      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
+    ALTER TABLE oibt_project_files
+      ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ DEFAULT NOW();
+  `);
+  // 2) Supprimer l'ancienne contrainte UNIQUE (project_id, action_key) si elle existe
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'oibt_project_files_project_id_action_key_key'
+      ) THEN
+        ALTER TABLE oibt_project_files DROP CONSTRAINT oibt_project_files_project_id_action_key_key;
+      END IF;
+    END$$;
+  `);
+  // 3) Étendre la CHECK constraint pour inclure 'sporadic'
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'oibt_project_files_action_key_check'
+      ) THEN
+        ALTER TABLE oibt_project_files DROP CONSTRAINT oibt_project_files_action_key_check;
+      END IF;
+    END$$;
+  `);
+  await pool.query(`
+    ALTER TABLE oibt_project_files
+      ADD CONSTRAINT oibt_project_files_action_key_check
+      CHECK (action_key IN ('avis','protocole','rapport','reception','sporadic'));
   `);
 
-  /* >>> Ajout YEAR comme demandé <<< */
-  await pool.query(`ALTER TABLE oibt_projects  ADD COLUMN IF NOT EXISTS year INTEGER;`);
-  await pool.query(`ALTER TABLE oibt_periodics ADD COLUMN IF NOT EXISTS year INTEGER;`);
+  // Périodiques : table d'historique multi-fichiers
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS oibt_periodic_files (
+      id SERIAL PRIMARY KEY,
+      site TEXT NOT NULL,
+      periodic_id INTEGER NOT NULL REFERENCES oibt_periodics(id) ON DELETE CASCADE,
+      file_type TEXT NOT NULL CHECK (file_type IN ('report','defect','confirmation')),
+      file BYTEA,
+      filename TEXT,
+      mime TEXT,
+      uploaded_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_oibt_perfiles_site ON oibt_periodic_files(site);
+    CREATE INDEX IF NOT EXISTS idx_oibt_perfiles_per ON oibt_periodic_files(periodic_id);
+  `);
 
-  // Backfill pour avoir des années cohérentes tout de suite
+  // Backfill YEAR si manquant
   await pool.query(`UPDATE oibt_projects  SET year = EXTRACT(YEAR FROM created_at)::int WHERE year IS NULL;`);
   await pool.query(`UPDATE oibt_periodics SET year = EXTRACT(YEAR FROM created_at)::int WHERE year IS NULL;`);
 }
@@ -144,14 +172,15 @@ ensureSchema().catch(e => console.error("[OIBT SCHEMA]", e));
 /* ------------------------------------------------------------------ */
 async function projectAttachmentsMap(site, projectId) {
   const filesQ = await pool.query(
-    `SELECT action_key, (filename IS NOT NULL) AS has_file
+    `SELECT action_key, COUNT(*)>0 AS has_file
      FROM oibt_project_files
-     WHERE site=$1 AND project_id=$2`,
+     WHERE site=$1 AND project_id=$2
+     GROUP BY action_key`,
     [site, projectId]
   );
-  const att = { avis: false, protocole: false, rapport: false, reception: false };
+  const att = { avis: false, protocole: false, rapport: false, reception: false, sporadic: false };
   for (const row of filesQ.rows) {
-    if (row.action_key && row.has_file) att[row.action_key] = true;
+    if (row.action_key in att) att[row.action_key] = row.has_file === true || row.has_file === "t";
   }
   return att;
 }
@@ -181,13 +210,13 @@ app.get("/api/oibt/projects", async (req, res) => {
 
     if (!rows.length) return res.json({ data: [] });
 
-    // Indiquer les pièces jointes disponibles par action
     const ids = rows.map(r => r.id);
     const files = (
       await pool.query(
-        `SELECT project_id, action_key, (filename IS NOT NULL) AS has_file
+        `SELECT project_id, action_key, COUNT(*)>0 AS has_file
          FROM oibt_project_files
-         WHERE site=$1 AND project_id = ANY($2)`,
+         WHERE site=$1 AND project_id = ANY($2)
+         GROUP BY project_id, action_key`,
         [site, ids]
       )
     ).rows;
@@ -195,7 +224,7 @@ app.get("/api/oibt/projects", async (req, res) => {
     const byProject = {};
     for (const f of files) {
       byProject[f.project_id] = byProject[f.project_id] || {};
-      byProject[f.project_id][f.action_key] = !!f.has_file;
+      byProject[f.project_id][f.action_key] = f.has_file === true || f.has_file === "t";
     }
 
     const data = rows.map(r => ({
@@ -205,6 +234,7 @@ app.get("/api/oibt/projects", async (req, res) => {
         protocole: !!byProject[r.id]?.protocole,
         rapport: !!byProject[r.id]?.rapport,
         reception: !!byProject[r.id]?.reception,
+        sporadic: !!byProject[r.id]?.sporadic,
       },
     }));
 
@@ -227,6 +257,7 @@ app.post("/api/oibt/projects", async (req, res) => {
       { key: "protocole",  name: "Protocole de mesure",  done: false },
       { key: "rapport",    name: "Rapport de sécurité",  done: false },
       { key: "reception",  name: "Contrôle de réception", done: false, due: null },
+      // l'étape "sporadic" sera ajoutée selon le besoin côté front
     ];
 
     const year = req.body?.year ?? new Date().getFullYear();
@@ -292,7 +323,6 @@ app.put("/api/oibt/projects/:id", async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ error: "Not found" });
     const updated = r.rows[0];
 
-    // Rejoindre les attachments pour éviter l'effet "Aucun fichier"
     const attachments = await projectAttachmentsMap(site, id);
 
     res.json({ ...updated, attachments });
@@ -316,7 +346,7 @@ app.delete("/api/oibt/projects/:id", async (req, res) => {
   }
 });
 
-// UPLOAD fichier d'action de PROJET (avis|protocole|rapport|reception)
+// UPLOAD fichier d'action de PROJET (avis|protocole|rapport|reception|sporadic)
 // -> coche auto l'étape, calcule due +6 mois si action=rapport
 // -> renvoie le projet COMPLET avec attachments
 app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res) => {
@@ -324,17 +354,15 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
     const site = siteOf(req);
     const id = Number(req.params.id);
     const action = String(req.query.action || "").toLowerCase();
-    if (!["avis", "protocole", "rapport", "reception"].includes(action)) {
+    if (!["avis", "protocole", "rapport", "reception", "sporadic"].includes(action)) {
       return res.status(400).json({ error: "Bad action" });
     }
     if (!req.file) return res.status(400).json({ error: "No file" });
 
-    // 1) Sauvegarde/écrase le fichier pour l’action
+    // 1) Enregistre un NOUVEAU fichier (multi-docs)
     await pool.query(
-      `INSERT INTO oibt_project_files (site, project_id, action_key, file, filename, mime)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (project_id, action_key) DO UPDATE SET
-         file=EXCLUDED.file, filename=EXCLUDED.filename, mime=EXCLUDED.mime, uploaded_at=NOW()`,
+      `INSERT INTO oibt_project_files (site, project_id, action_key, file, filename, mime, uploaded_at)
+       VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
       [site, id, action, req.file.buffer, req.file.originalname, req.file.mimetype]
     );
 
@@ -353,6 +381,9 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
     );
     if (idx >= 0) {
       next[idx] = { ...next[idx], done: true };
+    } else if (action === "sporadic") {
+      // si l'étape sporadique n'existait pas encore
+      next.push({ key: "sporadic", name: "Contrôle sporadique", done: true });
     }
 
     // 3) Si action = rapport -> due de “réception” à +6 mois si absente
@@ -392,7 +423,7 @@ app.post("/api/oibt/projects/:id/upload", upload.single("file"), async (req, res
   }
 });
 
-// DOWNLOAD fichier d'action de PROJET
+// DOWNLOAD fichier d'action de PROJET (dernier fichier)
 app.get("/api/oibt/projects/:id/download", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -400,7 +431,9 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
     const action = String(req.query.action || "").toLowerCase();
     const q = await pool.query(
       `SELECT file, filename, mime FROM oibt_project_files
-       WHERE site=$1 AND project_id=$2 AND action_key=$3`,
+       WHERE site=$1 AND project_id=$2 AND action_key=$3
+       ORDER BY uploaded_at DESC
+       LIMIT 1`,
       [site, id, action]
     );
     if (!q.rows.length || !q.rows[0].file) return res.status(404).send("File not found");
@@ -491,7 +524,6 @@ app.put("/api/oibt/periodics/:id", async (req, res) => {
     const { report_received, defect_report_received, confirmation_received } = req.body;
     const newYear = req.body?.year ?? null;
 
-    // On met à jour les timestamps uniquement quand ça passe à TRUE
     const { rows } = await pool.query(
       `UPDATE oibt_periodics
        SET
@@ -535,7 +567,7 @@ app.delete("/api/oibt/periodics/:id", async (req, res) => {
   }
 });
 
-// UPLOAD (report|defect|confirmation) + timestamps
+// UPLOAD (report|defect|confirmation) : multi-fichiers + timestamps + compat
 app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, res) => {
   try {
     const site = siteOf(req);
@@ -546,6 +578,14 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
     }
     if (!req.file) return res.status(400).json({ error: "No file" });
 
+    // 1) Historiser CHAQUE fichier
+    await pool.query(
+      `INSERT INTO oibt_periodic_files (site, periodic_id, file_type, file, filename, mime, uploaded_at)
+       VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
+      [site, id, type, req.file.buffer, req.file.originalname, req.file.mimetype]
+    );
+
+    // 2) Conserver aussi le "dernier" fichier pour compat avec l'UI actuelle
     const setCols = {
       report: "report_file=$1, report_filename=$2, report_mime=$3, report_received=TRUE, report_received_at=COALESCE(report_received_at, NOW())",
       defect: "defect_file=$1, defect_filename=$2, defect_mime=$3, defect_report_received=TRUE, defect_report_received_at=COALESCE(defect_report_received_at, NOW())",
@@ -573,7 +613,7 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
   }
 });
 
-// DOWNLOAD (report|defect|confirmation)
+// DOWNLOAD (report|defect|confirmation) : on sert le "dernier" pour compat
 app.get("/api/oibt/periodics/:id/download", async (req, res) => {
   try {
     const site = siteOf(req);
