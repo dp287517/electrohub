@@ -1,7 +1,8 @@
 // src/pages/Controls.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, get } from "../lib/api.js";
-import { RefreshCcw, X, Upload, Search, Filter, ImageDown, MessageSquareText } from "lucide-react";
+import { RefreshCcw, X, Upload, Search, Filter, ImageDown, MessageSquare } from "lucide-react";
+
 
 /** UI primitives (sans shadcn) */
 function Tab({ active, onClick, children }) {
@@ -417,7 +418,7 @@ export default function Controls() {
                       className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
                       title="Assistant: comment réaliser le test ?"
                     >
-                      <MessageSquareText size={16} /> Assistant
+                      <MessageSquare size={16} /> Assistant
                     </button>
                   </div>
                 </div>
