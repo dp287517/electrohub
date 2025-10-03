@@ -86,6 +86,7 @@ export const api = {
     duplicate: (id) => post(`/api/switchboard/boards/${id}/duplicate`),
     remove: (id) => del(`/api/switchboard/boards/${id}`),
   },
+
   selectivity: {
     listPairs: (params) => get("/api/selectivity/pairs", params),
     checkPair: (upstreamId, downstreamId) =>
@@ -94,6 +95,7 @@ export const api = {
       get(`/api/selectivity/curves?upstream=${upstreamId}&downstream=${downstreamId}`),
     getAiTip: (payload) => post("/api/selectivity/ai-tip", payload),
   },
+
   faultlevel: {
     listPoints: (params) => get("/api/faultlevel/points", params),
     checkPoint: (deviceId, switchboardId, phaseType = "three") =>
@@ -108,6 +110,7 @@ export const api = {
     updateParameters: (payload) => post("/api/faultlevel/parameters", payload),
     reset: () => post("/api/faultlevel/reset", {}),
   },
+
   arcflash: {
     listPoints: (params) => get("/api/arcflash/points", params),
     checkPoint: (deviceId, switchboardId) =>
@@ -118,6 +121,7 @@ export const api = {
     updateParameters: (payload) => post("/api/arcflash/parameters", payload),
     reset: () => post("/api/arcflash/reset", {}),
   },
+
   obsolescence: {
     listPoints: (params) => get("/api/obsolescence/points", params),
     checkPoint: (deviceId, switchboardId) =>
@@ -130,6 +134,7 @@ export const api = {
     analyzePdf: (formData) => upload("/api/obsolescence/analyze-pdf", formData),
     exportPdf: () => get("/api/obsolescence/export-pdf"),
   },
+
   hv: {
     list: (params) => get("/api/hv/equipments", params),
     getOne: (id) => get(`/api/hv/equipments/${id}`),
@@ -142,13 +147,17 @@ export const api = {
     remove: (id) => del(`/api/hv/devices/${id}`),
     removeEquipment: (id) => del(`/api/hv/equipments/${id}`),
   },
+
   diagram: {
     view: (params) => get("/api/diagram/view", { ...(params || {}), site: currentSite() }),
     health: () => get("/api/diagram/health"),
   },
 
-  /** ------- CONTROLS (NOUVEAU) ------- */
+  /** ------- CONTROLS ------- */
   controls: {
+    // Arborescence Building → Switchboards → (Devices) + HV + ATEX
+    tree: (params) => get("/api/controls/tree", params),
+
     // Catalogue (équipements)
     listEntities: (params) => get("/api/controls/catalog", params),
     createEntity: (payload) => post("/api/controls/catalog", payload),
@@ -174,16 +183,19 @@ export const api = {
     library: () => get("/api/controls/library"),
 
     // Génération / Sync
-    sync: (payload) => post("/api/controls/sync", payload),
+    // -> passe par source=db pour lire directement switchboards/devices/hv/atex depuis Postgres
+    sync: ({ site = currentSite() || "Default", source = "db" } = {}) =>
+      post(`/api/controls/sync?source=${encodeURIComponent(source)}`, { site }),
     generate: (payload) => post("/api/controls/generate", payload),
 
     // Historique & Records
     history: (params) => get("/api/controls/history", params),
     records: (params) => get("/api/controls/records", params),
 
-    // IA
-    visionScore: (formData) => upload("/api/controls/ai/vision-score", formData),
-    assistant: (payload) => post("/api/controls/ai/assistant", payload),
+    // IA (aligné backend)
+    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),
+    assistant: (taskId, question) =>
+      post(`/api/controls/tasks/${taskId}/assistant`, { question }),
   },
 
   /** ------- OIBT ------- */
