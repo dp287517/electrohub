@@ -1,10 +1,9 @@
 // src/pages/Controls.jsx
-import { useEffect, useState } from "react";
-import { get } from "../lib/api.js"; // facultatif si tu veux encore des appels bruts
-import { api } from "../lib/api.js";
-import { RefreshCcw, X, Upload } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, get } from "../lib/api.js";
+import { RefreshCcw, X, Upload, Search, Filter, ImageDown, MessageSquareText } from "lucide-react";
 
-/* ---------- Mini UI sans shadcn ---------- */
+/** UI primitives (sans shadcn) */
 function Tab({ active, onClick, children }) {
   return (
     <button
@@ -18,37 +17,12 @@ function Tab({ active, onClick, children }) {
     </button>
   );
 }
-
 function Card({ children, className = "" }) {
   return <div className={`border rounded-xl bg-white shadow ${className}`}>{children}</div>;
 }
 function CardBody({ children, className = "" }) {
   return <div className={`p-4 ${className}`}>{children}</div>;
 }
-
-function Modal({ open, title, onClose, children, footer }) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl">
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <h3 className="font-semibold">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded hover:bg-gray-100"
-            aria-label="Close"
-          >
-            <X size={18} />
-          </button>
-        </div>
-        <div className="p-4 max-h-[70vh] overflow-y-auto">{children}</div>
-        <div className="px-4 py-3 border-t bg-gray-50 flex justify-end">{footer}</div>
-      </div>
-    </div>
-  );
-}
-
 function Badge({ tone = "default", children }) {
   const cls = {
     default: "bg-gray-100 text-gray-800",
@@ -59,51 +33,76 @@ function Badge({ tone = "default", children }) {
   }[tone];
   return <span className={`px-2 py-0.5 rounded text-xs font-medium ${cls}`}>{children}</span>;
 }
+function Stat({ label, value }) {
+  return (
+    <div className="p-3 rounded-lg bg-gray-50 border flex flex-col">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-xl font-semibold">{value}</div>
+    </div>
+  );
+}
 
-/* ---------- Page Controls ---------- */
+/** Page Controls */
 export default function Controls() {
   const [tab, setTab] = useState("tasks"); // tasks | catalog | notpresent | attachments | library | history | analytics
   const [loading, setLoading] = useState(false);
 
-  // Données
+  // Data
   const [tasks, setTasks] = useState([]);
   const [entities, setEntities] = useState([]);
   const [notPresent, setNotPresent] = useState([]);
   const [library, setLibrary] = useState({}); // { [type]: items[] }
+  const [history, setHistory] = useState([]);
 
-  // Sélection courante
+  // Filters (Tasks)
+  const [q, setQ] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  const [fBuilding, setFBuilding] = useState("");
+  const [fType, setFType] = useState("");
+
+  // Selection
   const [selectedTask, setSelectedTask] = useState(null);
   const [taskDetails, setTaskDetails] = useState(null);
   const [attachments, setAttachments] = useState([]);
 
-  // Form résultats
+  // Results
   const [resultForm, setResultForm] = useState({});
   const [aiRiskScore, setAiRiskScore] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiReply, setAiReply] = useState("");
 
+  // DnD
+  const dropRef = useRef(null);
+  const [isDropping, setIsDropping] = useState(false);
+
+  // ---------- LOAD ----------
   async function loadAll() {
     setLoading(true);
     try {
-      const [t, e, n, lib] = await Promise.all([
-        api.controls.listTasks(),
+      const [t, e, n, lib, h] = await Promise.all([
+        api.controls.listTasks({ q, status: fStatus, building: fBuilding, type: fType }),
         api.controls.listEntities(),
         api.controls.listNotPresent(),
         api.controls.library(),
+        api.controls.history(),
       ]);
       setTasks(t.data || []);
       setEntities(e.data || []);
       setNotPresent(n || []);
       setLibrary(lib.library || {});
+      setHistory(h || []);
+    } catch (e) {
+      console.error(e);
     } finally {
       setLoading(false);
     }
   }
-
   useEffect(() => {
     loadAll();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, fStatus, fBuilding, fType]);
 
+  // ---------- SELECT TASK ----------
   async function handleSelectTask(id) {
     const d = await api.controls.getTask(id);
     setSelectedTask({ id: d.id, task_name: d.task_name, status: d.status, next_control: d.next_control });
@@ -111,9 +110,11 @@ export default function Controls() {
     setResultForm(d.results || {});
     const atts = await api.controls.listAttachments(id);
     setAttachments(atts || []);
-    setTab("attachments"); // va direct sur pj pour accélérer la saisie
+    setAiReply("");
+    setTab("attachments");
   }
 
+  // ---------- COMPLETE ----------
   async function handleCompleteTask() {
     if (!selectedTask) return;
     await api.controls.completeTask(selectedTask.id, {
@@ -125,8 +126,10 @@ export default function Controls() {
     setTaskDetails(null);
     setAttachments([]);
     await loadAll();
+    setTab("tasks");
   }
 
+  // ---------- ATTACHMENTS ----------
   async function handleUpload(files) {
     if (!selectedTask || !files?.length) return;
     const fd = new FormData();
@@ -135,7 +138,6 @@ export default function Controls() {
     const atts = await api.controls.listAttachments(selectedTask.id);
     setAttachments(atts || []);
   }
-
   async function handleDeleteAttachment(attId) {
     if (!selectedTask) return;
     await api.controls.removeAttachment(selectedTask.id, attId);
@@ -143,47 +145,123 @@ export default function Controls() {
     setAttachments(atts || []);
   }
 
-  async function analyzePhotos() {
-    if (!selectedTask || !attachments.length) return;
-    setAiBusy(true);
-    try {
-      const fd = new FormData();
-      // On ne re-upload pas les binaires, l’endpoint vision accepte des files => ici, on passe sans,
-      // mais tu peux aussi réuploader depuis l’input si tu veux un score live avant sauvegarde.
-      // Pour une UX simple, propose un nouvel input juste pour l’analyse si besoin.
-      // Ici, on prend un “fast path” : pas d’envoi = pas d’analyse.
-      // Si tu veux vraiment analyser les PJ déjà en BDD, crée un endpoint backend dédié (server_controls) qui lit les BLOBs.
-      alert("Pour analyser automatiquement les PJ déjà uploadées, ajoute un endpoint backend (ex: /ai/vision-score-from-db).");
-    } finally {
-      setAiBusy(false);
-    }
-  }
+  // ---------- DnD ----------
+  useEffect(() => {
+    const zone = dropRef.current;
+    if (!zone) return;
+    function prevent(e) { e.preventDefault(); e.stopPropagation(); }
+    const onDragEnter = (e) => { prevent(e); setIsDropping(true); };
+    const onDragOver  = (e) => { prevent(e); setIsDropping(true); };
+    const onDragLeave = (e) => { prevent(e); setIsDropping(false); };
+    const onDrop = async (e) => {
+      prevent(e); setIsDropping(false);
+      if (!selectedTask) return;
+      const files = e.dataTransfer?.files;
+      if (files?.length) await handleUpload(files);
+    };
+    zone.addEventListener("dragenter", onDragEnter);
+    zone.addEventListener("dragover", onDragOver);
+    zone.addEventListener("dragleave", onDragLeave);
+    zone.addEventListener("drop", onDrop);
+    return () => {
+      zone.removeEventListener("dragenter", onDragEnter);
+      zone.removeEventListener("dragover", onDragOver);
+      zone.removeEventListener("dragleave", onDragLeave);
+      zone.removeEventListener("drop", onDrop);
+    };
+  }, [selectedTask]);
 
-  async function getAIAssistant() {
+  // ---------- AI ----------
+  async function callAnalyze() {
     if (!selectedTask) return;
     setAiBusy(true);
     try {
-      const res = await api.controls.assistant({ mode: "text", text: "Conseils de maintenance sur cette tâche", lang: "fr" });
-      setAiReply(res.reply || "");
+      // Appelle l’endpoint IA qui lit directement les BLOBs côté serveur
+      const res = await fetch(`/api/controls/tasks/${selectedTask.id}/analyze`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Analyze failed");
+      setAiReply(json.analysis || "");
+      // (Option) recharger details si l’analyse remplit des champs
+      // const d = await api.controls.getTask(selectedTask.id); setTaskDetails(d);
+    } catch (e) {
+      alert(e.message || "Analyze error");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+  async function callAssistant() {
+    if (!selectedTask) return;
+    setAiBusy(true);
+    try {
+      const question =
+        taskDetails?.tsd_item
+          ? `Avant contrôle: comment réaliser "${taskDetails.tsd_item.label}" sur ${selectedTask.task_name}?`
+          : "Avant contrôle: comment réaliser le test ?";
+      const res = await fetch(`/api/controls/tasks/${selectedTask.id}/assistant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ question, lang: "fr" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json?.error || "Assistant failed");
+      setAiReply(json.answer || "");
+    } catch (e) {
+      alert(e.message || "Assistant error");
     } finally {
       setAiBusy(false);
     }
   }
 
+  // ---------- Analytics (client) ----------
+  const stats = useMemo(() => {
+    const total = tasks.length;
+    const completed = tasks.filter((t) => t.status === "Completed").length;
+    const overdue = tasks.filter((t) => t.status === "Overdue").length;
+    const planned = total - completed - overdue;
+    const compliance = total ? Math.round((completed / total) * 100) : 0;
+    return { total, completed, overdue, planned, compliance };
+  }, [tasks]);
+
+  // ---------- Buildings & types (issus du catalog) ----------
+  const buildings = useMemo(() => {
+    const set = new Set(entities.map((e) => e.building).filter(Boolean));
+    return Array.from(set);
+  }, [entities]);
+  const types = useMemo(() => {
+    const set = new Set(entities.map((e) => e.equipment_type).filter(Boolean));
+    return Array.from(set);
+  }, [entities]);
+
   return (
     <section className="p-4 sm:p-6">
+      {/* Header */}
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-2xl font-bold">Controls</h1>
-        <button
-          type="button"
-          onClick={loadAll}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
-        >
-          <RefreshCcw size={16} /> Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold">Controls</h1>
+          <div className="hidden sm:flex items-center gap-2">
+            <Stat label="Total tasks" value={stats.total} />
+            <Stat label="Completed" value={stats.completed} />
+            <Stat label="Overdue" value={stats.overdue} />
+            <Stat label="Compliance" value={`${stats.compliance}%`} />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={loadAll}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+          >
+            <RefreshCcw size={16} /> Refresh
+          </button>
+        </div>
       </div>
 
-      {/* Onglets */}
+      {/* Tabs */}
       <div className="flex flex-wrap gap-2 mb-4">
         <Tab active={tab === "tasks"} onClick={() => setTab("tasks")}>Tasks</Tab>
         <Tab active={tab === "catalog"} onClick={() => setTab("catalog")}>Catalog</Tab>
@@ -198,24 +276,76 @@ export default function Controls() {
 
       {/* TASKS */}
       {!loading && tab === "tasks" && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {tasks.map((t) => (
-            <Card key={t.id} className="hover:shadow-md transition cursor-pointer" onClick={() => handleSelectTask(t.id)}>
-              <CardBody>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="font-semibold">{t.task_name}</div>
-                  <Badge
-                    tone={t.status === "Overdue" ? "danger" : t.status === "Completed" ? "ok" : "info"}
-                  >
-                    {t.status}
-                  </Badge>
+        <>
+          {/* Filtres */}
+          <Card className="mb-4">
+            <CardBody className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div className="flex items-center gap-2 w-full md:w-1/2">
+                <div className="relative w-full">
+                  <Search size={16} className="absolute left-2 top-2.5 text-gray-400" />
+                  <input
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    placeholder="Search tasks…"
+                    className="pl-7 pr-3 py-2 w-full rounded-md border border-gray-300"
+                  />
                 </div>
-                <div className="text-sm text-gray-600 mt-1">Next: {t.next_control || "—"}</div>
-              </CardBody>
-            </Card>
-          ))}
-          {tasks.length === 0 && <div className="text-gray-500">No tasks</div>}
-        </div>
+                <button
+                  type="button"
+                  onClick={() => setQ("")}
+                  className="px-3 py-2 rounded-md bg-gray-100 text-gray-700 hover:bg-gray-200"
+                >
+                  Clear
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <Filter size={16} className="text-gray-500" />
+                  <select className="border rounded-md px-2 py-1" value={fStatus} onChange={(e)=>setFStatus(e.target.value)}>
+                    <option value="">Status</option>
+                    <option>Planned</option>
+                    <option>Completed</option>
+                    <option>Overdue</option>
+                  </select>
+                  <select className="border rounded-md px-2 py-1" value={fBuilding} onChange={(e)=>setFBuilding(e.target.value)}>
+                    <option value="">Building</option>
+                    {buildings.map((b)=> <option key={b} value={b}>{b}</option>)}
+                  </select>
+                  <select className="border rounded-md px-2 py-1" value={fType} onChange={(e)=>setFType(e.target.value)}>
+                    <option value="">Type</option>
+                    {types.map((t)=> <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+
+          {/* Liste */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {tasks.map((t) => (
+              <Card key={t.id} className="hover:shadow-md transition cursor-pointer" onClick={() => handleSelectTask(t.id)}>
+                <CardBody>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="font-semibold">{t.task_name}</div>
+                    <Badge
+                      tone={t.status === "Overdue" ? "danger" : t.status === "Completed" ? "ok" : "info"}
+                    >
+                      {t.status}
+                    </Badge>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    Next: {t.next_control || "—"}
+                  </div>
+                </CardBody>
+              </Card>
+            ))}
+            {tasks.length === 0 && (
+              <div className="text-gray-600">
+                No tasks — Assure-toi que la **sync** a bien importé Switchboard/HV/ATEX et que la TSD a généré les contrôles.
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* CATALOG */}
@@ -265,21 +395,53 @@ export default function Controls() {
                       {selectedTask.status} — Next: {selectedTask.next_control || "—"}
                     </div>
                   </div>
-                  <label className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-green-600 text-white hover:bg-green-700 cursor-pointer">
-                    <Upload size={16} />
-                    <span>Upload</span>
-                    <input type="file" className="hidden" multiple onChange={(e) => handleUpload(e.target.files)} />
-                  </label>
+                  <div className="flex gap-2">
+                    <label className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-green-600 text-white hover:bg-green-700 cursor-pointer">
+                      <Upload size={16} />
+                      <span>Upload</span>
+                      <input type="file" className="hidden" multiple onChange={(e) => handleUpload(e.target.files)} />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={callAnalyze}
+                      disabled={aiBusy || !attachments.length}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                      title="Analyser automatiquement les PJ (extraction de valeurs, safety)"
+                    >
+                      <ImageDown size={16} /> Analyze
+                    </button>
+                    <button
+                      type="button"
+                      onClick={callAssistant}
+                      disabled={aiBusy}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
+                      title="Assistant: comment réaliser le test ?"
+                    >
+                      <MessageSquareText size={16} /> Assistant
+                    </button>
+                  </div>
                 </div>
 
-                {/* Résultats & IA */}
+                {/* Zone drag & drop */}
+                <div
+                  ref={dropRef}
+                  className={`mt-4 border-2 border-dashed rounded-lg p-4 text-center ${
+                    isDropping ? "border-blue-500 bg-blue-50" : "border-gray-300 bg-gray-50"
+                  }`}
+                >
+                  Glisser-déposer ici vos photos (IR, manomètre, etc.) ou documents (PDF, rapports…)
+                </div>
+
+                {/* Résultats & champs dynamiques */}
                 {taskDetails?.tsd_item && (
                   <div className="mt-4 border rounded-lg p-3 bg-gray-50">
                     <div className="font-medium">{taskDetails.tsd_item.label}</div>
                     <div className="text-sm text-gray-600">Type: {taskDetails.tsd_item.type}</div>
-                    <div className="text-sm mt-2">{taskDetails.procedure_md || taskDetails.tsd_item.procedure_md}</div>
+                    <div className="text-sm mt-2 whitespace-pre-line">
+                      {taskDetails.procedure_md || taskDetails.tsd_item.procedure_md}
+                    </div>
 
-                    {/* Champ dynamique simple */}
+                    {/* Champ dynamique */}
                     {taskDetails.tsd_item.type === "number" && (
                       <div className="mt-3">
                         <label className="block text-sm text-gray-700 mb-1">
@@ -308,36 +470,12 @@ export default function Controls() {
                       </label>
                     )}
 
-                    <div className="mt-3 flex items-center gap-3">
-                      <label className="text-sm">AI Risk Score</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="1"
-                        step="0.01"
-                        className="h-9 w-24 rounded-md border border-gray-300 px-2"
-                        value={aiRiskScore ?? ""}
-                        onChange={(e) => setAiRiskScore(e.target.value === "" ? null : Number(e.target.value))}
-                      />
-                      <button
-                        type="button"
-                        onClick={analyzePhotos}
-                        disabled={aiBusy || !attachments.length}
-                        className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                      >
-                        {aiBusy ? "Analyzing..." : "Analyze Photos"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={getAIAssistant}
-                        disabled={aiBusy}
-                        className="px-3 py-2 rounded-md bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50"
-                      >
-                        {aiBusy ? "Thinking..." : "AI Advice"}
-                      </button>
-                    </div>
-
-                    {aiReply && <div className="mt-2 text-sm text-gray-800">{aiReply}</div>}
+                    {aiReply && (
+                      <div className="mt-3 p-3 rounded-md bg-white border">
+                        <div className="text-sm font-semibold mb-1">AI Suggestions</div>
+                        <div className="text-sm whitespace-pre-line">{aiReply}</div>
+                      </div>
+                    )}
 
                     <div className="mt-4 flex justify-end">
                       <button
@@ -356,7 +494,7 @@ export default function Controls() {
                   <div className="font-medium mb-2">Attachments</div>
                   <ul className="divide-y">
                     {attachments.map((a) => (
-                      <li key={a.id} className="py-2 flex items-center justify-between">
+                      <li key={a.id} className="py-2 flex items-center justify-between gap-3">
                         <a
                           className="text-blue-600 underline break-all"
                           href={`/api/controls/tasks/${selectedTask.id}/attachments/${a.id}`}
@@ -368,6 +506,7 @@ export default function Controls() {
                           type="button"
                           onClick={() => handleDeleteAttachment(a.id)}
                           className="text-red-600 hover:text-red-800"
+                          title="Supprimer la pièce jointe"
                         >
                           <X size={16} />
                         </button>
@@ -412,12 +551,47 @@ export default function Controls() {
 
       {/* HISTORY */}
       {!loading && tab === "history" && (
-        <div className="text-gray-500">TODO: brancher api.controls.history() et afficher les résultats</div>
+        <Card>
+          <CardBody>
+            <div className="text-sm text-gray-700 mb-2">Dernières opérations</div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-gray-50">
+                    <th className="py-2 px-2 text-left">Date</th>
+                    <th className="py-2 px-2 text-left">Task</th>
+                    <th className="py-2 px-2 text-left">User</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((h) => (
+                    <tr key={h.id} className="border-b">
+                      <td className="py-2 px-2">{new Date(h.date).toLocaleString()}</td>
+                      <td className="py-2 px-2">{h.task_name || `#${h.task_id}`}</td>
+                      <td className="py-2 px-2">{h.user || "—"}</td>
+                    </tr>
+                  ))}
+                  {history.length === 0 && (
+                    <tr>
+                      <td className="py-4 px-2 text-gray-500" colSpan={3}>No history</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       {/* ANALYTICS */}
       {!loading && tab === "analytics" && (
-        <div className="text-gray-500">TODO: indicateurs (total/completed/open/overdue, taux compliance, etc.)</div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Stat label="Total tasks" value={stats.total} />
+          <Stat label="Completed" value={stats.completed} />
+          <Stat label="Overdue" value={stats.overdue} />
+          <Stat label="Planned" value={stats.planned} />
+          <Stat label="Compliance" value={`${stats.compliance}%`} />
+        </div>
       )}
     </section>
   );
