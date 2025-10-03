@@ -1,4 +1,4 @@
-// server_oibt.js
+// server_oibt.js (ESM)
 import express from "express";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
@@ -107,7 +107,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_oibt_projfiles_site ON oibt_project_files(site);
   `);
 
-  // Auto-migration douce si tables déjà existantes
+  // Auto-migration douce si tables déjà existantes (colonnes diverses)
   await pool.query(`
     ALTER TABLE oibt_periodics
       ADD COLUMN IF NOT EXISTS report_url TEXT,
@@ -128,6 +128,14 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS confirmation_received_at TIMESTAMPTZ,
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
   `);
+
+  /* >>> Ajout YEAR comme demandé <<< */
+  await pool.query(`ALTER TABLE oibt_projects  ADD COLUMN IF NOT EXISTS year INTEGER;`);
+  await pool.query(`ALTER TABLE oibt_periodics ADD COLUMN IF NOT EXISTS year INTEGER;`);
+
+  // Backfill pour avoir des années cohérentes tout de suite
+  await pool.query(`UPDATE oibt_projects  SET year = EXTRACT(YEAR FROM created_at)::int WHERE year IS NULL;`);
+  await pool.query(`UPDATE oibt_periodics SET year = EXTRACT(YEAR FROM created_at)::int WHERE year IS NULL;`);
 }
 ensureSchema().catch(e => console.error("[OIBT SCHEMA]", e));
 
@@ -190,7 +198,7 @@ app.get("/api/oibt/projects", async (req, res) => {
   }
 });
 
-// CREATE (4 étapes visibles d’emblée)
+// CREATE (4 étapes visibles d’emblée) + YEAR
 app.post("/api/oibt/projects", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -204,9 +212,11 @@ app.post("/api/oibt/projects", async (req, res) => {
       { key: "reception",  name: "Contrôle de réception", done: false, due: null },
     ];
 
+    const year = req.body?.year ?? new Date().getFullYear();
+
     const r = await pool.query(
-      `INSERT INTO oibt_projects (site, title, status) VALUES ($1,$2,$3) RETURNING *`,
-      [site, title, JSON.stringify(baseActions)]
+      `INSERT INTO oibt_projects (site, title, status, year) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [site, title, JSON.stringify(baseActions), year]
     );
     res.status(201).json(r.rows[0]);
   } catch (e) {
@@ -215,7 +225,7 @@ app.post("/api/oibt/projects", async (req, res) => {
   }
 });
 
-// UPDATE (+6 mois quand “Rapport de sécurité” passe à done)
+// UPDATE (+6 mois quand “Rapport de sécurité” passe à done) + YEAR
 app.put("/api/oibt/projects/:id", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -255,9 +265,11 @@ app.put("/api/oibt/projects/:id", async (req, res) => {
       }
     }
 
+    const newYear = req.body?.year ?? null;
+
     const r = await pool.query(
-      `UPDATE oibt_projects SET status=$1 WHERE id=$2 AND site=$3 RETURNING *`,
-      [JSON.stringify(next), id, site]
+      `UPDATE oibt_projects SET status=$1, year=COALESCE($4, year) WHERE id=$2 AND site=$3 RETURNING *`,
+      [JSON.stringify(next), id, site, newYear]
     );
     res.json(r.rows[0]);
   } catch (e) {
@@ -334,7 +346,7 @@ app.get("/api/oibt/projects/:id/download", async (req, res) => {
 /* ------------------------------------------------------------------ */
 /*                              PERIODICS                             */
 /* ------------------------------------------------------------------ */
-// LIST (retourne flags + timestamps pour alertes)
+// LIST (retourne flags + timestamps pour alertes) + YEAR
 app.get("/api/oibt/periodics", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -342,7 +354,7 @@ app.get("/api/oibt/periodics", async (req, res) => {
 
     const { rows } = await pool.query(
       q
-        ? `SELECT id, site, building,
+        ? `SELECT id, site, building, year,
                  report_received, defect_report_received, confirmation_received,
                  report_received_at, defect_report_received_at, confirmation_received_at,
                  created_at, updated_at,
@@ -352,7 +364,7 @@ app.get("/api/oibt/periodics", async (req, res) => {
            FROM oibt_periodics
            WHERE site=$1 AND LOWER(building) LIKE $2
            ORDER BY created_at DESC`
-        : `SELECT id, site, building,
+        : `SELECT id, site, building, year,
                  report_received, defect_report_received, confirmation_received,
                  report_received_at, defect_report_received_at, confirmation_received_at,
                  created_at, updated_at,
@@ -372,21 +384,23 @@ app.get("/api/oibt/periodics", async (req, res) => {
   }
 });
 
-// CREATE
+// CREATE + YEAR
 app.post("/api/oibt/periodics", async (req, res) => {
   try {
     const site = siteOf(req);
     const building = String(req.body?.building || "").trim();
     if (!building) return res.status(400).json({ error: "Missing building" });
 
+    const year = req.body?.year ?? new Date().getFullYear();
+
     const { rows } = await pool.query(
-      `INSERT INTO oibt_periodics (site, building) VALUES ($1,$2) RETURNING
-        id, site, building,
+      `INSERT INTO oibt_periodics (site, building, year) VALUES ($1,$2,$3) RETURNING
+        id, site, building, year,
         report_received, defect_report_received, confirmation_received,
         report_received_at, defect_report_received_at, confirmation_received_at,
         created_at, updated_at,
         false AS has_report, false AS has_defect, false AS has_confirmation`,
-      [site, building]
+      [site, building, year]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -395,12 +409,13 @@ app.post("/api/oibt/periodics", async (req, res) => {
   }
 });
 
-// UPDATE (report/defect/confirmation flags + timestamps intelligents)
+// UPDATE (report/defect/confirmation flags + timestamps intelligents) + YEAR
 app.put("/api/oibt/periodics/:id", async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
     const { report_received, defect_report_received, confirmation_received } = req.body;
+    const newYear = req.body?.year ?? null;
 
     // On met à jour les timestamps uniquement quand ça passe à TRUE
     const { rows } = await pool.query(
@@ -412,16 +427,17 @@ app.put("/api/oibt/periodics/:id", async (req, res) => {
          defect_report_received_at = CASE WHEN $2 IS TRUE AND (defect_report_received IS DISTINCT FROM TRUE) THEN NOW() ELSE defect_report_received_at END,
          confirmation_received = COALESCE($3, confirmation_received),
          confirmation_received_at = CASE WHEN $3 IS TRUE AND (confirmation_received IS DISTINCT FROM TRUE) THEN NOW() ELSE confirmation_received_at END,
+         year = COALESCE($4, year),
          updated_at = NOW()
-       WHERE id=$4 AND site=$5
-       RETURNING id, site, building,
+       WHERE id=$5 AND site=$6
+       RETURNING id, site, building, year,
          report_received, defect_report_received, confirmation_received,
          report_received_at, defect_report_received_at, confirmation_received_at,
          created_at, updated_at,
          (report_filename IS NOT NULL OR report_url IS NOT NULL) AS has_report,
          (defect_filename IS NOT NULL) AS has_defect,
          (confirmation_filename IS NOT NULL) AS has_confirmation`,
-      [report_received, defect_report_received, confirmation_received, id, site]
+      [report_received, defect_report_received, confirmation_received, newYear, id, site]
     );
     if (!rows.length) return res.status(404).json({ error: "Not found" });
     res.json(rows[0]);
@@ -466,7 +482,7 @@ app.post("/api/oibt/periodics/:id/upload", upload.single("file"), async (req, re
       `UPDATE oibt_periodics
        SET ${setCols}, updated_at=NOW()
        WHERE id=$4 AND site=$5
-       RETURNING id, site, building,
+       RETURNING id, site, building, year,
          report_received, defect_report_received, confirmation_received,
          report_received_at, defect_report_received_at, confirmation_received_at,
          created_at, updated_at,
