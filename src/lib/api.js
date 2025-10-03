@@ -147,6 +147,45 @@ export const api = {
     health: () => get("/api/diagram/health"),
   },
 
+  /** ------- CONTROLS (NOUVEAU) ------- */
+  controls: {
+    // Catalogue (équipements)
+    listEntities: (params) => get("/api/controls/catalog", params),
+    createEntity: (payload) => post("/api/controls/catalog", payload),
+    removeEntity: (id) => del(`/api/controls/catalog/${id}`),
+
+    // Tâches
+    listTasks: (params) => get("/api/controls/tasks", params),
+    getTask: (id) => get(`/api/controls/tasks/${id}/details`),
+    completeTask: (id, payload) => post(`/api/controls/tasks/${id}/complete`, payload),
+
+    // Pièces jointes
+    uploadAttachment: (id, formData) => upload(`/api/controls/tasks/${id}/upload`, formData),
+    listAttachments: (id) => get(`/api/controls/tasks/${id}/attachments`),
+    // Pour télécharger un fichier, utilise plutôt un <a href> direct côté UI :
+    // `/api/controls/tasks/${taskId}/attachments/${attachmentId}`
+
+    // Not Present
+    listNotPresent: (params) => get("/api/controls/not-present", params),
+    declareNotPresent: (payload) => post("/api/controls/not-present", payload),
+    assessNotPresent: (id, payload) => post(`/api/controls/not-present/${id}/assess`, payload),
+
+    // Librairie TSD
+    library: () => get("/api/controls/library"),
+
+    // Génération / Sync
+    sync: (payload) => post("/api/controls/sync", payload),
+    generate: (payload) => post("/api/controls/generate", payload),
+
+    // Historique & Records
+    history: (params) => get("/api/controls/history", params),
+    records: (params) => get("/api/controls/records", params),
+
+    // IA
+    visionScore: (formData) => upload("/api/controls/ai/vision-score", formData),
+    assistant: (payload) => post("/api/controls/ai/assistant", payload),
+  },
+
   /** ------- OIBT ------- */
   oibt: {
     // Projets (avis / protocole / rapport / réception)
