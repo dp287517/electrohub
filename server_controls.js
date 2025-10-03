@@ -420,10 +420,10 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
   res.json({ ...t, tsd_item });
 });
 
+// ---- COMPLETE TASK
 app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    the: // (no-op label to avoid accidental "the" typo)
     const { user = "tech", results = {}, ai_risk_score = null } = req.body || {};
     const { rows: trows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
     if (!trows.length) return res.status(404).json({ error: "Not found" });
@@ -436,7 +436,7 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [JSON.stringify(results || {}), todayISO(), addMonths(todayISO(), t.frequency_months || 12), id]
     );
 
-    // Historique + Record + Marquer "fait" sur l'entité
+    // Historique + Record + marquer "fait" sur l'entité
     await pool.query(
       "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
       [t.site || "Default", id, t.task_name, user, "Completed", JSON.stringify({ ai_risk_score, results })]
