@@ -1,6 +1,6 @@
 // server_controls.js — Controls backend complet (production-ready)
-// Features : Sync (Switchboard/HV/ATEX) → Entities → Tasks depuis TSD, Attachments (multi),
-// AI analyze/assistant, Catalog/Not-Present/History/Records, Filters, Health.
+// Features : Sync (Switchboard/HV/ATEX) → Entities → Tasks (TSD), Tree (building→groups→entities),
+// Attachments (multi + label), AI analyze/assistant, Catalog/Not-Present/History/Records, Filters, Health.
 // IMPORTANT : écoute UNIQUEMENT sur CONTROLS_PORT (ou 3011). Ne jamais utiliser PORT ici.
 
 import express from "express";
@@ -28,7 +28,7 @@ app.use(helmet());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser());
 
-// CORS permissif (si besoin multi-origines)
+// CORS permissif
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -78,7 +78,8 @@ async function ensureSchema() {
       code TEXT,
       done JSONB DEFAULT '{}'::jsonb,   -- { "<task_code>": "YYYY-MM-DD", ... }
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      parent_code TEXT                 -- (nullable) code du switchboard parent pour un device
     );
   `);
 
@@ -106,7 +107,7 @@ async function ensureSchema() {
       next_control DATE,
       status TEXT DEFAULT 'Planned',  -- Planned | Completed | Overdue
       value_type TEXT DEFAULT 'checklist',
-      result_schema JSONB,            -- { field, type, unit, comparator, threshold }
+      result_schema JSONB,            -- { field, type, unit, comparator, threshold, options? }
       procedure_md TEXT,
       hazards_md TEXT,
       ppe_md TEXT,
@@ -140,6 +141,7 @@ async function ensureSchema() {
       size INTEGER,
       mimetype TEXT,
       data BYTEA,
+      label TEXT,                      -- (nullable) tag: "safety", "pre", "during", ...
       uploaded_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -169,7 +171,6 @@ async function ensureSchema() {
   `);
 
   // === ALTER (rendre compatible les anciennes bases) ===
-  // controls_history : ajouter la colonne "site" si manquante
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_history ALTER COLUMN site SET DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
@@ -178,7 +179,6 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS action TEXT;`);
 
-  // controls_tasks : colonnes parfois manquantes dans d’anciennes versions
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS value_type TEXT DEFAULT 'checklist';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS result_schema JSONB;`);
@@ -193,15 +193,13 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Planned';`);
 
-  // controls_entities : colonne "done" ou "updated_at" parfois absentes
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
 
-  // controls_records : colonne "site" si manquante
   await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-
-  // controls_not_present : colonne "site" si manquante
   await pool.query(`ALTER TABLE controls_not_present ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
 
   // Index idempotents
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
@@ -254,11 +252,13 @@ async function loadSwitchboards(site="Default") {
     });
   }
   for (const d of (devices?.data || [])) {
+    const parent_code = d.switchboard_code || d.board_code || d.parent_code || d.parent || null;
     out.push({
       site, building: d.building || d.building_code || "B00",
       equipment_type: "LV_DEVICE",
       name: d.name || `Device-${d.id}`,
-      code: d.code || `DEV-${d.id}`
+      code: d.code || `DEV-${d.id}`,
+      parent_code
     });
   }
   return out;
@@ -312,7 +312,7 @@ async function regenerateTasks(site="Default") {
               site, e.id, `${e.name} • ${it.label}`, it.id, it.frequency_months,
               null, todayISO(),
               'checklist',
-              JSON.stringify({ field: it.field, type: it.type, unit: it.unit, comparator: it.comparator, threshold: it.threshold }),
+              JSON.stringify({ field: it.field, type: it.type, unit: it.unit, comparator: it.comparator, threshold: it.threshold, options: it.options || null }),
               it.procedure_md || '', it.hazards_md || '', it.ppe_md || '', it.tools_md || '',
               'system'
             ]
@@ -351,16 +351,16 @@ app.post("/api/controls/sync", async (req, res) => {
       );
       if (exist.length === 0) {
         await pool.query(
-          "INSERT INTO controls_entities (site, building, equipment_type, name, code) VALUES ($1,$2,$3,$4,$5)",
-          [site, inc.building || null, inc.equipment_type, inc.name, inc.code || null]
+          "INSERT INTO controls_entities (site, building, equipment_type, name, code, parent_code) VALUES ($1,$2,$3,$4,$5,$6)",
+          [site, inc.building || null, inc.equipment_type, inc.name, inc.code || null, inc.parent_code || null]
         );
         added++;
       } else {
         const prev = exist[0];
-        if (prev.name !== inc.name || prev.building !== inc.building) {
+        if (prev.name !== inc.name || prev.building !== inc.building || prev.parent_code !== (inc.parent_code || null)) {
           await pool.query(
-            "UPDATE controls_entities SET building=$1, name=$2, updated_at=NOW() WHERE id=$3",
-            [inc.building || null, inc.name, prev.id]
+            "UPDATE controls_entities SET building=$1, name=$2, parent_code=$3, updated_at=NOW() WHERE id=$4",
+            [inc.building || null, inc.name, inc.parent_code || null, prev.id]
           );
           updated++;
         }
@@ -388,7 +388,7 @@ app.get("/api/controls/catalog", async (req, res) => {
 });
 
 app.post("/api/controls/catalog", async (req, res) => {
-  const { site="Default", building, equipment_type, name, code } = req.body || {};
+  const { site="Default", building, equipment_type, name, code, parent_code=null } = req.body || {};
   if (!equipment_type || !name) return res.status(400).json({ error: "Champs requis manquants" });
   const { rows: exist } = await pool.query(
     "SELECT id FROM controls_entities WHERE site=$1 AND code=$2",
@@ -396,8 +396,8 @@ app.post("/api/controls/catalog", async (req, res) => {
   );
   if (exist.length) return res.status(200).json({ id: exist[0].id, created: false });
   const { rows } = await pool.query(
-    "INSERT INTO controls_entities (site,building,equipment_type,name,code) VALUES ($1,$2,$3,$4,$5) RETURNING *",
-    [site, building || null, equipment_type, name, code || null]
+    "INSERT INTO controls_entities (site,building,equipment_type,name,code,parent_code) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
+    [site, building || null, equipment_type, name, code || null, parent_code]
   );
   res.status(201).json(rows[0]);
 });
@@ -413,7 +413,7 @@ app.delete("/api/controls/catalog/:id", async (req, res) => {
 app.get("/api/controls/tasks", async (req, res) => {
   try {
     const site = req.headers["x-site"] || req.query.site || "Default";
-    const { building, type, status, q, page = 1, pageSize = 200 } = req.query;
+    const { building, type, status, q, page = 1, pageSize = 200, entity_id } = req.query;
     await ensureOverdueFlags();
 
     let query = `
@@ -426,6 +426,7 @@ app.get("/api/controls/tasks", async (req, res) => {
     if (building) { query += ` AND ce.building = $${i++}`; values.push(building); }
     if (type) { query += ` AND ce.equipment_type = $${i++}`; values.push(type); }
     if (status) { query += ` AND ct.status = $${i++}`; values.push(status); }
+    if (entity_id) { query += ` AND ct.entity_id = $${i++}`; values.push(Number(entity_id)); }
     if (q) { query += ` AND (ct.task_name ILIKE $${i} OR ct.task_code ILIKE $${i})`; values.push(`%${q}%`); i++; }
 
     query += ` ORDER BY ct.next_control ASC NULLS LAST, ct.id DESC LIMIT $${i} OFFSET $${i+1}`;
@@ -500,13 +501,14 @@ app.post("/api/controls/tasks/:id/upload", upload.array("files", 20), async (req
   try {
     const id = Number(req.params.id);
     const files = req.files || [];
+    const label = req.body?.label || null; // même label pour le lot
     for (const f of files) {
       await pool.query(
-        "INSERT INTO controls_attachments (task_id, filename, size, mimetype, data) VALUES ($1,$2,$3,$4,$5)",
-        [id, f.originalname, f.size, f.mimetype, f.buffer]
+        "INSERT INTO controls_attachments (task_id, filename, size, mimetype, data, label) VALUES ($1,$2,$3,$4,$5,$6)",
+        [id, f.originalname, f.size, f.mimetype, f.buffer, label]
       );
     }
-    res.json({ uploaded: files.length });
+    res.json({ uploaded: files.length, label });
   } catch (e) {
     res.status(500).json({ error: "Erreur upload", details: e.message });
   }
@@ -515,7 +517,7 @@ app.post("/api/controls/tasks/:id/upload", upload.array("files", 20), async (req
 app.get("/api/controls/tasks/:id/attachments", async (req, res) => {
   const id = Number(req.params.id);
   const { rows } = await pool.query(
-    "SELECT id, filename, size, mimetype, uploaded_at FROM controls_attachments WHERE task_id=$1 ORDER BY uploaded_at DESC",
+    "SELECT id, filename, size, mimetype, label, uploaded_at FROM controls_attachments WHERE task_id=$1 ORDER BY uploaded_at DESC",
     [id]
   );
   res.json(rows);
@@ -707,6 +709,83 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: "Assistant error", details: e.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// TREE (building -> groups -> entities (+devices sous switchboard))
+// ---------------------------------------------------------------------------
+app.get("/api/controls/tree", async (req, res) => {
+  const site = req.headers["x-site"] || req.query.site || "Default";
+
+  const { rows: ents } = await pool.query(
+    "SELECT id, site, building, equipment_type, name, code, parent_code FROM controls_entities WHERE site=$1 ORDER BY building, equipment_type, name",
+    [site]
+  );
+
+  const { rows: counts } = await pool.query(`
+    SELECT entity_id,
+      SUM((status='Planned')::int) AS planned,
+      SUM((status='Overdue')::int) AS overdue,
+      SUM((status='Completed')::int) AS completed,
+      MIN(next_control) AS next_due
+    FROM controls_tasks
+    WHERE site=$1
+    GROUP BY entity_id
+  `, [site]);
+
+  const cMap = new Map(counts.map(r => [r.entity_id, r]));
+
+  // group by building
+  const buildings = {};
+  for (const e of ents) {
+    const b = e.building || "B00";
+    buildings[b] ||= { building: b, groups: { LV_SWITCHBOARD: [], LV_DEVICE: [], HV_EQUIPMENT: [], ATEX_EQUIPMENT: [] }, boardsByCode: {} };
+
+    // pré-indexer switchboards
+    if (e.equipment_type === "LV_SWITCHBOARD") {
+      const node = {
+        id: e.id, code: e.code, name: e.name, type: e.equipment_type,
+        counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null },
+        children: [] // devices
+      };
+      buildings[b].groups.LV_SWITCHBOARD.push(node);
+      if (e.code) buildings[b].boardsByCode[e.code] = node;
+    }
+  }
+
+  // ranger Devices sous leur parent si connu
+  for (const e of ents) {
+    const b = e.building || "B00";
+    if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b]?.boardsByCode[e.parent_code]) {
+      buildings[b].boardsByCode[e.parent_code].children.push({
+        id: e.id, code: e.code, name: e.name, type: e.equipment_type,
+        counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null }
+      });
+    }
+  }
+
+  // entités restantes (devices sans parent, HV, ATEX)
+  for (const e of ents) {
+    const b = e.building || "B00";
+    const bucket = buildings[b].groups;
+    const counts = cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null };
+
+    if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b].boardsByCode[e.parent_code]) continue;
+    if (e.equipment_type === "LV_DEVICE") bucket.LV_DEVICE.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts });
+    if (e.equipment_type === "HV_EQUIPMENT") bucket.HV_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts });
+    if (e.equipment_type === "ATEX_EQUIPMENT") bucket.ATEX_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts });
+  }
+
+  const out = Object.values(buildings).map(b => ({
+    building: b.building,
+    groups: [
+      { label: "Switchboards", type: "LV_SWITCHBOARD", entities: b.groups.LV_SWITCHBOARD },
+      { label: "Devices",      type: "LV_DEVICE",      entities: b.groups.LV_DEVICE },
+      { label: "High Voltage", type: "HV_EQUIPMENT",   entities: b.groups.HV_EQUIPMENT },
+      { label: "ATEX",         type: "ATEX_EQUIPMENT", entities: b.groups.ATEX_EQUIPMENT },
+    ]
+  }));
+  res.json(out);
 });
 
 // ---------------------------------------------------------------------------
