@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+// src/pages/Oibt.jsx
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
   Folder, FileText, CalendarClock, Download, Trash2, BarChart3,
@@ -196,6 +197,9 @@ export default function Oibt() {
   const [projFiles, setProjFiles] = useState({});   // key = `${id}:${action}` -> [{id, original_name, uploaded_at, size, mime}]
   const [perFiles, setPerFiles]   = useState({});   // key = `${id}:${type}`
 
+  // Eviter boucles d'auto-correction due
+  const fixedDueIdsRef = useRef(new Set());
+
   useEffect(() => { refreshAll(); }, []);
   async function refreshAll() {
     try {
@@ -266,6 +270,48 @@ export default function Oibt() {
     }
     return null;
   }
+  function getRapportDateObj(p) {
+    const iso = p?.last_uploads?.rapport;
+    if (!iso) return null;
+    const d = new Date(iso);
+    return isNaN(d) ? null : d;
+  }
+
+  /* ---------------------- AUTO DUE @75% (backfill persistant) ---------------------- */
+  const projectProgress = (p) => {
+    const n = (p.status || []).length || 1;
+    const done = (p.status || []).filter(a => a.done).length;
+    return Math.round((done / n) * 100);
+  };
+  function needsReceptionDue(p) {
+    const status = p.status || [];
+    const rapport = stepByKey(status, "rapport");
+    const reception = stepByKey(status, "reception");
+    // 75% typique = 3/4, mais on se base sur la logique métier :
+    return !!(rapport?.done && reception && !reception.done && !reception.due);
+  }
+
+  useEffect(() => {
+    const toFix = projects.filter(p => needsReceptionDue(p) && !fixedDueIdsRef.current.has(p.id));
+    if (!toFix.length) return;
+    (async () => {
+      for (const p of toFix) {
+        const status = [...(p.status || [])];
+        const recIdx = status.findIndex(a => (a.key === "reception") || a.name === "Contrôle de réception");
+        if (recIdx < 0) continue;
+        const rapportAt = getRapportDateObj(p);
+        const dueDate = toFR(addMonths(rapportAt || new Date(), 6));
+        status[recIdx] = { ...status[recIdx], due: dueDate };
+        try {
+          const upd = await api.oibt.updateProject(p.id, { status, year: p.year ?? getYear(p) });
+          fixedDueIdsRef.current.add(p.id);
+          setProjects(s => s.map(x => x.id === p.id ? upd : x));
+        } catch {
+          // on ignore pour ne pas boucler; on réessaiera via refreshAll manuel si besoin
+        }
+      }
+    })();
+  }, [projects]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ---------------------------- FILTERED LISTS ---------------------------- */
   const filteredProjects = useMemo(() => {
@@ -299,12 +345,7 @@ export default function Oibt() {
       });
   }, [periodics, qBuild, yearFilterPeriodics, statusFilterPeriodics]);
 
-  /* ------------------------------ PROGRESS ------------------------------ */
-  const projectProgress = (p) => {
-    const n = (p.status || []).length || 1;
-    const done = (p.status || []).filter(a => a.done).length;
-    return Math.round((done / n) * 100);
-  };
+  /* ------------------------------ PERIODIC PROGRESS ------------------------------ */
   const periodicProgress = (c) => {
     const flags = [
       c.report_received ? 1 : 0,
@@ -660,12 +701,12 @@ export default function Oibt() {
             {/* liste */}
             <div className="mt-5 grid gap-4">
               {filteredProjects.map(p => {
-                const progress = projectProgress(p);
+                const progressVal = projectProgress(p);
                 const reception = stepByKey(p.status, "reception");
                 const late = isProjectLate(p);
                 const year = p.year ?? getYear(p);
                 const expanded = expandedProjects.has(p.id);
-                const done = progress === 100;
+                const done = progressVal === 100;
                 const spor = hasSporadic(p);
                 const created = p.created_at || p.createdAt;
                 const rapportDate = getRapportDate(p);
@@ -716,19 +757,20 @@ export default function Oibt() {
                     </div>
 
                     <div className="mt-3">
-                      <Progress value={progress} />
+                      <Progress value={progressVal} />
                       <div className="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-3">
-                        <span>{progress}%</span>
+                        <span>{progressVal}%</span>
                         {rapportDate && (
                           <span className="flex items-center gap-1 text-gray-600">
                             <CalendarClock size={14} /> Rapport de sécurité déposé le {rapportDate}
                           </span>
                         )}
-                        {reception?.due && (
-                          <span className={`flex items-center gap-1 ${(!reception.done && late) ? "text-red-600" : "text-gray-600"}`}>
+                        {/* N’afficher l’échéance que si la réception n’est PAS terminée */}
+                        {reception?.due && !reception?.done && (
+                          <span className={`flex items-center gap-1 ${late ? "text-red-600" : "text-gray-600"}`}>
                             <CalendarClock size={14} />
-                            {reception.done ? <>Réception (échéance {reception.due})</> : <>Réception avant le {reception.due}</>}
-                            {!reception.done && late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
+                            Réception avant le {reception.due}
+                            {late && <span className="inline-flex items-center gap-1"><AlertTriangle size={14}/>en retard</span>}
                           </span>
                         )}
                       </div>
@@ -752,7 +794,7 @@ export default function Oibt() {
                                 <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap">
                                   <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
                                   <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
-                                  {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
+                                  {a.due && !a.done && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
                                 </label>
                                 {showUpload && <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />}
                               </div>
