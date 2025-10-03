@@ -148,6 +148,22 @@ function Tabs({ tabs, active, onChange }) {
   );
 }
 
+/* ------------------------------ DATE HELPERS ------------------------------ */
+function toFR(d) {
+  try { return d.toLocaleDateString("fr-FR"); } catch { return ""; }
+}
+function parseFR(dateStr) { // "dd/mm/yyyy" -> Date
+  if (!dateStr) return null;
+  const [d,m,y] = dateStr.split("/").map(Number);
+  if (!d || !m || !y) return null;
+  return new Date(y, m-1, d);
+}
+function addMonths(date, delta) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + delta);
+  return d;
+}
+
 /* ------------------------------ PAGE OIBT ------------------------------ */
 export default function Oibt() {
   const [tab, setTab] = useState("projects"); // projects | periodics | analysis
@@ -228,6 +244,23 @@ export default function Oibt() {
   const missingAvis = (p) => !(p.attachments?.avis);
 
   const periodicDone = (c) => !!(c.report_received && c.defect_report_received && c.confirmation_received);
+
+  /* -------------------------- RAPPORT DATE (PROJETS) -------------------------- */
+  function getRapportDate(p) {
+    // 1) si le backend expose p.last_uploads?.rapport (ISO), on le formatte
+    const iso = p?.last_uploads?.rapport;
+    if (iso) {
+      const d = new Date(iso);
+      if (!isNaN(d)) return toFR(d);
+    }
+    // 2) fallback déterministe : due(réception) - 6 mois (logique backend au moment du dépôt du rapport)
+    const rec = stepByKey(p.status, "reception");
+    if (rec?.due) {
+      const due = parseFR(rec.due);
+      if (due) return toFR(addMonths(due, -6));
+    }
+    return null;
+  }
 
   /* ---------------------------- FILTERED LISTS ---------------------------- */
   const filteredProjects = useMemo(() => {
@@ -580,6 +613,7 @@ export default function Oibt() {
                 const expanded = expandedProjects.has(p.id);
                 const done = progress === 100;
                 const spor = hasSporadic(p);
+                const rapportDate = getRapportDate(p); // << NEW
 
                 return (
                   <div key={p.id} className="p-4 rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -625,8 +659,13 @@ export default function Oibt() {
 
                     <div className="mt-3">
                       <Progress value={progress} />
-                      <div className="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-2">
+                      <div className="mt-1 text-xs text-gray-600 flex flex-wrap items-center gap-3">
                         <span>{progress}%</span>
+                        {rapportDate && (
+                          <span className="flex items-center gap-1 text-gray-600">
+                            <CalendarClock size={14} /> Rapport de sécurité déposé le {rapportDate}
+                          </span>
+                        )}
                         {reception?.due && (
                           <span className={`flex items-center gap-1 ${(!reception.done && late) ? "text-red-600" : "text-gray-600"}`}>
                             <CalendarClock size={14} />
@@ -645,6 +684,9 @@ export default function Oibt() {
                           const hasFile = !!p.attachments?.[key];
                           const accept = ".pdf,.doc,.docx,.png,.jpg,.jpeg";
                           const canUploadMulti = key !== "sporadic";
+                          const isRapport = key === "rapport";
+                          const rd = isRapport ? rapportDate : null;
+
                           return (
                             <li key={`${p.id}-${i}`} className="p-3 rounded-lg border border-gray-100 bg-gray-50">
                               <div className="flex items-center justify-between gap-3">
@@ -652,6 +694,11 @@ export default function Oibt() {
                                   <input type="checkbox" checked={!!a.done} onChange={() => toggleAction(p.id, i)} />
                                   <span className="flex items-center gap-2"><FileText className="text-gray-500" /> {a.name}</span>
                                   {a.due && <span className="text-xs text-gray-500 flex items-center gap-1"><CalendarClock size={14} /> Échéance {a.due}</span>}
+                                  {isRapport && hasFile && rd && (
+                                    <span className="text-xs text-gray-500 flex items-center gap-1 ml-2">
+                                      <CalendarClock size={14} /> Déposé le {rd}
+                                    </span>
+                                  )}
                                 </label>
                                 {key !== "sporadic" && (
                                   <Badge ok={hasFile} label={hasFile ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
