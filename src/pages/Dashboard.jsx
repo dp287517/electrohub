@@ -1,3 +1,4 @@
+// src/pages/Dashboard.jsx
 import AppCard from '../components/AppCard.jsx';
 
 const apps = [
@@ -11,6 +12,12 @@ const apps = [
   { label: 'High Voltage Equipment', to: '/app/hv', description: 'Manage HV cells, cables, transformers, busbars & analyses', icon: '⚡' },
   { label: 'Diagram', to: '/app/diagram', description: 'Interactive LV/HV map with filters & statuses (arc flash, fault level, selectivity)', icon: '📐' },
   { label: 'Maintenance Controls', to: '/app/controls', description: 'Follow-up of electrical equipment maintenance tasks', icon: '🛠️' },
+  {
+    label: 'Project',
+    to: '/app/projects',
+    description: 'Financial project management: business case, PIP, WBS, offers, orders, invoices, KPIs & AI',
+    icon: '💳'
+  },
 ];
 
 export default function Dashboard() {
