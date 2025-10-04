@@ -111,7 +111,7 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_site ON controls_entities(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_code ON controls_entities(code);`);
-  -- ensure uniqueness of (site, code) for clean UPSERT
+  // ensure uniqueness of (site, code) for clean UPSERT
   await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_controls_entities_site_code ON controls_entities(site, code);`);
 
   await pool.query(`
