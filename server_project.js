@@ -741,5 +741,5 @@ app.get("/api/projects/projects/:id/audit", async (req, res) => {
 });
 
 /* ===================== START ===================== */
-const port = process.env.PROJECTS_PORT || 3012; // <- as requested
+const port = Number(process.env.PROJECTS_PORT || 3013);
 app.listen(port, () => console.log(`Project Manager API listening on :${port}`));
