@@ -1,4 +1,4 @@
-// server_project.js (ESM) — Project Manager API
+// server_project.js (ESM) — Project Manager API (complete)
 import express from "express";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
@@ -11,7 +11,7 @@ dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
-// ---- OpenAI (optionnel)
+// ---- OpenAI (optional)
 let openai = null;
 try {
   if (process.env.OPENAI_API_KEY) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -24,7 +24,7 @@ app.use(helmet());
 app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
 
-// ---- CORS (utile en local et derrière passerelle)
+// ---- CORS (useful behind gateway or locally)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -39,7 +39,7 @@ const DEFAULT_SITE = process.env.PROJECT_DEFAULT_SITE || "Nyon";
 const siteOf = (req) =>
   (req.header("X-Site") || req.query.site || req.body?.site || "").toString() || DEFAULT_SITE;
 
-// ---- Upload (mémoire → DB BYTEA)
+// ---- Upload (memory -> DB BYTEA)
 const upload = multer({ storage: multer.memoryStorage() });
 
 /* ===================== SCHEMA ===================== */
@@ -120,7 +120,12 @@ async function ensureSchema() {
       uploaded_at TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  // Useful indexes
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_files_project ON pm_files(project_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_offers_project ON pm_offers(project_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_orders_project ON pm_orders(project_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_invoices_project ON pm_invoices(project_id);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_audit (
@@ -155,7 +160,6 @@ app.get("/api/projects/health", (_req, res) =>
   res.json({ ok: true, ts: Date.now(), openai: !!openai, schemaReady })
 );
 
-// Forcer/rejouer la création du schéma (utile en prod)
 async function tryEnsure() {
   try {
     await ensureSchema();
@@ -342,16 +346,16 @@ app.post("/api/projects/projects/:id/upload", upload.single("file"), async (req,
       [site, id, category, req.file.originalname, req.file.mimetype, req.file.buffer]
     );
 
-    // coche automatique
+    // auto-tick status
     const curr = await pool.query(`SELECT * FROM pm_status WHERE site=$1 AND project_id=$2`, [site, id]);
     const prev = curr.rows[0] || {};
     const patch = {
       business_case_done: category === "business_case" || prev.business_case_done || false,
-      pip_done: category === "pip" || prev.pip_done || false,
-      offers_received: category === "offer" || prev.offers_received || false,
-      wbs_recorded: category === "wbs" || prev.wbs_recorded || false,
-      orders_placed: category === "order" || prev.orders_placed || false,
-      invoices_received: category === "invoice" || prev.invoices_received || false,
+      pip_done:           category === "pip"          || prev.pip_done           || false,
+      offers_received:    category === "offer"        || prev.offers_received    || false,
+      wbs_recorded:       category === "wbs"          || prev.wbs_recorded       || false,
+      orders_placed:      category === "order"        || prev.orders_placed      || false,
+      invoices_received:  category === "invoice"      || prev.invoices_received  || false,
     };
     await pool.query(
       `INSERT INTO pm_status(project_id, site, business_case_done, pip_done, offers_received, wbs_recorded, orders_placed, invoices_received)
@@ -390,6 +394,7 @@ app.get("/api/projects/projects/:id/files", async (req, res) => {
   }
 });
 
+// Download endpoint (used by the front)
 app.get("/api/projects/download", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -404,7 +409,21 @@ app.get("/api/projects/download", async (req, res) => {
   }
 });
 
-/* ===================== FINANCIAL LINES (NEW) ===================== */
+// NEW: delete a file (front calls DELETE /api/projects/files/:fileId)
+app.delete("/api/projects/files/:fileId", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const fileId = Number(req.params.fileId);
+    const got = await pool.query(`DELETE FROM pm_files WHERE id=$1 AND site=$2 RETURNING project_id, filename`, [fileId, site]);
+    if (!got.rows.length) return res.status(404).json({ error: "File not found" });
+    await logAudit(site, got.rows[0].project_id, "delete_file", { file_id: fileId, filename: got.rows[0].filename });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ===================== FINANCIAL LINES ===================== */
 app.get("/api/projects/projects/:id/lines", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -441,7 +460,7 @@ app.get("/api/projects/projects/:id/lines", async (req, res) => {
   }
 });
 
-/* ===================== FINANCIAL INPUTS ===================== */
+// Create lines (already existed)
 app.post("/api/projects/projects/:id/offer", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -487,7 +506,78 @@ app.post("/api/projects/projects/:id/invoice", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-/* ===================== ANALYSIS & IA ===================== */
+// NEW: update a line (offer/order/invoice)
+app.put("/api/projects/projects/:id/offer/:lineId", async (req, res) => {
+  await updateLine("offer", req, res);
+});
+app.put("/api/projects/projects/:id/order/:lineId", async (req, res) => {
+  await updateLine("order", req, res);
+});
+app.put("/api/projects/projects/:id/invoice/:lineId", async (req, res) => {
+  await updateLine("invoice", req, res);
+});
+
+// NEW: delete a line
+app.delete("/api/projects/projects/:id/offer/:lineId", async (req, res) => {
+  await deleteLine("offer", req, res);
+});
+app.delete("/api/projects/projects/:id/order/:lineId", async (req, res) => {
+  await deleteLine("order", req, res);
+});
+app.delete("/api/projects/projects/:id/invoice/:lineId", async (req, res) => {
+  await deleteLine("invoice", req, res);
+});
+
+// helpers for lines
+async function updateLine(kind, req, res) {
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const lineId = Number(req.params.lineId);
+    const { vendor = null, amount = null } = req.body || {};
+    if (amount != null && !Number.isFinite(Number(amount))) return res.status(400).json({ error: "bad amount" });
+
+    const tables = {
+      offer: { table: "pm_offers",  dateCol: "received_at" },
+      order: { table: "pm_orders",  dateCol: "ordered_at"  },
+      invoice:{ table: "pm_invoices",dateCol: "invoiced_at" },
+    };
+    const t = tables[kind];
+    if (!t) return res.status(400).json({ error: "bad kind" });
+
+    const sql = `
+      UPDATE ${t.table}
+         SET vendor = COALESCE($1, vendor),
+             amount = COALESCE($2, amount)
+       WHERE id=$3 AND project_id=$4 AND site=$5
+       RETURNING *`;
+    const { rows:[row] } = await pool.query(sql, [vendor, amount != null ? num(amount) : null, lineId, id, site]);
+    if (!row) return res.status(404).json({ error: "line not found" });
+
+    await logAudit(site, id, `update_${kind}`, { line_id: lineId, vendor: row.vendor, amount: row.amount });
+    res.json(row);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+}
+
+async function deleteLine(kind, req, res) {
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const lineId = Number(req.params.lineId);
+
+    const tables = { offer: "pm_offers", order: "pm_orders", invoice: "pm_invoices" };
+    const table = tables[kind];
+    if (!table) return res.status(400).json({ error: "bad kind" });
+
+    const del = await pool.query(`DELETE FROM ${table} WHERE id=$1 AND project_id=$2 AND site=$3 RETURNING id`, [lineId, id, site]);
+    if (!del.rows.length) return res.status(404).json({ error: "line not found" });
+
+    await logAudit(site, id, `delete_${kind}`, { line_id: lineId });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+}
+
+/* ===================== ANALYSIS & AI ===================== */
 function analyze(fin, budget) {
   const offer = num(fin.offers_total);
   const commit = num(fin.orders_total);
@@ -526,25 +616,22 @@ app.post("/api/projects/projects/:id/assistant", async (req, res) => {
     const site = siteOf(req);
     const id = Number(req.params.id);
     const { question } = req.body || {};
-    if (!openai) return res.json({ answer: "L'IA n'est pas disponible (clé manquante)." });
+    if (!openai) return res.json({ answer: "AI not available (missing API key)." });
 
     const pQ = await pool.query(`SELECT title, wbs_number, budget_amount FROM pm_projects WHERE id=$1 AND site=$2`, [id, site]);
-    const sums = (await pool.query(
-      `SELECT COALESCE(SUM(amount),0) AS offers FROM pm_offers WHERE project_id=$1 AND site=$2`,
-      [id, site]
-    )).rows[0];
+    const sums = (await pool.query(`SELECT COALESCE(SUM(amount),0) AS offers FROM pm_offers WHERE project_id=$1 AND site=$2`, [id, site])).rows[0];
 
-    const ctx = `Projet: ${pQ.rows[0]?.title || id}
+    const ctx = `Project: ${pQ.rows[0]?.title || id}
 WBS: ${pQ.rows[0]?.wbs_number || '-'}
 Budget: ${pQ.rows[0]?.budget_amount || '-'}
-Offres: ${sums.offers}`;
+Offers: ${sums.offers}`;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.3,
       messages: [
-        { role: "system", content: "Tu es un assistant senior PMO/Contrôle de gestion. Donne des conseils concis, actionnables et chiffrés." },
-        { role: "user", content: `${ctx}\nQuestion: ${question || "Donne une analyse des risques court terme."}` },
+        { role: "system", content: "You are a senior PMO/Controlling assistant. Answer concisely with actionable and quantified advice." },
+        { role: "user", content: `${ctx}\nQuestion: ${question || "Provide a short-term risk analysis."}` },
       ],
     });
     const answer = completion.choices[0].message.content.trim();
