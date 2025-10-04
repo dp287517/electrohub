@@ -1,4 +1,4 @@
-// server_project.js (ESM) — Project Manager API (complete)
+// server_project.js (ESM) — Project Manager API (complete, with server-side filters & fixes)
 import express from "express";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
@@ -24,7 +24,7 @@ app.use(helmet());
 app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
 
-// ---- CORS (useful behind gateway or locally)
+// ---- CORS (behind gateway or local dev)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -143,6 +143,9 @@ async function ensureSchema() {
 
 /* ===================== UTILS ===================== */
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const bool = (v) => v === true || v === "1" || v === "true";
+const parseDate = (s) => (s ? new Date(s) : null);
+
 async function logAudit(site, project_id, action, meta = {}, actor = "system") {
   try {
     await pool.query(
@@ -176,18 +179,79 @@ app.post("/api/projects/admin/ensure", async (_req, res) => {
   res.json({ ok: schemaReady });
 });
 
-/* ===================== PROJECTS CRUD ===================== */
+/* ===================== PROJECTS CRUD (with server-side filters) ===================== */
+/**
+ * GET /api/projects/projects
+ * Query params (all optional):
+ *  - q: string (title ilike)
+ *  - wbs_only: 1|true
+ *  - health: ok|warn|critical
+ *  - budget_min, budget_max: number
+ *  - created_from, created_to: YYYY-MM-DD
+ *  - start_from, start_to: YYYY-MM-DD
+ *  - close_from, close_to: YYYY-MM-DD
+ *  - business_case_done, pip_done, offers_received, wbs_recorded, orders_placed, invoices_received: 1|true
+ */
 app.get("/api/projects/projects", async (req, res) => {
   try {
     const site = siteOf(req);
-    const q = String(req.query.q || "").toLowerCase().trim();
-    const { rows } = await pool.query(
-      q
-        ? `SELECT * FROM pm_projects WHERE site=$1 AND LOWER(title) LIKE $2 ORDER BY created_at DESC`
-        : `SELECT * FROM pm_projects WHERE site=$1 ORDER BY created_at DESC`,
-      q ? [site, `%${q}%`] : [site]
-    );
+    const q = String(req.query.q || "").trim();
+    const wbsOnly = bool(req.query.wbs_only);
+    const health = String(req.query.health || "").trim().toLowerCase(); // ok|warn|critical
+    const budgetMin = req.query.budget_min != null ? Number(req.query.budget_min) : null;
+    const budgetMax = req.query.budget_max != null ? Number(req.query.budget_max) : null;
 
+    const createdFrom = parseDate(req.query.created_from);
+    const createdTo   = parseDate(req.query.created_to);
+    const startFrom   = parseDate(req.query.start_from);
+    const startTo     = parseDate(req.query.start_to);
+    const closeFrom   = parseDate(req.query.close_from);
+    const closeTo     = parseDate(req.query.close_to);
+
+    const stepKeys = [
+      "business_case_done","pip_done","offers_received","wbs_recorded","orders_placed","invoices_received",
+    ];
+    const stepFilters = stepKeys.filter(k => bool(req.query[k]));
+
+    // Build WHERE with parameters
+    const where = ["p.site = $1"];
+    const params = [site];
+    let i = params.length;
+
+    if (q)               { params.push(`%${q.toLowerCase()}%`); where.push(`LOWER(p.title) LIKE $${++i}`); }
+    if (wbsOnly)         { where.push(`p.wbs_number IS NOT NULL AND p.wbs_number <> ''`); }
+    if (budgetMin != null && !Number.isNaN(budgetMin)) { params.push(budgetMin); where.push(`COALESCE(p.budget_amount,0) >= $${++i}`); }
+    if (budgetMax != null && !Number.isNaN(budgetMax)) { params.push(budgetMax); where.push(`COALESCE(p.budget_amount,0) <= $${++i}`); }
+
+    if (createdFrom)     { params.push(createdFrom); where.push(`p.created_at >= $${++i}`); }
+    if (createdTo)       { params.push(new Date(createdTo.getTime() + 24*3600*1000 - 1)); where.push(`p.created_at <= $${++i}`); }
+    if (startFrom)       { params.push(startFrom); where.push(`p.start_month >= $${++i}`); }
+    if (startTo)         { params.push(startTo); where.push(`p.start_month <= $${++i}`); }
+    if (closeFrom)       { params.push(closeFrom); where.push(`p.close_month >= $${++i}`); }
+    if (closeTo)         { params.push(closeTo); where.push(`p.close_month <= $${++i}`); }
+
+    // Steps (AND)
+    stepFilters.forEach((k) => where.push(`COALESCE(s.${k}, false) = true`));
+
+    // Health filter (based on last_analysis.health in status)
+    if (["ok","warn","critical"].includes(health)) {
+      where.push(`COALESCE(s.last_analysis->>'health','ok') = $${++i}`);
+      params.push(health);
+    }
+
+    // Query with LEFT JOIN on pm_status (to return status + enable step/health filters)
+    const sql = `
+      SELECT p.*,
+             s.business_case_done, s.pip_done, s.offers_received, s.wbs_recorded, s.orders_placed, s.invoices_received,
+             s.last_analysis
+        FROM pm_projects p
+   LEFT JOIN pm_status s ON s.project_id = p.id AND s.site = p.site
+       WHERE ${where.join(" AND ")}
+       ORDER BY p.created_at DESC
+    `;
+    const { rows } = await pool.query(sql, params);
+
+    // Sums per project (offers/orders/invoices)
     const ids = rows.map((r) => r.id);
     const sums = ids.length
       ? await pool.query(
@@ -201,16 +265,33 @@ app.get("/api/projects/projects", async (req, res) => {
           [site, ids]
         )
       : { rows: [] };
-    const byId = Object.fromEntries(sums.rows.map((r) => [r.project_id, r]));
+    const sumsById = Object.fromEntries(sums.rows.map((r) => [r.project_id, r]));
 
-    const st = await pool.query(`SELECT * FROM pm_status WHERE site=$1 AND project_id = ANY($2)`, [site, ids]);
-    const statusBy = Object.fromEntries(st.rows.map((r) => [r.project_id, r]));
-
+    // Build response like before (status object inline)
     res.json({
       data: rows.map((r) => ({
-        ...r,
-        kpi: byId[r.id] || { offers_total: 0, orders_total: 0, invoices_total: 0 },
-        status: statusBy[r.id] || null,
+        id: r.id,
+        site: r.site,
+        title: r.title,
+        wbs_number: r.wbs_number,
+        budget_amount: r.budget_amount,
+        prep_month: r.prep_month,
+        start_month: r.start_month,
+        close_month: r.close_month,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        kpi: sumsById[r.id] || { offers_total: 0, orders_total: 0, invoices_total: 0 },
+        status: {
+          project_id: r.id,
+          site: r.site,
+          business_case_done: r.business_case_done ?? false,
+          pip_done: r.pip_done ?? false,
+          offers_received: r.offers_received ?? false,
+          wbs_recorded: r.wbs_recorded ?? false,
+          orders_placed: r.orders_placed ?? false,
+          invoices_received: r.invoices_received ?? false,
+          last_analysis: r.last_analysis || null,
+        },
       })),
     });
   } catch (e) {
@@ -409,7 +490,7 @@ app.get("/api/projects/download", async (req, res) => {
   }
 });
 
-// NEW: delete a file (front calls DELETE /api/projects/files/:fileId)
+// Delete a file
 app.delete("/api/projects/files/:fileId", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -460,7 +541,7 @@ app.get("/api/projects/projects/:id/lines", async (req, res) => {
   }
 });
 
-// Create lines (already existed)
+// Create lines
 app.post("/api/projects/projects/:id/offer", async (req, res) => {
   try {
     const site = siteOf(req);
@@ -506,7 +587,7 @@ app.post("/api/projects/projects/:id/invoice", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// NEW: update a line (offer/order/invoice)
+// Update a line (offer/order/invoice)
 app.put("/api/projects/projects/:id/offer/:lineId", async (req, res) => {
   await updateLine("offer", req, res);
 });
@@ -517,7 +598,7 @@ app.put("/api/projects/projects/:id/invoice/:lineId", async (req, res) => {
   await updateLine("invoice", req, res);
 });
 
-// NEW: delete a line
+// Delete a line
 app.delete("/api/projects/projects/:id/offer/:lineId", async (req, res) => {
   await deleteLine("offer", req, res);
 });
@@ -639,6 +720,26 @@ Offers: ${sums.offers}`;
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/* ===================== AUDIT (optional endpoint) ===================== */
+app.get("/api/projects/projects/:id/audit", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
+    const limit = Math.min(Number(req.query.limit || 100), 500);
+    const { rows } = await pool.query(
+      `SELECT id, action, meta, at, actor
+         FROM pm_audit
+        WHERE site=$1 AND project_id=$2
+        ORDER BY at DESC
+        LIMIT $3`,
+      [site, id, limit]
+    );
+    res.json({ data: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 /* ===================== START ===================== */
-const port = process.env.PROJECTS_PORT || 3013;
+const port = process.env.PROJECTS_PORT || 3012; // <- as requested
 app.listen(port, () => console.log(`Project Manager API listening on :${port}`));
