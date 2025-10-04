@@ -1,16 +1,17 @@
 // src/pages/Project.jsx
 import { useEffect, useMemo, useState } from 'react';
 import { get, post } from '../lib/api.js';
-import { Plus, UploadCloud, Download, BarChart3, AlertTriangle, CheckCircle2, XCircle, Paperclip, Bot } from 'lucide-react';
+import { Plus, UploadCloud, BarChart3, AlertTriangle, CheckCircle2, XCircle, Paperclip, Bot } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend
 } from 'chart.js';
+
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
 const inputCls = 'w-full bg-white border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500';
-const btn = 'px-3 py-2 rounded bg-gray-900 text-white hover:bg-black/90';
-const btnPrimary = 'px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700';
+const btn = 'px-3 py-2 rounded bg-gray-900 text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed';
+const btnPrimary = 'px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed';
 
 function DropInput({ label = 'Glissez-déposez ou cliquez', onFiles, accept = undefined, multiple = true }) {
   const [drag, setDrag] = useState(false);
@@ -49,10 +50,21 @@ export default function Project() {
   }
 
   async function create() {
-    if (!title.trim()) return;
-    const row = await post('/api/projects/projects', { title: title.trim() });
-    setTitle('');
-    setList(s=> [row, ...s]);
+    const name = title.trim();
+    if (!name) return;
+    try {
+      setBusy(true);
+      const row = await post('/api/projects/projects', { title: name });
+      setTitle('');
+      setQ('');                         // évite que le filtre masque le nouveau projet
+      setList(s => [row, ...s]);        // feedback immédiat dans la grille
+      await openProject(row);           // ouvre la fiche nouvellement créée
+    } catch (e) {
+      console.error(e);
+      alert('Création impossible : ' + (e?.message || e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function openProject(p) {
@@ -68,7 +80,8 @@ export default function Project() {
   async function uploadFiles(p, category, files) {
     for (const file of files) {
       const fd = new FormData(); fd.append('file', file);
-      await fetch(`/api/projects/projects/${p.id}/upload?category=${encodeURIComponent(category)}`, { method:'POST', body: fd, credentials:'include', headers: {} });
+      // utiliser post() pour conserver l'en-tête X-Site côté client
+      await post(`/api/projects/projects/${p.id}/upload?category=${encodeURIComponent(category)}`, fd);
     }
     await openProject(p);
   }
@@ -103,13 +116,21 @@ export default function Project() {
     <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
       <header className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-2"><BarChart3/> Project Manager</h1>
-        <p className="text-gray-600">Cartes type « carte bancaire », gestion financière (offres, commandes, factures), WBS, pièces jointes en drag‑&‑drop, audit, KPI, alertes, IA.</p>
+        <p className="text-gray-600">Cartes type « carte bancaire », gestion financière (offres, commandes, factures), WBS, pièces jointes en drag-&-drop, audit, KPI, alertes, IA.</p>
       </header>
 
       <div className="flex gap-2 flex-wrap items-center mb-4">
         <input className={inputCls} placeholder="Filtrer par titre…" value={q} onChange={e=>setQ(e.target.value)} />
-        <input className={inputCls} placeholder="Nouveau projet" value={title} onChange={e=>setTitle(e.target.value)} />
-        <button className={btnPrimary} onClick={create}><Plus className="inline mr-1"/>Créer</button>
+        <input
+          className={inputCls}
+          placeholder="Nouveau projet"
+          value={title}
+          onChange={e=>setTitle(e.target.value)}
+          onKeyDown={(e)=>{ if(e.key==='Enter') create(); }}
+        />
+        <button className={btnPrimary} onClick={create} disabled={busy || !title.trim()}>
+          <Plus className="inline mr-1"/>Créer
+        </button>
         <button className={btn} onClick={load} disabled={busy}>Rafraîchir</button>
       </div>
 
@@ -122,7 +143,7 @@ export default function Project() {
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-lg font-semibold">{p.title}</div>
-                  <div className="text-xs text-gray-500">WBS : {p.wbs_number || '—'} · Budget : {p.budget_amount || '—'}</div>
+                  <div className="text-xs text-gray-500">WBS : {p.wbs_number || '—'} · Budget : {p.budget_amount || '—'}</div>
                 </div>
                 <button className="text-blue-600 hover:underline" onClick={()=>openProject(p)}>Voir</button>
               </div>
@@ -229,12 +250,26 @@ function AddLine({ title, onSubmit }) {
   );
 }
 
+function formatMonth(d) {
+  const dt = new Date(d);
+  return `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getFullYear()).slice(-2)}`;
+}
+
 function ProjectCharts({ analysis, lines }) {
+  // Construire des labels mensuels sans adapter "time"
   const data = useMemo(()=>{
-    const spent = (lines?.invoices||[]).slice().reverse();
-    let cum = 0; const points = spent.map(x=>{ cum += Number(x.amount)||0; return { x: new Date(x.invoiced_at||Date.now()), y: cum }; });
+    const inv = (lines?.invoices||[]).slice().reverse();
+    let cum = 0;
+    const labels = [];
+    const values = [];
+    for (const x of inv) {
+      cum += Number(x.amount) || 0;
+      labels.push(formatMonth(x.invoiced_at || Date.now()));
+      values.push(cum);
+    }
     return {
-      datasets: [{ label: 'Cumul factures (€)', data: points, parsing:false, tension:0.2 }]
+      labels,
+      datasets: [{ label: 'Cumul factures (€)', data: values, tension: 0.2 }]
     };
   }, [lines]);
 
@@ -242,7 +277,7 @@ function ProjectCharts({ analysis, lines }) {
     <div className="grid gap-4">
       <div className="p-4 rounded border bg-white">
         <div className="font-semibold mb-2">Courbe cumulative des factures</div>
-        <Line data={data} options={{ responsive:true, scales:{ x:{ type:'time', time:{ unit:'month' } }, y:{ beginAtZero:true }}}} />
+        <Line data={data} options={{ responsive:true, scales:{ y:{ beginAtZero:true }}}} />
       </div>
       {analysis && (
         <div className="grid sm:grid-cols-2 gap-3">
