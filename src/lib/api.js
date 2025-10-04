@@ -1,7 +1,6 @@
 /** Base API */
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
 
-
 /** Get current site from client-side stored profile (fallback to "Default") */
 function currentSite() {
   try {
@@ -128,7 +127,7 @@ export const api = {
     tree: (params) => get("/api/controls/tree", { site: currentSite(), ...(params || {}) }),
     catalog: (params) => get("/api/controls/catalog", { site: currentSite(), ...(params || {}) }),
 
-    // Sync: lit toutes les sources (read_site=*) et insère sous le site courant
+    // Sync (optionnel; laissé pour compat si bouton existe côté UI)
     sync: ({ site = currentSite(), source = "db" } = {}) =>
       post(`/api/controls/sync?source=${encodeURIComponent(source)}&read_site=*`, { site }),
 
