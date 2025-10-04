@@ -1,4 +1,4 @@
-// server_project.js (ESM)
+// server_project.js (ESM) — Project Manager API
 import express from "express";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
@@ -11,12 +11,10 @@ dotenv.config();
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 
-// --- OpenAI (optionnel)
+// ---- OpenAI (optionnel)
 let openai = null;
 try {
-  if (process.env.OPENAI_API_KEY) {
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  }
+  if (process.env.OPENAI_API_KEY) openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 } catch (e) {
   console.warn("[PROJECT] OpenAI init failed:", e.message);
 }
@@ -26,7 +24,7 @@ app.use(helmet());
 app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
 
-// --- CORS (utile en local et derrière proxy permissif)
+// ---- CORS (utile en local et derrière passerelle)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -36,18 +34,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// --- Multi-site (comme OIBT)
+// ---- Multi-site
 const DEFAULT_SITE = process.env.PROJECT_DEFAULT_SITE || "Nyon";
-function siteOf(req) {
-  return (req.header("X-Site") || req.query.site || req.body?.site || "").toString() || DEFAULT_SITE;
-}
+const siteOf = (req) =>
+  (req.header("X-Site") || req.query.site || req.body?.site || "").toString() || DEFAULT_SITE;
 
-// --- Upload (mémoire → DB BYTEA)
+// ---- Upload (mémoire → DB BYTEA)
 const upload = multer({ storage: multer.memoryStorage() });
 
 /* ===================== SCHEMA ===================== */
 async function ensureSchema() {
-  // pm_projects
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_projects (
       id SERIAL PRIMARY KEY,
@@ -64,7 +60,6 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_projects_site ON pm_projects(site);`);
 
-  // pm_status
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_status (
       project_id INTEGER REFERENCES pm_projects(id) ON DELETE CASCADE,
@@ -80,7 +75,6 @@ async function ensureSchema() {
     );
   `);
 
-  // pm_offers
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_offers (
       id SERIAL PRIMARY KEY,
@@ -92,7 +86,6 @@ async function ensureSchema() {
     );
   `);
 
-  // pm_orders
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_orders (
       id SERIAL PRIMARY KEY,
@@ -104,7 +97,6 @@ async function ensureSchema() {
     );
   `);
 
-  // pm_invoices
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_invoices (
       id SERIAL PRIMARY KEY,
@@ -116,7 +108,6 @@ async function ensureSchema() {
     );
   `);
 
-  // pm_files
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_files (
       id SERIAL PRIMARY KEY,
@@ -131,7 +122,6 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_files_project ON pm_files(project_id);`);
 
-  // pm_audit
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_audit (
       id BIGSERIAL PRIMARY KEY,
@@ -146,6 +136,8 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_audit_project ON pm_audit(project_id);`);
 }
 
+/* ===================== UTILS ===================== */
+const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 async function logAudit(site, project_id, action, meta = {}, actor = "system") {
   try {
     await pool.query(
@@ -163,6 +155,23 @@ app.get("/api/projects/health", (_req, res) =>
   res.json({ ok: true, ts: Date.now(), openai: !!openai, schemaReady })
 );
 
+// Forcer/rejouer la création du schéma (utile en prod)
+async function tryEnsure() {
+  try {
+    await ensureSchema();
+    schemaReady = true;
+    console.log("[PM SCHEMA] OK");
+  } catch (e) {
+    schemaReady = false;
+    console.error("[PM SCHEMA] init failed:", e?.message || e);
+  }
+}
+tryEnsure();
+app.post("/api/projects/admin/ensure", async (_req, res) => {
+  await tryEnsure();
+  res.json({ ok: schemaReady });
+});
+
 /* ===================== PROJECTS CRUD ===================== */
 app.get("/api/projects/projects", async (req, res) => {
   try {
@@ -175,26 +184,26 @@ app.get("/api/projects/projects", async (req, res) => {
       q ? [site, `%${q}%`] : [site]
     );
 
-    const ids = rows.map(r => r.id);
+    const ids = rows.map((r) => r.id);
     const sums = ids.length
       ? await pool.query(
           `
-      SELECT p.id as project_id,
-             COALESCE((SELECT SUM(amount) FROM pm_offers  o WHERE o.project_id=p.id AND o.site=$1),0) AS offers_total,
-             COALESCE((SELECT SUM(amount) FROM pm_orders  o WHERE o.project_id=p.id AND o.site=$1),0) AS orders_total,
-             COALESCE((SELECT SUM(amount) FROM pm_invoices i WHERE i.project_id=p.id AND i.site=$1),0) AS invoices_total
-      FROM pm_projects p WHERE p.site=$1 AND p.id = ANY($2)
-    `,
+        SELECT p.id as project_id,
+               COALESCE((SELECT SUM(amount) FROM pm_offers  o WHERE o.project_id=p.id AND o.site=$1),0) AS offers_total,
+               COALESCE((SELECT SUM(amount) FROM pm_orders  o WHERE o.project_id=p.id AND o.site=$1),0) AS orders_total,
+               COALESCE((SELECT SUM(amount) FROM pm_invoices i WHERE i.project_id=p.id AND i.site=$1),0) AS invoices_total
+        FROM pm_projects p WHERE p.site=$1 AND p.id = ANY($2)
+      `,
           [site, ids]
         )
       : { rows: [] };
-    const byId = Object.fromEntries(sums.rows.map(r => [r.project_id, r]));
+    const byId = Object.fromEntries(sums.rows.map((r) => [r.project_id, r]));
 
     const st = await pool.query(`SELECT * FROM pm_status WHERE site=$1 AND project_id = ANY($2)`, [site, ids]);
-    const statusBy = Object.fromEntries(st.rows.map(r => [r.project_id, r]));
+    const statusBy = Object.fromEntries(st.rows.map((r) => [r.project_id, r]));
 
     res.json({
-      data: rows.map(r => ({
+      data: rows.map((r) => ({
         ...r,
         kpi: byId[r.id] || { offers_total: 0, orders_total: 0, invoices_total: 0 },
         status: statusBy[r.id] || null,
@@ -212,7 +221,7 @@ app.post("/api/projects/projects", async (req, res) => {
     if (!title?.trim()) return res.status(400).json({ error: "Missing title" });
 
     const now = new Date();
-    const firstOf = d => new Date(d.getFullYear(), d.getMonth(), 1);
+    const firstOf = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
     const prep = firstOf(now);
     const start = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const close = new Date(now.getFullYear(), now.getMonth() + 2, 1);
@@ -223,7 +232,10 @@ app.post("/api/projects/projects", async (req, res) => {
       [site, title.trim(), wbs_number, budget_amount, prep, start, close]
     );
 
-    await pool.query(`INSERT INTO pm_status(project_id, site) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [r.rows[0].id, site]);
+    await pool.query(`INSERT INTO pm_status(project_id, site) VALUES ($1,$2) ON CONFLICT DO NOTHING`, [
+      r.rows[0].id,
+      site,
+    ]);
     await logAudit(site, r.rows[0].id, "create_project", { title, wbs_number, budget_amount });
 
     res.status(201).json(r.rows[0]);
@@ -251,7 +263,14 @@ app.put("/api/projects/projects/:id", async (req, res) => {
       [title, wbs_number, budget_amount, prep_month, start_month, close_month, id, site]
     );
 
-    await logAudit(site, id, "update_project", { title, wbs_number, budget_amount, prep_month, start_month, close_month });
+    await logAudit(site, id, "update_project", {
+      title,
+      wbs_number,
+      budget_amount,
+      prep_month,
+      start_month,
+      close_month,
+    });
     res.json(r.rows[0] || null);
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -328,11 +347,11 @@ app.post("/api/projects/projects/:id/upload", upload.single("file"), async (req,
     const prev = curr.rows[0] || {};
     const patch = {
       business_case_done: category === "business_case" || prev.business_case_done || false,
-      pip_done:           category === "pip"          || prev.pip_done           || false,
-      offers_received:    category === "offer"        || prev.offers_received    || false,
-      wbs_recorded:       category === "wbs"          || prev.wbs_recorded       || false,
-      orders_placed:      category === "order"        || prev.orders_placed      || false,
-      invoices_received:  category === "invoice"      || prev.invoices_received  || false,
+      pip_done: category === "pip" || prev.pip_done || false,
+      offers_received: category === "offer" || prev.offers_received || false,
+      wbs_recorded: category === "wbs" || prev.wbs_recorded || false,
+      orders_placed: category === "order" || prev.orders_placed || false,
+      invoices_received: category === "invoice" || prev.invoices_received || false,
     };
     await pool.query(
       `INSERT INTO pm_status(project_id, site, business_case_done, pip_done, offers_received, wbs_recorded, orders_placed, invoices_received)
@@ -385,16 +404,51 @@ app.get("/api/projects/download", async (req, res) => {
   }
 });
 
-/* ===================== FINANCIAL LINES ===================== */
-const num = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+/* ===================== FINANCIAL LINES (NEW) ===================== */
+app.get("/api/projects/projects/:id/lines", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const id = Number(req.params.id);
 
+    const exists = await pool.query(`SELECT 1 FROM pm_projects WHERE id=$1 AND site=$2`, [id, site]);
+    if (!exists.rows.length) return res.status(404).json({ error: "Project not found" });
+
+    const offers = await pool.query(
+      `SELECT id, vendor, amount, received_at
+         FROM pm_offers
+        WHERE site=$1 AND project_id=$2
+        ORDER BY received_at DESC, id DESC`,
+      [site, id]
+    );
+    const orders = await pool.query(
+      `SELECT id, vendor, amount, ordered_at
+         FROM pm_orders
+        WHERE site=$1 AND project_id=$2
+        ORDER BY ordered_at DESC, id DESC`,
+      [site, id]
+    );
+    const invoices = await pool.query(
+      `SELECT id, vendor, amount, invoiced_at
+         FROM pm_invoices
+        WHERE site=$1 AND project_id=$2
+        ORDER BY invoiced_at DESC, id DESC`,
+      [site, id]
+    );
+
+    res.json({ offers: offers.rows, orders: orders.rows, invoices: invoices.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/* ===================== FINANCIAL INPUTS ===================== */
 app.post("/api/projects/projects/:id/offer", async (req, res) => {
   try {
     const site = siteOf(req);
     const id = Number(req.params.id);
     const { vendor = null, amount } = req.body || {};
     if (!Number.isFinite(Number(amount))) return res.status(400).json({ error: "amount required" });
-    const { rows:[row] } = await pool.query(
+    const { rows: [row] } = await pool.query(
       `INSERT INTO pm_offers(site,project_id,vendor,amount) VALUES ($1,$2,$3,$4) RETURNING *`,
       [site, id, vendor, num(amount)]
     );
@@ -409,7 +463,7 @@ app.post("/api/projects/projects/:id/order", async (req, res) => {
     const id = Number(req.params.id);
     const { vendor = null, amount } = req.body || {};
     if (!Number.isFinite(Number(amount))) return res.status(400).json({ error: "amount required" });
-    const { rows:[row] } = await pool.query(
+    const { rows: [row] } = await pool.query(
       `INSERT INTO pm_orders(site,project_id,vendor,amount) VALUES ($1,$2,$3,$4) RETURNING *`,
       [site, id, vendor, num(amount)]
     );
@@ -424,7 +478,7 @@ app.post("/api/projects/projects/:id/invoice", async (req, res) => {
     const id = Number(req.params.id);
     const { vendor = null, amount } = req.body || {};
     if (!Number.isFinite(Number(amount))) return res.status(400).json({ error: "amount required" });
-    const { rows:[row] } = await pool.query(
+    const { rows: [row] } = await pool.query(
       `INSERT INTO pm_invoices(site,project_id,vendor,amount) VALUES ($1,$2,$3,$4) RETURNING *`,
       [site, id, vendor, num(amount)]
     );
@@ -433,6 +487,7 @@ app.post("/api/projects/projects/:id/invoice", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/* ===================== ANALYSIS & IA ===================== */
 function analyze(fin, budget) {
   const offer = num(fin.offers_total);
   const commit = num(fin.orders_total);
@@ -461,7 +516,7 @@ app.get("/api/projects/projects/:id/analysis", async (req, res) => {
     )).rows[0];
 
     const out = analyze(sums, p.budget_amount);
-    await pool.query(`UPDATE pm_status SET last_analysis = $1 WHERE project_id=$2 AND site=$3`, [out, id, site]).catch(()=>{});
+    await pool.query(`UPDATE pm_status SET last_analysis = $1 WHERE project_id=$2 AND site=$3`, [out, id, site]).catch(() => {});
     res.json(out);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -474,7 +529,10 @@ app.post("/api/projects/projects/:id/assistant", async (req, res) => {
     if (!openai) return res.json({ answer: "L'IA n'est pas disponible (clé manquante)." });
 
     const pQ = await pool.query(`SELECT title, wbs_number, budget_amount FROM pm_projects WHERE id=$1 AND site=$2`, [id, site]);
-    const sums = (await pool.query(`SELECT COALESCE(SUM(amount),0) AS offers FROM pm_offers WHERE project_id=$1 AND site=$2`, [id, site])).rows[0];
+    const sums = (await pool.query(
+      `SELECT COALESCE(SUM(amount),0) AS offers FROM pm_offers WHERE project_id=$1 AND site=$2`,
+      [id, site]
+    )).rows[0];
 
     const ctx = `Projet: ${pQ.rows[0]?.title || id}
 WBS: ${pQ.rows[0]?.wbs_number || '-'}
@@ -496,23 +554,4 @@ Offres: ${sums.offers}`;
 
 /* ===================== START ===================== */
 const port = process.env.PROJECTS_PORT || 3013;
-
-async function tryEnsure() {
-  try {
-    await ensureSchema();
-    schemaReady = true;
-    console.log("[PM SCHEMA] OK");
-  } catch (e) {
-    schemaReady = false;
-    console.error("[PM SCHEMA] init failed:", e?.message || e);
-  }
-}
-tryEnsure(); // on tente au boot, mais sans process.exit(1)
-
-// Route admin pour (re)forcer la création si besoin
-app.post("/api/projects/admin/ensure", async (_req, res) => {
-  await tryEnsure();
-  res.json({ ok: schemaReady });
-});
-
 app.listen(port, () => console.log(`Project Manager API listening on :${port}`));
