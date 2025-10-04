@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { api, API_BASE } from "../lib/api.js";
 import { RefreshCcw, X, Upload, Search, Filter, ImageDown, MessageSquare, ChevronRight, ChevronDown } from "lucide-react";
 
 // Utilitaires fetch simples
