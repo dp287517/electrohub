@@ -1,5 +1,5 @@
-// server_controls.js — FULL AUTO (no manual sync), OpenAI enabled, Render-style port
-// - Auto-imports from DB tables (switchboards, devices, hv_equipments, atex_equipments) on-demand
+// server_controls.js — FULL AUTO (no manual sync), OpenAI enabled, HV adapter
+// - Auto-imports from DB tables (switchboards, devices, hv_equipments, hv_devices, atex_equipments)
 // - Rebuilds/refreshes catalog & tasks automatically when empty or stale (TTL)
 // - Adds OpenAI analyze & assistant with pragmatic prompts
 // - Listens on CONTROLS_PORT || 3011 (same convention as your other services)
@@ -66,7 +66,6 @@ async function runChat(messages, { model = process.env.OPENAI_MODEL || "gpt-4o",
 /* ------------------------------------------------------------------ */
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addMonths(dateStr, months) { const d = dateStr ? new Date(dateStr) : new Date(); d.setMonth(d.getMonth() + (months || 0)); return d.toISOString().slice(0, 10); }
-function isDue(last, months) { if (!months || months <= 0) return true; if (!last) return true; const next = addMonths(last, months); return new Date(next) <= new Date(); }
 function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args); }
 const siteFilterSQL = (alias = "") => `($1 = '*' OR ${alias ? alias + '.' : ''}site = $1)`;
 
@@ -194,6 +193,19 @@ async function colExists(table, col) {
      ) AS ok`, [table, col]);
   return rows[0]?.ok === true;
 }
+async function tableExists(table) {
+  const { rows } = await pool.query(
+    `select exists (select 1 from information_schema.tables
+      where table_schema='public' and table_name=$1) as ok`, [table]);
+  return rows[0]?.ok === true;
+}
+async function pickCol(table, candidates) {
+  const { rows } = await pool.query(
+    `select column_name from information_schema.columns
+     where table_schema='public' and table_name=$1`, [table]);
+  const have = rows.map(r => r.column_name);
+  return candidates.find(c => have.includes(c)) || null;
+}
 
 async function loadSwitchboardsDB(readSite = 'Default') {
   const { rows } = await pool.query(`
@@ -245,13 +257,43 @@ async function loadDevicesDB(readSite = 'Default') {
 }
 
 async function loadHVsDB(readSite = 'Default') {
-  const { rows } = await pool.query(`
-    SELECT COALESCE(NULLIF(hv.site::text,''),'Default') AS site,
-           COALESCE(NULLIF(hv.building_code::text,''),'B00') AS building,
-           hv.name::text AS name, hv.code::text AS code
-    FROM public.hv_equipments hv
-    WHERE ($1 = '*' OR COALESCE(NULLIF(hv.site::text,''),'Default') = $1)`, [readSite]);
-  return rows.map(h => ({ ...h, equipment_type: 'HV_EQUIPMENT', parent_code: null }));
+  const rowsAll = [];
+
+  // 1) hv_equipments (schéma direct)
+  if (await tableExists('hv_equipments')) {
+    const { rows } = await pool.query(`
+      SELECT COALESCE(NULLIF(hv.site::text,''),'Default') AS site,
+             COALESCE(NULLIF(hv.building_code::text,''),'B00') AS building,
+             hv.name::text AS name, hv.code::text AS code
+      FROM public.hv_equipments hv
+      WHERE ($1 = '*' OR COALESCE(NULLIF(hv.site::text,''),'Default') = $1)`, [readSite]);
+    rowsAll.push(...rows.map(h => ({ ...h, equipment_type: 'HV_EQUIPMENT', parent_code: null })));
+  }
+
+  // 2) hv_devices (auto-mapping des colonnes)
+  if (await tableExists('hv_devices')) {
+    const siteCol      = (await pickCol('hv_devices', ['site'])) || null;
+    const bcol         = (await pickCol('hv_devices', ['building_code','building'])) || null;
+    const nameCol      = (await pickCol('hv_devices', ['name','device_type'])) || null;
+    const codeCol      = (await pickCol('hv_devices', ['code','reference','position_number'])) || null;
+
+    const siteExpr = siteCol ? `COALESCE(NULLIF(d.${siteCol}::text,''),'Default')` : `'Default'`;
+    const bExpr    = bcol    ? `COALESCE(NULLIF(d.${bcol}::text,''),'B00')`       : `'B00'`;
+    const nameExpr = nameCol ? `COALESCE(NULLIF(d.${nameCol}::text,''), ('HV-'||d.id)::text)` : `('HV-'||d.id)::text`;
+    const codeExpr = codeCol ? `COALESCE(NULLIF(d.${codeCol}::text,''), ('HV-'||d.id)::text)` : `('HV-'||d.id)::text`;
+
+    const sql = `
+      SELECT ${siteExpr} AS site,
+             ${bExpr}    AS building,
+             ${nameExpr} AS name,
+             ${codeExpr} AS code
+      FROM public.hv_devices d
+      WHERE ($1 = '*' OR ${siteExpr} = $1)`;
+    const { rows } = await pool.query(sql, [readSite]);
+    rowsAll.push(...rows.map(h => ({ ...h, equipment_type: 'HV_EQUIPMENT', parent_code: null })));
+  }
+
+  return rowsAll;
 }
 
 async function loadATEXDB(readSite = 'Default') {
