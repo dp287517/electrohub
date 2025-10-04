@@ -1,4 +1,4 @@
-// server.js
+// server.js — version corrigée (proxies AVANT body-parser)
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -17,11 +17,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+
+// Sécurité & cookies
 app.use(helmet());
-app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
 
-// -------- AUTH LIGHT -----------
+// -------- AUTH LIGHT (n'a pas besoin du body pour passer) ----------
 function authMiddleware(req, _res, next) {
   if (req.path.startsWith("/api/auth/") || req.path.startsWith("/api/public/")) return next();
   const token = req.cookies?.token;
@@ -31,58 +32,87 @@ function authMiddleware(req, _res, next) {
 }
 app.use(authMiddleware);
 
+/* =================================================================
+   PROXIES AVANT TOUT BODY-PARSER  => évite que le body soit mangé
+   ================================================================= */
+const atexTarget         = process.env.ATEX_BASE_URL         || "http://127.0.0.1:3001";
+const loopcalcTarget     = process.env.LOOPCALC_BASE_URL      || "http://127.0.0.1:3002";
+const switchboardTarget  = process.env.SWITCHBOARD_BASE_URL   || "http://127.0.0.1:3003";
+const selectivityTarget  = process.env.SELECTIVITY_BASE_URL   || "http://127.0.0.1:3004";
+const flaTarget          = process.env.FLA_BASE_URL           || "http://127.0.0.1:3005";
+const arcflashTarget     = process.env.ARCFLASH_BASE_URL      || "http://127.0.0.1:3006";
+const obsolescenceTarget = process.env.OBSOLESCENCE_BASE_URL  || "http://127.0.0.1:3007";
+const hvTarget           = process.env.HV_BASE_URL            || "http://127.0.0.1:3008";
+const diagramTarget      = process.env.DIAGRAM_BASE_URL       || "http://127.0.0.1:3009";
+const controlsTarget     = process.env.CONTROLS_BASE_URL      || "http://127.0.0.1:3010";
+const oibtTarget         = process.env.OIBT_BASE_URL          || "http://127.0.0.1:3012";
+const projectsTarget     = process.env.PROJECTS_BASE_URL      || "http://127.0.0.1:3013";
+
+// petit helper pour créer des proxys homogènes
+function mkProxy(target, { withRestream = false } = {}) {
+  return createProxyMiddleware({
+    target,
+    changeOrigin: true,
+    logLevel: "warn",
+    onError(err, req, res) {
+      res.writeHead(502, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Upstream unreachable", details: err.code || String(err) }));
+    },
+    // Re-stream du body si déjà parsé en amont (sécurité)
+    onProxyReq: withRestream
+      ? (proxyReq, req) => {
+          if (!req.body || !Object.keys(req.body).length) return;
+          const bodyData = JSON.stringify(req.body);
+          proxyReq.setHeader("Content-Type", "application/json");
+          proxyReq.setHeader("Content-Length", Buffer.byteLength(bodyData));
+          proxyReq.write(bodyData);
+        }
+      : undefined,
+  });
+}
+
+app.use("/api/atex",         mkProxy(atexTarget));
+app.use("/api/loopcalc",     mkProxy(loopcalcTarget));
+app.use("/api/switchboard",  mkProxy(switchboardTarget));
+app.use("/api/selectivity",  mkProxy(selectivityTarget));
+app.use("/api/faultlevel",   mkProxy(flaTarget));
+app.use("/api/arcflash",     mkProxy(arcflashTarget));
+app.use("/api/obsolescence", mkProxy(obsolescenceTarget));
+app.use("/api/hv",           mkProxy(hvTarget));
+app.use("/api/diagram",      mkProxy(diagramTarget));
+app.use("/api/controls",     mkProxy(controlsTarget));
+app.use("/api/oibt",         mkProxy(oibtTarget));
+
+// >>> Projects : proxy bavard + re-stream (si un jour body était déjà parsé)
+app.use("/api/projects", mkProxy(projectsTarget, { withRestream: true }));
+
+/* =================================================================
+   Body parser APRES les proxys (pour nos routes locales uniquement)
+   ================================================================= */
+app.use(express.json({ limit: "25mb" }));
+
 // -------- API de base ----------
 app.get("/api/auth/me", async (req, res) => {
   const user = req.user || { id: "guest", name: "Guest", site: process.env.DEFAULT_SITE || "Nyon" };
   res.json(user);
 });
-app.post("/api/auth/login", async (req, res) => {
+
+// Parser local au niveau route (optionnel car express.json global est déjà monté)
+app.post("/api/auth/login", express.json(), async (req, res) => {
   const { email, site = process.env.DEFAULT_SITE || "Nyon" } = req.body || {};
-  const token = jwt.sign({ id: email || "user", name: email || "user", site }, process.env.JWT_SECRET || "devsecret", { expiresIn: "2h" });
+  const token = jwt.sign(
+    { id: email || "user", name: email || "user", site },
+    process.env.JWT_SECRET || "devsecret",
+    { expiresIn: "2h" }
+  );
   res.cookie("token", token, { httpOnly: true, sameSite: "lax" });
   res.json({ ok: true });
 });
-app.post("/api/auth/logout", async (_req, res) => { res.clearCookie("token"); res.json({ ok: true }); });
 
-// -------- PROXIES -------------
-const atexTarget          = process.env.ATEX_BASE_URL          || "http://127.0.0.1:3001";
-const loopcalcTarget      = process.env.LOOPCALC_BASE_URL       || "http://127.0.0.1:3002";
-const switchboardTarget   = process.env.SWITCHBOARD_BASE_URL    || "http://127.0.0.1:3003";
-const selectivityTarget   = process.env.SELECTIVITY_BASE_URL    || "http://127.0.0.1:3004";
-const flaTarget           = process.env.FLA_BASE_URL            || "http://127.0.0.1:3005";
-const arcflashTarget      = process.env.ARCFLASH_BASE_URL       || "http://127.0.0.1:3006";
-const obsolescenceTarget  = process.env.OBSOLESCENCE_BASE_URL   || "http://127.0.0.1:3007";
-const hvTarget            = process.env.HV_BASE_URL             || "http://127.0.0.1:3008";
-const diagramTarget       = process.env.DIAGRAM_BASE_URL        || "http://127.0.0.1:3009";
-const controlsTarget      = process.env.CONTROLS_BASE_URL       || "http://127.0.0.1:3010";
-const oibtTarget          = process.env.OIBT_BASE_URL           || "http://127.0.0.1:3012";
-const projectsTarget      = process.env.PROJECTS_BASE_URL       || "http://127.0.0.1:3013";
-
-app.use("/api/atex",         createProxyMiddleware({ target: atexTarget,         changeOrigin: true, logLevel: "warn" }));
-app.use("/api/loopcalc",     createProxyMiddleware({ target: loopcalcTarget,     changeOrigin: true, logLevel: "warn" }));
-app.use("/api/switchboard",  createProxyMiddleware({ target: switchboardTarget,  changeOrigin: true, logLevel: "warn" }));
-app.use("/api/selectivity",  createProxyMiddleware({ target: selectivityTarget,  changeOrigin: true, logLevel: "warn" }));
-app.use("/api/faultlevel",   createProxyMiddleware({ target: flaTarget,          changeOrigin: true, logLevel: "warn" }));
-app.use("/api/arcflash",     createProxyMiddleware({ target: arcflashTarget,     changeOrigin: true, logLevel: "warn" }));
-app.use("/api/obsolescence", createProxyMiddleware({ target: obsolescenceTarget, changeOrigin: true, logLevel: "warn" }));
-app.use("/api/hv",           createProxyMiddleware({ target: hvTarget,           changeOrigin: true, logLevel: "warn" }));
-app.use("/api/diagram",      createProxyMiddleware({ target: diagramTarget,      changeOrigin: true, logLevel: "warn" }));
-app.use("/api/controls",     createProxyMiddleware({ target: controlsTarget,     changeOrigin: true, logLevel: "warn" }));
-app.use("/api/oibt",         createProxyMiddleware({ target: oibtTarget,         changeOrigin: true, logLevel: "warn" }));
-
-// >>> Projects : avec onError pour éviter le "Failed to fetch" muet
-app.use(
-  "/api/projects",
-  createProxyMiddleware({
-    target: projectsTarget,
-    changeOrigin: true,
-    logLevel: "warn",
-    onError(err, req, res) {
-      res.writeHead(502, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Projects backend unreachable", details: err.code || String(err) }));
-    },
-  })
-);
+app.post("/api/auth/logout", async (_req, res) => {
+  res.clearCookie("token");
+  res.json({ ok: true });
+});
 
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
