@@ -47,6 +47,7 @@ const upload = multer({ storage: multer.memoryStorage() });
  * SCHEMA
  * ========================================================== */
 async function ensureSchema() {
+  // pm_projects
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_projects (
       id SERIAL PRIMARY KEY,
@@ -54,16 +55,16 @@ async function ensureSchema() {
       title TEXT NOT NULL,
       wbs_number TEXT,
       budget_amount NUMERIC,
-      // 3 mois standardisés (prépa, lancement, clôture)
-      prep_month  DATE,   -- 1er jour du mois
+      prep_month  DATE,
       start_month DATE,
       close_month DATE,
       created_at  TIMESTAMPTZ DEFAULT NOW(),
       updated_at  TIMESTAMPTZ
     );
-    CREATE INDEX IF NOT EXISTS idx_pm_projects_site ON pm_projects(site);
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_projects_site ON pm_projects(site);`);
 
+  // pm_status
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_status (
       project_id INTEGER REFERENCES pm_projects(id) ON DELETE CASCADE,
@@ -79,6 +80,7 @@ async function ensureSchema() {
     );
   `);
 
+  // pm_offers
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_offers (
       id SERIAL PRIMARY KEY,
@@ -90,6 +92,7 @@ async function ensureSchema() {
     );
   `);
 
+  // pm_orders
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_orders (
       id SERIAL PRIMARY KEY,
@@ -101,6 +104,7 @@ async function ensureSchema() {
     );
   `);
 
+  // pm_invoices
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_invoices (
       id SERIAL PRIMARY KEY,
@@ -112,6 +116,7 @@ async function ensureSchema() {
     );
   `);
 
+  // pm_files
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_files (
       id SERIAL PRIMARY KEY,
@@ -123,9 +128,10 @@ async function ensureSchema() {
       file BYTEA,
       uploaded_at TIMESTAMPTZ DEFAULT NOW()
     );
-    CREATE INDEX IF NOT EXISTS idx_pm_files_project ON pm_files(project_id);
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_files_project ON pm_files(project_id);`);
 
+  // pm_audit
   await pool.query(`
     CREATE TABLE IF NOT EXISTS pm_audit (
       id BIGSERIAL PRIMARY KEY,
@@ -136,10 +142,9 @@ async function ensureSchema() {
       at TIMESTAMPTZ DEFAULT NOW(),
       actor TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_pm_audit_project ON pm_audit(project_id);
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_pm_audit_project ON pm_audit(project_id);`);
 }
-ensureSchema().catch(e => console.error("[PM SCHEMA]", e));
 
 async function logAudit(site, project_id, action, meta = {}, actor = "system") {
   try {
