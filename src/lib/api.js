@@ -1,5 +1,6 @@
 /** Base API */
-const API_BASE = import.meta.env.VITE_API_BASE || "";
+export const API_BASE = import.meta.env.VITE_API_BASE || "";
+
 
 /** Get current site from client-side stored profile (fallback to "Default") */
 function currentSite() {
