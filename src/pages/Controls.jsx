@@ -1,32 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { api, API_BASE } from "../lib/api.js";
 import { RefreshCcw, X, Upload, Search, Filter, ImageDown, MessageSquare, ChevronRight, ChevronDown } from "lucide-react";
+import { api, API_BASE } from "../lib/api.js"; // ← utilise le client API (X-Site + API_BASE)
 
-// Utilitaires fetch simples
+/** Adapteur léger vers api.controls.* */
 const API = {
-  tree: async () => (await fetch(`/api/controls/tree`)).json(),
-  tasksByEntity: async (entityId, q = "") => {
-    const url = new URL(`/api/controls/tasks`, window.location.origin);
-    url.searchParams.set("entity_id", entityId);
-    if (q) url.searchParams.set("q", q);
-    const r = await fetch(url);
-    return r.json();
-  },
-  taskDetails: async (id) => (await fetch(`/api/controls/tasks/${id}/details`)).json(),
-  listAttachments: async (taskId) => (await fetch(`/api/controls/tasks/${taskId}/attachments`)).json(),
-  upload: async (taskId, files, label) => {
-    const fd = new FormData();
-    for (const f of files) fd.append("files", f);
-    // label stocké côté DB si tu as ajouté la colonne ; sinon ignoré
-    if (label) fd.append("label", label);
-    const r = await fetch(`/api/controls/tasks/${taskId}/upload`, { method: "POST", body: fd });
-    return r.json();
-  },
-  analyze: async (taskId) => (await fetch(`/api/controls/tasks/${taskId}/analyze`, { method: "POST" })).json(),
-  assistant: async (taskId, question) =>
-    (await fetch(`/api/controls/tasks/${taskId}/assistant`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question }) })).json(),
-  complete: async (taskId, payload) =>
-    (await fetch(`/api/controls/tasks/${taskId}/complete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })).json()
+  tree: (params) => api.controls.tree(params),
+  tasksByEntity: (entityId, q = "") => api.controls.tasksByEntity(entityId, q),
+  taskDetails: (id) => api.controls.taskDetails(id),
+  listAttachments: (taskId) => api.controls.listAttachments(taskId),
+  upload: (taskId, files, label) => api.controls.uploadAttachments(taskId, files, label),
+  analyze: (taskId) => api.controls.analyze(taskId),
+  assistant: (taskId, question) => api.controls.assistant(taskId, question),
+  complete: (taskId, payload) => api.controls.completeTask(taskId, payload),
 };
 
 // Mini UI primitives
@@ -314,9 +299,15 @@ export default function Controls() {
               <DropArea onFiles={onUpload} />
               <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {attachments.map((a) => (
-                  <a key={a.id} href={`/api/controls/tasks/${taskDetails.id}/attachments/${a.id}`} target="_blank" style={{
-                    border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, display: "flex", gap: 8, textDecoration: "none", color: "#111827"
-                  }}>
+                  <a
+                    key={a.id}
+                    href={`${API_BASE}/api/controls/tasks/${taskDetails.id}/attachments/${a.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      border: "1px solid #e5e7eb", borderRadius: 8, padding: 8, display: "flex", gap: 8, textDecoration: "none", color: "#111827"
+                    }}
+                  >
                     <ImageDown size={16} />
                     <span style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.filename}</span>
                   </a>
