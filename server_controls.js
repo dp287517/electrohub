@@ -1,4 +1,4 @@
-// server_controls.js — FULL AUTO (no manual sync), OpenAI enabled, HV adapter
+// server_controls.js — FULL AUTO (corrected)
 // - Auto-imports from DB tables (switchboards, devices, hv_equipments, hv_devices, atex_equipments)
 // - Rebuilds/refreshes catalog & tasks automatically when empty or stale (TTL)
 // - Adds OpenAI analyze & assistant with pragmatic prompts
@@ -11,10 +11,8 @@ import dotenv from "dotenv";
 import multer from "multer";
 import pg from "pg";
 import OpenAI from "openai";
-import fetchPkg from "node-fetch";
 import { TSD_LIBRARY, EQUIPMENT_TYPES } from "./tsd_library.js";
 
-const fetch = (globalThis.fetch || fetchPkg);
 dotenv.config();
 
 /* ------------------------------------------------------------------ */
@@ -31,7 +29,7 @@ app.use(helmet());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser());
 
-// CORS permissive by default
+// CORS permissive by default (configurable)
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -41,16 +39,27 @@ app.use((req, res, next) => {
   next();
 });
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 20 } });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024, files: 20 },
+});
 
 /* ------------------------------------------------------------------ */
 /*                            OPENAI CLIENT                            */
 /* ------------------------------------------------------------------ */
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const ANALYZE_SYSTEM = `Tu es un expert maintenance électrique & HSE.\nProduis une analyse opérationnelle concise et actionnable pour la tâche de contrôle suivante.\nStructure attendue (Markdown court):\n1) Constat (données, écarts vs seuils)\n2) Risques & causes probables\n3) Actions immédiates (≤5)\n4) Prévention / périodicité conseillée`;
+const ANALYZE_SYSTEM = `Tu es un expert maintenance électrique & HSE.
+Produis une analyse opérationnelle concise et actionnable pour la tâche de contrôle suivante.
+Structure attendue (Markdown court):
+1) Constat (données, écarts vs seuils)
+2) Risques & causes probables
+3) Actions immédiates (≤5)
+4) Prévention / périodicité conseillée`;
 
-const ASSISTANT_SYSTEM = `Tu es l'assistant de contrôle maintenance.\nRéponds de façon pragmatique, en te basant sur la TSD (si fournie), l'historique des résultats et le contexte d'équipement.\nSi une valeur seuil manque, explique comment la mesurer ou où la trouver. Reste bref.`;
+const ASSISTANT_SYSTEM = `Tu es l'assistant de contrôle maintenance.
+Réponds de façon pragmatique, en te basant sur la TSD (si fournie), l'historique des résultats et le contexte d'équipement.
+Si une valeur seuil manque, explique comment la mesurer ou où la trouver. Reste bref.`;
 
 async function runChat(messages, { model = process.env.OPENAI_MODEL || "gpt-4o", temperature = 0.2 } = {}) {
   if (!process.env.OPENAI_API_KEY) {
@@ -64,10 +73,23 @@ async function runChat(messages, { model = process.env.OPENAI_MODEL || "gpt-4o",
 /* ------------------------------------------------------------------ */
 /*                              UTILITIES                              */
 /* ------------------------------------------------------------------ */
-function todayISO() { return new Date().toISOString().slice(0, 10); }
-function addMonths(dateStr, months) { const d = dateStr ? new Date(dateStr) : new Date(); d.setMonth(d.getMonth() + (months || 0)); return d.toISOString().slice(0, 10); }
-function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args); }
-const siteFilterSQL = (alias = "") => `($1 = '*' OR ${alias ? alias + '.' : ''}site = $1)`;
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+function addMonths(dateStr, months) {
+  const d = dateStr ? new Date(dateStr) : new Date();
+  d.setMonth(d.getMonth() + (months || 0));
+  return d.toISOString().slice(0, 10);
+}
+function log(...args) {
+  if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args);
+}
+/** Site filter clause with correct placeholder index (fixes partial $1 replacements) */
+function siteFilterSQL(alias = "", idx = 1) {
+  const p = `$${idx}`;
+  const pre = alias ? alias + "." : "";
+  return `(${p} = '*' OR ${pre}site = ${p})`;
+}
 
 /* ------------------------------------------------------------------ */
 /*                               SCHEMA                                */
@@ -76,7 +98,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_entities (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT NOT NULL DEFAULT 'Default',
       building TEXT,
       equipment_type TEXT,
       name TEXT,
@@ -89,11 +111,13 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_site ON controls_entities(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_code ON controls_entities(code);`);
+  -- ensure uniqueness of (site, code) for clean UPSERT
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_controls_entities_site_code ON controls_entities(site, code);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_tasks (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT NOT NULL DEFAULT 'Default',
       entity_id INTEGER REFERENCES controls_entities(id) ON DELETE CASCADE,
       task_name TEXT,
       task_code TEXT,
@@ -120,7 +144,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_history (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT NOT NULL DEFAULT 'Default',
       task_id INTEGER REFERENCES controls_tasks(id) ON DELETE SET NULL,
       task_name TEXT,
       user_name TEXT,
@@ -147,7 +171,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_not_present (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT NOT NULL DEFAULT 'Default',
       building TEXT,
       equipment_type TEXT,
       declared_by TEXT,
@@ -159,7 +183,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_records (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT NOT NULL DEFAULT 'Default',
       entity_id INTEGER REFERENCES controls_entities(id) ON DELETE SET NULL,
       task_code TEXT,
       results JSONB,
@@ -176,7 +200,10 @@ async function ensureSchema() {
     );
   `);
 }
-await ensureSchema().catch(e => { console.error("[schema] init error:", e); process.exit(1); });
+await ensureSchema().catch((e) => {
+  console.error("[schema] init error:", e);
+  process.exit(1);
+});
 
 async function ensureOverdueFlags() {
   await pool.query(`UPDATE controls_tasks SET status='Overdue' WHERE status='Planned' AND next_control < CURRENT_DATE`);
@@ -190,38 +217,48 @@ async function colExists(table, col) {
     `SELECT EXISTS (
        SELECT 1 FROM information_schema.columns
        WHERE table_schema='public' AND table_name=$1 AND column_name=$2
-     ) AS ok`, [table, col]);
+     ) AS ok`,
+    [table, col]
+  );
   return rows[0]?.ok === true;
 }
 async function tableExists(table) {
   const { rows } = await pool.query(
     `select exists (select 1 from information_schema.tables
-      where table_schema='public' and table_name=$1) as ok`, [table]);
+      where table_schema='public' and table_name=$1) as ok`,
+    [table]
+  );
   return rows[0]?.ok === true;
 }
 async function pickCol(table, candidates) {
   const { rows } = await pool.query(
     `select column_name from information_schema.columns
-     where table_schema='public' and table_name=$1`, [table]);
-  const have = rows.map(r => r.column_name);
-  return candidates.find(c => have.includes(c)) || null;
+     where table_schema='public' and table_name=$1`,
+    [table]
+  );
+  const have = rows.map((r) => r.column_name);
+  return candidates.find((c) => have.includes(c)) || null;
 }
 
-async function loadSwitchboardsDB(readSite = 'Default') {
-  const { rows } = await pool.query(`
+async function loadSwitchboardsDB(readSite = "Default") {
+  const { rows } = await pool.query(
+    `
     SELECT COALESCE(NULLIF(s.site::text,''),'Default') AS site,
            COALESCE(NULLIF(s.building_code::text,''),'B00') AS building,
            s.name::text AS name, s.code::text AS code
     FROM public.switchboards s
-    WHERE ($1 = '*' OR COALESCE(NULLIF(s.site::text,''),'Default') = $1)`, [readSite]);
-  return rows.map(sb => ({ ...sb, equipment_type: 'LV_SWITCHBOARD', parent_code: null }));
+    WHERE ($1 = '*' OR COALESCE(NULLIF(s.site::text,''),'Default') = $1)`,
+    [readSite]
+  );
+  return rows.map((sb) => ({ ...sb, equipment_type: "LV_SWITCHBOARD", parent_code: null }));
 }
 
-async function loadDevicesDB(readSite = 'Default') {
-  const hasSwitchboardId    = await colExists('devices', 'switchboard_id');
-  const hasParentSwitchCode = await colExists('devices', 'parent_switchboard');
+async function loadDevicesDB(readSite = "Default") {
+  const hasSwitchboardId = await colExists("devices", "switchboard_id");
+  const hasParentSwitchCode = await colExists("devices", "parent_switchboard");
   if (hasSwitchboardId) {
-    const { rows } = await pool.query(`
+    const { rows } = await pool.query(
+      `
       SELECT COALESCE(NULLIF(d.site::text,''),'Default') AS site,
              COALESCE(NULLIF(sb.building_code::text,''),'B00') AS building,
              COALESCE(NULLIF(d.name::text,''), d.device_type::text, ('Device-'||d.id)::text) AS name,
@@ -229,11 +266,14 @@ async function loadDevicesDB(readSite = 'Default') {
              sb.code::text AS parent_code
       FROM public.devices d
       LEFT JOIN public.switchboards sb ON sb.id = d.switchboard_id
-      WHERE ($1 = '*' OR COALESCE(NULLIF(d.site::text,''),'Default') = $1)`, [readSite]);
-    return rows.map(d => ({ ...d, equipment_type: 'LV_DEVICE' }));
+      WHERE ($1 = '*' OR COALESCE(NULLIF(d.site::text,''),'Default') = $1)`,
+      [readSite]
+    );
+    return rows.map((d) => ({ ...d, equipment_type: "LV_DEVICE" }));
   }
   if (hasParentSwitchCode) {
-    const { rows } = await pool.query(`
+    const { rows } = await pool.query(
+      `
       SELECT COALESCE(NULLIF(d.site::text,''),'Default') AS site,
              COALESCE(NULLIF(sb.building_code::text,''),'B00') AS building,
              COALESCE(NULLIF(d.name::text,''), d.device_type::text, ('Device-'||d.id)::text) AS name,
@@ -241,44 +281,52 @@ async function loadDevicesDB(readSite = 'Default') {
              sb.code::text AS parent_code
       FROM public.devices d
       LEFT JOIN public.switchboards sb ON sb.code = d.parent_switchboard
-      WHERE ($1 = '*' OR COALESCE(NULLIF(d.site::text,''),'Default') = $1)`, [readSite]);
-    return rows.map(d => ({ ...d, equipment_type: 'LV_DEVICE' }));
+      WHERE ($1 = '*' OR COALESCE(NULLIF(d.site::text,''),'Default') = $1)`,
+      [readSite]
+    );
+    return rows.map((d) => ({ ...d, equipment_type: "LV_DEVICE" }));
   }
   // fallback sans parentage
-  const { rows } = await pool.query(`
+  const { rows } = await pool.query(
+    `
     SELECT COALESCE(NULLIF(d.site::text,''),'Default') AS site,
            'B00' AS building,
            COALESCE(NULLIF(d.name::text,''), d.device_type::text, ('Device-'||d.id)::text) AS name,
            COALESCE(NULLIF(d.reference::text,''), NULLIF(d.position_number::text,''), ('DEV-'||d.id)::text) AS code,
            NULL::text AS parent_code
     FROM public.devices d
-    WHERE ($1 = '*' OR COALESCE(NULLIF(d.site::text,''),'Default') = $1)`, [readSite]);
-  return rows.map(d => ({ ...d, equipment_type: 'LV_DEVICE' }));
+    WHERE ($1 = '*' OR COALESCE(NULLIF(d.site::text,''),'Default') = $1)`,
+    [readSite]
+  );
+  return rows.map((d) => ({ ...d, equipment_type: "LV_DEVICE" }));
 }
 
-async function loadHVsDB(readSite = 'Default') {
+async function loadHVsDB(readSite = "Default") {
   const rowsAll = [];
 
   // 1) hv_equipments (schéma direct)
-  if (await tableExists('hv_equipments')) {
-    const { rows } = await pool.query(`
+  if (await tableExists("hv_equipments")) {
+    const { rows } = await pool.query(
+      `
       SELECT COALESCE(NULLIF(hv.site::text,''),'Default') AS site,
              COALESCE(NULLIF(hv.building_code::text,''),'B00') AS building,
              hv.name::text AS name, hv.code::text AS code
       FROM public.hv_equipments hv
-      WHERE ($1 = '*' OR COALESCE(NULLIF(hv.site::text,''),'Default') = $1)`, [readSite]);
-    rowsAll.push(...rows.map(h => ({ ...h, equipment_type: 'HV_EQUIPMENT', parent_code: null })));
+      WHERE ($1 = '*' OR COALESCE(NULLIF(hv.site::text,''),'Default') = $1)`,
+      [readSite]
+    );
+    rowsAll.push(...rows.map((h) => ({ ...h, equipment_type: "HV_EQUIPMENT", parent_code: null })));
   }
 
   // 2) hv_devices (auto-mapping des colonnes)
-  if (await tableExists('hv_devices')) {
-    const siteCol      = (await pickCol('hv_devices', ['site'])) || null;
-    const bcol         = (await pickCol('hv_devices', ['building_code','building'])) || null;
-    const nameCol      = (await pickCol('hv_devices', ['name','device_type'])) || null;
-    const codeCol      = (await pickCol('hv_devices', ['code','reference','position_number'])) || null;
+  if (await tableExists("hv_devices")) {
+    const siteCol = (await pickCol("hv_devices", ["site"])) || null;
+    const bcol = (await pickCol("hv_devices", ["building_code", "building"])) || null;
+    const nameCol = (await pickCol("hv_devices", ["name", "device_type"])) || null;
+    const codeCol = (await pickCol("hv_devices", ["code", "reference", "position_number"])) || null;
 
     const siteExpr = siteCol ? `COALESCE(NULLIF(d.${siteCol}::text,''),'Default')` : `'Default'`;
-    const bExpr    = bcol    ? `COALESCE(NULLIF(d.${bcol}::text,''),'B00')`       : `'B00'`;
+    const bExpr = bcol ? `COALESCE(NULLIF(d.${bcol}::text,''),'B00')` : `'B00'`;
     const nameExpr = nameCol ? `COALESCE(NULLIF(d.${nameCol}::text,''), ('HV-'||d.id)::text)` : `('HV-'||d.id)::text`;
     const codeExpr = codeCol ? `COALESCE(NULLIF(d.${codeCol}::text,''), ('HV-'||d.id)::text)` : `('HV-'||d.id)::text`;
 
@@ -290,24 +338,27 @@ async function loadHVsDB(readSite = 'Default') {
       FROM public.hv_devices d
       WHERE ($1 = '*' OR ${siteExpr} = $1)`;
     const { rows } = await pool.query(sql, [readSite]);
-    rowsAll.push(...rows.map(h => ({ ...h, equipment_type: 'HV_EQUIPMENT', parent_code: null })));
+    rowsAll.push(...rows.map((h) => ({ ...h, equipment_type: "HV_EQUIPMENT", parent_code: null })));
   }
 
   return rowsAll;
 }
 
-async function loadATEXDB(readSite = 'Default') {
-  const { rows } = await pool.query(`
+async function loadATEXDB(readSite = "Default") {
+  const { rows } = await pool.query(
+    `
     SELECT COALESCE(NULLIF(a.site::text,''),'Default') AS site,
            COALESCE(NULLIF(a.building::text,''),'B00') AS building,
            a.component_type::text AS name,
            COALESCE(NULLIF(a.manufacturer_ref::text,''), ('ATEX-'||a.id)::text) AS code
     FROM public.atex_equipments a
-    WHERE ($1 = '*' OR COALESCE(NULLIF(a.site::text,''),'Default') = $1)`, [readSite]);
-  return rows.map(ax => ({ ...ax, equipment_type: 'ATEX_EQUIPMENT', parent_code: null }));
+    WHERE ($1 = '*' OR COALESCE(NULLIF(a.site::text,''),'Default') = $1)`,
+    [readSite]
+  );
+  return rows.map((ax) => ({ ...ax, equipment_type: "ATEX_EQUIPMENT", parent_code: null }));
 }
 
-async function fetchAllFromDB(readSite = '*') {
+async function fetchAllFromDB(readSite = "*") {
   const [sbs, devs, hvs, atex] = await Promise.all([
     loadSwitchboardsDB(readSite),
     loadDevicesDB(readSite),
@@ -333,8 +384,11 @@ async function getLastRefresh(site) {
   return rows[0]?.last_refresh || null;
 }
 async function setLastRefresh(site) {
-  await pool.query(`INSERT INTO controls_state(site,last_refresh) VALUES ($1,NOW())
-    ON CONFLICT (site) DO UPDATE SET last_refresh=NOW()`, [site]);
+  await pool.query(
+    `INSERT INTO controls_state(site,last_refresh) VALUES ($1,NOW())
+     ON CONFLICT (site) DO UPDATE SET last_refresh=NOW()`,
+    [site]
+  );
 }
 
 async function ensureAutoForSite(site) {
@@ -343,7 +397,8 @@ async function ensureAutoForSite(site) {
   const n = cnt[0]?.n || 0;
   let stale = false;
   const last = await getLastRefresh(site);
-  if (!last) stale = true; else {
+  if (!last) stale = true;
+  else {
     const ageMin = (Date.now() - new Date(last).getTime()) / 60000;
     stale = ageMin >= TTL_MINUTES;
   }
@@ -355,9 +410,11 @@ async function ensureAutoForSite(site) {
   }
 }
 
-async function importFromSources(insertSite = 'Default') {
-  const incoming = await fetchAllFromDB('*'); // read across sites as requested
-  let added = 0, updated = 0, flaggedNotPresent = 0;
+async function importFromSources(insertSite = "Default") {
+  const incoming = await fetchAllFromDB("*"); // read across sites as requested
+  let added = 0,
+    updated = 0,
+    flaggedNotPresent = 0;
   for (const inc of incoming) {
     if (!EQUIPMENT_TYPES.includes(inc.equipment_type)) {
       await pool.query(
@@ -367,31 +424,29 @@ async function importFromSources(insertSite = 'Default') {
       flaggedNotPresent++;
       continue;
     }
-    const { rows: exist } = await pool.query(
-      "SELECT id, building, name, parent_code FROM controls_entities WHERE site=$1 AND code=$2",
-      [insertSite, inc.code]
+
+    // UPSERT (fix: no SELECT+UPDATE race)
+    const { rows } = await pool.query(
+      `INSERT INTO controls_entities (site, building, equipment_type, name, code, parent_code)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (site, code)
+       DO UPDATE SET building = EXCLUDED.building,
+                     equipment_type = EXCLUDED.equipment_type,
+                     name = EXCLUDED.name,
+                     parent_code = EXCLUDED.parent_code,
+                     updated_at = NOW()
+       RETURNING (xmax = 0) AS inserted`,
+      [insertSite, inc.building || null, inc.equipment_type, inc.name, inc.code, inc.parent_code || null]
     );
-    if (exist.length === 0) {
-      await pool.query(
-        "INSERT INTO controls_entities (site, building, equipment_type, name, code, parent_code) VALUES ($1,$2,$3,$4,$5,$6)",
-        [insertSite, inc.building || null, inc.equipment_type, inc.name, inc.code, inc.parent_code || null]
-      );
-      added++;
-    } else {
-      const prev = exist[0];
-      if (prev.name !== inc.name || prev.building !== inc.building || prev.parent_code !== (inc.parent_code || null)) {
-        await pool.query(
-          "UPDATE controls_entities SET building=$1, name=$2, parent_code=$3, updated_at=NOW() WHERE id=$4",
-          [inc.building || null, inc.name, inc.parent_code || null, prev.id]
-        );
-        updated++;
-      }
-    }
+    if (rows?.[0]?.inserted) added++;
+    else updated++;
   }
-  log(`[auto] import done → site=${insertSite} added=${added} updated=${updated} not_covered=${flaggedNotPresent}`);
+  log(
+    `[auto] import done → site=${insertSite} added=${added} updated=${updated} not_covered=${flaggedNotPresent}`
+  );
 }
 
-async function regenerateTasks(site = 'Default') {
+async function regenerateTasks(site = "Default") {
   const { rows: entities } = await pool.query("SELECT * FROM controls_entities WHERE site=$1", [site]);
   for (const e of entities) {
     const items = TSD_LIBRARY[e.equipment_type] || [];
@@ -401,16 +456,20 @@ async function regenerateTasks(site = 'Default') {
       let last = done[it.id] || null;
       // also check most recent Completed task for this pair
       const { rows: lastRows } = await pool.query(
-        `SELECT last_control FROM controls_tasks WHERE site=$1 AND entity_id=$2 AND task_code=$3 AND status='Completed' ORDER BY last_control DESC NULLS LAST LIMIT 1`,
+        `SELECT last_control FROM controls_tasks
+         WHERE site=$1 AND entity_id=$2 AND task_code=$3 AND status='Completed'
+         ORDER BY last_control DESC NULLS LAST LIMIT 1`,
         [site, e.id, it.id]
       );
       if (!last && lastRows[0]?.last_control) last = lastRows[0].last_control;
       const next = last ? addMonths(last, it.frequency_months || 12) : todayISO();
-      const status = new Date(next) < new Date(todayISO()) ? 'Overdue' : 'Planned';
+      const status = new Date(next) < new Date(todayISO()) ? "Overdue" : "Planned";
 
       // ensure one active task exists (Planned/Overdue)
       const { rows: act } = await pool.query(
-        `SELECT id FROM controls_tasks WHERE site=$1 AND entity_id=$2 AND task_code=$3 AND status IN ('Planned','Overdue') LIMIT 1`,
+        `SELECT id FROM controls_tasks
+         WHERE site=$1 AND entity_id=$2 AND task_code=$3 AND status IN ('Planned','Overdue')
+         LIMIT 1`,
         [site, e.id, it.id]
       );
       if (act.length === 0) {
@@ -420,17 +479,34 @@ async function regenerateTasks(site = 'Default') {
             value_type, result_schema, procedure_md, hazards_md, ppe_md, tools_md, created_by
           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
           [
-            site, e.id, `${e.name} • ${it.label}`, it.id, it.frequency_months,
-            last, next, status,
-            'checklist',
-            JSON.stringify({ field: it.field, type: it.type, unit: it.unit, comparator: it.comparator, threshold: it.threshold, options: it.options || null }),
-            it.procedure_md || '', it.hazards_md || '', it.ppe_md || '', it.tools_md || '',
-            'system'
+            site,
+            e.id,
+            `${e.name} • ${it.label}`,
+            it.id,
+            it.frequency_months,
+            last,
+            next,
+            status,
+            "checklist",
+            JSON.stringify({
+              field: it.field,
+              type: it.type,
+              unit: it.unit,
+              comparator: it.comparator,
+              threshold: it.threshold,
+              options: it.options || null,
+            }),
+            it.procedure_md || "",
+            it.hazards_md || "",
+            it.ppe_md || "",
+            it.tools_md || "",
+            "system",
           ]
         );
       } else {
         await pool.query(
-          `UPDATE controls_tasks SET last_control=$1, next_control=$2, status=$3, updated_at=NOW()
+          `UPDATE controls_tasks
+           SET last_control=$1, next_control=$2, status=$3, updated_at=NOW()
            WHERE id=$4`,
           [last, next, status, act[0].id]
         );
@@ -451,69 +527,102 @@ app.get("/api/controls/library", (_req, res) => {
 
 // Catalog (auto ensure)
 app.get("/api/controls/catalog", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
-  await ensureAutoForSite(site);
-  const { rows } = await pool.query(`SELECT * FROM controls_entities WHERE ${siteFilterSQL()} ORDER BY id DESC`, [site]);
-  res.json({ data: rows });
+  try {
+    const site = req.headers["x-site"] || req.query.site || "Default";
+    await ensureAutoForSite(site);
+    const { rows } = await pool.query(
+      `SELECT * FROM controls_entities WHERE ${siteFilterSQL("", 1)} ORDER BY id DESC`,
+      [site]
+    );
+    res.json({ data: rows });
+  } catch (e) {
+    res.status(500).json({ error: "Erreur catalog", details: e.message });
+  }
 });
 
 // Tree (auto ensure)
 app.get("/api/controls/tree", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
-  await ensureAutoForSite(site);
+  try {
+    const site = req.headers["x-site"] || req.query.site || "Default";
+    await ensureAutoForSite(site);
 
-  const { rows: ents } = await pool.query(
-    `SELECT id, site, building, equipment_type, name, code, parent_code
-     FROM controls_entities
-     WHERE ${siteFilterSQL()}
-     ORDER BY building, equipment_type, name`, [site]);
+    const { rows: ents } = await pool.query(
+      `SELECT id, site, building, equipment_type, name, code, parent_code
+       FROM controls_entities
+       WHERE ${siteFilterSQL("", 1)}
+       ORDER BY building, equipment_type, name`,
+      [site]
+    );
 
-  const { rows: counts } = await pool.query(`
-    SELECT entity_id,
-      SUM((status='Planned')::int) AS planned,
-      SUM((status='Overdue')::int) AS overdue,
-      SUM((status='Completed')::int) AS completed,
-      MIN(next_control) AS next_due
-    FROM controls_tasks ct
-    WHERE ${siteFilterSQL('ct')}
-    GROUP BY entity_id`, [site]);
+    const { rows: counts } = await pool.query(
+      `
+      SELECT entity_id,
+        SUM((status='Planned')::int) AS planned,
+        SUM((status='Overdue')::int) AS overdue,
+        SUM((status='Completed')::int) AS completed,
+        MIN(next_control) AS next_due
+      FROM controls_tasks ct
+      WHERE ${siteFilterSQL("ct", 1)}
+      GROUP BY entity_id`,
+      [site]
+    );
 
-  const cMap = new Map(counts.map(r => [r.entity_id, r]));
-  const buildings = {};
-  for (const e of ents) {
-    const b = e.building || "B00";
-    buildings[b] ||= { building: b, groups: { LV_SWITCHBOARD: [], LV_DEVICE: [], HV_EQUIPMENT: [], ATEX_EQUIPMENT: [] }, boardsByCode: {} };
-    if (e.equipment_type === "LV_SWITCHBOARD") {
-      const node = { id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null }, children: [] };
-      buildings[b].groups.LV_SWITCHBOARD.push(node);
-      if (e.code) buildings[b].boardsByCode[e.code] = node;
+    const cMap = new Map(counts.map((r) => [r.entity_id, r]));
+    const buildings = {};
+    for (const e of ents) {
+      const b = e.building || "B00";
+      buildings[b] ||= {
+        building: b,
+        groups: { LV_SWITCHBOARD: [], LV_DEVICE: [], HV_EQUIPMENT: [], ATEX_EQUIPMENT: [] },
+        boardsByCode: {},
+      };
+      if (e.equipment_type === "LV_SWITCHBOARD") {
+        const node = {
+          id: e.id,
+          code: e.code,
+          name: e.name,
+          type: e.equipment_type,
+          counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null },
+          children: [],
+        };
+        buildings[b].groups.LV_SWITCHBOARD.push(node);
+        if (e.code) buildings[b].boardsByCode[e.code] = node;
+      }
     }
-  }
-  for (const e of ents) {
-    const b = e.building || "B00";
-    if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b]?.boardsByCode[e.parent_code]) {
-      buildings[b].boardsByCode[e.parent_code].children.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null } });
+    for (const e of ents) {
+      const b = e.building || "B00";
+      if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b]?.boardsByCode[e.parent_code]) {
+        buildings[b].boardsByCode[e.parent_code].children.push({
+          id: e.id,
+          code: e.code,
+          name: e.name,
+          type: e.equipment_type,
+          counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null },
+        });
+      }
     }
+    for (const e of ents) {
+      const b = e.building || "B00";
+      const bucket = buildings[b].groups;
+      const countsFor = cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null };
+      if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b].boardsByCode[e.parent_code]) continue;
+      if (e.equipment_type === "LV_DEVICE") bucket.LV_DEVICE.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
+      if (e.equipment_type === "HV_EQUIPMENT") bucket.HV_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
+      if (e.equipment_type === "ATEX_EQUIPMENT") bucket.ATEX_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
+    }
+    const out = Object.values(buildings).map((b) => ({
+      building: b.building,
+      groups: [
+        { label: "Switchboards", type: "LV_SWITCHBOARD", entities: b.groups.LV_SWITCHBOARD },
+        { label: "Devices", type: "LV_DEVICE", entities: b.groups.LV_DEVICE },
+        { label: "High Voltage", type: "HV_EQUIPMENT", entities: b.groups.HV_EQUIPMENT },
+        { label: "ATEX", type: "ATEX_EQUIPMENT", entities: b.groups.ATEX_EQUIPMENT },
+      ],
+    }));
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ error: "Erreur tree", details: e.message });
   }
-  for (const e of ents) {
-    const b = e.building || "B00";
-    const bucket = buildings[b].groups;
-    const countsFor = cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null };
-    if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b].boardsByCode[e.parent_code]) continue;
-    if (e.equipment_type === "LV_DEVICE") bucket.LV_DEVICE.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
-    if (e.equipment_type === "HV_EQUIPMENT") bucket.HV_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
-    if (e.equipment_type === "ATEX_EQUIPMENT") bucket.ATEX_EQUIPMENT.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: countsFor });
-  }
-  const out = Object.values(buildings).map(b => ({
-    building: b.building,
-    groups: [
-      { label: "Switchboards", type: "LV_SWITCHBOARD", entities: b.groups.LV_SWITCHBOARD },
-      { label: "Devices",      type: "LV_DEVICE",      entities: b.groups.LV_DEVICE },
-      { label: "High Voltage", type: "HV_EQUIPMENT",   entities: b.groups.HV_EQUIPMENT },
-      { label: "ATEX",         type: "ATEX_EQUIPMENT", entities: b.groups.ATEX_EQUIPMENT },
-    ]
-  }));
-  res.json(out);
 });
 
 // Tasks (auto ensure)
@@ -524,20 +633,45 @@ app.get("/api/controls/tasks", async (req, res) => {
     const { building, type, status, q, page = 1, pageSize = 200, entity_id } = req.query;
     await ensureOverdueFlags();
 
-    let i = 1; const values = []; const where = [];
-    values.push(site); where.push(`${siteFilterSQL('ct')}`.replace('$1', `$${i++}`));
-    if (building) { values.push(building); where.push(`ce.building = $${i++}`); }
-    if (type)     { values.push(type);     where.push(`ce.equipment_type = $${i++}`); }
-    if (status)   { values.push(status);   where.push(`ct.status = $${i++}`); }
-    if (entity_id){ values.push(Number(entity_id)); where.push(`ct.entity_id = $${i++}`); }
-    if (q)        { values.push(`%${q}%`); where.push(`(ct.task_name ILIKE $${i} OR ct.task_code ILIKE $${i})`); i++; }
-    values.push(Number(pageSize)); values.push((Number(page) - 1) * Number(pageSize));
+    let i = 1;
+    const values = [];
+    const where = [];
+
+    // site filter (fix: correct placeholder indexing)
+    values.push(site);
+    where.push(siteFilterSQL("ct", i));
+    i++;
+
+    if (building) {
+      values.push(building);
+      where.push(`ce.building = $${i++}`);
+    }
+    if (type) {
+      values.push(type);
+      where.push(`ce.equipment_type = $${i++}`);
+    }
+    if (status) {
+      values.push(status);
+      where.push(`ct.status = $${i++}`);
+    }
+    if (entity_id) {
+      values.push(Number(entity_id));
+      where.push(`ct.entity_id = $${i++}`);
+    }
+    if (q) {
+      values.push(`%${q}%`);
+      where.push(`(ct.task_name ILIKE $${i} OR ct.task_code ILIKE $${i})`);
+      i++;
+    }
+
+    values.push(Number(pageSize));
+    values.push((Number(page) - 1) * Number(pageSize));
 
     const query = `
       SELECT ct.*, ce.equipment_type, ce.building, ce.name AS entity_name
       FROM controls_tasks ct
       LEFT JOIN controls_entities ce ON ct.entity_id = ce.id
-      WHERE ${where.length ? where.join(' AND ') : 'true'}
+      WHERE ${where.length ? where.join(" AND ") : "true"}
       ORDER BY ct.next_control ASC NULLS LAST, ct.id DESC
       LIMIT $${i++} OFFSET $${i}
     `;
@@ -557,8 +691,8 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
   let tsd_item = null;
   const { rows: ent } = await pool.query("SELECT equipment_type FROM controls_entities WHERE id=$1", [t.entity_id]);
   const eqType = ent[0]?.equipment_type;
-  if (eqType && TSD_LIBRARY[eqType]) tsd_item = (TSD_LIBRARY[eqType] || []).find(it => it.id === t.task_code) || null;
-  if (!tsd_item) tsd_item = Object.values(TSD_LIBRARY).flat().find(it => it.id === t.task_code) || null;
+  if (eqType && TSD_LIBRARY[eqType]) tsd_item = (TSD_LIBRARY[eqType] || []).find((it) => it.id === t.task_code) || null;
+  if (!tsd_item) tsd_item = Object.values(TSD_LIBRARY).flat().find((it) => it.id === t.task_code) || null;
 
   res.json({ ...t, tsd_item });
 });
@@ -578,12 +712,19 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [JSON.stringify(results || {}), todayISO(), addMonths(todayISO(), t.frequency_months || 12), id]
     );
 
-    await pool.query("INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
-      [t.site || "Default", id, t.task_name, user, "Completed", JSON.stringify({ ai_risk_score, results })]);
-    await pool.query("INSERT INTO controls_records (site, entity_id, task_code, results, created_by) VALUES ($1,$2,$3,$4,$5)",
-      [t.site || "Default", t.entity_id, t.task_code, JSON.stringify(results || {}), user]);
-    await pool.query("UPDATE controls_entities SET done = done || jsonb_build_object($1, $2) WHERE id=$3",
-      [t.task_code, todayISO(), t.entity_id]);
+    await pool.query(
+      "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
+      [t.site || "Default", id, t.task_name, user, "Completed", JSON.stringify({ ai_risk_score, results })]
+    );
+    await pool.query(
+      "INSERT INTO controls_records (site, entity_id, task_code, results, created_by) VALUES ($1,$2,$3,$4,$5)",
+      [t.site || "Default", t.entity_id, t.task_code, JSON.stringify(results || {}), user]
+    );
+    await pool.query("UPDATE controls_entities SET done = done || jsonb_build_object($1, $2) WHERE id=$3", [
+      t.task_code,
+      todayISO(),
+      t.entity_id,
+    ]);
 
     res.json({ ok: true });
   } catch (e) {
@@ -633,10 +774,17 @@ app.delete("/api/controls/tasks/:id/attachments/:attId", async (req, res) => {
 
 // Not present / history / records
 app.get("/api/controls/not-present", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
-  await ensureAutoForSite(site);
-  const { rows } = await pool.query(`SELECT * FROM controls_not_present WHERE ${siteFilterSQL()} ORDER BY id DESC`, [site]);
-  res.json(rows);
+  try {
+    const site = req.headers["x-site"] || req.query.site || "Default";
+    await ensureAutoForSite(site);
+    const { rows } = await pool.query(
+      `SELECT * FROM controls_not_present WHERE ${siteFilterSQL("", 1)} ORDER BY id DESC`,
+      [site]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "Erreur not-present", details: e.message });
+  }
 });
 app.post("/api/controls/not-present", async (req, res) => {
   const { site = "Default", building, equipment_type, declared_by = "user", note = "" } = req.body || {};
@@ -647,16 +795,30 @@ app.post("/api/controls/not-present", async (req, res) => {
   res.status(201).json(rows[0]);
 });
 app.get("/api/controls/history", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
-  await ensureAutoForSite(site);
-  const { rows } = await pool.query(`SELECT * FROM controls_history WHERE ${siteFilterSQL()} ORDER BY date DESC LIMIT 200`, [site]);
-  res.json(rows);
+  try {
+    const site = req.headers["x-site"] || req.query.site || "Default";
+    await ensureAutoForSite(site);
+    const { rows } = await pool.query(
+      `SELECT * FROM controls_history WHERE ${siteFilterSQL("", 1)} ORDER BY date DESC LIMIT 200`,
+      [site]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "Erreur history", details: e.message });
+  }
 });
 app.get("/api/controls/records", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
-  await ensureAutoForSite(site);
-  const { rows } = await pool.query(`SELECT * FROM controls_records WHERE ${siteFilterSQL()} ORDER BY created_at DESC LIMIT 200`, [site]);
-  res.json(rows);
+  try {
+    const site = req.headers["x-site"] || req.query.site || "Default";
+    await ensureAutoForSite(site);
+    const { rows } = await pool.query(
+      `SELECT * FROM controls_records WHERE ${siteFilterSQL("", 1)} ORDER BY created_at DESC LIMIT 200`,
+      [site]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "Erreur records", details: e.message });
+  }
 });
 
 // OpenAI endpoints
@@ -669,14 +831,32 @@ app.post("/api/controls/tasks/:id/analyze", async (req, res) => {
     const userMsg = {
       role: "user",
       content: [
-        { type: "text", text: `Site: ${ctx.task.site}\nEquipement: ${ctx.entity?.name || '-'} (${ctx.entity?.equipment_type})\nBuilding: ${ctx.entity?.building}\nTask: ${ctx.task.task_name} [code=${ctx.task.task_code}]\nResult_schema: ${JSON.stringify(ctx.task.result_schema)}\nDernier résultat: ${JSON.stringify(ctx.task.results)}\nTSD item: ${ctx.tsd_item ? JSON.stringify({ label: ctx.tsd_item.label, field: ctx.tsd_item.field, type: ctx.tsd_item.type, unit: ctx.tsd_item.unit, comparator: ctx.tsd_item.comparator, threshold: ctx.tsd_item.threshold }) : 'none'}\nPJ récentes: ${(ctx.attachments||[]).map(a=>a.filename).join(', ') || 'aucune'}` }
-      ]
+        {
+          type: "text",
+          text: `Site: ${ctx.task.site}
+Equipement: ${ctx.entity?.name || "-"} (${ctx.entity?.equipment_type})
+Building: ${ctx.entity?.building}
+Task: ${ctx.task.task_name} [code=${ctx.task.task_code}]
+Result_schema: ${JSON.stringify(ctx.task.result_schema)}
+Dernier résultat: ${JSON.stringify(ctx.task.results)}
+TSD item: ${
+            ctx.tsd_item
+              ? JSON.stringify({
+                  label: ctx.tsd_item.label,
+                  field: ctx.tsd_item.field,
+                  type: ctx.tsd_item.type,
+                  unit: ctx.tsd_item.unit,
+                  comparator: ctx.tsd_item.comparator,
+                  threshold: ctx.tsd_item.threshold,
+                })
+              : "none"
+          }
+PJ récentes: ${(ctx.attachments || []).map((a) => a.filename).join(", ") || "aucune"}`,
+        },
+      ],
     };
 
-    const { text } = await runChat([
-      { role: "system", content: ANALYZE_SYSTEM },
-      userMsg,
-    ]);
+    const { text } = await runChat([{ role: "system", content: ANALYZE_SYSTEM }, userMsg]);
 
     await pool.query(
       "UPDATE controls_tasks SET ai_notes = coalesce(ai_notes, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('at', NOW(), 'role', 'analysis', 'text', $1)) WHERE id=$2",
@@ -696,12 +876,28 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
     const ctx = await loadTaskContext(id);
     if (!ctx) return res.status(404).json({ error: "Task not found" });
 
-    const contextText = `Contexte:\n- Site: ${ctx.task.site}\n- Equipement: ${ctx.entity?.name} (${ctx.entity?.equipment_type}) building=${ctx.entity?.building}\n- Task: ${ctx.task.task_name} [${ctx.task.task_code}]\n- Résultats: ${JSON.stringify(ctx.task.results)}\n- TSD: ${ctx.tsd_item ? JSON.stringify({ label: ctx.tsd_item.label, field: ctx.tsd_item.field, unit: ctx.tsd_item.unit, comparator: ctx.tsd_item.comparator, threshold: ctx.tsd_item.threshold }) : 'none'}\n- PJ: ${(ctx.attachments||[]).map(a=>a.filename).join(', ') || 'aucune'}`;
+    const contextText = `Contexte:
+- Site: ${ctx.task.site}
+- Equipement: ${ctx.entity?.name} (${ctx.entity?.equipment_type}) building=${ctx.entity?.building}
+- Task: ${ctx.task.task_name} [${ctx.task.task_code}]
+- Résultats: ${JSON.stringify(ctx.task.results)}
+- TSD: ${
+      ctx.tsd_item
+        ? JSON.stringify({
+            label: ctx.tsd_item.label,
+            field: ctx.tsd_item.field,
+            unit: ctx.tsd_item.unit,
+            comparator: ctx.tsd_item.comparator,
+            threshold: ctx.tsd_item.threshold,
+          })
+        : "none"
+    }
+- PJ: ${(ctx.attachments || []).map((a) => a.filename).join(", ") || "aucune"}`;
 
-    const { text } = await runChat([
-      { role: "system", content: ASSISTANT_SYSTEM },
-      { role: "user", content: `${contextText}\n\nQuestion: ${q}` }
-    ], { temperature: 0.3 });
+    const { text } = await runChat(
+      [{ role: "system", content: ASSISTANT_SYSTEM }, { role: "user", content: `${contextText}\n\nQuestion: ${q}` }],
+      { temperature: 0.3 }
+    );
 
     await pool.query(
       "UPDATE controls_tasks SET ai_notes = coalesce(ai_notes, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('at', NOW(), 'role', 'assistant', 'q', $1, 'text', $2)) WHERE id=$3",
@@ -722,9 +918,9 @@ async function loadTaskContext(taskId) {
   const entity = ents[0] || null;
   let tsd_item = null;
   if (entity?.equipment_type && TSD_LIBRARY[entity.equipment_type]) {
-    tsd_item = (TSD_LIBRARY[entity.equipment_type] || []).find(it => it.id === task.task_code) || null;
+    tsd_item = (TSD_LIBRARY[entity.equipment_type] || []).find((it) => it.id === task.task_code) || null;
   }
-  if (!tsd_item) tsd_item = Object.values(TSD_LIBRARY).flat().find(it => it.id === task.task_code) || null;
+  if (!tsd_item) tsd_item = Object.values(TSD_LIBRARY).flat().find((it) => it.id === task.task_code) || null;
   const { rows: atts } = await pool.query(
     "SELECT id, filename, size, mimetype, uploaded_at FROM controls_attachments WHERE task_id=$1 ORDER BY uploaded_at DESC LIMIT 10",
     [taskId]
@@ -733,7 +929,14 @@ async function loadTaskContext(taskId) {
 }
 
 // Health
-app.get("/api/controls/health", (_req, res) => res.json({ ok: true, ts: Date.now(), ttl_minutes: TTL_MINUTES }));
+app.get("/api/controls/health", async (_req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT NOW() as now");
+    res.json({ ok: true, ts: Date.now(), db_time: rows?.[0]?.now, ttl_minutes: TTL_MINUTES });
+  } catch {
+    res.status(500).json({ ok: false, ts: Date.now(), ttl_minutes: TTL_MINUTES });
+  }
+});
 
 /* ------------------------------------------------------------------ */
 /*                                 START                               */
