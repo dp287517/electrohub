@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { get, post } from '../lib/api.js';
 import {
   Plus, UploadCloud, BarChart3, AlertTriangle, CheckCircle2, XCircle,
-  Paperclip, Bot, ChevronDown, Download, X
+  Paperclip, Bot, ChevronDown, Download, X, Trash2, Edit2, Save, X as CloseIcon
 } from 'lucide-react';
 import { Line } from 'react-chartjs-2';
 import {
@@ -18,7 +18,10 @@ const inputCls =
 const btn = 'px-3 py-2 rounded bg-gray-900 text-white hover:bg-black/90 disabled:opacity-50 disabled:cursor-not-allowed';
 const btnPrimary =
   'px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed';
+const btnGhost = 'px-2 py-1 rounded hover:bg-gray-100 text-gray-700';
+const danger = 'px-3 py-2 rounded bg-rose-600 text-white hover:bg-rose-700';
 
+/** Currency GBP */
 const gbp = (n) =>
   Number(n || 0).toLocaleString('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 2 });
 
@@ -78,6 +81,23 @@ function Toast({ msg, type = 'info', onClose }) {
   );
 }
 
+/* ----------------------------- Small helpers ----------------------------- */
+async function put(url, body) {
+  const r = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': body instanceof FormData ? undefined : 'application/json' },
+    credentials: 'include',
+    body: body instanceof FormData ? body : JSON.stringify(body || {}),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+async function del(url) {
+  const r = await fetch(url, { method: 'DELETE', credentials: 'include' });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json().catch(() => ({}));
+}
+
 /* --------------------------------- Page -------------------------------- */
 export default function Project() {
   const [list, setList] = useState([]);
@@ -88,6 +108,7 @@ export default function Project() {
   const [selected, setSelected] = useState(null); // project row
   const [status, setStatus] = useState(null);
   const [lines, setLines] = useState({ offers: [], orders: [], invoices: [] });
+  const [files, setFiles] = useState({ business_case: [], pip: [], offer: [], wbs: [], order: [], invoice: [] });
   const [analysis, setAnalysis] = useState(null);
   const [aiAnswer, setAiAnswer] = useState('');
 
@@ -98,9 +119,7 @@ export default function Project() {
   // toast
   const [toast, setToast] = useState(null);
 
-  useEffect(() => {
-    load();
-  }, []);
+  useEffect(() => { load(); }, []);
 
   useEffect(() => {
     // sync controlled fields when opening a project
@@ -131,7 +150,6 @@ export default function Project() {
       setToast({ msg: `Project <b>${row.title}</b> created.`, type: 'success' });
       await openProject(row); // open the newly created project
     } catch (e) {
-      console.error(e);
       setToast({ msg: 'Creation failed: ' + (e?.message || e), type: 'error' });
     } finally {
       setBusy(false);
@@ -143,36 +161,31 @@ export default function Project() {
     try {
       const s = await get(`/api/projects/projects/${p.id}/status`);
       setStatus(s || {});
-    } catch {
-      setStatus({});
-    }
+    } catch { setStatus({}); }
+
     try {
       const l = await get(`/api/projects/projects/${p.id}/lines`);
       setLines(l || { offers: [], orders: [], invoices: [] });
-    } catch {
-      setLines({ offers: [], orders: [], invoices: [] });
-    }
+    } catch { setLines({ offers: [], orders: [], invoices: [] }); }
+
     try {
       const a = await get(`/api/projects/projects/${p.id}/analysis`);
       setAnalysis(a || null);
-    } catch {
-      setAnalysis(null);
-    }
+    } catch { setAnalysis(null); }
+
+    await loadAllFiles(p.id);
   }
 
-  // local PUT helper (keeps credentials)
-  async function put(url, body) {
-    const r = await fetch(url, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(body || {}),
-    });
-    if (!r.ok) {
-      const text = await r.text();
-      throw new Error(text || `HTTP ${r.status}`);
+  async function loadAllFiles(projectId) {
+    const cats = ['business_case', 'pip', 'offer', 'wbs', 'order', 'invoice'];
+    const out = {};
+    for (const c of cats) {
+      try {
+        const f = await get(`/api/projects/projects/${projectId}/files`, { category: c });
+        out[c] = f?.files || [];
+      } catch { out[c] = []; }
     }
-    return r.json();
+    setFiles(out);
   }
 
   async function saveHeaderFields() {
@@ -193,31 +206,35 @@ export default function Project() {
       setSelected(updated);
       setList((s) => s.map((x) => (x.id === updated.id ? updated : x)));
       setToast({ msg: 'Header saved.', type: 'success' });
-      // refresh KPIs/analysis
-      await openProject(updated);
+      await openProject(updated); // refresh KPIs/analysis/files
     } catch (e) {
       setToast({ msg: 'Save failed: ' + (e?.message || e), type: 'error' });
     }
   }
 
-  async function uploadFiles(p, category, files) {
-    if (!files?.length) return;
+  async function uploadFiles(p, category, filesList) {
+    if (!filesList?.length) return;
     try {
-      for (const file of files) {
+      for (const file of filesList) {
         const fd = new FormData();
         fd.append('file', file);
-        await post(
-          `/api/projects/projects/${p.id}/upload?category=${encodeURIComponent(category)}`,
-          fd
-        );
+        await post(`/api/projects/projects/${p.id}/upload?category=${encodeURIComponent(category)}`, fd);
       }
-      setToast({
-        msg: files.length > 1 ? `${files.length} files uploaded.` : 'File uploaded.',
-        type: 'success',
-      });
-      await openProject(p);
+      setToast({ msg: filesList.length > 1 ? `${filesList.length} files uploaded.` : 'File uploaded.', type: 'success' });
+      await loadAllFiles(p.id);
     } catch (e) {
       setToast({ msg: 'Upload failed: ' + (e?.message || e), type: 'error' });
+    }
+  }
+
+  async function deleteFile(fileId) {
+    try {
+      // Backend route to add next: DELETE /api/projects/files/:fileId
+      await del(`/api/projects/files/${fileId}`);
+      setToast({ msg: 'File deleted.', type: 'success' });
+      if (selected) await loadAllFiles(selected.id);
+    } catch (e) {
+      setToast({ msg: 'Delete not supported yet (backend route to add).', type: 'warn' });
     }
   }
 
@@ -236,6 +253,28 @@ export default function Project() {
     }
   }
 
+  async function updateLine(kind, lineId, patch) {
+    try {
+      // Backend route to add next: PUT /api/projects/projects/:id/{kind}/:lineId
+      await put(`/api/projects/projects/${selected.id}/${kind}/${lineId}`, patch);
+      setToast({ msg: 'Line saved.', type: 'success' });
+      await openProject(selected);
+    } catch {
+      setToast({ msg: 'Edit not supported yet (backend route to add).', type: 'warn' });
+    }
+  }
+
+  async function deleteLine(kind, lineId) {
+    try {
+      // Backend route to add next: DELETE /api/projects/projects/:id/{kind}/:lineId
+      await del(`/api/projects/projects/${selected.id}/${kind}/${lineId}`);
+      setToast({ msg: 'Line deleted.', type: 'success' });
+      await openProject(selected);
+    } catch {
+      setToast({ msg: 'Delete not supported yet (backend route to add).', type: 'warn' });
+    }
+  }
+
   async function toggleStatus(key) {
     if (!selected) return;
     const next = { ...(status || {}) };
@@ -246,6 +285,19 @@ export default function Project() {
       setToast({ msg: 'Status updated.', type: 'success' });
     } catch (e) {
       setToast({ msg: 'Status update failed: ' + (e?.message || e), type: 'error' });
+    }
+  }
+
+  async function removeProject() {
+    if (!selected) return;
+    if (!confirm(`Delete project “${selected.title}”? This cannot be undone.`)) return;
+    try {
+      await del(`/api/projects/projects/${selected.id}`);
+      setList((s) => s.filter((p) => p.id !== selected.id));
+      setSelected(null);
+      setToast({ msg: 'Project deleted.', type: 'success' });
+    } catch (e) {
+      setToast({ msg: 'Deletion failed: ' + (e?.message || e), type: 'error' });
     }
   }
 
@@ -281,9 +333,7 @@ export default function Project() {
           placeholder="New project title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') create();
-          }}
+          onKeyDown={(e) => e.key === 'Enter' && create()}
         />
         <button className={btnPrimary} onClick={create} disabled={busy || !title.trim()}>
           <Plus className="inline mr-1" />
@@ -310,9 +360,14 @@ export default function Project() {
                     WBS: {p.wbs_number || '—'} · Budget: {p.budget_amount != null ? gbp(p.budget_amount) : '—'}
                   </div>
                 </div>
-                <button className="text-blue-600 hover:underline" onClick={() => openProject(p)}>
-                  View
-                </button>
+                <div className="flex items-center gap-2">
+                  <button className="text-blue-600 hover:underline" onClick={() => openProject(p)}>
+                    View
+                  </button>
+                  <button className="text-rose-600 hover:underline" onClick={() => { setSelected(p); removeProject(); }}>
+                    Delete
+                  </button>
+                </div>
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                 <div className="p-2 rounded bg-gray-50">
@@ -329,42 +384,12 @@ export default function Project() {
                 </div>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-gray-600 items-center">
-                {st.business_case_done ? (
-                  <CheckCircle2 className="text-emerald-600" size={14} />
-                ) : (
-                  <XCircle className="text-rose-600" size={14} />
-                )}
-                Business case
-                {st.pip_done ? (
-                  <CheckCircle2 className="text-emerald-600 ml-2" size={14} />
-                ) : (
-                  <XCircle className="text-rose-600 ml-2" size={14} />
-                )}
-                PIP
-                {st.offers_received ? (
-                  <CheckCircle2 className="text-emerald-600 ml-2" size={14} />
-                ) : (
-                  <XCircle className="text-rose-600 ml-2" size={14} />
-                )}
-                Offers
-                {st.wbs_recorded ? (
-                  <CheckCircle2 className="text-emerald-600 ml-2" size={14} />
-                ) : (
-                  <XCircle className="text-rose-600 ml-2" size={14} />
-                )}
-                WBS
-                {st.orders_placed ? (
-                  <CheckCircle2 className="text-emerald-600 ml-2" size={14} />
-                ) : (
-                  <XCircle className="text-rose-600 ml-2" size={14} />
-                )}
-                Orders
-                {st.invoices_received ? (
-                  <CheckCircle2 className="text-emerald-600 ml-2" size={14} />
-                ) : (
-                  <XCircle className="text-rose-600 ml-2" size={14} />
-                )}
-                Invoices
+                {st.business_case_done ? <CheckCircle2 className="text-emerald-600" size={14} /> : <XCircle className="text-rose-600" size={14} />} Business case
+                {st.pip_done ? <CheckCircle2 className="text-emerald-600 ml-2" size={14} /> : <XCircle className="text-rose-600 ml-2" size={14} />} PIP
+                {st.offers_received ? <CheckCircle2 className="text-emerald-600 ml-2" size={14} /> : <XCircle className="text-rose-600 ml-2" size={14} />} Offers
+                {st.wbs_recorded ? <CheckCircle2 className="text-emerald-600 ml-2" size={14} /> : <XCircle className="text-rose-600 ml-2" size={14} />} WBS
+                {st.orders_placed ? <CheckCircle2 className="text-emerald-600 ml-2" size={14} /> : <XCircle className="text-rose-600 ml-2" size={14} />} Orders
+                {st.invoices_received ? <CheckCircle2 className="text-emerald-600 ml-2" size={14} /> : <XCircle className="text-rose-600 ml-2" size={14} />} Invoices
               </div>
             </div>
           );
@@ -379,49 +404,23 @@ export default function Project() {
           aria-modal="true"
           role="dialog"
         >
-          <div className="mx-auto my-6 w-full max-w-4xl px-4" onClick={(e) => e.stopPropagation()}>
+          <div className="mx-auto my-6 w-full max-w-5xl px-4" onClick={(e) => e.stopPropagation()}>
             <div className="bg-white rounded-2xl shadow-2xl max-h-[90vh] flex flex-col overflow-hidden">
               {/* Header */}
               <div className="px-6 py-4 border-b bg-gray-50 flex items-center justify-between">
                 <h3 className="text-xl font-semibold">{selected.title}</h3>
-                <button className="text-gray-600 hover:text-gray-800" onClick={() => setSelected(null)} title="Close">
-                  <X />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button className={danger} onClick={removeProject} title="Delete project">
+                    <Trash2 size={16} className="inline -mt-0.5" /> Delete
+                  </button>
+                  <button className={btnGhost} onClick={() => setSelected(null)} title="Close">
+                    <CloseIcon />
+                  </button>
+                </div>
               </div>
 
               {/* Body (scrollable) */}
               <div className="p-6 grid gap-6 overflow-y-auto">
-                {/* Steps & attachments */}
-                <div>
-                  <h4 className="font-semibold mb-2">Steps & attachments</h4>
-                  <div className="grid sm:grid-cols-2 gap-3">
-                    {[
-                      ['business_case', 'Business case'],
-                      ['pip', 'PIP'],
-                      ['offer', 'Offers (PDF, emails…)'],
-                      ['wbs', 'WBS / Budget'],
-                      ['order', 'Orders'],
-                      ['invoice', 'Invoices'],
-                    ].map(([key, label]) => (
-                      <div key={key} className="p-3 rounded border bg-gray-50">
-                        <div className="text-sm font-medium mb-2 flex items-center gap-2">
-                          <Paperclip size={16} />
-                          {label}
-                        </div>
-                        <DropInput
-                          label="Drop files here"
-                          onFiles={(files) => uploadFiles(selected, key, files)}
-                          accept={'.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg'}
-                          multiple
-                        />
-                        <div className="mt-2 text-xs text-gray-500">
-                          Files are versioned and the corresponding step is ticked automatically.
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
                 {/* WBS & Budget */}
                 <div className="grid sm:grid-cols-3 gap-3">
                   <input
@@ -445,12 +444,97 @@ export default function Project() {
                   </div>
                 </div>
 
-                {/* Financial lines */}
-                <div className="grid sm:grid-cols-3 gap-3">
+                {/* Steps & attachments */}
+                <div>
+                  <h4 className="font-semibold mb-2">Steps & attachments</h4>
+                  <div className="grid md:grid-cols-2 gap-4">
+                    {[
+                      ['business_case', 'Business case'],
+                      ['pip', 'PIP'],
+                      ['offer', 'Offers (PDF, emails…)'],
+                      ['wbs', 'WBS / Budget'],
+                      ['order', 'Orders'],
+                      ['invoice', 'Invoices'],
+                    ].map(([key, label]) => (
+                      <div key={key} className="p-3 rounded border bg-gray-50">
+                        <div className="text-sm font-medium mb-2 flex items-center gap-2">
+                          <Paperclip size={16} /> {label}
+                        </div>
+                        <DropInput
+                          label="Drop files here"
+                          onFiles={(filesList) => uploadFiles(selected, key, filesList)}
+                          accept={'.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg'}
+                          multiple
+                        />
+                        {/* List existing files */}
+                        <ul className="mt-2 divide-y text-sm bg-white rounded border">
+                          {(files[key] || []).length === 0 && (
+                            <li className="px-3 py-2 text-gray-500">No files yet.</li>
+                          )}
+                          {(files[key] || []).map((f) => (
+                            <li key={f.id} className="px-3 py-2 flex items-center justify-between gap-3">
+                              <div className="truncate">
+                                <span className="font-medium">{f.filename}</span>
+                                <span className="text-gray-500 text-xs ml-2">
+                                  {new Date(f.uploaded_at).toLocaleString()}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <a
+                                  className={btnGhost}
+                                  href={`/api/projects/download?file_id=${f.id}`}
+                                  target="_blank" rel="noreferrer"
+                                  title="Download"
+                                >
+                                  <Download size={16} />
+                                </a>
+                                <button className={btnGhost} title="Delete" onClick={() => deleteFile(f.id)}>
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                        <div className="mt-2 text-xs text-gray-500">
+                          Files are versioned and the corresponding step is ticked automatically.
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Financial lines (add) */}
+                <div className="grid md:grid-cols-3 gap-3">
                   <AddLine title="Add offer" onSubmit={(amount, vendor) => addLine('offer', amount, vendor)} />
                   <AddLine title="Add order" onSubmit={(amount, vendor) => addLine('order', amount, vendor)} />
                   <AddLine title="Add invoice" onSubmit={(amount, vendor) => addLine('invoice', amount, vendor)} />
                 </div>
+
+                {/* Financial lines (list/edit/delete) */}
+                <LinesTable
+                  title="Offers"
+                  kind="offer"
+                  rows={lines.offers}
+                  dateKey="received_at"
+                  onEdit={(lineId, patch) => updateLine('offer', lineId, patch)}
+                  onDelete={(lineId) => deleteLine('offer', lineId)}
+                />
+                <LinesTable
+                  title="Orders"
+                  kind="order"
+                  rows={lines.orders}
+                  dateKey="ordered_at"
+                  onEdit={(lineId, patch) => updateLine('order', lineId, patch)}
+                  onDelete={(lineId) => deleteLine('order', lineId)}
+                />
+                <LinesTable
+                  title="Invoices"
+                  kind="invoice"
+                  rows={lines.invoices}
+                  dateKey="invoiced_at"
+                  onEdit={(lineId, patch) => updateLine('invoice', lineId, patch)}
+                  onDelete={(lineId) => deleteLine('invoice', lineId)}
+                />
 
                 {/* KPI & Chart */}
                 <ProjectCharts analysis={analysis} lines={lines} />
@@ -467,14 +551,9 @@ export default function Project() {
                     <input
                       className={inputCls}
                       placeholder="Ask a question (e.g., where is the risk of overrun?)"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') askAI(e.currentTarget.value);
-                      }}
+                      onKeyDown={(e) => e.key === 'Enter' && askAI(e.currentTarget.value)}
                     />
-                    <button
-                      className={btn}
-                      onClick={() => askAI('Quick risk assessment with prioritized actions')}
-                    >
+                    <button className={btn} onClick={() => askAI('Quick risk assessment with prioritized actions')}>
                       Quick advice
                     </button>
                   </div>
@@ -529,6 +608,69 @@ function AddLine({ title, onSubmit }) {
   );
 }
 
+function LinesTable({ title, kind, rows, dateKey, onEdit, onDelete }) {
+  const [editId, setEditId] = useState(null);
+  const [val, setVal] = useState({ amount: '', vendor: '' });
+
+  const startEdit = (r) => {
+    setEditId(r.id);
+    setVal({ amount: r.amount, vendor: r.vendor || '' });
+  };
+  const cancel = () => { setEditId(null); setVal({ amount: '', vendor: '' }); };
+  const save = async (id) => { await onEdit?.(id, { amount: Number(val.amount), vendor: val.vendor || null }); setEditId(null); };
+
+  return (
+    <div className="p-3 rounded border bg-white">
+      <div className="font-semibold mb-2">{title}</div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500">
+              <th className="py-2 pr-3">Date</th>
+              <th className="py-2 pr-3">Vendor</th>
+              <th className="py-2 pr-3">Amount</th>
+              <th className="py-2 pr-3 w-32">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="[&_tr:hover]:bg-gray-50">
+            {rows.length === 0 && (
+              <tr><td className="py-3 text-gray-500" colSpan={4}>No lines yet.</td></tr>
+            )}
+            {rows.map((r) => (
+              <tr key={`${kind}-${r.id}`} className="border-t">
+                <td className="py-2 pr-3">{new Date(r[dateKey] || Date.now()).toLocaleDateString()}</td>
+                <td className="py-2 pr-3">
+                  {editId === r.id
+                    ? <input className={inputCls} value={val.vendor} onChange={(e) => setVal((s) => ({ ...s, vendor: e.target.value }))} />
+                    : (r.vendor || '—')}
+                </td>
+                <td className="py-2 pr-3">
+                  {editId === r.id
+                    ? <input className={inputCls} type="number" value={val.amount} onChange={(e) => setVal((s) => ({ ...s, amount: e.target.value }))} />
+                    : gbp(r.amount)}
+                </td>
+                <td className="py-2 pr-3">
+                  {editId === r.id ? (
+                    <div className="flex gap-1">
+                      <button className={btnGhost} onClick={() => save(r.id)} title="Save"><Save size={16} /></button>
+                      <button className={btnGhost} onClick={cancel} title="Cancel"><X size={16} /></button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-1">
+                      <button className={btnGhost} onClick={() => startEdit(r)} title="Edit"><Edit2 size={16} /></button>
+                      <button className={btnGhost} onClick={() => onDelete?.(r.id)} title="Delete"><Trash2 size={16} /></button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function formatMonth(d) {
   const dt = new Date(d);
   return `${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getFullYear()).slice(-2)}`;
@@ -536,26 +678,46 @@ function formatMonth(d) {
 
 function ProjectCharts({ analysis, lines }) {
   const data = useMemo(() => {
-    const inv = (lines?.invoices || []).slice().reverse();
-    let cum = 0;
-    const labels = [];
-    const values = [];
-    for (const x of inv) {
-      cum += Number(x.amount) || 0;
-      labels.push(formatMonth(x.invoiced_at || Date.now()));
-      values.push(cum);
-    }
+    const toSeries = (arr, dateKey) => {
+      const s = (arr || []).slice().sort((a, b) => new Date(a[dateKey] || 0) - new Date(b[dateKey] || 0));
+      let cum = 0;
+      const labels = [];
+      const values = [];
+      for (const x of s) {
+        cum += Number(x.amount) || 0;
+        labels.push(formatMonth(x[dateKey] || Date.now()));
+        values.push(cum);
+      }
+      return { labels, values };
+    };
+    const inv = toSeries(lines?.invoices || [], 'invoiced_at');
+    const ord = toSeries(lines?.orders || [], 'ordered_at');
+    const off = toSeries(lines?.offers || [], 'received_at');
+
+    // build unified label axis (latest set)
+    const labels = [...new Set([...off.labels, ...ord.labels, ...inv.labels])];
+
+    const mapTo = (labels, s) => labels.map(l => {
+      const idx = s.labels.indexOf(l);
+      return idx >= 0 ? s.values[idx] : (s.values[(idx < 0 ? s.values.length - 1 : idx)] ?? 0);
+    });
+
     return {
       labels,
-      datasets: [{ label: 'Cumulative invoices (£)', data: values, tension: 0.2 }],
+      datasets: [
+        { label: 'Offers (£)', data: mapTo(labels, off), tension: 0.2 },
+        { label: 'Orders (£)', data: mapTo(labels, ord), tension: 0.2 },
+        { label: 'Invoices (£)', data: mapTo(labels, inv), tension: 0.2 },
+      ],
     };
   }, [lines]);
 
   return (
     <div className="grid gap-4">
       <div className="p-4 rounded border bg-white">
-        <div className="font-semibold mb-2">Cumulative invoice curve</div>
+        <div className="font-semibold mb-2">Cumulative curves (£)</div>
         <Line data={data} options={{ responsive: true, scales: { y: { beginAtZero: true } } }} />
+        <div className="text-xs text-gray-500 mt-1">Curves update as soon as you add offers, orders or invoices.</div>
       </div>
       {analysis && (
         <div className="grid sm:grid-cols-2 gap-3">
