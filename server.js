@@ -44,7 +44,8 @@ const arcflashTarget     = process.env.ARCFLASH_BASE_URL      || "http://127.0.0
 const obsolescenceTarget = process.env.OBSOLESCENCE_BASE_URL  || "http://127.0.0.1:3007";
 const hvTarget           = process.env.HV_BASE_URL            || "http://127.0.0.1:3008";
 const diagramTarget      = process.env.DIAGRAM_BASE_URL       || "http://127.0.0.1:3009";
-const controlsTarget     = process.env.CONTROLS_BASE_URL      || "http://127.0.0.1:3010";
+// ⚠️ Correction ici : Controls écoute chez toi sur 3011
+const controlsTarget     = process.env.CONTROLS_BASE_URL      || "http://127.0.0.1:3011";
 const oibtTarget         = process.env.OIBT_BASE_URL          || "http://127.0.0.1:3012";
 const projectsTarget     = process.env.PROJECTS_BASE_URL      || "http://127.0.0.1:3013";
 
@@ -80,7 +81,7 @@ app.use("/api/arcflash",     mkProxy(arcflashTarget));
 app.use("/api/obsolescence", mkProxy(obsolescenceTarget));
 app.use("/api/hv",           mkProxy(hvTarget));
 app.use("/api/diagram",      mkProxy(diagramTarget));
-app.use("/api/controls",     mkProxy(controlsTarget));
+app.use("/api/controls",     mkProxy(controlsTarget));   // <-- corrige le 404 Controls
 app.use("/api/oibt",         mkProxy(oibtTarget));
 
 // >>> Projects : proxy bavard + re-stream (si un jour body était déjà parsé)
