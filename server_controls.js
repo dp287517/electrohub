@@ -1,4 +1,8 @@
-// server_controls.js — Controls backend (patched for Render + tolerant site + IA stubs)
+// server_controls.js — Controls backend (Render-friendly port, tolerant site reads, + OpenAI analysis & assistant)
+// Usage:
+// - Set NEON_DATABASE_URL, OPENAI_API_KEY (optional for AI), CORS_ORIGIN, SWITCHBOARD_URL/HV_URL/ATEX_URL (if HTTP sources)
+// - Start: node server_controls.js (uses CONTROLS_PORT || 3011)
+
 import express from "express";
 import helmet from "helmet";
 import cookieParser from "cookie-parser";
@@ -20,7 +24,7 @@ app.use(helmet());
 app.use(express.json({ limit: "50mb" }));
 app.use(cookieParser());
 
-// CORS permissif
+// CORS
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -137,37 +141,12 @@ async function ensureSchema() {
     );
   `);
 
-  // ALTERs
+  // ALTERs (idempotent)
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
-
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS value_type TEXT DEFAULT 'checklist';`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS result_schema JSONB;`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS procedure_md TEXT;`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS hazards_md TEXT;`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS ppe_md TEXT;`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS tools_md TEXT;`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS results JSONB;`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS ai_notes JSONB DEFAULT '[]'::jsonb;`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS created_by TEXT;`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Planned';`);
-
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_history ALTER COLUMN site SET DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS meta JSONB;`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS task_name TEXT;`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS action TEXT;`);
-
-  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_not_present ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_next ON controls_tasks(next_control);`);
@@ -182,7 +161,7 @@ async function ensureOverdueFlags() { await pool.query(`UPDATE controls_tasks SE
 // --- LIBRARY ---
 app.get("/api/controls/library", (_req, res) => { res.json({ types: EQUIPMENT_TYPES, library: TSD_LIBRARY }); });
 
-// --- Sources HTTP + DB ---
+// --- LOADERS ---
 async function safeFetchJson(url) {
   try { const r = await fetch(url, { headers: { "Content-Type": "application/json" } }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return await r.json(); }
   catch (e) { log("fetch error", url, e.message); return null; }
@@ -216,7 +195,7 @@ async function loadATEXHTTP(site = "Default") {
   return (data?.data || []).map(ax => ({ site, building: ax.building || "B00", equipment_type: "ATEX_EQUIPMENT", name: ax.component_type || `ATEX-${ax.id}`, code: ax.manufacturer_ref || `ATEX-${ax.id}` }));
 }
 
-// DB (readSite '*' = lire toutes les sources)
+// DB (readSite '*' = read across sites)
 async function loadFromDB(readSite = "Default") {
   const { rows: sbs } = await pool.query(`
     SELECT COALESCE(NULLIF(s.site::text,''),'Default') AS site,
@@ -258,7 +237,7 @@ async function loadFromDB(readSite = "Default") {
   return out;
 }
 
-// --- Génération TSD ---
+// --- TSD generation ---
 async function regenerateTasks(site = "Default") {
   const { rows: entities } = await pool.query("SELECT * FROM controls_entities WHERE site=$1", [site]);
   let created = 0;
@@ -300,9 +279,9 @@ async function regenerateTasks(site = "Default") {
 // --- SYNC ---
 app.post("/api/controls/sync", async (req, res) => {
   try {
-    const site = req.body?.site || req.headers["x-site"] || "Default"; // site d'INSERTION
+    const site = req.body?.site || req.headers["x-site"] || "Default"; // insert site
     const source = (req.query.source || process.env.CONTROLS_SOURCE || "auto").toLowerCase();
-    const readSite = (req.query.read_site || process.env.CONTROLS_DB_READ_SITE || '*'); // site de LECTURE (DB)
+    const readSite = (req.query.read_site || process.env.CONTROLS_DB_READ_SITE || '*'); // DB read site
 
     let incoming = [];
     if (source === "db") {
@@ -337,8 +316,10 @@ app.post("/api/controls/sync", async (req, res) => {
     let added = 0, updated = 0, flaggedNotPresent = 0;
     for (const inc of items) {
       if (!EQUIPMENT_TYPES.includes(inc.equipment_type)) {
-        await pool.query("INSERT INTO controls_not_present (site, building, equipment_type, declared_by, note) VALUES ($1,$2,$3,$4,$5)",
-          [site, inc.building || null, inc.equipment_type, "system", "Type non couvert par la TSD"]);
+        await pool.query(
+          "INSERT INTO controls_not_present (site, building, equipment_type, declared_by, note) VALUES ($1,$2,$3,$4,$5)",
+          [site, inc.building || null, inc.equipment_type, "system", "Type non couvert par la TSD"]
+        );
         flaggedNotPresent++;
         continue;
       }
@@ -604,19 +585,107 @@ app.get("/api/controls/tree", async (req, res) => {
   res.json(out);
 });
 
-// --- IA (stubs pour éviter 404; activer si OPENAI_API_KEY) ---
+// --- OPENAI: prompts ---
+const ANALYZE_SYSTEM = `Tu es un expert maintenance électrique & HSE.
+Produis une analyse opérationnelle concise et actionnable pour la tâche de contrôle suivante.
+Structure attendue (Markdown court):
+1) Constat (données, écarts vs seuils)
+2) Risques & causes probables
+3) Actions immédiates (≤5)
+4) Prévention / périodicité conseillée`;
+
+const ASSISTANT_SYSTEM = `Tu es l'assistant de contrôle maintenance.
+Réponds de façon pragmatique, en te basant sur la TSD (si fournie), l'historique des résultats et le contexte d'équipement.
+Si une valeur seuil manque, explique comment la mesurer ou où la trouver. Reste bref.`;
+
+async function runChat(messages, { model = process.env.OPENAI_MODEL || "gpt-4o", temperature = 0.2 } = {}) {
+  if (!process.env.OPENAI_API_KEY) {
+    return { text: "(IA désactivée) Définis OPENAI_API_KEY pour activer l'analyse/assistant.", usage: null };
+  }
+  const resp = await openai.chat.completions.create({ model, temperature, messages });
+  const text = resp.choices?.[0]?.message?.content?.trim() || "";
+  return { text, usage: resp.usage || null };
+}
+
+async function loadTaskContext(taskId) {
+  const { rows: trows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [taskId]);
+  if (!trows.length) return null;
+  const task = trows[0];
+  const { rows: ents } = await pool.query("SELECT * FROM controls_entities WHERE id=$1", [task.entity_id]);
+  const entity = ents[0] || null;
+  let tsd_item = null;
+  if (entity?.equipment_type && TSD_LIBRARY[entity.equipment_type]) {
+    tsd_item = (TSD_LIBRARY[entity.equipment_type] || []).find(it => it.id === task.task_code) || null;
+  }
+  if (!tsd_item) tsd_item = Object.values(TSD_LIBRARY).flat().find(it => it.id === task.task_code) || null;
+  const { rows: atts } = await pool.query(
+    "SELECT id, filename, size, mimetype, uploaded_at FROM controls_attachments WHERE task_id=$1 ORDER BY uploaded_at DESC LIMIT 10",
+    [taskId]
+  );
+  return { task, entity, tsd_item, attachments: atts };
+}
+
 app.post("/api/controls/tasks/:id/analyze", async (req, res) => {
-  // Stub simple
-  res.json({ analysis: "Analyse IA désactivée (stub). Ajoute OPENAI_API_KEY pour activer." });
+  try {
+    const id = Number(req.params.id);
+    const ctx = await loadTaskContext(id);
+    if (!ctx) return res.status(404).json({ error: "Task not found" });
+
+    const userMsg = {
+      role: "user",
+      content: [
+        { type: "text", text: `Site: ${ctx.task.site}\nEquipement: ${ctx.entity?.name || '-'} (${ctx.entity?.equipment_type})\nBuilding: ${ctx.entity?.building}\nTask: ${ctx.task.task_name} [code=${ctx.task.task_code}]\nResult_schema: ${JSON.stringify(ctx.task.result_schema)}\nDernier résultat: ${JSON.stringify(ctx.task.results)}\nTSD item: ${ctx.tsd_item ? JSON.stringify({ label: ctx.tsd_item.label, field: ctx.tsd_item.field, type: ctx.tsd_item.type, unit: ctx.tsd_item.unit, comparator: ctx.tsd_item.comparator, threshold: ctx.tsd_item.threshold }) : 'none'}\nPJ récentes: ${(ctx.attachments||[]).map(a=>a.filename).join(', ') || 'aucune'}` }
+      ]
+    };
+
+    const { text } = await runChat([
+      { role: "system", content: ANALYZE_SYSTEM },
+      userMsg,
+    ]);
+
+    // historiser dans ai_notes
+    await pool.query(
+      "UPDATE controls_tasks SET ai_notes = coalesce(ai_notes, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('at', NOW(), 'role', 'analysis', 'text', $1)) WHERE id=$2",
+      [text, id]
+    );
+
+    res.json({ analysis: text });
+  } catch (e) {
+    res.status(500).json({ error: "Erreur analyze", details: e.message });
+  }
 });
+
 app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
-  const q = (req.body && req.body.question) || "";
-  res.json({ answer: q ? `(stub) Réponse générique à: ${q}` : "(stub) Pose une question." });
+  try {
+    const id = Number(req.params.id);
+    const q = (req.body && req.body.question) || "";
+    const ctx = await loadTaskContext(id);
+    if (!ctx) return res.status(404).json({ error: "Task not found" });
+
+    const contextText = `Contexte:\n- Site: ${ctx.task.site}\n- Equipement: ${ctx.entity?.name} (${ctx.entity?.equipment_type}) building=${ctx.entity?.building}\n- Task: ${ctx.task.task_name} [${ctx.task.task_code}]\n- Résultats: ${JSON.stringify(ctx.task.results)}\n- TSD: ${ctx.tsd_item ? JSON.stringify({ label: ctx.tsd_item.label, field: ctx.tsd_item.field, unit: ctx.tsd_item.unit, comparator: ctx.tsd_item.comparator, threshold: ctx.tsd_item.threshold }) : 'none'}\n- PJ: ${(ctx.attachments||[]).map(a=>a.filename).join(', ') || 'aucune'}`;
+
+    const { text } = await runChat([
+      { role: "system", content: ASSISTANT_SYSTEM },
+      { role: "user", content: `${contextText}\n\nQuestion: ${q}` }
+    ], { temperature: 0.3 });
+
+    await pool.query(
+      "UPDATE controls_tasks SET ai_notes = coalesce(ai_notes, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('at', NOW(), 'role', 'assistant', 'q', $1, 'text', $2)) WHERE id=$3",
+      [q, text, id]
+    );
+
+    res.json({ answer: text });
+  } catch (e) {
+    res.status(500).json({ error: "Erreur assistant", details: e.message });
+  }
 });
 
 // --- HEALTH ---
 app.get("/api/controls/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// --- START (Render) ---
-const port = Number(process.env.PORT || process.env.CONTROLS_PORT || 3011);
-app.listen(port, () => console.log(`[controls] serveur démarré sur :${port}`));
+// --- START (match other services pattern) ---
+/* ------------------------------------------------------------------ */
+/*                                START                               */
+/* ------------------------------------------------------------------ */
+const port = process.env.CONTROLS_PORT || 3011;
+app.listen(port, () => console.log(`Controls service running on :${port}`));
