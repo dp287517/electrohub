@@ -1,4 +1,4 @@
-// server_controls.js — Controls backend (corrigé, robuste & rétro-compatible)
+// Controls backend (corrigé, robuste & rétro-compatible)
 // - Fix "column size does not exist" (ALTER + fallback)
 // - TSD = source de vérité pour library/result_schema
 // - Non applicable auto si type TSD absent en DB
@@ -11,7 +11,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import bodyParser from "body-parser";
 import { Pool } from "pg";
-import crypto from "crypto";
 
 import {
   TSD_LIBRARY,
@@ -43,12 +42,6 @@ function addMonths(date, n) {
   const d = new Date(date);
   d.setMonth(d.getMonth() + n);
   return d;
-}
-
-function daysDiff(a, b) {
-  const A = new Date(a).getTime();
-  const B = new Date(b).getTime();
-  return Math.floor((A - B) / 86400000);
 }
 
 async function colExists(table, column) {
@@ -137,8 +130,7 @@ async function ensureSchema() {
 
 /* ====================== TSD → RESULT SCHEMA ====================== */
 function toResultSchemaFromTSD(tsdItem) {
-  // Normalise les champs pour le front (boolean / number / text / select / checklist)
-  // tsdItem peut contenir: type, field, unit, comparator, threshold, options, checklist
+  // Normalise: boolean | number | text | select | checklist
   if (!tsdItem) return { type: "boolean", field: "ok" };
   const out = {
     type: tsdItem.type || "boolean",
@@ -146,7 +138,7 @@ function toResultSchemaFromTSD(tsdItem) {
   };
   if (tsdItem.unit) out.unit = tsdItem.unit;
   if (Array.isArray(tsdItem.options)) out.options = tsdItem.options;
-  if (Array.isArray(tsdItem.checklist)) out.checklist = tsdItem.checklist; // support explicite
+  if (Array.isArray(tsdItem.checklist)) out.checklist = tsdItem.checklist;
   if (tsdItem.comparator) out.comparator = tsdItem.comparator;
   if (tsdItem.threshold !== undefined) out.threshold = tsdItem.threshold;
   return out;
@@ -154,17 +146,11 @@ function toResultSchemaFromTSD(tsdItem) {
 
 /* ====================== SYNC / AUTO-GENERATION ====================== */
 async function importFromSources(site) {
-  // EXEMPLE : lit HV/ATEX/SWITCHBOARD de tes autres tables si présentes.
-  // Ici on garde un import minimal : si tu as déjà des entités, on n’écrase pas.
-  // Complète si besoin selon tes autres services.
-  const known = new Set();
+  // Exemple: si aucune entité, on crée quelques placeholders pour la démo
   const { rows } = await pool.query(
-    `SELECT id, equipment_type, name FROM controls_entities WHERE site=$1`,
+    `SELECT id FROM controls_entities WHERE site=$1 LIMIT 1`,
     [site]
   );
-  for (const r of rows) known.add(`${r.equipment_type}::${r.name}`);
-
-  // Si aucune entité, on crée des placeholders vides pour montrer la mécanique
   if (rows.length === 0) {
     const samples = [
       { building: "B1", equipment_type: "LV_SWITCHBOARD", name: "Tableau TGBT" },
@@ -174,7 +160,8 @@ async function importFromSources(site) {
     ];
     for (const s of samples) {
       await pool.query(
-        `INSERT INTO controls_entities(site,building,equipment_type,name) VALUES($1,$2,$3,$4)
+        `INSERT INTO controls_entities(site,building,equipment_type,name)
+         VALUES($1,$2,$3,$4)
          ON CONFLICT (site, equipment_type, name) DO NOTHING`,
         [site, s.building, s.equipment_type, s.name]
       );
@@ -182,7 +169,6 @@ async function importFromSources(site) {
   }
 }
 
-// Crée/MAJ les tasks depuis la TSD pour chaque entité
 async function regenerateTasksForSite(site) {
   const { rows: ents } = await pool.query(
     `SELECT * FROM controls_entities WHERE site=$1`,
@@ -394,7 +380,6 @@ app.get("/api/controls/tasks/:id/attachments", async (req, res) => {
     const hasSize = await colExists("controls_attachments", "size");
     const hasData = await colExists("controls_attachments", "data");
 
-    // fallback robuste:  size, ou OCTET_LENGTH(data), sinon 0
     const sizeExpr = hasSize ? "size" : (hasData ? "octet_length(data) AS size" : "0::int AS size");
 
     const { rows } = await pool.query(
@@ -464,7 +449,7 @@ const ASSISTANT_SYSTEM =
   "Tu es l’assistant des contrôles électriques. Réponds clairement, par étapes, en rappelant les EPI, outillage et risques. Si une photo est fournie, exploite-la, sinon propose les étapes manuelles.";
 
 async function runChat(messages) {
-  // branchement IA “stub” pour déploiement sans clé : renvoie une aide standard
+  // Stub sans clé: renvoie une aide standard
   const txt =
     "- Vérifie l’isolement et l’état visuel.\n- Indique l’appareil à utiliser (multimètre, pince ampèremétrique, caméra IR...).\n- Décris le branchement et les seuils.\n- Liste les EPI et points de sécurité.\n- Ajoute les photos des mesures pour interprétation.";
   return { text: txt };
@@ -529,9 +514,9 @@ app.post("/api/controls/tasks/:id/analyze", async (req, res) => {
     const ctx = await loadTaskContext(id);
     if (!ctx) return res.status(404).json({ error: "Task not found" });
 
-    // Stub d’analyse : explique quoi chercher sur la photo + comment interpréter
+    // Stub d’analyse générique (on branchera la vraie OCR/vision après)
     const analysis =
-      "Analyse IA (générique) :\n" +
+      "Analyse IA :\n" +
       "- Dépose une photo nette du point de mesure (écran d’appareil, IR, plaque signalétique…).\n" +
       "- L’IA extrait les valeurs (tension/intensité/température/IP, etc.) et compare au seuil TSD.\n" +
       "- Sans photo, saisis la valeur manuellement dans la checklist.";
@@ -546,7 +531,6 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const payload = req.body || {};
-    const user = payload.user || "system";
 
     const { rows } = await pool.query(`SELECT * FROM controls_tasks WHERE id=$1`, [id]);
     if (!rows.length) return res.status(404).json({ error: "Not found" });
