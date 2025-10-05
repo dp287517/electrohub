@@ -1,12 +1,40 @@
-// src/pages/Controls.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ============================
-   API utils
-============================ */
-function headersFor(site) {
-  return site ? { "X-Site": site } : {};
+/* =====================================
+   Helpers (robustes contre valeurs brutes)
+===================================== */
+function cls(...a) { return a.filter(Boolean).join(" "); }
+const fmtDate = (s) => (s ? new Date(s).toLocaleDateString() : "—");
+const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
+
+function isPlainObject(x){ return x && typeof x === 'object' && !Array.isArray(x); }
+function toLabel(x, fallback = "—") {
+  if (x == null) return fallback;
+  if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") return String(x);
+  if (isPlainObject(x)) return x.label || x.name || x.title || x.value || fallback;
+  return fallback;
 }
+function toValue(x) {
+  if (x == null) return "";
+  if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") return x;
+  if (isPlainObject(x)) return x.value ?? x.key ?? x.id ?? toLabel(x, "");
+  return "";
+}
+function SafeText({ value, empty = "—" }) {
+  const v = value;
+  if (v == null || v === "") return <>{empty}</>;
+  if (typeof v === "string" || typeof v === "number") return <>{String(v)}</>;
+  if (typeof v === "boolean") return <>{v ? "Oui" : "Non"}</>;
+  // Évite l'erreur React #31: on ne rend JAMAIS d'objet brut
+  if (Array.isArray(v)) return <>{v.map((it, i) => toLabel(it)).filter(Boolean).join(" · ")}</>;
+  if (isPlainObject(v)) return <>{toLabel(v, empty)}</>;
+  return <>{empty}</>;
+}
+
+/* ============================
+   API utils (inchangés)
+============================ */
+function headersFor(site) { return site ? { "X-Site": site } : {}; }
 const CONTROLS_API = {
   library: () => fetchJSON(`/api/controls/library`),
   tree: (site) => fetchJSON(`/api/controls/tree`, { headers: headersFor(site) }),
@@ -20,7 +48,6 @@ const CONTROLS_API = {
     fetchJSON(`/api/controls/tasks/${id}/assistant`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // on indique que l'IA peut analyser les pièces jointes et les seuils TSD
       body: JSON.stringify(
         body || {
           question: "Aide pré-intervention : EPI, points à vérifier, appareil à utiliser, interprétation des mesures.",
@@ -166,20 +193,30 @@ const Icon = {
 };
 
 /* ============================
-   Helpers
+   Error Boundary (évite crash écran)
 ============================ */
-function cls(...a) { return a.filter(Boolean).join(" "); }
-const fmtDate = (s) => (s ? new Date(s).toLocaleDateString() : "—");
-const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
+class ErrorBoundary extends React.Component {
+  constructor(props){ super(props); this.state = { hasError:false, message: '' }; }
+  static getDerivedStateFromError(err){ return { hasError:true, message: err?.message || 'Erreur inconnue' }; }
+  componentDidCatch(){ /* no-op */ }
+  render(){
+    if (this.state.hasError) {
+      return (
+        <div style={{padding:12}}>
+          <div className="error"><Icon.Alert /> <div>{this.state.message}</div></div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 /* ============================
    Controls Page
 ============================ */
 export default function Controls() {
-  // Par défaut on part sur Nyon (pas de "Default")
   const [site, setSite] = useState(localStorage.getItem("controls_site") || "Nyon");
-  const [tab, setTab] = useState("tasks"); // "tasks" | "calendar"
-
+  const [tab, setTab] = useState("tasks");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -187,7 +224,6 @@ export default function Controls() {
   const [tree, setTree] = useState([]);
   const [tasks, setTasks] = useState([]);
 
-  // Filtres (repliables)
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [fQuery, setFQuery] = useState("");
   const [fBuilding, setFBuilding] = useState("");
@@ -195,10 +231,8 @@ export default function Controls() {
   const [fStatus, setFStatus] = useState("");
   const [onlyOverdue, setOnlyOverdue] = useState(false);
 
-  // Sélection tâche (modal)
   const [selectedId, setSelectedId] = useState(null);
 
-  // Debounce recherche
   const qRef = useRef(null);
   useEffect(() => {
     if (qRef.current) clearTimeout(qRef.current);
@@ -263,11 +297,15 @@ export default function Controls() {
 
   const buildings = useMemo(() => {
     const s = new Set();
-    tree.forEach((b) => s.add(b.building || "—"));
+    (tree || []).forEach((b) => s.add(b?.building || "—"));
     return Array.from(s);
   }, [tree]);
 
-  const types = useMemo(() => (library?.types || []), [library]);
+  // Normalise les types: parfois l'API peut renvoyer des objets
+  const types = useMemo(() => {
+    const arr = (library?.types || []);
+    return arr.map((t) => toLabel(t)).filter(Boolean);
+  }, [library]);
 
   return (
     <div className="controls-wrap">
@@ -306,10 +344,12 @@ export default function Controls() {
             {loading ? <SkeletonList /> : <TaskGrid tasks={tasks} onOpen={setSelectedId} />}
 
             {selectedId ? (
-              <TaskModal id={selectedId} onClose={() => setSelectedId(null)} onCompleted={() => {
-                setSelectedId(null);
-                refreshTasks();
-              }} />
+              <ErrorBoundary>
+                <TaskModal id={selectedId} onClose={() => setSelectedId(null)} onCompleted={() => {
+                  setSelectedId(null);
+                  refreshTasks();
+                }} />
+              </ErrorBoundary>
             ) : null}
           </>
         )}
@@ -407,14 +447,17 @@ function FiltersBar({
             <label>Bâtiment</label>
             <select className="input" value={fBuilding} onChange={(e) => setFBuilding(e.target.value)}>
               <option value="">Tous</option>
-              {buildings.map((b) => <option key={b} value={b}>{b}</option>)}
+              {buildings.map((b) => <option key={toLabel(b)} value={toLabel(b)}>{toLabel(b)}</option>)}
             </select>
           </div>
           <div className="filter">
             <label>Type équipement</label>
             <select className="input" value={fType} onChange={(e) => setFType(e.target.value)}>
               <option value="">Tous</option>
-              {types.map((t) => <option key={t} value={t}>{t}</option>)}
+              {types.map((t) => {
+                const lab = toLabel(t);
+                return <option key={lab} value={lab}>{lab}</option>;
+              })}
             </select>
           </div>
           <div className="filter">
@@ -428,7 +471,7 @@ function FiltersBar({
             </select>
           </div>
           <div className="filter check">
-            <input id="overdue" type="checkbox" checked={onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} />
+            <input id="overdue" type="checkbox" checked={!!onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} />
             <label htmlFor="overdue">Seulement en retard</label>
           </div>
 
@@ -464,12 +507,13 @@ function statusBadge(s) {
   }
 }
 function typeLabel(t) {
-  switch (t) {
+  const k = typeof t === 'string' ? t : toLabel(t, "");
+  switch (k) {
     case "LV_SWITCHBOARD": return "Tableau BT";
     case "LV_DEVICE": return "Appareil BT";
     case "HV_EQUIPMENT": return "HT (>1000V)";
     case "ATEX_EQUIPMENT": return "ATEX";
-    default: return t || "—";
+    default: return k || "—";
   }
 }
 
@@ -478,16 +522,16 @@ function TaskCard({ t, onOpen }) {
     <div className="card" onClick={onOpen} role="button">
       <div className="card-head">
         {statusBadge(t.status)}
-        <div className="date"><Icon.Calendar /> {t.next_control ? fmtDate(t.next_control) : "À planifier"}</div>
+        <div className="date"><Icon.Calendar /> <SafeText value={t.next_control ? fmtDate(t.next_control) : "À planifier"} /></div>
       </div>
-      <div className="card-title">{t.task_name}</div>
+      <div className="card-title"><SafeText value={t.task_name} /></div>
       <div className="card-sub">
-        <span className="chip"><Icon.Building /> {t.building || "—"}</span>
-        <span className="chip"><Icon.Bolt /> {typeLabel(t.equipment_type)}</span>
+        <span className="chip"><Icon.Building /> <SafeText value={t.building} /></span>
+        <span className="chip"><Icon.Bolt /> <SafeText value={typeLabel(t.equipment_type)} /></span>
       </div>
       <div className="card-entity">
-        Équipement : <strong>{t.entity_name || "—"}</strong>
-        {t.entity_code ? <span className="mono"> ({t.entity_code})</span> : null}
+        Équipement : <strong><SafeText value={t.entity_name} /></strong>
+        {t.entity_code ? <span className="mono"> (<SafeText value={t.entity_code} />)</span> : null}
       </div>
     </div>
   );
@@ -545,6 +589,7 @@ function TaskModal({ id, onClose, onCompleted }) {
   }
 
   function handleResultChange(field, value) {
+    // Si on tente de mettre un objet où un texte/nbre est attendu, ne pas crasher
     setResults((r) => ({ ...r, [field]: value }));
   }
 
@@ -590,7 +635,7 @@ function TaskModal({ id, onClose, onCompleted }) {
       setProblem("");
       const payload = {
         user: localStorage.getItem("controls_user") || "Technicien",
-        results: results || {}, // non-null
+        results: results || {},
         notes,
       };
       const res = await CONTROLS_API.complete(id, payload);
@@ -602,29 +647,29 @@ function TaskModal({ id, onClose, onCompleted }) {
   }
 
   const thresholdBox = useMemo(() => {
-    if (details?.threshold_text) return details.threshold_text;
+    if (details?.threshold_text && typeof details.threshold_text === 'string') return details.threshold_text;
     if (isGroup && rs.items.some((it) => it?.threshold_text)) {
       return rs.items
         .filter((it) => it?.threshold_text)
-        .map((it) => `${it.label}: ${it.threshold_text}`)
+        .map((it) => `${toLabel(it.label)}: ${toLabel(it.threshold_text, '')}`)
         .join(" • ");
     }
     return "";
   }, [details, rs, isGroup]);
 
-  const clusterNotes = details?.tsd_cluster_items || []; // consignes/points regroupés côté serveur
+  const clusterNotes = details?.tsd_cluster_items || [];
 
   return (
     <div className="modal">
       <div className="modal-card">
         <div className="modal-head">
           <div className="mh-left">
-            <div className="mh-title">{details?.task_name || "Chargement..."}</div>
+            <div className="mh-title"><SafeText value={details?.task_name || "Chargement..."} /></div>
             <div className="mh-sub">
-              <span className="chip"><Icon.Bolt /> {typeLabel(details?.equipment_type)}</span>
-              <span className="chip"><Icon.Building /> {details?.building || "—"}</span>
-              {details?.entity_code ? <span className="chip code">Équipement: {details?.entity_code}</span> : null}
-              {details?.task_code ? <span className="chip code">Code tâche: {details?.task_code}</span> : null}
+              <span className="chip"><Icon.Bolt /> <SafeText value={typeLabel(details?.equipment_type)} /></span>
+              <span className="chip"><Icon.Building /> <SafeText value={details?.building} /></span>
+              {details?.entity_code ? <span className="chip code">Équipement: <SafeText value={details?.entity_code} /></span> : null}
+              {details?.task_code ? <span className="chip code">Code tâche: <SafeText value={details?.task_code} /></span> : null}
             </div>
           </div>
           <button className="btn icon ghost" onClick={onClose} title="Fermer"><Icon.X /></button>
@@ -658,14 +703,13 @@ function TaskModal({ id, onClose, onCompleted }) {
 
               <div className="section">
                 <div className="section-title">Checklist & Mesures</div>
-                {thresholdBox ? <div className="rule">{thresholdBox}</div> : null}
+                {thresholdBox ? <div className="rule"><SafeText value={thresholdBox} /></div> : null}
 
-                {/* Consignes / points du cluster (ex: a) à h)) */}
-                {clusterNotes?.length ? (
+                {Array.isArray(clusterNotes) && clusterNotes.length ? (
                   <div className="hint">
                     <strong>Consignes TSD (points à observer) :</strong>
                     <ul style={{margin:'6px 0 0 18px'}}>
-                      {clusterNotes.map((s, i) => <li key={i}>{s}</li>)}
+                      {clusterNotes.map((s, i) => <li key={i}><SafeText value={s} /></li>)}
                     </ul>
                   </div>
                 ) : null}
@@ -689,8 +733,8 @@ function TaskModal({ id, onClose, onCompleted }) {
                   <textarea
                     className="input textarea"
                     placeholder="Observations, conditions de test, EPI, risques, etc."
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
+                    value={results.__notes ?? ""}
+                    onChange={(e) => handleResultChange("__notes", e.target.value)}
                   />
                 </div>
 
@@ -766,33 +810,38 @@ function SingleField({ schema, results, onChange }) {
   // checklist simple -> tri-état par item si schema.checklist est fourni
   if (type === "checklist" && Array.isArray(schema.checklist) && schema.checklist.length) {
     const current = (results[field] && typeof results[field] === "object") ? results[field] : {};
-    function setItem(item, v) {
-      onChange(field, { ...current, [item]: v });
+    function setItem(itemKey, v) {
+      onChange(field, { ...current, [itemKey]: v });
     }
     return (
       <div className="field">
         <label>Checklist</label>
         <div className="group-fields">
-          {schema.checklist.map((item) => (
-            <div key={item} className="group-item">
-              <div className="gi-head"><div className="gi-label">{item}</div></div>
-              <div className="field">
-                <label>Conformité</label>
-                <select className="input" value={current[item] ?? ""} onChange={(e) => setItem(item, e.target.value)}>
-                  <option value="">—</option>
-                  <option value="conforme">Conforme</option>
-                  <option value="non_conforme">Non conforme</option>
-                  <option value="na">Non applicable</option>
-                </select>
+          {schema.checklist.map((item) => {
+            const key = toValue(item);
+            const label = toLabel(item);
+            return (
+              <div key={String(key)} className="group-item">
+                <div className="gi-head"><div className="gi-label">{label}</div></div>
+                <div className="field">
+                  <label>Conformité</label>
+                  <select className="input" value={current[key] ?? ""} onChange={(e) => setItem(key, e.target.value)}>
+                    <option value="">—</option>
+                    <option value="conforme">Conforme</option>
+                    <option value="non_conforme">Non conforme</option>
+                    <option value="na">Non applicable</option>
+                  </select>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
   }
 
   if (type === "number") {
+    const val = results[field];
     return (
       <div className="field">
         <label>Valeur {schema.unit ? `(${schema.unit})` : ""}</label>
@@ -800,7 +849,7 @@ function SingleField({ schema, results, onChange }) {
           className="input"
           type="number"
           step="any"
-          value={results[field] ?? ""}
+          value={val ?? ""}
           onChange={(e) => onChange(field, e.target.value === "" ? "" : Number(e.target.value))}
           placeholder={schema.unit ? `Ex: 12.5 ${schema.unit}` : "Ex: 12.5"}
         />
@@ -813,7 +862,11 @@ function SingleField({ schema, results, onChange }) {
         <label>Choix</label>
         <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
           <option value="">—</option>
-          {schema.options.map((o) => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
+          {schema.options.map((o) => {
+            const val = toValue(o);
+            const lab = toLabel(o);
+            return <option key={String(val)} value={val}>{lab}</option>;
+          })}
         </select>
       </div>
     );
@@ -836,7 +889,7 @@ function SingleField({ schema, results, onChange }) {
   return (
     <div className="field">
       <label>Observation</label>
-      <input className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)} placeholder="Renseigner le résultat"/>
+      <input className="input" value={toValue(results[field])} onChange={(e) => onChange(field, e.target.value)} placeholder="Renseigner le résultat"/>
     </div>
   );
 }
@@ -848,26 +901,25 @@ function GroupFields({ items, results, onChange }) {
         const t = normalizeType(it.type);
         const field = it.field || it.id;
         const unit = it.unit ? ` (${it.unit})` : "";
+        const label = toLabel(it.label || field || it.id);
 
         // checklist multi-points -> tri-état PAR POINT
         if (t === "checklist" && Array.isArray(it.options) && it.options.length) {
           const curr = (results[field] && typeof results[field] === "object") ? results[field] : {};
-          function setItem(optKey, v) {
-            onChange(field, { ...curr, [optKey]: v });
-          }
+          function setItem(optKey, v) { onChange(field, { ...curr, [optKey]: v }); }
           return (
-            <div key={field} className="group-item">
+            <div key={String(field)} className="group-item">
               <div className="gi-head">
-                <div className="gi-label">{it.label}</div>
-                {it.threshold_text ? <div className="gi-rule">{it.threshold_text}</div> : null}
+                <div className="gi-label">{label}</div>
+                {it.threshold_text ? <div className="gi-rule"><SafeText value={it.threshold_text} /></div> : null}
               </div>
               <div className="group-fields">
                 {it.options.map((opt) => {
-                  const key = opt.value || opt.key || opt;
-                  const label = opt.label || opt.name || opt;
+                  const key = toValue(opt);
+                  const lab = toLabel(opt);
                   return (
-                    <div key={key} className="group-item" style={{padding:'8px'}}>
-                      <div className="gi-head"><div className="gi-label">{label}</div></div>
+                    <div key={String(key)} className="group-item" style={{padding:'8px'}}>
+                      <div className="gi-head"><div className="gi-label">{lab}</div></div>
                       <div className="field">
                         <label>Conformité</label>
                         <select className="input" value={curr[key] ?? ""} onChange={(e) => setItem(key, e.target.value)}>
@@ -886,10 +938,10 @@ function GroupFields({ items, results, onChange }) {
         }
 
         return (
-          <div key={field} className="group-item">
+          <div key={String(field)} className="group-item">
             <div className="gi-head">
-              <div className="gi-label">{it.label}</div>
-              {it.threshold_text ? <div className="gi-rule">{it.threshold_text}</div> : null}
+              <div className="gi-label">{label}</div>
+              {it.threshold_text ? <div className="gi-rule"><SafeText value={it.threshold_text} /></div> : null}
             </div>
 
             {t === "number" && (
@@ -911,7 +963,11 @@ function GroupFields({ items, results, onChange }) {
                 <label>Choix</label>
                 <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
                   <option value="">—</option>
-                  {it.options.map((o) => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
+                  {it.options.map((o) => {
+                    const val = toValue(o);
+                    const lab = toLabel(o);
+                    return <option key={String(val)} value={val}>{lab}</option>;
+                  })}
                 </select>
               </div>
             )}
@@ -933,7 +989,7 @@ function GroupFields({ items, results, onChange }) {
                 <label>Observation</label>
                 <input
                   className="input"
-                  value={results[field] ?? ""}
+                  value={toValue(results[field])}
                   onChange={(e) => onChange(field, e.target.value)}
                   placeholder="Renseigner le résultat"
                 />
@@ -981,12 +1037,8 @@ function CalendarPanel({ site, onSelectTask }) {
     })();
   }, [month, site]);
 
-  function prev() {
-    const d = new Date(month); d.setMonth(d.getMonth() - 1); setMonth(d);
-  }
-  function next() {
-    const d = new Date(month); d.setMonth(d.getMonth() + 1); setMonth(d);
-  }
+  function prev() { const d = new Date(month); d.setMonth(d.getMonth() - 1); setMonth(d); }
+  function next() { const d = new Date(month); d.setMonth(d.getMonth() + 1); setMonth(d); }
 
   const grid = buildMonthGrid(month);
   const byDay = new Map();
@@ -1019,7 +1071,7 @@ function CalendarPanel({ site, onSelectTask }) {
                     className={cls("cal-item", ev.status === "Overdue" && "red", ev.status === "Planned" && "blue")}
                     onClick={() => onSelectTask(ev.id)}
                   >
-                    {ev.entity_name} · {ev.task_name}
+                    <SafeText value={ev.entity_name} /> · <SafeText value={ev.task_name} />
                   </div>
                 ))}
                 {list.length > 4 ? <div className="cal-more">+{list.length - 4} autres…</div> : null}
@@ -1059,8 +1111,8 @@ function AttachmentList({ taskId, attachments }) {
           target="_blank" rel="noreferrer"
           title={`${a.filename} (${a.size || 0} o)`}
         >
-          <Icon.Paperclip /> <span className="name">{a.filename}</span>
-          <span className="meta">{a.mimetype || "—"} • {a.size ?? "?"} o</span>
+          <Icon.Paperclip /> <span className="name"><SafeText value={a.filename} /></span>
+          <span className="meta"><SafeText value={a.mimetype || "—"} /> • <SafeText value={a.size ?? "?"} /> o</span>
         </a>
       ))}
     </div>
