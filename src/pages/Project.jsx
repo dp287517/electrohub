@@ -54,7 +54,8 @@ function Modal({ open, title, children, footer, onClose }) {
           <div className="font-semibold">{title}</div>
           <button className={btnGhost} onClick={onClose}><X /></button>
         </div>
-        <div className="p-5">{children}</div>
+        {/* Scrollable body */}
+        <div className="p-5 max-h-[70vh] overflow-y-auto">{children}</div>
         {footer && <div className="px-5 py-4 border-t bg-gray-50">{footer}</div>}
       </div>
     </div>
@@ -116,6 +117,9 @@ export default function Project() {
   // header fields (controlled)
   const [editWbs, setEditWbs] = useState('');
   const [editBudget, setEditBudget] = useState('');
+  const [editPrepDate, setEditPrepDate] = useState('');   // "Created" (mapped to prep_month)
+  const [editStartDate, setEditStartDate] = useState(''); // start_month
+  const [editCloseDate, setEditCloseDate] = useState(''); // close_month
 
   // filters
   const [showFilters, setShowFilters] = useState(false);
@@ -149,6 +153,9 @@ export default function Project() {
     if (!selected) return;
     setEditWbs(selected.wbs_number || '');
     setEditBudget(selected.budget_amount ?? '');
+    setEditPrepDate(dateInputValue(selected.prep_month || selected.created_at));
+    setEditStartDate(dateInputValue(selected.start_month));
+    setEditCloseDate(dateInputValue(selected.close_month));
   }, [selected?.id]); // eslint-disable-line
 
   async function load() {
@@ -203,18 +210,35 @@ export default function Project() {
         budget_amount: editBudget === '' ? null : Number(editBudget),
       };
       const updated = await put(`/api/projects/projects/${selected.id}`, payload);
+      // Auto-flag WBS when wbs_number/budget is set
       if ((payload.wbs_number && !status?.wbs_recorded) || (payload.budget_amount && !status?.wbs_recorded)) {
-        const nextStatus = { ...(status || {}), wbs_recorded: true };
-        const st = await put(`/api/projects/projects/${selected.id}/status`, nextStatus);
-        setStatus(st);
+        await ensureStatus({ wbs_recorded: true });
       }
-      // reflect list + header
       setSelected(updated);
       setList((s) => s.map((x) => (x.id === updated.id ? updated : x)));
       setToast({ msg: 'Header saved.', type: 'success' });
       await openProject(updated);
     } catch (e) {
       setToast({ msg: 'Save failed: ' + (e?.message || e), type: 'error' });
+    }
+  }
+
+  async function saveDates() {
+    if (!selected) return;
+    try {
+      const payload = {
+        prep_month: editPrepDate ? new Date(editPrepDate) : null,
+        start_month: editStartDate ? new Date(editStartDate) : null,
+        close_month: editCloseDate ? new Date(editCloseDate) : null,
+      };
+      const updated = await put(`/api/projects/projects/${selected.id}`, payload);
+      // If user sets a close date manually, that's a "closed" step
+      setSelected(updated);
+      setList((s) => s.map((x) => (x.id === updated.id ? updated : x)));
+      setToast({ msg: 'Dates saved.', type: 'success' });
+      await openProject(updated);
+    } catch (e) {
+      setToast({ msg: 'Saving dates failed: ' + (e?.message || e), type: 'error' });
     }
   }
 
@@ -255,9 +279,37 @@ export default function Project() {
         const fd = new FormData(); fd.append('file', file);
         await post(`/api/projects/projects/${p.id}/upload?category=${encodeURIComponent(category)}`, fd);
       }
+      // Auto-ensure matching step when relevant (front-side safety)
+      await ensureStepForCategory(category);
       setToast({ msg: filesList.length > 1 ? `${filesList.length} files uploaded.` : 'File uploaded.', type: 'success' });
       await loadAllFiles(p.id);
+      await openProject(p);
     } catch (e) { setToast({ msg: 'Upload failed: ' + (e?.message || e), type: 'error' }); }
+  }
+
+  async function ensureStepForCategory(category) {
+    // Even if backend already ticks, front enforces it for safety.
+    const mapping = {
+      business_case: 'business_case_done',
+      pip: 'pip_done',
+      offer: 'offers_received',
+      wbs: 'wbs_recorded',
+      order: 'orders_placed',
+      invoice: 'invoices_received',
+    };
+    const key = mapping[category];
+    if (!key || !selected) return;
+    if (!status?.[key]) await ensureStatus({ [key]: true });
+  }
+
+  async function ensureStatus(patch) {
+    const next = { ...(status || {}), ...patch };
+    try {
+      const js = await put(`/api/projects/projects/${selected.id}/status`, next);
+      setStatus(js);
+    } catch (e) {
+      // non-bloquant
+    }
   }
 
   async function deleteFile(fileId) {
@@ -272,6 +324,10 @@ export default function Project() {
     if (!selected || !amount) return;
     try {
       await post(`/api/projects/projects/${selected.id}/${kind}`, { amount: Number(amount), vendor: vendor || null });
+      // auto-steps for offers/orders/invoices
+      if (kind === 'offer')  await ensureStatus({ offers_received: true });
+      if (kind === 'order')  await ensureStatus({ orders_placed: true });
+      if (kind === 'invoice')await ensureStatus({ invoices_received: true });
       setToast({ msg: `${kind.charAt(0).toUpperCase() + kind.slice(1)} added.`, type: 'success' });
       await openProject(selected);
     } catch (e) { setToast({ msg: 'Operation failed: ' + (e?.message || e), type: 'error' }); }
@@ -301,13 +357,27 @@ export default function Project() {
     } catch (e) { setToast({ msg: 'Status update failed: ' + (e?.message || e), type: 'error' }); }
   }
 
+  async function setClosed(on) {
+    // close toggle writes/clears close_month
+    if (!selected) return;
+    try {
+      const payload = { close_month: on ? new Date() : null };
+      const updated = await put(`/api/projects/projects/${selected.id}`, payload);
+      setSelected(updated);
+      setList((s) => s.map((x) => (x.id === updated.id ? updated : x)));
+      setEditCloseDate(dateInputValue(updated.close_month));
+      setToast({ msg: on ? 'Project closed.' : 'Project reopened.', type: 'success' });
+      await openProject(updated);
+    } catch (e) { setToast({ msg: 'Close toggle failed: ' + (e?.message || e), type: 'error' }); }
+  }
+
   async function askAI(question) {
     if (!selected) return;
     const r = await post(`/api/projects/projects/${selected.id}/assistant`, { question });
     setAiAnswer(r?.answer || '');
   }
 
-  /* ----------------------------- Filtering (client-side for now) ----------------------------- */
+  /* ----------------------------- Filtering (client-side) ----------------------------- */
   const filtered = useMemo(() => {
     const within = (d, from, to) => {
       if (!d) return false;
@@ -319,30 +389,18 @@ export default function Project() {
       return true;
     };
     return (list || []).filter((p) => {
-      // title
       if (fltTitle && !(p.title || '').toLowerCase().includes(fltTitle.toLowerCase())) return false;
-      // wbs only
       if (fltWbsOnly && !p.wbs_number) return false;
-      // budget range
       if (fltBudgetMin && Number(p.budget_amount ?? 0) < Number(fltBudgetMin)) return false;
       if (fltBudgetMax && Number(p.budget_amount ?? 0) > Number(fltBudgetMax)) return false;
-      // health
       const health = p.status?.last_analysis?.health || 'ok';
       if (fltHealth !== 'all' && health !== fltHealth) return false;
-      // steps (AND)
       for (const k of Object.keys(fltSteps)) {
         if (fltSteps[k] && !p.status?.[k]) return false;
       }
-      // dates
-      if (fltCreatedFrom || fltCreatedTo) {
-        if (!within(p.created_at, fltCreatedFrom, fltCreatedTo)) return false;
-      }
-      if (fltStartFrom || fltStartTo) {
-        if (!within(p.start_month, fltStartFrom, fltStartTo)) return false;
-      }
-      if (fltCloseFrom || fltCloseTo) {
-        if (!within(p.close_month, fltCloseFrom, fltCloseTo)) return false;
-      }
+      if (fltCreatedFrom || fltCreatedTo) if (!within(p.created_at, fltCreatedFrom, fltCreatedTo)) return false;
+      if (fltStartFrom || fltStartTo)     if (!within(p.start_month, fltStartFrom, fltStartTo)) return false;
+      if (fltCloseFrom || fltCloseTo)     if (!within(p.close_month, fltCloseFrom, fltCloseTo)) return false;
       return true;
     });
   }, [list, fltTitle, fltWbsOnly, fltBudgetMin, fltBudgetMax, fltHealth, fltSteps, fltCreatedFrom, fltCreatedTo, fltStartFrom, fltStartTo, fltCloseFrom, fltCloseTo]);
@@ -450,6 +508,20 @@ export default function Project() {
           const tone = health === 'critical' ? 'rose' : health === 'warn' ? 'amber' : 'green';
           const isOpen = expandedId === p.id;
 
+          // progress computation (7 steps including "closed")
+          const stepsDone = {
+            business_case_done: !!st.business_case_done || (files.business_case?.length > 0),
+            pip_done:           !!st.pip_done          || (files.pip?.length > 0),
+            offers_received:    !!st.offers_received   || (lines.offers?.length > 0),
+            wbs_recorded:       !!st.wbs_recorded      || !!p.wbs_number || Number(p.budget_amount || 0) > 0,
+            orders_placed:      !!st.orders_placed     || (lines.orders?.length > 0),
+            invoices_received:  !!st.invoices_received || (lines.invoices?.length > 0),
+            closed:             !!p.close_month,
+          };
+          const totalSteps = 7;
+          const completed = Object.values(stepsDone).filter(Boolean).length;
+          const pct = Math.round((completed / totalSteps) * 100);
+
           return (
             <div key={p.id} className="rounded-2xl border bg-white shadow-sm overflow-hidden">
               {/* Row header: only title + arrow + basic chips + delete icon */}
@@ -474,28 +546,90 @@ export default function Project() {
               {/* Expanded content */}
               {isOpen && (
                 <div className="px-4 pb-5">
-                  {/* Meta dates */}
-                  <div className="flex flex-wrap gap-3 text-xs text-gray-600 mb-3">
-                    <span className="inline-flex items-center gap-1"><Calendar size={14}/> Created: {p.created_at ? new Date(p.created_at).toLocaleDateString() : '—'}</span>
-                    <span className="inline-flex items-center gap-1"><Calendar size={14}/> Start: {p.start_month ? new Date(p.start_month).toLocaleDateString() : '—'}</span>
-                    <span className="inline-flex items-center gap-1"><Calendar size={14}/> Close: {p.close_month ? new Date(p.close_month).toLocaleDateString() : '—'}</span>
+                  {/* Progress bar */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                      <span>Progress</span>
+                      <span>{completed}/{totalSteps} • {pct}%</span>
+                    </div>
+                    <div className="w-full h-2 rounded bg-gray-200 overflow-hidden">
+                      <div className="h-2 bg-emerald-500" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="mt-2 grid sm:grid-cols-7 gap-2 text-[11px]">
+                      {[
+                        ['Business case', stepsDone.business_case_done],
+                        ['PIP', stepsDone.pip_done],
+                        ['Offers', stepsDone.offers_received],
+                        ['WBS', stepsDone.wbs_recorded],
+                        ['Orders', stepsDone.orders_placed],
+                        ['Invoices', stepsDone.invoices_received],
+                        ['Closed', stepsDone.closed],
+                      ].map(([label, ok]) => (
+                        <span key={label} className={`inline-flex items-center gap-1 px-2 py-1 rounded border ${ok?'bg-emerald-50 text-emerald-700 border-emerald-200':'bg-gray-50 text-gray-600 border-gray-200'}`}>
+                          {ok ? <CheckCircle2 size={12}/> : <XCircle size={12}/>}
+                          {label}
+                        </span>
+                      ))}
+                    </div>
                   </div>
 
-                  {/* WBS & Budget */}
-                  <div className="grid sm:grid-cols-3 gap-3 mb-4">
-                    <input className={input} placeholder="WBS number" value={editWbs}
-                           onChange={(e)=>setEditWbs(e.target.value)} onBlur={saveHeaderFields}/>
-                    <div className="flex items-center gap-2">
-                      <PoundSterling size={16} className="text-gray-500"/>
-                      <input className={input} placeholder="Budget amount (£)" type="number" value={editBudget}
-                             onChange={(e)=>setEditBudget(e.target.value)} onBlur={saveHeaderFields}/>
+                  {/* Dates + WBS & Budget (editable) */}
+                  <div className="grid lg:grid-cols-2 gap-4 mb-4">
+                    <div className="grid sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs text-gray-600">Created</label>
+                        <input className={input} type="date" value={editPrepDate}
+                               onChange={(e)=>setEditPrepDate(e.target.value)} onBlur={saveDates} />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-600">Start</label>
+                        <input className={input} type="date" value={editStartDate}
+                               onChange={(e)=>setEditStartDate(e.target.value)} onBlur={saveDates} />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-600">Close</label>
+                        <input className={input} type="date" value={editCloseDate}
+                               onChange={(e)=>setEditCloseDate(e.target.value)} onBlur={saveDates} />
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                      Milestones auto: preparation, start, close
+                    <div className="grid sm:grid-cols-3 gap-3">
+                      <input className={input} placeholder="WBS number" value={editWbs}
+                             onChange={(e)=>setEditWbs(e.target.value)} onBlur={saveHeaderFields}/>
+                      <div className="flex items-center gap-2">
+                        <PoundSterling size={16} className="text-gray-500"/>
+                        <input className={input} placeholder="Budget amount (£)" type="number" value={editBudget}
+                               onChange={(e)=>setEditBudget(e.target.value)} onBlur={saveHeaderFields}/>
+                      </div>
+                      {/* Close switch */}
+                      <label className="flex items-center gap-2 text-sm">
+                        <input type="checkbox" checked={!!selected?.close_month} onChange={(e)=>setClosed(e.target.checked)} />
+                        <span>Mark as closed</span>
+                      </label>
                     </div>
                   </div>
 
-                  {/* Steps & attachments */}
+                  {/* Status checklist (interactive toggles) */}
+                  <div className="p-3 rounded border bg-gray-50 mb-4">
+                    <div className="text-sm font-medium mb-2">Checklist</div>
+                    <div className="grid sm:grid-cols-3 md:grid-cols-7 gap-2 text-sm">
+                      {[
+                        ['business_case_done', 'Business case'],
+                        ['pip_done', 'PIP'],
+                        ['offers_received', 'Offers'],
+                        ['wbs_recorded', 'WBS'],
+                        ['orders_placed', 'Orders'],
+                        ['invoices_received', 'Invoices'],
+                      ].map(([k, label]) => (
+                        <label key={k} className="flex items-center gap-2">
+                          <input type="checkbox" checked={!!status?.[k]} onChange={()=>toggleStatus(k)} />
+                          <span>{label}</span>
+                        </label>
+                      ))}
+                      <div className="text-xs text-gray-500 md:col-span-1">Use the toggle above to close/reopen.</div>
+                    </div>
+                  </div>
+
+                  {/* Attachments blocks */}
                   <div className="grid md:grid-cols-2 gap-4">
                     {[
                       ['business_case', 'Business case'],
@@ -508,7 +642,7 @@ export default function Project() {
                       <div key={key} className="p-3 rounded border bg-gray-50">
                         <div className="text-sm font-medium mb-2 flex items-center gap-2"><Paperclip size={16}/> {label}</div>
                         <DropInput label="Drop files here"
-                                   onFiles={(filesList)=>uploadFiles(p, key, filesList)}
+                                   onFiles={(filesList)=>uploadFiles(selected, key, filesList)}
                                    accept={'.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg'} multiple />
                         <ul className="mt-2 divide-y text-sm bg-white rounded border">
                           {(files[key] || []).length === 0 && <li className="px-3 py-2 text-gray-500">No files yet.</li>}
@@ -753,4 +887,15 @@ function Alerts({ analysis }) {
       ))}
     </div>
   );
+}
+
+/* ------------------------------ helpers ------------------------------ */
+function dateInputValue(d) {
+  if (!d) return '';
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return '';
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth()+1).padStart(2,'0');
+  const day = String(dt.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
 }
