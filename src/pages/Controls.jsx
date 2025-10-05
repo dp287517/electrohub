@@ -4,7 +4,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 /* ============================
    API utils
 ============================ */
-const API_BASE = ""; // relatif : même domaine (ex: /api/controls/...)
 const CONTROLS_API = {
   library: () => fetchJSON(`/api/controls/library`),
   tree: (site) => fetchJSON(`/api/controls/tree`, { headers: { "X-Site": site || "Default" } }),
@@ -14,28 +13,29 @@ const CONTROLS_API = {
   attachments: (id) => fetchJSON(`/api/controls/tasks/${id}/attachments`),
   upload: (id, formData) =>
     fetch(`/api/controls/tasks/${id}/upload`, { method: "POST", body: formData }).then(asJSON),
-  assistant: (id, question) =>
+  assistant: (id, body) =>
     fetchJSON(`/api/controls/tasks/${id}/assistant`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(body || { question: "Que dois-je faire précisément ?" }),
     }),
-  analyze: (id) => fetchJSON(`/api/controls/tasks/${id}/analyze`, { method: "POST" }),
   complete: (id, payload) =>
     fetchJSON(`/api/controls/tasks/${id}/complete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     }),
+  calendar: (site, params = {}) =>
+    fetchJSON(`/api/controls/calendar${toQS(params)}`, { headers: { "X-Site": site || "Default" } }),
 };
 
 function toQS(obj) {
-  const params = new URLSearchParams();
+  const p = new URLSearchParams();
   Object.entries(obj || {}).forEach(([k, v]) => {
     if (v === undefined || v === null || v === "") return;
-    params.set(k, v);
+    p.set(k, v);
   });
-  const s = params.toString();
+  const s = p.toString();
   return s ? `?${s}` : "";
 }
 
@@ -158,9 +158,7 @@ const Icon = {
 /* ============================
    Helpers
 ============================ */
-function cls(...a) {
-  return a.filter(Boolean).join(" ");
-}
+function cls(...a) { return a.filter(Boolean).join(" "); }
 const fmtDate = (s) => (s ? new Date(s).toLocaleDateString() : "—");
 const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
 
@@ -169,6 +167,8 @@ const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
 ============================ */
 export default function Controls() {
   const [site, setSite] = useState(localStorage.getItem("controls_site") || "Default");
+  const [tab, setTab] = useState("tasks"); // "tasks" | "calendar"
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -192,11 +192,11 @@ export default function Controls() {
   useEffect(() => {
     if (qRef.current) clearTimeout(qRef.current);
     qRef.current = setTimeout(() => {
-      refreshTasks();
-    }, 400);
+      if (tab === "tasks") refreshTasks();
+    }, 350);
     return () => clearTimeout(qRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fQuery, fBuilding, fType, fStatus, onlyOverdue, site]);
+  }, [fQuery, fBuilding, fType, fStatus, onlyOverdue, site, tab]);
 
   useEffect(() => {
     (async () => {
@@ -264,36 +264,45 @@ export default function Controls() {
         setSite={onChangeSite}
         onRefresh={() => refreshTasks(true)}
       />
+
       <div className="container">
         <h1 className="page-title">Contrôles & Checklists</h1>
 
-        <FiltersBar
-          query={fQuery}
-          setQuery={setFQuery}
-          filtersOpen={filtersOpen}
-          setFiltersOpen={setFiltersOpen}
-          buildings={buildings}
-          types={types}
-          fBuilding={fBuilding}
-          setFBuilding={setFBuilding}
-          fType={fType}
-          setFType={setFType}
-          fStatus={fStatus}
-          setFStatus={setFStatus}
-          onlyOverdue={onlyOverdue}
-          setOnlyOverdue={setOnlyOverdue}
-          onReset={resetFilters}
-        />
+        <Tabs tab={tab} setTab={setTab} />
 
-        {error ? <ErrorBanner message={error} /> : null}
-        {loading ? <SkeletonList /> : <TaskGrid tasks={tasks} onOpen={setSelectedId} />}
+        {tab === "tasks" && (
+          <>
+            <FiltersBar
+              query={fQuery}
+              setQuery={setFQuery}
+              filtersOpen={filtersOpen}
+              setFiltersOpen={setFiltersOpen}
+              buildings={buildings}
+              types={types}
+              fBuilding={fBuilding}
+              setFBuilding={setFBuilding}
+              fType={fType}
+              setFType={setFType}
+              fStatus={fStatus}
+              setFStatus={setFStatus}
+              onlyOverdue={onlyOverdue}
+              setOnlyOverdue={setOnlyOverdue}
+              onReset={resetFilters}
+            />
 
-        {selectedId ? (
-          <TaskModal id={selectedId} onClose={() => setSelectedId(null)} onCompleted={() => {
-            setSelectedId(null);
-            refreshTasks();
-          }} />
-        ) : null}
+            {error ? <ErrorBanner message={error} /> : null}
+            {loading ? <SkeletonList /> : <TaskGrid tasks={tasks} onOpen={setSelectedId} />}
+
+            {selectedId ? (
+              <TaskModal id={selectedId} onClose={() => setSelectedId(null)} onCompleted={() => {
+                setSelectedId(null);
+                refreshTasks();
+              }} />
+            ) : null}
+          </>
+        )}
+
+        {tab === "calendar" && <CalendarPanel site={site} onSelectTask={(id) => setSelectedId(id)} />}
       </div>
 
       {/* Page CSS */}
@@ -307,7 +316,6 @@ export default function Controls() {
 ============================ */
 function TopBar({ site, setSite, onRefresh }) {
   const [siteInput, setSiteInput] = useState(site);
-
   useEffect(() => setSiteInput(site), [site]);
 
   return (
@@ -332,6 +340,22 @@ function TopBar({ site, setSite, onRefresh }) {
         </button>
       </div>
     </header>
+  );
+}
+
+/* ============================
+   Tabs
+============================ */
+function Tabs({ tab, setTab }) {
+  return (
+    <div className="tabs">
+      <button className={cls("tab", tab === "tasks" && "active")} onClick={() => setTab("tasks")}>
+        <Icon.Search /> Tâches
+      </button>
+      <button className={cls("tab", tab === "calendar" && "active")} onClick={() => setTab("calendar")}>
+        <Icon.Calendar /> Calendrier
+      </button>
+    </div>
   );
 }
 
@@ -385,6 +409,7 @@ function FiltersBar({
             <label>Statut</label>
             <select className="input" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
               <option value="">Tous</option>
+              <option value="Pending">À faire (1ʳᵉ)</option>
               <option value="Planned">Planifié</option>
               <option value="Overdue">En retard</option>
               <option value="Completed">Terminé</option>
@@ -408,9 +433,7 @@ function FiltersBar({
    Task Grid + Cards
 ============================ */
 function TaskGrid({ tasks, onOpen }) {
-  if (!tasks.length) {
-    return <div className="empty">Aucune tâche trouvée.</div>;
-  }
+  if (!tasks.length) return <div className="empty">Aucune tâche trouvée.</div>;
   return (
     <div className="grid">
       {tasks.map((t) => (
@@ -424,10 +447,10 @@ function statusBadge(s) {
   switch (s) {
     case "Overdue": return <span className="badge red"><Icon.Alert /> En retard</span>;
     case "Completed": return <span className="badge green"><Icon.Check /> Terminé</span>;
+    case "Pending": return <span className="badge yellow"><Icon.Clock /> À faire (1ʳᵉ)</span>;
     default: return <span className="badge blue"><Icon.Clock /> Planifié</span>;
   }
 }
-
 function typeLabel(t) {
   switch (t) {
     case "LV_SWITCHBOARD": return "Tableau BT";
@@ -443,7 +466,7 @@ function TaskCard({ t, onOpen }) {
     <div className="card" onClick={onOpen} role="button">
       <div className="card-head">
         {statusBadge(t.status)}
-        <div className="date"><Icon.Calendar /> {t.next_control ? fmtDate(t.next_control) : "—"}</div>
+        <div className="date"><Icon.Calendar /> {t.next_control ? fmtDate(t.next_control) : "À planifier"}</div>
       </div>
       <div className="card-title">{t.task_name}</div>
       <div className="card-sub">
@@ -452,6 +475,7 @@ function TaskCard({ t, onOpen }) {
       </div>
       <div className="card-entity">
         Équipement : <strong>{t.entity_name || "—"}</strong>
+        {t.entity_code ? <span className="mono"> ({t.entity_code})</span> : null}
       </div>
     </div>
   );
@@ -476,7 +500,6 @@ function TaskModal({ id, onClose, onCompleted }) {
   const [aiText, setAiText] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiAnswer, setAiAnswer] = useState("");
-  const [aiAnalysis, setAiAnalysis] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -488,7 +511,7 @@ function TaskModal({ id, onClose, onCompleted }) {
         setResults(d?.results || {});
         const atts = await CONTROLS_API.attachments(id);
         setAttachments(atts || []);
-        setAiAnswer(""); setAiAnalysis("");
+        setAiAnswer("");
       } catch (e) {
         setProblem(e.message || String(e));
       } finally {
@@ -498,20 +521,8 @@ function TaskModal({ id, onClose, onCompleted }) {
   }, [id]);
 
   const rs = details?.result_schema || {};
-  const tsd = details?.tsd_item || null;
-
-  // Préconisations / seuils (affichage aide)
-  const ruleText = useMemo(() => {
-    if (!tsd) return "";
-    const bits = [];
-    if (tsd.comparator && tsd.threshold !== undefined) {
-      bits.push(`Seuil: ${tsd.comparator} ${tsd.threshold}${tsd.unit ? " " + tsd.unit : ""}`);
-    }
-    if (tsd.unit && (!tsd.comparator || tsd.threshold === undefined) && (rs?.type === "number")) {
-      bits.push(`Unité: ${tsd.unit}`);
-    }
-    return bits.join(" • ");
-  }, [tsd, rs]);
+  const isGroup = Array.isArray(rs?.items) && rs.items.length > 0;
+  const clusterItems = details?.tsd_cluster_items || []; // côté serveur pour info/texte
 
   async function refreshAttachments() {
     try {
@@ -545,24 +556,13 @@ function TaskModal({ id, onClose, onCompleted }) {
     }
   }
 
-  async function askAssistant() {
+  async function askAssistant(question) {
     try {
       setAiLoading(true);
       setAiAnswer("");
-      const res = await CONTROLS_API.assistant(id, aiText || "Que dois-je faire précisément ?");
-      setAiAnswer(res?.answer || "");
-    } catch (e) {
-      setProblem(e.message || String(e));
-    } finally {
-      setAiLoading(false);
-    }
-  }
-  async function runAnalysis() {
-    try {
-      setAiLoading(true);
-      setAiAnalysis("");
-      const res = await CONTROLS_API.analyze(id);
-      setAiAnalysis(res?.analysis || "");
+      const body = { question: question || aiText || "Aide pré-intervention : EPI, points de mesure, appareil, interprétation." };
+      const res = await CONTROLS_API.assistant(id, body);
+      setAiAnswer(res?.message || "");
     } catch (e) {
       setProblem(e.message || String(e));
     } finally {
@@ -579,12 +579,24 @@ function TaskModal({ id, onClose, onCompleted }) {
         notes,
       };
       const res = await CONTROLS_API.complete(id, payload);
-      toast("Tâche clôturée. Prochain contrôle: " + fmtDT(res?.next_control));
+      toast("Tâche clôturée. Prochain contrôle: " + fmtDate(res?.next_control));
       onCompleted?.();
     } catch (e) {
       setProblem(e.message || String(e));
     }
   }
+
+  const thresholdBox = useMemo(() => {
+    // Affichage lisible des seuils depuis backend (threshold_text ou items[].threshold_text)
+    if (details?.threshold_text) return details.threshold_text;
+    if (isGroup) {
+      return rs.items
+        .filter((it) => it?.threshold_text)
+        .map((it) => `${it.label}: ${it.threshold_text}`)
+        .join(" • ");
+    }
+    return "";
+  }, [details, rs, isGroup]);
 
   return (
     <div className="modal">
@@ -595,7 +607,8 @@ function TaskModal({ id, onClose, onCompleted }) {
             <div className="mh-sub">
               <span className="chip"><Icon.Bolt /> {typeLabel(details?.equipment_type)}</span>
               <span className="chip"><Icon.Building /> {details?.building || "—"}</span>
-              <span className="chip code">Code: {details?.task_code || "—"}</span>
+              {details?.entity_code ? <span className="chip code">Équipement: {details?.entity_code}</span> : null}
+              {details?.task_code ? <span className="chip code">Code tâche: {details?.task_code}</span> : null}
             </div>
           </div>
           <button className="btn icon ghost" onClick={onClose} title="Fermer"><Icon.X /></button>
@@ -610,7 +623,7 @@ function TaskModal({ id, onClose, onCompleted }) {
               <div className="callout">
                 <div className="callout-title"><Icon.Camera /> Photo de pré-intervention (optionnelle)</div>
                 <div className="callout-text">
-                  Avant d’intervenir, vous pouvez ajouter une photo du contexte (vue d’ensemble, repères, plaques, etc.).
+                  Avant d’intervenir, vous pouvez ajouter une photo (vue d’ensemble, plaques, repères).
                   L’assistant expliquera où mesurer et avec quel appareil. Ce n’est pas obligatoire.
                 </div>
                 <div className="upload-line">
@@ -627,13 +640,23 @@ function TaskModal({ id, onClose, onCompleted }) {
                 </div>
               </div>
 
-              {/* Aide TSD */}
               <div className="section">
                 <div className="section-title">Checklist & Mesures</div>
-                {tsd?.label ? <div className="hint">{tsd.label}</div> : null}
-                {ruleText ? <div className="rule">{ruleText}</div> : null}
+                {thresholdBox ? <div className="rule">{thresholdBox}</div> : null}
 
-                <DynamicFields tsd={tsd} resultSchema={rs} results={results} onChange={handleResultChange} />
+                {isGroup ? (
+                  <GroupFields
+                    items={rs.items}
+                    results={results}
+                    onChange={handleResultChange}
+                  />
+                ) : (
+                  <SingleField
+                    schema={rs}
+                    results={results}
+                    onChange={handleResultChange}
+                  />
+                )}
 
                 <div className="field">
                   <label>Notes / Observations</label>
@@ -684,11 +707,10 @@ function TaskModal({ id, onClose, onCompleted }) {
                     onChange={(e) => setAiText(e.target.value)}
                   />
                   <div className="ai-actions">
-                    <button className="btn" onClick={askAssistant} disabled={aiLoading}><Icon.Send /> Conseils</button>
-                    <button className="btn ghost" onClick={runAnalysis} disabled={aiLoading}><Icon.Search /> Analyser</button>
+                    <button className="btn" onClick={() => askAssistant()} disabled={aiLoading}><Icon.Send /> Conseils</button>
+                    <button className="btn ghost" onClick={() => askAssistant("Analyse des pièces jointes et des résultats vs seuils TSD.")} disabled={aiLoading}><Icon.Search /> Analyser</button>
                   </div>
-                  {aiAnswer ? <div className="ai-answer"><div className="ai-title">Conseils</div><pre>{aiAnswer}</pre></div> : null}
-                  {aiAnalysis ? <div className="ai-answer"><div className="ai-title">Analyse</div><pre>{aiAnalysis}</pre></div> : null}
+                  {aiAnswer ? <div className="ai-answer"><div className="ai-title">Réponse</div><pre>{aiAnswer}</pre></div> : null}
                 </div>
               </div>
             </div>
@@ -701,12 +723,10 @@ function TaskModal({ id, onClose, onCompleted }) {
 }
 
 /* ============================
-   Dynamic fields from TSD/result_schema
+   Fields renderers
 ============================ */
-function DynamicFields({ tsd, resultSchema, results, onChange }) {
-  // Le backend fournit result_schema standardisé:
-  // { type: "boolean"|"number"|"text"|"select"|"checklist"|"check", field: "..." , unit?, options?, checklist? }
-  if (!resultSchema || !resultSchema.field) {
+function SingleField({ schema, results, onChange }) {
+  if (!schema || !schema.field) {
     return (
       <div className="field">
         <label>Résultat (texte)</label>
@@ -714,12 +734,36 @@ function DynamicFields({ tsd, resultSchema, results, onChange }) {
       </div>
     );
   }
-
-  const field = resultSchema.field;
-  const type = normalizeType(resultSchema.type);
-
-  if (type === "checklist" && Array.isArray(resultSchema.checklist)) {
-    const list = resultSchema.checklist;
+  const field = schema.field;
+  const type = normalizeType(schema.type);
+  if (type === "number") {
+    return (
+      <div className="field">
+        <label>Valeur {schema.unit ? `(${schema.unit})` : ""}</label>
+        <input
+          className="input"
+          type="number"
+          step="any"
+          value={results[field] ?? ""}
+          onChange={(e) => onChange(field, e.target.value === "" ? "" : Number(e.target.value))}
+          placeholder={schema.unit ? `Ex: 12.5 ${schema.unit}` : "Ex: 12.5"}
+        />
+      </div>
+    );
+  }
+  if (type === "select" && Array.isArray(schema.options)) {
+    return (
+      <div className="field">
+        <label>Choix</label>
+        <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
+          <option value="">—</option>
+          {schema.options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+    );
+  }
+  if (type === "checklist" && Array.isArray(schema.checklist)) {
+    const list = schema.checklist;
     const current = Array.isArray(results[field]) ? results[field] : [];
     function toggleItem(item) {
       const has = current.includes(item);
@@ -740,63 +784,114 @@ function DynamicFields({ tsd, resultSchema, results, onChange }) {
       </div>
     );
   }
-
-  if (type === "select" && Array.isArray(resultSchema.options)) {
+  if (type === "check" || type === "boolean") {
+    // tri-état demandé: Conforme / Non conforme / NA
+    const val = results[field] ?? "";
     return (
       <div className="field">
-        <label>Choix</label>
-        <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
+        <label>Conformité</label>
+        <select className="input" value={val} onChange={(e) => onChange(field, e.target.value)}>
           <option value="">—</option>
-          {resultSchema.options.map((o) => <option key={o} value={o}>{o}</option>)}
+          <option value="conforme">Conforme</option>
+          <option value="non_conforme">Non conforme</option>
+          <option value="na">Non applicable</option>
         </select>
       </div>
     );
   }
-
-  if (type === "number") {
-    const unit = resultSchema.unit || tsd?.unit || "";
-    return (
-      <div className="field">
-        <label>Valeur {unit ? `(${unit})` : ""}</label>
-        <input
-          className="input"
-          type="number"
-          step="any"
-          value={results[field] ?? ""}
-          onChange={(e) => onChange(field, e.target.value === "" ? "" : Number(e.target.value))}
-          placeholder={unit ? `Ex: 12.5 ${unit}` : "Ex: 12.5"}
-        />
-      </div>
-    );
-  }
-
-  if (type === "boolean" || type === "check") {
-    const val = !!results[field];
-    return (
-      <div className="field check">
-        <input id={`ck-${field}`} type="checkbox" checked={val} onChange={(e) => onChange(field, e.target.checked)} />
-        <label htmlFor={`ck-${field}`}>{tsd?.label || "Conforme"}</label>
-      </div>
-    );
-  }
-
-  // text (par défaut)
+  // text
   return (
     <div className="field">
       <label>Observation</label>
-      <input
-        className="input"
-        value={results[field] ?? ""}
-        onChange={(e) => onChange(field, e.target.value)}
-        placeholder="Renseigner le résultat"
-      />
+      <input className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)} placeholder="Renseigner le résultat"/>
     </div>
   );
 }
+
+function GroupFields({ items, results, onChange }) {
+  return (
+    <div className="group-fields">
+      {items.map((it) => {
+        const t = normalizeType(it.type);
+        const field = it.field || it.id;
+        const unit = it.unit ? ` (${it.unit})` : "";
+        return (
+          <div key={field} className="group-item">
+            <div className="gi-head">
+              <div className="gi-label">{it.label}</div>
+              {it.threshold_text ? <div className="gi-rule">{it.threshold_text}</div> : null}
+            </div>
+
+            {t === "number" && (
+              <div className="field">
+                <label>Valeur{unit}</label>
+                <input
+                  className="input"
+                  type="number"
+                  step="any"
+                  value={results[field] ?? ""}
+                  onChange={(e) => onChange(field, e.target.value === "" ? "" : Number(e.target.value))}
+                  placeholder={it.unit ? `Ex: 12.5 ${it.unit}` : "Ex: 12.5"}
+                />
+              </div>
+            )}
+
+            {t === "select" && Array.isArray(it.options) && (
+              <div className="field">
+                <label>Choix</label>
+                <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
+                  <option value="">—</option>
+                  {it.options.map((o) => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
+                </select>
+              </div>
+            )}
+
+            {t === "checklist" && Array.isArray(it.options) && (
+              <div className="field">
+                <label>Conformité</label>
+                <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
+                  <option value="">—</option>
+                  <option value="conforme">Conforme</option>
+                  <option value="non_conforme">Non conforme</option>
+                  <option value="na">Non applicable</option>
+                </select>
+              </div>
+            )}
+
+            {(t === "check" || t === "boolean") && (
+              <div className="field">
+                <label>Conformité</label>
+                <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
+                  <option value="">—</option>
+                  <option value="conforme">Conforme</option>
+                  <option value="non_conforme">Non conforme</option>
+                  <option value="na">Non applicable</option>
+                </select>
+              </div>
+            )}
+
+            {(!["number","select","checklist","check","boolean"].includes(t)) && (
+              <div className="field">
+                <label>Observation</label>
+                <input
+                  className="input"
+                  value={results[field] ?? ""}
+                  onChange={(e) => onChange(field, e.target.value)}
+                  placeholder="Renseigner le résultat"
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function normalizeType(t) {
   if (!t) return "text";
   const k = String(t).toLowerCase();
-  if (["boolean", "bool", "check"].includes(k)) return "boolean";
+  if (["boolean", "bool", "check"].includes(k)) return "check";
   if (["number", "numeric", "float", "int"].includes(k)) return "number";
   if (["text", "string"].includes(k)) return "text";
   if (["select", "choice", "enum"].includes(k)) return "select";
@@ -805,12 +900,97 @@ function normalizeType(t) {
 }
 
 /* ============================
+   Calendar
+============================ */
+function CalendarPanel({ site, onSelectTask }) {
+  const [month, setMonth] = useState(() => {
+    const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [items, setItems] = useState([]);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setErr("");
+        const from = toISODate(month);
+        const to = toISODate(new Date(month.getFullYear(), month.getMonth() + 1, 0));
+        const rows = await CONTROLS_API.calendar(site, { from, to });
+        setItems(rows || []);
+      } catch (e) {
+        setErr(e.message || String(e));
+      }
+    })();
+  }, [month, site]);
+
+  function prev() {
+    const d = new Date(month); d.setMonth(d.getMonth() - 1); setMonth(d);
+  }
+  function next() {
+    const d = new Date(month); d.setMonth(d.getMonth() + 1); setMonth(d);
+  }
+
+  const grid = buildMonthGrid(month);
+  const byDay = new Map();
+  for (const it of items) {
+    const key = toISODate(new Date(it.next_control));
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(it);
+  }
+
+  return (
+    <div className="calendar-panel">
+      <div className="cal-head">
+        <button className="btn ghost" onClick={prev}>‹</button>
+        <div className="cal-title"><Icon.Calendar /> {month.toLocaleDateString(undefined, { year: "numeric", month: "long" })}</div>
+        <button className="btn ghost" onClick={next}>›</button>
+      </div>
+      {err ? <ErrorBanner message={err} /> : null}
+      <div className="cal-grid">
+        {["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"].map((d) => <div key={d} className="cal-dow">{d}</div>)}
+        {grid.map((cell, i) => {
+          const key = toISODate(cell.date);
+          const list = byDay.get(key) || [];
+          return (
+            <div key={i} className={cls("cal-cell", cell.otherMonth && "muted")}>
+              <div className="cal-day">{cell.date.getDate()}</div>
+              <div className="cal-list">
+                {list.slice(0, 4).map(ev => (
+                  <div
+                    key={ev.id}
+                    className={cls("cal-item", ev.status === "Overdue" && "red", ev.status === "Planned" && "blue")}
+                    onClick={() => onSelectTask(ev.id)}
+                  >
+                    {ev.entity_name} · {ev.task_name}
+                  </div>
+                ))}
+                {list.length > 4 ? <div className="cal-more">+{list.length - 4} autres…</div> : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+function toISODate(d) { const x = new Date(d); x.setHours(0,0,0,0); return x.toISOString().slice(0,10); }
+function buildMonthGrid(firstOfMonth) {
+  const start = new Date(firstOfMonth);
+  const firstDay = (start.getDay() + 6) % 7; // Monday start
+  const startDate = new Date(start); startDate.setDate(1 - firstDay);
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const dt = new Date(startDate); dt.setDate(startDate.getDate() + i);
+    cells.push({ date: dt, otherMonth: dt.getMonth() !== firstOfMonth.getMonth() });
+  }
+  return cells;
+}
+
+/* ============================
    Attachments list
 ============================ */
 function AttachmentList({ taskId, attachments }) {
-  if (!attachments?.length) {
-    return <div className="empty small">Aucune pièce jointe.</div>;
-  }
+  if (!attachments?.length) return <div className="empty small">Aucune pièce jointe.</div>;
   return (
     <div className="attachments">
       {attachments.map((a) => (
@@ -909,6 +1089,7 @@ const styles = `
   --primary-600: #0284c7;
   --blue-50: #eff6ff;
   --green: #16a34a;
+  --yellow: #f59e0b;
   --red: #dc2626;
   --border: #e5e7eb;
   --chip: #eef2f7;
@@ -937,6 +1118,10 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .btn.primary { background: var(--green); }
 .btn.primary:hover { background: #15803d; }
 
+.tabs { display:flex; gap:8px; margin: 8px 0 16px; }
+.tab { background:#fff; border:1px solid var(--border); border-radius:999px; padding:8px 12px; display:inline-flex; gap:8px; align-items:center; cursor:pointer; }
+.tab.active { background: var(--blue-50); border-color:#bfdbfe; }
+
 .filters { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; margin: 8px 0 16px; }
 .filters-row { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
 .search { position:relative; flex:1; min-width: 220px; }
@@ -959,8 +1144,10 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .badge.green { background:#ecfdf5; color:#065f46; }
 .badge.red { background:#fef2f2; color:#991b1b; }
 .badge.blue { background:#eff6ff; color:#1e40af; }
+.badge.yellow { background:#fffbeb; color:#92400e; border-color:#fde68a; }
 .chip { display:inline-flex; gap:6px; align-items:center; background: var(--chip); color:#111; border:1px solid var(--border); padding:4px 8px; border-radius:999px; font-size:12px; }
 .chip.code { background:#fafafa; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
 .error { display:flex; gap:8px; align-items:flex-start; background:#fef2f2; border:1px solid #fecaca; color:#7f1d1d; padding:12px; border-radius:10px; margin: 12px 0; }
 
@@ -982,6 +1169,11 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .field.check { flex-direction:row; align-items:center; gap:8px; }
 .checklist { display:flex; flex-direction:column; gap:6px; }
 .ck-item { display:flex; gap:8px; align-items:center; }
+.group-fields { display:flex; flex-direction:column; gap:12px; }
+.group-item { border:1px solid var(--border); border-radius:10px; padding:10px; background:#fff; }
+.gi-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }
+.gi-label { font-weight:700; }
+.gi-rule { font-size:12px; color:#374151; background:#f8fafc; border:1px dashed var(--border); padding:4px 6px; border-radius:8px; }
 .actions { display:flex; gap:8px; justify-content:flex-end; }
 
 .callout { background:#fafafa; border:1px solid var(--border); border-radius:10px; padding:12px; }
@@ -1014,10 +1206,25 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 60; }
 .toast { background:#111; color:#fff; padding:10px 12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.2); max-width: 70vw; }
 
-/* Responsive */
+/* Calendar */
+.calendar-panel { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; }
+.cal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.cal-title { font-weight:800; display:flex; gap:8px; align-items:center; }
+.cal-grid { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
+.cal-dow { font-size:12px; color:#475569; text-align:center; padding:6px 0; }
+.cal-cell { border:1px solid var(--border); border-radius:10px; background:#fff; min-height:104px; padding:6px; display:flex; flex-direction:column; gap:4px; }
+.cal-cell.muted { background:#fafafa; color:#6b7280; }
+.cal-day { font-size:12px; color:#64748b; }
+.cal-list { display:flex; flex-direction:column; gap:4px; }
+.cal-item { font-size:12px; line-height:1.25; padding:4px 6px; border-radius:6px; background:#eff6ff; cursor:pointer; border:1px solid var(--border); }
+.cal-item.red { background:#fef2f2; }
+.cal-item.blue { background:#eff6ff; }
+.cal-more { font-size:11px; color:#64748b; }
+
 @media (max-width: 980px) {
   .filters-panel { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
   .modal-body { grid-template-columns: 1fr; }
+  .cal-cell { min-height:88px; }
 }
 @media (max-width: 600px) {
   .filters-row { gap:8px; }
