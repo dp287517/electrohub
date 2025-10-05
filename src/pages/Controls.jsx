@@ -4,11 +4,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 /* ============================
    API utils
 ============================ */
+function headersFor(site) {
+  return site ? { "X-Site": site } : {};
+}
 const CONTROLS_API = {
   library: () => fetchJSON(`/api/controls/library`),
-  tree: (site) => fetchJSON(`/api/controls/tree`, { headers: { "X-Site": site || "Default" } }),
+  tree: (site) => fetchJSON(`/api/controls/tree`, { headers: headersFor(site) }),
   tasks: (params = {}, site) =>
-    fetchJSON(`/api/controls/tasks${toQS(params)}`, { headers: { "X-Site": site || "Default" } }),
+    fetchJSON(`/api/controls/tasks${toQS(params)}`, { headers: headersFor(site) }),
   taskDetails: (id) => fetchJSON(`/api/controls/tasks/${id}/details`),
   attachments: (id) => fetchJSON(`/api/controls/tasks/${id}/attachments`),
   upload: (id, formData) =>
@@ -17,7 +20,14 @@ const CONTROLS_API = {
     fetchJSON(`/api/controls/tasks/${id}/assistant`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || { question: "Que dois-je faire précisément ?" }),
+      // on indique que l'IA peut analyser les pièces jointes et les seuils TSD
+      body: JSON.stringify(
+        body || {
+          question: "Aide pré-intervention : EPI, points à vérifier, appareil à utiliser, interprétation des mesures.",
+          analyze_attachments: true,
+          analyze_thresholds: true,
+        }
+      ),
     }),
   complete: (id, payload) =>
     fetchJSON(`/api/controls/tasks/${id}/complete`, {
@@ -26,7 +36,7 @@ const CONTROLS_API = {
       body: JSON.stringify(payload),
     }),
   calendar: (site, params = {}) =>
-    fetchJSON(`/api/controls/calendar${toQS(params)}`, { headers: { "X-Site": site || "Default" } }),
+    fetchJSON(`/api/controls/calendar${toQS(params)}`, { headers: headersFor(site) }),
 };
 
 function toQS(obj) {
@@ -166,7 +176,8 @@ const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
    Controls Page
 ============================ */
 export default function Controls() {
-  const [site, setSite] = useState(localStorage.getItem("controls_site") || "Default");
+  // Par défaut on part sur Nyon (pas de "Default")
+  const [site, setSite] = useState(localStorage.getItem("controls_site") || "Nyon");
   const [tab, setTab] = useState("tasks"); // "tasks" | "calendar"
 
   const [loading, setLoading] = useState(true);
@@ -245,8 +256,9 @@ export default function Controls() {
   }
 
   function onChangeSite(v) {
-    setSite(v || "Default");
-    localStorage.setItem("controls_site", v || "Default");
+    const next = (v || "").trim();
+    setSite(next);
+    localStorage.setItem("controls_site", next);
   }
 
   const buildings = useMemo(() => {
@@ -332,7 +344,7 @@ function TopBar({ site, setSite, onRefresh }) {
             value={siteInput}
             onChange={(e) => setSiteInput(e.target.value)}
             onBlur={() => setSite(siteInput)}
-            placeholder="Default"
+            placeholder="Site (ex: Nyon)"
           />
         </div>
         <button className="btn ghost" onClick={onRefresh} title="Rafraîchir">
@@ -522,7 +534,6 @@ function TaskModal({ id, onClose, onCompleted }) {
 
   const rs = details?.result_schema || {};
   const isGroup = Array.isArray(rs?.items) && rs.items.length > 0;
-  const clusterItems = details?.tsd_cluster_items || []; // côté serveur pour info/texte
 
   async function refreshAttachments() {
     try {
@@ -560,7 +571,11 @@ function TaskModal({ id, onClose, onCompleted }) {
     try {
       setAiLoading(true);
       setAiAnswer("");
-      const body = { question: question || aiText || "Aide pré-intervention : EPI, points de mesure, appareil, interprétation." };
+      const body = {
+        question: question || aiText || "Aide pré-intervention : EPI, points de mesure, appareil, interprétation.",
+        analyze_attachments: true,
+        analyze_thresholds: true,
+      };
       const res = await CONTROLS_API.assistant(id, body);
       setAiAnswer(res?.message || "");
     } catch (e) {
@@ -575,7 +590,7 @@ function TaskModal({ id, onClose, onCompleted }) {
       setProblem("");
       const payload = {
         user: localStorage.getItem("controls_user") || "Technicien",
-        results,
+        results: results || {}, // non-null
         notes,
       };
       const res = await CONTROLS_API.complete(id, payload);
@@ -587,9 +602,8 @@ function TaskModal({ id, onClose, onCompleted }) {
   }
 
   const thresholdBox = useMemo(() => {
-    // Affichage lisible des seuils depuis backend (threshold_text ou items[].threshold_text)
     if (details?.threshold_text) return details.threshold_text;
-    if (isGroup) {
+    if (isGroup && rs.items.some((it) => it?.threshold_text)) {
       return rs.items
         .filter((it) => it?.threshold_text)
         .map((it) => `${it.label}: ${it.threshold_text}`)
@@ -597,6 +611,8 @@ function TaskModal({ id, onClose, onCompleted }) {
     }
     return "";
   }, [details, rs, isGroup]);
+
+  const clusterNotes = details?.tsd_cluster_items || []; // consignes/points regroupés côté serveur
 
   return (
     <div className="modal">
@@ -643,6 +659,16 @@ function TaskModal({ id, onClose, onCompleted }) {
               <div className="section">
                 <div className="section-title">Checklist & Mesures</div>
                 {thresholdBox ? <div className="rule">{thresholdBox}</div> : null}
+
+                {/* Consignes / points du cluster (ex: a) à h)) */}
+                {clusterNotes?.length ? (
+                  <div className="hint">
+                    <strong>Consignes TSD (points à observer) :</strong>
+                    <ul style={{margin:'6px 0 0 18px'}}>
+                      {clusterNotes.map((s, i) => <li key={i}>{s}</li>)}
+                    </ul>
+                  </div>
+                ) : null}
 
                 {isGroup ? (
                   <GroupFields
@@ -736,6 +762,36 @@ function SingleField({ schema, results, onChange }) {
   }
   const field = schema.field;
   const type = normalizeType(schema.type);
+
+  // checklist simple -> tri-état par item si schema.checklist est fourni
+  if (type === "checklist" && Array.isArray(schema.checklist) && schema.checklist.length) {
+    const current = (results[field] && typeof results[field] === "object") ? results[field] : {};
+    function setItem(item, v) {
+      onChange(field, { ...current, [item]: v });
+    }
+    return (
+      <div className="field">
+        <label>Checklist</label>
+        <div className="group-fields">
+          {schema.checklist.map((item) => (
+            <div key={item} className="group-item">
+              <div className="gi-head"><div className="gi-label">{item}</div></div>
+              <div className="field">
+                <label>Conformité</label>
+                <select className="input" value={current[item] ?? ""} onChange={(e) => setItem(item, e.target.value)}>
+                  <option value="">—</option>
+                  <option value="conforme">Conforme</option>
+                  <option value="non_conforme">Non conforme</option>
+                  <option value="na">Non applicable</option>
+                </select>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (type === "number") {
     return (
       <div className="field">
@@ -757,35 +813,12 @@ function SingleField({ schema, results, onChange }) {
         <label>Choix</label>
         <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
           <option value="">—</option>
-          {schema.options.map((o) => <option key={o} value={o}>{o}</option>)}
+          {schema.options.map((o) => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
         </select>
       </div>
     );
   }
-  if (type === "checklist" && Array.isArray(schema.checklist)) {
-    const list = schema.checklist;
-    const current = Array.isArray(results[field]) ? results[field] : [];
-    function toggleItem(item) {
-      const has = current.includes(item);
-      const next = has ? current.filter((x) => x !== item) : current.concat(item);
-      onChange(field, next);
-    }
-    return (
-      <div className="field">
-        <label>Checklist</label>
-        <div className="checklist">
-          {list.map((item) => (
-            <label key={item} className="ck-item">
-              <input type="checkbox" checked={current.includes(item)} onChange={() => toggleItem(item)} />
-              <span>{item}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-    );
-  }
   if (type === "check" || type === "boolean") {
-    // tri-état demandé: Conforme / Non conforme / NA
     const val = results[field] ?? "";
     return (
       <div className="field">
@@ -815,6 +848,43 @@ function GroupFields({ items, results, onChange }) {
         const t = normalizeType(it.type);
         const field = it.field || it.id;
         const unit = it.unit ? ` (${it.unit})` : "";
+
+        // checklist multi-points -> tri-état PAR POINT
+        if (t === "checklist" && Array.isArray(it.options) && it.options.length) {
+          const curr = (results[field] && typeof results[field] === "object") ? results[field] : {};
+          function setItem(optKey, v) {
+            onChange(field, { ...curr, [optKey]: v });
+          }
+          return (
+            <div key={field} className="group-item">
+              <div className="gi-head">
+                <div className="gi-label">{it.label}</div>
+                {it.threshold_text ? <div className="gi-rule">{it.threshold_text}</div> : null}
+              </div>
+              <div className="group-fields">
+                {it.options.map((opt) => {
+                  const key = opt.value || opt.key || opt;
+                  const label = opt.label || opt.name || opt;
+                  return (
+                    <div key={key} className="group-item" style={{padding:'8px'}}>
+                      <div className="gi-head"><div className="gi-label">{label}</div></div>
+                      <div className="field">
+                        <label>Conformité</label>
+                        <select className="input" value={curr[key] ?? ""} onChange={(e) => setItem(key, e.target.value)}>
+                          <option value="">—</option>
+                          <option value="conforme">Conforme</option>
+                          <option value="non_conforme">Non conforme</option>
+                          <option value="na">Non applicable</option>
+                        </select>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div key={field} className="group-item">
             <div className="gi-head">
@@ -842,18 +912,6 @@ function GroupFields({ items, results, onChange }) {
                 <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
                   <option value="">—</option>
                   {it.options.map((o) => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
-                </select>
-              </div>
-            )}
-
-            {t === "checklist" && Array.isArray(it.options) && (
-              <div className="field">
-                <label>Conformité</label>
-                <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
-                  <option value="">—</option>
-                  <option value="conforme">Conforme</option>
-                  <option value="non_conforme">Non conforme</option>
-                  <option value="na">Non applicable</option>
                 </select>
               </div>
             )}
