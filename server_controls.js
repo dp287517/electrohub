@@ -4,7 +4,7 @@
 // - Regroupement par "cluster" si défini dans la TSD -> une seule carte / inspection
 // - Endpoints: /assistant (IA), /calendar, /tree amélioré, /details enrichis
 // - Compat schéma: colonne legacy "user" dans controls_history, size dans attachments, etc.
-// - Index/contraintes: unique partiel sur tâches actives pour éviter doublons
+// - Index/contraintes: unique partiel sur tâches actives + DÉDOUBLONNAGE avant création
 // - Démarre sur CONTROLS_PORT (ou 3011)
 
 import express from "express";
@@ -64,6 +64,11 @@ function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[cont
 
 function comparatorText(comp, thr, unit) {
   const U = unit ? ` ${unit}` : "";
+  // Meilleur rendu pour booléens (évite "== true")
+  if (typeof thr === "boolean") {
+    if (comp === "==") return thr ? "Doit être Conforme / OK" : "Doit être Non conforme";
+    if (comp === "!=") return thr ? "Doit être Non conforme" : "Doit être Conforme / OK";
+  }
   switch (comp) {
     case "==": return `Doit être égal à ${thr}${U}`;
     case "!=": return `Doit être différent de ${thr}${U}`;
@@ -83,7 +88,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_entities (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT,
       building TEXT,
       equipment_type TEXT,
       name TEXT,
@@ -110,7 +115,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_tasks (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT,
       entity_id INTEGER REFERENCES controls_entities(id) ON DELETE CASCADE,
       task_name TEXT,
       task_code TEXT,
@@ -137,13 +142,14 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_history (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT,
       task_id INTEGER REFERENCES controls_tasks(id) ON DELETE SET NULL,
       task_name TEXT,
       user_name TEXT,
       "user" TEXT,                        -- compat legacy
       action TEXT,
       meta JSONB,
+      results JSONB,                      -- compat pour anciens schémas exigeant NOT NULL
       date TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -164,7 +170,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_not_present (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT,
       building TEXT,
       equipment_type TEXT,
       declared_by TEXT,
@@ -176,7 +182,7 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_records (
       id SERIAL PRIMARY KEY,
-      site TEXT DEFAULT 'Default',
+      site TEXT,
       entity_id INTEGER REFERENCES controls_entities(id) ON DELETE SET NULL,
       task_code TEXT,
       results JSONB,
@@ -185,13 +191,13 @@ async function ensureSchema() {
     );
   `);
 
-  // ALTER compat
+  // ALTER compat (ajouts + suppression de NOT NULL hérités)
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
+  await pool.query(`ALTER TABLE controls_entities ALTER COLUMN site DROP DEFAULT;`);
 
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS cluster TEXT;`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS value_type TEXT DEFAULT 'checklist';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS result_schema JSONB;`);
@@ -204,19 +210,34 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS created_by TEXT;`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Planned';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS threshold_text TEXT;`);
+  await pool.query(`ALTER TABLE controls_tasks ALTER COLUMN site DROP DEFAULT;`);
 
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS "user" TEXT;`);
-  await pool.query(`ALTER TABLE controls_history ALTER COLUMN "user" DROP NOT NULL;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS task_name TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS action TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS meta JSONB;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS results JSONB;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
+  await pool.query(`ALTER TABLE controls_history ALTER COLUMN "user" DROP NOT NULL;`);
+  await pool.query(`ALTER TABLE controls_history ALTER COLUMN results DROP NOT NULL;`);
 
   await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
+  await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS size INTEGER;`);
+
+  // DÉDOUBLONNAGE avant index unique (garde l'id le plus grand)
+  await pool.query(`
+    DELETE FROM controls_tasks t
+    USING controls_tasks t2
+    WHERE t.site = t2.site
+      AND t.entity_id = t2.entity_id
+      AND COALESCE(t.cluster, t.task_code) = COALESCE(t2.cluster, t2.task_code)
+      AND t.status IN ('Pending','Planned','Overdue')
+      AND t2.status IN ('Pending','Planned','Overdue')
+      AND t.id < t2.id
+  `);
 
   // Indexes (dont unique partiel pour éviter doublons de tâches actives)
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
@@ -259,7 +280,7 @@ async function safeFetchJson(url) {
 }
 
 // HTTP (compat)
-async function loadSwitchboardsHTTP(site="Default") {
+async function loadSwitchboardsHTTP(site) {
   const url = process.env.SWITCHBOARD_URL || process.env.SWITCHBOARD_BASE_URL || "";
   if (!url) return [];
   const boards  = await safeFetchJson(`${url}/api/switchboard/boards?site=${encodeURIComponent(site)}`);
@@ -285,7 +306,7 @@ async function loadSwitchboardsHTTP(site="Default") {
   }
   return out;
 }
-async function loadHVHTTP(site="Default") {
+async function loadHVHTTP(site) {
   const url = process.env.HV_URL || process.env.HV_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/hv/equipments?site=${encodeURIComponent(site)}`);
@@ -296,7 +317,7 @@ async function loadHVHTTP(site="Default") {
     code: h.code || `HV-${h.id}`
   }));
 }
-async function loadATEXHTTP(site="Default") {
+async function loadATEXHTTP(site) {
   const url = process.env.ATEX_URL || process.env.ATEX_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/atex/equipments?site=${encodeURIComponent(site)}`);
@@ -309,51 +330,51 @@ async function loadATEXHTTP(site="Default") {
 }
 
 // DB (recommandé)
-async function loadFromDB(site="Default") {
+async function loadFromDB(site) {
   // Switchboards
   const { rows: sbs } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(s.site,''),'Default') AS site,
+      NULLIF(s.site,'') AS site,
       COALESCE(NULLIF(s.building_code,''),'B00') AS building,
       s.name::text AS name,
       s.code::text AS code
     FROM public.switchboards s
-    WHERE COALESCE(NULLIF(s.site,''),'Default') = $1
+    WHERE s.site = $1
   `, [site]);
 
   // Devices (+ parent switchboard_code)
   const { rows: devs } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(d.site,''),'Default') AS site,
+      NULLIF(d.site,'') AS site,
       COALESCE(NULLIF(sb.building_code,''),'B00') AS building,
       COALESCE(NULLIF(d.name,''), d.device_type, ('Device-'||d.id))::text AS name,
       COALESCE(NULLIF(d.reference,''), NULLIF(d.position_number,''), ('DEV-'||d.id))::text AS code,
       sb.code::text AS parent_code
     FROM public.devices d
     LEFT JOIN public.switchboards sb ON sb.id = d.switchboard_id
-    WHERE COALESCE(NULLIF(d.site,''),'Default') = $1
+    WHERE d.site = $1
   `, [site]);
 
   // HV
   const { rows: hvs } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(hv.site,''),'Default') AS site,
+      NULLIF(hv.site,'') AS site,
       COALESCE(NULLIF(hv.building_code,''),'B00') AS building,
       hv.name::text AS name,
       hv.code::text AS code
     FROM public.hv_equipments hv
-    WHERE COALESCE(NULLIF(hv.site,''),'Default') = $1
+    WHERE hv.site = $1
   `, [site]);
 
   // ATEX
   const { rows: atex } = await pool.query(`
     SELECT
-      COALESCE(NULLIF(a.site,''),'Default') AS site,
+      NULLIF(a.site,'') AS site,
       COALESCE(NULLIF(a.building,''),'B00') AS building,
       a.component_type::text AS name,
       COALESCE(NULLIF(a.manufacturer_ref,''), ('ATEX-'||a.id))::text AS code
     FROM public.atex_equipments a
-    WHERE COALESCE(NULLIF(a.site,''),'Default') = $1
+    WHERE a.site = $1
   `, [site]);
 
   const out = [];
@@ -390,9 +411,11 @@ function buildSchemaForCluster(clusterGroup) {
     unit: it.unit || null,
     comparator: it.comparator || null,
     threshold: it.threshold ?? null,
-    options: it.options || (it.type === "checklist"
-      ? [{value:"conforme", label:"Conforme"}, {value:"non_conforme", label:"Non conforme"}, {value:"na", label:"Non applicable"}]
-      : null),
+    options: it.options || (
+      it.type === "checklist" || it.type === "check"
+        ? [{value:"conforme", label:"Conforme"}, {value:"non_conforme", label:"Non conforme"}, {value:"na", label:"Non applicable"}]
+        : null
+    ),
     threshold_text: comparatorText(it.comparator, it.threshold, it.unit)
   }));
 
@@ -478,7 +501,7 @@ async function ensureActiveTaskForEntity(site, entity) {
   return created;
 }
 
-async function regenerateTasks(site="Default") {
+async function regenerateTasks(site) {
   const { rows: entities } = await pool.query("SELECT * FROM controls_entities WHERE site=$1", [site]);
   let created = 0;
   for (const e of entities) {
@@ -493,7 +516,7 @@ async function regenerateTasks(site="Default") {
 // ---------------------------------------------------------------------------
 app.post("/api/controls/sync", async (req, res) => {
   try {
-    const site = req.body?.site || req.headers["x-site"] || "Default";
+    const site = req.body?.site || req.headers["x-site"] || "Nyon"; // par défaut Nyon si non fourni
     const source = (req.query.source || process.env.CONTROLS_SOURCE || "auto").toLowerCase();
 
     let incoming = [];
@@ -558,7 +581,7 @@ app.post("/api/controls/sync", async (req, res) => {
     }
 
     const created = await regenerateTasks(site);
-    res.json({ source: source || "auto", synced: items.length, added, updated, not_present_flagged: flaggedNotPresent, tasks_created: created });
+    res.json({ source: source || "auto", site, synced: items.length, added, updated, not_present_flagged: flaggedNotPresent, tasks_created: created });
   } catch (e) {
     log("sync error:", e);
     res.status(500).json({ error: "Erreur sync", details: e.message });
@@ -569,7 +592,7 @@ app.post("/api/controls/sync", async (req, res) => {
 // CATALOG
 // ---------------------------------------------------------------------------
 app.get("/api/controls/catalog", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
+  const site = req.headers["x-site"] || req.query.site || "Nyon";
   const { rows } = await pool.query(
     "SELECT * FROM controls_entities WHERE site=$1 ORDER BY id DESC",
     [site]
@@ -578,7 +601,7 @@ app.get("/api/controls/catalog", async (req, res) => {
 });
 
 app.post("/api/controls/catalog", async (req, res) => {
-  const { site="Default", building, equipment_type, name, code, parent_code=null } = req.body || {};
+  const { site="Nyon", building, equipment_type, name, code, parent_code=null } = req.body || {};
   if (!equipment_type || !name) return res.status(400).json({ error: "Champs requis manquants" });
   const { rows: exist } = await pool.query(
     "SELECT id FROM controls_entities WHERE site=$1 AND code=$2",
@@ -602,7 +625,7 @@ app.delete("/api/controls/catalog/:id", async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/controls/tasks", async (req, res) => {
   try {
-    const site = req.headers["x-site"] || req.query.site || "Default";
+    const site = req.headers["x-site"] || req.query.site || "Nyon";
     const { building, type, status, q, page = 1, pageSize = 200, entity_id } = req.query;
     await ensureOverdueFlags();
 
@@ -675,12 +698,12 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
     // Historique + Record + marquer "fait" sur l’entité (clé = cluster ou code)
     const doneKey = t.cluster || t.task_code;
     await pool.query(
-      "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-      [t.site || "Default", id, t.task_name, user, user, "Completed", JSON.stringify({ ai_risk_score, results, notes })]
+      "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta, results) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+      [t.site || "Nyon", id, t.task_name, user, user, "Completed", JSON.stringify({ ai_risk_score, results, notes }), JSON.stringify(results || {})]
     );
     await pool.query(
       "INSERT INTO controls_records (site, entity_id, task_code, results, created_by) VALUES ($1,$2,$3,$4,$5)",
-      [t.site || "Default", t.entity_id, doneKey, JSON.stringify(results || {}), user]
+      [t.site || "Nyon", t.entity_id, doneKey, JSON.stringify(results || {}), user]
     );
     await pool.query(
       "UPDATE controls_entities SET done = done || jsonb_build_object($1, $2) WHERE id=$3",
@@ -696,7 +719,7 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
     if (ncFound) {
       await pool.query(
         "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        [t.site || "Default", id, t.task_name, user, user, "NC", JSON.stringify({ reason: "Checklist non conforme", results })]
+        [t.site || "Nyon", id, t.task_name, user, user, "NC", JSON.stringify({ reason: "Checklist non conforme", results })]
       );
     }
 
@@ -758,7 +781,7 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
         : await pool.query(`SELECT * FROM controls_attachments WHERE task_id=$1 AND (label ILIKE 'pre%' OR label IS NULL) ORDER BY uploaded_at DESC LIMIT 4`, [id]);
 
       images = atts.map(a => ({
-        type: "input_image",
+        type: "image_url",
         image_url: {
           url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}`
         }
@@ -860,7 +883,7 @@ app.delete("/api/controls/tasks/:id/attachments/:attId", async (req, res) => {
 // NOT PRESENT
 // ---------------------------------------------------------------------------
 app.get("/api/controls/not-present", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
+  const site = req.headers["x-site"] || req.query.site || "Nyon";
   const { rows } = await pool.query(
     "SELECT * FROM controls_not_present WHERE site=$1 ORDER BY id DESC",
     [site]
@@ -869,7 +892,7 @@ app.get("/api/controls/not-present", async (req, res) => {
 });
 
 app.post("/api/controls/not-present", async (req, res) => {
-  const { site="Default", building, equipment_type, declared_by="user", note="" } = req.body || {};
+  const { site="Nyon", building, equipment_type, declared_by="user", note="" } = req.body || {};
   const { rows } = await pool.query(
     "INSERT INTO controls_not_present (site,building,equipment_type,declared_by,note) VALUES ($1,$2,$3,$4,$5) RETURNING *",
     [site, building || null, equipment_type, declared_by, note]
@@ -882,7 +905,7 @@ app.post("/api/controls/not-present/:id/assess", async (req, res) => {
   const { action="Assessed", user="system", meta={} } = req.body || {};
   await pool.query(
     "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-    [req.headers["x-site"] || "Default", null, `not-present#${id}`, user, user, action, JSON.stringify(meta)]
+    [req.headers["x-site"] || "Nyon", null, `not-present#${id}`, user, user, action, JSON.stringify(meta)]
   );
   res.json({ ok: true });
 });
@@ -891,7 +914,7 @@ app.post("/api/controls/not-present/:id/assess", async (req, res) => {
 // HISTORY & RECORDS
 // ---------------------------------------------------------------------------
 app.get("/api/controls/history", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
+  const site = req.headers["x-site"] || req.query.site || "Nyon";
   const { rows } = await pool.query(
     "SELECT * FROM controls_history WHERE site=$1 ORDER BY date DESC LIMIT 200",
     [site]
@@ -900,7 +923,7 @@ app.get("/api/controls/history", async (req, res) => {
 });
 
 app.get("/api/controls/records", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
+  const site = req.headers["x-site"] || req.query.site || "Nyon";
   const { rows } = await pool.query(
     "SELECT * FROM controls_records WHERE site=$1 ORDER BY created_at DESC LIMIT 200",
     [site]
@@ -912,7 +935,7 @@ app.get("/api/controls/records", async (req, res) => {
 // TREE (building -> groups -> entities (+devices sous switchboard))
 // ---------------------------------------------------------------------------
 app.get("/api/controls/tree", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
+  const site = req.headers["x-site"] || req.query.site || "Nyon";
 
   const { rows: ents } = await pool.query(
     "SELECT id, site, building, equipment_type, name, code, parent_code FROM controls_entities WHERE site=$1 ORDER BY building, equipment_type, name",
@@ -990,7 +1013,7 @@ app.get("/api/controls/tree", async (req, res) => {
 // CALENDAR — vue globale des futures échéances
 // ---------------------------------------------------------------------------
 app.get("/api/controls/calendar", async (req, res) => {
-  const site = req.headers["x-site"] || req.query.site || "Default";
+  const site = req.headers["x-site"] || req.query.site || "Nyon";
   const { from, to } = req.query;
   const q = `
     SELECT ct.id, ct.next_control, ct.status, ct.task_name, ce.name AS entity_name, ce.code AS entity_code, ce.equipment_type, ce.building
