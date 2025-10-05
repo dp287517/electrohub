@@ -605,6 +605,10 @@ function TaskModal({ id, onClose, onCompleted }) {
       if (kind === "pre") setPreFiles([]);
       else setWorkFiles([]);
       await refreshAttachments();
+      // Déclenchement automatique de l'IA après upload pré‑intervention
+      if (kind === "pre") {
+        await askAssistant("Analyse la/les photo(s) pré‑intervention et donne les consignes (EPI, points de mesure, appareil).");
+      }
     } catch (e) {
       setProblem(e.message || String(e));
     } finally {
@@ -636,7 +640,8 @@ function TaskModal({ id, onClose, onCompleted }) {
       const payload = {
         user: localStorage.getItem("controls_user") || "Technicien",
         results: results || {},
-        notes,
+        // IMPORTANT: envoyer les notes saisies dans le champ Notes / Observations
+        notes: results?.__notes || "",
       };
       const res = await CONTROLS_API.complete(id, payload);
       toast("Tâche clôturée. Prochain contrôle: " + fmtDate(res?.next_control));
@@ -1311,7 +1316,8 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .skeleton .w70 { width:70%; }
 .skeleton .w80 { width:80%; }
 .skeleton .w90 { width:90%; }
-@keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+@keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; }
+}
 
 .toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 60; }
 .toast { background:#111; color:#fff; padding:10px 12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.2); max-width: 70vw; }
