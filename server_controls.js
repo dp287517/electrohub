@@ -1,10 +1,8 @@
-// server_controls.js — Controls backend (vNext)
-// - Première occurrence: statut "Pending" (non planifiée, next_control = NULL)
-// - À la complétion: crée une NOUVELLE tâche pour la prochaine échéance (au lieu d’écraser)
-// - Regroupement par "cluster" si défini dans la TSD -> une seule carte / inspection
-// - Endpoints: /assistant (IA), /calendar, /tree amélioré, /details enrichis
-// - Compat schéma: colonne legacy "user" dans controls_history, size dans attachments, etc.
-// - Index/contraintes: unique partiel sur tâches actives + DÉDOUBLONNAGE avant création
+// server_controls.js — Controls backend (corrigé)
+// - Migration idempotente: ajoute entity_id à controls_records si absent (corrige l'erreur "column entity_id...")
+// - Purge des entités disparues lors du /sync (supprime aussi leurs tâches via ON DELETE CASCADE)
+// - Conserve tout le comportement existant: Pending 1ère occurrence, création d'une nouvelle tâche à la complétion, IA avec photos "pré"
+// - Index/contraintes: unique partiel sur tâches actives + dédoublonnage
 // - Démarre sur CONTROLS_PORT (ou 3011)
 
 import express from "express";
@@ -56,15 +54,11 @@ function addMonths(dateStr, months) {
   d.setMonth(d.getMonth() + (months || 0));
   return d.toISOString().slice(0, 10);
 }
-function isDue(dateStr) {
-  if (!dateStr) return true;
-  return new Date(dateStr) <= new Date();
-}
+function isDue(dateStr) { if (!dateStr) return true; return new Date(dateStr) <= new Date(); }
 function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args); }
 
 function comparatorText(comp, thr, unit) {
   const U = unit ? ` ${unit}` : "";
-  // Meilleur rendu pour booléens (évite "== true")
   if (typeof thr === "boolean") {
     if (comp === "==") return thr ? "Doit être Conforme / OK" : "Doit être Non conforme";
     if (comp === "!=") return thr ? "Doit être Non conforme" : "Doit être Conforme / OK";
@@ -119,18 +113,18 @@ async function ensureSchema() {
       entity_id INTEGER REFERENCES controls_entities(id) ON DELETE CASCADE,
       task_name TEXT,
       task_code TEXT,
-      cluster TEXT,                       -- regroupement (si défini par TSD)
+      cluster TEXT,
       frequency_months INTEGER,
       last_control DATE,
       next_control DATE,
-      status TEXT DEFAULT 'Planned',      -- Pending | Planned | Overdue | Completed | Canceled
+      status TEXT DEFAULT 'Planned',
       value_type TEXT DEFAULT 'checklist',
       result_schema JSONB,
       procedure_md TEXT,
       hazards_md TEXT,
       ppe_md TEXT,
       tools_md TEXT,
-      threshold_text TEXT,                -- lisible pour l’UI ("≤ 20 °C", etc.)
+      threshold_text TEXT,
       results JSONB,
       ai_notes JSONB DEFAULT '[]'::jsonb,
       created_by TEXT,
@@ -146,10 +140,10 @@ async function ensureSchema() {
       task_id INTEGER REFERENCES controls_tasks(id) ON DELETE SET NULL,
       task_name TEXT,
       user_name TEXT,
-      "user" TEXT,                        -- compat legacy
+      "user" TEXT,
       action TEXT,
       meta JSONB,
-      results JSONB,                      -- compat pour anciens schémas exigeant NOT NULL
+      results JSONB,
       date TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -191,7 +185,7 @@ async function ensureSchema() {
     );
   `);
 
-  // ALTER compat (ajouts + suppression de NOT NULL hérités)
+  // ALTER compat
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
@@ -227,7 +221,13 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
   await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS size INTEGER;`);
 
-  // DÉDOUBLONNAGE avant index unique (garde l'id le plus grand)
+  // **MIGRATION CRITIQUE**: si la table controls_records existait SANS entity_id
+  await pool.query(`
+    ALTER TABLE controls_records 
+      ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES controls_entities(id) ON DELETE SET NULL;
+  `);
+
+  // Dédoublonnage des tâches actives avant index unique
   await pool.query(`
     DELETE FROM controls_tasks t
     USING controls_tasks t2
@@ -239,7 +239,7 @@ async function ensureSchema() {
       AND t.id < t2.id
   `);
 
-  // Indexes (dont unique partiel pour éviter doublons de tâches actives)
+  // Indexes
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_next ON controls_tasks(next_control);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_site ON controls_entities(site);`);
@@ -287,22 +287,11 @@ async function loadSwitchboardsHTTP(site) {
   const devices = await safeFetchJson(`${url}/api/switchboard/devices?site=${encodeURIComponent(site)}`);
   const out = [];
   for (const sb of (boards?.data || [])) {
-    out.push({
-      site, building: sb.building || sb.building_code || "B00",
-      equipment_type: "LV_SWITCHBOARD",
-      name: sb.name || `Board-${sb.id}`,
-      code: sb.code || `SB-${sb.id}`
-    });
+    out.push({ site, building: sb.building || sb.building_code || "B00", equipment_type: "LV_SWITCHBOARD", name: sb.name || `Board-${sb.id}`, code: sb.code || `SB-${sb.id}` });
   }
   for (const d of (devices?.data || [])) {
     const parent_code = d.switchboard_code || d.board_code || d.parent_code || d.parent || null;
-    out.push({
-      site, building: d.building || d.building_code || "B00",
-      equipment_type: "LV_DEVICE",
-      name: d.name || `Device-${d.id}`,
-      code: d.code || d.reference || d.position_number || `DEV-${d.id}`,
-      parent_code
-    });
+    out.push({ site, building: d.building || d.building_code || "B00", equipment_type: "LV_DEVICE", name: d.name || `Device-${d.id}`, code: d.code || d.reference || d.position_number || `DEV-${d.id}`, parent_code });
   }
   return out;
 }
@@ -310,72 +299,38 @@ async function loadHVHTTP(site) {
   const url = process.env.HV_URL || process.env.HV_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/hv/equipments?site=${encodeURIComponent(site)}`);
-  return (data?.data || []).map(h => ({
-    site, building: h.building || h.building_code || "B00",
-    equipment_type: "HV_EQUIPMENT",
-    name: h.name || `HV-${h.id}`,
-    code: h.code || `HV-${h.id}`
-  }));
+  return (data?.data || []).map(h => ({ site, building: h.building || h.building_code || "B00", equipment_type: "HV_EQUIPMENT", name: h.name || `HV-${h.id}`, code: h.code || `HV-${h.id}` }));
 }
 async function loadATEXHTTP(site) {
   const url = process.env.ATEX_URL || process.env.ATEX_BASE_URL || "";
   if (!url) return [];
   const data = await safeFetchJson(`${url}/api/atex/equipments?site=${encodeURIComponent(site)}`);
-  return (data?.data || []).map(ax => ({
-    site, building: ax.building || "B00",
-    equipment_type: "ATEX_EQUIPMENT",
-    name: ax.component_type || `ATEX-${ax.id}`,
-    code: ax.manufacturer_ref || `ATEX-${ax.id}`
-  }));
+  return (data?.data || []).map(ax => ({ site, building: ax.building || "B00", equipment_type: "ATEX_EQUIPMENT", name: ax.component_type || `ATEX-${ax.id}`, code: ax.manufacturer_ref || `ATEX-${ax.id}` }));
 }
 
 // DB (recommandé)
 async function loadFromDB(site) {
-  // Switchboards
   const { rows: sbs } = await pool.query(`
-    SELECT
-      NULLIF(s.site,'') AS site,
-      COALESCE(NULLIF(s.building_code,''),'B00') AS building,
-      s.name::text AS name,
-      s.code::text AS code
-    FROM public.switchboards s
-    WHERE s.site = $1
-  `, [site]);
+    SELECT NULLIF(s.site,'') AS site, COALESCE(NULLIF(s.building_code,''),'B00') AS building, s.name::text AS name, s.code::text AS code
+    FROM public.switchboards s WHERE s.site = $1`, [site]);
 
-  // Devices (+ parent switchboard_code)
   const { rows: devs } = await pool.query(`
-    SELECT
-      NULLIF(d.site,'') AS site,
-      COALESCE(NULLIF(sb.building_code,''),'B00') AS building,
-      COALESCE(NULLIF(d.name,''), d.device_type, ('Device-'||d.id))::text AS name,
-      COALESCE(NULLIF(d.reference,''), NULLIF(d.position_number,''), ('DEV-'||d.id))::text AS code,
-      sb.code::text AS parent_code
-    FROM public.devices d
-    LEFT JOIN public.switchboards sb ON sb.id = d.switchboard_id
-    WHERE d.site = $1
-  `, [site]);
+    SELECT NULLIF(d.site,'') AS site, COALESCE(NULLIF(sb.building_code,''),'B00') AS building,
+           COALESCE(NULLIF(d.name,''), d.device_type, ('Device-'||d.id))::text AS name,
+           COALESCE(NULLIF(d.reference,''), NULLIF(d.position_number,''), ('DEV-'||d.id))::text AS code,
+           sb.code::text AS parent_code
+    FROM public.devices d LEFT JOIN public.switchboards sb ON sb.id = d.switchboard_id
+    WHERE d.site = $1`, [site]);
 
-  // HV
   const { rows: hvs } = await pool.query(`
-    SELECT
-      NULLIF(hv.site,'') AS site,
-      COALESCE(NULLIF(hv.building_code,''),'B00') AS building,
-      hv.name::text AS name,
-      hv.code::text AS code
-    FROM public.hv_equipments hv
-    WHERE hv.site = $1
-  `, [site]);
+    SELECT NULLIF(hv.site,'') AS site, COALESCE(NULLIF(hv.building_code,''),'B00') AS building, hv.name::text AS name, hv.code::text AS code
+    FROM public.hv_equipments hv WHERE hv.site = $1`, [site]);
 
-  // ATEX
   const { rows: atex } = await pool.query(`
-    SELECT
-      NULLIF(a.site,'') AS site,
-      COALESCE(NULLIF(a.building,''),'B00') AS building,
-      a.component_type::text AS name,
-      COALESCE(NULLIF(a.manufacturer_ref,''), ('ATEX-'||a.id))::text AS code
-    FROM public.atex_equipments a
-    WHERE a.site = $1
-  `, [site]);
+    SELECT NULLIF(a.site,'') AS site, COALESCE(NULLIF(a.building,''),'B00') AS building,
+           a.component_type::text AS name,
+           COALESCE(NULLIF(a.manufacturer_ref,''), ('ATEX-'||a.id))::text AS code
+    FROM public.atex_equipments a WHERE a.site = $1`, [site]);
 
   const out = [];
   for (const sb of sbs) out.push({ ...sb, equipment_type: "LV_SWITCHBOARD", parent_code: null });
@@ -386,12 +341,12 @@ async function loadFromDB(site) {
 }
 
 // ---------------------------------------------------------------------------
-// TSD helpers: regrouper par cluster si présent
+// TSD helpers & schema
 // ---------------------------------------------------------------------------
 function clusterize(items = []) {
   const map = new Map();
   for (const it of items) {
-    const key = it.cluster || it.id; // si pas de cluster => unitaire
+    const key = it.cluster || it.id;
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(it);
   }
@@ -399,23 +354,14 @@ function clusterize(items = []) {
 }
 
 function buildSchemaForCluster(clusterGroup) {
-  // Un schéma "items[]" pour checklists/mesures multiples
   const first = clusterGroup.items[0] || {};
   const freq = first.frequency_months || 12;
 
   const items = clusterGroup.items.map(it => ({
-    id: it.id,
-    field: it.field,
-    label: it.label,
-    type: it.type,               // "check" | "number" | "text" | "checklist"
-    unit: it.unit || null,
-    comparator: it.comparator || null,
-    threshold: it.threshold ?? null,
-    options: it.options || (
-      it.type === "checklist" || it.type === "check"
-        ? [{value:"conforme", label:"Conforme"}, {value:"non_conforme", label:"Non conforme"}, {value:"na", label:"Non applicable"}]
-        : null
-    ),
+    id: it.id, field: it.field, label: it.label, type: it.type,
+    unit: it.unit || null, comparator: it.comparator || null, threshold: it.threshold ?? null,
+    options: it.options || (it.type === "checklist" || it.type === "check"
+      ? [{value:"conforme", label:"Conforme"}, {value:"non_conforme", label:"Non conforme"}, {value:"na", label:"Non applicable"}] : null),
     threshold_text: comparatorText(it.comparator, it.threshold, it.unit)
   }));
 
@@ -433,9 +379,6 @@ function buildSchemaForCluster(clusterGroup) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Génération TSD (Pending pour 1ère occurrence, Planned après)
-// ---------------------------------------------------------------------------
 async function ensureActiveTaskForEntity(site, entity) {
   const items = TSD_LIBRARY[entity.equipment_type] || [];
   if (items.length === 0) return 0;
@@ -444,10 +387,9 @@ async function ensureActiveTaskForEntity(site, entity) {
   let created = 0;
 
   for (const cg of clusters) {
-    const task_code = cg.cluster; // cluster id ou item id
+    const task_code = cg.cluster;
     const last = entity.done?.[task_code] || null;
 
-    // Existe-t-il déjà une tâche active (Pending/Planned/Overdue) ?
     const { rows: exist } = await pool.query(
       `SELECT id FROM controls_tasks
        WHERE site=$1 AND entity_id=$2 AND COALESCE(cluster, task_code)=$3
@@ -459,7 +401,6 @@ async function ensureActiveTaskForEntity(site, entity) {
     const schema = buildSchemaForCluster(cg);
 
     if (!last) {
-      // 1ère occurrence => Pending + non planifiée
       await pool.query(
         `INSERT INTO controls_tasks (
           site, entity_id, task_name, task_code, cluster, frequency_months,
@@ -476,7 +417,6 @@ async function ensureActiveTaskForEntity(site, entity) {
       );
       created++;
     } else {
-      // Planifier à la prochaine date seulement
       const next = addMonths(last, schema.frequency_months);
       if (isDue(next)) {
         await pool.query(
@@ -504,39 +444,25 @@ async function ensureActiveTaskForEntity(site, entity) {
 async function regenerateTasks(site) {
   const { rows: entities } = await pool.query("SELECT * FROM controls_entities WHERE site=$1", [site]);
   let created = 0;
-  for (const e of entities) {
-    created += await ensureActiveTaskForEntity(site, e);
-  }
+  for (const e of entities) created += await ensureActiveTaskForEntity(site, e);
   await ensureOverdueFlags();
   return created;
 }
 
 // ---------------------------------------------------------------------------
-// SYNC
+// SYNC (avec purge des entités disparues)
 // ---------------------------------------------------------------------------
 app.post("/api/controls/sync", async (req, res) => {
   try {
-    const site = req.body?.site || req.headers["x-site"] || "Nyon"; // par défaut Nyon si non fourni
+    const site = req.body?.site || req.headers["x-site"] || "Nyon";
     const source = (req.query.source || process.env.CONTROLS_SOURCE || "auto").toLowerCase();
 
     let incoming = [];
-    if (source === "db") {
-      incoming = await loadFromDB(site);
-    } else if (source === "http") {
-      incoming = [
-        ...(await loadSwitchboardsHTTP(site)),
-        ...(await loadHVHTTP(site)),
-        ...(await loadATEXHTTP(site)),
-      ];
-    } else {
+    if (source === "db") incoming = await loadFromDB(site);
+    else if (source === "http") incoming = [ ...(await loadSwitchboardsHTTP(site)), ...(await loadHVHTTP(site)), ...(await loadATEXHTTP(site)) ];
+    else {
       try { incoming = await loadFromDB(site); } catch { incoming = []; }
-      if (incoming.length === 0) {
-        incoming = [
-          ...(await loadSwitchboardsHTTP(site)),
-          ...(await loadHVHTTP(site)),
-          ...(await loadATEXHTTP(site)),
-        ];
-      }
+      if (incoming.length === 0) incoming = [ ...(await loadSwitchboardsHTTP(site)), ...(await loadHVHTTP(site)), ...(await loadATEXHTTP(site)) ];
     }
 
     // déduplication par (equipment_type + code)
@@ -547,6 +473,14 @@ app.post("/api/controls/sync", async (req, res) => {
       if (!map.has(key)) map.set(key, x);
     }
     const items = Array.from(map.values());
+
+    // **PURGE** des entités qui n'existent plus dans les sources
+    const { rows: existing } = await pool.query("SELECT id, equipment_type, code FROM controls_entities WHERE site=$1", [site]);
+    const incomingKeys = new Set(items.map(x => `${x.equipment_type}:${x.code}`));
+    const toDelete = existing.filter(e => !incomingKeys.has(`${e.equipment_type}:${e.code}`)).map(e => e.id);
+    if (toDelete.length) {
+      await pool.query("DELETE FROM controls_entities WHERE id = ANY($1::int[])", [toDelete]); // cascade sur tasks
+    }
 
     let added = 0, updated = 0, flaggedNotPresent = 0;
     for (const inc of items) {
@@ -581,7 +515,7 @@ app.post("/api/controls/sync", async (req, res) => {
     }
 
     const created = await regenerateTasks(site);
-    res.json({ source: source || "auto", site, synced: items.length, added, updated, not_present_flagged: flaggedNotPresent, tasks_created: created });
+    res.json({ source: source || "auto", site, synced: items.length, added, updated, tasks_created: created, purged: toDelete?.length || 0, not_present_flagged: flaggedNotPresent });
   } catch (e) {
     log("sync error:", e);
     res.status(500).json({ error: "Erreur sync", details: e.message });
@@ -593,20 +527,14 @@ app.post("/api/controls/sync", async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/controls/catalog", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Nyon";
-  const { rows } = await pool.query(
-    "SELECT * FROM controls_entities WHERE site=$1 ORDER BY id DESC",
-    [site]
-  );
+  const { rows } = await pool.query("SELECT * FROM controls_entities WHERE site=$1 ORDER BY id DESC", [site]);
   res.json({ data: rows });
 });
 
 app.post("/api/controls/catalog", async (req, res) => {
   const { site="Nyon", building, equipment_type, name, code, parent_code=null } = req.body || {};
   if (!equipment_type || !name) return res.status(400).json({ error: "Champs requis manquants" });
-  const { rows: exist } = await pool.query(
-    "SELECT id FROM controls_entities WHERE site=$1 AND code=$2",
-    [site, code]
-  );
+  const { rows: exist } = await pool.query("SELECT id FROM controls_entities WHERE site=$1 AND code=$2", [site, code]);
   if (exist.length) return res.status(200).json({ id: exist[0].id, created: false });
   const { rows } = await pool.query(
     "INSERT INTO controls_entities (site,building,equipment_type,name,code,parent_code) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *",
@@ -665,16 +593,12 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
   if (!rows.length) return res.status(404).json({ error: "Not found" });
   const t = rows[0];
 
-  // joindre le cluster TSD correspondant
   const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
-  const clusterItems = t.cluster
-    ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
-    : tsdItems.filter(it => it.id === t.task_code);
-
+  const clusterItems = t.cluster ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
+                                 : tsdItems.filter(it => it.id === t.task_code);
   res.json({ ...t, tsd_cluster_items: clusterItems });
 });
 
-// Completer une tâche -> crée la prochaine
 app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -686,16 +610,12 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
     if (!trows.length) return res.status(404).json({ error: "Not found" });
     const t = trows[0];
 
-    // Clôturer l'actuelle
     const today = todayISO();
     await pool.query(
-      `UPDATE controls_tasks
-       SET status='Completed', results=$1, last_control=$2, updated_at=NOW()
-       WHERE id=$3`,
+      `UPDATE controls_tasks SET status='Completed', results=$1, last_control=$2, updated_at=NOW() WHERE id=$3`,
       [JSON.stringify(results || {}), today, id]
     );
 
-    // Historique + Record + marquer "fait" sur l’entité (clé = cluster ou code)
     const doneKey = t.cluster || t.task_code;
     await pool.query(
       "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta, results) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
@@ -710,12 +630,10 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [doneKey, today, t.entity_id]
     );
 
-    // Détection non-conformités pour déclencher WO (historique)
+    // NC simple (texte)
     let ncFound = false;
     const flatVals = typeof results === "object" ? JSON.stringify(results).toLowerCase() : "";
-    if (flatVals.includes("non_conforme") || flatVals.includes("\"ko\"") || flatVals.includes("reject")) {
-      ncFound = true;
-    }
+    if (flatVals.includes("non_conforme") || flatVals.includes("\"ko\"") || flatVals.includes("reject")) ncFound = true;
     if (ncFound) {
       await pool.query(
         "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
@@ -723,13 +641,10 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       );
     }
 
-    // Créer la prochaine tâche (planned)
     const freq = t.frequency_months || 12;
     const next = addMonths(today, freq);
-
-    // Récupérer schéma et textes existants (on garde le même cluster / code)
-    const { rows: current } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
-    const cur = current[0];
+    const { rows: curRows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
+    const cur = curRows[0];
 
     const { rows: newTask } = await pool.query(
       `INSERT INTO controls_tasks (
@@ -767,60 +682,34 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
     if (!trows.length) return res.status(404).json({ error: "Not found" });
     const t = trows[0];
 
-    // Contexte TSD
     const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
-    const items = t.cluster
-      ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
-      : tsdItems.filter(it => it.id === t.task_code);
+    const items = t.cluster ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
+                            : tsdItems.filter(it => it.id === t.task_code);
 
-    // Pièces jointes "pré" (ou ids spécifiques)
     let images = [];
     if (use_pre_images || (attachment_ids && attachment_ids.length)) {
       const { rows: atts } = attachment_ids.length
         ? await pool.query(`SELECT * FROM controls_attachments WHERE task_id=$1 AND id = ANY($2::int[]) ORDER BY uploaded_at DESC`, [id, attachment_ids])
         : await pool.query(`SELECT * FROM controls_attachments WHERE task_id=$1 AND (label ILIKE 'pre%' OR label IS NULL) ORDER BY uploaded_at DESC LIMIT 4`, [id]);
-
-      images = atts.map(a => ({
-        type: "image_url",
-        image_url: {
-          url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}`
-        }
-      }));
+      images = atts.map(a => ({ type: "image_url", image_url: { url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}` } }));
     }
 
-    const system = `Tu es l'assistant sécurité & qualité pour des contrôles électriques. 
-Rédige des consignes claires pour: EPI, zones à observer, points de mesure, appareil requis, interprétation des mesures, et alertes.
-Réponds en français, en listes courtes et actions concrètes.`;
+    const system = `Tu es l'assistant sécurité & qualité pour des contrôles électriques. \nRédige des consignes claires pour: EPI, zones à observer, points de mesure, appareil requis, interprétation des mesures, et alertes.\nRéponds en français, en listes courtes et actions concrètes.`;
 
     const content = [
       { type: "text", text:
-        `Équipement: ${t.equipment_type} • ${t.entity_name} (${t.entity_code}) • Bâtiment ${t.building || "?"}
-Tâche: ${t.task_name}
-Fréquence: ${t.frequency_months || 12} mois
-Seuils: ${t.threshold_text || "(voir items)"}
-Points: ${items.map(it => `- ${it.label}`).join("\n")}
-Question: ${question || "(guidage pré-intervention)"}`
+        `Équipement: ${t.equipment_type} • ${t.entity_name} (${t.entity_code}) • Bâtiment ${t.building || "?"}\nTâche: ${t.task_name}\nFréquence: ${t.frequency_months || 12} mois\nSeuils: ${t.threshold_text || "(voir items)"}\nPoints: ${items.map(it => `- ${it.label}`).join("\n")}\nQuestion: ${question || "(guidage pré-intervention)"}`
       },
       ...images
     ];
 
     if (!process.env.OPENAI_API_KEY) {
-      return res.json({
-        ok: true,
-        message: `Conseils IA (mode local): 
-- EPI: gants isolants adaptés, lunettes, casque.
-- Avant d'ouvrir: consignation si besoin, balisage zone.
-- Photos claires des bornes/écrans. Mesure avec l’appareil indiqué dans la procédure.
-- Compare la valeur aux seuils: ${t.threshold_text || "cf. items"}.`
-      });
+      return res.json({ ok: true, message: `Conseils IA (mode local):\n- EPI: gants isolants adaptés, lunettes, casque.\n- Avant d'ouvrir: consignation si besoin, balisage zone.\n- Photos claires des bornes/écrans. Mesure avec l’appareil indiqué dans la procédure.\n- Compare la valeur aux seuils: ${t.threshold_text || "cf. items"}.` });
     }
 
     const chat = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content }
-      ],
+      messages: [ { role: "system", content: system }, { role: "user", content } ],
       temperature: 0.2
     });
 
@@ -838,7 +727,7 @@ app.post("/api/controls/tasks/:id/upload", upload.array("files", 20), async (req
   try {
     const id = Number(req.params.id);
     const files = req.files || [];
-    const label = req.body?.label || null; // même label pour le lot
+    const label = req.body?.label || null;
     for (const f of files) {
       await pool.query(
         "INSERT INTO controls_attachments (task_id, filename, size, mimetype, data, label) VALUES ($1,$2,$3,$4,$5,$6)",
@@ -884,10 +773,7 @@ app.delete("/api/controls/tasks/:id/attachments/:attId", async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/controls/not-present", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Nyon";
-  const { rows } = await pool.query(
-    "SELECT * FROM controls_not_present WHERE site=$1 ORDER BY id DESC",
-    [site]
-  );
+  const { rows } = await pool.query("SELECT * FROM controls_not_present WHERE site=$1 ORDER BY id DESC", [site]);
   res.json(rows);
 });
 
@@ -956,36 +842,25 @@ app.get("/api/controls/tree", async (req, res) => {
 
   const cMap = new Map(counts.map(r => [r.entity_id, r]));
 
-  // group by building
   const buildings = {};
   for (const e of ents) {
     const b = e.building || "B00";
     buildings[b] ||= { building: b, groups: { LV_SWITCHBOARD: [], LV_DEVICE: [], HV_EQUIPMENT: [], ATEX_EQUIPMENT: [] }, boardsByCode: {} };
 
-    // pré-indexer switchboards
     if (e.equipment_type === "LV_SWITCHBOARD") {
-      const node = {
-        id: e.id, code: e.code, name: e.name, type: e.equipment_type,
-        counts: cMap.get(e.id) || { planned: 0, overdue: 0, pending: 0, completed: 0, next_due: null },
-        children: [] // devices
-      };
+      const node = { id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: cMap.get(e.id) || { planned: 0, overdue: 0, pending: 0, completed: 0, next_due: null }, children: [] };
       buildings[b].groups.LV_SWITCHBOARD.push(node);
       if (e.code) buildings[b].boardsByCode[e.code] = node;
     }
   }
 
-  // ranger Devices sous leur parent si connu
   for (const e of ents) {
     const b = e.building || "B00";
     if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b]?.boardsByCode[e.parent_code]) {
-      buildings[b].boardsByCode[e.parent_code].children.push({
-        id: e.id, code: e.code, name: e.name, type: e.equipment_type,
-        counts: cMap.get(e.id) || { planned: 0, overdue: 0, pending: 0, completed: 0, next_due: null }
-      });
+      buildings[b].boardsByCode[e.parent_code].children.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts: cMap.get(e.id) || { planned: 0, overdue: 0, pending: 0, completed: 0, next_due: null } });
     }
   }
 
-  // entités restantes
   for (const e of ents) {
     const b = e.building || "B00";
     const bucket = buildings[b].groups;
@@ -1036,7 +911,7 @@ app.get("/api/controls/calendar", async (req, res) => {
 app.get("/api/controls/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // ---------------------------------------------------------------------------
-// START — garde EXACTEMENT ce snippet (pas de PORT)
+// START — ne pas changer la lecture du port
 // ---------------------------------------------------------------------------
 const port = Number(process.env.CONTROLS_PORT || 3011);
 app.listen(port, () => console.log(`[controls] serveur démarré sur :${port}`));
