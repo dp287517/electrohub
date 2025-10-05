@@ -1,682 +1,402 @@
 // src/pages/Controls.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/**
- * Controls.jsx — full UI, mobile-first, no external UI lib
- * - Fetches library/tasks/tree from backend instead of importing tsd_library.js
- * - Collapsible filters + search
- * - Task list with status chips and icons
- * - Detail panel with:
- *    • "Photo pré-intervention" (obligatoire avant démarrer)
- *    • Uploader multiples (caméra smartphone acceptée)
- *    • Interprétation IA et analyse IA
- *    • Form dynamique selon result_schema (number/text/select/checklist/boolean)
- * - Complete task -> POST /complete
- * - Inputs: fond blanc & texte noir
- *
- * Env:
- *  - Optionnel: VITE_CONTROLS_URL (ex: https://api.example.com)
- *  - Header X-Site stocké en localStorage("controls.site") (Default sinon)
- */
-
-const API_BASE = import.meta.env.VITE_CONTROLS_URL || ""; // same-origin by default
-const defaultSite = localStorage.getItem("controls.site") || "Default";
-
-// ------------------------------ SVG Icons (no deps) ------------------------------
-const Icon = {
-  Filter: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M3 5h18M6 12h12M10 19h4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
-  ),
-  Search: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" fill="none"/><path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
-  ),
-  Refresh: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M20 6v6h-6" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/><path d="M20 12a8 8 0 1 1-2.34-5.66L20 6" stroke="currentColor" strokeWidth="2" fill="none"/></svg>
-  ),
-  Camera: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M3 7h4l2-2h6l2 2h4v12H3z" stroke="currentColor" strokeWidth="2" fill="none"/><circle cx="12" cy="13" r="4" stroke="currentColor" strokeWidth="2" fill="none"/></svg>
-  ),
-  Upload: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M12 16V4M8 8l4-4 4 4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/><path d="M20 16v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2" stroke="currentColor" strokeWidth="2" fill="none"/></svg>
-  ),
-  Trash: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
-  ),
-  Calendar: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><rect x="3" y="5" width="18" height="16" rx="2" ry="2" stroke="currentColor" strokeWidth="2" fill="none"/><path d="M16 3v4M8 3v4M3 11h18" stroke="currentColor" strokeWidth="2" fill="none"/></svg>
-  ),
-  Bolt: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M13 2L3 14h7l-1 8 10-12h-7z" stroke="currentColor" strokeWidth="2" fill="none"/></svg>
-  ),
-  Check: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
-  ),
-  Alert: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M12 9v4M12 17h.01" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" stroke="currentColor" strokeWidth="2" fill="none"/></svg>
-  ),
-  X: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>
-  ),
-  Wand: (props) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}><path d="M15 4l5 5M2 20l7-7" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round"/><rect x="14" y="3" width="4" height="4" transform="rotate(45 16 5)" stroke="currentColor" strokeWidth="2" fill="none"/></svg>
-  ),
+/* ============================
+   API utils
+============================ */
+const API_BASE = ""; // relatif : même domaine (ex: /api/controls/...)
+const CONTROLS_API = {
+  library: () => fetchJSON(`/api/controls/library`),
+  tree: (site) => fetchJSON(`/api/controls/tree`, { headers: { "X-Site": site || "Default" } }),
+  tasks: (params = {}, site) =>
+    fetchJSON(`/api/controls/tasks${toQS(params)}`, { headers: { "X-Site": site || "Default" } }),
+  taskDetails: (id) => fetchJSON(`/api/controls/tasks/${id}/details`),
+  attachments: (id) => fetchJSON(`/api/controls/tasks/${id}/attachments`),
+  upload: (id, formData) =>
+    fetch(`/api/controls/tasks/${id}/upload`, { method: "POST", body: formData }).then(asJSON),
+  assistant: (id, question) =>
+    fetchJSON(`/api/controls/tasks/${id}/assistant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    }),
+  analyze: (id) => fetchJSON(`/api/controls/tasks/${id}/analyze`, { method: "POST" }),
+  complete: (id, payload) =>
+    fetchJSON(`/api/controls/tasks/${id}/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
 };
 
-// ------------------------------ Small UI helpers ------------------------------
-const Pill = ({ children, color = "#111", bg = "#eee", title }) => (
-  <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 8px", borderRadius: 999, background: bg, color, fontWeight: 600, fontSize: 12 }}>
-    {children}
-  </span>
-);
-
-const StatusPill = ({ status }) => {
-  const s = (status || "").toLowerCase();
-  if (s === "overdue") return <Pill bg="#fde2e2" color="#b40000" title="En retard"><Icon.Alert />Overdue</Pill>;
-  if (s === "completed") return <Pill bg="#e7f6ea" color="#106b21" title="Terminé"><Icon.Check />Completed</Pill>;
-  return <Pill bg="#e8f0fe" color="#1a56db" title="Planifié"><Icon.Calendar />Planned</Pill>;
-};
-
-const Collapsible = ({ label, icon, children, defaultOpen = false }) => {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="collapsible">
-      <button className="collapsible-btn" onClick={() => setOpen((o) => !o)}>
-        {icon} <span style={{ fontWeight: 700 }}>{label}</span>
-        <span className={`chev ${open ? "up" : ""}`}>▾</span>
-      </button>
-      {open && <div className="collapsible-body">{children}</div>}
-    </div>
-  );
-};
-
-// ------------------------------ API layer ------------------------------
-async function api(path, { method = "GET", body, site = defaultSite, signal } = {}) {
-  const headers = { "Content-Type": "application/json", "X-Site": site };
-  const res = await fetch(`${API_BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-    signal,
+function toQS(obj) {
+  const params = new URLSearchParams();
+  Object.entries(obj || {}).forEach(([k, v]) => {
+    if (v === undefined || v === null || v === "") return;
+    params.set(k, v);
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error || err?.message || `HTTP ${res.status}`);
-  }
-  return res.json();
+  const s = params.toString();
+  return s ? `?${s}` : "";
 }
 
-async function apiUpload(path, files, { label, site = defaultSite, onProgress } = {}) {
-  const form = new FormData();
-  for (const f of files) form.append("files", f);
-  if (label) form.append("label", label);
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "X-Site": site },
-    body: form,
-  });
+async function fetchJSON(url, options = {}) {
+  const res = await fetch(url, options);
   if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error || `Upload HTTP ${res.status}`);
-  }
-  return res.json();
-}
-
-// ------------------------------ Uploader ------------------------------
-function PhotoUploader({ taskId, label = "during", onDone, disabled }) {
-  const fileRef = useRef();
-  const [busy, setBusy] = useState(false);
-  const onPick = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
+    let message = `${res.status} ${res.statusText}`;
     try {
-      setBusy(true);
-      await apiUpload(`/api/controls/tasks/${taskId}/upload`, files, { label });
-      onDone && onDone();
-    } catch (e) {
-      alert("Upload: " + e.message);
-    } finally {
-      setBusy(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  };
-  return (
-    <label className="btn secondary" style={{ opacity: disabled ? 0.5 : 1 }}>
-      <Icon.Upload />
-      {label === "pre" ? "Ajouter photo pré-intervention" : "Ajouter des photos"}
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*"
-        multiple={label !== "pre"} // for "pre" we usually want a simple single photo, but multiple is fine too; keep single for clarity
-        capture="environment"
-        onChange={onPick}
-        disabled={busy || disabled}
-        style={{ display: "none" }}
-      />
-    </label>
-  );
+      const j = await res.json();
+      if (j?.error) message = j.error;
+      if (j?.details) message += `: ${j.details}`;
+    } catch {}
+    throw new Error(message);
+  }
+  return res.json();
+}
+async function asJSON(res) {
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const j = await res.json();
+      if (j?.error) message = j.error;
+      if (j?.details) message += `: ${j.details}`;
+    } catch {}
+    throw new Error(message);
+  }
+  return res.json();
 }
 
-function AttachmentList({ attachments = [], onDelete }) {
-  const groups = useMemo(() => {
-    const g = { pre: [], during: [], other: [] };
-    for (const a of attachments) {
-      const key = (a.label || "").toLowerCase();
-      if (key === "pre") g.pre.push(a);
-      else if (key === "during") g.during.push(a);
-      else g.other.push(a);
-    }
-    return g;
-  }, [attachments]);
+/* ============================
+   Icons (inline SVG, no deps)
+============================ */
+const Icon = {
+  Search: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M21 21l-4.35-4.35M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  Filter: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M4 6h16M7 12h10M10 18h4" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  ChevronDown: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  ChevronUp: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M18 15l-6-6-6 6" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  Refresh: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 8V4h-4" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  Calendar: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  Building: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M3 21h18M6 21V7h12v14M9 21v-4h6v4" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  Bolt: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  Alert: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  ),
+  Check: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M20 6l-11 11-5-5" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+  Clock: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/>
+      <path d="M12 6v6l4 2" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  ),
+  Camera: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M4 7h4l2-2h4l2 2h4v12H4z" fill="none" stroke="currentColor" strokeWidth="2"/>
+      <circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  ),
+  Upload: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M12 16V4M7 9l5-5 5 5M4 20h16" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  ),
+  Paperclip: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 1 1 4.95 4.95l-9.19 9.19a2 2 0 1 1-2.83-2.83l7.78-7.78" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  ),
+  Send: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M22 2L11 13" fill="none" stroke="currentColor" strokeWidth="2"/>
+      <path d="M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" strokeWidth="2"/>
+    </svg>
+  ),
+  X: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
+      <path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" strokeWidth="2" />
+    </svg>
+  ),
+};
 
-  const Group = ({ title, items }) =>
-    items.length ? (
-      <div>
-        <div className="section-title">{title}</div>
-        <div className="attachments">
-          {items.map((att) => (
-            <div key={att.id} className="att">
-              <a className="thumb" href={`${API_BASE}/api/controls/tasks/${att.task_id || ""}/attachments/${att.id}`} target="_blank" rel="noreferrer">
-                {/* If API returns image, browser will preview it in a new tab */}
-                <span className="file">{att.filename}</span>
-              </a>
-              <div className="att-meta">
-                <small>{Math.round((att.size || 0) / 1024)} KB</small>
-                {onDelete && (
-                  <button className="icon-btn danger" title="Supprimer" onClick={() => onDelete(att.id)}>
-                    <Icon.Trash />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    ) : null;
-
-  return (
-    <>
-      <Group title="Pré-intervention" items={groups.pre} />
-      <Group title="Pendant l'intervention" items={groups.during} />
-      <Group title="Autres" items={groups.other} />
-    </>
-  );
+/* ============================
+   Helpers
+============================ */
+function cls(...a) {
+  return a.filter(Boolean).join(" ");
 }
+const fmtDate = (s) => (s ? new Date(s).toLocaleDateString() : "—");
+const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
 
-// ------------------------------ Result Form ------------------------------
-function ResultForm({ schema, value, onChange }) {
-  // schema: { field, type, unit, comparator, threshold, options }
-  const [local, setLocal] = useState(() => value || {});
-  useEffect(() => setLocal(value || {}), [value]);
-
-  const inputStyle = { background: "#fff", color: "#000", border: "1px solid #ccc", borderRadius: 8, padding: "10px 12px", width: "100%" };
-
-  const setVal = (k, v) => {
-    const next = { ...local, [k]: v };
-    setLocal(next);
-    onChange && onChange(next);
-  };
-
-  return (
-    <div className="grid2">
-      {schema?.type === "number" && (
-        <>
-          <div>
-            <label className="lbl">Mesure ({schema.unit || "-"})</label>
-            <input
-              style={inputStyle}
-              type="number"
-              step="any"
-              value={local.value ?? ""}
-              placeholder={`ex: seuil ${schema.comparator || "<="} ${schema.threshold ?? "?"} ${schema.unit || ""}`}
-              onChange={(e) => setVal("value", e.target.value === "" ? "" : Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="lbl">Conforme ?</label>
-            <select style={inputStyle} value={local.ok ?? ""} onChange={(e) => setVal("ok", e.target.value === "" ? "" : e.target.value === "true")}>
-              <option value="">—</option>
-              <option value="true">Oui</option>
-              <option value="false">Non</option>
-            </select>
-          </div>
-        </>
-      )}
-
-      {schema?.type === "boolean" && (
-        <div>
-          <label className="lbl">{schema.field || "État"}</label>
-          <select style={inputStyle} value={local.ok ?? ""} onChange={(e) => setVal("ok", e.target.value === "" ? "" : e.target.value === "true")}>
-            <option value="">—</option>
-            <option value="true">Oui</option>
-            <option value="false">Non</option>
-          </select>
-        </div>
-      )}
-
-      {schema?.type === "text" && (
-        <div>
-          <label className="lbl">{schema.field || "Valeur"}</label>
-          <input style={inputStyle} type="text" value={local.text ?? ""} onChange={(e) => setVal("text", e.target.value)} />
-        </div>
-      )}
-
-      {schema?.type === "select" && Array.isArray(schema.options) && (
-        <div>
-          <label className="lbl">{schema.field || "Sélection"}</label>
-          <select style={inputStyle} value={local.choice ?? ""} onChange={(e) => setVal("choice", e.target.value)}>
-            <option value="">—</option>
-            {schema.options.map((opt) => (
-              <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {schema?.type === "checklist" && Array.isArray(schema.options) && (
-        <div className="checklist">
-          <div className="lbl" style={{ marginBottom: 8 }}>{schema.field || "Checklist"}</div>
-          {schema.options.map((opt) => {
-            const checked = !!(local.checklist?.[opt]);
-            return (
-              <label key={String(opt)} className="check">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(e) => {
-                    const next = { ...(local.checklist || {}) };
-                    next[opt] = e.target.checked;
-                    setVal("checklist", next);
-                  }}
-                />
-                <span>{String(opt)}</span>
-              </label>
-            );
-          })}
-        </div>
-      )}
-
-      <div style={{ gridColumn: "1 / -1" }}>
-        <label className="lbl">Notes</label>
-        <textarea style={{ ...inputStyle, minHeight: 80 }} value={local.notes ?? ""} onChange={(e) => setVal("notes", e.target.value)} placeholder="Observations, n° de série des appareils utilisés, etc." />
-      </div>
-    </div>
-  );
-}
-
-// ------------------------------ Main Page ------------------------------
+/* ============================
+   Controls Page
+============================ */
 export default function Controls() {
-  const [site, setSite] = useState(defaultSite);
+  const [site, setSite] = useState(localStorage.getItem("controls_site") || "Default");
   const [loading, setLoading] = useState(true);
-  const [library, setLibrary] = useState(null); // { types, library }
-  const [tree, setTree] = useState([]); // for building filters
-  const [tasks, setTasks] = useState([]);
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(200);
-  const [filters, setFilters] = useState({ building: "", type: "", status: "", q: "" });
   const [error, setError] = useState("");
 
-  const [selected, setSelected] = useState(null);
-  const [details, setDetails] = useState(null);
-  const [attachments, setAttachments] = useState([]);
-  const [resultDraft, setResultDraft] = useState({});
-  const [busy, setBusy] = useState(false);
-  const [aiAnswer, setAiAnswer] = useState("");
-  const [aiAnalysis, setAiAnalysis] = useState("");
+  const [library, setLibrary] = useState(null);
+  const [tree, setTree] = useState([]);
+  const [tasks, setTasks] = useState([]);
 
-  const abortRef = useRef();
+  // Filtres (repliables)
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [fQuery, setFQuery] = useState("");
+  const [fBuilding, setFBuilding] = useState("");
+  const [fType, setFType] = useState("");
+  const [fStatus, setFStatus] = useState("");
+  const [onlyOverdue, setOnlyOverdue] = useState(false);
 
-  // Load library + tree initially
+  // Sélection tâche (modal)
+  const [selectedId, setSelectedId] = useState(null);
+
+  // Debounce recherche
+  const qRef = useRef(null);
   useEffect(() => {
-    let aborted = false;
+    if (qRef.current) clearTimeout(qRef.current);
+    qRef.current = setTimeout(() => {
+      refreshTasks();
+    }, 400);
+    return () => clearTimeout(qRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fQuery, fBuilding, fType, fStatus, onlyOverdue, site]);
+
+  useEffect(() => {
     (async () => {
       try {
         setLoading(true);
-        const [lib, t] = await Promise.all([
-          api(`/api/controls/library`, { site }),
-          api(`/api/controls/tree`, { site }),
-        ]);
-        if (aborted) return;
+        setError("");
+        const lib = await CONTROLS_API.library();
         setLibrary(lib);
-        setTree(t || []);
+        const t = await CONTROLS_API.tree(site);
+        setTree(t);
+        await refreshTasks(true);
       } catch (e) {
-        setError(e.message);
+        setError(e.message || String(e));
       } finally {
         setLoading(false);
       }
     })();
-    return () => {
-      aborted = true;
-    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [site]);
 
-  // Load tasks each time filters/page change
-  const refreshTasks = async () => {
-    if (abortRef.current) abortRef.current.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
+  function resetFilters() {
+    setFQuery("");
+    setFBuilding("");
+    setFType("");
+    setFStatus("");
+    setOnlyOverdue(false);
+  }
+
+  async function refreshTasks(hard = false) {
     try {
-      setLoading(true);
       setError("");
-      const qs = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-      for (const k of ["building", "type", "status", "q"]) {
-        if (filters[k]) qs.set(k, filters[k]);
-      }
-      const res = await api(`/api/controls/tasks?${qs.toString()}`, { site, signal: ctrl.signal });
-      setTasks(res?.data || []);
+      const params = {
+        q: fQuery || undefined,
+        building: fBuilding || undefined,
+        type: fType || undefined,
+        status: fStatus || undefined,
+      };
+      const res = await CONTROLS_API.tasks(params, site);
+      let list = res?.data || [];
+      if (onlyOverdue) list = list.filter((x) => x.status === "Overdue");
+      setTasks(list);
+      if (hard) setSelectedId(null);
     } catch (e) {
-      if (e.name !== "AbortError") setError(e.message);
-    } finally {
-      setLoading(false);
+      setError(e.message || String(e));
     }
-  };
-  useEffect(() => { refreshTasks(); /* eslint-disable-next-line */ }, [site, page, pageSize, JSON.stringify(filters)]);
+  }
+
+  function onChangeSite(v) {
+    setSite(v || "Default");
+    localStorage.setItem("controls_site", v || "Default");
+  }
 
   const buildings = useMemo(() => {
-    const set = new Set();
-    tree.forEach((b) => set.add(b.building));
-    return Array.from(set);
+    const s = new Set();
+    tree.forEach((b) => s.add(b.building || "—"));
+    return Array.from(s);
   }, [tree]);
 
-  const openDetails = async (task) => {
-    setSelected(task);
-    setDetails(null);
-    setAttachments([]);
-    setResultDraft({});
-    setAiAnswer("");
-    setAiAnalysis("");
-    try {
-      const d = await api(`/api/controls/tasks/${task.id}/details`, { site });
-      setDetails(d);
-      const atts = await api(`/api/controls/tasks/${task.id}/attachments`, { site });
-      // enrich each with task_id for download link building
-      setAttachments((atts || []).map((x) => ({ ...x, task_id: task.id })));
-      // start draft with previous results if any
-      if (d?.results) setResultDraft(d.results);
-    } catch (e) {
-      alert("Chargement des détails: " + e.message);
-    }
-  };
-
-  const deleteAttachment = async (attId) => {
-    if (!selected) return;
-    if (!confirm("Supprimer cette pièce jointe ?")) return;
-    try {
-      await fetch(`${API_BASE}/api/controls/tasks/${selected.id}/attachments/${attId}`, { method: "DELETE", headers: { "X-Site": site } });
-      const atts = await api(`/api/controls/tasks/${selected.id}/attachments`, { site });
-      setAttachments((atts || []).map((x) => ({ ...x, task_id: selected.id })));
-    } catch (e) {
-      alert("Suppression: " + e.message);
-    }
-  };
-
-  const askAssistant = async (question) => {
-    if (!selected) return;
-    try {
-      setBusy(true);
-      const res = await api(`/api/controls/tasks/${selected.id}/assistant`, { method: "POST", body: { question }, site });
-      setAiAnswer(res?.answer || "");
-    } catch (e) {
-      alert("Assistant IA: " + e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runAnalysis = async () => {
-    if (!selected) return;
-    try {
-      setBusy(true);
-      const res = await api(`/api/controls/tasks/${selected.id}/analyze`, { method: "POST", body: {}, site });
-      setAiAnalysis(res?.analysis || "");
-    } catch (e) {
-      alert("Analyse IA: " + e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const ensurePrePhoto = useMemo(() => {
-    return attachments.some((a) => (a.label || "").toLowerCase() === "pre");
-  }, [attachments]);
-
-  const onComplete = async () => {
-    if (!selected || !details) return;
-    if (!ensurePrePhoto) {
-      alert("Merci d'ajouter au moins 1 photo pré-intervention avant de terminer.");
-      return;
-    }
-    try {
-      setBusy(true);
-      await api(`/api/controls/tasks/${selected.id}/complete`, {
-        method: "POST",
-        site,
-        body: { results: resultDraft, user: "tech", ai_risk_score: null },
-      });
-      await refreshTasks();
-      alert("Contrôle enregistré ✅");
-      setSelected(null);
-    } catch (e) {
-      alert("Enregistrement: " + e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const resetFilters = () => setFilters({ building: "", type: "", status: "", q: "" });
-
-  // Persist site
-  useEffect(() => {
-    localStorage.setItem("controls.site", site);
-  }, [site]);
-
-  const headerRight = (
-    <div className="right-actions">
-      <button className="icon-btn" title="Rafraîchir" onClick={refreshTasks}><Icon.Refresh /></button>
-    </div>
-  );
+  const types = useMemo(() => (library?.types || []), [library]);
 
   return (
-    <div className="controlsPage">
-      <style>{CSS}</style>
+    <div className="controls-wrap">
+      <TopBar
+        site={site}
+        setSite={onChangeSite}
+        onRefresh={() => refreshTasks(true)}
+      />
+      <div className="container">
+        <h1 className="page-title">Contrôles & Checklists</h1>
 
-      <header className="topbar">
-        <div className="brand">
-          <Icon.Bolt style={{ marginRight: 8 }} />
-          <span>Contrôles</span>
-        </div>
+        <FiltersBar
+          query={fQuery}
+          setQuery={setFQuery}
+          filtersOpen={filtersOpen}
+          setFiltersOpen={setFiltersOpen}
+          buildings={buildings}
+          types={types}
+          fBuilding={fBuilding}
+          setFBuilding={setFBuilding}
+          fType={fType}
+          setFType={setFType}
+          fStatus={fStatus}
+          setFStatus={setFStatus}
+          onlyOverdue={onlyOverdue}
+          setOnlyOverdue={setOnlyOverdue}
+          onReset={resetFilters}
+        />
 
-        <div className="site">
+        {error ? <ErrorBanner message={error} /> : null}
+        {loading ? <SkeletonList /> : <TaskGrid tasks={tasks} onOpen={setSelectedId} />}
+
+        {selectedId ? (
+          <TaskModal id={selectedId} onClose={() => setSelectedId(null)} onCompleted={() => {
+            setSelectedId(null);
+            refreshTasks();
+          }} />
+        ) : null}
+      </div>
+
+      {/* Page CSS */}
+      <style>{styles}</style>
+    </div>
+  );
+}
+
+/* ============================
+   Top Bar
+============================ */
+function TopBar({ site, setSite, onRefresh }) {
+  const [siteInput, setSiteInput] = useState(site);
+
+  useEffect(() => setSiteInput(site), [site]);
+
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <span className="logo"><Icon.Bolt /></span>
+        <span className="brand-name">ElectroHub · Contrôles</span>
+      </div>
+      <div className="top-actions">
+        <div className="site-picker">
           <label>Site</label>
           <input
-            className="site-input"
-            style={{ background: "#fff", color: "#000" }}
-            value={site}
-            onChange={(e) => setSite(e.target.value || "Default")}
+            className="input"
+            value={siteInput}
+            onChange={(e) => setSiteInput(e.target.value)}
+            onBlur={() => setSite(siteInput)}
             placeholder="Default"
           />
         </div>
+        <button className="btn ghost" onClick={onRefresh} title="Rafraîchir">
+          <Icon.Refresh /> <span>Rafraîchir</span>
+        </button>
+      </div>
+    </header>
+  );
+}
 
-        {headerRight}
-      </header>
+/* ============================
+   Filters
+============================ */
+function FiltersBar({
+  query, setQuery,
+  filtersOpen, setFiltersOpen,
+  buildings, types,
+  fBuilding, setFBuilding,
+  fType, setFType,
+  fStatus, setFStatus,
+  onlyOverdue, setOnlyOverdue,
+  onReset,
+}) {
+  return (
+    <div className="filters">
+      <div className="filters-row">
+        <div className="search">
+          <span className="icon"><Icon.Search /></span>
+          <input
+            className="input"
+            placeholder="Recherche tâche / code…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+        <button className="btn" onClick={() => setFiltersOpen(!filtersOpen)}>
+          <Icon.Filter /> <span>Filtres</span> {filtersOpen ? <Icon.ChevronUp/> : <Icon.ChevronDown/>}
+        </button>
+      </div>
 
-      <section className="filters">
-        <Collapsible
-          label="Filtres & recherche"
-          icon={<Icon.Filter />}
-          defaultOpen={false}
-        >
-          <div className="filters-grid">
-            <div>
-              <label className="lbl">Bâtiment</label>
-              <select
-                value={filters.building}
-                onChange={(e) => setFilters((f) => ({ ...f, building: e.target.value }))}
-                style={inputBase}
-              >
-                <option value="">Tous</option>
-                {buildings.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="lbl">Type d’équipement</label>
-              <select
-                value={filters.type}
-                onChange={(e) => setFilters((f) => ({ ...f, type: e.target.value }))}
-                style={inputBase}
-              >
-                <option value="">Tous</option>
-                {(library?.types || []).map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="lbl">Statut</label>
-              <select
-                value={filters.status}
-                onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value }))}
-                style={inputBase}
-              >
-                <option value="">Tous</option>
-                <option value="Planned">Planned</option>
-                <option value="Overdue">Overdue</option>
-                <option value="Completed">Completed</option>
-              </select>
-            </div>
-            <div className="searchbox">
-              <label className="lbl">Recherche</label>
-              <div className="search">
-                <Icon.Search />
-                <input
-                  style={{ ...inputBase, border: "none", outline: "none" }}
-                  value={filters.q}
-                  onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
-                  placeholder="Nom de tâche, code…"
-                />
-              </div>
-            </div>
-            <div className="flt-actions">
-              <button className="btn light" onClick={resetFilters}>Réinitialiser</button>
-              <button className="btn" onClick={refreshTasks}><Icon.Filter /> Appliquer</button>
-            </div>
+      {filtersOpen && (
+        <div className="filters-panel">
+          <div className="filter">
+            <label>Bâtiment</label>
+            <select className="input" value={fBuilding} onChange={(e) => setFBuilding(e.target.value)}>
+              <option value="">Tous</option>
+              {buildings.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
           </div>
-        </Collapsible>
-      </section>
-
-      {!!error && <div className="error">Erreur: {error}</div>}
-
-      <section className="list">
-        {loading ? (
-          <div className="loading">Chargement…</div>
-        ) : tasks.length === 0 ? (
-          <div className="empty">Aucune tâche</div>
-        ) : (
-          <div className="cards">
-            {tasks.map((t) => (
-              <article key={t.id} className="card" onClick={() => openDetails(t)}>
-                <div className="card-hd">
-                  <div className="title">{t.task_name}</div>
-                  <StatusPill status={t.status} />
-                </div>
-                <div className="meta">
-                  <div className="meta-row"><Icon.Bolt /> <span>{t.equipment_type || "—"}</span></div>
-                  <div className="meta-row"><Icon.Calendar /> <span>Prochain: {t.next_control || "—"}</span></div>
-                  <div className="meta-row"><span>Bat. {t.building || "—"}</span></div>
-                </div>
-              </article>
-            ))}
+          <div className="filter">
+            <label>Type équipement</label>
+            <select className="input" value={fType} onChange={(e) => setFType(e.target.value)}>
+              <option value="">Tous</option>
+              {types.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
           </div>
-        )}
-      </section>
+          <div className="filter">
+            <label>Statut</label>
+            <select className="input" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
+              <option value="">Tous</option>
+              <option value="Planned">Planifié</option>
+              <option value="Overdue">En retard</option>
+              <option value="Completed">Terminé</option>
+            </select>
+          </div>
+          <div className="filter check">
+            <input id="overdue" type="checkbox" checked={onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} />
+            <label htmlFor="overdue">Seulement en retard</label>
+          </div>
 
-      {selected && details && (
-        <div className="drawer">
-          <div className="drawer-inner">
-            <div className="drawer-hd">
-              <div>
-                <div className="path">Bat. {details.building || "—"} • {details.task_code}</div>
-                <div className="h1">{details.task_name}</div>
-              </div>
-              <button className="icon-btn" onClick={() => setSelected(null)}><Icon.X /></button>
-            </div>
-
-            <div className="drawer-content">
-              <div className="panel">
-                <div className="section-title">1) Photo pré-intervention (obligatoire)</div>
-                <div className="row gap">
-                  <PhotoUploader
-                    taskId={selected.id}
-                    label="pre"
-                    onDone={async () => {
-                      const atts = await api(`/api/controls/tasks/${selected.id}/attachments`, { site });
-                      setAttachments((atts || []).map((x) => ({ ...x, task_id: selected.id })));
-                    }}
-                  />
-                  {!ensurePrePhoto && <Pill bg="#fff4d6" color="#8a6100"><Icon.Alert /> Requis avant démarrer</Pill>}
-                  {ensurePrePhoto && <Pill bg="#e7f6ea" color="#106b21"><Icon.Check /> OK</Pill>}
-                </div>
-              </div>
-
-              <div className="panel">
-                <div className="section-title">2) Consignes IA / Procédure</div>
-                <div className="ai-actions">
-                  <button className="btn secondary" onClick={() => askAssistant("Décris précisément où intervenir, quelles étapes suivre, quels EPI et outils utiliser en te basant sur la TSD et le contexte. Puis liste les points clés à photographier.")}>
-                    <Icon.Wand /> Demander les consignes (IA)
-                  </button>
-                  <button className="btn light" onClick={runAnalysis} title="Analyse des écarts & actions">
-                    <Icon.Wand /> Analyser la tâche (IA)
-                  </button>
-                </div>
-                {!!aiAnswer && <div className="ai-box" dangerouslySetInnerHTML={{ __html: mdToHtml(aiAnswer) }} />}
-                {!!aiAnalysis && <div className="ai-box" dangerouslySetInnerHTML={{ __html: mdToHtml(aiAnalysis) }} />}
-                {details?.tsd_item && (
-                  <div className="tsd">
-                    <div className="k">TSD</div>
-                    <div className="v">
-                      <div><b>{details.tsd_item.label}</b></div>
-                      <div>Champ: {details.tsd_item.field} • Type: {details.tsd_item.type} {details.tsd_item.unit ? `(${details.tsd_item.unit})` : ""}</div>
-                      {details.tsd_item.threshold != null && (
-                        <div>Seuil: {details.tsd_item.comparator || "≤"} {details.tsd_item.threshold} {details.tsd_item.unit || ""}</div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="panel">
-                <div className="section-title">3) Saisie des résultats</div>
-                <ResultForm schema={details.result_schema} value={resultDraft} onChange={setResultDraft} />
-              </div>
-
-              <div className="panel">
-                <div className="section-title">4) Pièces jointes (pendant l’intervention)</div>
-                <div className="row gap">
-                  <PhotoUploader
-                    taskId={selected.id}
-                    label="during"
-                    onDone={async () => {
-                      const atts = await api(`/api/controls/tasks/${selected.id}/attachments`, { site });
-                      setAttachments((atts || []).map((x) => ({ ...x, task_id: selected.id })));
-                    }}
-                  />
-                </div>
-                <AttachmentList attachments={attachments} onDelete={(id) => deleteAttachment(id)} />
-              </div>
-            </div>
-
-            <div className="drawer-ft">
-              <div className="left">
-                <StatusPill status={details.status} />
-                <small style={{ opacity: 0.7, marginLeft: 10 }}>
-                  Prochain: {details.next_control || "—"} • Dernier: {details.last_control || "—"}
-                </small>
-              </div>
-              <div className="right">
-                <button className="btn light" onClick={() => setSelected(null)}>Annuler</button>
-                <button className="btn" disabled={!ensurePrePhoto || busy} onClick={onComplete}><Icon.Check /> Terminer le contrôle</button>
-              </div>
-            </div>
+          <div className="filter-actions">
+            <button className="btn ghost" onClick={onReset}><Icon.Refresh /> Réinitialiser</button>
           </div>
         </div>
       )}
@@ -684,111 +404,628 @@ export default function Controls() {
   );
 }
 
-// ------------------------------ Styles (scoped) ------------------------------
-const inputBase = {
-  background: "#fff",
-  color: "#000",
-  border: "1px solid #ccc",
-  borderRadius: 10,
-  padding: "10px 12px",
-  width: "100%",
-};
-
-const CSS = `
-.controlsPage { --bg:#0c0f14; --card:#121721; --muted:#95a1b2; --accent:#2563eb; --text:#e8eef9; background:var(--bg); color:var(--text); min-height:100vh; }
-.topbar { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; position:sticky; top:0; z-index:10; background:linear-gradient(180deg, rgba(12,15,20,.98), rgba(12,15,20,.8)); border-bottom:1px solid rgba(255,255,255,.08); }
-.brand { display:flex; align-items:center; font-weight:800; letter-spacing:.5px; }
-.brand svg { color:#ffd166; }
-.site { display:flex; align-items:center; gap:8px; }
-.site label { font-size:12px; opacity:.8; }
-.site-input { width:150px; border-radius:10px; border:1px solid #2a3444; padding:8px 10px; }
-
-.right-actions .icon-btn { background:#1a2233; border:1px solid #2d3a52; color:#dbe6ff; }
-
-.filters { padding:12px 12px 0; }
-.collapsible { background:transparent; border:1px solid rgba(255,255,255,.08); border-radius:14px; overflow:hidden; }
-.collapsible-btn { display:flex; align-items:center; justify-content:space-between; gap:10px; width:100%; background:#111624; border:none; color:#dfe8ff; padding:12px 14px; font-size:14px; cursor:pointer; }
-.collapsible-btn svg { margin-right:8px; }
-.collapsible-btn .chev { transition: transform .2s; opacity:.7; }
-.collapsible-btn .chev.up { transform: rotate(180deg); }
-.collapsible-body { padding:12px; background:#0c121f; }
-
-.filters-grid { display:grid; grid-template-columns: repeat(12, 1fr); gap:12px; align-items:end; }
-.filters-grid > div { grid-column: span 12; }
-@media (min-width: 720px) {
-  .filters-grid > div { grid-column: span 3; }
-  .filters-grid .searchbox { grid-column: span 6; }
-  .filters-grid .flt-actions { grid-column: span 12; display:flex; gap:10px; justify-content:flex-end; }
+/* ============================
+   Task Grid + Cards
+============================ */
+function TaskGrid({ tasks, onOpen }) {
+  if (!tasks.length) {
+    return <div className="empty">Aucune tâche trouvée.</div>;
+  }
+  return (
+    <div className="grid">
+      {tasks.map((t) => (
+        <TaskCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />
+      ))}
+    </div>
+  );
 }
-.search { display:flex; align-items:center; gap:8px; border:1px solid #2a3444; background:#0c1424; padding:8px 10px; border-radius:10px; }
-.search input { background:transparent; color:#fff; }
 
-.btn { display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:12px; border:1px solid #2a3444; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
-.btn.secondary { background:#1b2538; color:#dfe8ff; }
-.btn.light { background:#0d1321; color:#dfe8ff; }
-.btn.danger { background:#8a1f1f; color:#fff; border-color:#a92727; }
-.btn:disabled { opacity:.6; cursor:not-allowed; }
-.icon-btn { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:10px; border:1px solid #2a3444; background:#0e1628; color:#cfe0ff; cursor:pointer; }
-.icon-btn.danger { background:#2b1414; color:#ffdede; border-color:#4a1a1a; }
+function statusBadge(s) {
+  switch (s) {
+    case "Overdue": return <span className="badge red"><Icon.Alert /> En retard</span>;
+    case "Completed": return <span className="badge green"><Icon.Check /> Terminé</span>;
+    default: return <span className="badge blue"><Icon.Clock /> Planifié</span>;
+  }
+}
 
-.lbl { font-size:12px; color:var(--muted); margin-bottom:6px; display:block; }
-.section-title { font-weight:800; margin-bottom:8px; color:#eaf1ff; }
-.grid2 { display:grid; grid-template-columns: 1fr; gap:12px; }
-@media (min-width: 720px){ .grid2 { grid-template-columns: 1fr 1fr; } }
-.checklist .check { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
-.checklist input { width:18px; height:18px; }
+function typeLabel(t) {
+  switch (t) {
+    case "LV_SWITCHBOARD": return "Tableau BT";
+    case "LV_DEVICE": return "Appareil BT";
+    case "HV_EQUIPMENT": return "HT (>1000V)";
+    case "ATEX_EQUIPMENT": return "ATEX";
+    default: return t || "—";
+  }
+}
 
-.error { margin:14px 12px; color:#ffb4b4; }
-.loading, .empty { opacity:.8; padding:20px 12px; }
+function TaskCard({ t, onOpen }) {
+  return (
+    <div className="card" onClick={onOpen} role="button">
+      <div className="card-head">
+        {statusBadge(t.status)}
+        <div className="date"><Icon.Calendar /> {t.next_control ? fmtDate(t.next_control) : "—"}</div>
+      </div>
+      <div className="card-title">{t.task_name}</div>
+      <div className="card-sub">
+        <span className="chip"><Icon.Building /> {t.building || "—"}</span>
+        <span className="chip"><Icon.Bolt /> {typeLabel(t.equipment_type)}</span>
+      </div>
+      <div className="card-entity">
+        Équipement : <strong>{t.entity_name || "—"}</strong>
+      </div>
+    </div>
+  );
+}
 
-.list { padding:12px; }
-.cards { display:grid; grid-template-columns: 1fr; gap:12px; }
-@media (min-width: 900px){ .cards { grid-template-columns: repeat(2, 1fr); } }
-@media (min-width: 1200px){ .cards { grid-template-columns: repeat(3, 1fr); } }
-.card { background:var(--card); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:12px; cursor:pointer; transition: transform .1s, box-shadow .1s; }
-.card:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(0,0,0,.2); }
-.card-hd { display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.card .title { font-weight:800; line-height:1.2; }
-.meta { margin-top:8px; display:flex; gap:16px; flex-wrap:wrap; opacity:.9; }
-.meta-row { display:flex; align-items:center; gap:8px; }
+/* ============================
+   Task Modal (details)
+============================ */
+function TaskModal({ id, onClose, onCompleted }) {
+  const [loading, setLoading] = useState(true);
+  const [details, setDetails] = useState(null);
+  const [problem, setProblem] = useState("");
 
-.attachments { display:grid; grid-template-columns: 1fr; gap:10px; margin-top:10px; }
-@media (min-width: 680px){ .attachments { grid-template-columns: repeat(2, 1fr); } }
-.att { border:1px solid #2a3444; border-radius:12px; padding:10px; background:#0b1322; display:flex; align-items:center; justify-content:space-between; gap:10px; }
-.att .thumb { color:#cfe0ff; text-decoration:none; }
-.att .file { display:inline-block; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.att-meta { display:flex; align-items:center; gap:8px; }
+  const [attachments, setAttachments] = useState([]);
+  const [preFiles, setPreFiles] = useState([]);
+  const [workFiles, setWorkFiles] = useState([]);
+  const [uploading, setUploading] = useState(false);
 
-.row.gap { display:flex; gap:10px; flex-wrap:wrap; }
+  const [results, setResults] = useState({});
+  const [notes, setNotes] = useState("");
 
-.drawer { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; }
-.drawer-inner { margin-left:auto; max-width:960px; width:100%; height:100%; background:#0a0f19; border-left:1px solid rgba(255,255,255,.08); display:flex; flex-direction:column; }
-.drawer-hd { display:flex; align-items:center; justify-content:space-between; padding:12px; border-bottom:1px solid rgba(255,255,255,.08); }
-.drawer-hd .path { font-size:12px; color:var(--muted); }
-.drawer-hd .h1 { font-size:18px; font-weight:800; }
-.drawer-content { padding:12px; overflow:auto; display:flex; flex-direction:column; gap:12px; }
-.panel { background:#0b1324; border:1px solid #1f2a40; border-radius:14px; padding:12px; }
-.tsd { display:grid; grid-template-columns: 80px 1fr; gap:8px; margin-top:10px; background:#0c1528; border:1px dashed #2a3b5a; border-radius:12px; padding:10px; }
-.tsd .k { color:#a4b1c6; }
-.tsd .v { color:#eaf1ff; }
+  const [aiText, setAiText] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiAnswer, setAiAnswer] = useState("");
+  const [aiAnalysis, setAiAnalysis] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        setProblem("");
+        const d = await CONTROLS_API.taskDetails(id);
+        setDetails(d);
+        setResults(d?.results || {});
+        const atts = await CONTROLS_API.attachments(id);
+        setAttachments(atts || []);
+        setAiAnswer(""); setAiAnalysis("");
+      } catch (e) {
+        setProblem(e.message || String(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [id]);
+
+  const rs = details?.result_schema || {};
+  const tsd = details?.tsd_item || null;
+
+  // Préconisations / seuils (affichage aide)
+  const ruleText = useMemo(() => {
+    if (!tsd) return "";
+    const bits = [];
+    if (tsd.comparator && tsd.threshold !== undefined) {
+      bits.push(`Seuil: ${tsd.comparator} ${tsd.threshold}${tsd.unit ? " " + tsd.unit : ""}`);
+    }
+    if (tsd.unit && (!tsd.comparator || tsd.threshold === undefined) && (rs?.type === "number")) {
+      bits.push(`Unité: ${tsd.unit}`);
+    }
+    return bits.join(" • ");
+  }, [tsd, rs]);
+
+  async function refreshAttachments() {
+    try {
+      const atts = await CONTROLS_API.attachments(id);
+      setAttachments(atts || []);
+    } catch (e) {
+      setProblem(e.message || String(e));
+    }
+  }
+
+  function handleResultChange(field, value) {
+    setResults((r) => ({ ...r, [field]: value }));
+  }
+
+  async function doUpload(kind) {
+    const files = kind === "pre" ? preFiles : workFiles;
+    if (!files?.length) return;
+    try {
+      setUploading(true);
+      const fd = new FormData();
+      for (const f of files) fd.append("files", f);
+      fd.append("label", kind === "pre" ? "pre" : "work");
+      await CONTROLS_API.upload(id, fd);
+      if (kind === "pre") setPreFiles([]);
+      else setWorkFiles([]);
+      await refreshAttachments();
+    } catch (e) {
+      setProblem(e.message || String(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function askAssistant() {
+    try {
+      setAiLoading(true);
+      setAiAnswer("");
+      const res = await CONTROLS_API.assistant(id, aiText || "Que dois-je faire précisément ?");
+      setAiAnswer(res?.answer || "");
+    } catch (e) {
+      setProblem(e.message || String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+  async function runAnalysis() {
+    try {
+      setAiLoading(true);
+      setAiAnalysis("");
+      const res = await CONTROLS_API.analyze(id);
+      setAiAnalysis(res?.analysis || "");
+    } catch (e) {
+      setProblem(e.message || String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function completeTask() {
+    try {
+      setProblem("");
+      const payload = {
+        user: localStorage.getItem("controls_user") || "Technicien",
+        results,
+        notes,
+      };
+      const res = await CONTROLS_API.complete(id, payload);
+      toast("Tâche clôturée. Prochain contrôle: " + fmtDT(res?.next_control));
+      onCompleted?.();
+    } catch (e) {
+      setProblem(e.message || String(e));
+    }
+  }
+
+  return (
+    <div className="modal">
+      <div className="modal-card">
+        <div className="modal-head">
+          <div className="mh-left">
+            <div className="mh-title">{details?.task_name || "Chargement..."}</div>
+            <div className="mh-sub">
+              <span className="chip"><Icon.Bolt /> {typeLabel(details?.equipment_type)}</span>
+              <span className="chip"><Icon.Building /> {details?.building || "—"}</span>
+              <span className="chip code">Code: {details?.task_code || "—"}</span>
+            </div>
+          </div>
+          <button className="btn icon ghost" onClick={onClose} title="Fermer"><Icon.X /></button>
+        </div>
+
+        {problem ? <ErrorBanner message={`Chargement des détails: ${problem}`} /> : null}
+        {loading ? <ModalSkeleton /> : (
+          <div className="modal-body">
+            {/* Colonne gauche: checklist / champs */}
+            <div className="col form">
+              {/* Alerte pré-intervention (optionnelle) */}
+              <div className="callout">
+                <div className="callout-title"><Icon.Camera /> Photo de pré-intervention (optionnelle)</div>
+                <div className="callout-text">
+                  Avant d’intervenir, vous pouvez ajouter une photo du contexte (vue d’ensemble, repères, plaques, etc.).
+                  L’assistant expliquera où mesurer et avec quel appareil. Ce n’est pas obligatoire.
+                </div>
+                <div className="upload-line">
+                  <label className="btn">
+                    <Icon.Upload /> Joindre photo(s)
+                    <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => setPreFiles(Array.from(e.target.files || []))}/>
+                  </label>
+                  <button className="btn ghost" disabled={!preFiles.length || uploading} onClick={() => doUpload("pre")}>
+                    <Icon.Send /> Envoyer
+                  </button>
+                  <div className="files-list">
+                    {preFiles.map((f, i) => <span key={i} className="file-pill">{f.name}</span>)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Aide TSD */}
+              <div className="section">
+                <div className="section-title">Checklist & Mesures</div>
+                {tsd?.label ? <div className="hint">{tsd.label}</div> : null}
+                {ruleText ? <div className="rule">{ruleText}</div> : null}
+
+                <DynamicFields tsd={tsd} resultSchema={rs} results={results} onChange={handleResultChange} />
+
+                <div className="field">
+                  <label>Notes / Observations</label>
+                  <textarea
+                    className="input textarea"
+                    placeholder="Observations, conditions de test, EPI, risques, etc."
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                  />
+                </div>
+
+                <div className="actions">
+                  <button className="btn primary" onClick={completeTask}><Icon.Check /> Clôturer la tâche</button>
+                </div>
+              </div>
+            </div>
+
+            {/* Colonne droite: PJ + IA */}
+            <div className="col side">
+              <div className="section">
+                <div className="section-title"><Icon.Paperclip /> Pièces jointes</div>
+                <div className="upload-line">
+                  <label className="btn">
+                    <Icon.Upload /> Ajouter pendant contrôle
+                    <input type="file" accept="image/*,application/pdf" multiple style={{ display: "none" }} onChange={(e) => setWorkFiles(Array.from(e.target.files || []))}/>
+                  </label>
+                  <button className="btn ghost" disabled={!workFiles.length || uploading} onClick={() => doUpload("work")}>
+                    <Icon.Send /> Envoyer
+                  </button>
+                </div>
+                <div className="files-list">
+                  {workFiles.map((f, i) => <span key={i} className="file-pill">{f.name}</span>)}
+                </div>
+
+                <AttachmentList taskId={id} attachments={attachments} />
+              </div>
+
+              <div className="section">
+                <div className="section-title"><Icon.Bolt /> Assistant IA</div>
+                <div className="hint">
+                  Joignez des photos d’écrans d’appareils de mesure : l’IA interprète les valeurs et vérifie les seuils TSD.
+                </div>
+                <div className="ai-box">
+                  <textarea
+                    className="input textarea"
+                    placeholder="Posez une question (ex: Quelle méthode pour mesurer l’isolement ?)"
+                    value={aiText}
+                    onChange={(e) => setAiText(e.target.value)}
+                  />
+                  <div className="ai-actions">
+                    <button className="btn" onClick={askAssistant} disabled={aiLoading}><Icon.Send /> Conseils</button>
+                    <button className="btn ghost" onClick={runAnalysis} disabled={aiLoading}><Icon.Search /> Analyser</button>
+                  </div>
+                  {aiAnswer ? <div className="ai-answer"><div className="ai-title">Conseils</div><pre>{aiAnswer}</pre></div> : null}
+                  {aiAnalysis ? <div className="ai-answer"><div className="ai-title">Analyse</div><pre>{aiAnalysis}</pre></div> : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      <ToastRoot />
+    </div>
+  );
+}
+
+/* ============================
+   Dynamic fields from TSD/result_schema
+============================ */
+function DynamicFields({ tsd, resultSchema, results, onChange }) {
+  // Le backend fournit result_schema standardisé:
+  // { type: "boolean"|"number"|"text"|"select"|"checklist"|"check", field: "..." , unit?, options?, checklist? }
+  if (!resultSchema || !resultSchema.field) {
+    return (
+      <div className="field">
+        <label>Résultat (texte)</label>
+        <input className="input" value={results["value"] || ""} onChange={(e) => onChange("value", e.target.value)} />
+      </div>
+    );
+  }
+
+  const field = resultSchema.field;
+  const type = normalizeType(resultSchema.type);
+
+  if (type === "checklist" && Array.isArray(resultSchema.checklist)) {
+    const list = resultSchema.checklist;
+    const current = Array.isArray(results[field]) ? results[field] : [];
+    function toggleItem(item) {
+      const has = current.includes(item);
+      const next = has ? current.filter((x) => x !== item) : current.concat(item);
+      onChange(field, next);
+    }
+    return (
+      <div className="field">
+        <label>Checklist</label>
+        <div className="checklist">
+          {list.map((item) => (
+            <label key={item} className="ck-item">
+              <input type="checkbox" checked={current.includes(item)} onChange={() => toggleItem(item)} />
+              <span>{item}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (type === "select" && Array.isArray(resultSchema.options)) {
+    return (
+      <div className="field">
+        <label>Choix</label>
+        <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
+          <option value="">—</option>
+          {resultSchema.options.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+    );
+  }
+
+  if (type === "number") {
+    const unit = resultSchema.unit || tsd?.unit || "";
+    return (
+      <div className="field">
+        <label>Valeur {unit ? `(${unit})` : ""}</label>
+        <input
+          className="input"
+          type="number"
+          step="any"
+          value={results[field] ?? ""}
+          onChange={(e) => onChange(field, e.target.value === "" ? "" : Number(e.target.value))}
+          placeholder={unit ? `Ex: 12.5 ${unit}` : "Ex: 12.5"}
+        />
+      </div>
+    );
+  }
+
+  if (type === "boolean" || type === "check") {
+    const val = !!results[field];
+    return (
+      <div className="field check">
+        <input id={`ck-${field}`} type="checkbox" checked={val} onChange={(e) => onChange(field, e.target.checked)} />
+        <label htmlFor={`ck-${field}`}>{tsd?.label || "Conforme"}</label>
+      </div>
+    );
+  }
+
+  // text (par défaut)
+  return (
+    <div className="field">
+      <label>Observation</label>
+      <input
+        className="input"
+        value={results[field] ?? ""}
+        onChange={(e) => onChange(field, e.target.value)}
+        placeholder="Renseigner le résultat"
+      />
+    </div>
+  );
+}
+function normalizeType(t) {
+  if (!t) return "text";
+  const k = String(t).toLowerCase();
+  if (["boolean", "bool", "check"].includes(k)) return "boolean";
+  if (["number", "numeric", "float", "int"].includes(k)) return "number";
+  if (["text", "string"].includes(k)) return "text";
+  if (["select", "choice", "enum"].includes(k)) return "select";
+  if (["checklist", "list"].includes(k)) return "checklist";
+  return k;
+}
+
+/* ============================
+   Attachments list
+============================ */
+function AttachmentList({ taskId, attachments }) {
+  if (!attachments?.length) {
+    return <div className="empty small">Aucune pièce jointe.</div>;
+  }
+  return (
+    <div className="attachments">
+      {attachments.map((a) => (
+        <a
+          key={a.id}
+          className="att"
+          href={`/api/controls/tasks/${taskId}/attachments/${a.id}`}
+          target="_blank" rel="noreferrer"
+          title={`${a.filename} (${a.size || 0} o)`}
+        >
+          <Icon.Paperclip /> <span className="name">{a.filename}</span>
+          <span className="meta">{a.mimetype || "—"} • {a.size ?? "?"} o</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/* ============================
+   UI helpers
+============================ */
+function ErrorBanner({ message }) {
+  return (
+    <div className="error">
+      <Icon.Alert /> <div>{message}</div>
+    </div>
+  );
+}
+function SkeletonList() {
+  return (
+    <div className="grid">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div className="card skeleton" key={i}>
+          <div className="line w40"></div>
+          <div className="line w70"></div>
+          <div className="line w50"></div>
+        </div>
+      ))}
+    </div>
+  );
+}
+function ModalSkeleton() {
+  return (
+    <div className="modal-body">
+      <div className="col form">
+        <div className="line w80"></div>
+        <div className="line w60"></div>
+        <div className="line w90"></div>
+      </div>
+      <div className="col side">
+        <div className="line w70"></div>
+        <div className="line w50"></div>
+        <div className="line w60"></div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================
+   Toast (minimal)
+============================ */
+let TOASTS = [];
+let setToastState;
+function ToastRoot() {
+  const [, set] = useState(0);
+  setToastState = set;
+  useEffect(() => () => { setToastState = null; }, []);
+  return (
+    <div className="toasts">
+      {TOASTS.map((t) => (
+        <div className="toast" key={t.id}>{t.text}</div>
+      ))}
+    </div>
+  );
+}
+function toast(text) {
+  const id = Math.random().toString(36).slice(2);
+  TOASTS.push({ id, text });
+  setToastState && setToastState(Date.now());
+  setTimeout(() => {
+    TOASTS = TOASTS.filter((x) => x.id !== id);
+    setToastState && setToastState(Date.now());
+  }, 3500);
+}
+
+/* ============================
+   CSS (fonds blancs / texte noir)
+============================ */
+const styles = `
+:root {
+  --bg: #f6f7fb;
+  --card: #fff;
+  --text: #111;
+  --muted: #6b7280;
+  --primary: #0ea5e9;
+  --primary-600: #0284c7;
+  --blue-50: #eff6ff;
+  --green: #16a34a;
+  --red: #dc2626;
+  --border: #e5e7eb;
+  --chip: #eef2f7;
+}
+
+* { box-sizing:border-box; }
+html, body, #root { height: 100%; }
+body { margin:0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji"; }
+
+.controls-wrap .container { width: 100%; max-width: 1200px; padding: 16px; margin: 0 auto; }
+.page-title { font-size: 24px; margin: 16px 0 8px; }
+
+.topbar { position: sticky; top: 0; z-index: 10; display:flex; justify-content:space-between; align-items:center; padding:10px 16px; background:#fff; border-bottom:1px solid var(--border); }
+.brand { display:flex; align-items:center; gap:10px; font-weight:700; }
+.logo svg { color: var(--primary); }
+.top-actions { display:flex; align-items:flex-end; gap:12px; }
+.site-picker label { font-size:12px; color:var(--muted); display:block; margin-bottom:4px; }
+.input { background:#fff; color:#000; border:1px solid var(--border); border-radius:8px; padding:10px 12px; width:100%; }
+.input:focus { outline:2px solid var(--primary); border-color: transparent; }
+.textarea { min-height: 90px; resize: vertical; }
+
+.btn { display:inline-flex; align-items:center; gap:8px; background: var(--primary); color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; font-weight:600; }
+.btn:hover { background: var(--primary-600); }
+.btn.ghost { background:#fff; color:#111; border:1px solid var(--border); }
+.btn.icon { padding:8px; border-radius:8px; }
+.btn.primary { background: var(--green); }
+.btn.primary:hover { background: #15803d; }
+
+.filters { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; margin: 8px 0 16px; }
+.filters-row { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+.search { position:relative; flex:1; min-width: 220px; }
+.search .icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--muted); }
+.search .input { padding-left:36px; }
+.filters-panel { margin-top:10px; display:grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap:12px; }
+.filter { display:flex; flex-direction:column; gap:6px; }
+.filter.check { flex-direction:row; align-items:center; gap:8px; }
+.filter-actions { grid-column: 1 / -1; display:flex; justify-content:flex-end; }
+
+.grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.card { background: var(--card); border:1px solid var(--border); border-radius:12px; padding:12px; cursor:pointer; transition: transform .05s ease, box-shadow .15s ease; }
+.card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.06); transform: translateY(-1px); }
+.card-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+.card-title { font-weight:700; margin-bottom:8px; }
+.card-sub { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.card-entity { color:var(--muted); }
+.date { display:flex; gap:6px; align-items:center; color:var(--muted); font-size: 12px; }
+.badge { display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:4px 8px; border-radius:999px; background: var(--blue-50); color:#0b4a6f; border:1px solid var(--border); }
+.badge.green { background:#ecfdf5; color:#065f46; }
+.badge.red { background:#fef2f2; color:#991b1b; }
+.badge.blue { background:#eff6ff; color:#1e40af; }
+.chip { display:inline-flex; gap:6px; align-items:center; background: var(--chip); color:#111; border:1px solid var(--border); padding:4px 8px; border-radius:999px; font-size:12px; }
+.chip.code { background:#fafafa; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+.error { display:flex; gap:8px; align-items:flex-start; background:#fef2f2; border:1px solid #fecaca; color:#7f1d1d; padding:12px; border-radius:10px; margin: 12px 0; }
+
+.empty { text-align:center; color:var(--muted); padding:24px; }
+.empty.small { padding:8px; text-align:left; }
+
+.modal { position: fixed; inset:0; background: rgba(0,0,0,.28); display:flex; align-items:flex-start; justify-content:center; padding:20px; z-index: 50; overflow:auto; }
+.modal-card { width: 100%; max-width: 1100px; background:#fff; border-radius:14px; border:1px solid var(--border); }
+.modal-head { padding:12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
+.mh-title { font-weight:800; font-size:18px; }
+.mh-sub { display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; color:var(--muted); }
+.modal-body { display:grid; grid-template-columns: 1.3fr .9fr; gap:16px; padding:12px; }
+.col { display:flex; flex-direction:column; gap:12px; }
+.section { background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px; }
+.section-title { font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+.hint { font-size: 13px; color: var(--muted); margin-bottom:6px; }
+.rule { font-size: 12px; color:#1f2937; background:#f3f4f6; border:1px dashed var(--border); padding:8px; border-radius:8px; margin-bottom:8px; }
+.field { display:flex; flex-direction:column; gap:6px; }
+.field.check { flex-direction:row; align-items:center; gap:8px; }
+.checklist { display:flex; flex-direction:column; gap:6px; }
+.ck-item { display:flex; gap:8px; align-items:center; }
+.actions { display:flex; gap:8px; justify-content:flex-end; }
+
+.callout { background:#fafafa; border:1px solid var(--border); border-radius:10px; padding:12px; }
+.callout-title { font-weight:700; display:flex; gap:8px; align-items:center; margin-bottom:4px; }
+.callout-text { font-size:13px; color:var(--muted); margin-bottom:8px; }
+
+.upload-line { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.file-pill { display:inline-flex; align-items:center; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#fff; font-size:12px; }
+.files-list { display:flex; gap:6px; flex-wrap:wrap; }
+
+.attachments { display:flex; flex-direction:column; gap:8px; }
+.att { display:flex; align-items:center; gap:8px; padding:8px; border:1px solid var(--border); border-radius:8px; text-decoration:none; color:inherit; background:#fff; }
+.att:hover { background:#f8fafc; }
+
+.ai-box { display:flex; flex-direction:column; gap:8px; }
 .ai-actions { display:flex; gap:8px; flex-wrap:wrap; }
-.ai-box { margin-top:10px; background:#0e1830; border:1px solid #243456; border-radius:12px; padding:12px; color:#eaf1ff; }
-.drawer-ft { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px; border-top:1px solid rgba(255,255,255,.08); background:rgba(10,15,25,.9); position:sticky; bottom:0; }
+.ai-answer { background:#fafafa; border:1px solid var(--border); border-radius:8px; padding:8px; }
+.ai-title { font-weight:700; margin-bottom:4px; }
+.ai-answer pre { margin:0; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
+
+.skeleton .line { height: 10px; background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9); background-size: 200% 100%; animation: sk 1.2s ease-in-out infinite; border-radius:6px; margin:8px 0; }
+.skeleton .w40 { width:40%; }
+.skeleton .w50 { width:50%; }
+.skeleton .w60 { width:60%; }
+.skeleton .w70 { width:70%; }
+.skeleton .w80 { width:80%; }
+.skeleton .w90 { width:90%; }
+@keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+.toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 60; }
+.toast { background:#111; color:#fff; padding:10px 12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.2); max-width: 70vw; }
+
+/* Responsive */
+@media (max-width: 980px) {
+  .filters-panel { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
+  .modal-body { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .filters-row { gap:8px; }
+  .filters-panel { grid-template-columns: 1fr; }
+  .grid { grid-template-columns: 1fr; }
+}
 `;
 
-// ------------------------------ Utilities ------------------------------
-function mdToHtml(md) {
-  // Minimal markdown -> HTML for bullets/headers/strong/emphasis/inline code
-  if (!md) return "";
-  let html = md
-    .replace(/^### (.*)$/gm, "<h3>$1</h3>")
-    .replace(/^## (.*)$/gm, "<h2>$1</h2>")
-    .replace(/^# (.*)$/gm, "<h1>$1</h1>")
-    .replace(/^\- (.*)$/gm, "<li>$1</li>")
-    .replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
-    .replace(/\*(.*?)\*/g, "<i>$1</i>")
-    .replace(/`(.*?)`/g, "<code>$1</code>");
-  html = html.replace(/(<li>.*<\/li>)/gs, (m) => `<ul>${m}</ul>`);
-  html = html.replace(/\n/g, "<br/>");
-  return html;
-}
+/* ============================
+   FIN
+============================ */
