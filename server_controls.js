@@ -1,10 +1,11 @@
-// server_controls.js — Controls backend (solide + rétro-compatible)
-// - Fix crash: add IF NOT EXISTS "code" column on controls_entities
-// - Sync "DB mode": lit switchboards/devices/hv/atex depuis Postgres (sans HTTP)
-// - Arbo: Building -> Switchboards -> Devices (enfants) + High Voltage + ATEX
-// - TSD: génération auto des tâches + due dates
-// - Upload multi (drag&drop) + IA Analyze/Assistant (OpenAI)
-// - Démarre UNIQUEMENT sur CONTROLS_PORT (ou 3011). Ne pas utiliser PORT ici.
+// server_controls.js — Controls backend (vNext)
+// - Première occurrence: statut "Pending" (non planifiée, next_control = NULL)
+// - À la complétion: crée une NOUVELLE tâche pour la prochaine échéance (au lieu d’écraser)
+// - Regroupement par "cluster" si défini dans la TSD -> une seule carte / inspection
+// - Endpoints: /assistant (IA), /calendar, /tree amélioré, /details enrichis
+// - Compat schéma: colonne legacy "user" dans controls_history, size dans attachments, etc.
+// - Index/contraintes: unique partiel sur tâches actives pour éviter doublons
+// - Démarre sur CONTROLS_PORT (ou 3011)
 
 import express from "express";
 import helmet from "helmet";
@@ -55,19 +56,30 @@ function addMonths(dateStr, months) {
   d.setMonth(d.getMonth() + (months || 0));
   return d.toISOString().slice(0, 10);
 }
-function isDue(last, freqMonths) {
-  if (!freqMonths || freqMonths <= 0) return true;
-  if (!last) return true;
-  const next = addMonths(last, freqMonths);
-  return new Date(next) <= new Date();
+function isDue(dateStr) {
+  if (!dateStr) return true;
+  return new Date(dateStr) <= new Date();
 }
 function log(...args) { if (process.env.CONTROLS_LOG !== "0") console.log("[controls]", ...args); }
+
+function comparatorText(comp, thr, unit) {
+  const U = unit ? ` ${unit}` : "";
+  switch (comp) {
+    case "==": return `Doit être égal à ${thr}${U}`;
+    case "!=": return `Doit être différent de ${thr}${U}`;
+    case "<=": return `Doit être ≤ ${thr}${U}`;
+    case ">=": return `Doit être ≥ ${thr}${U}`;
+    case "<":  return `Doit être < ${thr}${U}`;
+    case ">":  return `Doit être > ${thr}${U}`;
+    default:   return `Seuil: ${comp} ${thr}${U}`;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // SCHEMA (création + migrations rétro-compatibles)
 // ---------------------------------------------------------------------------
 async function ensureSchema() {
-  // CREATE si absent
+  // CREATE
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_entities (
       id SERIAL PRIMARY KEY,
@@ -75,7 +87,7 @@ async function ensureSchema() {
       building TEXT,
       equipment_type TEXT,
       name TEXT,
-      code TEXT,                           -- peut manquer sur une ancienne base (cf. ALTER plus bas)
+      code TEXT,
       done JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -102,16 +114,18 @@ async function ensureSchema() {
       entity_id INTEGER REFERENCES controls_entities(id) ON DELETE CASCADE,
       task_name TEXT,
       task_code TEXT,
+      cluster TEXT,                       -- regroupement (si défini par TSD)
       frequency_months INTEGER,
       last_control DATE,
       next_control DATE,
-      status TEXT DEFAULT 'Planned',
+      status TEXT DEFAULT 'Planned',      -- Pending | Planned | Overdue | Completed | Canceled
       value_type TEXT DEFAULT 'checklist',
       result_schema JSONB,
       procedure_md TEXT,
       hazards_md TEXT,
       ppe_md TEXT,
       tools_md TEXT,
+      threshold_text TEXT,                -- lisible pour l’UI ("≤ 20 °C", etc.)
       results JSONB,
       ai_notes JSONB DEFAULT '[]'::jsonb,
       created_by TEXT,
@@ -127,6 +141,7 @@ async function ensureSchema() {
       task_id INTEGER REFERENCES controls_tasks(id) ON DELETE SET NULL,
       task_name TEXT,
       user_name TEXT,
+      "user" TEXT,                        -- compat legacy
       action TEXT,
       meta JSONB,
       date TIMESTAMPTZ DEFAULT NOW()
@@ -170,13 +185,14 @@ async function ensureSchema() {
     );
   `);
 
-  // ALTER (compatibilité avec anciennes bases)
-  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);            // <— FIX crash “code” missing
+  // ALTER compat
+  await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
 
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS cluster TEXT;`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS value_type TEXT DEFAULT 'checklist';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS result_schema JSONB;`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS procedure_md TEXT;`);
@@ -189,25 +205,31 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Planned';`);
+  await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS threshold_text TEXT;`);
 
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_history ALTER COLUMN site SET DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS meta JSONB;`);
-  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS task_name TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS "user" TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ALTER COLUMN "user" DROP NOT NULL;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS task_name TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS action TEXT;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS meta JSONB;`);
+  await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS date TIMESTAMPTZ DEFAULT NOW();`);
 
-  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
-  await pool.query(`ALTER TABLE controls_not_present ADD COLUMN IF NOT EXISTS site TEXT DEFAULT 'Default';`);
   await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
 
+  // Indexes (dont unique partiel pour éviter doublons de tâches actives)
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_next ON controls_tasks(next_control);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_site ON controls_entities(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_history_site_date ON controls_history(site, date DESC);`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_controls_tasks_active
+    ON controls_tasks(site, entity_id, COALESCE(cluster, task_code))
+    WHERE status IN ('Planned','Overdue','Pending');
+  `);
 
-  log("[controls] schema ensured (create + alter ok)");
+  log("schema ensured");
 }
 await ensureSchema().catch(e => { console.error("[schema] init error:", e); process.exit(1); });
 
@@ -343,41 +365,124 @@ async function loadFromDB(site="Default") {
 }
 
 // ---------------------------------------------------------------------------
-// Génération TSD
+// TSD helpers: regrouper par cluster si présent
 // ---------------------------------------------------------------------------
+function clusterize(items = []) {
+  const map = new Map();
+  for (const it of items) {
+    const key = it.cluster || it.id; // si pas de cluster => unitaire
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(it);
+  }
+  return Array.from(map.entries()).map(([cluster, arr]) => ({ cluster, items: arr }));
+}
+
+function buildSchemaForCluster(clusterGroup) {
+  // Un schéma "items[]" pour checklists/mesures multiples
+  const first = clusterGroup.items[0] || {};
+  const freq = first.frequency_months || 12;
+
+  const items = clusterGroup.items.map(it => ({
+    id: it.id,
+    field: it.field,
+    label: it.label,
+    type: it.type,               // "check" | "number" | "text" | "checklist"
+    unit: it.unit || null,
+    comparator: it.comparator || null,
+    threshold: it.threshold ?? null,
+    options: it.options || (it.type === "checklist"
+      ? [{value:"conforme", label:"Conforme"}, {value:"non_conforme", label:"Non conforme"}, {value:"na", label:"Non applicable"}]
+      : null),
+    threshold_text: comparatorText(it.comparator, it.threshold, it.unit)
+  }));
+
+  const procedure_md = clusterGroup.items.map(it => it.procedure_md).filter(Boolean).join("\n\n");
+  const hazards_md   = clusterGroup.items.map(it => it.hazards_md).filter(Boolean).join("\n\n");
+  const ppe_md       = clusterGroup.items.map(it => it.ppe_md).filter(Boolean).join("\n\n");
+  const tools_md     = clusterGroup.items.map(it => it.tools_md).filter(Boolean).join("\n\n");
+
+  return {
+    frequency_months: freq,
+    value_type: "group",
+    result_schema: { items },
+    threshold_text: items.map(x => `${x.label}: ${x.threshold_text}`).join(" • "),
+    procedure_md, hazards_md, ppe_md, tools_md
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Génération TSD (Pending pour 1ère occurrence, Planned après)
+// ---------------------------------------------------------------------------
+async function ensureActiveTaskForEntity(site, entity) {
+  const items = TSD_LIBRARY[entity.equipment_type] || [];
+  if (items.length === 0) return 0;
+
+  const clusters = clusterize(items);
+  let created = 0;
+
+  for (const cg of clusters) {
+    const task_code = cg.cluster; // cluster id ou item id
+    const last = entity.done?.[task_code] || null;
+
+    // Existe-t-il déjà une tâche active (Pending/Planned/Overdue) ?
+    const { rows: exist } = await pool.query(
+      `SELECT id FROM controls_tasks
+       WHERE site=$1 AND entity_id=$2 AND COALESCE(cluster, task_code)=$3
+       AND status IN ('Pending','Planned','Overdue') LIMIT 1`,
+      [site, entity.id, task_code]
+    );
+    if (exist.length) continue;
+
+    const schema = buildSchemaForCluster(cg);
+
+    if (!last) {
+      // 1ère occurrence => Pending + non planifiée
+      await pool.query(
+        `INSERT INTO controls_tasks (
+          site, entity_id, task_name, task_code, cluster, frequency_months,
+          last_control, next_control, status, value_type, result_schema,
+          procedure_md, hazards_md, ppe_md, tools_md, threshold_text, created_by
+        ) VALUES ($1,$2,$3,$4,$5,$6,NULL,NULL,'Pending',$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [
+          site, entity.id, `${entity.name} • ${cg.items[0].label}`,
+          task_code, cg.cluster, schema.frequency_months,
+          schema.value_type, JSON.stringify(schema.result_schema),
+          schema.procedure_md, schema.hazards_md, schema.ppe_md, schema.tools_md,
+          schema.threshold_text, 'system'
+        ]
+      );
+      created++;
+    } else {
+      // Planifier à la prochaine date seulement
+      const next = addMonths(last, schema.frequency_months);
+      if (isDue(next)) {
+        await pool.query(
+          `INSERT INTO controls_tasks (
+            site, entity_id, task_name, task_code, cluster, frequency_months,
+            last_control, next_control, status, value_type, result_schema,
+            procedure_md, hazards_md, ppe_md, tools_md, threshold_text, created_by
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,$16)`,
+          [
+            site, entity.id, `${entity.name} • ${cg.items[0].label}`,
+            task_code, cg.cluster, schema.frequency_months,
+            last, next,
+            schema.value_type, JSON.stringify(schema.result_schema),
+            schema.procedure_md, schema.hazards_md, schema.ppe_md, schema.tools_md,
+            schema.threshold_text, 'system'
+          ]
+        );
+        created++;
+      }
+    }
+  }
+  return created;
+}
+
 async function regenerateTasks(site="Default") {
   const { rows: entities } = await pool.query("SELECT * FROM controls_entities WHERE site=$1", [site]);
   let created = 0;
   for (const e of entities) {
-    const items = TSD_LIBRARY[e.equipment_type] || [];
-    const done = e.done || {};
-    for (const it of items) {
-      const last = done[it.id] || null;
-      if (isDue(last, it.frequency_months)) {
-        const { rows: exists } = await pool.query(
-          `SELECT id FROM controls_tasks
-           WHERE site=$1 AND entity_id=$2 AND task_code=$3 AND status IN ('Planned','Overdue') LIMIT 1`,
-           [site, e.id, it.id]
-        );
-        if (exists.length === 0) {
-          await pool.query(
-            `INSERT INTO controls_tasks (
-              site, entity_id, task_name, task_code, frequency_months, last_control, next_control, status,
-              value_type, result_schema, procedure_md, hazards_md, ppe_md, tools_md, created_by
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,'Planned',$8,$9,$10,$11,$12,$13,$14)`,
-            [
-              site, e.id, `${e.name} • ${it.label}`, it.id, it.frequency_months,
-              null, todayISO(),
-              'checklist',
-              JSON.stringify({ field: it.field, type: it.type, unit: it.unit, comparator: it.comparator, threshold: it.threshold, options: it.options || null }),
-              it.procedure_md || '', it.hazards_md || '', it.ppe_md || '', it.tools_md || '',
-              'system'
-            ]
-          );
-          created++;
-        }
-      }
-    }
+    created += await ensureActiveTaskForEntity(site, e);
   }
   await ensureOverdueFlags();
   return created;
@@ -401,7 +506,6 @@ app.post("/api/controls/sync", async (req, res) => {
         ...(await loadATEXHTTP(site)),
       ];
     } else {
-      // auto : tente DB en premier (plus fiable), sinon HTTP si variables présentes
       try { incoming = await loadFromDB(site); } catch { incoming = []; }
       if (incoming.length === 0) {
         incoming = [
@@ -415,7 +519,7 @@ app.post("/api/controls/sync", async (req, res) => {
     // déduplication par (equipment_type + code)
     const map = new Map();
     for (const x of incoming) {
-      if (!x.code) continue; // on ignore les éléments sans code
+      if (!x.code) continue;
       const key = `${x.equipment_type}:${x.code}`;
       if (!map.has(key)) map.set(key, x);
     }
@@ -494,7 +598,7 @@ app.delete("/api/controls/catalog/:id", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// TASKS — list, details (+tsd_item), complete
+// TASKS — list, details (+tsd cluster), complete -> create next
 // ---------------------------------------------------------------------------
 app.get("/api/controls/tasks", async (req, res) => {
   try {
@@ -503,7 +607,7 @@ app.get("/api/controls/tasks", async (req, res) => {
     await ensureOverdueFlags();
 
     let query = `
-      SELECT ct.*, ce.equipment_type, ce.building, ce.name AS entity_name
+      SELECT ct.*, ce.equipment_type, ce.building, ce.name AS entity_name, ce.code AS entity_code
       FROM controls_tasks ct
       LEFT JOIN controls_entities ce ON ct.entity_id = ce.id
       WHERE ct.site = $1`;
@@ -515,7 +619,10 @@ app.get("/api/controls/tasks", async (req, res) => {
     if (entity_id) { query += ` AND ct.entity_id = $${i++}`; values.push(Number(entity_id)); }
     if (q) { query += ` AND (ct.task_name ILIKE $${i} OR ct.task_code ILIKE $${i})`; values.push(`%${q}%`); i++; }
 
-    query += ` ORDER BY ct.next_control ASC NULLS LAST, ct.id DESC LIMIT $${i} OFFSET $${i+1}`;
+    query += ` ORDER BY 
+      CASE WHEN ct.status='Overdue' THEN 0 WHEN ct.status='Planned' THEN 1 WHEN ct.status='Pending' THEN 2 ELSE 3 END ASC,
+      ct.next_control ASC NULLS LAST, ct.id DESC
+      LIMIT $${i} OFFSET $${i+1}`;
     values.push(Number(pageSize), (Number(page) - 1) * Number(pageSize));
 
     const { rows } = await pool.query(query, values);
@@ -527,56 +634,177 @@ app.get("/api/controls/tasks", async (req, res) => {
 
 app.get("/api/controls/tasks/:id/details", async (req, res) => {
   const id = Number(req.params.id);
-  const { rows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
+  const { rows } = await pool.query(
+    `SELECT ct.*, ce.equipment_type, ce.name AS entity_name, ce.code AS entity_code, ce.building
+     FROM controls_tasks ct
+     LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
+     WHERE ct.id=$1`, [id]);
   if (!rows.length) return res.status(404).json({ error: "Not found" });
   const t = rows[0];
 
-  // joindre l’item TSD correspondant
-  let tsd_item = null;
-  const { rows: ent } = await pool.query("SELECT equipment_type FROM controls_entities WHERE id=$1", [t.entity_id]);
-  const eqType = ent[0]?.equipment_type;
-  if (eqType && TSD_LIBRARY[eqType]) {
-    tsd_item = (TSD_LIBRARY[eqType] || []).find(it => it.id === t.task_code) || null;
-  }
-  if (!tsd_item) {
-    tsd_item = Object.values(TSD_LIBRARY).flat().find(it => it.id === t.task_code) || null;
-  }
+  // joindre le cluster TSD correspondant
+  const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
+  const clusterItems = t.cluster
+    ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
+    : tsdItems.filter(it => it.id === t.task_code);
 
-  res.json({ ...t, tsd_item });
+  res.json({ ...t, tsd_cluster_items: clusterItems });
 });
 
+// Completer une tâche -> crée la prochaine
 app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { user = "tech", results = {}, ai_risk_score = null } = req.body || {};
-    const { rows: trows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
+    const { user = "tech", results = {}, ai_risk_score = null, notes = "" } = req.body || {};
+    const { rows: trows } = await pool.query(
+      `SELECT ct.*, ce.equipment_type, ce.name AS entity_name
+       FROM controls_tasks ct LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
+       WHERE ct.id=$1`, [id]);
     if (!trows.length) return res.status(404).json({ error: "Not found" });
     const t = trows[0];
 
+    // Clôturer l'actuelle
+    const today = todayISO();
     await pool.query(
       `UPDATE controls_tasks
-       SET status='Completed', results=$1, last_control=$2, next_control=$3, updated_at=NOW()
-       WHERE id=$4`,
-      [JSON.stringify(results || {}), todayISO(), addMonths(todayISO(), t.frequency_months || 12), id]
+       SET status='Completed', results=$1, last_control=$2, updated_at=NOW()
+       WHERE id=$3`,
+      [JSON.stringify(results || {}), today, id]
     );
 
-    // Historique + Record + marquer "fait" sur l’entité
+    // Historique + Record + marquer "fait" sur l’entité (clé = cluster ou code)
+    const doneKey = t.cluster || t.task_code;
     await pool.query(
-      "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
-      [t.site || "Default", id, t.task_name, user, "Completed", JSON.stringify({ ai_risk_score, results })]
+      "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+      [t.site || "Default", id, t.task_name, user, user, "Completed", JSON.stringify({ ai_risk_score, results, notes })]
     );
     await pool.query(
       "INSERT INTO controls_records (site, entity_id, task_code, results, created_by) VALUES ($1,$2,$3,$4,$5)",
-      [t.site || "Default", t.entity_id, t.task_code, JSON.stringify(results || {}), user]
+      [t.site || "Default", t.entity_id, doneKey, JSON.stringify(results || {}), user]
     );
     await pool.query(
       "UPDATE controls_entities SET done = done || jsonb_build_object($1, $2) WHERE id=$3",
-      [t.task_code, todayISO(), t.entity_id]
+      [doneKey, today, t.entity_id]
     );
 
-    res.json({ ok: true });
+    // Détection non-conformités pour déclencher WO (historique)
+    let ncFound = false;
+    const flatVals = typeof results === "object" ? JSON.stringify(results).toLowerCase() : "";
+    if (flatVals.includes("non_conforme") || flatVals.includes("\"ko\"") || flatVals.includes("reject")) {
+      ncFound = true;
+    }
+    if (ncFound) {
+      await pool.query(
+        "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        [t.site || "Default", id, t.task_name, user, user, "NC", JSON.stringify({ reason: "Checklist non conforme", results })]
+      );
+    }
+
+    // Créer la prochaine tâche (planned)
+    const freq = t.frequency_months || 12;
+    const next = addMonths(today, freq);
+
+    // Récupérer schéma et textes existants (on garde le même cluster / code)
+    const { rows: current } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
+    const cur = current[0];
+
+    const { rows: newTask } = await pool.query(
+      `INSERT INTO controls_tasks (
+          site, entity_id, task_name, task_code, cluster, frequency_months,
+          last_control, next_control, status, value_type, result_schema,
+          procedure_md, hazards_md, ppe_md, tools_md, threshold_text, created_by
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,$16)
+        RETURNING id`,
+      [
+        cur.site, cur.entity_id, cur.task_name, cur.task_code, cur.cluster, cur.frequency_months,
+        today, next, cur.value_type, cur.result_schema,
+        cur.procedure_md, cur.hazards_md, cur.ppe_md, cur.tools_md, cur.threshold_text, user || 'system'
+      ]
+    );
+
+    res.json({ ok: true, next_task_id: newTask[0].id, next_control: next, non_conformity: ncFound });
   } catch (e) {
     res.status(500).json({ error: "Erreur completion", details: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// ASSISTANT IA — consignes, lecture photos "pré-intervention", aide mesure
+// ---------------------------------------------------------------------------
+app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { question = "", use_pre_images = true, attachment_ids = [] } = req.body || {};
+
+    const { rows: trows } = await pool.query(
+      `SELECT ct.*, ce.equipment_type, ce.name AS entity_name, ce.code AS entity_code, ce.building
+       FROM controls_tasks ct
+       LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
+       WHERE ct.id=$1`, [id]);
+    if (!trows.length) return res.status(404).json({ error: "Not found" });
+    const t = trows[0];
+
+    // Contexte TSD
+    const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
+    const items = t.cluster
+      ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
+      : tsdItems.filter(it => it.id === t.task_code);
+
+    // Pièces jointes "pré" (ou ids spécifiques)
+    let images = [];
+    if (use_pre_images || (attachment_ids && attachment_ids.length)) {
+      const { rows: atts } = attachment_ids.length
+        ? await pool.query(`SELECT * FROM controls_attachments WHERE task_id=$1 AND id = ANY($2::int[]) ORDER BY uploaded_at DESC`, [id, attachment_ids])
+        : await pool.query(`SELECT * FROM controls_attachments WHERE task_id=$1 AND (label ILIKE 'pre%' OR label IS NULL) ORDER BY uploaded_at DESC LIMIT 4`, [id]);
+
+      images = atts.map(a => ({
+        type: "input_image",
+        image_url: {
+          url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}`
+        }
+      }));
+    }
+
+    const system = `Tu es l'assistant sécurité & qualité pour des contrôles électriques. 
+Rédige des consignes claires pour: EPI, zones à observer, points de mesure, appareil requis, interprétation des mesures, et alertes.
+Réponds en français, en listes courtes et actions concrètes.`;
+
+    const content = [
+      { type: "text", text:
+        `Équipement: ${t.equipment_type} • ${t.entity_name} (${t.entity_code}) • Bâtiment ${t.building || "?"}
+Tâche: ${t.task_name}
+Fréquence: ${t.frequency_months || 12} mois
+Seuils: ${t.threshold_text || "(voir items)"}
+Points: ${items.map(it => `- ${it.label}`).join("\n")}
+Question: ${question || "(guidage pré-intervention)"}`
+      },
+      ...images
+    ];
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res.json({
+        ok: true,
+        message: `Conseils IA (mode local): 
+- EPI: gants isolants adaptés, lunettes, casque.
+- Avant d'ouvrir: consignation si besoin, balisage zone.
+- Photos claires des bornes/écrans. Mesure avec l’appareil indiqué dans la procédure.
+- Compare la valeur aux seuils: ${t.threshold_text || "cf. items"}.`
+      });
+    }
+
+    const chat = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content }
+      ],
+      temperature: 0.2
+    });
+
+    const text = chat.choices?.[0]?.message?.content || "—";
+    res.json({ ok: true, message: text });
+  } catch (e) {
+    res.status(500).json({ error: "Erreur assistant", details: e.message });
   }
 });
 
@@ -653,8 +881,8 @@ app.post("/api/controls/not-present/:id/assess", async (req, res) => {
   const id = Number(req.params.id);
   const { action="Assessed", user="system", meta={} } = req.body || {};
   await pool.query(
-    "INSERT INTO controls_history (site, task_id, task_name, user_name, action, meta) VALUES ($1,$2,$3,$4,$5,$6)",
-    [req.headers["x-site"] || "Default", null, `not-present#${id}`, user, action, JSON.stringify(meta)]
+    "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+    [req.headers["x-site"] || "Default", null, `not-present#${id}`, user, user, action, JSON.stringify(meta)]
   );
   res.json({ ok: true });
 });
@@ -695,6 +923,7 @@ app.get("/api/controls/tree", async (req, res) => {
     SELECT entity_id,
       SUM((status='Planned')::int) AS planned,
       SUM((status='Overdue')::int) AS overdue,
+      SUM((status='Pending')::int) AS pending,
       SUM((status='Completed')::int) AS completed,
       MIN(next_control) AS next_due
     FROM controls_tasks
@@ -714,7 +943,7 @@ app.get("/api/controls/tree", async (req, res) => {
     if (e.equipment_type === "LV_SWITCHBOARD") {
       const node = {
         id: e.id, code: e.code, name: e.name, type: e.equipment_type,
-        counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null },
+        counts: cMap.get(e.id) || { planned: 0, overdue: 0, pending: 0, completed: 0, next_due: null },
         children: [] // devices
       };
       buildings[b].groups.LV_SWITCHBOARD.push(node);
@@ -728,16 +957,16 @@ app.get("/api/controls/tree", async (req, res) => {
     if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b]?.boardsByCode[e.parent_code]) {
       buildings[b].boardsByCode[e.parent_code].children.push({
         id: e.id, code: e.code, name: e.name, type: e.equipment_type,
-        counts: cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null }
+        counts: cMap.get(e.id) || { planned: 0, overdue: 0, pending: 0, completed: 0, next_due: null }
       });
     }
   }
 
-  // entités restantes (devices sans parent, HV, ATEX)
+  // entités restantes
   for (const e of ents) {
     const b = e.building || "B00";
     const bucket = buildings[b].groups;
-    const counts = cMap.get(e.id) || { planned: 0, overdue: 0, completed: 0, next_due: null };
+    const counts = cMap.get(e.id) || { planned: 0, overdue: 0, pending: 0, completed: 0, next_due: null };
 
     if (e.equipment_type === "LV_DEVICE" && e.parent_code && buildings[b].boardsByCode[e.parent_code]) continue;
     if (e.equipment_type === "LV_DEVICE") bucket.LV_DEVICE.push({ id: e.id, code: e.code, name: e.name, type: e.equipment_type, counts });
@@ -755,6 +984,27 @@ app.get("/api/controls/tree", async (req, res) => {
     ]
   }));
   res.json(out);
+});
+
+// ---------------------------------------------------------------------------
+// CALENDAR — vue globale des futures échéances
+// ---------------------------------------------------------------------------
+app.get("/api/controls/calendar", async (req, res) => {
+  const site = req.headers["x-site"] || req.query.site || "Default";
+  const { from, to } = req.query;
+  const q = `
+    SELECT ct.id, ct.next_control, ct.status, ct.task_name, ce.name AS entity_name, ce.code AS entity_code, ce.equipment_type, ce.building
+    FROM controls_tasks ct
+    LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
+    WHERE ct.site=$1
+      AND ct.next_control IS NOT NULL
+      AND ct.status IN ('Planned','Overdue')
+      AND ($2::date IS NULL OR ct.next_control >= $2::date)
+      AND ($3::date IS NULL OR ct.next_control <= $3::date)
+    ORDER BY ct.next_control ASC, ct.id DESC
+    LIMIT 1000`;
+  const { rows } = await pool.query(q, [site, from || null, to || null]);
+  res.json(rows);
 });
 
 // ---------------------------------------------------------------------------
