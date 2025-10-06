@@ -45,7 +45,6 @@ const CONTROLS_API = {
   upload: (id, formData) =>
     fetch(`/api/controls/tasks/${id}/upload`, { method: "POST", body: formData }).then(asJSON),
 
-  // Aligné avec le backend: use_pre_images / attachment_ids
   assistant: (id, body) =>
     fetchJSON(`/api/controls/tasks/${id}/assistant`, {
       method: "POST",
@@ -591,7 +590,6 @@ function TaskModal({ id, onClose, onCompleted }) {
       const res = await CONTROLS_API.complete(id, { user: "tech", results, notes });
       toast("Tâche complétée");
       onCompleted();
-      // Si NC, le backend renvoie non_conformity=true et le frontend peut afficher le toast côté liste
       if (res?.non_conformity) {
         setTimeout(() => toast("Non-conformité détectée. Ouvrez un suivi (follow-up)."), 100);
       }
@@ -603,7 +601,23 @@ function TaskModal({ id, onClose, onCompleted }) {
   if (loading) return <ModalSkeleton />;
   if (err) return <ErrorBanner message={err} />;
 
-  const schema = task.result_schema?.items || [];
+  // ---------- MODIF A) : fallback local si result_schema absent + bouton "Reconstruire" ----------
+  let schema = Array.isArray(task?.result_schema?.items) ? task.result_schema.items : [];
+  const tsdFallback = Array.isArray(task?.tsd_cluster_items) ? task.tsd_cluster_items : [];
+  if (!schema.length && tsdFallback.length) {
+    schema = tsdFallback.map(it => ({
+      id: it.id,
+      field: it.field,
+      label: it.label,
+      type: "check",
+      unit: it.unit || null,
+      comparator: it.comparator || null,
+      threshold: it.threshold ?? null,
+      threshold_text: (it.comparator || it.threshold != null)
+        ? `${it.label} — ${it.comparator || ""} ${it.threshold ?? ""} ${it.unit || ""}`.trim()
+        : "Choisir: Conforme / Non conforme / N.A."
+    }));
+  }
 
   return (
     <div className="modal" onClick={onClose}>
@@ -623,6 +637,29 @@ function TaskModal({ id, onClose, onCompleted }) {
           <div className="col form">
             <div className="section">
               <div className="section-title"><Icon.Check /> Checklist</div>
+
+              {/* Bouton Reconstruire si vide */}
+              {(!schema || !schema.length) ? (
+                <div className="empty small">
+                  Checklist vide.{" "}
+                  <button
+                    className="btn ghost"
+                    onClick={async () => {
+                      try {
+                        await fetch(`/api/controls/tasks/${id}/fix-schema`, { method: "POST" });
+                        const details = await CONTROLS_API.taskDetails(id);
+                        setTask(details);
+                        toast("Checklist reconstruite");
+                      } catch (e) {
+                        toast("Impossible de reconstruire: " + e.message);
+                      }
+                    }}
+                  >
+                    Reconstruire
+                  </button>
+                </div>
+              ) : null}
+
               <div className="group-fields">
                 {schema.map((it) => (
                   <div key={it.id} className="group-item">
@@ -648,6 +685,7 @@ function TaskModal({ id, onClose, onCompleted }) {
                 ))}
               </div>
             </div>
+
             <div className="section">
               <div className="section-title"><Icon.Camera /> Photos & Pièces jointes</div>
               <AttachmentList taskId={id} attachments={attachments} />
@@ -658,14 +696,17 @@ function TaskModal({ id, onClose, onCompleted }) {
                 </label>
               </div>
             </div>
+
             <div className="section">
               <div className="section-title"><Icon.Send /> Notes</div>
               <textarea className="input textarea" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes optionnelles..." />
             </div>
+
             <div className="actions">
               <button className="btn primary" onClick={complete}>Compléter</button>
             </div>
           </div>
+
           <div className="col side">
             <div className="section">
               <div className="section-title"><Icon.Alert /> Procédure & Sécurité</div>
@@ -686,14 +727,53 @@ function TaskModal({ id, onClose, onCompleted }) {
                 <div className="callout-text"><SafeText value={task.procedure_md || "—"} /></div>
               </div>
             </div>
+
+            {/* ---------- MODIF B) : UI claire Guidage / Interprétation photo ---------- */}
             <div className="section ai-box">
               <div className="section-title"><Icon.Bolt /> Assistant IA</div>
-              <div className="ai-actions">
-                <button className="btn ghost" onClick={() => assistant()} disabled={aiLoading}>Guidage Pré</button>
-                <button className="btn ghost" onClick={() => assistant("Analyse photo")} disabled={aiLoading}>Analyse Photo</button>
+
+              <div className="ai-actions" style={{gap:8, alignItems:'center', flexWrap:'wrap'}}>
+                <button
+                  className="btn ghost"
+                  onClick={() => assistant("Guidage pré-intervention (EPI, points de contrôle, appareil de mesure, valeurs attendues)")}
+                  disabled={aiLoading}
+                >
+                  Guidage pré-intervention
+                </button>
+
+                <span style={{fontSize:12, color:"#475569"}}>ou</span>
+
+                <select id="ai-photo" className="input" style={{width:240}}>
+                  <option value="">— choisir une photo à interpréter —</option>
+                  {attachments.filter(a => (a.mimetype||"").startsWith("image/")).map(a =>
+                    <option key={a.id} value={a.id}>{a.filename}</option>
+                  )}
+                </select>
+                <button
+                  className="btn ghost"
+                  onClick={() => {
+                    const sel = document.getElementById("ai-photo");
+                    const attId = sel ? Number(sel.value) : 0;
+                    if (!attId) return toast("Choisis une photo d'abord");
+                    assistant("Interprétation de la photo (lire valeurs, état visuel, remarques sécurité)", [attId]);
+                  }}
+                  disabled={aiLoading}
+                >
+                  Interpréter la photo
+                </button>
               </div>
-              {aiMessage ? <div className="ai-answer"><pre>{aiMessage}</pre></div> : null}
+
+              {aiMessage ? <div className="ai-answer"><pre>{aiMessage}</pre></div> : (
+                <div className="ai-answer" style={{opacity:.8}}>
+                  <div className="ai-title">Exemples :</div>
+                  <ul style={{margin:'6px 0 0 18px', padding:0}}>
+                    <li>Guidage pré-intervention : EPI requis, points à vérifier, seuils et tolérances.</li>
+                    <li>Interprétation photo : lecture d’un écran (tension/courant), état d’un isolant, présence d’échauffement…</li>
+                  </ul>
+                </div>
+              )}
             </div>
+            {/* ---------- fin modif B ---------- */}
           </div>
         </div>
       </div>
