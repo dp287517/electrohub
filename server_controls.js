@@ -200,6 +200,9 @@ async function ensureSchema() {
     ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
   `);
   await pool.query(`UPDATE controls_records SET created_at = NOW() WHERE created_at IS NULL;`);
+  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS site TEXT;`);
+  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS results JSONB;`);
+  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS created_by TEXT;`);
 
   // controls_attachments : colonnes utilisées par les requêtes
   await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
