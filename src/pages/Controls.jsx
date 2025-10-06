@@ -32,7 +32,7 @@ function SafeText({ value, empty = "—" }) {
 }
 
 /* ============================
-   API utils (inchangés)
+   API utils (mise à jour)
 ============================ */
 function headersFor(site) { return site ? { "X-Site": site } : {}; }
 const CONTROLS_API = {
@@ -44,18 +44,22 @@ const CONTROLS_API = {
   attachments: (id) => fetchJSON(`/api/controls/tasks/${id}/attachments`),
   upload: (id, formData) =>
     fetch(`/api/controls/tasks/${id}/upload`, { method: "POST", body: formData }).then(asJSON),
+
+  // Aligné avec le backend: use_pre_images / attachment_ids
   assistant: (id, body) =>
     fetchJSON(`/api/controls/tasks/${id}/assistant`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         body || {
-          question: "Aide pré-intervention : EPI, points à vérifier, appareil à utiliser, interprétation des mesures.",
-          analyze_attachments: true,
-          analyze_thresholds: true,
+          question:
+            "Aide pré-intervention : EPI, points à vérifier, appareil à utiliser, interprétation des mesures.",
+          use_pre_images: true,
+          attachment_ids: [],
         }
       ),
     }),
+
   complete: (id, payload) =>
     fetchJSON(`/api/controls/tasks/${id}/complete`, {
       method: "POST",
@@ -64,6 +68,16 @@ const CONTROLS_API = {
     }),
   calendar: (site, params = {}) =>
     fetchJSON(`/api/controls/calendar${toQS(params)}`, { headers: headersFor(site) }),
+
+  // --- Nouveaux endpoints: Audit IA ---
+  aiAuditRun: (site, params = {}) =>
+    fetchJSON(`/api/controls/ai/audit-run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headersFor(site) },
+      body: JSON.stringify(params || {}),
+    }),
+  aiAuditList: (site, params = {}) =>
+    fetchJSON(`/api/controls/ai/audit${toQS(params)}`, { headers: headersFor(site) }),
 };
 
 function toQS(obj) {
@@ -355,6 +369,7 @@ export default function Controls() {
         )}
 
         {tab === "calendar" && <CalendarPanel site={site} onSelectTask={(id) => setSelectedId(id)} />}
+        {tab === "audit" && <AIAuditPanel site={site} />}
       </div>
 
       {/* Page CSS */}
@@ -406,6 +421,9 @@ function Tabs({ tab, setTab }) {
       </button>
       <button className={cls("tab", tab === "calendar" && "active")} onClick={() => setTab("calendar")}>
         <Icon.Calendar /> Calendrier
+      </button>
+      <button className={cls("tab", tab === "audit" && "active")} onClick={() => setTab("audit")}>
+        <Icon.Alert /> Audit&nbsp;IA
       </button>
     </div>
   );
@@ -589,7 +607,6 @@ function TaskModal({ id, onClose, onCompleted }) {
   }
 
   function handleResultChange(field, value) {
-    // Si on tente de mettre un objet où un texte/nbre est attendu, ne pas crasher
     setResults((r) => ({ ...r, [field]: value }));
   }
 
@@ -605,9 +622,16 @@ function TaskModal({ id, onClose, onCompleted }) {
       if (kind === "pre") setPreFiles([]);
       else setWorkFiles([]);
       await refreshAttachments();
-      // Déclenchement automatique de l'IA après upload pré‑intervention
+
+      // Auto-assistant après upload (pré et travail) -> point 6
       if (kind === "pre") {
-        await askAssistant("Analyse la/les photo(s) pré‑intervention et donne les consignes (EPI, points de mesure, appareil).");
+        await askAssistant(
+          "Analyse la/les photo(s) pré-intervention et donne les consignes (EPI, points de mesure, appareil)."
+        );
+      } else if (kind === "work") {
+        await askAssistant(
+          "Analyse des pièces jointes ajoutées pendant l'intervention et interprétation des valeurs vs seuils."
+        );
       }
     } catch (e) {
       setProblem(e.message || String(e));
@@ -621,9 +645,13 @@ function TaskModal({ id, onClose, onCompleted }) {
       setAiLoading(true);
       setAiAnswer("");
       const body = {
-        question: question || aiText || "Aide pré-intervention : EPI, points de mesure, appareil, interprétation.",
-        analyze_attachments: true,
-        analyze_thresholds: true,
+        question:
+          question ||
+          aiText ||
+          "Aide pré-intervention : EPI, points de mesure, appareil, interprétation.",
+        // Aligné backend -> point 4
+        use_pre_images: true,
+        attachment_ids: [],
       };
       const res = await CONTROLS_API.assistant(id, body);
       setAiAnswer(res?.message || "");
@@ -652,11 +680,12 @@ function TaskModal({ id, onClose, onCompleted }) {
   }
 
   const thresholdBox = useMemo(() => {
-    if (details?.threshold_text && typeof details.threshold_text === 'string') return details.threshold_text;
+    if (details?.threshold_text && typeof details.threshold_text === "string")
+      return details.threshold_text;
     if (isGroup && rs.items.some((it) => it?.threshold_text)) {
       return rs.items
         .filter((it) => it?.threshold_text)
-        .map((it) => `${toLabel(it.label)}: ${toLabel(it.threshold_text, '')}`)
+        .map((it) => `${toLabel(it.label)}: ${toLabel(it.threshold_text, "")}`)
         .join(" • ");
     }
     return "";
@@ -669,68 +698,103 @@ function TaskModal({ id, onClose, onCompleted }) {
       <div className="modal-card">
         <div className="modal-head">
           <div className="mh-left">
-            <div className="mh-title"><SafeText value={details?.task_name || "Chargement..."} /></div>
+            <div className="mh-title">
+              <SafeText value={details?.task_name || "Chargement..."} />
+            </div>
             <div className="mh-sub">
-              <span className="chip"><Icon.Bolt /> <SafeText value={typeLabel(details?.equipment_type)} /></span>
-              <span className="chip"><Icon.Building /> <SafeText value={details?.building} /></span>
-              {details?.entity_code ? <span className="chip code">Équipement: <SafeText value={details?.entity_code} /></span> : null}
-              {details?.task_code ? <span className="chip code">Code tâche: <SafeText value={details?.task_code} /></span> : null}
+              <span className="chip">
+                <Icon.Bolt /> <SafeText value={typeLabel(details?.equipment_type)} />
+              </span>
+              <span className="chip">
+                <Icon.Building /> <SafeText value={details?.building} />
+              </span>
+              {details?.entity_code ? (
+                <span className="chip code">
+                  Équipement: <SafeText value={details?.entity_code} />
+                </span>
+              ) : null}
+              {details?.task_code ? (
+                <span className="chip code">
+                  Code tâche: <SafeText value={details?.task_code} />
+                </span>
+              ) : null}
             </div>
           </div>
-          <button className="btn icon ghost" onClick={onClose} title="Fermer"><Icon.X /></button>
+          <button className="btn icon ghost" onClick={onClose} title="Fermer">
+            <Icon.X />
+          </button>
         </div>
 
         {problem ? <ErrorBanner message={`Chargement des détails: ${problem}`} /> : null}
-        {loading ? <ModalSkeleton /> : (
+        {loading ? (
+          <ModalSkeleton />
+        ) : (
           <div className="modal-body">
             {/* Colonne gauche: checklist / champs */}
             <div className="col form">
               {/* Alerte pré-intervention (optionnelle) */}
               <div className="callout">
-                <div className="callout-title"><Icon.Camera /> Photo de pré-intervention (optionnelle)</div>
+                <div className="callout-title">
+                  <Icon.Camera /> Photo de pré-intervention (optionnelle)
+                </div>
                 <div className="callout-text">
-                  Avant d’intervenir, vous pouvez ajouter une photo (vue d’ensemble, plaques, repères).
-                  L’assistant expliquera où mesurer et avec quel appareil. Ce n’est pas obligatoire.
+                  Avant d’intervenir, vous pouvez ajouter une photo (vue d’ensemble, plaques,
+                  repères). L’assistant expliquera où mesurer et avec quel appareil. Ce n’est pas
+                  obligatoire.
                 </div>
                 <div className="upload-line">
                   <label className="btn">
                     <Icon.Upload /> Joindre photo(s)
-                    <input type="file" accept="image/*" multiple style={{ display: "none" }} onChange={(e) => setPreFiles(Array.from(e.target.files || []))}/>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={(e) => setPreFiles(Array.from(e.target.files || []))}
+                    />
                   </label>
-                  <button className="btn ghost" disabled={!preFiles.length || uploading} onClick={() => doUpload("pre")}>
+                  <button
+                    className="btn ghost"
+                    disabled={!preFiles.length || uploading}
+                    onClick={() => doUpload("pre")}
+                  >
                     <Icon.Send /> Envoyer
                   </button>
                   <div className="files-list">
-                    {preFiles.map((f, i) => <span key={i} className="file-pill">{f.name}</span>)}
+                    {preFiles.map((f, i) => (
+                      <span key={i} className="file-pill">
+                        {f.name}
+                      </span>
+                    ))}
                   </div>
                 </div>
               </div>
 
               <div className="section">
                 <div className="section-title">Checklist & Mesures</div>
-                {thresholdBox ? <div className="rule"><SafeText value={thresholdBox} /></div> : null}
+                {thresholdBox ? (
+                  <div className="rule">
+                    <SafeText value={thresholdBox} />
+                  </div>
+                ) : null}
 
                 {Array.isArray(clusterNotes) && clusterNotes.length ? (
                   <div className="hint">
                     <strong>Consignes TSD (points à observer) :</strong>
-                    <ul style={{margin:'6px 0 0 18px'}}>
-                      {clusterNotes.map((s, i) => <li key={i}><SafeText value={s} /></li>)}
+                    <ul style={{ margin: "6px 0 0 18px" }}>
+                      {clusterNotes.map((s, i) => (
+                        <li key={i}>
+                          <SafeText value={s} />
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 ) : null}
 
                 {isGroup ? (
-                  <GroupFields
-                    items={rs.items}
-                    results={results}
-                    onChange={handleResultChange}
-                  />
+                  <GroupFields items={rs.items} results={results} onChange={handleResultChange} />
                 ) : (
-                  <SingleField
-                    schema={rs}
-                    results={results}
-                    onChange={handleResultChange}
-                  />
+                  <SingleField schema={rs} results={results} onChange={handleResultChange} />
                 )}
 
                 <div className="field">
@@ -744,7 +808,9 @@ function TaskModal({ id, onClose, onCompleted }) {
                 </div>
 
                 <div className="actions">
-                  <button className="btn primary" onClick={completeTask}><Icon.Check /> Clôturer la tâche</button>
+                  <button className="btn primary" onClick={completeTask}>
+                    <Icon.Check /> Clôturer la tâche
+                  </button>
                 </div>
               </div>
             </div>
@@ -752,27 +818,46 @@ function TaskModal({ id, onClose, onCompleted }) {
             {/* Colonne droite: PJ + IA */}
             <div className="col side">
               <div className="section">
-                <div className="section-title"><Icon.Paperclip /> Pièces jointes</div>
+                <div className="section-title">
+                  <Icon.Paperclip /> Pièces jointes
+                </div>
                 <div className="upload-line">
                   <label className="btn">
                     <Icon.Upload /> Ajouter pendant contrôle
-                    <input type="file" accept="image/*,application/pdf" multiple style={{ display: "none" }} onChange={(e) => setWorkFiles(Array.from(e.target.files || []))}/>
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      multiple
+                      style={{ display: "none" }}
+                      onChange={(e) => setWorkFiles(Array.from(e.target.files || []))}
+                    />
                   </label>
-                  <button className="btn ghost" disabled={!workFiles.length || uploading} onClick={() => doUpload("work")}>
+                  <button
+                    className="btn ghost"
+                    disabled={!workFiles.length || uploading}
+                    onClick={() => doUpload("work")}
+                  >
                     <Icon.Send /> Envoyer
                   </button>
                 </div>
                 <div className="files-list">
-                  {workFiles.map((f, i) => <span key={i} className="file-pill">{f.name}</span>)}
+                  {workFiles.map((f, i) => (
+                    <span key={i} className="file-pill">
+                      {f.name}
+                    </span>
+                  ))}
                 </div>
 
                 <AttachmentList taskId={id} attachments={attachments} />
               </div>
 
               <div className="section">
-                <div className="section-title"><Icon.Bolt /> Assistant IA</div>
+                <div className="section-title">
+                  <Icon.Bolt /> Assistant IA
+                </div>
                 <div className="hint">
-                  Joignez des photos d’écrans d’appareils de mesure : l’IA interprète les valeurs et vérifie les seuils TSD.
+                  Joignez des photos d’écrans d’appareils de mesure : l’IA interprète les valeurs
+                  et vérifie les seuils TSD.
                 </div>
                 <div className="ai-box">
                   <textarea
@@ -782,10 +867,27 @@ function TaskModal({ id, onClose, onCompleted }) {
                     onChange={(e) => setAiText(e.target.value)}
                   />
                   <div className="ai-actions">
-                    <button className="btn" onClick={() => askAssistant()} disabled={aiLoading}><Icon.Send /> Conseils</button>
-                    <button className="btn ghost" onClick={() => askAssistant("Analyse des pièces jointes et des résultats vs seuils TSD.")} disabled={aiLoading}><Icon.Search /> Analyser</button>
+                    <button className="btn" onClick={() => askAssistant()} disabled={aiLoading}>
+                      <Icon.Send /> Conseils
+                    </button>
+                    <button
+                      className="btn ghost"
+                      onClick={() =>
+                        askAssistant(
+                          "Analyse des pièces jointes et des résultats vs seuils TSD."
+                        )
+                      }
+                      disabled={aiLoading}
+                    >
+                      <Icon.Search /> Analyser
+                    </button>
                   </div>
-                  {aiAnswer ? <div className="ai-answer"><div className="ai-title">Réponse</div><pre>{aiAnswer}</pre></div> : null}
+                  {aiAnswer ? (
+                    <div className="ai-answer">
+                      <div className="ai-title">Réponse</div>
+                      <pre>{aiAnswer}</pre>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
