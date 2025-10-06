@@ -715,21 +715,19 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
 
     const today = todayISO();
 
-    // 1) Marque la tâche comme complétée
+    // 1) Compléter la tâche courante
     await pool.query(
       `UPDATE controls_tasks
-         SET status='Completed', results=$1, last_control=$2, updated_at=NOW()
-       WHERE id=$3`,
-      [JSON.stringify(results || {}), today, id]
+        SET status='Completed', results=$1::jsonb, last_control=$2, updated_at=NOW()
+      WHERE id=$3`,
+      [results || {}, today, id]
     );
 
-    const doneKey = t.cluster || t.task_code;
-
-    // 2) Historise l'action de complétion
+    // 2) Historique (on caste meta et results)
     await pool.query(
       `INSERT INTO controls_history
-         (site, task_id, task_name, user_name, "user", action, meta, results)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        (site, task_id, task_name, user_name, "user", action, meta, results)
+      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
       [
         t.site || "Nyon",
         id,
@@ -737,17 +735,17 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
         user,
         user,
         "Completed",
-        JSON.stringify({ ai_risk_score, results, notes }),
-        JSON.stringify(results || {})
+        { ai_risk_score, results, notes },
+        results || {}
       ]
     );
 
-    // 3) Snapshot synthétique (audit/IA)
+    // 3) Snapshot records
     await pool.query(
       `INSERT INTO controls_records
-         (site, entity_id, task_code, results, created_by)
-       VALUES ($1,$2,$3,$4,$5)`,
-      [t.site || "Nyon", t.entity_id, doneKey, JSON.stringify(results || {}), user]
+        (site, entity_id, task_code, results, created_by)
+      VALUES ($1,$2,$3,$4::jsonb,$5)`,
+      [t.site || "Nyon", t.entity_id, doneKey, results || {}, user]
     );
 
     // 4) Met à jour le "done" de l'entité
@@ -908,80 +906,111 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
     if (!trows.length) return res.status(404).json({ error: "Not found" });
     const t = trows[0];
 
-    // TSD items du cluster
+    // Items TSD (cluster)
     const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
     const items = t.cluster
       ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
       : tsdItems.filter(it => it.id === t.task_code);
 
-    // Contexte historique (derniers enregistrements)
+    // Historique court
     const { rows: recent } = await pool.query(
       `SELECT results, created_at
        FROM controls_records
        WHERE site = $1 AND entity_id = $2 AND task_code = $3
-       ORDER BY created_at DESC LIMIT 10`,
+       ORDER BY created_at DESC LIMIT 6`,
       [t.site || "Nyon", t.entity_id, (t.cluster || t.task_code)]
     );
 
     // Récupération d'images
-    let images = [];
-    if (use_pre_images || (attachment_ids && attachment_ids.length)) {
-      const { rows: atts } = attachment_ids.length
-        ? await pool.query(
-            `SELECT * FROM controls_attachments
-             WHERE task_id=$1 AND id = ANY($2::int[])
-             ORDER BY uploaded_at DESC`, [id, attachment_ids]
-          )
-        : await pool.query(
-            `SELECT * FROM controls_attachments
-             WHERE task_id=$1 AND (label ILIKE 'pre%' OR label IS NULL)
-             ORDER BY uploaded_at DESC LIMIT 4`, [id]
-          );
-
-      images = atts
-        .filter(a => (a.mimetype || "").startsWith("image/") && a.data)
-        .map(a => ({
-          type: "image_url",
-          image_url: { url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}` }
-        }));
+    let atts = [];
+    if (attachment_ids?.length) {
+      const r = await pool.query(
+        `SELECT * FROM controls_attachments
+         WHERE task_id=$1 AND id = ANY($2::int[])
+         ORDER BY uploaded_at DESC`, [id, attachment_ids]
+      );
+      atts = r.rows;
+    } else if (use_pre_images) {
+      const r = await pool.query(
+        `SELECT * FROM controls_attachments
+         WHERE task_id=$1
+         ORDER BY uploaded_at DESC LIMIT 4`, [id]
+      );
+      atts = r.rows;
     }
 
-    const system = `Tu es l'assistant sécurité & qualité pour des contrôles électriques.
-Donne des consignes concrètes en français, sous forme de listes d'actions.
-Couvre: EPI, zones à observer, points de mesure, appareil requis, interprétation des mesures, alertes.
-Intègre les seuils et l'historique récent si pertinent.`;
+    const imgParts = atts
+      .filter(a => (a.mimetype||"").startsWith("image/") && a.data)
+      .map(a => ({
+        type: "image_url",
+        image_url: { url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}` }
+      }));
 
-    const contentText = [
+    // Si pas d'image exploitable
+    if (!imgParts.length && !question) {
+      return res.json({
+        ok: true,
+        message:
+`Aucune image exploitable n’a été détectée pour cette tâche.
+
+Pour une analyse visuelle automatique :
+- Cadre l’écran complet de l’appareil de mesure (net, sans reflets)
+- Inclure l’étiquette d’identification (code / modèle) si possible
+- Éviter les angles obliques et les flous
+- Ajouter au moins 1 photo “vue d’ensemble” + 1 photo “détail de la mesure”
+
+Clique ensuite sur “Interpréter la photo”.`
+      });
+    }
+
+    const system = `Tu es un expert en maintenance électrique. 
+Objectifs:
+1) Analyser précisément les photos fournies (lecture de valeurs, défauts visibles).
+2) Aligner l’analyse avec la checklist de la tâche (items TSD).
+3) Signaler toute non-conformité avec justification factuelle (référence à la photo/valeur).
+4) Donner des actions concrètes, ordonnées, incluant sécurité et isolement si nécessaire.
+Format de réponse (obligatoire):
+- "Risques immédiats": puces courtes (STOP si danger).
+- "Lecture image": valeurs lues (tension/courant/temp/etc.), éléments visuels remarquables.
+- "Écarts vs seuils": comparer valeurs/constats aux seuils connus (indiquer item.id).
+- "Proposition de statuts par item": pour chaque item (si déductible) -> conforme / non_conforme / na + 1 phrase.
+- "Actions recommandées": étapes concrètes (PPE, outils, isolement, tests).
+Réponds en français. Sois spécifique, sans généralités.`;
+
+    // Construit le contexte texte
+    const lines = [
       `Équipement: ${t.equipment_type} • ${t.entity_name} (${t.entity_code}) • Bâtiment ${t.building || "?"}`,
-      `Tâche: ${t.task_name}`,
-      `Fréquence: ${t.frequency_months || 12} mois`,
-      `Seuils: ${t.threshold_text || "(voir items)"}`,
-      `Points:`,
-      ...items.map(it => `- ${it.label}`),
-      `Historique (résumé rapide des ${recent.length} derniers enregistrements):`,
-      ...recent.map(r => `• ${new Date(r.created_at).toISOString().slice(0,10)} -> ${JSON.stringify(r.results).slice(0,160)}${JSON.stringify(r.results).length>160?'…':''}`),
-      `Question: ${question || "(guidage pré-intervention)"}`
-    ].join("\n");
+      `Tâche: ${t.task_name} • Fréquence: ${t.frequency_months || 12} mois`,
+      `Seuils (texte): ${t.threshold_text || "(voir items)"}\n`,
+      `Checklist (items):`,
+      ...items.map(it => `- [${it.id}] ${it.label} ${it.comparator ? `(${it.comparator} ${it.threshold ?? ""} ${it.unit||""})` : ""}`),
+      `\nHistorique récent (${recent.length}):`,
+      ...recent.map(r => `• ${new Date(r.created_at).toISOString().slice(0,10)} -> ${JSON.stringify(r.results).slice(0,120)}${JSON.stringify(r.results).length>120?'…':''}`),
+      `\nQuestion: ${question || "Analyse visuelle + lecture valeurs"}`,
+    ];
 
     if (!process.env.OPENAI_API_KEY) {
       return res.json({
         ok: true,
         message:
-`Conseils IA (mode local):
-- EPI: gants isolants, lunettes, casque, vêtements anti-arc.
-- Sécurise la zone: consignation si nécessaire, balisage, absence de tension.
-- Photo: cadrer bornes, étiquettes, écrans; lisibilité n°/valeurs.
-- Mesures: respecte la procédure et compare aux seuils: ${t.threshold_text || "cf. items"}.
-- Si doute/NC: stop, prévenir et créer action corrective.`
+`Mode local (clé OpenAI absente).
+Exemple d'analyse:
+- Risques immédiats: vérifier absence d’odeur d’échauffement; pas d’arc; dégagement; EPI classe 00/0 si BT, classe adéquate si HT.
+- Lecture image: lire tension/courant/°C; noter indicateur relais; peinture noircie; fissures isolants.
+- Écarts vs seuils: comparer aux bornes acceptables; si dépassement → NC.
+- Statuts par item: proposer conforme/non_conforme/na s’il y a assez d’indices.
+- Actions: si NC → stop, consigner, ouvrir suivi, thermographie ciblée, serrage couple, remplacement pièce.`
       });
     }
 
+    const messages = [
+      { role: "system", content: system },
+      { role: "user", content: [{ type: "text", text: lines.join("\n") }, ...imgParts] }
+    ];
+
     const chat = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: [{ type: "text", text: contentText }, ...images] }
-      ],
+      messages,
       temperature: 0.2
     });
 
