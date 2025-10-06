@@ -78,7 +78,7 @@ function comparatorText(comp, thr, unit) {
 // SCHEMA (création + migrations rétro-compatibles)
 // ---------------------------------------------------------------------------
 async function ensureSchema() {
-  // CREATE
+  // CREATE (schéma cible)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_entities (
       id SERIAL PRIMARY KEY,
@@ -185,21 +185,39 @@ async function ensureSchema() {
     );
   `);
 
-  // Sécurisation des schémas partiels préexistants (corrige "column task_code ... does not exist")
+  // -----------------------------------------------------------------------
+  // MIGRATIONS IDÉMPOTENTES (toujours AVANT la création des index)
+  // -----------------------------------------------------------------------
+
+  // controls_records : sécurise les colonnes et backfill created_at
   await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS task_code TEXT;`);
-  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES controls_entities(id) ON DELETE SET NULL;`);
+  await pool.query(`
+    ALTER TABLE controls_records
+    ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES controls_entities(id) ON DELETE SET NULL;
+  `);
+  await pool.query(`
+    ALTER TABLE controls_records
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+  `);
+  await pool.query(`UPDATE controls_records SET created_at = NOW() WHERE created_at IS NULL;`);
 
-  // Index utiles pour l'audit et les requêtes
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_records_site_created_at ON controls_records(site, created_at DESC);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_records_entity_task ON controls_records(entity_id, task_code);`);
+  // controls_attachments : colonnes utilisées par les requêtes
+  await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
+  await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS size INTEGER;`);
+  await pool.query(`
+    ALTER TABLE controls_attachments
+    ADD COLUMN IF NOT EXISTS uploaded_at TIMESTAMPTZ DEFAULT NOW();
+  `);
+  await pool.query(`UPDATE controls_attachments SET uploaded_at = NOW() WHERE uploaded_at IS NULL;`);
 
-  // ALTER compat
+  // controls_entities : champs additionnels
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS parent_code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ALTER COLUMN site DROP DEFAULT;`);
 
+  // controls_tasks : champs additionnels
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS cluster TEXT;`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS value_type TEXT DEFAULT 'checklist';`);
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS result_schema JSONB;`);
@@ -215,6 +233,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_tasks ADD COLUMN IF NOT EXISTS threshold_text TEXT;`);
   await pool.query(`ALTER TABLE controls_tasks ALTER COLUMN site DROP DEFAULT;`);
 
+  // controls_history : champs additionnels + nullabilité
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS site TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS user_name TEXT;`);
   await pool.query(`ALTER TABLE controls_history ADD COLUMN IF NOT EXISTS "user" TEXT;`);
@@ -226,16 +245,9 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE controls_history ALTER COLUMN "user" DROP NOT NULL;`);
   await pool.query(`ALTER TABLE controls_history ALTER COLUMN results DROP NOT NULL;`);
 
-  await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS label TEXT;`);
-  await pool.query(`ALTER TABLE controls_attachments ADD COLUMN IF NOT EXISTS size INTEGER;`);
-
-  // **MIGRATION CRITIQUE**: si la table controls_records existait SANS entity_id
-  await pool.query(`
-    ALTER TABLE controls_records 
-      ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES controls_entities(id) ON DELETE SET NULL;
-  `);
-
-  // Dédoublonnage des tâches actives avant index unique
+  // -----------------------------------------------------------------------
+  // DÉDOUBLONNAGE (avant la contrainte unique)
+  // -----------------------------------------------------------------------
   await pool.query(`
     DELETE FROM controls_tasks t
     USING controls_tasks t2
@@ -247,7 +259,18 @@ async function ensureSchema() {
       AND t.id < t2.id
   `);
 
-  // Indexes
+  // -----------------------------------------------------------------------
+  // INDEXES (après colonnes assurées)
+  // -----------------------------------------------------------------------
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_controls_records_site_created_at
+    ON controls_records(site, created_at DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_controls_records_entity_task
+    ON controls_records(entity_id, task_code)
+  `);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_site ON controls_tasks(site);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_tasks_next ON controls_tasks(next_control);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_entities_site ON controls_entities(site);`);
@@ -258,7 +281,9 @@ async function ensureSchema() {
     WHERE status IN ('Planned','Overdue','Pending');
   `);
 
-  // Audit IA : stockage des dérives détectées
+  // -----------------------------------------------------------------------
+  // TABLES & INDEXES pour l'audit IA
+  // -----------------------------------------------------------------------
   await pool.query(`
     CREATE TABLE IF NOT EXISTS controls_ai_audit (
       id SERIAL PRIMARY KEY,
@@ -271,15 +296,25 @@ async function ensureSchema() {
       last_eval TIMESTAMPTZ DEFAULT NOW()
     );
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_audit_site_score ON controls_ai_audit(site, drift_score DESC, last_eval DESC);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_audit_entity_task ON controls_ai_audit(entity_id, task_code);`);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ai_audit_site_score
+    ON controls_ai_audit(site, drift_score DESC, last_eval DESC)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_ai_audit_entity_task
+    ON controls_ai_audit(entity_id, task_code)
+  `);
 
   log("schema ensured");
 }
 await ensureSchema().catch(e => { console.error("[schema] init error:", e); process.exit(1); });
 
 async function ensureOverdueFlags() {
-  await pool.query(`UPDATE controls_tasks SET status='Overdue' WHERE status='Planned' AND next_control < CURRENT_DATE`);
+  await pool.query(`
+    UPDATE controls_tasks
+       SET status='Overdue'
+     WHERE status='Planned' AND next_control < CURRENT_DATE
+  `);
 }
 
 // ---------------------------------------------------------------------------
