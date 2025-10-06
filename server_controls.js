@@ -761,12 +761,17 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [t.site || "Nyon", t.entity_id, doneKey, results || {}, user]
     );
 
-    // 4) Marquer l'occurrence dans entity.done (JSONB)
+    // 4) Marquer l'occurrence dans entity.done (typage explicite)
     await pool.query(
       `UPDATE controls_entities
-          SET done = done || jsonb_build_object($1, $2)
+          SET done = jsonb_set(
+            COALESCE(done, '{}'::jsonb),
+            ARRAY[$1]::text[],        -- clé (doneKey) typée texte
+            to_jsonb($2::text),       -- valeur (date ISO) typée texte -> jsonb
+            true
+          )
         WHERE id=$3`,
-      [doneKey, today, t.entity_id]
+      [String(doneKey), String(today), t.entity_id]
     );
 
     // 5) Détection d'une non-conformité dans les résultats
@@ -818,7 +823,7 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
             procedure_md, hazards_md, ppe_md, tools_md, threshold_text, created_by
           ) VALUES (
             $1,$2,$3,$4,$5,$6,
-            $7,$8,'Planned',$9,$10,
+            $7,$8,'Planned',$9,$10::jsonb,
             $11,$12,$13,$14,$15,$16
           )
           ON CONFLICT (site, entity_id, COALESCE(cluster, task_code))
