@@ -1,1328 +1,2172 @@
-// === BEGIN: Original tsd_library.js ===
-// tsd_library.js — Exhaustif (BT <1000V, ATEX, HT >1000V) + identification claire UPS/Battery
-// Mapping strictement aligné avec les types utilisés par server_controls.js
-
-export const EQUIPMENT_TYPES = [
-  'LV_SWITCHBOARD',   // Tableaux BT < 1000V (TGBT, TD)
-  'LV_DEVICE',        // Départs/disjoncteurs/DDR montés dans tableaux BT
-  'ATEX_EQUIPMENT',   // Matériels en zones ATEX
-  'HV_EQUIPMENT',     // Cellules / Switchgear HT >1000V (y.c. TF, disjoncteurs, relais, SF6…)
-  'UPS',              // UPS (marqué non couvert par défaut)
-  'BATTERY_SYSTEM'    // Batteries / racks (marqué non couvert par défaut)
-];
-
-// Utilitaires courants
-const YES = true;
-const NO  = false;
-
-// Pour UPS/BATTERY : indicateur pour le backend (si false => classer en not_present)
-export const TSD_FLAGS = {
-  UPS: { enabled: false, note: 'Non couvert TSD actuel. À construire ultérieurement.' },
-  BATTERY_SYSTEM: { enabled: false, note: 'Non couvert TSD actuel. À construire ultérieurement.' }
-};
-
-export const TSD_LIBRARY = {
-
-  // =====================================================================
-  // LV — SWITCHBOARD (< 1000V) : TGBT, tableaux divisionnaires, busbar
-  // =====================================================================
-  LV_SWITCHBOARD: [
+// -----------------------------------------------------------------------------
+// tsd_library.js
+// Central library of controls derived from: G2.1 Maintenance, Inspection and
+// Testing of Electrical Equipment TSD (v2.0, Effective 2023-10-12).
+// This file is generated to support Electrohub (server_controls.js / Controls.jsx).
+//
+// Usage:
+//  - RESULT_OPTIONS: standard statuses for checklist items.
+//  - Each category maps to a DB table (db_table). If that equipment type does
+//    not yet exist in DB, display `fallback_note_if_missing` to the user.
+//  - frequency: { interval: <number>, unit: 'months'|'years'|'weeks' }.
+//  - observations: free-text fields to capture readings/notes.
+// -----------------------------------------------------------------------------
+export const tsdLibrary = {
+  "meta": {
+    "source": "G2.1 Maintenance, Inspection and Testing of Electrical Equipment TSD v2.0 (Effective: 2023-10-12)",
+    "result_options": [
+      "Conforme",
+      "Non conforme",
+      "Non applicable"
+    ],
+    "missing_equipment_note": "Equipment pending integration into Electrohub system."
+  },
+  "categories": [
     {
-      id: 'lv_room_clean_dry',
-      label: 'Local propre, sec, ventilé',
-      field: 'lv_room_clean_dry',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 3,
-      procedure_md: 'Inspection visuelle du local (poussière, humidité, fuites, ventilation). Vérifier que nulle obstruction gêne la dissipation thermique.',
-      hazards_md: 'Choc électrique, arc en cas de pollution/condensation.',
-      ppe_md: 'Gants isolants cat. adaptée, lunettes.',
-      tools_md: 'Lampe, caméra thermique (optionnelle).'
+      "key": "lv_switchgear",
+      "label": "Low voltage switchgear (<1000 V ac)",
+      "db_table": "switchboards",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "description": "Visual inspection with the switchgear energized and in normal operating condition.",
+          "frequency": {
+            "interval": 3,
+            "unit": "months"
+          },
+          "checklist": [
+            "Switchgear environment is clean, cool and dry",
+            "No abnormal noises, smells, vibration or heat",
+            "Arcing not detected (sound/voltage flicker)",
+            "No blistered/blackened paint; insulation looks normal (no signs of overheating)",
+            "Room temperature indicates no general overheating",
+            "No combustibles/unwanted material on or near switchgear",
+            "No damaged insulators",
+            "No pooled water, leaks, rodents, or environmental contaminants",
+            "IP2X protection maintained incl. inside cubicles opened without tools",
+            "All labels permanent, legible and accurate to drawing"
+          ],
+          "observations": [
+            "Relay indications (flags)",
+            "Voltage readings",
+            "Current readings",
+            "Damaged components (displays, meters, LEDs)"
+          ],
+          "notes": "For checklist items, record status using: Conforme / Non conforme / Non applicable."
+        },
+        {
+          "type": "Thermography",
+          "description": "Perform thermographic surveys of low voltage switchgear.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Solid insulation",
+            "Bolted connections",
+            "Switchgear contacts",
+            "Panel exterior",
+            "Accessible internal components"
+          ]
+        },
+        {
+          "type": "Low-Voltage Air Circuit Breakers (ACB) \u2013 Annual",
+          "description": "Functional and mechanical checks, lubrication per manufacturer.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Smooth operation; mechanism not binding",
+            "Correct alignment; no mechanical damage",
+            "No overheating; arc chutes OK; contacts OK",
+            "Insulation resistance of main contacts checked",
+            "Prove operation from protection devices",
+            "Charging mechanism and auxiliary features functional (interlocks, trip-free, anti-pumping, trip indicators)",
+            "Open/Close operation (manual & control system)",
+            "Lubricated per manufacturer"
+          ]
+        },
+        {
+          "type": "MCCB >400A \u2013 Annual",
+          "description": "Operation and settings.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Smooth operation; mechanism not binding",
+            "Protection settings correct vs latest electrical study"
+          ]
+        },
+        {
+          "type": "Motor Contactors \u2013 Annual",
+          "description": "For contactors >50 hp (37 kW).",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Mechanically exercised",
+            "Smooth operation; correct alignment; no mechanical damage",
+            "No overheating; arc barriers and contacts in good condition",
+            "Controls functionally OK",
+            "Lubricated per manufacturer"
+          ]
+        },
+        {
+          "type": "Automatic Transfer Switch \u2013 Annual",
+          "description": "Functional and mechanical checks, thermography, lubrication.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Simulate loss/return of normal power; verify transfer and interlocks",
+            "Thermography in both positions (no hot spots)",
+            "Smooth mechanical operation; mechanism not binding",
+            "Lubricated per manufacturer"
+          ]
+        },
+        {
+          "type": "Fused Switches \u2013 3\u20135 years",
+          "description": "Mechanical checks, lubrication, fuse rating and overheating check.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Physical condition of fuse housing/base",
+            "Smooth operation; mechanism not binding",
+            "Lubricated per manufacturer",
+            "Fuses of correct rating/characteristics (replace all 3 phases if one is blown)",
+            "No evidence of overheating"
+          ]
+        },
+        {
+          "type": "Low-Voltage ACB \u2013 Electrical Tests 3\u20135 years",
+          "description": "Trip/close coil voltages, insulation resistance, primary injection, time travel.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Trip/Close coils operate within manufacturer voltage (typically ~50% rated)",
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)",
+            "Primary current injection tests protective functions (pick-up/operate within tolerance)",
+            "Time travel curve recorded and compared to manufacturer and previous results"
+          ]
+        },
+        {
+          "type": "MCCB \u2013 Insulation Resistance 3\u20135 years",
+          "description": "IR >100 M\u03a9 at 1000Vdc.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Motor Contactors \u2013 Insulation Resistance 3\u20135 years",
+          "description": "IR >100 M\u03a9 at 1000Vdc.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Automatic Transfer Switch \u2013 Insulation Resistance 3\u20135 years",
+          "description": "IR >100 M\u03a9 at 1000Vdc.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Busbars and Cables \u2013 3\u20135 years",
+          "description": "Low resistance and insulation resistance checks.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Low Resistance of bolted connections \u2013 compare similar joints; no >50% difference; below manufacturer/max baseline",
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Protection Relays \u2013 3\u20135 years",
+          "description": "Secondary injection testing; settings per latest coordination study.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "All protective functions operate correctly via secondary injection",
+            "Relay settings match current protection coordination study"
+          ]
+        }
+      ]
     },
     {
-      id: 'lv_covers_doors_labels',
-      label: 'Capots/portes/serrures/plaques signalétique',
-      field: 'lv_panels_integrity',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 6,
-      procedure_md: 'Vérifier l’intégrité, la fixation, les verrous/clefs et la lisibilité des étiquettes/cadenassage.',
-      hazards_md: 'Contact direct si capot manquant, coupure intempestive.',
-      ppe_md: 'Gants, lunettes.',
-      tools_md: 'Tournevis/clé isolée.'
+      "key": "hv_switchgear",
+      "label": "High voltage switchgear (>1000 V ac)",
+      "db_table": "hv_devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "description": "Visual inspection with the switchgear energized.",
+          "frequency": {
+            "interval": 3,
+            "unit": "months"
+          },
+          "checklist": [
+            "Environment clean, cool, dry; no abnormal noises/smells/vibration/heat",
+            "Arcing not detected (sound/voltage flicker)",
+            "No blistered/blackened paint; insulation condition OK",
+            "Room temperature indicates no general overheating",
+            "No combustibles near switchgear",
+            "No damaged insulators",
+            "No pooled water/leaks/rodents/environmental contaminants"
+          ],
+          "observations": [
+            "Relay indications (flags)",
+            "Voltage readings (where possible)",
+            "Current readings (where possible)"
+          ]
+        },
+        {
+          "type": "Thermography",
+          "description": "Non-intrusive thermographic survey; if heat detected, isolate and earth before intrusive access.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Busbar chamber covers",
+            "Cable boxes",
+            "Voltage transformers"
+          ]
+        },
+        {
+          "type": "Partial Discharge",
+          "description": "Routine pass/fail PD tests (e.g., UltraTEV\u00ae).",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Perform handheld PD test",
+            "Record results",
+            "Investigate any failed PD test"
+          ]
+        },
+        {
+          "type": "Circuit Breakers \u2013 Annual functional checks",
+          "description": "General condition and operation.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Covers/frame/poles/racking device OK",
+            "Max number of operation cycles within limit",
+            "Key locking and pad locking operate",
+            "Racking interlock (red opening pushbutton) OK",
+            "Manual/electrical racking OK (motorized where applicable)",
+            "Manual and electrical Open/Close operate"
+          ]
+        },
+        {
+          "type": "Circuit Breakers \u2013 3\u20138 years maintenance",
+          "description": "IR, vacuum integrity, oil quality, over-potential, contact resistance, time-travel.",
+          "frequency": {
+            "interval": 6,
+            "unit": "years"
+          },
+          "checklist": [
+            "Insulation resistance > 2 G\u03a9 at 5000Vdc (open & closed)",
+            "Vacuum bottle over-potential per manufacturer (vacuum integrity)",
+            "Liquid Screening (bulk oil): dielectric strength >26kV; moisture <25ppm; PCB <50ppm (post fault, replace oil)",
+            "Dielectric over-potential per manufacturer (avoid damaging connected equipment)",
+            "Contact resistance \u2013 no pole deviates >50% vs lowest; within manufacturer limits",
+            "Time-travel curve recorded; compare to manufacturer/previous results"
+          ]
+        },
+        {
+          "type": "Insulators and Busbars \u2013 3\u20138 years",
+          "description": "Low resistance and insulation resistance.",
+          "frequency": {
+            "interval": 6,
+            "unit": "years"
+          },
+          "checklist": [
+            "Low Resistance across bolted connections; no >50% difference; below manufacturer max",
+            "Insulation resistance >2 G\u03a9 at 5000Vdc (phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Voltage Transformers \u2013 3\u20138 years",
+          "description": "Visual inspection (energized & isolated), fuses, insulation.",
+          "frequency": {
+            "interval": 6,
+            "unit": "years"
+          },
+          "checklist": [
+            "Good visual condition; labelled; locked in service (energized)",
+            "Shutters in good condition (isolated)",
+            "Withdrawable mechanism free; primary contacts/spring/earth OK",
+            "Primary & secondary fuses correct and in good condition",
+            "Insulation resistance >5 G\u03a9 (dc, 1 minute)"
+          ]
+        },
+        {
+          "type": "Protection Relays \u2013 3\u20138 years",
+          "description": "Secondary current injection test; settings vs coordination study.",
+          "frequency": {
+            "interval": 6,
+            "unit": "years"
+          },
+          "checklist": [
+            "All protective functions verified via secondary injection",
+            "Settings match protection coordination study"
+          ]
+        }
+      ]
     },
     {
-      id: 'lv_thermography',
-      label: 'Thermographie sous charge',
-      field: 'lv_ir_max_delta',
-      type: 'number',
-      unit: '°C',
-      comparator: '<=',
-      threshold: 25,
-      frequency_months: 12,
-      procedure_md: 'Effectuer une thermographie en charge nominale. Tolérer ΔT ≤ 25°C entre connexions homogènes. Au-delà, investiguer serrage/oxydation.',
-      hazards_md: 'Brûlure, exposition arc si enlèvement capots.',
-      ppe_md: 'Visière/écran facial, gants ignifugés selon risque.',
-      tools_md: 'Caméra IR étalonnée.'
+      "key": "pfc_hv",
+      "label": "Power Factor Correction (>1000 V ac)",
+      "db_table": "hv_devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection \u2013 3 months",
+          "frequency": {
+            "interval": 3,
+            "unit": "months"
+          },
+          "checklist": [
+            "Correct mode of operation (auto/manual)",
+            "Controller parameter settings and alarms OK (PF setpoint ~0.95)",
+            "Review PF trends and system performance"
+          ]
+        },
+        {
+          "type": "Annual Visual Inspection (after HV isolation)",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Capacitors/reactors/cabling: no overheating/damage",
+            "Cleanliness/ventilation/heating/filtration \u2013 replace filters as needed"
+          ]
+        },
+        {
+          "type": "Annual Capacitor Condition Test (after HV isolation)",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Measure capacitance of each phase of each step \u2013 within manufacturer limits",
+            "Isolate failing steps"
+          ]
+        },
+        {
+          "type": "Every 3 years \u2013 components & terminations",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Fuses & vacuum contactors: condition, ratings correct, free operation, no overheating; replace as needed",
+            "Cable terminations \u2013 check all phase & earth connections",
+            "Connection tightness \u2013 torque to manufacturer settings"
+          ]
+        }
+      ]
     },
     {
-      id: 'lv_torque_check',
-      label: 'Re-serrage connexions principales',
-      field: 'lv_torque_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 24,
-      procedure_md: 'Contrôle couple sur jeux de barres/borniers selon couples constructeur. Si couple non disponible, appliquer référentiel interne et consigner.',
-      hazards_md: 'Arc à l’ouverture, serrage sur pièces sous tension interdit.',
-      ppe_md: 'Gants isolants, lunettes.',
-      tools_md: 'Clé dynamométrique isolée.'
+      "key": "transformers_fluid",
+      "label": "Fluid Immersed Transformers",
+      "db_table": "hv_equipments",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual inspections (Non-Intrusive)",
+          "frequency": {
+            "interval": 6,
+            "unit": "months"
+          },
+          "checklist": [
+            "Silica gel breathers checked/replaced as needed",
+            "No signs of abnormality (leaks, corrosion, contamination)",
+            "Earthing connections integrity"
+          ]
+        },
+        {
+          "type": "Annual Oil Sample Test",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Breakdown voltage, moisture content, Oil Quality Index",
+            "Trend results; increase sampling if abnormal",
+            "FURAN analysis yearly only if high CO/CO2 ratio observed"
+          ]
+        },
+        {
+          "type": "Annual Dissolved Gas Analysis (DGA)",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Screening tests and DGA (main & tap changer tanks)",
+            "Trend results; investigate/renew fluid if failed"
+          ]
+        },
+        {
+          "type": "Annual Paintwork",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "No rust/damage; touch up as needed"
+          ]
+        },
+        {
+          "type": "Annual Inspect Fluid Level",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Top up as needed",
+            "Record leaks and arrange repair"
+          ]
+        },
+        {
+          "type": "Annual Temperature Indicators",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Devices undamaged & sealed; reasonable temperature vs load and ambient",
+            "Alarm/trip settings correct",
+            "Record peak & reset"
+          ]
+        },
+        {
+          "type": "Annual Pressure Relief Device",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "No damage/water ingress"
+          ]
+        },
+        {
+          "type": "Annual Buchholz (Gas/Oil Actuator Relay)",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Valves in correct position",
+            "Chamber filled with liquid",
+            "If gas present, sample and release pressure"
+          ]
+        },
+        {
+          "type": "Annual Liquid Level Indicator",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Condition OK",
+            "Level reasonable vs last inspection",
+            "Record levels"
+          ]
+        },
+        {
+          "type": "Annual Vacuum/Pressure Gauge",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Condition OK",
+            "Vacuum/pressure maintained; record values"
+          ]
+        },
+        {
+          "type": "Annual HV & LV Cable Boxes",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Integrity of cable boxes & glands",
+            "Routine pass/fail PD tests (e.g., UltraTEV\u00ae) \u2013 investigate failures"
+          ]
+        },
+        {
+          "type": "Annual HV & LV Terminal Bushings",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Clean; no tracking/cracks/contaminants"
+          ]
+        },
+        {
+          "type": "Annual Cooling Fans & Pumps",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Fans/guards condition",
+            "Pump housing & gland",
+            "Temperature monitor setpoints correct",
+            "Operate fans and pumps"
+          ]
+        },
+        {
+          "type": "Annual On-load Tap Changers",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Record operation count",
+            "Inspect control panel for overheating/moisture ingress"
+          ]
+        },
+        {
+          "type": "Connection & fittings \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Torque checks on bolted connections/fittings",
+            "Inside cable boxes: no overheating/PD; replace gaskets when opened",
+            "Clean/inspect bushings"
+          ]
+        },
+        {
+          "type": "Off-circuit Tapping Switch \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Operate across all taps freely"
+          ]
+        },
+        {
+          "type": "Earth Connection Integrity \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Earth continuity test recorded"
+          ]
+        },
+        {
+          "type": "Insulation Resistance \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Winding-to-winding & winding-to-ground IR",
+            "HV: 5000V 1 min; LV: 1000V 1 min",
+            "IR >100 M\u03a9 (LV) and >1000 M\u03a9 (HV) \u2013 record"
+          ]
+        },
+        {
+          "type": "Low Resistance Test \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Bolted connection low-resistance \u2013 no >50% diff; <1 \u03a9 and/or within manufacturer limit"
+          ]
+        },
+        {
+          "type": "Protective Devices \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Test liquid/winding temperature indicators; Buchholz etc."
+          ]
+        },
+        {
+          "type": "Capacitive Bushings \u2013 Power Factor",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Power factor & capacitance within \u00b110% of nameplate",
+            "Hot collar watts-loss within manufacturer factory test",
+            "Consider winding power factor test (typical 3% fluid-filled; silicone ~0.5%)"
+          ]
+        },
+        {
+          "type": "External paint \u2013 refurbish if required",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "PCB Analysis",
+          "frequency": {
+            "interval": 60,
+            "unit": "months"
+          },
+          "checklist": [
+            "PCB content <50 ppm or per local regulations (stricter applies)"
+          ]
+        }
+      ]
     },
     {
-      id: 'lv_insulation_resistance',
-      label: 'Mesure de résistance d’isolement tableau',
-      field: 'lv_ir_value',
-      type: 'number',
-      unit: 'MΩ',
-      comparator: '>=',
-      threshold: 1,
-      frequency_months: 36,
-      procedure_md: 'Mesurer l’isolement phase/terre et phase/phase selon procédure. Seuil minimal 1 MΩ (ou conforme note constructeur/site).',
-      hazards_md: 'Injection de tension d’essai, déconnexion préalable requise.',
-      ppe_md: 'Gants isolants, lunettes.',
-      tools_md: 'Mégohmmètre.'
+      "key": "transformers_cast_resin",
+      "label": "Cast Resin Transformers",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Ventilation & Protection Devices",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "No damage/overheating on wiring to ventilation/protection devices",
+            "Reasonable temperature vs load & ambient",
+            "Functional check of protection (winding temp alarms/trips)",
+            "Functional check of cooling fans (if any)"
+          ]
+        },
+        {
+          "type": "Paintwork",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "No rust/damage; touch up"
+          ]
+        },
+        {
+          "type": "Cleanliness",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "No foreign matter on windings",
+            "Vacuum clean; blow inaccessible areas with compressed air/N2",
+            "Vent grills unobstructed"
+          ]
+        },
+        {
+          "type": "Insulating Distances",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Correct distances between cables and live parts"
+          ]
+        },
+        {
+          "type": "Cables & Busbars",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Fixings and connections OK",
+            "Glands secured & correctly made-off"
+          ]
+        },
+        {
+          "type": "Ingress Protection",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Compliance with original IP rating"
+          ]
+        },
+        {
+          "type": "Partial Discharge",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Handheld PD test (e.g., UltraTEV\u00ae); record results; investigate failures"
+          ]
+        },
+        {
+          "type": "HV & LV Cable Boxes",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Integrity of cable boxes; glands good",
+            "Routine PD tests & record; investigate failures"
+          ]
+        },
+        {
+          "type": "Cooling Fans",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Fans/guards condition",
+            "Temperature monitor setpoints correct"
+          ]
+        },
+        {
+          "type": "Connection & fittings \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Torque checks on bolted connections/fittings",
+            "Inside cable boxes: no overheating/PD"
+          ]
+        },
+        {
+          "type": "Earth Connection Integrity \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Earth continuity test recorded"
+          ]
+        },
+        {
+          "type": "Insulation Resistance \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Winding-to-winding & winding-to-ground IR",
+            "HV: 5000V 1 min; LV: 1000V 1 min",
+            "IR >100 M\u03a9 (LV) and >1000 M\u03a9 (HV); record"
+          ]
+        },
+        {
+          "type": "Low Resistance Test \u2013 Intrusive",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Bolted connection low-resistance \u2013 no >50% diff; <1 \u03a9 and/or within manufacturer"
+          ]
+        },
+        {
+          "type": "Protective Devices",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Test alarms/trips for winding temperature; over-current devices"
+          ]
+        },
+        {
+          "type": "Polarisation Index",
+          "frequency": {
+            "interval": 84,
+            "unit": "months"
+          },
+          "checklist": [
+            "10-minute/1-minute IR ratio (PI) \u2265 1.0; record"
+          ]
+        },
+        {
+          "type": "Power Factor (>1000 kVA)",
+          "frequency": {
+            "interval": 84,
+            "unit": "months"
+          },
+          "checklist": [
+            "CH/CHL <= 2%; CL <= 5%; record"
+          ]
+        },
+        {
+          "type": "Power Factor Tip-Up (>1000 kVA)",
+          "frequency": {
+            "interval": 84,
+            "unit": "months"
+          },
+          "checklist": [
+            "PF remains reasonably constant; tip-up \u2264 0.5%"
+          ]
+        }
+      ]
     },
     {
-      id: 'lv_rcd_test',
-      label: 'Test déclenchement DDR/RCD (bouton Test ou injecteur)',
-      field: 'lv_rcd_trip',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Actionner bouton TEST ou injecter IΔn pour vérifier déclenchement dans le temps spécifié.',
-      hazards_md: 'Coupure de circuits sensibles.',
-      ppe_md: 'Aucun spécifique (prévenir utilisateurs).',
-      tools_md: 'Injecteur DDR (si disponible).'
+      "key": "motors_hv_or_large",
+      "label": "AC Induction Motors >1000 V ac or >400 kW",
+      "db_table": "hv_devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Routine Visual Inspection",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "checklist": [
+            "No unusual noises, vibrations, or excessive heat",
+            "Oil levels OK; no bearing lubrication leaks",
+            "No cooling water leaks; air inlets not blocked",
+            "No combustibles; good housekeeping",
+            "Foundations OK; shaft alignment OK; earth connections OK",
+            "Fan cowling/baffles OK; proper circuit identification; cables/glanding OK; fixing bolts OK",
+            "No corrosion, chemical attack, physical damage"
+          ]
+        },
+        {
+          "type": "Vibration measurements",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "checklist": [
+            "If no online vib analysis, measure shaft/bearing vibration (Acoustic Emission/Ultrasound acceptable)"
+          ]
+        },
+        {
+          "type": "Oil lubricated bearings \u2013 lube analysis",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Perform lubrication analysis (where economically viable)"
+          ]
+        },
+        {
+          "type": "Thermal Imaging",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Bearings, motor frame, terminal box, surge capacitors, cables, motor controller, VSD checked"
+          ]
+        },
+        {
+          "type": "Motor Terminal Box \u2013 visual during IR testing",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "No water ingress/corona discharge; earth connections OK"
+          ]
+        },
+        {
+          "type": "Stator Winding \u2013 Insulation Resistance",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Apply dc 1 min; IR \u2265 100 M\u03a9"
+          ]
+        },
+        {
+          "type": "Stator Winding \u2013 Polarisation Index",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "10/1 min IR ratio; PI \u2265 2 indicates clean/dry (much higher may indicate dryness/brittleness)"
+          ]
+        },
+        {
+          "type": "Stator Winding \u2013 DC conductivity",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Low-resistance ohmmeter; phase resistances within 1 \u03a9 of each other"
+          ]
+        },
+        {
+          "type": "Stator Winding \u2013 Power Factor",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "AC PF one phase at a time; epoxy mica \u22640.5%; asphaltic mica 3\u20135%",
+            "1% PF increase trend is serious; investigate",
+            "PF increase with \u2193capacitance \u21d2 thermal deterioration; PF increase with \u2191capacitance \u21d2 water absorption"
+          ]
+        },
+        {
+          "type": "Stator Winding \u2013 Power Factor Tip-Up",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "PF at ~20% and 100% phase-earth voltage; trend tip-up (increasing \u21d2 PD activity)"
+          ]
+        },
+        {
+          "type": "Stator Core \u2013 Visual",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "No hot spots"
+          ]
+        },
+        {
+          "type": "Stator Core \u2013 Air Gap",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Measure air gap"
+          ]
+        },
+        {
+          "type": "Stator Core \u2013 Loop Test",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Excite to 100% back-of-core flux; soak; ensure no thermal runaway; hot spots \u0394T 5\u201310\u00b0C indicate defects"
+          ]
+        },
+        {
+          "type": "Rotor Winding \u2013 Insulation Resistance",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Applies to wound rotor motors; IR \u2265 100 M\u03a9"
+          ]
+        },
+        {
+          "type": "Rotor \u2013 Polarisation Index",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Squirrel cage motors: PI per 10/1 min IR; \u22652 indicates clean/dry"
+          ]
+        },
+        {
+          "type": "Rotor \u2013 DC conductivity",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Wound rotor motors: phase resistances within 1 \u03a9"
+          ]
+        },
+        {
+          "type": "Slip rings/brushes \u2013 inspect",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Wear/damage"
+          ]
+        },
+        {
+          "type": "Squirrel cage \u2013 Growler Test",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "checklist": [
+            "Detect broken bars via growler method"
+          ]
+        },
+        {
+          "type": "Retaining rings \u2013 corrosion check",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "If fitted, check for corrosion"
+          ]
+        },
+        {
+          "type": "Rings in-situ \u2013 NDE",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Rings removed \u2013 NDE",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Cracking inspection \u2013 visual",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Fan blades/vanes \u2013 NDE for cracks",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Forging \u2013 NDE for cracks/inclusions",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Bearings \u2013 Insulation Resistance",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Only insulated bearings: 500Vdc; \u226550 M\u03a9 disassembled; \u22655 M\u03a9 assembled"
+          ]
+        },
+        {
+          "type": "Sleeve bearings \u2013 white metal surfaces",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Anti-friction bearings \u2013 cage/rolling elements",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Shaft surfaces",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Heater check",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Motor heater functioning properly"
+          ]
+        }
+      ]
     },
     {
-      id: 'lv_earthing_continuity',
-      label: 'Continuité de la liaison équipotentielle',
-      field: 'lv_pe_continuity',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Vérifier continuité PE entre carcasses/portes/rails et barres PE.',
-      hazards_md: 'Risque choc si absence de PE.',
-      ppe_md: 'Gants, lunettes.',
-      tools_md: 'Ohmmètre faible courant.'
-    }
-  ],
-
-  // =====================================================================
-  // LV — DEVICES (< 1000V) : Départs, disjoncteurs, sectionneurs, VSD, etc.
-  // =====================================================================
-  LV_DEVICE: [
-    {
-      id: 'dev_visual_mechanical',
-      label: 'État visuel & mécanique (poignées, indicateurs)',
-      field: 'dev_visual_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Vérifier indicateurs (ouvert/fermé), verrouillage, position, étiquetage, câblage apparent.',
-      hazards_md: 'Contact direct si capot/vis manquants.',
-      ppe_md: 'Gants, lunettes.',
-      tools_md: 'Tournevis isolé.'
+      "key": "bus_duct_riser",
+      "label": "Bus Duct / Bus Riser (>800A, <1000 Vac)",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Safe access; protection against accidental contact with live parts",
+            "No arcing/burnt smell; no blistered/blackened paint; insulation OK",
+            "No damaged/missing insulators/supports/clamps; no distortion",
+            "No foreign objects, pooled water, leaks, rodents, contaminants",
+            "Heater settings/operation checked (measure current drawn)",
+            "No signs of circulating/leakage current"
+          ]
+        },
+        {
+          "type": "Thermography",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Terminations",
+            "Bolted connections",
+            "Earth connections",
+            "Tap-offs",
+            "Investigate any hot areas (intrusive maintenance may be required)"
+          ]
+        },
+        {
+          "type": "Operational checks of inline components",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Inline breaker/isolators/fusible units smooth operation; correct protection settings/fuse selection"
+          ]
+        },
+        {
+          "type": "Low Resistance / Earthing / Torque \u2013 5 yrs",
+          "frequency": {
+            "interval": 60,
+            "unit": "months"
+          },
+          "checklist": [
+            "Low Resistance across bolted connections (no >50% difference; below max/baseline)",
+            "Earthing resistance/integrity recorded & baseline checked",
+            "Torque checks per manufacturer (unless torque-free design)",
+            "Lubricate mechanisms per manufacturer"
+          ]
+        },
+        {
+          "type": "Inline/tap-off MCCB \u2013 IR",
+          "frequency": {
+            "interval": 60,
+            "unit": "months"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; P-P, P-E)"
+          ]
+        },
+        {
+          "type": "Fusible links \u2013 IR",
+          "frequency": {
+            "interval": 60,
+            "unit": "months"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; P-P, P-E)"
+          ]
+        }
+      ]
     },
     {
-      id: 'dev_functional_test',
-      label: 'Essai fonctionnel (déclencheur/disjoncteur) hors charge',
-      field: 'dev_trip_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 24,
-      procedure_md: 'Tester le déclenchement mécanique (si possible). Ne pas endommager sélectivité/production. Consigner temps/observations.',
-      hazards_md: 'Coupure inattendue si mal isolé du réseau.',
-      ppe_md: 'Gants, lunettes.',
-      tools_md: 'Injecteur secondaire (si relais), chronomètre.'
+      "key": "pfc_lv",
+      "label": "Power Factor Correction (<1000 V ac)",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "frequency": {
+            "interval": 3,
+            "unit": "months"
+          },
+          "checklist": [
+            "Capacitors/contactors/resistors/reactors/cables \u2013 no overheating/damage",
+            "Cabinet moisture/cleanliness/ventilation/filtration OK; replace filters as needed",
+            "Ambient temperature acceptable",
+            "Measured PF/alarm \u2013 PF setpoint ~0.95",
+            "Check PF trends & harmonic levels"
+          ]
+        },
+        {
+          "type": "Capacitor Condition Test",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Measure capacitance of each capacitor/stage",
+            "If any capacitor degrades >10%, isolate & replace unless safety/monitoring systems per lifecycle policy"
+          ]
+        },
+        {
+          "type": "Thermography",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Capacitors/contactors/resistors/reactors/cabling \u2013 no overheating",
+            "Bolted connections/terminations",
+            "MCCBs/fuses",
+            "Thyristors or SCR modules"
+          ]
+        },
+        {
+          "type": "Fuses/MCCBs/Contactors/Resistors/Reactors",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Discharge resistors operate per manufacturer",
+            "No damage; correct ratings; free operation of MCCB/contactor",
+            "Fuses not blown (replace with correct rating)",
+            "No overheating; renew if needed"
+          ]
+        },
+        {
+          "type": "Thermal protection internal",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Cleanliness OK; settings per manufacturer; functional tests including fans"
+          ]
+        },
+        {
+          "type": "Controller settings & operations",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Capacitor stages operate; alarms & settings correct"
+          ]
+        },
+        {
+          "type": "Cable terminations",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "All phase/earth connections & terminations OK"
+          ]
+        },
+        {
+          "type": "Connection tightness",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Torque to manufacturer settings"
+          ]
+        },
+        {
+          "type": "Lifecycle Management \u2013 reference",
+          "notes": "Apply decision flow for replacements per TSD life cycle chart"
+        }
+      ]
     },
     {
-      id: 'dev_thermography',
-      label: 'Thermographie sur bornes du départ',
-      field: 'dev_ir_max_delta',
-      type: 'number',
-      unit: '°C',
-      comparator: '<=',
-      threshold: 20,
-      frequency_months: 12,
-      procedure_md: 'Caméra IR sur bornes du départ en charge. ΔT ≤ 20°C. Sinon, contrôler serrage/oxydation.',
-      hazards_md: 'Brûlure/arc si capots retirés sous charge.',
-      ppe_md: 'Visière, gants ignifugés si risque.',
-      tools_md: 'Caméra IR.'
+      "key": "distribution_boards",
+      "label": "Distribution Boards (<1000 V ac)",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "frequency": {
+            "interval": 3,
+            "unit": "months"
+          },
+          "checklist": [
+            "Clean inside & outside",
+            "No exterior damage/corrosion",
+            "Access controlled panels",
+            "Doors earthed",
+            "Labels & circuit charts present & accurate"
+          ]
+        },
+        {
+          "type": "Identification & Circuit Charts",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Descriptions accurate; schedules updated as necessary",
+            "Labels securely fixed on door exterior"
+          ]
+        },
+        {
+          "type": "Ingress Protection",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "IP rating suitable for environment (note changes e.g., wet)",
+            "No missing gland plates/glands/plugs",
+            "Minimum IP2X protection against accidental contact; covers require tool to remove"
+          ]
+        },
+        {
+          "type": "Fuse Carriers & MCBs",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "No damage; ratings correct where practicable",
+            "Free operation of MCB mechanisms"
+          ]
+        },
+        {
+          "type": "Thermal Imaging",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Solid insulation; bolted connections; breakers & fuse holders; panel exterior; accessible internal components"
+          ]
+        },
+        {
+          "type": "Cable Insulation",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Condition OK; no overheating; identify/report causes"
+          ]
+        },
+        {
+          "type": "Cable Terminations",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "Check all phase/neutral/earth connections & terminations",
+            "Tightness OK; terminations supported by glands/clamps (not by connections)"
+          ]
+        },
+        {
+          "type": "Conduit & Cable Glands",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "Tightness OK; gland earth continuity OK"
+          ]
+        },
+        {
+          "type": "Earth-Fault Loop Impedance",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "At origin (unless calculated); each distribution board; all fixed equipment; all sockets; 10% of lighting outlets (farthest point)",
+            "Furthest point of every radial circuit",
+            "Values within IEC 60364 recommendations",
+            "Note: Earth loop test removes need for separate earth continuity tests"
+          ]
+        },
+        {
+          "type": "Residual Current Devices (RCDs)",
+          "frequency": {
+            "interval": 6,
+            "unit": "months"
+          },
+          "checklist": [
+            "Operation via test button (every 6 months)",
+            "Annual test using approved RCD tester"
+          ]
+        }
+      ]
     },
     {
-      id: 'dev_rcd',
-      label: 'Si DDR intégré : test de déclenchement',
-      field: 'dev_rcd_trip',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Appuyer test ou injecter IΔn, vérifier déclenchement et temps.',
-      hazards_md: 'Perte alimentation circuits aval.',
-      ppe_md: 'Aucun spécifique.',
-      tools_md: 'Injecteur DDR.'
-    }
-  ],
-
-  // =====================================================================
-  // ATEX — ZONES EXPLOSIVES (Ex d/e/i/n/t) : Matériels marqués Ex
-  // =====================================================================
-  ATEX_EQUIPMENT: [
-    {
-      id: 'atex_visual_external',
-      label: 'Inspection visuelle externe (Cat. 1/2/3) — rapproché',
-      field: 'atex_ext_visual_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 6,
-      procedure_md: 'Contrôler enveloppes, presse-étoupes, garnitures, corrosion, chocs, marquage CE/Ex lisible, IP adapté à la zone.',
-      hazards_md: 'Risque d’explosion (empêcher toute source d’ignition).',
-      ppe_md: 'Chaussures antistatiques, tenue antistatique, ESD si requis.',
-      tools_md: 'Lampe ATEX, clé dynamométrique ATEX.'
+      "key": "motors_lv",
+      "label": "AC Induction Motors <1000 V ac <400 kW",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Foundations; shaft alignment; earth connections; fan cowling; air filters; baffles; labels; cables/glanding; fixing bolts",
+            "No corrosion, chemical attack, physical damage",
+            "No incorrect/over lubrication of bearings; no undue dust buildup"
+          ]
+        },
+        {
+          "type": "Winding Resistance",
+          "frequency": {
+            "interval": 60,
+            "unit": "months"
+          },
+          "checklist": [
+            "Measure winding resistance; balanced"
+          ]
+        },
+        {
+          "type": "Insulation Resistance",
+          "frequency": {
+            "interval": 60,
+            "unit": "months"
+          },
+          "checklist": [
+            "Winding-to-earth IR for each phase; \u2265100 M\u03a9 corrected to 40\u00b0C"
+          ]
+        },
+        {
+          "type": "Starters/Inverters/Cabling \u2013 Checks",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "Tightness of all connections",
+            "No overheating in starter cubicle",
+            "Motor fuse rating characteristic correct vs drawing",
+            "Operation of motor protection devices",
+            "Fixed/moving contacts condition \u2013 replace as necessary",
+            "Control panel functions correctly; indicator lights OK"
+          ]
+        },
+        {
+          "type": "Earth Fault Loop Impedance",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "Phase-to-earth link at motor terminals; impedance less than specified by IEC 60364 / protective device"
+          ]
+        },
+        {
+          "type": "Motor Circuit Insulation",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "Phase-to-earth IR (motor+LV cabling); \u2265100 M\u03a9 corrected to 40\u00b0C",
+            "If VSD installed, test supply and motor cables separately"
+          ]
+        }
+      ]
     },
     {
-      id: 'atex_detailed_internal',
-      label: 'Inspection détaillée (ouverture) selon mode de protection',
-      field: 'atex_detailed_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Ouvrir si autorisé (Ex e/d). Vérifier jeux d’air, joints, surfaces de contact Ex d, serrage bornes, continuité PE.',
-      hazards_md: 'Perte de confinement Ex d, risque inflammation.',
-      ppe_md: 'Gants, lunettes, ESD si électronique.',
-      tools_md: 'Clé dynamométrique ATEX, multimètre, jauges.'
+      "key": "hazardous_areas",
+      "label": "Hazardous Areas (IEC 60079)",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Initial Inspection (100% \u2013 Detailed)",
+          "frequency": {
+            "interval": 0,
+            "unit": "months"
+          },
+          "notes": "Initial for all new hazardous location equipment; use Tables 3-1/3-2/3-3 (Detailed)"
+        },
+        {
+          "type": "Periodic \u2013 Portable (100% \u2013 Close)",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "notes": "\u22641 year for portable equipment"
+        },
+        {
+          "type": "Periodic \u2013 Fixed (100% \u2013 Close if ignition-capable, else 100% \u2013 Visual)",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          }
+        },
+        {
+          "type": "Sample \u2013 Detailed (10% of equipment)",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "notes": "Detailed inspection on 10% sample to adjust interval/grade"
+        },
+        {
+          "type": "Checklist \u2013 Table 3-1 (Ex d/e/n, Ex t/td)",
+          "checklist": [
+            "A1 Equipment appropriate to EPL/Zone requirements",
+            "A2 Equipment group correct",
+            "A3 Equipment temperature class correct (gas)",
+            "A4 Max surface temperature correct",
+            "A5 Degree of protection (IP) appropriate",
+            "A6 Equipment circuit identification correct",
+            "A7 Equipment circuit identification available",
+            "A8 Enclosure/glass/glass-to-metal sealing gaskets/compounds satisfactory",
+            "A9 No damages or unauthorised modifications (physical)",
+            "A10 No evidence of unauthorised modifications (visual)",
+            "A11 Cable entry devices/blanking elements correct type, complete, tight (physical & visual)",
+            "A12 Threaded covers correct, tight, secured (physical & visual)",
+            "A13 Joint surfaces clean/undamaged; gaskets satisfactory and positioned correctly",
+            "A14 Enclosure gaskets condition satisfactory",
+            "A15 No evidence of water/dust ingress (per IP rating)",
+            "A16 Dimensions of flanged joint gaps within limits (docs/standards/site docs)",
+            "A17 Electrical connections tight",
+            "A18 Unused terminals tightened",
+            "A19 Enclosed break & hermetically sealed devices undamaged",
+            "A20 Encapsulated components undamaged",
+            "A21 Flameproof components undamaged",
+            "A22 Restricted breathing enclosure satisfactory (type nR)",
+            "A23 Test port functional (type nR)",
+            "A24 Breathing operation satisfactory (type nR)",
+            "A25 Breathing & draining devices satisfactory",
+            "EQUIP-LIGHT-26 Fluorescent lamps not indicating EOL effects",
+            "EQUIP-LIGHT-27 HID lamps not indicating EOL effects",
+            "EQUIP-LIGHT-28 Lamp type/rating/pin configuration/position correct",
+            "EQUIP-MOTORS-29 Fans clearance; cooling undamaged; foundations no indent/cracks",
+            "EQUIP-MOTORS-30 Ventilation airflow not impeded",
+            "EQUIP-MOTORS-31 Motor insulation resistance satisfactory",
+            "B1 Cable type appropriate",
+            "B2 No obvious cable damage",
+            "B3 Sealing of trunking/ducts/pipes/conduits satisfactory",
+            "B4 Stopping boxes/cable boxes correctly filled",
+            "B5 Integrity of conduit system & mixed interface maintained",
+            "B6 Earthing connections/bonding satisfactory (physical & visual)",
+            "B7 Fault loop impedance (TN) or earthing resistance (IT) satisfactory",
+            "B8 Automatic protective devices set correctly (no auto-reset)",
+            "B9 Automatic protective devices operate within permitted limits",
+            "B10 Specific conditions of use complied with",
+            "B11 Cables not in use correctly terminated",
+            "B12 Obstructions near flameproof flanged joints per IEC 60079-14",
+            "B13 Variable voltage/frequency installation per documentation",
+            "HEATING-14 Temperature sensors function per documents",
+            "HEATING-15 Safety cut-off devices function per documents",
+            "HEATING-16 Safety cut-off setting sealed",
+            "HEATING-17 Reset possible with tool only",
+            "HEATING-18 Auto-reset not possible",
+            "HEATING-19 Reset under fault prevented",
+            "HEATING-20 Safety cut-off independent from control system",
+            "HEATING-21 Level switch installed/set if required",
+            "HEATING-22 Flow switch installed/set if required",
+            "MOTORS-23 Motor protection devices operate within permitted tE/tA limits",
+            "ENV-1 Equipment protected vs corrosion/weather/vibration/adverse factors",
+            "ENV-2 No undue accumulation of dust/dirt",
+            "ENV-3 Electrical insulation clean/dry"
+          ]
+        },
+        {
+          "type": "Checklist \u2013 Table 3-2 (Ex i)",
+          "checklist": [
+            "A1 Documentation appropriate to EPL/zone",
+            "A2 Installed equipment matches documentation (fixed)",
+            "A3 Category & group correct",
+            "A4 IP rating appropriate to Group III material present",
+            "A5 Temperature class correct",
+            "A6 Apparatus ambient temperature range correct",
+            "A7 Apparatus service temperature range correct",
+            "A8 Installation clearly labelled",
+            "A9 Enclosure/glass/glass-to-metal gaskets/compounds satisfactory",
+            "A10 Cable glands/blanking elements correct type, complete, tight (physical & visual)",
+            "A11 No unauthorised modifications",
+            "A12 No evidence of unauthorised modifications",
+            "A13 Energy limiting devices (barriers/isolators/relays) are approved type, installed per certification, earthed where required",
+            "A14 Enclosure gaskets condition satisfactory",
+            "A15 Electrical connections tight",
+            "A16 PCBs clean/undamaged",
+            "A17 Maximum Um of associated apparatus not exceeded",
+            "B1 Cables installed per documentation",
+            "B2 Cable screens earthed per documentation",
+            "B3 No obvious cable damage",
+            "B4 Sealing of trunking/ducts/pipes/conduits satisfactory",
+            "B5 Point-to-point connections correct (initial inspection)",
+            "B6 Earth continuity satisfactory (non-galvanically isolated circuits)",
+            "B7 Earthing maintains integrity of type of protection",
+            "B8 Intrinsically safe circuit earthing satisfactory",
+            "B9 Insulation resistance satisfactory",
+            "B10 Separation maintained between IS and non-IS circuits in common boxes/cubicles",
+            "B11 Short-circuit protection of power supply per documentation",
+            "B12 Specific conditions of use complied with",
+            "B13 Cables not in use correctly terminated",
+            "C1 Equipment protected vs corrosion/weather/vibration/adverse factors",
+            "C2 No undue external accumulation of dust/dirt"
+          ]
+        },
+        {
+          "type": "Checklist \u2013 Table 3-3 (Ex p/pD)",
+          "checklist": [
+            "A1 Equipment appropriate to EPL/zone",
+            "A2 Equipment group correct",
+            "A3 Temperature class/surface temperature correct",
+            "A4 Circuit identification correct",
+            "A5 Circuit identification available",
+            "A6 Enclosure/glass/gaskets/compounds satisfactory",
+            "A7 No unauthorised modifications",
+            "A8 No evidence of unauthorised modifications",
+            "A9 Lamp rating/type/position correct",
+            "B1 Cable type appropriate",
+            "B2 No obvious cable damage",
+            "B3 Earthing/bonding connections satisfactory (physical & visual)",
+            "B4 Fault loop impedance (TN) or earthing resistance (IT) satisfactory",
+            "B5 Automatic protective devices operate within limits",
+            "B6 Automatic protective devices set correctly",
+            "B7 Protective gas inlet temperature below maximum",
+            "B8 Ducts/pipes/enclosures in good condition",
+            "B9 Protective gas substantially free from contaminants",
+            "B10 Protective gas pressure/flow adequate",
+            "B11 Pressure/flow indicators/alarms/interlocks function correctly",
+            "B12 Spark/particle barriers of exhaust ducts satisfactory",
+            "B13 Specific conditions of use complied with",
+            "C1 Equipment protected vs corrosion/weather/vibration/adverse factors",
+            "C2 No undue external accumulation of dust/dirt"
+          ]
+        }
+      ]
     },
     {
-      id: 'atex_bonding_earthing',
-      label: 'Liaisons équipotentielles & terre',
-      field: 'atex_pe_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Vérifier continuité PE, pontages, ponts de terre sur presse-étoupes métalliques, serrage.',
-      hazards_md: 'Charge électrostatique non évacuée.',
-      ppe_md: 'Gants, lunettes.',
-      tools_md: 'Ohmmètre faible courant.'
-    }
-  ],
-
-  // =====================================================================
-  // HV — > 1000V : Switchgear HT, Transformateurs, Disjoncteurs, Relais, SF6
-  // =====================================================================
-  HV_EQUIPMENT: [
-    {
-      id: 'hv_room_clean_dry',
-      label: 'Local HT propre, sec, verrouillé',
-      field: 'hv_room_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 3,
-      procedure_md: 'Inspection du local HT : propreté, absence d’humidité, verrouillage, absence d’intrusions.',
-      hazards_md: 'Arc HT (danger mortel), claquages.',
-      ppe_md: 'Casque, visière, gants isolants HT, vêtements ignifugés.',
-      tools_md: 'Lampe, caméra IR (option).'
+      "key": "emergency_lighting",
+      "label": "Emergency Lighting Systems",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Monthly Test",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "checklist": [
+            "If automatic testing: record short-duration results",
+            "Else: switch each luminaire/exit sign to emergency mode; ensure illumination",
+            "For central battery systems: check system monitors"
+          ]
+        },
+        {
+          "type": "Annual Test",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "If automatic testing: record full rated duration results",
+            "Else: test each luminaire/sign for full rated duration; restore normal supply; verify indicators & charging",
+            "Record date/results; lux measurements per design; adequate lighting levels where required"
+          ]
+        }
+      ]
     },
     {
-      id: 'hv_cb_timing',
-      label: 'Essai temporisation disjoncteur HT',
-      field: 'hv_cb_time_ms',
-      type: 'number',
-      unit: 'ms',
-      comparator: '<=',
-      threshold: 80,
-      frequency_months: 24,
-      procedure_md: 'Mesure des temps d’ouverture/fermeture sous injecteur secondaire selon constructeur. Comparer au référentiel.',
-      hazards_md: 'Mauvaise manœuvre peut endommager l’appareil.',
-      ppe_md: 'Gants isolants HT, lunettes.',
-      tools_md: 'Injecteur secondaire, chronomètre/temporographe.'
+      "key": "ups_small",
+      "label": "Uninterruptible Power Supply (<=5000 VA)",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Asset Data (CMMS) \u2013 Required",
+          "notes": "Keep Manufacturer/Model/SN, kVA size, install year, battery type/code, battery install year"
+        },
+        {
+          "type": "Ambient Conditions \u2013 Required",
+          "notes": "UPS within design ambient conditions"
+        },
+        {
+          "type": "Annual \u2013 Visual Inspection",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Unit functions within design; no outstanding alarms",
+            "Clean; vents/filters OK (replace as needed)"
+          ]
+        },
+        {
+          "type": "Annual \u2013 UPS Battery Test",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "notes": "Perform per Battery Systems section (3.2.16)"
+        },
+        {
+          "type": "Every 7th year \u2013 Asset Replacement",
+          "frequency": {
+            "interval": 84,
+            "unit": "months"
+          },
+          "checklist": [
+            "Plan/schedule UPS replacement"
+          ]
+        }
+      ]
     },
     {
-      id: 'hv_protection_relay_test',
-      label: 'Test relais de protection (secondaire)',
-      field: 'hv_relay_trip_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Injection secondaire pour vérifier tripping/paramètres, en respectant sélectivité & consignation.',
-      hazards_md: 'Déclenchement intempestif si mauvais câblage.',
-      ppe_md: 'Gants, lunettes.',
-      tools_md: 'Injecteur secondaire, PC logiciel si numérique.'
+      "key": "ups_large",
+      "label": "Uninterruptible Power Supply (>5000 VA)",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Asset Data (CMMS) \u2013 Required",
+          "notes": "Keep Manufacturer/Model/SN, kVA size, install year, battery type/code, battery install year"
+        },
+        {
+          "type": "Environment \u2013 Required",
+          "notes": "Clean; managed to ~21\u00b0C; RH \u226495%"
+        },
+        {
+          "type": "Annual \u2013 Visual Inspection",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "All components clean; within design specification",
+            "Fans/filters OK (replace/clean as necessary)"
+          ]
+        },
+        {
+          "type": "Annual \u2013 Environmental Checks",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Room temperature ~21\u00b0C, RH \u226495%",
+            "UPS airflow OK; no dust contamination inside"
+          ]
+        },
+        {
+          "type": "Annual \u2013 Mechanical/Electrical Inspection",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Inspect power/control terminations and system components",
+            "Identify components to replace next service visit"
+          ]
+        },
+        {
+          "type": "Annual \u2013 Functional/Operational Verification",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Review event/alarm logs",
+            "Input/output/bypass V/I within spec",
+            "Comms options operate properly",
+            "On-battery operation; transfer to/from static bypass",
+            "Parallel operation performance (if applicable)"
+          ]
+        },
+        {
+          "type": "Annual \u2013 Implement Updates",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Firmware upgrades implemented",
+            "Circuit board revisions checked/updated",
+            "Replace components per OEM intervals (AC/DC caps, cooling fans)"
+          ]
+        },
+        {
+          "type": "Annual \u2013 UPS Battery Test",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "notes": "Perform per Battery Systems section (3.2.16)"
+        },
+        {
+          "type": "6th year \u2013 Mid-life overhaul",
+          "frequency": {
+            "interval": 72,
+            "unit": "months"
+          },
+          "notes": "Follow manufacturer recommendations"
+        },
+        {
+          "type": "12th year \u2013 UPS replacement",
+          "frequency": {
+            "interval": 144,
+            "unit": "months"
+          },
+          "checklist": [
+            "Plan/schedule replacement"
+          ]
+        }
+      ]
     },
     {
-      id: 'hv_sf6_density',
-      label: 'Contrôle densité SF₆',
-      field: 'hv_sf6_density_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Relever densité/pression SF₆ vs température. En cas d’écart, consigner et programmer maintenance.',
-      hazards_md: 'Fuite de gaz, risque environnemental.',
-      ppe_md: 'Gants, lunettes.',
-      tools_md: 'Densimètre/lecteur fabricant.'
+      "key": "batteries",
+      "label": "Battery Systems",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Charger \u2013 Monthly",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "checklist": [
+            "Cleanliness OK; indicators/meters OK; alarm logs checked; cooling fan OK"
+          ]
+        },
+        {
+          "type": "Charger \u2013 Quarterly",
+          "frequency": {
+            "interval": 3,
+            "unit": "months"
+          },
+          "checklist": [
+            "Power capacitors \u2013 no degradation/leaks/bloating/discoloration"
+          ]
+        },
+        {
+          "type": "Flooded Lead-Acid \u2013 Monthly",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "checklist": [
+            "Record charger V/I; electrolyte levels; no corrosion/leaks"
+          ]
+        },
+        {
+          "type": "Flooded Lead-Acid \u2013 Discharge Test",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Load discharge test per manufacturer (1\u20133 yrs)",
+            "Increase to annual if capacity deteriorates",
+            "Replace when capacity approaches 80% rated",
+            "Typical life 4\u20138 yrs at 20\u201325\u00b0C"
+          ]
+        },
+        {
+          "type": "Flooded Ni-Cad \u2013 Monthly",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "checklist": [
+            "Record charger V/I; electrolyte levels; no corrosion/leaks"
+          ]
+        },
+        {
+          "type": "Flooded Ni-Cad \u2013 Discharge Test",
+          "frequency": {
+            "interval": 24,
+            "unit": "months"
+          },
+          "checklist": [
+            "Load discharge test per manufacturer (1\u20133 yrs)",
+            "Increase to annual if capacity deteriorates",
+            "Replace when capacity approaches 80% rated",
+            "Typical life 20\u201325 yrs at 20\u201325\u00b0C"
+          ]
+        },
+        {
+          "type": "Sealed Lead Acid (VRLA) \u2013 Monthly",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "checklist": [
+            "Record charger V/I; ambient temperature; no corrosion/leaks/overheating/distorted cases"
+          ]
+        },
+        {
+          "type": "Sealed Lead Acid (VRLA) \u2013 Annual",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Load discharge test per manufacturer",
+            "Increase to 6-monthly if capacity deteriorates",
+            "Replace when capacity approaches 80% rated",
+            "Typical life 3\u20137 yrs at 20\u201325\u00b0C"
+          ]
+        }
+      ]
     },
     {
-      id: 'tf_oil_dga',
-      label: 'Transformateur — DGA (analyse gaz dissous) / rigidité diélectrique',
-      field: 'tf_oil_dga_ok',
-      type: 'check',
-      comparator: '==',
-      threshold: YES,
-      frequency_months: 12,
-      procedure_md: 'Prélèvement huile : DGA, rigidité diélectrique, BF/BG, eau/ppm. Comparer aux seuils alerte.',
-      hazards_md: 'Brûlure huile chaude, pollution.',
-      ppe_md: 'Gants, lunettes, combinaison anti-huile.',
-      tools_md: 'Kit prélèvement, flacons labo.'
+      "key": "vsd",
+      "label": "Variable Speed Drives",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Clean internal/external; vents/fans; no damage/corrosion",
+            "Controller alarms reviewed; ambient OK; no overheating",
+            "Correct permanent labelling"
+          ]
+        },
+        {
+          "type": "Ingress Protection",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "IP rating suitable; no missing gland plates/glands/plugs",
+            "Minimum IPXXB \u2013 no accessible live parts without tools"
+          ]
+        },
+        {
+          "type": "Ventilation",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Filters cleaned/replaced",
+            "Fans operate correctly"
+          ]
+        },
+        {
+          "type": "Thermal Imaging",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Panel exterior; accessible internal components/cables"
+          ]
+        },
+        {
+          "type": "Power Capacitors",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Capacitance within limits; replace if degraded >10%",
+            "Replace plastic can capacitors older than 10 years",
+            "If drive idle >1 year: restore capacitors per manufacturer"
+          ]
+        },
+        {
+          "type": "Cable Terminations",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "All phase/earth connections & terminations OK; tightness OK; supported by glands/clamps"
+          ]
+        },
+        {
+          "type": "Replace Fans",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "notes": "Replace per manufacturer recommendations"
+        }
+      ]
     },
     {
-      id: 'tf_thermography',
-      label: 'Transformateur — thermographie connexions/évents',
-      field: 'tf_ir_delta',
-      type: 'number',
-      unit: '°C',
-      comparator: '<=',
-      threshold: 25,
-      frequency_months: 12,
-      procedure_md: 'Thermographie sur bornes BT/HT, radiateurs, connexions ; ΔT ≤ 25°C.',
-      hazards_md: 'Brûlure/arc.',
-      ppe_md: 'Visière/écran, gants ignifugés.',
-      tools_md: 'Caméra IR.'
+      "key": "fire_detection_alarm",
+      "label": "Fire Detection and Fire Alarm Systems",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Weekly User Test",
+          "frequency": {
+            "interval": 1,
+            "unit": "weeks"
+          },
+          "checklist": [
+            "Operate a manual call point during working hours; verify processing to sounders & ARC",
+            "Alternate call point each week; record in logbook",
+            "Keep test duration \u22641 minute to distinguish from real fire",
+            "If staged alarms (Alert/Evacuate), operate sequentially",
+            "If shift workers exist, do additional monthly test for those shifts"
+          ]
+        },
+        {
+          "type": "Periodic Inspection & Test (6\u201312 months)",
+          "frequency": {
+            "interval": 9,
+            "unit": "months"
+          },
+          "checklist": [
+            "Examine logbook; ensure recorded faults addressed",
+            "Visual check if building/occupancy changes affect compliance",
+            "Check false alarm records & 12-month rate; record actions",
+            "Verify fire functions by operating \u22651 detector/MCP per circuit; record which devices",
+            "Check operation of alarm devices; controls/indicators OK",
+            "Verify transmission to ARC (all signal types)",
+            "Test ancillary functions; simulate faults for indicators (where practicable)",
+            "Test printers, consumables; service radio systems per manufacturer",
+            "Report defects; update logbook; issue servicing certificate"
+          ]
+        },
+        {
+          "type": "Annual Inspection & Test",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Test switch mechanism of every MCP",
+            "Examine all detectors for damage/paint/etc.; functionally test each",
+            "Heat detectors: test with safe heat source (no flame); special arrangements for fusible links",
+            "Point smoke detectors: test with suitable material per manufacturer (smoke enters chamber)",
+            "Beam detectors: introduce attenuation (filter/smoke)",
+            "Aspirating systems: confirm smoke enters detector chamber",
+            "CO detectors: confirm CO entry & alarm (observe safety)",
+            "Flame detectors: test with suitable radiation; follow manufacturer guidance",
+            "Analogue-value systems: confirm values within manufacturer range",
+            "Multi-sensor detectors: verify products of combustion reach sensors; fire signal produced",
+            "Verify visual alarm devices unobstructed & clean lenses",
+            "Visually confirm cable fixings secure/undamaged",
+            "Check standby power capacity remains suitable",
+            "Test interlocks (e.g., doors, AHUs)",
+            "Report defects; record inspection; servicing certificate"
+          ]
+        },
+        {
+          "type": "Batteries \u2013 Monthly/Annual",
+          "frequency": {
+            "interval": 1,
+            "unit": "months"
+          },
+          "notes": "Perform battery tests/maintenance per section 3.2.16 monthly and annually"
+        }
+      ]
     },
     {
-      id: 'tf_tan_delta',
-      label: 'Transformateur — tangente delta/isolement',
-      field: 'tf_tandelta',
-      type: 'number',
-      unit: '%',
-      comparator: '<=',
-      threshold: 1.0,
-      frequency_months: 36,
-      procedure_md: 'Mesure tan δ selon norme/constructeur, comparer aux historiques.',
-      hazards_md: 'Tension d’essai élevée.',
-      ppe_md: 'Gants isolants HT.',
-      tools_md: 'Pont de mesure tan δ.'
-    }
-  ],
-
-  // =====================================================================
-  // UPS (non couvert TSD — volontairement marqué pour not_present)
-  // =====================================================================
-  UPS: [
-    {
-      id: 'ups_placeholder',
-      label: 'UPS — non couvert (à construire)',
-      field: 'ups_placeholder',
-      type: 'check',
-      comparator: '==',
-      threshold: NO,
-      frequency_months: 12,
-      procedure_md: 'À définir ultérieurement.',
-      hazards_md: '—',
-      ppe_md: '—',
-      tools_md: '—'
-    }
-  ],
-
-  // =====================================================================
-  // BATTERY SYSTEM (non couvert TSD — volontairement marqué pour not_present)
-  // =====================================================================
-  BATTERY_SYSTEM: [
-    {
-      id: 'bat_placeholder',
-      label: 'Batteries — non couvert (à construire)',
-      field: 'bat_placeholder',
-      type: 'check',
-      comparator: '==',
-      threshold: NO,
-      frequency_months: 12,
-      procedure_md: 'À définir ultérieurement.',
-      hazards_md: '—',
-      ppe_md: '—',
-      tools_md: '—'
+      "key": "earthing_systems",
+      "label": "Earthing Systems",
+      "db_table": "sites",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Earth Electrode Resistance \u2013 Inspection & Test",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Inspect terminations for security and protective finish",
+            "Disconnect electrode from earthing system pre-test",
+            "Measure earth electrode resistance \u2013 never above 200 \u03a9; readings should be <100 \u03a9"
+          ]
+        },
+        {
+          "type": "Earthing Conductor Resistance (Continuity)",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "Inspect all protective/bonding connections are sound & secure",
+            "Measure conductor resistances with low resistance ohmmeter"
+          ]
+        },
+        {
+          "type": "Earth System Resistance Value Check",
+          "frequency": {
+            "interval": 48,
+            "unit": "months"
+          },
+          "checklist": [
+            "At each distribution stage check overall earthing system resistance with clamp-on tester (e.g., DET10C/20C)",
+            "Max resistances: HV=1 \u03a9; Electrical Power=5 \u03a9; Lightning=10 \u03a9; ESD=10 \u03a9"
+          ]
+        },
+        {
+          "type": "Lightning Protection Systems \u2013 Visual & Test",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Visual: air terminations, down conductors, earth pits, joints, connections, test points \u2013 no corrosion",
+            "Test: continuity with low resistance milli-ohmmeter; measure system resistance; test earth electrodes"
+          ]
+        },
+        {
+          "type": "Electrostatic Discharge (Static Earthing) \u2013 Visual & Test",
+          "frequency": {
+            "interval": 36,
+            "unit": "months"
+          },
+          "checklist": [
+            "Visual: conductor tapes, earth pits, joints, connections, test points/earth links, plant item connections",
+            "Test: continuity from plant to earth link with low resistance ohmmeter; measure system resistance; test electrodes"
+          ]
+        }
+      ]
     }
   ]
 };
-
-// Normalisation : s’assurer que chaque item a bien ses champs de base
-Object.keys(TSD_LIBRARY).forEach(type => {
-  TSD_LIBRARY[type].forEach(item => {
-    item.type = item.type || 'check';
-    item.comparator = item.comparator || '==';
-    item.threshold = (item.threshold === undefined) ? YES : item.threshold;
-    item.frequency_months = item.frequency_months || 12;
-    item.procedure_md = item.procedure_md || 'Procédure standard selon fabricant et consignes site.';
-    item.hazards_md = item.hazards_md || 'Risque électrique standard. Respecter consignations.';
-    item.ppe_md = item.ppe_md || 'Gants isolants, lunettes.';
-    item.tools_md = item.tools_md || 'Outils standard de maintenance.';
-  });
-});
-
-// === END: Original tsd_library.js ===
-
-// === BEGIN: Auto-integrated full coverage from TSD (generated) ===
-// This block is auto-generated from the source PDF to ensure no control line is missed.
-// Auto-generated from G2.1 TSD PDF to capture every control line found.
-// This file aims for exhaustive coverage of control statements as text lines.
-// Source: G2.1 Maintenance, Inspection and Testing of Electrical Equipment TSD.pdf
-export const TSD_FULL_CONTROLS = {
-  "2 Definitions": [
-    "• A certification organisation accredited by a recognised",
-    "• Such equipment conforms to the requirements of the Local",
-    "The connection of electrical systems to the Earth's conductive surface",
-    "control, store, measure or use electrical energy.",
-    "In accordance with IEC 60529. Protection against hazardous parts by",
-    "• A finger (a jointed test finger of 12mm diameter and",
-    "• A solid object of 12.5mm diameter.",
-    "protection does not meet IP2X (exposed to touch).",
-    "or 600 volts ac (or 900 volts dc) between conductors and earth.",
-    "In accordance with IEC 60529. This means protection against ingress",
-    "and whether battery or mains powered.",
-    "Global Support Function",
-    "Partial Discharge",
-    "Miniature Circuit Breaker",
-  ],
-  "3.2.1 Earthing Systems": [
-    "Earth Electrode Resistance",
-    "a) Inspection",
-    "b) Testing",
-    "All earth electrodes need to be tested to ensure that good",
-    "contact is made with the general mass of earth.",
-    "There are several methods for measurement of the earth",
-    "The earth electrode resistance should never be above 200",
-    "Earth electrode resistance readings must be <100 Ω.",
-    "Earthing Conductor Resistance Testing (Continuity",
-    "Test)",
-    "A low resistance ohmmeter must be used to measure the",
-    "Earth System Resistance Value Check",
-    "At each stage of the electrical distribution system a check",
-    "e.g., Megger DET10C or DET20C.",
-    "Maximum resistance to earth values are:",
-    "• High Voltage Systems = 1 Ω",
-    "• Electrical Power = 5 Ω",
-    "• Lightning Protection = 10 Ω",
-    "• Electrostatic Discharge = 10 Ω",
-    "Lightning protection systems must be inspected to ensure",
-    "Lightning Protection Systems.",
-    "a) Visual Inspection",
-    "• Air termination conductors.",
-    "• Down conductors.",
-    "• Earth electrode pits.",
-    "• Joints.",
-    "• Connections.",
-    "• Test points.",
-    "b) Test",
-    "All lightning protection systems must be tested for",
-    "continuity using a low resistance milli-ohmmeter e.g.",
-    "A resistance value for the whole lightning protection",
-    "Earth electrodes should be tested.",
-    "• Earth conductor tapes.",
-    "• Test points / Earth links.",
-    "• Plant items connection to earth.",
-    "continuity from plant item to earth link using a low",
-  ],
-  "3.2.2 High Voltage Switchgear (>1000 V ac)": [
-    "Visual Inspection",
-    "These inspections are performed with the switchgear",
-    "The operator must check that the switchgear is operating",
-    "in a clean, cool and dry environment with no abnormal",
-    "noises, smells, vibration or heat.",
-    "• Arcing can be detected by sound as well as",
-    "• The presence of blistered or blackened paint, the",
-    "smell of overheated plastic, and the visual",
-    "condition of insulation are good indicators of",
-    "• Room temperature is a good indication of general",
-    "• Storage of combustibles near switchgear.",
-    "• Damaged insulators.",
-    "• Pooled water, leaks, rodents, and environmental",
-    "• Relay indications (flags).",
-    "• Voltage readings where possible.",
-    "• Current readings where possible.",
-    "Thermography",
-    "voltage switchgear. Items that must be thermally",
-    "a) Busbar chamber covers.",
-    "b) Cable Boxes.",
-    "c) Voltage Transformers.",
-    "a) Perform routine pass / fail partial discharge tests using",
-    "a handheld partial discharge equipment e.g.,",
-    "Partial Discharge",
-    "b) Record results.",
-    "c) Failed partial discharge tests must be investigated",
-    "a) Check the general condition of the device (Cover,",
-    "b) Check the maximum number of operation cycles of the",
-    "c) Operate device key locking and operate device pad",
-    "d) Check the device racking interlock (operation of the red",
-    "e) Operate the racking device manually and / or operate",
-    "the racking device electrically for motorized breaker.",
-    "f) Operate (Open / Close) the device manually and",
-    "Circuit Breaker Maintenance – [Oil, SF6, Vacuum]",
-    "Insulation Resistance - Circuit Breaker",
-    "Apply 5000Vdc for one minute with the circuit breaker",
-    "contacts open and closed to measure phase-to-phase and",
-    "phase-to-earth resistance for each pole.",
-    "The insulation resistance must be > 2 GΩ.",
-    "Vacuum Circuit Breaker Dielectric Over-potential",
-    "Perform a dc over-potential test on vacuum circuit breaker",
-    "Liquid Screening - Circuit Breaker",
-    "b) Moisture: <25ppm.",
-    "c) PCB: <50ppm.",
-    "a) Dielectric strength: >26 kV.",
-    "and test for PCBs, moisture, dielectric strength, and oil",
-    "If an oil circuit breaker has cleared a high voltage fault the",
-    "Dielectric Over-potential - Circuit Breaker",
-    "Contact Resistance - Circuit Breaker",
-    "Measure contact resistance of each pole. Compare to",
-    "Time Travel - Circuit Breaker",
-    "Record the time travel curve for the circuit breaker.",
-    "previous test results to determine if there is any",
-    "deterioration in the circuit breaker operating mechanism.",
-    "Measure the resistance of bolted connections using a low",
-    "50% between resistance readings. Also check that the",
-    "Apply 5000Vdc for 1-minute to measure phase-to-earth",
-    "Insulation Resistance",
-    "This inspection is performed with the transformer energised",
-    "a) Is the transformer unit in good visual condition i.e., no",
-    "b) Is the transformer labelled?",
-    "c) Is the transformer locked in the service position?",
-    "This inspection is performed with the transformer isolated.",
-    "c) Are the busbar and circuit shutters in good condition?",
-    "d) If the transformer is withdrawable is the mechanism free",
-    "tension and scraping earth are in good condition?",
-    "Verify fuse sizes are correct and that the fuses are in good",
-    "Check Primary and Secondary Fuses",
-    "Apply a dc voltage for one minute to measure the phase-to-",
-    "earth resistance on each phase.",
-    "The insulation resistance must be >5 GΩ.",
-    "Protection Relays",
-    "Perform secondary current injection testing to check the",
-    "functions of the protection. Check all protective functions",
-    "and verify that the relay settings are in accordance with the",
-    "protection coordination study.",
-  ],
-  "3.2.3 Power Factor Correction (>1000 V ac)": [
-    "Visual Inspection",
-    "a) Check that system is in the correct mode of operation",
-    "b) Check controller parameter settings and alarms",
-    "c) Check power factor trends and performance of the",
-    "Visual Inspection (Once high voltage isolation is in",
-    "a) Check capacitors, reactors and cabling for signs of",
-    "b) Check capacitor bank cleanliness, ventilation, heating",
-    "Capacitor Condition Test (Once high voltage isolation is",
-    "a) Carry out capacitor condition tests for each phase on",
-    "each step. This test shall include measuring the",
-    "capacitance of each capacitor and ensuring the",
-    "b) Isolate capacitor banks which fail condition test.",
-  ],
-  "3 Years": [
-    "a) Check for damage.",
-    "b) Check rating(s) are correct for capacitor ratings.",
-    "c) Check free operation of Vacuum Contactor",
-    "d) Ensure fuses are not 'blown'. (Replace with correct",
-    "e) Check for evidence of overheating. Renew where",
-    "Check all phase and earth connections and terminations.",
-    "Check all connections to torque settings recommended by",
-  ],
-  "3.2.4 Fluid Immersed Transformers": [
-    "Visual inspections",
-    "a) Check silica gel breathers where necessary replace.",
-    "b) Check transformer for signs of abnormality.",
-    "c) Check integrity of earthing connections.",
-    "Oil Sample Test",
-    "a) Carry out oil breakdown voltage, moisture content and",
-    "b) Keep a trend of test results. Increase sample testing if",
-    "c) Start Conducting FURAN analysis of oil sample for",
-    "transformer lifecycle assessment yearly only if a high",
-    "b) Keep a trend of DGA results for comparison and",
-    "analysis. If fluid fails test investigate and where",
-    "a) Carry out fluid screening tests and dissolved gas analysis",
-    "(DGA) for main and tap changer tanks.",
-    "Inspect Fluid Level",
-    "a) Top up fluid where applicable.",
-    "b) Make a note of any leaks and arrange for repair.",
-    "a) Visual inspection of the temperature indication devices",
-    "b) Is unit showing a reasonably expectable temperature",
-    "taking into account transformer load profile and",
-    "c) Are the temperature alarm and trip settings correct?",
-    "d) Record highest temperature peak. Reset peak",
-    "a) Visually inspect device for signs of damage or water",
-    "Gas and Oil Actuator Relay (Buchholz)",
-    "a) Check valves are in correct position.",
-    "b) Ensure liquid in chamber.",
-    "a) Check unit is in good condition.",
-    "c) If gas is present sample the gas for analysis thus",
-    "b) Check level has not changed appreciably since last",
-    "c) Record levels.",
-    "b) Check vacuum or pressure is being maintained and has",
-    "c) Record values.",
-    "a) Check integrity of cable boxes.",
-    "b) Ensure glands are in good condition.",
-    "c) Perform routine pass/fail partial discharge tests using a",
-    "handheld partial discharge equipment e.g UltraTEV®.",
-    "Record results. Failed partial discharge tests must be",
-    "a) Visually check cleanliness and condition of bushings.",
-    "a) Check condition of fans and guarding.",
-    "b) Check the pump housing and gland.",
-    "a) Record the number of operations.",
-    "c) Ensure the temperature monitors are set to the correct",
-    "d) Operate cooling fans and pumps where fitted.",
-    "b) Inspect the tap change control panel for signs of",
-    "Test – Intrusive Maintenance.",
-    "a) Torque checks on bolted connections and fittings.",
-    "Where permissible check inside cable boxes for signs of",
-    "overheating and partial discharge.",
-    "b) Clean and Check bushings for signs of cracks or partial",
-    "c) Check cable termination box for signs of water ingress.",
-    "Replace gaskets when cable box is opened.",
-    "a) Operate ‘Off Circuit Tapping Switch’.",
-    "b) Check that the tap switch moves freely across all",
-    "Earth Connection Integrity",
-    "Earth continuity test must be performed, and results",
-    "Insulation Resistance Test",
-    "a) Measure the winding to winding and winding to ground",
-    "insulation resistance.",
-    "b) Insulation resistance measurement must be conducted",
-    "c) Insulation resistance readings must be > 100 MΩ on the",
-    "d) Results must be recorded.",
-    "Low Resistance Test",
-    "a) Measure the resistance of bolted connections using a",
-    "b) Compare resistance readings between similar bolted",
-    "than 50% between resistance readings. Check that the",
-    "Power Factor Test on capacitive type bushings",
-    "a) Test alarm and tripping functions of all protective",
-    "devices associated with transformer. This could include",
-    "d) Gas and oil actuator relay (Buchholz).",
-    "b) Liquid temperature indicator.",
-    "c) Winding temperature indicator.",
-    "a) Measure the power factor and capacitance of the high",
-    "b) The bushing power factor and capacitance must not vary",
-    "test tap is not provided, use the hot collar test and",
-    "measure the watts-loss. Bushing hot collar watts-loss",
-    "test result.",
-    "c) If power factor testing of the bushings is being",
-    "performed, it is good practice to extend the test to",
-    "include power factor testing of the transformer windings.",
-    "De-grease, prepare, prime, undercoat and repaint any",
-  ],
-  "3.2.5 Cast Resin Transformers": [
-    "Visual Inspection – Non-Intrusive Maintenance.",
-    "Ventilation and protection devices",
-    "a) Look for signs of damage or over heating of wiring to",
-    "ventilation and protection devices.",
-    "b) Is unit showing a reasonably expectable temperature",
-    "taking into account transformer load profile and",
-    "c) Perform functional check of protection devices. e.g.,",
-    "d) Perform functional check of cooling fans where",
-    "a) Check for foreign matter on transformer windings.",
-    "b) Vacuum clean and blow less accessible areas with",
-    "c) Ensure ventilation grills are free from obstruction.",
-    "Check for the correct insulating distances between the",
-    "b) Check cable glands are secured and correctly ‘made off’.",
-    "Check compliance with original IP rating.",
-    "Ingress Protection",
-    "a) Check fixings and connections.",
-    "Partial Discharge",
-    "b) Record results.",
-    "a) Perform routine pass/fail partial discharge tests using a",
-    "handheld partial discharge equipment e.g. UltraTEV®.",
-    "c) Failed partial discharge tests must be investigated",
-    "a) Check integrity of cable boxes.",
-    "b) Ensure glands are in good condition.",
-    "c) Perform routine pass/fail partial discharge tests using a",
-    "handheld partial discharge equipment e.g UltraTEV®.",
-    "Record results. Failed partial discharge tests must be",
-    "a) Check condition of fans and guarding.",
-    "b) Ensure the temperature monitors are set to the correct",
-    "Test – Intrusive Maintenance",
-    "Insulation Resistance Test",
-    "Earth Connection Integrity",
-    "permissible check inside cable boxes for signs of",
-    "overheating and partial discharge.",
-    "Earth continuity test must be performed, and results",
-    "a) Measure the winding to winding and winding to ground",
-    "insulation resistance.",
-    "b) Insulation resistance measurement must be conducted",
-    "c) Insulation resistance readings must be > 100 MΩ on the",
-    "d) Results must be recorded.",
-    "Low Resistance Test",
-    "a) Measure the resistance of bolted connections using a",
-    "b) Compare resistance readings between similar bolted",
-    "than 50% between resistance readings. Check that the",
-    "Test alarm and tripping functions of all protective devices",
-    "associated with transformer. This could include but is not",
-    "a) Winding temperature indicator.",
-    "b) Over-current Protection Devices.",
-    "a) Extend the 1-minute spot insulation resistance test to",
-    "include a 10-minute insulation resistance measurement.",
-    "5-8 Years Power Factor Test on cast resin transformers over a",
-    "b) Calculate the polarization index.",
-    "c) This value must not be less than 1.0.",
-    "c) Results must be recorded.",
-    "a) Measure the power factor of the transformer windings.",
-    "b) The CH (high voltage winding) and CHL (high & low",
-    "5-8 Years Power Factor Tip-Up Test on cast resin transformers",
-    "a) Measure the power factor at increasing test voltages up",
-    "to the maximum test voltage.",
-    "b) The power factor must remain reasonably constant and",
-    "c) Tip-up of over 0.5% warrants investigation and could",
-  ],
-  "3.2.6 AC Induction Motors >1000 V ac or >400 kW": [
-    "Routine Visual Inspection",
-    "Using only human senses, check for:",
-    "Visually inspect the following:",
-    "• Unusual noises.",
-    "• Unusual vibrations.",
-    "• Excessive heat.",
-    "• Oil levels.",
-    "• Bearing lubrication leaks.",
-    "• Cooling water leaks.",
-    "• Blocked air inlet vents.",
-    "• Combustibles, and.",
-    "• Housekeeping.",
-    "• Cable & glanding.",
-    "• Fixing bolts.",
-    "• Corrosion.",
-    "• Chemical attack.",
-    "• Physical damage.",
-    "• Motor foundations.",
-    "• Shaft alignment.",
-    "• Earth connections.",
-    "• Cooling fan cowling.",
-    "• Baffles.",
-    "• Motor circuit identification labelling is present and",
-    "If online vibration analysis is not provided, perform",
-    "vibration measurements of the shaft and bearings. Acoustic",
-    "Thermal Imaging",
-    "Check the following for signs of overheating:",
-    "• Bearings.",
-    "• Motor frame.",
-    "• Motor terminal box.",
-    "• Surge capacitors.",
-    "• Cables.",
-    "• Motor controller.",
-    "• Variable speed drive (VSD).",
-    "During insulation testing, perform visual check for",
-    "• Water ingress.",
-    "• Corona discharge.",
-    "b) Polarisation Index (PI)",
-    "a) Insulation resistance",
-    "Ratio of 10min and 1min insulation resistance test. A",
-    "polarisation index (PI) equal to or greater than 2 is an",
-    "indication the insulation is clean and dry. However, PI",
-    "values much higher than 2 will indicate the insulation is dry",
-    "c) DC conductivity",
-    "Use a low resistance ohmmeter to measure the resistance",
-    "d) Power Factor",
-    "Apply an ac voltage and measure the power factor of each",
-    "e) Power Factor Tip Up",
-    "indicates thermal deterioration.",
-    "Measure the power factor of each stator winding phase at",
-    "about 20% phase- to-earth voltage and then again at",
-    "100% phase- to-earth voltage. The tip-up is the difference",
-    "An increasing trend indicates increasing partial discharge",
-    "a) Visually inspect for signs of hot spots.",
-    "b) Air Gap Measurement.",
-    "c) Loop Test.",
-    "cooling does not undergo thermal runaway.",
-    "a) Insulation resistance.",
-    "b) Polarisation Index (PI).",
-    "This test is only applicable to wound rotor induction",
-    "This test is only applicable to squirrel cage induction",
-    "Ratio of 10min and 1min insulation resistance test.",
-    "A polarisation index (PI) equal to or greater than 2 is an",
-    "values much higher than 2 will indicate the insulation is",
-    "c) DC conductivity.",
-    "d) Inspect slip rings, brushes and brushes rigging",
-    "e) Growler Test.",
-    "motor check for signs of corrosion.",
-    "Visually inspect for signs of cracking.",
-    "NDE of fan blades and vanes for cracking.",
-    "This test is only applicable to insulated bearings.",
-    "Apply a 500 V dc voltage to the bearings and measure the",
-    "resistance to earth.",
-    "Minimum insulation resistance of 50MΩ for individual",
-    "Minimum insulation resistance of 5MΩ for bearings tested",
-    "b) Inspect white metal surfaces of sleeve bearings.",
-    "c) Inspect cage and rolling elements of anti-friction",
-    "d) Inspect shaft surfaces in contact with bearings.",
-    "Check that motor heater is functioning properly.",
-  ],
-  "3.2.7 Low Voltage Switchgear (<1000 V ac)": [
-    "3 months Visual Inspection.",
-    "These inspections are performed with the switchgear",
-    "The operator must check that the switchgear is operating in",
-    "a clean, cool and dry environment with no abnormal noises,",
-    "smells, vibration or heat.",
-    "a) Arcing can be detected by sound as well as voltage",
-    "b) The presence of blistered or blackened paint, the smell",
-    "of overheated plastic, and the visual condition of",
-    "insulation are good indicators of overheating.",
-    "c) Room temperature is a good indication of general",
-    "d) Storage of combustibles and unwanted material on or",
-    "near switchgear.",
-    "e) Damaged insulators.",
-    "f) Pooled water, leaks, rodents, and environmental",
-    "g) Ensure min IP2X protection against accidental contact",
-    "h) All labels must be permanent, legible and accurate to",
-    "• Relay indications (flags).",
-    "• Voltage readings.",
-    "• Current readings.",
-    "• Damaged components e.g., displays, meters,",
-    "Thermography.",
-    "Perform thermographic surveys of low voltage switchgear.",
-    "• Solid insulation.",
-    "• Bolted connections.",
-    "• Switchgear contacts.",
-    "• Panel exterior.",
-    "• Accessible internal components.",
-    "Check the circuit breaker for:",
-    "• Smooth operation.",
-    "• Correct alignment.",
-    "• Mechanical damage.",
-    "• Overheating.",
-    "• Binding of moving parts.",
-    "• Condition of arc chutes.",
-    "• Condition of contacts.",
-    "• Insulation resistance of main contacts.",
-    "• Prove operation of breakers from protection",
-    "Also perform a functional check of the charging mechanism",
-    "breaker, these auxiliary features can include interlocks and",
-    "trip-free, anti-pumping, and trip indicators.)",
-    "Functionally test the circuit breaker mechanism and control",
-    "Lubricate the circuit breaker in accordance with the",
-    "a) Check the circuit breakers for smooth operation and to",
-    "confirm the mechanism is not binding and is operating",
-    "b) Ensure the protection settings are correct in comparison",
-    "a) Mechanically exercise and inspect motor contactors that",
-    "b) Check the contactor for smooth operation, correct",
-    "contacts where possible. Functionally check the",
-    "c) Lubricate the motor contactor in accordance with the",
-    "a) Functionally test automatic transfer switches by",
-    "normal power. Use a thermographic camera to check for",
-    "positions. Check the function of mechanical interlocks",
-    "b) Mechanically inspect and exercise the automatic transfer",
-    "switch. Check for smooth operation and ensure the",
-    "c) Lubricate the automatic transfer switch in accordance",
-    "a) Physical condition of fuse housing/base.",
-    "b) Operate switches to check for smooth operation and to",
-    "confirm that the mechanism is not binding and is",
-    "c) Lubricate the switches in accordance with the",
-    "d) During the mechanical inspection, check that fuses are",
-    "blown fuses, it is good practice to replace all three",
-    "a) Trip and Close Coil Voltages.",
-    "Measure the voltage required to operate the trip and close",
-    "coils. Also verify the trip and close coils are functioning",
-    "b) Insulation Resistance.",
-    "Apply 1000Vdc for one minute with the circuit breaker",
-    "contacts open and closed to measure phase-to-phase and",
-    "phase-to-earth resistance for each pole.",
-    "Insulation resistance readings must be >100 MΩ.",
-    "c) Primary Current Injection Testing.",
-    "Circuit breaker with direct tripping can only be tested by",
-    "Verify proper operation and response of the protection",
-    "functions of the breaker.",
-    "The protection relays must pick up and operate at currents",
-    "d) Time Travel Record the time travel curve for the circuit",
-    "breaker. Compare to manufacturer’s time travel curve as",
-    "well as to previous test results to determine if there is",
-    "any deterioration in the circuit breaker operating",
-    "a) Insulation Resistance.",
-    "open and closed to measure phase-to-phase and phase-to-",
-    "earth resistance for each pole. Insulation resistance",
-    "phase-to-earth resistance for each pole. Insulation",
-    "a) Low Resistance.",
-    "Measure the resistance of bolted connections using a low",
-    "50% between resistance readings. Also check that the",
-    "Protection Relays.",
-    "a) Secondary injection testing.",
-    "Apply 1000Vdc for 1-minute to measure phase-to-earth",
-    "Perform secondary current injection testing to check the",
-    "functions of the protection relays. Check all protective",
-    "functions and verify that the relay settings are in",
-    "accordance with the most up to date protection",
-  ],
-  "3.2.8 Bus Duct / Bus Riser (>800A, <1000 Vac)": [
-    "Visual Inspection.",
-    "The operator must check that the bus riser is operating in a",
-    "clean, cool and dry environment with no abnormal noises,",
-    "smells, vibration or heat.",
-    "a) Access to bus riser space safely and protected against",
-    "b) Arcing can be detected by sound as well as burnt smell.",
-    "c) The presence of blistered or blackened paint, the smell",
-    "of overheated plastic, and the visual condition of",
-    "insulation are good indicators of overheating.",
-    "d) Damaged or missing insulators/supports/clamps.",
-    "e) Foreign objects, pooled water, leaks, rodents, and",
-    "f) Heater settings and operation checks (measurement of",
-    "g) Signs of circulating and leakage current.",
-    "Thermography.",
-    "• Terminations.",
-    "• Bolted connections.",
-    "• Earth connections",
-    "• Tap offs.",
-    "(any areas of concern following thermography test must be",
-    "Test – Intrusive Maintenance",
-    "(breaker, isolators, fusible units etc).",
-    "Check the mechanisms for smooth operation and to confirm",
-    "Ensure the protection settings / fuse selections are correct.",
-    "Measure the resistance of bolted connections using a low",
-    "50% between resistance readings. Also check that the",
-    "a) Low Resistance.",
-    "b) Earthing Resistance and Integrity checks.",
-    "c) Torque checks.",
-    "d) Operational checks of inline mechanical",
-    "components (breaker, isolators, fusible units etc).",
-    "Lubricate the mechanisms in accordance with the",
-    "Apply 1000Vdc for one minute with the circuit breaker",
-    "contacts open and closed to measure phase-to-phase and",
-    "phase-to-earth resistance for each pole.",
-    "Insulation resistance readings must be >100 MΩ.",
-    "a) Insulation Resistance.",
-    "contacts open and closed to measure phase-to-phase",
-    "and phase-to-earth resistance for each pole.",
-  ],
-  "3.2.9 Power Factor Correction (<1000 V ac)": [
-    "3 months Visual Inspection.",
-    "a) Check capacitors, contactors, resistors, reactors and",
-    "Capacitor Condition Test.",
-    "b) Check capacitor bank for moisture, cleanliness,",
-    "c) Check ambient temperature.",
-    "d) Check measured power factor and alarms",
-    "e) Check power factor trends and harmonic levels.",
-    "a) Carry out capacitor condition tests for each phase on",
-    "each step. This test shall include measuring the",
-    "capacitance of each capacitor.",
-    "b) If the value of individual capacitors is found have",
-    "Thermography.",
-    "b) Bolted connections and terminations.",
-    "c) MCCB and fuses.",
-    "d) Thyristors or SCR (Silicon-Controlled-Rectifier) modules.",
-    "b) Check for damage.",
-    "a) Ensure correct operation of discharge resistors as per",
-    "c) Check rating(s) are correct for capacitor ratings.",
-    "d) Check free operation of MCCB and contactor",
-    "e) Ensure fuses are not 'blown'. (Replace with correct",
-    "f) Check for evidence of overheating. Renew where",
-    "Thermal protection fitted internal to equipment.",
-    "a) Check cleanliness.",
-    "b) Check settings per manufacturer recommendations.",
-    "c) Perform functional tests, including operation of fans.",
-    "a) Check operation of capacitor stages.",
-    "b) Check for alarms.",
-    "c) Check for correct settings.",
-  ],
-  "3.2.10 Distribution Boards (<1000 V ac)": [
-    "3 months Visual Inspection.",
-    "a) Check for cleanliness external and internal of panel.",
-    "b) Check for signs of exterior damage and corrosion.",
-    "c) Check that panels are access controlled.",
-    "d) Check for earthing of distribution board panel doors.",
-    "e) Check the label and circuit charts are present and",
-    "a) Check for accuracy of descriptions. Update schedules as",
-    "Ingress Protection.",
-    "a) Check that the distribution board’s IP rating is suitable",
-    "b) Check for missing gland plates, glands and plugs.",
-    "c) Verify that board has protection against accidently",
-    "60529. It must not be possible for persons to touch any",
-    "a) Check for damage.",
-    "b) Check rating(s) where practicable.",
-    "c) Check free operation of MCB mechanisms where",
-    "d) Check for evidence of overheating. Renew where",
-    "Thermal Imaging.",
-    "Conduct thermal imaging of distribution boards ensuring",
-    "• Solid insulation, Bolted connections, Electrical",
-    "• Panel exterior.",
-    "• Accessible internal components.",
-    "Cable Insulation.",
-    "a) Check condition and inspect for signs of overheating.",
-    "b) If possible, identify cause of overheating and report.",
-    "a) Check all phase, neutral and earth connections and",
-    "b) Check tightness of all connections.",
-    "c) Cable terminations to be supported by glands or suitable",
-    "a) Check for tightness.",
-    "b) Check continuity to earth of cable gland.",
-    "Earth-Fault Loop Impedance Testing.",
-    "Earth loop impedance testing must be carried out at:",
-    "a) The origin of the installation (unless value available via",
-    "b) At each distribution board.",
-    "c) At all fixed equipment.",
-    "d) At all socket outlets.",
-    "e) 10% of all lighting outlets (choosing farthest point from",
-    "f) Furthest point of every radial circuit.",
-    "The impedance of the phase-earth loop of a circuit must be",
-    "Note: Earth-Fault Loop Impedance testing removes the",
-    "need to conduct earth continuity tests because the earth",
-    "Residual Current Devices (RCD’s)",
-    "a) Check operation via test button (6 months).",
-    "b) Test with approved RCD tester (annual).",
-  ],
-  "3.2.11 AC Induction Motors <1000 V ac <400 kW": [
-    "Visually inspect the following:",
-    "• Motor foundations.",
-    "• Shaft alignment.",
-    "• Earth connections.",
-    "• Cooling fan cowling",
-    "• Air filters.",
-    "• Baffles.",
-    "• Motor circuit identification labelling is present and",
-    "• Corrosion.",
-    "• Chemical attack.",
-    "• Physical damage.",
-    "• Incorrect use of lubrication and over lubrication of",
-    "• No undue build-up of dust on the motor.",
-    "• Cable & glanding.",
-    "• Fixing bolts.",
-    "a) Winding Resistance.",
-    "Measure the resistance of the motor windings using an",
-    "ohmmeter. Check the resistances are balanced.",
-    "b) Insulation Resistance.",
-    "Measure the winding to earth insulation resistance for each",
-    "The insulation resistance reading correct to 40˚C must be",
-    "c) Dielectric Absorption.",
-    "insulation resistance at 30 seconds to the insulation",
-    "a) Check:",
-    "• Tightness of all connections.",
-    "• For signs of overheating in motor starter cubicle.",
-    "• Motor fuse rating and characteristic is correct to",
-    "• Operation of motor protection devices.",
-    "• Condition of fixed and moving contacts. Replace as",
-    "• Control panel functions correctly.",
-    "• Indicator lights for correct operation replace as",
-    "b) Earth Fault Loop Impedance.",
-    "Apply phase to earth link at the motor terminals and",
-    "determine the motor circuit earth loop impedance. Confirm",
-    "c) Motor Circuit Insulation Resistance.",
-    "Measure the phase to earth insulation resistance for each",
-    "phase of the motor circuit. This test encompasses both the",
-    "supply and motor cables and test separately.",
-  ],
-  "3.2.12 Hazardous Areas": [
-    "are used to check",
-    "type of protection",
-    "may be visual or",
-  ],
-  "3.2.12.1 Hazardous Area Inspection Schedules": [
-    "Installations (D = Detailed, C = Close, V = Visual).",
-    "Check That",
-    "Equipment Protection Levels (EPL) / Zone",
-  ],
-  "11 Bolts, cable entry devices (direct and": [
-    "- Physical check.",
-    "- Visual check.",
-  ],
-  "16 Dimensions of flanged joint gaps are:": [
-    "– Within the limits in accordance with",
-    "– Within maximum values permitted by",
-  ],
-  "31 Insulation resistance (IR) of the motor": [
-    "(D = detailed, C = close, V = visual)",
-    "Check That",
-  ],
-  "4 Stopping boxes and cable boxes are": [
-    "- Physical check.",
-    "- Visual check.",
-  ],
-  "2 No undue accumulation of dust and dirt.": [
-    "Electrical insulation is clean and dry.",
-    "NOTE 1 General: the checks used for equipment using both types of protection",
-    "“e” and “d” will be a combination of both columns. For hybrid protections, visual",
-    "test equipment.",
-    "(D = detailed, C = close, V = visual)",
-    "Check That",
-    "appropriate to the Equipment Protection Levels (EPL)",
-  ],
-  "10 Cable glands and blanking elements are the correct": [
-    "– Physical check.",
-    "– Visual check.",
-  ],
-  "17 The maximum voltage Um of the associated": [
-    "Earth continuity is satisfactory (e.g., connections are",
-    "Earth connections maintain the integrity of the type of",
-    "protection.",
-    "Check That",
-    "Insulation resistance is satisfactory.",
-  ],
-  "13 Cables not in use are correctly terminated.": [
-    "weather, vibration and other adverse factors.",
-    "(D = detailed, C = close, V = visual)",
-    "Check That",
-    "Equipment is appropriate to the Equipment Protection",
-    "- Physical check.",
-    "- Visual check.",
-  ],
-  "3.2.13 Emergency Lighting Systems": [
-    "• Switch each luminaire and each internally",
-    "rated duration test shall be recorded.",
-    "the battery. This simulates a failure of the supply",
-    "• For central battery systems, the correct operation",
-    "• Each luminaire and internally illuminated sign shall",
-    "be tested as per monthly test but for its full rated",
-    "• The supply of the normal lighting shall be restored,",
-    "• The date of the test and its results shall be",
-    "• Lux measurements to ensure it meets the",
-    "• In locations where personnel are expected to work",
-  ],
-  "REQUIREMENTS": [
-    "• The UPS asset must be included in computerised maintenance",
-    "o Type of battery / Battery code.",
-    "o Year of installation of the battery.",
-    "• The UPS must be in suitable ambient conditions within",
-    "Perform Visual Inspection",
-    "UPS Battery Test",
-    "• Inspect the UPS solution to ensure that unit is",
-    "• Check UPS has no outstanding alarms. Any alarms",
-    "• Check UPS is clean and free of dust. Pay attention to",
-    "any vents on UPS. Clean and replace any filters as",
-    "• Perform battery test and maintenance as per item",
-    "3.2.16 accordingly with the type of battery installed on",
-    "the UPS system.",
-    "• During the assets 7th year (asset is over 7 years old)",
-    "schedule replacement of UPS.",
-  ],
-  "MANDATORY REQUIREMENTS": [
-    "• The UPS must be included in computerised maintenance",
-    "o Type of battery / Battery code.",
-    "o Year of installation of the battery.",
-    "Perform Visual Inspection",
-    "• The UPS must be in a clean (free from excessive dust)",
-    "• Inspect the UPS. Ensure all components are clean and",
-    "• Check UPS fans and filters. Replace / clean filters as",
-    "• Verify and document that the system’s environment is",
-    "o UPS airflow and that there is no dust",
-    "contamination within the UPS.",
-    "• Inspect all power and control wire termination points as",
-    "well as all UPS system components.",
-    "• Determine components with the UPS that are",
-    "• Check UPS event and alarm logs.",
-    "• Verify that input, output and bypass voltage and current",
-    "• Verify that the installed communication options are",
-    "• Verify on battery operation and transfer to and from",
-    "Check parallel operation performance when applicable.",
-    "• Verify and implement all required firmware upgrades.",
-    "• Check all circuit board revisions and update as required.",
-    "Replace components at OEM recommended intervals. E.g.",
-    "UPS Battery Test",
-    "• Perform battery test and maintenance as per item",
-    "3.2.16 accordingly with the type of battery installed on",
-    "the UPS system.",
-    "UPS mid-life overhaul",
-    "• Follow manufacturer recommendations for the",
-    "replacement of UPS system components.",
-    "UPS replacement",
-    "• During the assets 12th year (asset is over 12 years old)",
-    "schedule replacement of UPS.",
-  ],
-  "3.2.16 Battery Systems": [
-    "Visual inspection of Charger Unit",
-    "Check cleanliness. Check indicators and meters. Check",
-    "alarm logs, if available. Check cooling fan operation",
-    "Check power capacitors for exterior signs of degradation,",
-    "Check and record charger voltage and current. Check",
-    "1 to 3 yrs. Perform a load discharge test to frequency and instructions",
-    "Replace the battery when its measured capacity approaches",
-    "Check and record charger voltage and current. Check and",
-    "record ambient temperature, and for evidence of corrosion,",
-    "Perform a load discharge test as per manufacturing",
-  ],
-  "3.2.17 Variable Speed Drives": [
-    "Visual Inspection",
-    "• Check for cleanliness external and internal to panel,",
-    "particularly around ventilation openings and fans – clean",
-    "• Check for signs of damage and corrosion.",
-    "• Check controller for alarms.",
-    "• Check ambient temperature and any signs of",
-    "Ingress Protection",
-    "• Check correct and permanent label is fitted.",
-    "• Check that the drive’s IP rating is suitable for the",
-    "• Check for missing gland plates, glands and plugs.",
-    "• Verify that panel has protection against accidental",
-    "• Check filters and clean or replace, as necessary.",
-    "• Check correct operation of fans.",
-    "Thermal Imaging",
-    "Conduct thermal imaging ensuring the following items are",
-    "• Panel exterior.",
-    "• Accessible internal components, cables.",
-    "• Carry out capacitor condition test. This test shall include",
-    "measuring the capacitance of each capacitor. If the",
-    "more than 10% isolate drive and replace.",
-    "• If the drive contains plastic can capacitors that are older",
-    "than 10 years isolate the drive and replace.",
-    "• Check all phase, and earth connections and",
-    "• Check tightness of all connections.",
-    "• Replace fans in line with manufacturer",
-    "• Cable terminations to be supported by glands or suitable",
-  ],
-  "3.2.18 Fire Detection and Fire Alarm Systems": [
-    "• A manual call point must be operated during normal",
-    "transmitted. The test should be carried out at",
-    "• In systems with staged alarms incorporating an “Alert”",
-    "• In facilities where some employees only work during",
-    "normally tested (e.g., shift workers), an additional test(s)",
-    "• A different manual call point must be used at the time of",
-    "every weekly test, so that all manual call points in the",
-    "system with 150 manual call points, the user will test",
-    "• The result of the weekly test and the identity of the",
-    "• The duration for which any fire alarm signal is given",
-    "the time of the weekly test by the user should not",
-    "fire at the time of the weekly test, occupants will be",
-    "Periodic Inspection and Test of the System",
-    "• The system logbook must be examined. It must be",
-    "• A visual inspection must be made to check whether",
-    "• The records of false alarms must be checked. The rate",
-    "• The fire alarm functions of the control and indicating",
-    "• The operation of the fire alarm devices must be",
-    "• All controls and visual indicators at control and",
-    "• The operation of any facility for automatic transmission",
-    "• All ancillary functions of the control and indicating",
-    "• All fault indicators and their circuits should be checked,",
-    "• All printers must be tested to ensure that they operate",
-    "• Radio systems of all types must be serviced in",
-    "• On completion of the work, any outstanding defects",
-    "Annual Inspection and Test of the System",
-    "• The switch mechanism of every manual call point",
-    "element, insertion of a test key or operation of the",
-    "• All automatic fire detectors and remote detectors",
-    "• Every heat detector must be functionally tested by",
-    "integrating line detectors). Special test",
-    "• Point smoke detectors must be functionally tested by",
-    "• Optical beam smoke detectors must be functionally",
-    "filter, smoke or simulated smoke.",
-    "• Aspirating fire detection systems must be",
-    "• Carbon monoxide fire detectors must be functionally",
-    "• Flame detectors must be functionally tested by a",
-    "• In fire detection systems that enable analogue",
-    "• Multi-sensor detectors must be operated by a",
-    "confirmed that visual fire alarm devices are not",
-    "clean.",
-    "• A visual inspection must be made to confirm that all",
-    "• The standby power supply capacity must be checked",
-    "• Interlocks to equipment such as door access control",
-    "record of the inspection and test must be made on",
-    "Battery Inspection",
-    "Perform battery test and maintenance as per item 3.2.16",
-    "accordingly with the type of battery installed on the system.",
-    "Battery Test/Maintenance",
-    "Perform battery test and maintenance as per item",
-    "3.2.16 accordingly with the type of battery installed",
-  ],
-  "4 Roles & Responsibility": [
-    "• A Haleon employee in a local senior leadership",
-    "Function SME",
-    "• Able to control, direct or influence resources, both",
-  ],
-  "5.1 Regulations / External References": [
-    "• IEC 60364 - Electrical Installations for Buildings",
-    "• IEC 60529 – Degrees of protection provided by enclosures (IP",
-    "• IEC 60079 – Explosive Atmosphere Standards Series",
-  ],
-};
-
-
-/**
- * Return a flat list of all controls (strings).
- */
-export function allControls() {
-  return Object.values(TSD_FULL_CONTROLS).flat();
-}
-
-/**
- * Return controls for a given section title (exact match).
- */
-export function controlsForSection(sectionTitle) {
-  return TSD_FULL_CONTROLS[sectionTitle] || [];
-}
-
-/**
- * Search controls by a keyword (case-insensitive).
- */
-export function searchControls(keyword) {
-  if (!keyword) return [];
-  const k = keyword.toLowerCase();
-  const results = [];
-  for (const [section, items] of Object.entries(TSD_FULL_CONTROLS)) {
-    for (const line of items) {
-      if (line.toLowerCase().includes(k)) {
-        results.push({ section, line });
-      }
-    }
-  }
-  return results;
-}
-
-
-/**
- * Integrated facade that combines the original library with the exhaustive, line-by-line control set.
- * - Preserves all original exports.
- * - Adds `TSD_FULL_CONTROLS` (by section), `allControls`, `controlsForSection`, `searchControls`.
- * - Adds `getIntegratedControls()` to retrieve a consolidated structure useful for CMMS binding.
- */
-export function getIntegratedControls() {
-  // If the original library defines structured equipment/tasks, we expose both:
-  const sections = TSD_FULL_CONTROLS;
-  const controls = allControls();
-
-  return {
-    sections,          // { sectionTitle: [ "control line", ... ] }
-    controls,          // [ "control line", ... ]
-  };
-}
-
-/**
- * Generate stable IDs for controls (useful for CMMS field keys, diffing, etc.).
- * ID format: `${crc32(section)}-${index}-${crc32(line)}`
- */
-export function controlIds() {
-  function crc32(str) {
-    let c = 0 ^ -1;
-    for (let i = 0; i < str.length; i++) {
-      c = (c >>> 8) ^ CRC_TABLE[(c ^ str.charCodeAt(i)) & 0xFF];
-    }
-    return (c ^ -1) >>> 0;
-  }
-  const CRC_TABLE = (() => {
-    const t = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let c = n;
-      for (let k = 0; k < 8; k++) {
-        c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : (c >>> 1);
-      }
-      t[n] = c >>> 0;
-    }
-    return t;
-  })();
-
-  const ids = [];
-  let idx = 0;
-  for (const [section, items] of Object.entries(TSD_FULL_CONTROLS)) {
-    const sHash = crc32(section).toString(16);
-    for (let i = 0; i < items.length; i++) {
-      const line = items[i];
-      const lHash = crc32(line).toString(16);
-      ids.push({ id: `${sHash}-${idx}-${lHash}`, section, line });
-      idx++;
-    }
-  }
-  return ids;
-}
-
-// === END: Auto-integrated block ===
