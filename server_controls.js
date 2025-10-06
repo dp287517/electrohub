@@ -185,6 +185,14 @@ async function ensureSchema() {
     );
   `);
 
+  // Sécurisation des schémas partiels préexistants (corrige "column task_code ... does not exist")
+  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS task_code TEXT;`);
+  await pool.query(`ALTER TABLE controls_records ADD COLUMN IF NOT EXISTS entity_id INTEGER REFERENCES controls_entities(id) ON DELETE SET NULL;`);
+
+  // Index utiles pour l'audit et les requêtes
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_records_site_created_at ON controls_records(site, created_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_controls_records_entity_task ON controls_records(entity_id, task_code);`);
+
   // ALTER compat
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS code TEXT;`);
   await pool.query(`ALTER TABLE controls_entities ADD COLUMN IF NOT EXISTS done JSONB DEFAULT '{}'::jsonb;`);
@@ -249,6 +257,22 @@ async function ensureSchema() {
     ON controls_tasks(site, entity_id, COALESCE(cluster, task_code))
     WHERE status IN ('Planned','Overdue','Pending');
   `);
+
+  // Audit IA : stockage des dérives détectées
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS controls_ai_audit (
+      id SERIAL PRIMARY KEY,
+      site TEXT,
+      entity_id INTEGER REFERENCES controls_entities(id) ON DELETE CASCADE,
+      task_code TEXT,
+      nc_rate NUMERIC,
+      drift_score NUMERIC,
+      sample_size INTEGER,
+      last_eval TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_audit_site_score ON controls_ai_audit(site, drift_score DESC, last_eval DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_audit_entity_task ON controls_ai_audit(entity_id, task_code);`);
 
   log("schema ensured");
 }
@@ -603,46 +627,94 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { user = "tech", results = {}, ai_risk_score = null, notes = "" } = req.body || {};
+
     const { rows: trows } = await pool.query(
       `SELECT ct.*, ce.equipment_type, ce.name AS entity_name
-       FROM controls_tasks ct LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
-       WHERE ct.id=$1`, [id]);
+       FROM controls_tasks ct
+       LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
+       WHERE ct.id=$1`,
+      [id]
+    );
     if (!trows.length) return res.status(404).json({ error: "Not found" });
     const t = trows[0];
 
     const today = todayISO();
+
+    // 1) Marque la tâche comme complétée
     await pool.query(
-      `UPDATE controls_tasks SET status='Completed', results=$1, last_control=$2, updated_at=NOW() WHERE id=$3`,
+      `UPDATE controls_tasks
+         SET status='Completed', results=$1, last_control=$2, updated_at=NOW()
+       WHERE id=$3`,
       [JSON.stringify(results || {}), today, id]
     );
 
     const doneKey = t.cluster || t.task_code;
+
+    // 2) Historise l'action de complétion
     await pool.query(
-      "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta, results) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-      [t.site || "Nyon", id, t.task_name, user, user, "Completed", JSON.stringify({ ai_risk_score, results, notes }), JSON.stringify(results || {})]
+      `INSERT INTO controls_history
+         (site, task_id, task_name, user_name, "user", action, meta, results)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        t.site || "Nyon",
+        id,
+        t.task_name,
+        user,
+        user,
+        "Completed",
+        JSON.stringify({ ai_risk_score, results, notes }),
+        JSON.stringify(results || {})
+      ]
     );
+
+    // 3) Enregistre un snapshot synthétique pour l’audit/IA
     await pool.query(
-      "INSERT INTO controls_records (site, entity_id, task_code, results, created_by) VALUES ($1,$2,$3,$4,$5)",
+      `INSERT INTO controls_records
+         (site, entity_id, task_code, results, created_by)
+       VALUES ($1,$2,$3,$4,$5)`,
       [t.site || "Nyon", t.entity_id, doneKey, JSON.stringify(results || {}), user]
     );
+
+    // (Point 5) Hook optionnel : notifier un worker d’audit si tu en ajoutes un plus tard
+    // await pool.query("NOTIFY ai_audit, $1", [JSON.stringify({ site: t.site || "Nyon", entity_id: t.entity_id, task_code: doneKey })]);
+
+    // 4) Met à jour le cache "done" côté entité
     await pool.query(
-      "UPDATE controls_entities SET done = done || jsonb_build_object($1, $2) WHERE id=$3",
+      `UPDATE controls_entities
+          SET done = done || jsonb_build_object($1, $2)
+        WHERE id=$3`,
       [doneKey, today, t.entity_id]
     );
 
-    // NC simple (texte)
+    // 5) Détection simple d'une non-conformité texte
     let ncFound = false;
     const flatVals = typeof results === "object" ? JSON.stringify(results).toLowerCase() : "";
-    if (flatVals.includes("non_conforme") || flatVals.includes("\"ko\"") || flatVals.includes("reject")) ncFound = true;
-    if (ncFound) {
+    if (
+      flatVals.includes("non_conforme") ||
+      flatVals.includes("\"ko\"") ||
+      flatVals.includes("reject")
+    ) {
+      ncFound = true;
       await pool.query(
-        "INSERT INTO controls_history (site, task_id, task_name, user_name, \"user\", action, meta) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-        [t.site || "Nyon", id, t.task_name, user, user, "NC", JSON.stringify({ reason: "Checklist non conforme", results })]
+        `INSERT INTO controls_history
+           (site, task_id, task_name, user_name, "user", action, meta)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          t.site || "Nyon",
+          id,
+          t.task_name,
+          user,
+          user,
+          "NC",
+          JSON.stringify({ reason: "Checklist non conforme", results })
+        ]
       );
     }
 
+    // 6) Programme la prochaine occurrence selon la fréquence TSD
     const freq = t.frequency_months || 12;
     const next = addMonths(today, freq);
+
     const { rows: curRows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
     const cur = curRows[0];
 
@@ -651,12 +723,29 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
           site, entity_id, task_name, task_code, cluster, frequency_months,
           last_control, next_control, status, value_type, result_schema,
           procedure_md, hazards_md, ppe_md, tools_md, threshold_text, created_by
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,$16)
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,
+          $7,$8,'Planned',$9,$10,
+          $11,$12,$13,$14,$15,$16
+        )
         RETURNING id`,
       [
-        cur.site, cur.entity_id, cur.task_name, cur.task_code, cur.cluster, cur.frequency_months,
-        today, next, cur.value_type, cur.result_schema,
-        cur.procedure_md, cur.hazards_md, cur.ppe_md, cur.tools_md, cur.threshold_text, user || 'system'
+        cur.site,
+        cur.entity_id,
+        cur.task_name,
+        cur.task_code,
+        cur.cluster,
+        cur.frequency_months,
+        today,
+        next,
+        cur.value_type,
+        cur.result_schema,
+        cur.procedure_md,
+        cur.hazards_md,
+        cur.ppe_md,
+        cur.tools_md,
+        cur.threshold_text,
+        user || "system"
       ]
     );
 
@@ -674,6 +763,7 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
     const id = Number(req.params.id);
     const { question = "", use_pre_images = true, attachment_ids = [] } = req.body || {};
 
+    // Tâche + entité
     const { rows: trows } = await pool.query(
       `SELECT ct.*, ce.equipment_type, ce.name AS entity_name, ce.code AS entity_code, ce.building
        FROM controls_tasks ct
@@ -682,34 +772,82 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
     if (!trows.length) return res.status(404).json({ error: "Not found" });
     const t = trows[0];
 
+    // TSD items du cluster
     const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
-    const items = t.cluster ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
-                            : tsdItems.filter(it => it.id === t.task_code);
+    const items = t.cluster
+      ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
+      : tsdItems.filter(it => it.id === t.task_code);
 
+    // Contexte historique (derniers enregistrements pour l’IA)
+    const { rows: recent } = await pool.query(
+      `SELECT results, created_at
+       FROM controls_records
+       WHERE site = $1 AND entity_id = $2 AND task_code = $3
+       ORDER BY created_at DESC LIMIT 10`,
+      [t.site || "Nyon", t.entity_id, (t.cluster || t.task_code)]
+    );
+
+    // Récupération d'images
     let images = [];
     if (use_pre_images || (attachment_ids && attachment_ids.length)) {
       const { rows: atts } = attachment_ids.length
-        ? await pool.query(`SELECT * FROM controls_attachments WHERE task_id=$1 AND id = ANY($2::int[]) ORDER BY uploaded_at DESC`, [id, attachment_ids])
-        : await pool.query(`SELECT * FROM controls_attachments WHERE task_id=$1 AND (label ILIKE 'pre%' OR label IS NULL) ORDER BY uploaded_at DESC LIMIT 4`, [id]);
-      images = atts.map(a => ({ type: "image_url", image_url: { url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}` } }));
+        ? await pool.query(
+            `SELECT * FROM controls_attachments
+             WHERE task_id=$1 AND id = ANY($2::int[])
+             ORDER BY uploaded_at DESC`, [id, attachment_ids]
+          )
+        : await pool.query(
+            `SELECT * FROM controls_attachments
+             WHERE task_id=$1 AND (label ILIKE 'pre%' OR label IS NULL)
+             ORDER BY uploaded_at DESC LIMIT 4`, [id]
+          );
+
+      // Filtrage images valides (mime image/*) + conversion base64
+      images = atts
+        .filter(a => (a.mimetype || "").startsWith("image/") && a.data)
+        .map(a => ({
+          type: "image_url",
+          image_url: { url: `data:${a.mimetype};base64,${Buffer.from(a.data).toString("base64")}` }
+        }));
     }
 
-    const system = `Tu es l'assistant sécurité & qualité pour des contrôles électriques. \nRédige des consignes claires pour: EPI, zones à observer, points de mesure, appareil requis, interprétation des mesures, et alertes.\nRéponds en français, en listes courtes et actions concrètes.`;
+    // Prompt système + utilisateur
+    const system = `Tu es l'assistant sécurité & qualité pour des contrôles électriques.
+Donne des consignes concrètes en français, sous forme de listes d'actions.
+Couvre: EPI, zones à observer, points de mesure, appareil requis, interprétation des mesures, alertes.
+Intègre les seuils et l'historique récent si pertinent.`;
 
-    const content = [
-      { type: "text", text:
-        `Équipement: ${t.equipment_type} • ${t.entity_name} (${t.entity_code}) • Bâtiment ${t.building || "?"}\nTâche: ${t.task_name}\nFréquence: ${t.frequency_months || 12} mois\nSeuils: ${t.threshold_text || "(voir items)"}\nPoints: ${items.map(it => `- ${it.label}`).join("\n")}\nQuestion: ${question || "(guidage pré-intervention)"}`
-      },
-      ...images
-    ];
+    const contentText = [
+      `Équipement: ${t.equipment_type} • ${t.entity_name} (${t.entity_code}) • Bâtiment ${t.building || "?"}`,
+      `Tâche: ${t.task_name}`,
+      `Fréquence: ${t.frequency_months || 12} mois`,
+      `Seuils: ${t.threshold_text || "(voir items)"}`,
+      `Points:`,
+      ...items.map(it => `- ${it.label}`),
+      `Historique (résumé rapide des ${recent.length} derniers enregistrements):`,
+      ...recent.map(r => `• ${new Date(r.created_at).toISOString().slice(0,10)} -> ${JSON.stringify(r.results).slice(0,160)}${JSON.stringify(r.results).length>160?'…':''}`),
+      `Question: ${question || "(guidage pré-intervention)"}`
+    ].join("\n");
 
     if (!process.env.OPENAI_API_KEY) {
-      return res.json({ ok: true, message: `Conseils IA (mode local):\n- EPI: gants isolants adaptés, lunettes, casque.\n- Avant d'ouvrir: consignation si besoin, balisage zone.\n- Photos claires des bornes/écrans. Mesure avec l’appareil indiqué dans la procédure.\n- Compare la valeur aux seuils: ${t.threshold_text || "cf. items"}.` });
+      return res.json({
+        ok: true,
+        message:
+`Conseils IA (mode local):
+- EPI: gants isolants, lunettes, casque, vêtements anti-arc.
+- Sécurise la zone: consignation si nécessaire, balisage, absence de tension.
+- Photo: cadrer bornes, étiquettes, écrans; lisibilité n°/valeurs.
+- Mesures: respecte la procédure et compare aux seuils: ${t.threshold_text || "cf. items"}.
+- Si doute/NC: stop, prévenir et créer action corrective.`
+      });
     }
 
     const chat = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: [ { role: "system", content: system }, { role: "user", content } ],
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: [{ type: "text", text: contentText }, ...images] }
+      ],
       temperature: 0.2
     });
 
@@ -815,6 +953,110 @@ app.get("/api/controls/records", async (req, res) => {
     [site]
   );
   res.json(rows);
+});
+
+// ---------------------------------------------------------------------------
+// AI AUDIT — détection de dérives (nc_rate, drift_score)
+// ---------------------------------------------------------------------------
+
+// Utilitaire: calc taux de NC (non_conforme/KO) dans un objet results
+function computeNcRate(rows) {
+  if (!rows.length) return 0;
+  let nc = 0;
+  for (const r of rows) {
+    const txt = JSON.stringify(r.results || {}).toLowerCase();
+    if (txt.includes("non_conforme") || txt.includes("\"ko\"") || txt.includes("reject")) nc++;
+  }
+  return nc / rows.length;
+}
+
+// Calcule un score de dérive simple entre période récente et période plus ancienne
+function driftScore(prevRate, currRate) {
+  // Amplifie la variation, bornée à 1.0
+  return Math.min(1, Math.abs(currRate - prevRate) * 5);
+}
+
+// Lance un audit sur N derniers enregistrements par (entity_id, task_code)
+app.post("/api/controls/ai/audit-run", async (req, res) => {
+  try {
+    const site = req.headers["x-site"] || req.body?.site || "Nyon";
+    const windowRecent = Math.max( Number(req.body?.recent || 20), 5 );  // min 5
+    const windowPast   = Math.max( Number(req.body?.past   || 50), 10 ); // min 10
+
+    // Candidats: couples ayant de l'historique
+    const { rows: pairs } = await pool.query(
+      `SELECT entity_id, task_code, COUNT(*) AS c
+       FROM controls_records
+       WHERE site=$1
+       GROUP BY entity_id, task_code
+       HAVING COUNT(*) >= $2`,
+      [site, windowRecent + windowPast]
+    );
+
+    let audited = 0;
+    for (const p of pairs) {
+      const { rows: allrows } = await pool.query(
+        `SELECT results, created_at
+         FROM controls_records
+         WHERE site=$1 AND entity_id=$2 AND task_code=$3
+         ORDER BY created_at DESC
+         LIMIT $4`,
+        [site, p.entity_id, p.task_code, windowRecent + windowPast]
+      );
+
+      const recent = allrows.slice(0, windowRecent);
+      const past   = allrows.slice(windowRecent);
+
+      const rRate = computeNcRate(recent);
+      const pRate = computeNcRate(past);
+      const dScore = driftScore(pRate, rRate);
+
+      await pool.query(
+        `INSERT INTO controls_ai_audit (site, entity_id, task_code, nc_rate, drift_score, sample_size, last_eval)
+         VALUES ($1,$2,$3,$4,$5,$6,NOW())
+         ON CONFLICT DO NOTHING`,
+        [site, p.entity_id, p.task_code, rRate, dScore, allrows.length]
+      );
+
+      // Upsert "manuel" (au cas où tu veuilles écraser la ligne existante la plus récente)
+      await pool.query(
+        `DELETE FROM controls_ai_audit
+         WHERE id IN (
+           SELECT id FROM controls_ai_audit
+           WHERE site=$1 AND entity_id=$2 AND task_code=$3
+           ORDER BY last_eval DESC
+           OFFSET 1
+         )`,
+        [site, p.entity_id, p.task_code]
+      );
+
+      audited++;
+    }
+
+    res.json({ ok: true, site, audited, pairs: pairs.length, windowRecent, windowPast });
+  } catch (e) {
+    res.status(500).json({ error: "Erreur audit IA", details: e.message });
+  }
+});
+
+// Liste les dérives (tri décroissant sur drift_score)
+app.get("/api/controls/ai/audit", async (req, res) => {
+  try {
+    const site = req.headers["x-site"] || req.query.site || "Nyon";
+    const limit = Math.min(Number(req.query.limit || 200), 1000);
+    const { rows } = await pool.query(
+      `SELECT a.*, e.name AS entity_name, e.code AS entity_code, e.building
+       FROM controls_ai_audit a
+       LEFT JOIN controls_entities e ON e.id = a.entity_id
+       WHERE a.site=$1
+       ORDER BY a.drift_score DESC, a.last_eval DESC
+       LIMIT $2`,
+      [site, limit]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "Erreur list audit", details: e.message });
+  }
 });
 
 // ---------------------------------------------------------------------------
