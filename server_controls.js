@@ -698,13 +698,17 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
 });
 
 // (B) Compléter — robuste (ON CONFLICT + fallback) + NC + création prochaine occurrence
+// ---------------------------------------------
+// POST /api/controls/tasks/:id/complete
+// ---------------------------------------------
 app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const { user = "tech", results = {}, ai_risk_score = null, notes = "" } = req.body || {};
 
+    // 0) Tâche + entité
     const { rows: trows } = await pool.query(
-      `SELECT ct.*, ce.equipment_type, ce.name AS entity_name
+      `SELECT ct.*, ce.equipment_type, ce.name AS entity_name, ce.code AS entity_code
        FROM controls_tasks ct
        LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
        WHERE ct.id=$1`,
@@ -715,19 +719,28 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
 
     const today = todayISO();
 
-    // 1) Compléter la tâche courante
+    // 1) Compléter la tâche courante (JSONB)
     await pool.query(
       `UPDATE controls_tasks
-        SET status='Completed', results=$1::jsonb, last_control=$2, updated_at=NOW()
-      WHERE id=$3`,
+         SET status='Completed',
+             results=$1::jsonb,
+             last_control=$2,
+             updated_at=NOW()
+       WHERE id=$3`,
       [results || {}, today, id]
     );
 
-    // 2) Historique (on caste meta et results)
+    // ⚠️ Définir la clé de "cluster" / code pour historiser et marquer l'entité
+    const doneKey =
+      (t.cluster && String(t.cluster)) ||
+      (t.task_code && String(t.task_code)) ||
+      `task_${t.id}`;
+
+    // 2) Historique - "Completed"
     await pool.query(
       `INSERT INTO controls_history
-        (site, task_id, task_name, user_name, "user", action, meta, results)
-      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
+         (site, task_id, task_name, user_name, "user", action, meta, results)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)`,
       [
         t.site || "Nyon",
         id,
@@ -736,19 +749,19 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
         user,
         "Completed",
         { ai_risk_score, results, notes },
-        results || {}
+        results || {},
       ]
     );
 
     // 3) Snapshot records
     await pool.query(
       `INSERT INTO controls_records
-        (site, entity_id, task_code, results, created_by)
-      VALUES ($1,$2,$3,$4::jsonb,$5)`,
+         (site, entity_id, task_code, results, created_by)
+       VALUES ($1,$2,$3,$4::jsonb,$5)`,
       [t.site || "Nyon", t.entity_id, doneKey, results || {}, user]
     );
 
-    // 4) Met à jour le "done" de l'entité
+    // 4) Marquer l'occurrence dans entity.done (JSONB)
     await pool.query(
       `UPDATE controls_entities
           SET done = done || jsonb_build_object($1, $2)
@@ -756,15 +769,23 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [doneKey, today, t.entity_id]
     );
 
-    // 5) Détection non-conformité
+    // 5) Détection d'une non-conformité dans les résultats
     let ncFound = false;
-    const flatVals = typeof results === "object" ? JSON.stringify(results).toLowerCase() : "";
-    if (flatVals.includes("non_conforme") || flatVals.includes("\"ko\"") || flatVals.includes("reject")) {
+    const flatVals =
+      typeof results === "object"
+        ? JSON.stringify(results).toLowerCase()
+        : String(results || "").toLowerCase();
+
+    if (
+      flatVals.includes("non_conforme") ||
+      flatVals.includes('"ko"') ||
+      flatVals.includes("reject")
+    ) {
       ncFound = true;
       await pool.query(
         `INSERT INTO controls_history
            (site, task_id, task_name, user_name, "user", action, meta)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)`,
         [
           t.site || "Nyon",
           id,
@@ -772,16 +793,20 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
           user,
           user,
           "NC",
-          JSON.stringify({ reason: "Checklist non conforme", results })
+          { reason: "Checklist non conforme", results },
         ]
       );
     }
 
-    // 6) Programme la prochaine occurrence (protégée contre conflits d'unicité)
-    const freq = t.frequency_months || 12;
+    // 6) Créer la prochaine occurrence (protégé contre doublon)
+    const freq = Number(t.frequency_months) || 12;
     const next = addMonths(today, freq);
 
-    const { rows: curRows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
+    // On relit la tâche courante (au cas où /details l’a normalisée entre-temps)
+    const { rows: curRows } = await pool.query(
+      "SELECT * FROM controls_tasks WHERE id=$1",
+      [id]
+    );
     const cur = curRows[0];
 
     let nextTaskId = null;
@@ -796,7 +821,8 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
             $7,$8,'Planned',$9,$10,
             $11,$12,$13,$14,$15,$16
           )
-          ON CONFLICT ON CONSTRAINT ux_controls_tasks_active DO NOTHING
+          ON CONFLICT (site, entity_id, COALESCE(cluster, task_code))
+          DO NOTHING
           RETURNING id`,
         [
           cur.site,
@@ -808,32 +834,36 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
           today,
           next,
           cur.value_type,
-          cur.result_schema,
+          cur.result_schema, // si présent, sinon NULL → /details le reconstruira à l’ouverture
           cur.procedure_md,
           cur.hazards_md,
           cur.ppe_md,
           cur.tools_md,
           cur.threshold_text,
-          user || "system"
+          user || "system",
         ]
       );
       nextTaskId = ins.rows?.[0]?.id || null;
     } catch (e) {
-      // ignore et passe au fallback
-    }
-    if (!nextTaskId) {
+      // Fallback: si déjà existante, renvoyer l'ID
       const { rows: exist } = await pool.query(
         `SELECT id FROM controls_tasks
-         WHERE site=$1 AND entity_id=$2 AND COALESCE(cluster, task_code)=$3
-           AND status IN ('Planned','Overdue','Pending')
-         ORDER BY id DESC LIMIT 1`,
+           WHERE site=$1 AND entity_id=$2 AND COALESCE(cluster, task_code)=$3
+             AND status IN ('Planned','Overdue','Pending')
+           ORDER BY id DESC LIMIT 1`,
         [cur.site, cur.entity_id, cur.cluster || cur.task_code]
       );
       nextTaskId = exist?.[0]?.id || null;
     }
 
-    res.json({ ok: true, next_task_id: nextTaskId, next_control: next, non_conformity: ncFound });
+    return res.json({
+      ok: true,
+      next_task_id: nextTaskId,
+      next_control: next,
+      non_conformity: ncFound,
+    });
   } catch (e) {
+    console.error("complete error", e);
     res.status(500).json({ error: "Erreur completion", details: e.message });
   }
 });
