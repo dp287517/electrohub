@@ -372,6 +372,8 @@ export default function Controls() {
         {tab === "audit" && <AIAuditPanel site={site} />}
       </div>
 
+      <ToastRoot />
+
       {/* Page CSS */}
       <style>{styles}</style>
     </div>
@@ -507,7 +509,11 @@ function TaskGrid({ tasks, onOpen }) {
       {tasks.map((t) => (
         <div className="card" key={t.id} onClick={() => onOpen(t.id)}>
           <div className="card-head">
-            <div className="badge" className={cls("badge", t.status === "Overdue" && "red", t.status === "Planned" && "blue", t.status === "Pending" && "yellow")}>
+            <div className={cls("badge",
+              t.status === "Overdue" && "red",
+              t.status === "Planned" && "blue",
+              t.status === "Pending" && "yellow"
+            )}>
               {t.status}
             </div>
             <div className="chip code">{t.task_code || t.cluster}</div>
@@ -537,7 +543,6 @@ function TaskModal({ id, onClose, onCompleted }) {
   const [notes, setNotes] = useState("");
   const [aiMessage, setAiMessage] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
-  const [files, setFiles] = useState([]);
 
   useEffect(() => {
     (async () => {
@@ -586,6 +591,10 @@ function TaskModal({ id, onClose, onCompleted }) {
       const res = await CONTROLS_API.complete(id, { user: "tech", results, notes });
       toast("Tâche complétée");
       onCompleted();
+      // Si NC, le backend renvoie non_conformity=true et le frontend peut afficher le toast côté liste
+      if (res?.non_conformity) {
+        setTimeout(() => toast("Non-conformité détectée. Ouvrez un suivi (follow-up)."), 100);
+      }
     } catch (e) {
       toast("Erreur: " + e.message);
     }
@@ -621,13 +630,19 @@ function TaskModal({ id, onClose, onCompleted }) {
                       <div className="gi-label"><SafeText value={it.label} /></div>
                       <div className="gi-rule"><SafeText value={it.threshold_text} /></div>
                     </div>
-                    <div className="field check">
-                      <input
-                        type="checkbox"
-                        checked={results[it.id] || false}
-                        onChange={(e) => setResults({ ...results, [it.id]: e.target.checked })}
-                      />
-                      <label>Conforme</label>
+                    {/* Tri-state conforme / non conforme / N.A. */}
+                    <div className="field">
+                      <label className="hint">Résultat</label>
+                      <select
+                        className="input"
+                        value={results[it.id] ?? ""}
+                        onChange={(e) => setResults({ ...results, [it.id]: e.target.value })}
+                      >
+                        <option value="">—</option>
+                        <option value="conforme">Conforme</option>
+                        <option value="non_conforme">Non conforme</option>
+                        <option value="na">Non applicable</option>
+                      </select>
                     </div>
                   </div>
                 ))}
@@ -700,8 +715,9 @@ function CalendarPanel({ site, onSelectTask }) {
       const to = new Date(month); to.setDate(1); to.setMonth(to.getMonth() + 2); to.setDate(0);
       try {
         setErr("");
-        const { rows } = await CONTROLS_API.calendar(site, { from: toISODate(from), to: toISODate(to) });
-        setItems(rows || []);
+        const data = await CONTROLS_API.calendar(site, { from: toISODate(from), to: toISODate(to) });
+        // Le backend renvoie un tableau brut
+        setItems(Array.isArray(data) ? data : (data?.rows || []));
       } catch (e) {
         setErr(e.message || String(e));
       }
@@ -1070,7 +1086,9 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 60; }
 .toast { background:#111; color:#fff; padding:10px 12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.2); max-width: 70vw; }
 
-/* Calendar */
+*::selection { background: #bae6fd; }
+
+ /* Calendar */
 .calendar-panel { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; }
 .cal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
 .cal-title { font-weight:800; display:flex; gap:8px; align-items:center; }
