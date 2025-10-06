@@ -1,8 +1,10 @@
-// server_controls.js — Controls backend (corrigé)
-// - Migration idempotente: ajoute entity_id à controls_records si absent (corrige l'erreur "column entity_id...")
-// - Purge des entités disparues lors du /sync (supprime aussi leurs tâches via ON DELETE CASCADE)
-// - Conserve tout le comportement existant: Pending 1ère occurrence, création d'une nouvelle tâche à la complétion, IA avec photos "pré"
-// - Index/contraintes: unique partiel sur tâches actives + dédoublonnage
+// server_controls.js — Controls backend (corrigé, intégrant les patches demandés)
+// - Reconstruction automatique du result_schema dans GET /tasks/:id/details
+// - Endpoint POST /tasks/:id/fix-schema
+// - Route POST /tasks/:id/complete robuste (ON CONFLICT sur l'unique partiel + fallback)
+// - Migration idempotente: colonnes manquantes, index, unique partiel (ux_controls_tasks_active)
+// - Purge des entités disparues lors du /sync (ON DELETE CASCADE sur tasks)
+// - IA assistant (guidage pré + interprétation photo), audit IA
 // - Démarre sur CONTROLS_PORT (ou 3011)
 
 import express from "express";
@@ -645,6 +647,7 @@ app.get("/api/controls/tasks", async (req, res) => {
   }
 });
 
+// (A) Reconstruire automatiquement la checklist manquante lors du details
 app.get("/api/controls/tasks/:id/details", async (req, res) => {
   const id = Number(req.params.id);
   const { rows } = await pool.query(
@@ -653,14 +656,48 @@ app.get("/api/controls/tasks/:id/details", async (req, res) => {
      LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
      WHERE ct.id=$1`, [id]);
   if (!rows.length) return res.status(404).json({ error: "Not found" });
-  const t = rows[0];
+  let t = rows[0];
 
+  // 1) Items TSD du cluster
   const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
-  const clusterItems = t.cluster ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
-                                 : tsdItems.filter(it => it.id === t.task_code);
+  const clusterItems = t.cluster
+    ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
+    : tsdItems.filter(it => it.id === t.task_code);
+
+  // 2) Reconstruction si result_schema manquant/vidé
+  const needsBuild = !t.result_schema || !t.result_schema.items || !Array.isArray(t.result_schema.items) || t.result_schema.items.length === 0;
+  if (needsBuild) {
+    const cg = { cluster: t.cluster || t.task_code, items: clusterItems };
+    const schema = buildSchemaForCluster(cg);
+    const q = `
+      UPDATE controls_tasks
+         SET value_type=$1,
+             result_schema=$2,
+             procedure_md=$3,
+             hazards_md=$4,
+             ppe_md=$5,
+             tools_md=$6,
+             threshold_text=$7,
+             updated_at=NOW()
+       WHERE id=$8
+       RETURNING *`;
+    const { rows: upd } = await pool.query(q, [
+      schema.value_type,
+      JSON.stringify(schema.result_schema),
+      schema.procedure_md,
+      schema.hazards_md,
+      schema.ppe_md,
+      schema.tools_md,
+      schema.threshold_text,
+      id
+    ]);
+    t = upd[0];
+  }
+
   res.json({ ...t, tsd_cluster_items: clusterItems });
 });
 
+// (B) Compléter — robuste (ON CONFLICT + fallback) + NC + création prochaine occurrence
 app.post("/api/controls/tasks/:id/complete", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -705,7 +742,7 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       ]
     );
 
-    // 3) Enregistre un snapshot synthétique pour l’audit/IA
+    // 3) Snapshot synthétique (audit/IA)
     await pool.query(
       `INSERT INTO controls_records
          (site, entity_id, task_code, results, created_by)
@@ -713,10 +750,7 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [t.site || "Nyon", t.entity_id, doneKey, JSON.stringify(results || {}), user]
     );
 
-    // (Point 5) Hook optionnel : notifier un worker d’audit si tu en ajoutes un plus tard
-    await pool.query("NOTIFY ai_audit, $1", [JSON.stringify({ site: t.site || "Nyon", entity_id: t.entity_id, task_code: doneKey })]);
-
-    // 4) Met à jour le cache "done" côté entité
+    // 4) Met à jour le "done" de l'entité
     await pool.query(
       `UPDATE controls_entities
           SET done = done || jsonb_build_object($1, $2)
@@ -724,14 +758,10 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       [doneKey, today, t.entity_id]
     );
 
-    // 5) Détection simple d'une non-conformité texte
+    // 5) Détection non-conformité
     let ncFound = false;
     const flatVals = typeof results === "object" ? JSON.stringify(results).toLowerCase() : "";
-    if (
-      flatVals.includes("non_conforme") ||
-      flatVals.includes("\"ko\"") ||
-      flatVals.includes("reject")
-    ) {
+    if (flatVals.includes("non_conforme") || flatVals.includes("\"ko\"") || flatVals.includes("reject")) {
       ncFound = true;
       await pool.query(
         `INSERT INTO controls_history
@@ -749,48 +779,115 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
       );
     }
 
-    // 6) Programme la prochaine occurrence selon la fréquence TSD
+    // 6) Programme la prochaine occurrence (protégée contre conflits d'unicité)
     const freq = t.frequency_months || 12;
     const next = addMonths(today, freq);
 
     const { rows: curRows } = await pool.query("SELECT * FROM controls_tasks WHERE id=$1", [id]);
     const cur = curRows[0];
 
-    const { rows: newTask } = await pool.query(
-      `INSERT INTO controls_tasks (
-          site, entity_id, task_name, task_code, cluster, frequency_months,
-          last_control, next_control, status, value_type, result_schema,
-          procedure_md, hazards_md, ppe_md, tools_md, threshold_text, created_by
-        ) VALUES (
-          $1,$2,$3,$4,$5,$6,
-          $7,$8,'Planned',$9,$10,
-          $11,$12,$13,$14,$15,$16
-        )
-        RETURNING id`,
-      [
-        cur.site,
-        cur.entity_id,
-        cur.task_name,
-        cur.task_code,
-        cur.cluster,
-        cur.frequency_months,
-        today,
-        next,
-        cur.value_type,
-        cur.result_schema,
-        cur.procedure_md,
-        cur.hazards_md,
-        cur.ppe_md,
-        cur.tools_md,
-        cur.threshold_text,
-        user || "system"
-      ]
-    );
+    let nextTaskId = null;
+    try {
+      const ins = await pool.query(
+        `INSERT INTO controls_tasks (
+            site, entity_id, task_name, task_code, cluster, frequency_months,
+            last_control, next_control, status, value_type, result_schema,
+            procedure_md, hazards_md, ppe_md, tools_md, threshold_text, created_by
+          ) VALUES (
+            $1,$2,$3,$4,$5,$6,
+            $7,$8,'Planned',$9,$10,
+            $11,$12,$13,$14,$15,$16
+          )
+          ON CONFLICT ON CONSTRAINT ux_controls_tasks_active DO NOTHING
+          RETURNING id`,
+        [
+          cur.site,
+          cur.entity_id,
+          cur.task_name,
+          cur.task_code,
+          cur.cluster,
+          cur.frequency_months,
+          today,
+          next,
+          cur.value_type,
+          cur.result_schema,
+          cur.procedure_md,
+          cur.hazards_md,
+          cur.ppe_md,
+          cur.tools_md,
+          cur.threshold_text,
+          user || "system"
+        ]
+      );
+      nextTaskId = ins.rows?.[0]?.id || null;
+    } catch (e) {
+      // ignore et passe au fallback
+    }
+    if (!nextTaskId) {
+      const { rows: exist } = await pool.query(
+        `SELECT id FROM controls_tasks
+         WHERE site=$1 AND entity_id=$2 AND COALESCE(cluster, task_code)=$3
+           AND status IN ('Planned','Overdue','Pending')
+         ORDER BY id DESC LIMIT 1`,
+        [cur.site, cur.entity_id, cur.cluster || cur.task_code]
+      );
+      nextTaskId = exist?.[0]?.id || null;
+    }
 
-    res.json({ ok: true, next_task_id: newTask[0].id, next_control: next, non_conformity: ncFound });
+    res.json({ ok: true, next_task_id: nextTaskId, next_control: next, non_conformity: ncFound });
   } catch (e) {
     res.status(500).json({ error: "Erreur completion", details: e.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// (C) Endpoint pour (re)construire explicitement la checklist
+// ---------------------------------------------------------------------------
+app.post("/api/controls/tasks/:id/fix-schema", async (req, res) => {
+  const id = Number(req.params.id);
+  const { rows } = await pool.query(
+    `SELECT ct.*, ce.equipment_type
+     FROM controls_tasks ct
+     LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
+     WHERE ct.id=$1`, [id]);
+  if (!rows.length) return res.status(404).json({ error: "Not found" });
+  const t = rows[0];
+
+  const tsdItems = (TSD_LIBRARY[t.equipment_type] || []);
+  const clusterItems = t.cluster
+    ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
+    : tsdItems.filter(it => it.id === t.task_code);
+
+  if (!clusterItems.length) return res.status(400).json({ error: "Aucun item TSD pour ce cluster" });
+
+  const cg = { cluster: t.cluster || t.task_code, items: clusterItems };
+  const schema = buildSchemaForCluster(cg);
+
+  const { rows: upd } = await pool.query(
+    `UPDATE controls_tasks
+        SET value_type=$1,
+            result_schema=$2,
+            procedure_md=$3,
+            hazards_md=$4,
+            ppe_md=$5,
+            tools_md=$6,
+            threshold_text=$7,
+            updated_at=NOW()
+      WHERE id=$8
+      RETURNING *`,
+    [
+      schema.value_type,
+      JSON.stringify(schema.result_schema),
+      schema.procedure_md,
+      schema.hazards_md,
+      schema.ppe_md,
+      schema.tools_md,
+      schema.threshold_text,
+      id
+    ]
+  );
+
+  res.json({ ok: true, task: upd[0] });
 });
 
 // ---------------------------------------------------------------------------
@@ -806,7 +903,8 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
       `SELECT ct.*, ce.equipment_type, ce.name AS entity_name, ce.code AS entity_code, ce.building
        FROM controls_tasks ct
        LEFT JOIN controls_entities ce ON ce.id = ct.entity_id
-       WHERE ct.id=$1`, [id]);
+       WHERE ct.id=$1`, [id]
+    );
     if (!trows.length) return res.status(404).json({ error: "Not found" });
     const t = trows[0];
 
@@ -816,7 +914,7 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
       ? tsdItems.filter(it => (it.cluster || it.id) === t.cluster)
       : tsdItems.filter(it => it.id === t.task_code);
 
-    // Contexte historique (derniers enregistrements pour l’IA)
+    // Contexte historique (derniers enregistrements)
     const { rows: recent } = await pool.query(
       `SELECT results, created_at
        FROM controls_records
@@ -840,7 +938,6 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
              ORDER BY uploaded_at DESC LIMIT 4`, [id]
           );
 
-      // Filtrage images valides (mime image/*) + conversion base64
       images = atts
         .filter(a => (a.mimetype || "").startsWith("image/") && a.data)
         .map(a => ({
@@ -849,7 +946,6 @@ app.post("/api/controls/tasks/:id/assistant", async (req, res) => {
         }));
     }
 
-    // Prompt système + utilisateur
     const system = `Tu es l'assistant sécurité & qualité pour des contrôles électriques.
 Donne des consignes concrètes en français, sous forme de listes d'actions.
 Couvre: EPI, zones à observer, points de mesure, appareil requis, interprétation des mesures, alertes.
@@ -1056,7 +1152,7 @@ app.post("/api/controls/ai/audit-run", async (req, res) => {
         [site, p.entity_id, p.task_code, rRate, dScore, allrows.length]
       );
 
-      // Upsert "manuel" (au cas où tu veuilles écraser la ligne existante la plus récente)
+      // Upsert "manuel": garde la plus récente
       await pool.query(
         `DELETE FROM controls_ai_audit
          WHERE id IN (
@@ -1165,7 +1261,7 @@ app.get("/api/controls/tree", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// CALENDAR — vue globale des futures échéances
+/** CALENDAR — vue globale des futures échéances */
 // ---------------------------------------------------------------------------
 app.get("/api/controls/calendar", async (req, res) => {
   const site = req.headers["x-site"] || req.query.site || "Nyon";
