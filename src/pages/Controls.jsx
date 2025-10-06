@@ -392,7 +392,7 @@ function TopBar({ site, setSite, onRefresh }) {
         <span className="brand-name">ElectroHub · Contrôles</span>
       </div>
       <div className="top-actions">
-        <div className="site-picker">
+        <div className="brand">
           <label>Site</label>
           <input
             className="input"
@@ -449,694 +449,258 @@ function FiltersBar({
           <span className="icon"><Icon.Search /></span>
           <input
             className="input"
-            placeholder="Recherche tâche / code…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            placeholder="Rechercher..."
           />
         </div>
-        <button className="btn" onClick={() => setFiltersOpen(!filtersOpen)}>
-          <Icon.Filter /> <span>Filtres</span> {filtersOpen ? <Icon.ChevronUp/> : <Icon.ChevronDown/>}
+        <button className="btn ghost" onClick={() => setFiltersOpen(!filtersOpen)}>
+          <Icon.Filter /> Filtres {filtersOpen ? <Icon.ChevronUp /> : <Icon.ChevronDown />}
         </button>
       </div>
-
-      {filtersOpen && (
+      {filtersOpen ? (
         <div className="filters-panel">
           <div className="filter">
             <label>Bâtiment</label>
             <select className="input" value={fBuilding} onChange={(e) => setFBuilding(e.target.value)}>
               <option value="">Tous</option>
-              {buildings.map((b) => <option key={toLabel(b)} value={toLabel(b)}>{toLabel(b)}</option>)}
+              {buildings.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
           <div className="filter">
-            <label>Type équipement</label>
+            <label>Type</label>
             <select className="input" value={fType} onChange={(e) => setFType(e.target.value)}>
               <option value="">Tous</option>
-              {types.map((t) => {
-                const lab = toLabel(t);
-                return <option key={lab} value={lab}>{lab}</option>;
-              })}
+              {types.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div className="filter">
             <label>Statut</label>
             <select className="input" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
               <option value="">Tous</option>
-              <option value="Pending">À faire (1ʳᵉ)</option>
-              <option value="Planned">Planifié</option>
               <option value="Overdue">En retard</option>
-              <option value="Completed">Terminé</option>
+              <option value="Planned">Planifié</option>
+              <option value="Pending">En attente</option>
+              <option value="Completed">Complété</option>
             </select>
           </div>
           <div className="filter check">
-            <input id="overdue" type="checkbox" checked={!!onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} />
-            <label htmlFor="overdue">Seulement en retard</label>
+            <input type="checkbox" checked={onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} />
+            <label>Seulement en retard</label>
           </div>
-
           <div className="filter-actions">
-            <button className="btn ghost" onClick={onReset}><Icon.Refresh /> Réinitialiser</button>
+            <button className="btn ghost" onClick={onReset}>Réinitialiser</button>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
 /* ============================
-   Task Grid + Cards
+   Task Grid
 ============================ */
 function TaskGrid({ tasks, onOpen }) {
-  if (!tasks.length) return <div className="empty">Aucune tâche trouvée.</div>;
+  if (!tasks?.length) return <div className="empty">Aucune tâche trouvée.</div>;
   return (
     <div className="grid">
       {tasks.map((t) => (
-        <TaskCard key={t.id} t={t} onOpen={() => onOpen(t.id)} />
+        <div className="card" key={t.id} onClick={() => onOpen(t.id)}>
+          <div className="card-head">
+            <div className="badge" className={cls("badge", t.status === "Overdue" && "red", t.status === "Planned" && "blue", t.status === "Pending" && "yellow")}>
+              {t.status}
+            </div>
+            <div className="chip code">{t.task_code || t.cluster}</div>
+          </div>
+          <div className="card-title"><SafeText value={t.task_name} /></div>
+          <div className="card-sub">
+            <div className="chip"><Icon.Building /> <SafeText value={t.building} /></div>
+            <div className="chip"><Icon.Bolt /> <SafeText value={t.equipment_type} /></div>
+          </div>
+          <div className="card-entity"><SafeText value={t.entity_name} /> ({t.entity_code})</div>
+          <div className="date"><Icon.Clock /> Suivant: <SafeText value={fmtDate(t.next_control)} /></div>
+        </div>
       ))}
     </div>
   );
 }
 
-function statusBadge(s) {
-  switch (s) {
-    case "Overdue": return <span className="badge red"><Icon.Alert /> En retard</span>;
-    case "Completed": return <span className="badge green"><Icon.Check /> Terminé</span>;
-    case "Pending": return <span className="badge yellow"><Icon.Clock /> À faire (1ʳᵉ)</span>;
-    default: return <span className="badge blue"><Icon.Clock /> Planifié</span>;
-  }
-}
-function typeLabel(t) {
-  const k = typeof t === 'string' ? t : toLabel(t, "");
-  switch (k) {
-    case "LV_SWITCHBOARD": return "Tableau BT";
-    case "LV_DEVICE": return "Appareil BT";
-    case "HV_EQUIPMENT": return "HT (>1000V)";
-    case "ATEX_EQUIPMENT": return "ATEX";
-    default: return k || "—";
-  }
-}
-
-function TaskCard({ t, onOpen }) {
-  return (
-    <div className="card" onClick={onOpen} role="button">
-      <div className="card-head">
-        {statusBadge(t.status)}
-        <div className="date"><Icon.Calendar /> <SafeText value={t.next_control ? fmtDate(t.next_control) : "À planifier"} /></div>
-      </div>
-      <div className="card-title"><SafeText value={t.task_name} /></div>
-      <div className="card-sub">
-        <span className="chip"><Icon.Building /> <SafeText value={t.building} /></span>
-        <span className="chip"><Icon.Bolt /> <SafeText value={typeLabel(t.equipment_type)} /></span>
-      </div>
-      <div className="card-entity">
-        Équipement : <strong><SafeText value={t.entity_name} /></strong>
-        {t.entity_code ? <span className="mono"> (<SafeText value={t.entity_code} />)</span> : null}
-      </div>
-    </div>
-  );
-}
-
 /* ============================
-   Task Modal (details)
+   Task Modal
 ============================ */
 function TaskModal({ id, onClose, onCompleted }) {
   const [loading, setLoading] = useState(true);
-  const [details, setDetails] = useState(null);
-  const [problem, setProblem] = useState("");
-
+  const [err, setErr] = useState("");
+  const [task, setTask] = useState(null);
   const [attachments, setAttachments] = useState([]);
-  const [preFiles, setPreFiles] = useState([]);
-  const [workFiles, setWorkFiles] = useState([]);
-  const [uploading, setUploading] = useState(false);
-
   const [results, setResults] = useState({});
   const [notes, setNotes] = useState("");
-
-  const [aiText, setAiText] = useState("");
+  const [aiMessage, setAiMessage] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiAnswer, setAiAnswer] = useState("");
+  const [files, setFiles] = useState([]);
 
   useEffect(() => {
     (async () => {
       try {
         setLoading(true);
-        setProblem("");
-        const d = await CONTROLS_API.taskDetails(id);
-        setDetails(d);
-        setResults(d?.results || {});
+        setErr("");
+        const details = await CONTROLS_API.taskDetails(id);
+        setTask(details);
         const atts = await CONTROLS_API.attachments(id);
-        setAttachments(atts || []);
-        setAiAnswer("");
+        setAttachments(atts);
       } catch (e) {
-        setProblem(e.message || String(e));
+        setErr(e.message || String(e));
       } finally {
         setLoading(false);
       }
     })();
   }, [id]);
 
-  const rs = details?.result_schema || {};
-  const isGroup = Array.isArray(rs?.items) && rs.items.length > 0;
-
-  async function refreshAttachments() {
+  async function onUpload(e) {
+    const fd = new FormData();
+    for (const f of e.target.files) fd.append("files", f);
     try {
-      const atts = await CONTROLS_API.attachments(id);
-      setAttachments(atts || []);
-    } catch (e) {
-      setProblem(e.message || String(e));
-    }
-  }
-
-  function handleResultChange(field, value) {
-    setResults((r) => ({ ...r, [field]: value }));
-  }
-
-  async function doUpload(kind) {
-    const files = kind === "pre" ? preFiles : workFiles;
-    if (!files?.length) return;
-    try {
-      setUploading(true);
-      const fd = new FormData();
-      for (const f of files) fd.append("files", f);
-      fd.append("label", kind === "pre" ? "pre" : "work");
       await CONTROLS_API.upload(id, fd);
-      if (kind === "pre") setPreFiles([]);
-      else setWorkFiles([]);
-      await refreshAttachments();
-
-      // Auto-assistant après upload (pré et travail) -> point 6
-      if (kind === "pre") {
-        await askAssistant(
-          "Analyse la/les photo(s) pré-intervention et donne les consignes (EPI, points de mesure, appareil)."
-        );
-      } else if (kind === "work") {
-        await askAssistant(
-          "Analyse des pièces jointes ajoutées pendant l'intervention et interprétation des valeurs vs seuils."
-        );
-      }
+      const atts = await CONTROLS_API.attachments(id);
+      setAttachments(atts);
+      toast("Upload réussi");
     } catch (e) {
-      setProblem(e.message || String(e));
-    } finally {
-      setUploading(false);
+      toast("Erreur upload: " + e.message);
     }
   }
 
-  async function askAssistant(question) {
+  async function assistant(question = "", attachment_ids = []) {
     try {
       setAiLoading(true);
-      setAiAnswer("");
-      const body = {
-        question:
-          question ||
-          aiText ||
-          "Aide pré-intervention : EPI, points de mesure, appareil, interprétation.",
-        // Aligné backend -> point 4
-        use_pre_images: true,
-        attachment_ids: [],
-      };
-      const res = await CONTROLS_API.assistant(id, body);
-      setAiAnswer(res?.message || "");
+      const res = await CONTROLS_API.assistant(id, { question, use_pre_images: true, attachment_ids });
+      setAiMessage(res.message);
     } catch (e) {
-      setProblem(e.message || String(e));
+      toast("Erreur IA: " + e.message);
     } finally {
       setAiLoading(false);
     }
   }
 
-  async function completeTask() {
+  async function complete() {
     try {
-      setProblem("");
-      const payload = {
-        user: localStorage.getItem("controls_user") || "Technicien",
-        results: results || {},
-        // IMPORTANT: envoyer les notes saisies dans le champ Notes / Observations
-        notes: results?.__notes || "",
-      };
-      const res = await CONTROLS_API.complete(id, payload);
-      toast("Tâche clôturée. Prochain contrôle: " + fmtDate(res?.next_control));
-      onCompleted?.();
+      const res = await CONTROLS_API.complete(id, { user: "tech", results, notes });
+      toast("Tâche complétée");
+      onCompleted();
     } catch (e) {
-      setProblem(e.message || String(e));
+      toast("Erreur: " + e.message);
     }
   }
 
-  const thresholdBox = useMemo(() => {
-    if (details?.threshold_text && typeof details.threshold_text === "string")
-      return details.threshold_text;
-    if (isGroup && rs.items.some((it) => it?.threshold_text)) {
-      return rs.items
-        .filter((it) => it?.threshold_text)
-        .map((it) => `${toLabel(it.label)}: ${toLabel(it.threshold_text, "")}`)
-        .join(" • ");
-    }
-    return "";
-  }, [details, rs, isGroup]);
+  if (loading) return <ModalSkeleton />;
+  if (err) return <ErrorBanner message={err} />;
 
-  const clusterNotes = details?.tsd_cluster_items || [];
+  const schema = task.result_schema?.items || [];
 
   return (
-    <div className="modal">
-      <div className="modal-card">
+    <div className="modal" onClick={onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <div className="mh-left">
-            <div className="mh-title">
-              <SafeText value={details?.task_name || "Chargement..."} />
-            </div>
+          <div className="mh-col">
+            <div className="mh-title"><SafeText value={task.task_name} /></div>
             <div className="mh-sub">
-              <span className="chip">
-                <Icon.Bolt /> <SafeText value={typeLabel(details?.equipment_type)} />
-              </span>
-              <span className="chip">
-                <Icon.Building /> <SafeText value={details?.building} />
-              </span>
-              {details?.entity_code ? (
-                <span className="chip code">
-                  Équipement: <SafeText value={details?.entity_code} />
-                </span>
-              ) : null}
-              {details?.task_code ? (
-                <span className="chip code">
-                  Code tâche: <SafeText value={details?.task_code} />
-                </span>
-              ) : null}
+              <div className="chip"><Icon.Building /> <SafeText value={task.building} /></div>
+              <div className="chip"><Icon.Bolt /> <SafeText value={task.equipment_type} /></div>
+              <div className="chip code"><SafeText value={task.entity_code} /></div>
             </div>
           </div>
-          <button className="btn icon ghost" onClick={onClose} title="Fermer">
-            <Icon.X />
-          </button>
+          <button className="btn icon ghost" onClick={onClose}><Icon.X /></button>
         </div>
-
-        {problem ? <ErrorBanner message={`Chargement des détails: ${problem}`} /> : null}
-        {loading ? (
-          <ModalSkeleton />
-        ) : (
-          <div className="modal-body">
-            {/* Colonne gauche: checklist / champs */}
-            <div className="col form">
-              {/* Alerte pré-intervention (optionnelle) */}
-              <div className="callout">
-                <div className="callout-title">
-                  <Icon.Camera /> Photo de pré-intervention (optionnelle)
-                </div>
-                <div className="callout-text">
-                  Avant d’intervenir, vous pouvez ajouter une photo (vue d’ensemble, plaques,
-                  repères). L’assistant expliquera où mesurer et avec quel appareil. Ce n’est pas
-                  obligatoire.
-                </div>
-                <div className="upload-line">
-                  <label className="btn">
-                    <Icon.Upload /> Joindre photo(s)
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      style={{ display: "none" }}
-                      onChange={(e) => setPreFiles(Array.from(e.target.files || []))}
-                    />
-                  </label>
-                  <button
-                    className="btn ghost"
-                    disabled={!preFiles.length || uploading}
-                    onClick={() => doUpload("pre")}
-                  >
-                    <Icon.Send /> Envoyer
-                  </button>
-                  <div className="files-list">
-                    {preFiles.map((f, i) => (
-                      <span key={i} className="file-pill">
-                        {f.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="section">
-                <div className="section-title">Checklist & Mesures</div>
-                {thresholdBox ? (
-                  <div className="rule">
-                    <SafeText value={thresholdBox} />
-                  </div>
-                ) : null}
-
-                {Array.isArray(clusterNotes) && clusterNotes.length ? (
-                  <div className="hint">
-                    <strong>Consignes TSD (points à observer) :</strong>
-                    <ul style={{ margin: "6px 0 0 18px" }}>
-                      {clusterNotes.map((s, i) => (
-                        <li key={i}>
-                          <SafeText value={s} />
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-
-                {isGroup ? (
-                  <GroupFields items={rs.items} results={results} onChange={handleResultChange} />
-                ) : (
-                  <SingleField schema={rs} results={results} onChange={handleResultChange} />
-                )}
-
-                <div className="field">
-                  <label>Notes / Observations</label>
-                  <textarea
-                    className="input textarea"
-                    placeholder="Observations, conditions de test, EPI, risques, etc."
-                    value={results.__notes ?? ""}
-                    onChange={(e) => handleResultChange("__notes", e.target.value)}
-                  />
-                </div>
-
-                <div className="actions">
-                  <button className="btn primary" onClick={completeTask}>
-                    <Icon.Check /> Clôturer la tâche
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Colonne droite: PJ + IA */}
-            <div className="col side">
-              <div className="section">
-                <div className="section-title">
-                  <Icon.Paperclip /> Pièces jointes
-                </div>
-                <div className="upload-line">
-                  <label className="btn">
-                    <Icon.Upload /> Ajouter pendant contrôle
-                    <input
-                      type="file"
-                      accept="image/*,application/pdf"
-                      multiple
-                      style={{ display: "none" }}
-                      onChange={(e) => setWorkFiles(Array.from(e.target.files || []))}
-                    />
-                  </label>
-                  <button
-                    className="btn ghost"
-                    disabled={!workFiles.length || uploading}
-                    onClick={() => doUpload("work")}
-                  >
-                    <Icon.Send /> Envoyer
-                  </button>
-                </div>
-                <div className="files-list">
-                  {workFiles.map((f, i) => (
-                    <span key={i} className="file-pill">
-                      {f.name}
-                    </span>
-                  ))}
-                </div>
-
-                <AttachmentList taskId={id} attachments={attachments} />
-              </div>
-
-              <div className="section">
-                <div className="section-title">
-                  <Icon.Bolt /> Assistant IA
-                </div>
-                <div className="hint">
-                  Joignez des photos d’écrans d’appareils de mesure : l’IA interprète les valeurs
-                  et vérifie les seuils TSD.
-                </div>
-                <div className="ai-box">
-                  <textarea
-                    className="input textarea"
-                    placeholder="Posez une question (ex: Quelle méthode pour mesurer l’isolement ?)"
-                    value={aiText}
-                    onChange={(e) => setAiText(e.target.value)}
-                  />
-                  <div className="ai-actions">
-                    <button className="btn" onClick={() => askAssistant()} disabled={aiLoading}>
-                      <Icon.Send /> Conseils
-                    </button>
-                    <button
-                      className="btn ghost"
-                      onClick={() =>
-                        askAssistant(
-                          "Analyse des pièces jointes et des résultats vs seuils TSD."
-                        )
-                      }
-                      disabled={aiLoading}
-                    >
-                      <Icon.Search /> Analyser
-                    </button>
-                  </div>
-                  {aiAnswer ? (
-                    <div className="ai-answer">
-                      <div className="ai-title">Réponse</div>
-                      <pre>{aiAnswer}</pre>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-      <ToastRoot />
-    </div>
-  );
-}
-
-/* ============================
-   Fields renderers
-============================ */
-function SingleField({ schema, results, onChange }) {
-  if (!schema || !schema.field) {
-    return (
-      <div className="field">
-        <label>Résultat (texte)</label>
-        <input className="input" value={results["value"] || ""} onChange={(e) => onChange("value", e.target.value)} />
-      </div>
-    );
-  }
-  const field = schema.field;
-  const type = normalizeType(schema.type);
-
-  // checklist simple -> tri-état par item si schema.checklist est fourni
-  if (type === "checklist" && Array.isArray(schema.checklist) && schema.checklist.length) {
-    const current = (results[field] && typeof results[field] === "object") ? results[field] : {};
-    function setItem(itemKey, v) {
-      onChange(field, { ...current, [itemKey]: v });
-    }
-    return (
-      <div className="field">
-        <label>Checklist</label>
-        <div className="group-fields">
-          {schema.checklist.map((item) => {
-            const key = toValue(item);
-            const label = toLabel(item);
-            return (
-              <div key={String(key)} className="group-item">
-                <div className="gi-head"><div className="gi-label">{label}</div></div>
-                <div className="field">
-                  <label>Conformité</label>
-                  <select className="input" value={current[key] ?? ""} onChange={(e) => setItem(key, e.target.value)}>
-                    <option value="">—</option>
-                    <option value="conforme">Conforme</option>
-                    <option value="non_conforme">Non conforme</option>
-                    <option value="na">Non applicable</option>
-                  </select>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (type === "number") {
-    const val = results[field];
-    return (
-      <div className="field">
-        <label>Valeur {schema.unit ? `(${schema.unit})` : ""}</label>
-        <input
-          className="input"
-          type="number"
-          step="any"
-          value={val ?? ""}
-          onChange={(e) => onChange(field, e.target.value === "" ? "" : Number(e.target.value))}
-          placeholder={schema.unit ? `Ex: 12.5 ${schema.unit}` : "Ex: 12.5"}
-        />
-      </div>
-    );
-  }
-  if (type === "select" && Array.isArray(schema.options)) {
-    return (
-      <div className="field">
-        <label>Choix</label>
-        <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
-          <option value="">—</option>
-          {schema.options.map((o) => {
-            const val = toValue(o);
-            const lab = toLabel(o);
-            return <option key={String(val)} value={val}>{lab}</option>;
-          })}
-        </select>
-      </div>
-    );
-  }
-  if (type === "check" || type === "boolean") {
-    const val = results[field] ?? "";
-    return (
-      <div className="field">
-        <label>Conformité</label>
-        <select className="input" value={val} onChange={(e) => onChange(field, e.target.value)}>
-          <option value="">—</option>
-          <option value="conforme">Conforme</option>
-          <option value="non_conforme">Non conforme</option>
-          <option value="na">Non applicable</option>
-        </select>
-      </div>
-    );
-  }
-  // text
-  return (
-    <div className="field">
-      <label>Observation</label>
-      <input className="input" value={toValue(results[field])} onChange={(e) => onChange(field, e.target.value)} placeholder="Renseigner le résultat"/>
-    </div>
-  );
-}
-
-function GroupFields({ items, results, onChange }) {
-  return (
-    <div className="group-fields">
-      {items.map((it) => {
-        const t = normalizeType(it.type);
-        const field = it.field || it.id;
-        const unit = it.unit ? ` (${it.unit})` : "";
-        const label = toLabel(it.label || field || it.id);
-
-        // checklist multi-points -> tri-état PAR POINT
-        if (t === "checklist" && Array.isArray(it.options) && it.options.length) {
-          const curr = (results[field] && typeof results[field] === "object") ? results[field] : {};
-          function setItem(optKey, v) { onChange(field, { ...curr, [optKey]: v }); }
-          return (
-            <div key={String(field)} className="group-item">
-              <div className="gi-head">
-                <div className="gi-label">{label}</div>
-                {it.threshold_text ? <div className="gi-rule"><SafeText value={it.threshold_text} /></div> : null}
-              </div>
+        <div className="modal-body">
+          <div className="col form">
+            <div className="section">
+              <div className="section-title"><Icon.Check /> Checklist</div>
               <div className="group-fields">
-                {it.options.map((opt) => {
-                  const key = toValue(opt);
-                  const lab = toLabel(opt);
-                  return (
-                    <div key={String(key)} className="group-item" style={{padding:'8px'}}>
-                      <div className="gi-head"><div className="gi-label">{lab}</div></div>
-                      <div className="field">
-                        <label>Conformité</label>
-                        <select className="input" value={curr[key] ?? ""} onChange={(e) => setItem(key, e.target.value)}>
-                          <option value="">—</option>
-                          <option value="conforme">Conforme</option>
-                          <option value="non_conforme">Non conforme</option>
-                          <option value="na">Non applicable</option>
-                        </select>
-                      </div>
+                {schema.map((it) => (
+                  <div key={it.id} className="group-item">
+                    <div className="gi-head">
+                      <div className="gi-label"><SafeText value={it.label} /></div>
+                      <div className="gi-rule"><SafeText value={it.threshold_text} /></div>
                     </div>
-                  );
-                })}
+                    <div className="field check">
+                      <input
+                        type="checkbox"
+                        checked={results[it.id] || false}
+                        onChange={(e) => setResults({ ...results, [it.id]: e.target.checked })}
+                      />
+                      <label>Conforme</label>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
-          );
-        }
-
-        return (
-          <div key={String(field)} className="group-item">
-            <div className="gi-head">
-              <div className="gi-label">{label}</div>
-              {it.threshold_text ? <div className="gi-rule"><SafeText value={it.threshold_text} /></div> : null}
+            <div className="section">
+              <div className="section-title"><Icon.Camera /> Photos & Pièces jointes</div>
+              <AttachmentList taskId={id} attachments={attachments} />
+              <div className="upload-line">
+                <label className="btn">
+                  <Icon.Upload /> Ajouter fichiers
+                  <input type="file" multiple onChange={onUpload} style={{display:'none'}} />
+                </label>
+              </div>
             </div>
-
-            {t === "number" && (
-              <div className="field">
-                <label>Valeur{unit}</label>
-                <input
-                  className="input"
-                  type="number"
-                  step="any"
-                  value={results[field] ?? ""}
-                  onChange={(e) => onChange(field, e.target.value === "" ? "" : Number(e.target.value))}
-                  placeholder={it.unit ? `Ex: 12.5 ${it.unit}` : "Ex: 12.5"}
-                />
-              </div>
-            )}
-
-            {t === "select" && Array.isArray(it.options) && (
-              <div className="field">
-                <label>Choix</label>
-                <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
-                  <option value="">—</option>
-                  {it.options.map((o) => {
-                    const val = toValue(o);
-                    const lab = toLabel(o);
-                    return <option key={String(val)} value={val}>{lab}</option>;
-                  })}
-                </select>
-              </div>
-            )}
-
-            {(t === "check" || t === "boolean") && (
-              <div className="field">
-                <label>Conformité</label>
-                <select className="input" value={results[field] ?? ""} onChange={(e) => onChange(field, e.target.value)}>
-                  <option value="">—</option>
-                  <option value="conforme">Conforme</option>
-                  <option value="non_conforme">Non conforme</option>
-                  <option value="na">Non applicable</option>
-                </select>
-              </div>
-            )}
-
-            {(!["number","select","checklist","check","boolean"].includes(t)) && (
-              <div className="field">
-                <label>Observation</label>
-                <input
-                  className="input"
-                  value={toValue(results[field])}
-                  onChange={(e) => onChange(field, e.target.value)}
-                  placeholder="Renseigner le résultat"
-                />
-              </div>
-            )}
+            <div className="section">
+              <div className="section-title"><Icon.Send /> Notes</div>
+              <textarea className="input textarea" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes optionnelles..." />
+            </div>
+            <div className="actions">
+              <button className="btn primary" onClick={complete}>Compléter</button>
+            </div>
           </div>
-        );
-      })}
+          <div className="col side">
+            <div className="section">
+              <div className="section-title"><Icon.Alert /> Procédure & Sécurité</div>
+              <div className="callout">
+                <div className="callout-title"><Icon.Alert /> Dangers</div>
+                <div className="callout-text"><SafeText value={task.hazards_md || "—"} /></div>
+              </div>
+              <div className="callout">
+                <div className="callout-title"><Icon.Bolt /> EPI</div>
+                <div className="callout-text"><SafeText value={task.ppe_md || "—"} /></div>
+              </div>
+              <div className="callout">
+                <div className="callout-title"><Icon.Clock /> Outils</div>
+                <div className="callout-text"><SafeText value={task.tools_md || "—"} /></div>
+              </div>
+              <div className="callout">
+                <div className="callout-title"><Icon.Check /> Procédure</div>
+                <div className="callout-text"><SafeText value={task.procedure_md || "—"} /></div>
+              </div>
+            </div>
+            <div className="section ai-box">
+              <div className="section-title"><Icon.Bolt /> Assistant IA</div>
+              <div className="ai-actions">
+                <button className="btn ghost" onClick={() => assistant()} disabled={aiLoading}>Guidage Pré</button>
+                <button className="btn ghost" onClick={() => assistant("Analyse photo")} disabled={aiLoading}>Analyse Photo</button>
+              </div>
+              {aiMessage ? <div className="ai-answer"><pre>{aiMessage}</pre></div> : null}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function normalizeType(t) {
-  if (!t) return "text";
-  const k = String(t).toLowerCase();
-  if (["boolean", "bool", "check"].includes(k)) return "check";
-  if (["number", "numeric", "float", "int"].includes(k)) return "number";
-  if (["text", "string"].includes(k)) return "text";
-  if (["select", "choice", "enum"].includes(k)) return "select";
-  if (["checklist", "list"].includes(k)) return "checklist";
-  return k;
-}
-
 /* ============================
-   Calendar
+   Calendar Panel
 ============================ */
 function CalendarPanel({ site, onSelectTask }) {
-  const [month, setMonth] = useState(() => {
-    const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
-  const [items, setItems] = useState([]);
+  const [month, setMonth] = useState(new Date());
   const [err, setErr] = useState("");
+  const [items, setItems] = useState([]);
 
   useEffect(() => {
     (async () => {
+      const from = new Date(month); from.setDate(1); from.setMonth(from.getMonth() - 1);
+      const to = new Date(month); to.setDate(1); to.setMonth(to.getMonth() + 2); to.setDate(0);
       try {
         setErr("");
-        const from = toISODate(month);
-        const to = toISODate(new Date(month.getFullYear(), month.getMonth() + 1, 0));
-        const rows = await CONTROLS_API.calendar(site, { from, to });
+        const { rows } = await CONTROLS_API.calendar(site, { from: toISODate(from), to: toISODate(to) });
         setItems(rows || []);
       } catch (e) {
         setErr(e.message || String(e));
@@ -1294,6 +858,88 @@ function toast(text) {
 }
 
 /* ============================
+   AI Audit Panel
+============================ */
+function AIAuditPanel({ site }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [items, setItems] = useState([]);
+  const [recent, setRecent] = useState(20);
+  const [past, setPast] = useState(50);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        setErr("");
+        const res = await CONTROLS_API.aiAuditList(site);
+        setItems(res || []);
+      } catch (e) {
+        setErr(e.message || String(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [site]);
+
+  async function runAudit() {
+    try {
+      setLoading(true);
+      setErr("");
+      await CONTROLS_API.aiAuditRun(site, { recent, past });
+      const res = await CONTROLS_API.aiAuditList(site);
+      setItems(res || []);
+      toast("Audit IA terminé");
+    } catch (e) {
+      setErr(e.message || String(e));
+      toast("Erreur audit: " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="audit-panel">
+      <div className="audit-head">
+        <button className="btn" onClick={runAudit} disabled={loading}>
+          <Icon.Refresh /> {loading ? 'En cours...' : 'Lancer Audit IA'}
+        </button>
+        <div className="audit-params">
+          <div className="filter">
+            <label>Récent (n)</label>
+            <input type="number" className="input" value={recent} onChange={(e) => setRecent(Number(e.target.value))} min={5} />
+          </div>
+          <div className="filter">
+            <label>Passé (n)</label>
+            <input type="number" className="input" value={past} onChange={(e) => setPast(Number(e.target.value))} min={10} />
+          </div>
+        </div>
+      </div>
+      {err ? <ErrorBanner message={err} /> : null}
+      {loading ? <SkeletonList /> : (
+        items.length === 0 ? <div className="empty">Aucun résultat d'audit pour le moment. Lancez un audit pour analyser les dérives.</div> : (
+          <div className="grid">
+            {items.map((it) => (
+              <div className="card" key={it.id}>
+                <div className="card-head">
+                  <div className="card-title"><SafeText value={it.entity_name} /> ({it.entity_code})</div>
+                  <div className="chip code"><SafeText value={it.task_code} /></div>
+                </div>
+                <div className="card-sub">
+                  <div className="badge red">Drift: {(it.drift_score * 100).toFixed(1)}%</div>
+                  <div className="badge yellow">NC Rate: {(it.nc_rate * 100).toFixed(1)}%</div>
+                </div>
+                <div className="date"><Icon.Clock /> Échantillon: {it.sample_size} • Dernière: <SafeText value={fmtDT(it.last_eval)} /></div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
+/* ============================
    CSS (fonds blancs / texte noir)
 ============================ */
 const styles = `
@@ -1381,7 +1027,7 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .section { background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px; }
 .section-title { font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
 .hint { font-size: 13px; color: var(--muted); margin-bottom:6px; }
-.rule { font-size: 12px; color:#1f2937; background:#f3f4f6; border:1px dashed var(--border); padding:8px; border-radius:8px; margin-bottom:8px; }
+.rule { font-size: 12px; color:#1f2937; background:#f3f4f6; border:1px solid var(--border); padding:8px; border-radius:8px; margin-bottom:8px; }
 .field { display:flex; flex-direction:column; gap:6px; }
 .field.check { flex-direction:row; align-items:center; gap:8px; }
 .checklist { display:flex; flex-direction:column; gap:6px; }
@@ -1450,7 +1096,3 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
   .grid { grid-template-columns: 1fr; }
 }
 `;
-
-/* ============================
-   FIN
-============================ */
