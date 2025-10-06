@@ -46,7 +46,7 @@
     "pdfjs-dist": "^4.7.21",
     "gantt-task-react": "^0.3.8",
     "dayjs": "^1.11.13",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
     "csv-stringify": "^6.5.0",
     "cors": "^2.8.5"
   },
