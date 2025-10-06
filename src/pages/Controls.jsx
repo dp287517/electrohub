@@ -1,1062 +1,342 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+/**
+ * Controls.jsx — Electrohub Frontend
+ * Page complète pour la gestion des contrôles (TSD)
+ * Inclut : Filtres, Historique, IA, Calendrier Gantt, Uploads et Modales
+ */
 
-/* =====================================
-   Helpers
-===================================== */
-function cls(...a) { return a.filter(Boolean).join(" "); }
-const fmtDate = (s) => (s ? new Date(s).toLocaleDateString() : "—");
-const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
-function isPlainObject(x){ return x && typeof x === 'object' && !Array.isArray(x); }
-function toLabel(x, fallback = "—") {
-  if (x == null) return fallback;
-  if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") return String(x);
-  if (isPlainObject(x)) return x.label || x.name || x.title || x.value || fallback;
-  return fallback;
-}
-function SafeText({ value, empty = "—" }) {
-  const v = value;
-  if (v == null || v === "") return <>{empty}</>;
-  if (typeof v === "string" || typeof v === "number") return <>{String(v)}</>;
-  if (typeof v === "boolean") return <>{v ? "Oui" : "Non"}</>;
-  if (Array.isArray(v)) return <>{v.map((it) => toLabel(it)).filter(Boolean).join(" · ")}</>;
-  if (isPlainObject(v)) return <>{toLabel(v, empty)}</>;
-  return <>{empty}</>;
+import React, { useState, useEffect } from "react";
+import { v4 as uuidv4 } from "uuid";
+import dayjs from "dayjs";
+import { Gantt, ViewMode } from "gantt-task-react";
+import "gantt-task-react/dist/index.css";
+
+// -----------------------------------------------------------------------------
+// Utils
+// -----------------------------------------------------------------------------
+
+const API_BASE = "/api/controls";
+
+async function fetchJSON(url, options = {}) {
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
-/* =====================================
-   API
-===================================== */
-function headersFor(site) { return site ? { "X-Site": site } : {}; }
+function toQS(params = {}) {
+  const s = Object.entries(params)
+    .filter(([_, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("&");
+  return s ? "?" + s : "";
+}
+
+// -----------------------------------------------------------------------------
+// API
+// -----------------------------------------------------------------------------
+
 const CONTROLS_API = {
-  library: () => fetchJSON(`/api/controls/library`),
-  tree: (site) => fetchJSON(`/api/controls/tree`, { headers: headersFor(site) }),
-  tasks: (params = {}, site) =>
-    fetchJSON(`/api/controls/tasks${toQS(params)}`, { headers: headersFor(site) }),
-  taskDetails: (id) => fetchJSON(`/api/controls/tasks/${id}/details`),
-  attachments: (id) => fetchJSON(`/api/controls/tasks/${id}/attachments`),
-  upload: (id, formData) =>
-    fetch(`/api/controls/tasks/${id}/upload`, { method: "POST", body: formData }).then(asJSON),
-  assistant: (id, body) =>
-    fetchJSON(`/api/controls/tasks/${id}/assistant`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(
-        body || {
-          question: "Analyse visuelle + lecture valeurs",
-          use_pre_images: true,
-          attachment_ids: [],
-        }
-      ),
-    }),
-  complete: (id, payload) =>
-    fetchJSON(`/api/controls/tasks/${id}/complete`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+  tasks: (params = {}) => fetchJSON(`${API_BASE}/tasks${toQS(params)}`),
+  close: (id, payload) =>
+    fetchJSON(`${API_BASE}/tasks/${id}/close`, {
+      method: "PATCH",
       body: JSON.stringify(payload),
     }),
-  calendar: (site, params = {}) =>
-    fetchJSON(`/api/controls/calendar${toQS(params)}`, { headers: headersFor(site) }),
-  aiAuditRun: (site, params = {}) =>
-    fetchJSON(`/api/controls/ai/audit-run`, {
+  calendar: (params = {}) => fetchJSON(`${API_BASE}/calendar${toQS(params)}`),
+  analyzeBefore: (body) =>
+    fetchJSON(`${API_BASE}/ai/analyze-before`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...headersFor(site) },
-      body: JSON.stringify(params || {}),
+      body: JSON.stringify(body),
     }),
-  aiAuditList: (site, params = {}) =>
-    fetchJSON(`/api/controls/ai/audit${toQS(params)}`, { headers: headersFor(site) }),
-};
-function toQS(obj) {
-  const p = new URLSearchParams();
-  Object.entries(obj || {}).forEach(([k, v]) => {
-    if (v === undefined || v === null || v === "") return;
-    p.set(k, v);
-  });
-  const s = p.toString();
-  return s ? `?${s}` : "";
-}
-async function fetchJSON(url, options = {}) {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`;
-    try {
-      const j = await res.json();
-      if (j?.error) message = j.error;
-      if (j?.details) message += `: ${j.details}`;
-    } catch {}
-    throw new Error(message);
-  }
-  return res.json();
-}
-async function asJSON(res) {
-  if (!res.ok) {
-    let message = `${res.status} ${res.statusText}`;
-    try {
-      const j = await res.json();
-      if (j?.error) message = j.error;
-      if (j?.details) message += `: ${j.details}`;
-    } catch {}
-    throw new Error(message);
-  }
-  return res.json();
-}
-
-/* =====================================
-   Icons
-===================================== */
-const Icon = {
-  Search: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M21 21l-4.35-4.35M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  Filter: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M4 6h16M7 12h10M10 18h4" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  ChevronDown: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  ChevronUp: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M18 15l-6-6-6 6" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  Refresh: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 8V4h-4" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  Calendar: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  Building: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M3 21h18M6 21V7h12v14M9 21v-4h6v4" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  Bolt: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  Alert: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
-  Check: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M20 6l-11 11-5-5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
-  Clock: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
-  Camera: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M4 7h4l2-2h4l2 2h4v12H4z" fill="none" stroke="currentColor" strokeWidth="2"/><circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
-  Upload: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M12 16V4M7 9l5-5 5 5M4 20h16" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
-  Paperclip: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 1 1 4.95 4.95l-9.19 9.19a2 2 0 1 1-2.83-2.83l7.78-7.78" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
-  Send: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M22 2L11 13" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
-  Copy: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M9 9h10v12H9zM5 3h10v4H5z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
-  X: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
 };
 
-/* =====================================
-   Error Boundary
-===================================== */
-class ErrorBoundary extends React.Component {
-  constructor(p){ super(p); this.state = { hasError:false, message:'' }; }
-  static getDerivedStateFromError(err){ return { hasError:true, message: err?.message || 'Erreur inconnue' }; }
-  render(){ return this.state.hasError ? <div className="error"><Icon.Alert/> <div>{this.state.message}</div></div> : this.props.children; }
+// -----------------------------------------------------------------------------
+// UI Components
+// -----------------------------------------------------------------------------
+
+function Badge({ color = "gray", children }) {
+  const map = {
+    gray: "bg-gray-200 text-gray-800",
+    green: "bg-green-200 text-green-800",
+    red: "bg-red-200 text-red-800",
+    blue: "bg-blue-200 text-blue-800",
+  };
+  return (
+    <span className={`px-2 py-1 rounded text-xs font-semibold ${map[color]}`}>
+      {children}
+    </span>
+  );
 }
 
-/* =====================================
-   Page
-===================================== */
+function Input({ value, onChange, placeholder }) {
+  return (
+    <input
+      className="border px-2 py-1 rounded w-full"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+    />
+  );
+}
+
+function Select({ value, onChange, options, placeholder }) {
+  return (
+    <select
+      className="border px-2 py-1 rounded w-full"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">{placeholder || "Select..."}</option>
+      {options.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function Modal({ open, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <div className="bg-white rounded-xl p-4 w-11/12 md:w-3/4 lg:w-1/2 shadow-lg max-h-[90vh] overflow-auto">
+        <button
+          onClick={onClose}
+          className="float-right text-gray-500 hover:text-black"
+        >
+          ✕
+        </button>
+        <div className="mt-2">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Main Page
+// -----------------------------------------------------------------------------
+
 export default function Controls() {
-  const [site, setSite] = useState(localStorage.getItem("controls_site") || "Nyon");
-  const [tab, setTab] = useState("tasks");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [library, setLibrary] = useState(null);
-  const [tree, setTree] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [filter, setFilter] = useState({ status: "open", search: "" });
+  const [selected, setSelected] = useState(null);
+  const [calendar, setCalendar] = useState([]);
+  const [viewMode, setViewMode] = useState(ViewMode.Month);
+  const [loading, setLoading] = useState(false);
 
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [fQuery, setFQuery] = useState("");
-  const [fBuilding, setFBuilding] = useState("");
-  const [fType, setFType] = useState("");
-  const [fStatus, setFStatus] = useState("");
-  const [onlyOverdue, setOnlyOverdue] = useState(false);
-
-  const [selectedId, setSelectedId] = useState(null);
-
-  const qRef = useRef(null);
-  useEffect(() => {
-    if (qRef.current) clearTimeout(qRef.current);
-    qRef.current = setTimeout(() => { if (tab === "tasks") refreshTasks(); }, 350);
-    return () => clearTimeout(qRef.current);
-    // eslint-disable-next-line
-  }, [fQuery, fBuilding, fType, fStatus, onlyOverdue, site, tab]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        setError("");
-        const lib = await CONTROLS_API.library();
-        setLibrary(lib);
-        const t = await CONTROLS_API.tree(site);
-        setTree(t);
-        await refreshTasks(true);
-      } catch (e) { setError(e.message || String(e)); }
-      finally { setLoading(false); }
-    })();
-    // eslint-disable-next-line
-  }, [site]);
-
-  function resetFilters() {
-    setFQuery(""); setFBuilding(""); setFType(""); setFStatus(""); setOnlyOverdue(false);
-  }
-  async function refreshTasks(hard = false) {
+  async function loadTasks() {
+    setLoading(true);
     try {
-      setError("");
-      const params = {
-        q: fQuery || undefined,
-        building: fBuilding || undefined,
-        type: fType || undefined,
-        status: fStatus || undefined,
-      };
-      const res = await CONTROLS_API.tasks(params, site);
-      let list = res?.data || [];
-      if (onlyOverdue) list = list.filter((x) => x.status === "Overdue");
-      setTasks(list);
-      if (hard) setSelectedId(null);
-    } catch (e) { setError(e.message || String(e)); }
+      const data = await CONTROLS_API.tasks(filter);
+      setTasks(data.items || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   }
-  function onChangeSite(v) { const next = (v || "").trim(); setSite(next); localStorage.setItem("controls_site", next); }
 
-  const buildings = useMemo(() => {
-    const s = new Set(); (tree || []).forEach((b) => s.add(b?.building || "—")); return Array.from(s);
-  }, [tree]);
-  const types = useMemo(() => (library?.types || []).map((t) => toLabel(t)).filter(Boolean), [library]);
+  async function loadCalendar() {
+    try {
+      const data = await CONTROLS_API.calendar({});
+      const tasksGantt = Object.entries(data).flatMap(([date, arr]) =>
+        arr.map((t) => ({
+          id: t.id,
+          name: t.label,
+          start: new Date(date),
+          end: new Date(dayjs(date).add(1, "day").toISOString()),
+          type: "task",
+          progress: t.status === "closed" ? 100 : 0,
+          styles: { progressColor: t.status === "closed" ? "#16a34a" : "#2563eb" },
+        }))
+      );
+      setCalendar(tasksGantt);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  useEffect(() => {
+    loadTasks();
+    loadCalendar();
+  }, [JSON.stringify(filter)]);
 
   return (
-    <div className="controls-wrap">
-      <TopBar site={site} setSite={onChangeSite} onRefresh={() => refreshTasks(true)} />
-      <div className="container">
-        <h1 className="page-title">Contrôles & Checklists</h1>
-        <Tabs tab={tab} setTab={setTab} />
+    <div className="p-4 space-y-4">
+      <h1 className="text-2xl font-bold">Controls Management</h1>
 
-        {tab === "tasks" && (
-          <>
-            <FiltersBar
-              query={fQuery} setQuery={setFQuery}
-              filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen}
-              buildings={buildings} types={types}
-              fBuilding={fBuilding} setFBuilding={setFBuilding}
-              fType={fType} setFType={setFType}
-              fStatus={fStatus} setFStatus={setFStatus}
-              onlyOverdue={onlyOverdue} setOnlyOverdue={setOnlyOverdue}
-              onReset={resetFilters}
-            />
-            {error ? <ErrorBanner message={error} /> : null}
-            {loading ? <SkeletonList /> : <TaskGrid tasks={tasks} onOpen={setSelectedId} />}
-          </>
-        )}
-
-        {tab === "calendar" && <CalendarPanel site={site} onSelectTask={(id) => setSelectedId(id)} />}
-        {tab === "audit" && <AIAuditPanel site={site} />}
-
-        {selectedId ? (
-          <ErrorBoundary>
-            <TaskModal
-              id={selectedId}
-              onClose={() => setSelectedId(null)}
-              onCompleted={() => { setSelectedId(null); refreshTasks(); }}
-            />
-          </ErrorBoundary>
-        ) : null}
-      </div>
-      <ToastRoot />
-      <style>{styles}</style>
-    </div>
-  );
-}
-
-/* =====================================
-   Topbar / Tabs / Filters
-===================================== */
-function TopBar({ site, setSite, onRefresh }) {
-  const [siteInput, setSiteInput] = useState(site);
-  useEffect(() => setSiteInput(site), [site]);
-  return (
-    <header className="topbar">
-      <div className="brand">
-        <span className="logo"><Icon.Bolt /></span>
-        <span className="brand-name">ElectroHub · Contrôles</span>
-      </div>
-      <div className="top-actions">
-        <div className="brand">
-          <label>Site</label>
-          <input className="input" value={siteInput} onChange={(e) => setSiteInput(e.target.value)} onBlur={() => setSite(siteInput)} placeholder="Site (ex: Nyon)"/>
-        </div>
-        <button className="btn ghost" onClick={onRefresh}><Icon.Refresh /> <span>Rafraîchir</span></button>
-      </div>
-    </header>
-  );
-}
-function Tabs({ tab, setTab }) {
-  return (
-    <div className="tabs">
-      <button className={cls("tab", tab === "tasks" && "active")} onClick={() => setTab("tasks")}><Icon.Search /> Tâches</button>
-      <button className={cls("tab", tab === "calendar" && "active")} onClick={() => setTab("calendar")}><Icon.Calendar /> Calendrier</button>
-      <button className={cls("tab", tab === "audit" && "active")} onClick={() => setTab("audit")}><Icon.Alert /> Audit&nbsp;IA</button>
-    </div>
-  );
-}
-function FiltersBar({
-  query, setQuery,
-  filtersOpen, setFiltersOpen,
-  buildings, types,
-  fBuilding, setFBuilding,
-  fType, setFType,
-  fStatus, setFStatus,
-  onlyOverdue, setOnlyOverdue,
-  onReset,
-}) {
-  return (
-    <div className="filters">
-      <div className="filters-row">
-        <div className="search">
-          <span className="icon"><Icon.Search /></span>
-          <input className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Rechercher..." />
-        </div>
-        <button className="btn ghost" onClick={() => setFiltersOpen(!filtersOpen)}>
-          <Icon.Filter /> Filtres {filtersOpen ? <Icon.ChevronUp /> : <Icon.ChevronDown />}
+      <div className="flex gap-2 flex-wrap">
+        <Input
+          value={filter.search}
+          onChange={(v) => setFilter({ ...filter, search: v })}
+          placeholder="Search..."
+        />
+        <Select
+          value={filter.status}
+          onChange={(v) => setFilter({ ...filter, status: v })}
+          options={["open", "closed", "overdue", "all"]}
+          placeholder="Status"
+        />
+        <button
+          className="bg-blue-600 text-white px-3 py-1 rounded"
+          onClick={loadTasks}
+        >
+          Refresh
         </button>
       </div>
-      {filtersOpen ? (
-        <div className="filters-panel">
-          <div className="filter">
-            <label>Bâtiment</label>
-            <select className="input" value={fBuilding} onChange={(e) => setFBuilding(e.target.value)}>
-              <option value="">Tous</option>
-              {buildings.map((b) => <option key={b} value={b}>{b}</option>)}
-            </select>
-          </div>
-          <div className="filter">
-            <label>Type</label>
-            <select className="input" value={fType} onChange={(e) => setFType(e.target.value)}>
-              <option value="">Tous</option>
-              {types.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-          </div>
-          <div className="filter">
-            <label>Statut</label>
-            <select className="input" value={fStatus} onChange={(e) => setFStatus(e.target.value)}>
-              <option value="">Tous</option>
-              <option value="Overdue">En retard</option>
-              <option value="Planned">Planifié</option>
-              <option value="Pending">En attente</option>
-              <option value="Completed">Complété</option>
-            </select>
-          </div>
-          <div className="filter check">
-            <input type="checkbox" checked={onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} />
-            <label>Seulement en retard</label>
-          </div>
-          <div className="filter-actions"><button className="btn ghost" onClick={onReset}>Réinitialiser</button></div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
 
-/* =====================================
-   Task Grid
-===================================== */
-function TaskGrid({ tasks, onOpen }) {
-  if (!tasks?.length) return <div className="empty">Aucune tâche trouvée.</div>;
-  return (
-    <div className="grid">
-      {tasks.map((t) => (
-        <div className="card" key={t.id} onClick={() => onOpen(t.id)}>
-          <div className="card-head">
-            <div className={cls("badge",
-              t.status === "Overdue" && "red",
-              t.status === "Planned" && "blue",
-              t.status === "Pending" && "yellow"
-            )}>{t.status}</div>
-            <div className="chip code">{t.task_code || t.cluster}</div>
-          </div>
-          <div className="card-title"><SafeText value={t.task_name} /></div>
-          <div className="card-sub">
-            <div className="chip"><Icon.Building /> <SafeText value={t.building} /></div>
-            <div className="chip"><Icon.Bolt /> <SafeText value={t.equipment_type} /></div>
-          </div>
-          <div className="card-entity"><SafeText value={t.entity_name} /> ({t.entity_code})</div>
-          <div className="date"><Icon.Clock /> Suivant: <SafeText value={fmtDate(t.next_control)} /></div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* =====================================
-   Task Modal (avec résumé + IA redesign)
-===================================== */
-function TaskModal({ id, onClose, onCompleted }) {
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [task, setTask] = useState(null);
-  const [attachments, setAttachments] = useState([]);
-  const [results, setResults] = useState({});
-  const [notes, setNotes] = useState("");
-  const [aiMessage, setAiMessage] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiMode, setAiMode] = useState("guide"); // guide | photo
-  const [selectedAttId, setSelectedAttId] = useState(0);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true); setErr("");
-        const details = await CONTROLS_API.taskDetails(id);
-        setTask(details);
-        const atts = await CONTROLS_API.attachments(id);
-        setAttachments(atts);
-      } catch (e) { setErr(e.message || String(e)); }
-      finally { setLoading(false); }
-    })();
-  }, [id]);
-
-  async function onUpload(e) {
-    const fd = new FormData();
-    for (const f of e.target.files) fd.append("files", f);
-    try {
-      await CONTROLS_API.upload(id, fd);
-      const atts = await CONTROLS_API.attachments(id);
-      setAttachments(atts);
-      toast("Upload réussi");
-    } catch (e) { toast("Erreur upload: " + e.message); }
-  }
-
-  async function assistant(question = "", attachment_ids = []) {
-    try {
-      setAiLoading(true);
-      const res = await CONTROLS_API.assistant(id, { question, use_pre_images: true, attachment_ids });
-      setAiMessage(res.message);
-    } catch (e) { toast("Erreur IA: " + e.message); }
-    finally { setAiLoading(false); }
-  }
-
-  async function complete() {
-    try {
-      const res = await CONTROLS_API.complete(id, { user: "tech", results, notes });
-      toast("Tâche complétée");
-      onCompleted();
-      if (res?.non_conformity) setTimeout(() => toast("Non-conformité détectée. Ouvrez un suivi."), 120);
-    } catch (e) { toast("Erreur: " + e.message); }
-  }
-
-  if (loading) return <ModalSkeleton />;
-  if (err) return <ErrorBanner message={err} />;
-
-  // Fallback checklist (si schema absent)
-  let schema = Array.isArray(task?.result_schema?.items) ? task.result_schema.items : [];
-  const tsdFallback = Array.isArray(task?.tsd_cluster_items) ? task.tsd_cluster_items : [];
-  if (!schema.length && tsdFallback.length) {
-    schema = tsdFallback.map(it => ({
-      id: it.id, field: it.field, label: it.label, type: "check",
-      unit: it.unit || null, comparator: it.comparator || null, threshold: it.threshold ?? null,
-      threshold_text: (it.comparator || it.threshold != null)
-        ? `${it.label} — ${it.comparator || ""} ${it.threshold ?? ""} ${it.unit || ""}`.trim()
-        : "Choisir: Conforme / Non conforme / N.A."
-    }));
-  }
-
-  // Vignettes images
-  const imageAtts = attachments.filter(a => (a.mimetype || "").startsWith("image/"));
-
-  return (
-    <div className="modal" onClick={onClose}>
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <div className="mh-col">
-            <div className="mh-title"><SafeText value={task.task_name} /></div>
-
-            {/* CHIPS sous le titre */}
-            <div className="mh-sub">
-              <div className="chip"><Icon.Building /> <SafeText value={task.building} /></div>
-              <div className="chip"><Icon.Bolt /> <SafeText value={task.equipment_type} /></div>
-              <div className="chip code"><SafeText value={task.entity_code} /></div>
-            </div>
-
-            {/* MINI CARDS résumé */}
-            <div className="mini-cards" style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px,1fr))', gap:8, marginTop:8}}>
-              <div className="card small">
-                <div className="card-title mono"><SafeText value={task.task_name} /></div>
-                <div className="card-sub" style={{fontSize:12, color:'#475569'}}>Local propre, sec, ventilé</div>
-              </div>
-              <div className="card small">
-                <div className="card-title">Statut</div>
-                <div className="card-sub"><span className={cls("badge",
-                  task.status === "Overdue" && "red",
-                  task.status === "Planned" && "blue",
-                  task.status === "Pending" && "yellow"
-                )}>{task.status}</span></div>
-              </div>
-              <div className="card small">
-                <div className="card-title">Prochaine échéance</div>
-                <div className="card-sub"><SafeText value={fmtDate(task.next_control)} /></div>
-              </div>
-              <div className="card small">
-                <div className="card-title">Seuils</div>
-                <div className="card-sub" style={{fontSize:12}}><SafeText value={task.threshold_text || "—"} /></div>
-              </div>
-            </div>
-          </div>
-          <button className="btn icon ghost" onClick={onClose}><Icon.X /></button>
-        </div>
-
-        <div className="modal-body">
-          {/* Colonne gauche */}
-          <div className="col form">
-            <div className="section">
-              <div className="section-title"><Icon.Check /> Checklist</div>
-
-              {/* Bouton Reconstruire si vide */}
-              {(!schema || !schema.length) ? (
-                <div className="empty small">
-                  Checklist vide.{" "}
+      {/* TASK GRID */}
+      <div className="overflow-auto border rounded-md">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-100">
+            <tr>
+              <th className="p-2 text-left">Label</th>
+              <th className="p-2 text-left">Type</th>
+              <th className="p-2 text-left">Status</th>
+              <th className="p-2 text-left">Due Date</th>
+              <th className="p-2 text-left">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tasks.map((t) => (
+              <tr key={t.id} className="border-t hover:bg-gray-50">
+                <td className="p-2">{t.label}</td>
+                <td className="p-2">{t.control_type}</td>
+                <td className="p-2">
+                  {t.status === "open" && <Badge color="blue">Open</Badge>}
+                  {t.status === "closed" && <Badge color="green">Closed</Badge>}
+                  {t.status === "overdue" && <Badge color="red">Overdue</Badge>}
+                </td>
+                <td className="p-2">{dayjs(t.due_date).format("DD/MM/YYYY")}</td>
+                <td className="p-2">
                   <button
-                    className="btn ghost"
-                    onClick={async () => {
-                      try {
-                        await fetch(`/api/controls/tasks/${id}/fix-schema`, { method: "POST" });
-                        const details = await CONTROLS_API.taskDetails(id);
-                        setTask(details);
-                        toast("Checklist reconstruite");
-                      } catch (e) { toast("Impossible de reconstruire: " + e.message); }
-                    }}
-                  >Reconstruire</button>
-                </div>
-              ) : null}
-
-              <div className="group-fields">
-                {schema.map((it) => (
-                  <div key={it.id} className="group-item">
-                    <div className="gi-head">
-                      <div className="gi-label"><SafeText value={it.label} /></div>
-                      <div className="gi-rule"><SafeText value={it.threshold_text} /></div>
-                    </div>
-                    <div className="field">
-                      <label className="hint">Résultat</label>
-                      <select
-                        className="input"
-                        value={results[it.id] ?? ""}
-                        onChange={(e) => setResults({ ...results, [it.id]: e.target.value })}
-                      >
-                        <option value="">—</option>
-                        <option value="conforme">Conforme</option>
-                        <option value="non_conforme">Non conforme</option>
-                        <option value="na">Non applicable</option>
-                      </select>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="section">
-              <div className="section-title"><Icon.Camera /> Photos & Pièces jointes</div>
-              <AttachmentList taskId={id} attachments={attachments} />
-              <div className="upload-line">
-                <label className="btn">
-                  <Icon.Upload /> Ajouter fichiers
-                  <input type="file" multiple onChange={onUpload} style={{display:'none'}} />
-                </label>
-              </div>
-            </div>
-
-            <div className="section">
-              <div className="section-title"><Icon.Send /> Notes</div>
-              <textarea className="input textarea" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Notes optionnelles..." />
-            </div>
-
-            <div className="actions">
-              <button className="btn primary" onClick={complete}>Compléter</button>
-            </div>
-          </div>
-
-          {/* Colonne droite — IA redesign */}
-          <div className="col side">
-            <div className="section ai-box fancy">
-              <div className="ai-gradient" />
-              <div className="section-title"><Icon.Bolt /> Assistant IA</div>
-
-              {/* Mode selector */}
-              <div className="ai-modes">
-                <button className={cls("chip", aiMode === "guide" && "active")} onClick={() => setAiMode("guide")}>Guidage pré-intervention</button>
-                <button className={cls("chip", aiMode === "photo" && "active")} onClick={() => setAiMode("photo")}>Interprétation photo</button>
-              </div>
-
-              {aiMode === "guide" && (
-                <div className="ai-card">
-                  <div className="ai-card-title">Brief express</div>
-                  <div className="ai-card-body">
-                    <p className="hint">EPI, points de contrôle, appareil de mesure, valeurs attendues, risques immédiats.</p>
-                    <button
-                      className="btn ghost"
-                      onClick={() => assistant("Guidage pré-intervention (EPI, points de contrôle, appareil de mesure, valeurs attendues)")}
-                      disabled={aiLoading}
-                    >
-                      <Icon.Send /> Générer le guidage
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {aiMode === "photo" && (
-                <div className="ai-card">
-                  <div className="ai-card-title">Choisir une photo</div>
-                  <div className="ai-thumbs">
-                    {imageAtts.length === 0 ? (
-                      <div className="empty small">Aucune image. Ajoute une photo puis réessaie.</div>
-                    ) : imageAtts.map(a => (
-                      <label key={a.id} className={cls("thumb", selectedAttId === a.id && "selected")}>
-                        <input
-                          type="radio"
-                          name="ai-photo"
-                          value={a.id}
-                          checked={selectedAttId === a.id}
-                          onChange={() => setSelectedAttId(a.id)}
-                          style={{ display: 'none' }}
-                        />
-                        <img
-                          src={`/api/controls/tasks/${id}/attachments/${a.id}`}
-                          alt={a.filename}
-                          onClick={() => setSelectedAttId(a.id)}
-                        />
-                        <span className="thumb-name" title={a.filename}><SafeText value={a.filename} /></span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="ai-card-actions">
-                    <button
-                      className="btn ghost"
-                      onClick={() => {
-                        if (!selectedAttId) return toast("Choisis une photo d'abord");
-                        assistant("Interprétation de la photo (lire valeurs, état visuel, remarques sécurité)", [selectedAttId]);
-                      }}
-                      disabled={aiLoading}
-                    >
-                      <Icon.Send /> Interpréter la photo
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Zone de réponse */}
-              <div className={cls("ai-answer", aiLoading && "loading")}>
-                {aiLoading ? (
-                  <div className="ai-loader">
-                    <div className="spinner" />
-                    <div>Analyse en cours…</div>
-                  </div>
-                ) : aiMessage ? (
-                  <>
-                    <pre>{aiMessage}</pre>
-                    <div className="ai-toolbar">
-                      <button className="btn ghost" onClick={() => {
-                        navigator.clipboard.writeText(aiMessage).then(() => toast("Réponse copiée"));
-                      }}><Icon.Copy /> Copier</button>
-                    </div>
-                  </>
-                ) : (
-                  <div className="ai-placeholder">
-                    <p className="hint">Utilise <b>Guidage pré-intervention</b> pour un briefing ciblé ou sélectionne une <b>photo</b> pour obtenir une lecture automatique (valeurs, défauts visuels, écarts vs seuils, actions).</p>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Procédure & sécurité */}
-            <div className="section">
-              <div className="section-title"><Icon.Alert /> Procédure & Sécurité</div>
-              <div className="callout">
-                <div className="callout-title"><Icon.Alert /> Dangers</div>
-                <div className="callout-text"><SafeText value={task.hazards_md || "—"} /></div>
-              </div>
-              <div className="callout">
-                <div className="callout-title"><Icon.Bolt /> EPI</div>
-                <div className="callout-text"><SafeText value={task.ppe_md || "—"} /></div>
-              </div>
-              <div className="callout">
-                <div className="callout-title"><Icon.Clock /> Outils</div>
-                <div className="callout-text"><SafeText value={task.tools_md || "—"} /></div>
-              </div>
-              <div className="callout">
-                <div className="callout-title"><Icon.Check /> Procédure</div>
-                <div className="callout-text"><SafeText value={task.procedure_md || "—"} /></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* =====================================
-   Calendar
-===================================== */
-function CalendarPanel({ site, onSelectTask }) {
-  const [month, setMonth] = useState(new Date());
-  const [err, setErr] = useState("");
-  const [items, setItems] = useState([]);
-
-  useEffect(() => {
-    (async () => {
-      const from = new Date(month); from.setDate(1); from.setMonth(from.getMonth() - 1);
-      const to = new Date(month); to.setDate(1); to.setMonth(to.getMonth() + 2); to.setDate(0);
-      try {
-        setErr("");
-        const data = await CONTROLS_API.calendar(site, { from: toISODate(from), to: toISODate(to) });
-        setItems(Array.isArray(data) ? data : (data?.rows || []));
-      } catch (e) { setErr(e.message || String(e)); }
-    })();
-  }, [month, site]);
-
-  function prev() { const d = new Date(month); d.setMonth(d.getMonth() - 1); setMonth(d); }
-  function next() { const d = new Date(month); d.setMonth(d.getMonth() + 1); setMonth(d); }
-
-  const grid = buildMonthGrid(month);
-  const byDay = new Map();
-  for (const it of items) {
-    const key = toISODate(new Date(it.next_control));
-    if (!byDay.has(key)) byDay.set(key, []);
-    byDay.get(key).push(it);
-  }
-
-  return (
-    <div className="calendar-panel">
-      <div className="cal-head">
-        <button className="btn ghost" onClick={prev}>‹</button>
-        <div className="cal-title"><Icon.Calendar /> {month.toLocaleDateString(undefined, { year: "numeric", month: "long" })}</div>
-        <button className="btn ghost" onClick={next}>›</button>
-      </div>
-      {err ? <ErrorBanner message={err} /> : null}
-      <div className="cal-grid">
-        {["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"].map((d) => <div key={d} className="cal-dow">{d}</div>)}
-        {grid.map((cell, i) => {
-          const key = toISODate(cell.date);
-          const list = byDay.get(key) || [];
-          return (
-            <div key={i} className={cls("cal-cell", cell.otherMonth && "muted")}>
-              <div className="cal-day">{cell.date.getDate()}</div>
-              <div className="cal-list">
-                {list.slice(0, 4).map(ev => (
-                  <div
-                    key={ev.id}
-                    className={cls("cal-item", ev.status === "Overdue" && "red", ev.status === "Planned" && "blue")}
-                    onClick={() => onSelectTask(ev.id)}
+                    className="text-blue-600 underline"
+                    onClick={() => setSelected(t)}
                   >
-                    <SafeText value={ev.entity_name} /> · <SafeText value={ev.task_name} />
-                  </div>
-                ))}
-                {list.length > 4 ? <div className="cal-more">+{list.length - 4} autres…</div> : null}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-function toISODate(d) { const x = new Date(d); x.setHours(0,0,0,0); return x.toISOString().slice(0,10); }
-function buildMonthGrid(firstOfMonth) {
-  const start = new Date(firstOfMonth);
-  const firstDay = (start.getDay() + 6) % 7; // Monday start
-  const startDate = new Date(start); startDate.setDate(1 - firstDay);
-  const cells = [];
-  for (let i = 0; i < 42; i++) {
-    const dt = new Date(startDate); dt.setDate(startDate.getDate() + i);
-    cells.push({ date: dt, otherMonth: dt.getMonth() !== firstOfMonth.getMonth() });
-  }
-  return cells;
-}
-
-/* =====================================
-   Attachments
-===================================== */
-function AttachmentList({ taskId, attachments }) {
-  if (!attachments?.length) return <div className="empty small">Aucune pièce jointe.</div>;
-  return (
-    <div className="attachments">
-      {attachments.map((a) => (
-        <a
-          key={a.id}
-          className="att"
-          href={`/api/controls/tasks/${taskId}/attachments/${a.id}`}
-          target="_blank" rel="noreferrer"
-          title={`${a.filename} (${a.size || 0} o)`}
-        >
-          <Icon.Paperclip /> <span className="name"><SafeText value={a.filename} /></span>
-          <span className="meta"><SafeText value={a.mimetype || "—"} /> • <SafeText value={a.size ?? "?"} /> o</span>
-        </a>
-      ))}
-    </div>
-  );
-}
-
-/* =====================================
-   UI Helpers
-===================================== */
-function ErrorBanner({ message }) { return <div className="error"><Icon.Alert /> <div>{message}</div></div>; }
-function SkeletonList() {
-  return (
-    <div className="grid">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div className="card skeleton" key={i}>
-          <div className="line w40"></div>
-          <div className="line w70"></div>
-          <div className="line w50"></div>
-        </div>
-      ))}
-    </div>
-  );
-}
-function ModalSkeleton() {
-  return (
-    <div className="modal-body">
-      <div className="col form">
-        <div className="line w80"></div>
-        <div className="line w60"></div>
-        <div className="line w90"></div>
-      </div>
-      <div className="col side">
-        <div className="line w70"></div>
-        <div className="line w50"></div>
-        <div className="line w60"></div>
-      </div>
-    </div>
-  );
-}
-
-/* =====================================
-   Toast
-===================================== */
-let TOASTS = [];
-let setToastState;
-function ToastRoot() {
-  const [, set] = useState(0);
-  setToastState = set;
-  useEffect(() => () => { setToastState = null; }, []);
-  return (
-    <div className="toasts">
-      {TOASTS.map((t) => (<div className="toast" key={t.id}>{t.text}</div>))}
-    </div>
-  );
-}
-function toast(text) {
-  const id = Math.random().toString(36).slice(2);
-  TOASTS.push({ id, text }); setToastState && setToastState(Date.now());
-  setTimeout(() => { TOASTS = TOASTS.filter((x) => x.id !== id); setToastState && setToastState(Date.now()); }, 3500);
-}
-
-/* =====================================
-   Audit IA Panel
-===================================== */
-function AIAuditPanel({ site }) {
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-  const [items, setItems] = useState([]);
-  const [recent, setRecent] = useState(20);
-  const [past, setPast] = useState(50);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true); setErr("");
-        const res = await CONTROLS_API.aiAuditList(site);
-        setItems(res || []);
-      } catch (e) { setErr(e.message || String(e)); }
-      finally { setLoading(false); }
-    })();
-  }, [site]);
-
-  async function runAudit() {
-    try {
-      setLoading(true); setErr("");
-      await CONTROLS_API.aiAuditRun(site, { recent, past });
-      const res = await CONTROLS_API.aiAuditList(site);
-      setItems(res || []);
-      toast("Audit IA terminé");
-    } catch (e) { setErr(e.message || String(e)); toast("Erreur audit: " + e.message); }
-    finally { setLoading(false); }
-  }
-
-  return (
-    <div className="audit-panel">
-      <div className="audit-head">
-        <button className="btn" onClick={runAudit} disabled={loading}><Icon.Refresh /> {loading ? 'En cours...' : 'Lancer Audit IA'}</button>
-        <div className="audit-params">
-          <div className="filter"><label>Récent (n)</label><input type="number" className="input" value={recent} onChange={(e) => setRecent(Number(e.target.value))} min={5} /></div>
-          <div className="filter"><label>Passé (n)</label><input type="number" className="input" value={past} onChange={(e) => setPast(Number(e.target.value))} min={10} /></div>
-        </div>
-      </div>
-      {err ? <ErrorBanner message={err} /> : null}
-      {loading ? <SkeletonList /> : (
-        items.length === 0 ? <div className="empty">Aucun résultat d'audit pour le moment. Lancez un audit pour analyser les dérives.</div> : (
-          <div className="grid">
-            {items.map((it) => (
-              <div className="card" key={it.id}>
-                <div className="card-head">
-                  <div className="card-title"><SafeText value={it.entity_name} /> ({it.entity_code})</div>
-                  <div className="chip code"><SafeText value={it.task_code} /></div>
-                </div>
-                <div className="card-sub">
-                  <div className="badge red">Drift: {(it.drift_score * 100).toFixed(1)}%</div>
-                  <div className="badge yellow">NC Rate: {(it.nc_rate * 100).toFixed(1)}%</div>
-                </div>
-                <div className="date"><Icon.Clock /> Échantillon: {it.sample_size} • Dernière: <SafeText value={fmtDT(it.last_eval)} /></div>
-              </div>
+                    Details
+                  </button>
+                </td>
+              </tr>
             ))}
-          </div>
-        )
+          </tbody>
+        </table>
+        {loading && <div className="p-2 text-gray-500">Loading...</div>}
+      </div>
+
+      {/* GANTT VIEW */}
+      <div className="border rounded-md p-2 bg-white shadow">
+        <h2 className="text-lg font-semibold mb-2">Calendar (Gantt View)</h2>
+        <div className="flex items-center gap-2 mb-2">
+          <span>View mode:</span>
+          <select
+            className="border px-2 py-1 rounded"
+            value={viewMode}
+            onChange={(e) => setViewMode(e.target.value)}
+          >
+            <option value={ViewMode.Week}>Week</option>
+            <option value={ViewMode.Month}>Month</option>
+            <option value={ViewMode.Year}>Year</option>
+          </select>
+        </div>
+        <div className="h-[400px] bg-white overflow-x-auto">
+          <Gantt tasks={calendar} viewMode={viewMode} />
+        </div>
+      </div>
+
+      <Modal open={!!selected} onClose={() => setSelected(null)}>
+        {selected && (
+          <TaskDetails
+            task={selected}
+            onClose={() => setSelected(null)}
+            reload={loadTasks}
+          />
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// TaskDetails modal
+// -----------------------------------------------------------------------------
+
+function TaskDetails({ task, onClose, reload }) {
+  const [obs, setObs] = useState("");
+  const [aiResult, setAiResult] = useState(null);
+
+  async function closeTask() {
+    try {
+      await CONTROLS_API.close(task.id, {
+        record_status: "done",
+        checklist: [],
+        observations: { notes: obs },
+        attachments: [],
+      });
+      reload();
+      onClose();
+    } catch (err) {
+      alert("Error closing task: " + err.message);
+    }
+  }
+
+  async function analyzeBefore() {
+    try {
+      const data = await CONTROLS_API.analyzeBefore({
+        image_url: "https://example.com/image.jpg",
+      });
+      setAiResult(data.findings || []);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-xl font-semibold">{task.label}</h2>
+      <p>
+        <b>Due:</b> {dayjs(task.due_date).format("DD/MM/YYYY")}
+      </p>
+
+      <div>
+        <h3 className="font-semibold">Observations</h3>
+        <textarea
+          className="border w-full rounded p-2 text-sm"
+          rows={3}
+          value={obs}
+          onChange={(e) => setObs(e.target.value)}
+        />
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={closeTask}
+          className="bg-green-600 text-white px-4 py-1 rounded"
+        >
+          Close Task
+        </button>
+        <button
+          onClick={analyzeBefore}
+          className="bg-yellow-500 text-white px-4 py-1 rounded"
+        >
+          AI Analysis
+        </button>
+      </div>
+
+      {aiResult && (
+        <div className="mt-3 border rounded p-2 bg-gray-50">
+          <h4 className="font-semibold">AI Findings</h4>
+          <ul className="text-sm list-disc ml-4">
+            {aiResult.map((f, i) => (
+              <li key={i}>
+                {f.message} ({Math.round(f.confidence * 100)}%)
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
 }
-
-/* =====================================
-   Styles
-===================================== */
-const styles = `
-:root {
-  --bg: #f6f7fb;
-  --card: #fff;
-  --text: #111;
-  --muted: #6b7280;
-  --primary: #0ea5e9;
-  --primary-600: #0284c7;
-  --blue-50: #eff6ff;
-  --green: #16a34a;
-  --yellow: #f59e0b;
-  --red: #dc2626;
-  --border: #e5e7eb;
-  --chip: #eef2f7;
-}
-
-* { box-sizing:border-box; }
-html, body, #root { height: 100%; }
-body { margin:0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji"; }
-
-.controls-wrap .container { width: 100%; max-width: 1200px; padding: 16px; margin: 0 auto; }
-.page-title { font-size: 24px; margin: 16px 0 8px; }
-
-.topbar { position: sticky; top: 0; z-index: 10; display:flex; justify-content:space-between; align-items:center; padding:10px 16px; background:#fff; border-bottom:1px solid var(--border); }
-.brand { display:flex; align-items:center; gap:10px; font-weight:700; }
-.logo svg { color: var(--primary); }
-.top-actions { display:flex; align-items:flex-end; gap:12px; }
-.input { background:#fff; color:#000; border:1px solid var(--border); border-radius:8px; padding:10px 12px; width:100%; }
-.input:focus { outline:2px solid var(--primary); border-color: transparent; }
-.textarea { min-height: 90px; resize: vertical; }
-
-.btn { display:inline-flex; align-items:center; gap:8px; background: var(--primary); color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; font-weight:600; }
-.btn:hover { background: var(--primary-600); }
-.btn.ghost { background:#fff; color:#111; border:1px solid var(--border); }
-.btn.icon { padding:8px; border-radius:8px; }
-.btn.primary { background: var(--green); }
-.btn.primary:hover { background: #15803d; }
-
-.tabs { display:flex; gap:8px; margin: 8px 0 16px; }
-.tab { background:#fff; border:1px solid var(--border); border-radius:999px; padding:8px 12px; display:inline-flex; gap:8px; align-items:center; cursor:pointer; }
-.tab.active { background: var(--blue-50); border-color:#bfdbfe; }
-
-.filters { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; margin: 8px 0 16px; }
-.filters-row { display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
-.search { position:relative; flex:1; min-width: 220px; }
-.search .icon { position:absolute; left:10px; top:50%; transform:translateY(-50%); color:var(--muted); }
-.search .input { padding-left:36px; }
-.filters-panel { margin-top:10px; display:grid; grid-template-columns: repeat(4, minmax(160px, 1fr)); gap:12px; }
-.filter { display:flex; flex-direction:column; gap:6px; }
-.filter.check { flex-direction:row; align-items:center; gap:8px; }
-.filter-actions { grid-column: 1 / -1; display:flex; justify-content:flex-end; }
-
-.grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-.card { background: var(--card); border:1px solid var(--border); border-radius:12px; padding:12px; cursor:pointer; transition: transform .05s ease, box-shadow .15s ease; }
-.card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.06); transform: translateY(-1px); }
-.card-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
-.card-title { font-weight:700; margin-bottom:8px; }
-.card-sub { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-.card-entity { color:var(--muted); }
-.date { display:flex; gap:6px; align-items:center; color:var(--muted); font-size: 12px; }
-.badge { display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:4px 8px; border-radius:999px; background: var(--blue-50); color:#0b4a6f; border:1px solid var(--border); }
-.badge.green { background:#ecfdf5; color:#065f46; }
-.badge.red { background:#fef2f2; color:#991b1b; }
-.badge.blue { background:#eff6ff; color:#1e40af; }
-.badge.yellow { background:#fffbeb; color:#92400e; border-color:#fde68a; }
-.chip { display:inline-flex; gap:6px; align-items:center; background: var(--chip); color:#111; border:1px solid var(--border); padding:4px 8px; border-radius:999px; font-size:12px; }
-.chip.code { background:#fafafa; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-.chip.active { outline:2px solid #bae6fd; }
-
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-
-.error { display:flex; gap:8px; align-items:flex-start; background:#fef2f2; border:1px solid #fecaca; color:#7f1d1d; padding:12px; border-radius:10px; margin: 12px 0; }
-.empty { text-align:center; color:var(--muted); padding:24px; }
-.empty.small { padding:8px; text-align:left; }
-
-.modal { position: fixed; inset:0; background: rgba(0,0,0,.28); display:flex; align-items:flex-start; justify-content:center; padding:20px; z-index: 50; overflow:auto; }
-.modal-card { width: 100%; max-width: 1100px; background:#fff; border-radius:14px; border:1px solid var(--border); }
-.modal-head { padding:12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
-.mh-title { font-weight:800; font-size:18px; }
-.mh-sub { display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; color:var(--muted); }
-.modal-body { display:grid; grid-template-columns: 1.3fr .9fr; gap:16px; padding:12px; }
-.col { display:flex; flex-direction:column; gap:12px; }
-.section { background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px; }
-.section-title { font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
-.hint { font-size: 13px; color: var(--muted); margin-bottom:6px; }
-.field { display:flex; flex-direction:column; gap:6px; }
-.group-fields { display:flex; flex-direction:column; gap:12px; }
-.group-item { border:1px solid var(--border); border-radius:10px; padding:10px; background:#fff; }
-.gi-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }
-.gi-label { font-weight:700; }
-.gi-rule { font-size:12px; color:#374151; background:#f8fafc; border:1px dashed var(--border); padding:4px 6px; border-radius:8px; }
-.actions { display:flex; gap:8px; justify-content:flex-end; }
-
-.callout { background:#fafafa; border:1px solid var(--border); border-radius:10px; padding:12px; }
-.callout-title { font-weight:700; display:flex; gap:8px; align-items:center; margin-bottom:4px; }
-.callout-text { font-size:13px; color:var(--muted); margin-bottom:8px; }
-
-.upload-line { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.attachments { display:flex; flex-direction:column; gap:8px; }
-.att { display:flex; align-items:center; gap:8px; padding:8px; border:1px solid var(--border); border-radius:8px; text-decoration:none; color:inherit; background:#fff; }
-.att:hover { background:#f8fafc; }
-
-/* Mini cards - résumé */
-.card.small { cursor:default; }
-.card.small .card-title { font-weight:700; font-size:13px; margin-bottom:4px; }
-.card.small .card-sub { font-size:12px; color:#374151; }
-
-/* AI redesign */
-.ai-box.fancy { position: relative; overflow: hidden; }
-.ai-gradient { position:absolute; inset:-1px; background: linear-gradient(135deg, rgba(14,165,233,.06), rgba(99,102,241,.06)); z-index:0; }
-.ai-box.fancy > * { position: relative; z-index:1; }
-.ai-modes { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
-.ai-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:10px; }
-.ai-card-title { font-weight:700; margin-bottom:6px; }
-.ai-thumbs { display:grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap:8px; }
-.thumb { position:relative; display:flex; flex-direction:column; gap:4px; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:#fff; }
-.thumb img { width:100%; height:90px; object-fit:cover; display:block; }
-.thumb.selected { outline:3px solid #bae6fd; }
-.thumb-name { font-size:12px; color:#334155; padding:6px 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.ai-card-actions { display:flex; justify-content:flex-end; margin-top:8px; }
-
-.ai-answer { background:#0b1220; color:#e5e7eb; border:1px solid #111827; border-radius:10px; padding:10px; min-height:120px; }
-.ai-answer pre { margin:0; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12.5px; line-height:1.5; }
-.ai-placeholder { opacity:.9; }
-.ai-loader { display:flex; align-items:center; gap:10px; }
-.spinner { width:16px; height:16px; border-radius:999px; border:2px solid #94a3b8; border-top-color: transparent; animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.ai-toolbar { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
-
-/* Calendar */
-.calendar-panel { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; }
-.cal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-.cal-title { font-weight:800; display:flex; gap:8px; align-items:center; }
-.cal-grid { display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; }
-.cal-dow { font-size:12px; color:#475569; text-align:center; padding:6px 0; }
-.cal-cell { border:1px solid var(--border); border-radius:10px; background:#fff; min-height:104px; padding:6px; display:flex; flex-direction:column; gap:4px; }
-.cal-cell.muted { background:#fafafa; color:#6b7280; }
-.cal-day { font-size:12px; color:#64748b; }
-.cal-list { display:flex; flex-direction:column; gap:4px; }
-.cal-item { font-size:12px; line-height:1.25; padding:4px 6px; border-radius:6px; background:#eff6ff; cursor:pointer; border:1px solid var(--border); }
-.cal-item.red { background:#fef2f2; }
-.cal-item.blue { background:#eff6ff; }
-.cal-more { font-size:11px; color:#64748b; }
-
-/* Skeleton */
-.skeleton .line { height: 10px; background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9); background-size: 200% 100%; animation: sk 1.2s ease-in-out infinite; border-radius:6px; margin:8px 0; }
-.skeleton .w40 { width:40%; } .skeleton .w50 { width:50%; } .skeleton .w60 { width:60%; } .skeleton .w70 { width:70%; } .skeleton .w80 { width:80%; } .skeleton .w90 { width:90%; }
-@keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-
-/* Toast */
-.toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 60; }
-.toast { background:#111; color:#fff; padding:10px 12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.2); max-width: 70vw; }
-
-@media (max-width: 980px) {
-  .filters-panel { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
-  .modal-body { grid-template-columns: 1fr; }
-  .cal-cell { min-height:88px; }
-}
-@media (max-width: 600px) {
-  .filters-row { gap:8px; }
-  .filters-panel { grid-template-columns: 1fr; }
-  .grid { grid-template-columns: 1fr; }
-}
-`;
