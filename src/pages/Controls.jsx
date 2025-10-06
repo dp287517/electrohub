@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /* =====================================
-   Helpers (robustes contre valeurs brutes)
+   Helpers
 ===================================== */
 function cls(...a) { return a.filter(Boolean).join(" "); }
 const fmtDate = (s) => (s ? new Date(s).toLocaleDateString() : "—");
 const fmtDT = (s) => (s ? new Date(s).toLocaleString() : "—");
-
 function isPlainObject(x){ return x && typeof x === 'object' && !Array.isArray(x); }
 function toLabel(x, fallback = "—") {
   if (x == null) return fallback;
@@ -14,26 +13,19 @@ function toLabel(x, fallback = "—") {
   if (isPlainObject(x)) return x.label || x.name || x.title || x.value || fallback;
   return fallback;
 }
-function toValue(x) {
-  if (x == null) return "";
-  if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") return x;
-  if (isPlainObject(x)) return x.value ?? x.key ?? x.id ?? toLabel(x, "");
-  return "";
-}
 function SafeText({ value, empty = "—" }) {
   const v = value;
   if (v == null || v === "") return <>{empty}</>;
   if (typeof v === "string" || typeof v === "number") return <>{String(v)}</>;
   if (typeof v === "boolean") return <>{v ? "Oui" : "Non"}</>;
-  // Évite l'erreur React #31: on ne rend JAMAIS d'objet brut
-  if (Array.isArray(v)) return <>{v.map((it, i) => toLabel(it)).filter(Boolean).join(" · ")}</>;
+  if (Array.isArray(v)) return <>{v.map((it) => toLabel(it)).filter(Boolean).join(" · ")}</>;
   if (isPlainObject(v)) return <>{toLabel(v, empty)}</>;
   return <>{empty}</>;
 }
 
-/* ============================
-   API utils (mise à jour)
-============================ */
+/* =====================================
+   API
+===================================== */
 function headersFor(site) { return site ? { "X-Site": site } : {}; }
 const CONTROLS_API = {
   library: () => fetchJSON(`/api/controls/library`),
@@ -44,21 +36,18 @@ const CONTROLS_API = {
   attachments: (id) => fetchJSON(`/api/controls/tasks/${id}/attachments`),
   upload: (id, formData) =>
     fetch(`/api/controls/tasks/${id}/upload`, { method: "POST", body: formData }).then(asJSON),
-
   assistant: (id, body) =>
     fetchJSON(`/api/controls/tasks/${id}/assistant`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(
         body || {
-          question:
-            "Aide pré-intervention : EPI, points à vérifier, appareil à utiliser, interprétation des mesures.",
+          question: "Analyse visuelle + lecture valeurs",
           use_pre_images: true,
           attachment_ids: [],
         }
       ),
     }),
-
   complete: (id, payload) =>
     fetchJSON(`/api/controls/tasks/${id}/complete`, {
       method: "POST",
@@ -67,8 +56,6 @@ const CONTROLS_API = {
     }),
   calendar: (site, params = {}) =>
     fetchJSON(`/api/controls/calendar${toQS(params)}`, { headers: headersFor(site) }),
-
-  // --- Nouveaux endpoints: Audit IA ---
   aiAuditRun: (site, params = {}) =>
     fetchJSON(`/api/controls/ai/audit-run`, {
       method: "POST",
@@ -78,7 +65,6 @@ const CONTROLS_API = {
   aiAuditList: (site, params = {}) =>
     fetchJSON(`/api/controls/ai/audit${toQS(params)}`, { headers: headersFor(site) }),
 };
-
 function toQS(obj) {
   const p = new URLSearchParams();
   Object.entries(obj || {}).forEach(([k, v]) => {
@@ -88,7 +74,6 @@ function toQS(obj) {
   const s = p.toString();
   return s ? `?${s}` : "";
 }
-
 async function fetchJSON(url, options = {}) {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -115,124 +100,46 @@ async function asJSON(res) {
   return res.json();
 }
 
-/* ============================
-   Icons (inline SVG, no deps)
-============================ */
+/* =====================================
+   Icons
+===================================== */
 const Icon = {
-  Search: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M21 21l-4.35-4.35M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  Filter: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M4 6h16M7 12h10M10 18h4" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  ChevronDown: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  ChevronUp: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M18 15l-6-6-6 6" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  Refresh: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 8V4h-4" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  Calendar: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
-      <path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  Building: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M3 21h18M6 21V7h12v14M9 21v-4h6v4" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  Bolt: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  Alert: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="none" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  ),
-  Check: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M20 6l-11 11-5-5" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
-  Clock: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/>
-      <path d="M12 6v6l4 2" fill="none" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  ),
-  Camera: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M4 7h4l2-2h4l2 2h4v12H4z" fill="none" stroke="currentColor" strokeWidth="2"/>
-      <circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  ),
-  Upload: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M12 16V4M7 9l5-5 5 5M4 20h16" fill="none" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  ),
-  Paperclip: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 1 1 4.95 4.95l-9.19 9.19a2 2 0 1 1-2.83-2.83l7.78-7.78" fill="none" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  ),
-  Send: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M22 2L11 13" fill="none" stroke="currentColor" strokeWidth="2"/>
-      <path d="M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  ),
-  X: (p) => (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...p}>
-      <path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  ),
+  Search: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M21 21l-4.35-4.35M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  Filter: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M4 6h16M7 12h10M10 18h4" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  ChevronDown: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  ChevronUp: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M18 15l-6-6-6 6" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  Refresh: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8M20 8V4h-4" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  Calendar: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="2" /><path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  Building: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M3 21h18M6 21V7h12v14M9 21v-4h6v4" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  Bolt: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  Alert: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  Check: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M20 6l-11 11-5-5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
+  Clock: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M12 6v6l4 2" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  Camera: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M4 7h4l2-2h4l2 2h4v12H4z" fill="none" stroke="currentColor" strokeWidth="2"/><circle cx="12" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  Upload: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M12 16V4M7 9l5-5 5 5M4 20h16" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  Paperclip: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M21.44 11.05l-8.49 8.49a5 5 0 0 1-7.07-7.07l9.19-9.19a3.5 3.5 0 1 1 4.95 4.95l-9.19 9.19a2 2 0 1 1-2.83-2.83l7.78-7.78" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  Send: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M22 2L11 13" fill="none" stroke="currentColor" strokeWidth="2"/><path d="M22 2l-7 20-4-9-9-4 20-7z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  Copy: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M9 9h10v12H9zM5 3h10v4H5z" fill="none" stroke="currentColor" strokeWidth="2"/></svg>,
+  X: (p) => <svg viewBox="0 0 24 24" width="18" height="18" {...p}><path d="M18 6 6 18M6 6l12 12" fill="none" stroke="currentColor" strokeWidth="2" /></svg>,
 };
 
-/* ============================
-   Error Boundary (évite crash écran)
-============================ */
+/* =====================================
+   Error Boundary
+===================================== */
 class ErrorBoundary extends React.Component {
-  constructor(props){ super(props); this.state = { hasError:false, message: '' }; }
+  constructor(p){ super(p); this.state = { hasError:false, message:'' }; }
   static getDerivedStateFromError(err){ return { hasError:true, message: err?.message || 'Erreur inconnue' }; }
-  componentDidCatch(){ /* no-op */ }
-  render(){
-    if (this.state.hasError) {
-      return (
-        <div style={{padding:12}}>
-          <div className="error"><Icon.Alert /> <div>{this.state.message}</div></div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
+  render(){ return this.state.hasError ? <div className="error"><Icon.Alert/> <div>{this.state.message}</div></div> : this.props.children; }
 }
 
-/* ============================
-   Controls Page
-============================ */
+/* =====================================
+   Page
+===================================== */
 export default function Controls() {
   const [site, setSite] = useState(localStorage.getItem("controls_site") || "Nyon");
   const [tab, setTab] = useState("tasks");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-
   const [library, setLibrary] = useState(null);
   const [tree, setTree] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -249,11 +156,9 @@ export default function Controls() {
   const qRef = useRef(null);
   useEffect(() => {
     if (qRef.current) clearTimeout(qRef.current);
-    qRef.current = setTimeout(() => {
-      if (tab === "tasks") refreshTasks();
-    }, 350);
+    qRef.current = setTimeout(() => { if (tab === "tasks") refreshTasks(); }, 350);
     return () => clearTimeout(qRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line
   }, [fQuery, fBuilding, fType, fStatus, onlyOverdue, site, tab]);
 
   useEffect(() => {
@@ -266,23 +171,15 @@ export default function Controls() {
         const t = await CONTROLS_API.tree(site);
         setTree(t);
         await refreshTasks(true);
-      } catch (e) {
-        setError(e.message || String(e));
-      } finally {
-        setLoading(false);
-      }
+      } catch (e) { setError(e.message || String(e)); }
+      finally { setLoading(false); }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line
   }, [site]);
 
   function resetFilters() {
-    setFQuery("");
-    setFBuilding("");
-    setFType("");
-    setFStatus("");
-    setOnlyOverdue(false);
+    setFQuery(""); setFBuilding(""); setFType(""); setFStatus(""); setOnlyOverdue(false);
   }
-
   async function refreshTasks(hard = false) {
     try {
       setError("");
@@ -297,95 +194,64 @@ export default function Controls() {
       if (onlyOverdue) list = list.filter((x) => x.status === "Overdue");
       setTasks(list);
       if (hard) setSelectedId(null);
-    } catch (e) {
-      setError(e.message || String(e));
-    }
+    } catch (e) { setError(e.message || String(e)); }
   }
-
-  function onChangeSite(v) {
-    const next = (v || "").trim();
-    setSite(next);
-    localStorage.setItem("controls_site", next);
-  }
+  function onChangeSite(v) { const next = (v || "").trim(); setSite(next); localStorage.setItem("controls_site", next); }
 
   const buildings = useMemo(() => {
-    const s = new Set();
-    (tree || []).forEach((b) => s.add(b?.building || "—"));
-    return Array.from(s);
+    const s = new Set(); (tree || []).forEach((b) => s.add(b?.building || "—")); return Array.from(s);
   }, [tree]);
-
-  // Normalise les types: parfois l'API peut renvoyer des objets
-  const types = useMemo(() => {
-    const arr = (library?.types || []);
-    return arr.map((t) => toLabel(t)).filter(Boolean);
-  }, [library]);
+  const types = useMemo(() => (library?.types || []).map((t) => toLabel(t)).filter(Boolean), [library]);
 
   return (
     <div className="controls-wrap">
-      <TopBar
-        site={site}
-        setSite={onChangeSite}
-        onRefresh={() => refreshTasks(true)}
-      />
-
+      <TopBar site={site} setSite={onChangeSite} onRefresh={() => refreshTasks(true)} />
       <div className="container">
         <h1 className="page-title">Contrôles & Checklists</h1>
-
         <Tabs tab={tab} setTab={setTab} />
 
         {tab === "tasks" && (
           <>
             <FiltersBar
-              query={fQuery}
-              setQuery={setFQuery}
-              filtersOpen={filtersOpen}
-              setFiltersOpen={setFiltersOpen}
-              buildings={buildings}
-              types={types}
-              fBuilding={fBuilding}
-              setFBuilding={setFBuilding}
-              fType={fType}
-              setFType={setFType}
-              fStatus={fStatus}
-              setFStatus={setFStatus}
-              onlyOverdue={onlyOverdue}
-              setOnlyOverdue={setOnlyOverdue}
+              query={fQuery} setQuery={setFQuery}
+              filtersOpen={filtersOpen} setFiltersOpen={setFiltersOpen}
+              buildings={buildings} types={types}
+              fBuilding={fBuilding} setFBuilding={setFBuilding}
+              fType={fType} setFType={setFType}
+              fStatus={fStatus} setFStatus={setFStatus}
+              onlyOverdue={onlyOverdue} setOnlyOverdue={setOnlyOverdue}
               onReset={resetFilters}
             />
-
             {error ? <ErrorBanner message={error} /> : null}
             {loading ? <SkeletonList /> : <TaskGrid tasks={tasks} onOpen={setSelectedId} />}
-
-            {selectedId ? (
-              <ErrorBoundary>
-                <TaskModal id={selectedId} onClose={() => setSelectedId(null)} onCompleted={() => {
-                  setSelectedId(null);
-                  refreshTasks();
-                }} />
-              </ErrorBoundary>
-            ) : null}
           </>
         )}
 
         {tab === "calendar" && <CalendarPanel site={site} onSelectTask={(id) => setSelectedId(id)} />}
         {tab === "audit" && <AIAuditPanel site={site} />}
+
+        {selectedId ? (
+          <ErrorBoundary>
+            <TaskModal
+              id={selectedId}
+              onClose={() => setSelectedId(null)}
+              onCompleted={() => { setSelectedId(null); refreshTasks(); }}
+            />
+          </ErrorBoundary>
+        ) : null}
       </div>
-
       <ToastRoot />
-
-      {/* Page CSS */}
       <style>{styles}</style>
     </div>
   );
 }
 
-/* ============================
-   Top Bar
-============================ */
+/* =====================================
+   Topbar / Tabs / Filters
+===================================== */
 function TopBar({ site, setSite, onRefresh }) {
   const [siteInput, setSiteInput] = useState(site);
   useEffect(() => setSiteInput(site), [site]);
-
   return (
     <header className="topbar">
       <div className="brand">
@@ -395,44 +261,22 @@ function TopBar({ site, setSite, onRefresh }) {
       <div className="top-actions">
         <div className="brand">
           <label>Site</label>
-          <input
-            className="input"
-            value={siteInput}
-            onChange={(e) => setSiteInput(e.target.value)}
-            onBlur={() => setSite(siteInput)}
-            placeholder="Site (ex: Nyon)"
-          />
+          <input className="input" value={siteInput} onChange={(e) => setSiteInput(e.target.value)} onBlur={() => setSite(siteInput)} placeholder="Site (ex: Nyon)"/>
         </div>
-        <button className="btn ghost" onClick={onRefresh} title="Rafraîchir">
-          <Icon.Refresh /> <span>Rafraîchir</span>
-        </button>
+        <button className="btn ghost" onClick={onRefresh}><Icon.Refresh /> <span>Rafraîchir</span></button>
       </div>
     </header>
   );
 }
-
-/* ============================
-   Tabs
-============================ */
 function Tabs({ tab, setTab }) {
   return (
     <div className="tabs">
-      <button className={cls("tab", tab === "tasks" && "active")} onClick={() => setTab("tasks")}>
-        <Icon.Search /> Tâches
-      </button>
-      <button className={cls("tab", tab === "calendar" && "active")} onClick={() => setTab("calendar")}>
-        <Icon.Calendar /> Calendrier
-      </button>
-      <button className={cls("tab", tab === "audit" && "active")} onClick={() => setTab("audit")}>
-        <Icon.Alert /> Audit&nbsp;IA
-      </button>
+      <button className={cls("tab", tab === "tasks" && "active")} onClick={() => setTab("tasks")}><Icon.Search /> Tâches</button>
+      <button className={cls("tab", tab === "calendar" && "active")} onClick={() => setTab("calendar")}><Icon.Calendar /> Calendrier</button>
+      <button className={cls("tab", tab === "audit" && "active")} onClick={() => setTab("audit")}><Icon.Alert /> Audit&nbsp;IA</button>
     </div>
   );
 }
-
-/* ============================
-   Filters
-============================ */
 function FiltersBar({
   query, setQuery,
   filtersOpen, setFiltersOpen,
@@ -448,12 +292,7 @@ function FiltersBar({
       <div className="filters-row">
         <div className="search">
           <span className="icon"><Icon.Search /></span>
-          <input
-            className="input"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Rechercher..."
-          />
+          <input className="input" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Rechercher..." />
         </div>
         <button className="btn ghost" onClick={() => setFiltersOpen(!filtersOpen)}>
           <Icon.Filter /> Filtres {filtersOpen ? <Icon.ChevronUp /> : <Icon.ChevronDown />}
@@ -489,18 +328,16 @@ function FiltersBar({
             <input type="checkbox" checked={onlyOverdue} onChange={(e) => setOnlyOverdue(e.target.checked)} />
             <label>Seulement en retard</label>
           </div>
-          <div className="filter-actions">
-            <button className="btn ghost" onClick={onReset}>Réinitialiser</button>
-          </div>
+          <div className="filter-actions"><button className="btn ghost" onClick={onReset}>Réinitialiser</button></div>
         </div>
       ) : null}
     </div>
   );
 }
 
-/* ============================
+/* =====================================
    Task Grid
-============================ */
+===================================== */
 function TaskGrid({ tasks, onOpen }) {
   if (!tasks?.length) return <div className="empty">Aucune tâche trouvée.</div>;
   return (
@@ -512,9 +349,7 @@ function TaskGrid({ tasks, onOpen }) {
               t.status === "Overdue" && "red",
               t.status === "Planned" && "blue",
               t.status === "Pending" && "yellow"
-            )}>
-              {t.status}
-            </div>
+            )}>{t.status}</div>
             <div className="chip code">{t.task_code || t.cluster}</div>
           </div>
           <div className="card-title"><SafeText value={t.task_name} /></div>
@@ -530,9 +365,9 @@ function TaskGrid({ tasks, onOpen }) {
   );
 }
 
-/* ============================
-   Task Modal
-============================ */
+/* =====================================
+   Task Modal (avec résumé + IA redesign)
+===================================== */
 function TaskModal({ id, onClose, onCompleted }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -542,21 +377,19 @@ function TaskModal({ id, onClose, onCompleted }) {
   const [notes, setNotes] = useState("");
   const [aiMessage, setAiMessage] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiMode, setAiMode] = useState("guide"); // guide | photo
+  const [selectedAttId, setSelectedAttId] = useState(0);
 
   useEffect(() => {
     (async () => {
       try {
-        setLoading(true);
-        setErr("");
+        setLoading(true); setErr("");
         const details = await CONTROLS_API.taskDetails(id);
         setTask(details);
         const atts = await CONTROLS_API.attachments(id);
         setAttachments(atts);
-      } catch (e) {
-        setErr(e.message || String(e));
-      } finally {
-        setLoading(false);
-      }
+      } catch (e) { setErr(e.message || String(e)); }
+      finally { setLoading(false); }
     })();
   }, [id]);
 
@@ -568,9 +401,7 @@ function TaskModal({ id, onClose, onCompleted }) {
       const atts = await CONTROLS_API.attachments(id);
       setAttachments(atts);
       toast("Upload réussi");
-    } catch (e) {
-      toast("Erreur upload: " + e.message);
-    }
+    } catch (e) { toast("Erreur upload: " + e.message); }
   }
 
   async function assistant(question = "", attachment_ids = []) {
@@ -578,11 +409,8 @@ function TaskModal({ id, onClose, onCompleted }) {
       setAiLoading(true);
       const res = await CONTROLS_API.assistant(id, { question, use_pre_images: true, attachment_ids });
       setAiMessage(res.message);
-    } catch (e) {
-      toast("Erreur IA: " + e.message);
-    } finally {
-      setAiLoading(false);
-    }
+    } catch (e) { toast("Erreur IA: " + e.message); }
+    finally { setAiLoading(false); }
   }
 
   async function complete() {
@@ -590,34 +418,28 @@ function TaskModal({ id, onClose, onCompleted }) {
       const res = await CONTROLS_API.complete(id, { user: "tech", results, notes });
       toast("Tâche complétée");
       onCompleted();
-      if (res?.non_conformity) {
-        setTimeout(() => toast("Non-conformité détectée. Ouvrez un suivi (follow-up)."), 100);
-      }
-    } catch (e) {
-      toast("Erreur: " + e.message);
-    }
+      if (res?.non_conformity) setTimeout(() => toast("Non-conformité détectée. Ouvrez un suivi."), 120);
+    } catch (e) { toast("Erreur: " + e.message); }
   }
 
   if (loading) return <ModalSkeleton />;
   if (err) return <ErrorBanner message={err} />;
 
-  // ---------- MODIF A) : fallback local si result_schema absent + bouton "Reconstruire" ----------
+  // Fallback checklist (si schema absent)
   let schema = Array.isArray(task?.result_schema?.items) ? task.result_schema.items : [];
   const tsdFallback = Array.isArray(task?.tsd_cluster_items) ? task.tsd_cluster_items : [];
   if (!schema.length && tsdFallback.length) {
     schema = tsdFallback.map(it => ({
-      id: it.id,
-      field: it.field,
-      label: it.label,
-      type: "check",
-      unit: it.unit || null,
-      comparator: it.comparator || null,
-      threshold: it.threshold ?? null,
+      id: it.id, field: it.field, label: it.label, type: "check",
+      unit: it.unit || null, comparator: it.comparator || null, threshold: it.threshold ?? null,
       threshold_text: (it.comparator || it.threshold != null)
         ? `${it.label} — ${it.comparator || ""} ${it.threshold ?? ""} ${it.unit || ""}`.trim()
         : "Choisir: Conforme / Non conforme / N.A."
     }));
   }
+
+  // Vignettes images
+  const imageAtts = attachments.filter(a => (a.mimetype || "").startsWith("image/"));
 
   return (
     <div className="modal" onClick={onClose}>
@@ -625,15 +447,43 @@ function TaskModal({ id, onClose, onCompleted }) {
         <div className="modal-head">
           <div className="mh-col">
             <div className="mh-title"><SafeText value={task.task_name} /></div>
+
+            {/* CHIPS sous le titre */}
             <div className="mh-sub">
               <div className="chip"><Icon.Building /> <SafeText value={task.building} /></div>
               <div className="chip"><Icon.Bolt /> <SafeText value={task.equipment_type} /></div>
               <div className="chip code"><SafeText value={task.entity_code} /></div>
             </div>
+
+            {/* MINI CARDS résumé */}
+            <div className="mini-cards" style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px,1fr))', gap:8, marginTop:8}}>
+              <div className="card small">
+                <div className="card-title mono"><SafeText value={task.task_name} /></div>
+                <div className="card-sub" style={{fontSize:12, color:'#475569'}}>Local propre, sec, ventilé</div>
+              </div>
+              <div className="card small">
+                <div className="card-title">Statut</div>
+                <div className="card-sub"><span className={cls("badge",
+                  task.status === "Overdue" && "red",
+                  task.status === "Planned" && "blue",
+                  task.status === "Pending" && "yellow"
+                )}>{task.status}</span></div>
+              </div>
+              <div className="card small">
+                <div className="card-title">Prochaine échéance</div>
+                <div className="card-sub"><SafeText value={fmtDate(task.next_control)} /></div>
+              </div>
+              <div className="card small">
+                <div className="card-title">Seuils</div>
+                <div className="card-sub" style={{fontSize:12}}><SafeText value={task.threshold_text || "—"} /></div>
+              </div>
+            </div>
           </div>
           <button className="btn icon ghost" onClick={onClose}><Icon.X /></button>
         </div>
+
         <div className="modal-body">
+          {/* Colonne gauche */}
           <div className="col form">
             <div className="section">
               <div className="section-title"><Icon.Check /> Checklist</div>
@@ -650,13 +500,9 @@ function TaskModal({ id, onClose, onCompleted }) {
                         const details = await CONTROLS_API.taskDetails(id);
                         setTask(details);
                         toast("Checklist reconstruite");
-                      } catch (e) {
-                        toast("Impossible de reconstruire: " + e.message);
-                      }
+                      } catch (e) { toast("Impossible de reconstruire: " + e.message); }
                     }}
-                  >
-                    Reconstruire
-                  </button>
+                  >Reconstruire</button>
                 </div>
               ) : null}
 
@@ -667,7 +513,6 @@ function TaskModal({ id, onClose, onCompleted }) {
                       <div className="gi-label"><SafeText value={it.label} /></div>
                       <div className="gi-rule"><SafeText value={it.threshold_text} /></div>
                     </div>
-                    {/* Tri-state conforme / non conforme / N.A. */}
                     <div className="field">
                       <label className="hint">Résultat</label>
                       <select
@@ -707,7 +552,99 @@ function TaskModal({ id, onClose, onCompleted }) {
             </div>
           </div>
 
+          {/* Colonne droite — IA redesign */}
           <div className="col side">
+            <div className="section ai-box fancy">
+              <div className="ai-gradient" />
+              <div className="section-title"><Icon.Bolt /> Assistant IA</div>
+
+              {/* Mode selector */}
+              <div className="ai-modes">
+                <button className={cls("chip", aiMode === "guide" && "active")} onClick={() => setAiMode("guide")}>Guidage pré-intervention</button>
+                <button className={cls("chip", aiMode === "photo" && "active")} onClick={() => setAiMode("photo")}>Interprétation photo</button>
+              </div>
+
+              {aiMode === "guide" && (
+                <div className="ai-card">
+                  <div className="ai-card-title">Brief express</div>
+                  <div className="ai-card-body">
+                    <p className="hint">EPI, points de contrôle, appareil de mesure, valeurs attendues, risques immédiats.</p>
+                    <button
+                      className="btn ghost"
+                      onClick={() => assistant("Guidage pré-intervention (EPI, points de contrôle, appareil de mesure, valeurs attendues)")}
+                      disabled={aiLoading}
+                    >
+                      <Icon.Send /> Générer le guidage
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {aiMode === "photo" && (
+                <div className="ai-card">
+                  <div className="ai-card-title">Choisir une photo</div>
+                  <div className="ai-thumbs">
+                    {imageAtts.length === 0 ? (
+                      <div className="empty small">Aucune image. Ajoute une photo puis réessaie.</div>
+                    ) : imageAtts.map(a => (
+                      <label key={a.id} className={cls("thumb", selectedAttId === a.id && "selected")}>
+                        <input
+                          type="radio"
+                          name="ai-photo"
+                          value={a.id}
+                          checked={selectedAttId === a.id}
+                          onChange={() => setSelectedAttId(a.id)}
+                          style={{ display: 'none' }}
+                        />
+                        <img
+                          src={`/api/controls/tasks/${id}/attachments/${a.id}`}
+                          alt={a.filename}
+                          onClick={() => setSelectedAttId(a.id)}
+                        />
+                        <span className="thumb-name" title={a.filename}><SafeText value={a.filename} /></span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="ai-card-actions">
+                    <button
+                      className="btn ghost"
+                      onClick={() => {
+                        if (!selectedAttId) return toast("Choisis une photo d'abord");
+                        assistant("Interprétation de la photo (lire valeurs, état visuel, remarques sécurité)", [selectedAttId]);
+                      }}
+                      disabled={aiLoading}
+                    >
+                      <Icon.Send /> Interpréter la photo
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Zone de réponse */}
+              <div className={cls("ai-answer", aiLoading && "loading")}>
+                {aiLoading ? (
+                  <div className="ai-loader">
+                    <div className="spinner" />
+                    <div>Analyse en cours…</div>
+                  </div>
+                ) : aiMessage ? (
+                  <>
+                    <pre>{aiMessage}</pre>
+                    <div className="ai-toolbar">
+                      <button className="btn ghost" onClick={() => {
+                        navigator.clipboard.writeText(aiMessage).then(() => toast("Réponse copiée"));
+                      }}><Icon.Copy /> Copier</button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="ai-placeholder">
+                    <p className="hint">Utilise <b>Guidage pré-intervention</b> pour un briefing ciblé ou sélectionne une <b>photo</b> pour obtenir une lecture automatique (valeurs, défauts visuels, écarts vs seuils, actions).</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Procédure & sécurité */}
             <div className="section">
               <div className="section-title"><Icon.Alert /> Procédure & Sécurité</div>
               <div className="callout">
@@ -727,53 +664,6 @@ function TaskModal({ id, onClose, onCompleted }) {
                 <div className="callout-text"><SafeText value={task.procedure_md || "—"} /></div>
               </div>
             </div>
-
-            {/* ---------- MODIF B) : UI claire Guidage / Interprétation photo ---------- */}
-            <div className="section ai-box">
-              <div className="section-title"><Icon.Bolt /> Assistant IA</div>
-
-              <div className="ai-actions" style={{gap:8, alignItems:'center', flexWrap:'wrap'}}>
-                <button
-                  className="btn ghost"
-                  onClick={() => assistant("Guidage pré-intervention (EPI, points de contrôle, appareil de mesure, valeurs attendues)")}
-                  disabled={aiLoading}
-                >
-                  Guidage pré-intervention
-                </button>
-
-                <span style={{fontSize:12, color:"#475569"}}>ou</span>
-
-                <select id="ai-photo" className="input" style={{width:240}}>
-                  <option value="">— choisir une photo à interpréter —</option>
-                  {attachments.filter(a => (a.mimetype||"").startsWith("image/")).map(a =>
-                    <option key={a.id} value={a.id}>{a.filename}</option>
-                  )}
-                </select>
-                <button
-                  className="btn ghost"
-                  onClick={() => {
-                    const sel = document.getElementById("ai-photo");
-                    const attId = sel ? Number(sel.value) : 0;
-                    if (!attId) return toast("Choisis une photo d'abord");
-                    assistant("Interprétation de la photo (lire valeurs, état visuel, remarques sécurité)", [attId]);
-                  }}
-                  disabled={aiLoading}
-                >
-                  Interpréter la photo
-                </button>
-              </div>
-
-              {aiMessage ? <div className="ai-answer"><pre>{aiMessage}</pre></div> : (
-                <div className="ai-answer" style={{opacity:.8}}>
-                  <div className="ai-title">Exemples :</div>
-                  <ul style={{margin:'6px 0 0 18px', padding:0}}>
-                    <li>Guidage pré-intervention : EPI requis, points à vérifier, seuils et tolérances.</li>
-                    <li>Interprétation photo : lecture d’un écran (tension/courant), état d’un isolant, présence d’échauffement…</li>
-                  </ul>
-                </div>
-              )}
-            </div>
-            {/* ---------- fin modif B ---------- */}
           </div>
         </div>
       </div>
@@ -781,9 +671,9 @@ function TaskModal({ id, onClose, onCompleted }) {
   );
 }
 
-/* ============================
-   Calendar Panel
-============================ */
+/* =====================================
+   Calendar
+===================================== */
 function CalendarPanel({ site, onSelectTask }) {
   const [month, setMonth] = useState(new Date());
   const [err, setErr] = useState("");
@@ -796,11 +686,8 @@ function CalendarPanel({ site, onSelectTask }) {
       try {
         setErr("");
         const data = await CONTROLS_API.calendar(site, { from: toISODate(from), to: toISODate(to) });
-        // Le backend renvoie un tableau brut
         setItems(Array.isArray(data) ? data : (data?.rows || []));
-      } catch (e) {
-        setErr(e.message || String(e));
-      }
+      } catch (e) { setErr(e.message || String(e)); }
     })();
   }, [month, site]);
 
@@ -863,9 +750,9 @@ function buildMonthGrid(firstOfMonth) {
   return cells;
 }
 
-/* ============================
-   Attachments list
-============================ */
+/* =====================================
+   Attachments
+===================================== */
 function AttachmentList({ taskId, attachments }) {
   if (!attachments?.length) return <div className="empty small">Aucune pièce jointe.</div>;
   return (
@@ -886,16 +773,10 @@ function AttachmentList({ taskId, attachments }) {
   );
 }
 
-/* ============================
-   UI helpers
-============================ */
-function ErrorBanner({ message }) {
-  return (
-    <div className="error">
-      <Icon.Alert /> <div>{message}</div>
-    </div>
-  );
-}
+/* =====================================
+   UI Helpers
+===================================== */
+function ErrorBanner({ message }) { return <div className="error"><Icon.Alert /> <div>{message}</div></div>; }
 function SkeletonList() {
   return (
     <div className="grid">
@@ -926,9 +807,9 @@ function ModalSkeleton() {
   );
 }
 
-/* ============================
-   Toast (minimal)
-============================ */
+/* =====================================
+   Toast
+===================================== */
 let TOASTS = [];
 let setToastState;
 function ToastRoot() {
@@ -937,25 +818,19 @@ function ToastRoot() {
   useEffect(() => () => { setToastState = null; }, []);
   return (
     <div className="toasts">
-      {TOASTS.map((t) => (
-        <div className="toast" key={t.id}>{t.text}</div>
-      ))}
+      {TOASTS.map((t) => (<div className="toast" key={t.id}>{t.text}</div>))}
     </div>
   );
 }
 function toast(text) {
   const id = Math.random().toString(36).slice(2);
-  TOASTS.push({ id, text });
-  setToastState && setToastState(Date.now());
-  setTimeout(() => {
-    TOASTS = TOASTS.filter((x) => x.id !== id);
-    setToastState && setToastState(Date.now());
-  }, 3500);
+  TOASTS.push({ id, text }); setToastState && setToastState(Date.now());
+  setTimeout(() => { TOASTS = TOASTS.filter((x) => x.id !== id); setToastState && setToastState(Date.now()); }, 3500);
 }
 
-/* ============================
-   AI Audit Panel
-============================ */
+/* =====================================
+   Audit IA Panel
+===================================== */
 function AIAuditPanel({ site }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -966,49 +841,32 @@ function AIAuditPanel({ site }) {
   useEffect(() => {
     (async () => {
       try {
-        setLoading(true);
-        setErr("");
+        setLoading(true); setErr("");
         const res = await CONTROLS_API.aiAuditList(site);
         setItems(res || []);
-      } catch (e) {
-        setErr(e.message || String(e));
-      } finally {
-        setLoading(false);
-      }
+      } catch (e) { setErr(e.message || String(e)); }
+      finally { setLoading(false); }
     })();
   }, [site]);
 
   async function runAudit() {
     try {
-      setLoading(true);
-      setErr("");
+      setLoading(true); setErr("");
       await CONTROLS_API.aiAuditRun(site, { recent, past });
       const res = await CONTROLS_API.aiAuditList(site);
       setItems(res || []);
       toast("Audit IA terminé");
-    } catch (e) {
-      setErr(e.message || String(e));
-      toast("Erreur audit: " + e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setErr(e.message || String(e)); toast("Erreur audit: " + e.message); }
+    finally { setLoading(false); }
   }
 
   return (
     <div className="audit-panel">
       <div className="audit-head">
-        <button className="btn" onClick={runAudit} disabled={loading}>
-          <Icon.Refresh /> {loading ? 'En cours...' : 'Lancer Audit IA'}
-        </button>
+        <button className="btn" onClick={runAudit} disabled={loading}><Icon.Refresh /> {loading ? 'En cours...' : 'Lancer Audit IA'}</button>
         <div className="audit-params">
-          <div className="filter">
-            <label>Récent (n)</label>
-            <input type="number" className="input" value={recent} onChange={(e) => setRecent(Number(e.target.value))} min={5} />
-          </div>
-          <div className="filter">
-            <label>Passé (n)</label>
-            <input type="number" className="input" value={past} onChange={(e) => setPast(Number(e.target.value))} min={10} />
-          </div>
+          <div className="filter"><label>Récent (n)</label><input type="number" className="input" value={recent} onChange={(e) => setRecent(Number(e.target.value))} min={5} /></div>
+          <div className="filter"><label>Passé (n)</label><input type="number" className="input" value={past} onChange={(e) => setPast(Number(e.target.value))} min={10} /></div>
         </div>
       </div>
       {err ? <ErrorBanner message={err} /> : null}
@@ -1035,9 +893,9 @@ function AIAuditPanel({ site }) {
   );
 }
 
-/* ============================
-   CSS (fonds blancs / texte noir)
-============================ */
+/* =====================================
+   Styles
+===================================== */
 const styles = `
 :root {
   --bg: #f6f7fb;
@@ -1065,7 +923,6 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .brand { display:flex; align-items:center; gap:10px; font-weight:700; }
 .logo svg { color: var(--primary); }
 .top-actions { display:flex; align-items:flex-end; gap:12px; }
-.site-picker label { font-size:12px; color:var(--muted); display:block; margin-bottom:4px; }
 .input { background:#fff; color:#000; border:1px solid var(--border); border-radius:8px; padding:10px 12px; width:100%; }
 .input:focus { outline:2px solid var(--primary); border-color: transparent; }
 .textarea { min-height: 90px; resize: vertical; }
@@ -1106,10 +963,11 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .badge.yellow { background:#fffbeb; color:#92400e; border-color:#fde68a; }
 .chip { display:inline-flex; gap:6px; align-items:center; background: var(--chip); color:#111; border:1px solid var(--border); padding:4px 8px; border-radius:999px; font-size:12px; }
 .chip.code { background:#fafafa; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+.chip.active { outline:2px solid #bae6fd; }
+
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
 .error { display:flex; gap:8px; align-items:flex-start; background:#fef2f2; border:1px solid #fecaca; color:#7f1d1d; padding:12px; border-radius:10px; margin: 12px 0; }
-
 .empty { text-align:center; color:var(--muted); padding:24px; }
 .empty.small { padding:8px; text-align:left; }
 
@@ -1123,11 +981,7 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .section { background:#fff; border:1px solid var(--border); border-radius:10px; padding:12px; }
 .section-title { font-weight:700; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
 .hint { font-size: 13px; color: var(--muted); margin-bottom:6px; }
-.rule { font-size: 12px; color:#1f2937; background:#f3f4f6; border:1px solid var(--border); padding:8px; border-radius:8px; margin-bottom:8px; }
 .field { display:flex; flex-direction:column; gap:6px; }
-.field.check { flex-direction:row; align-items:center; gap:8px; }
-.checklist { display:flex; flex-direction:column; gap:6px; }
-.ck-item { display:flex; gap:8px; align-items:center; }
 .group-fields { display:flex; flex-direction:column; gap:12px; }
 .group-item { border:1px solid var(--border); border-radius:10px; padding:10px; background:#fff; }
 .gi-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px; }
@@ -1140,35 +994,38 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .callout-text { font-size:13px; color:var(--muted); margin-bottom:8px; }
 
 .upload-line { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-.file-pill { display:inline-flex; align-items:center; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:#fff; font-size:12px; }
-.files-list { display:flex; gap:6px; flex-wrap:wrap; }
-
 .attachments { display:flex; flex-direction:column; gap:8px; }
 .att { display:flex; align-items:center; gap:8px; padding:8px; border:1px solid var(--border); border-radius:8px; text-decoration:none; color:inherit; background:#fff; }
 .att:hover { background:#f8fafc; }
 
-.ai-box { display:flex; flex-direction:column; gap:8px; }
-.ai-actions { display:flex; gap:8px; flex-wrap:wrap; }
-.ai-answer { background:#fafafa; border:1px solid var(--border); border-radius:8px; padding:8px; }
-.ai-title { font-weight:700; margin-bottom:4px; }
-.ai-answer pre { margin:0; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
+/* Mini cards - résumé */
+.card.small { cursor:default; }
+.card.small .card-title { font-weight:700; font-size:13px; margin-bottom:4px; }
+.card.small .card-sub { font-size:12px; color:#374151; }
 
-.skeleton .line { height: 10px; background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9); background-size: 200% 100%; animation: sk 1.2s ease-in-out infinite; border-radius:6px; margin:8px 0; }
-.skeleton .w40 { width:40%; }
-.skeleton .w50 { width:50%; }
-.skeleton .w60 { width:60%; }
-.skeleton .w70 { width:70%; }
-.skeleton .w80 { width:80%; }
-.skeleton .w90 { width:90%; }
-@keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; }
-}
+/* AI redesign */
+.ai-box.fancy { position: relative; overflow: hidden; }
+.ai-gradient { position:absolute; inset:-1px; background: linear-gradient(135deg, rgba(14,165,233,.06), rgba(99,102,241,.06)); z-index:0; }
+.ai-box.fancy > * { position: relative; z-index:1; }
+.ai-modes { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+.ai-card { background:#fff; border:1px solid var(--border); border-radius:10px; padding:10px; }
+.ai-card-title { font-weight:700; margin-bottom:6px; }
+.ai-thumbs { display:grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap:8px; }
+.thumb { position:relative; display:flex; flex-direction:column; gap:4px; border:1px solid var(--border); border-radius:10px; overflow:hidden; background:#fff; }
+.thumb img { width:100%; height:90px; object-fit:cover; display:block; }
+.thumb.selected { outline:3px solid #bae6fd; }
+.thumb-name { font-size:12px; color:#334155; padding:6px 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ai-card-actions { display:flex; justify-content:flex-end; margin-top:8px; }
 
-.toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 60; }
-.toast { background:#111; color:#fff; padding:10px 12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.2); max-width: 70vw; }
+.ai-answer { background:#0b1220; color:#e5e7eb; border:1px solid #111827; border-radius:10px; padding:10px; min-height:120px; }
+.ai-answer pre { margin:0; white-space:pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12.5px; line-height:1.5; }
+.ai-placeholder { opacity:.9; }
+.ai-loader { display:flex; align-items:center; gap:10px; }
+.spinner { width:16px; height:16px; border-radius:999px; border:2px solid #94a3b8; border-top-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.ai-toolbar { display:flex; justify-content:flex-end; gap:8px; margin-top:8px; }
 
-*::selection { background: #bae6fd; }
-
- /* Calendar */
+/* Calendar */
 .calendar-panel { background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; }
 .cal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
 .cal-title { font-weight:800; display:flex; gap:8px; align-items:center; }
@@ -1182,6 +1039,15 @@ body { margin:0; background: var(--bg); color: var(--text); font-family: system-
 .cal-item.red { background:#fef2f2; }
 .cal-item.blue { background:#eff6ff; }
 .cal-more { font-size:11px; color:#64748b; }
+
+/* Skeleton */
+.skeleton .line { height: 10px; background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9); background-size: 200% 100%; animation: sk 1.2s ease-in-out infinite; border-radius:6px; margin:8px 0; }
+.skeleton .w40 { width:40%; } .skeleton .w50 { width:50%; } .skeleton .w60 { width:60%; } .skeleton .w70 { width:70%; } .skeleton .w80 { width:80%; } .skeleton .w90 { width:90%; }
+@keyframes sk { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Toast */
+.toasts { position: fixed; right: 16px; bottom: 16px; display:flex; flex-direction:column; gap:8px; z-index: 60; }
+.toast { background:#111; color:#fff; padding:10px 12px; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.2); max-width: 70vw; }
 
 @media (max-width: 980px) {
   .filters-panel { grid-template-columns: repeat(2, minmax(160px, 1fr)); }
