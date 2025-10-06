@@ -676,7 +676,7 @@ app.post("/api/controls/tasks/:id/complete", async (req, res) => {
     );
 
     // (Point 5) Hook optionnel : notifier un worker d’audit si tu en ajoutes un plus tard
-    // await pool.query("NOTIFY ai_audit, $1", [JSON.stringify({ site: t.site || "Nyon", entity_id: t.entity_id, task_code: doneKey })]);
+    await pool.query("NOTIFY ai_audit, $1", [JSON.stringify({ site: t.site || "Nyon", entity_id: t.entity_id, task_code: doneKey })]);
 
     // 4) Met à jour le cache "done" côté entité
     await pool.query(
