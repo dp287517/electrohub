@@ -1,7 +1,7 @@
 /**
  * server_controls.js — ESM (type: module)
  * Routes montées sous /api/controls
- * Aligne strictement les colonnes sur ton schéma Postgres + OPTION CONFORT (seed)
+ * Confort++ : bootstrap d'entités si table vide + seed TSD
  *
  * Prérequis:
  *   npm i express pg multer dayjs uuid
@@ -98,6 +98,24 @@ async function withTx(fn) {
   }
 }
 
+// Helpers dynamiques (introspection des colonnes pour INSERT souple)
+async function getTableColumns(client, tableName) {
+  const { rows } = await client.query(
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema='public' AND table_name=$1`,
+    [tableName]
+  );
+  return rows.map(r => r.column_name);
+}
+function buildDynamicInsert(table, cols, valuesObj) {
+  const colsToUse = cols.filter(c => Object.prototype.hasOwnProperty.call(valuesObj, c));
+  const placeholders = colsToUse.map((_, idx) => `$${idx + 1}`);
+  const values = colsToUse.map(c => valuesObj[c]);
+  const sql = `INSERT INTO ${table} (${colsToUse.join(",")}) VALUES (${placeholders.join(",")})`;
+  return { sql, values };
+}
+
 // ---------------------------------------------------------------------------
 // App + Router (monté sous /api/controls)
 // ---------------------------------------------------------------------------
@@ -130,7 +148,7 @@ router.get("/tsd/category/:key", (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Entities (helper simple)
+// Entities (helper + bootstrap)
 // ---------------------------------------------------------------------------
 router.get("/entities/:id", async (req, res) => {
   const { id } = req.params;
@@ -141,9 +159,68 @@ router.get("/entities/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+/**
+ * Crée 1 entité minimale de façon dynamique selon les colonnes existantes
+ * body: { site?, name?, label?, category_key? ... }
+ */
+router.post("/bootstrap/create-entity", async (req, res) => {
+  const body = req.body || {};
+  try {
+    const created = await withTx(async (client) => {
+      const cols = await getTableColumns(client, "controls_entities");
+      const id = uuidv4();
+      const now = new Date().toISOString();
+
+      // Valeurs par défaut très souples : on n'inclut dans l'INSERT que les colonnes réellement présentes
+      const values = {
+        id,
+        site: body.site || "Default",
+        name: body.name || body.label || "Generic Entity",
+        label: body.label || body.name || "Generic Entity",
+        category_key: body.category_key || null,
+        created_at: now,
+        updated_at: now,
+        active: true,
+      };
+
+      const { sql, values: params } = buildDynamicInsert("controls_entities", cols, values);
+      await client.query(sql, params);
+
+      return { id, used_columns: cols.filter(c => Object.prototype.hasOwnProperty.call(values, c)) };
+    });
+    res.status(201).json({ ok: true, ...created });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/**
+ * S’assure qu’il existe au moins 1 entité. Si aucune, en crée 1 “Default / Generic Entity”.
+ * Renvoie { ensured: true, entity_id }
+ */
+async function ensureAtLeastOneEntity(client) {
+  const c = await client.query(`SELECT id FROM controls_entities LIMIT 1`);
+  if (c.rowCount > 0) return { ensured: false, entity_id: c.rows[0].id };
+
+  // Crée une entité minimale dynamiquement
+  const cols = await getTableColumns(client, "controls_entities");
+  const id = uuidv4();
+  const now = new Date().toISOString();
+  const values = {
+    id,
+    site: "Default",
+    name: "Generic Entity",
+    label: "Generic Entity",
+    created_at: now,
+    updated_at: now,
+    active: true,
+  };
+  const { sql, values: params } = buildDynamicInsert("controls_entities", cols, values);
+  await client.query(sql, params);
+  return { ensured: true, entity_id: id };
+}
+
 // ---------------------------------------------------------------------------
 // TASKS - Liste / Création / Clôture / Historique
-//  -> IMPORTANT: SELECT alias: task_name AS label, next_control AS due_date
+//  -> alias SELECT: task_name AS label, next_control AS due_date
 // ---------------------------------------------------------------------------
 router.get("/tasks", async (req, res) => {
   const {
@@ -213,11 +290,20 @@ router.post("/tasks", async (req, res) => {
 
   try {
     const created = await withTx(async (client) => {
+      // si entité absente -> en créer 1 minimale
       const entQ = await client.query(`SELECT id, site FROM controls_entities WHERE id = $1`, [entity_id]);
+      let ensuredEntityId = entity_id;
+      let entSite = site || "Default";
       if (!entQ.rowCount) {
-        return { warning: tsdLibrary.meta?.missing_equipment_note || "Equipement en attente d'intégration au système Electrohub." };
+        const ensure = await ensureAtLeastOneEntity(client);
+        ensuredEntityId = ensure.entity_id;
+        // récupère la ligne complète
+        const got = await client.query(`SELECT id, site FROM controls_entities WHERE id = $1`, [ensuredEntityId]);
+        entSite = got.rows[0]?.site || entSite;
+      } else {
+        entSite = site || entQ.rows[0].site || "Default";
       }
-      const entSite = site || entQ.rows[0].site || "Default";
+
       const nextCtrl = due_date || (freqMonths ? addFrequencyFromMonths(new Date().toISOString(), freqMonths) : null) || dayjs.utc().add(30, "day").toISOString();
       const procedure_md = control.procedure_md || "";
       const hazards_md   = control.hazards_md   || "";
@@ -232,11 +318,9 @@ router.post("/tasks", async (req, res) => {
            last_control, next_control, status, value_type, result_schema,
            procedure_md, hazards_md, ppe_md, tools_md, created_by, created_at, updated_at)
          VALUES
-          ($1,$2,$3,$4,$5,$6,
-           $7,$8,'Planned',$9,$10,
-           $11,$12,$13,$14,$15,NOW(),NOW())
+          ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())
          RETURNING *`,
-        [ id, entSite, entity_id, task_name, control.type, freqMonths, null, nextCtrl,
+        [ id, entSite, ensuredEntityId, task_name, control.type, freqMonths, null, nextCtrl,
           value_type, null, procedure_md, hazards_md, ppe_md, tools_md, "system" ]
       );
 
@@ -378,25 +462,17 @@ router.post("/tasks/:id/attachments", upload.single("file"), async (req, res) =>
 });
 
 // ---------------------------------------------------------------------------
-// OPTION DE CONFORT : SEED
-// - GET  /bootstrap/seed?dry_run=1&category=LV_SWITCHBOARD&site=MySite
-//   -> crée (ou présente en dry_run) des tâches “Planned” pour chaque entité valide,
-//      en utilisant toutes les controls de la catégorie choisie (par défaut LV_SWITCHBOARD).
+// OPTION CONFORT : SEED ENTITIES + SEED TASKS
+// - GET  /bootstrap/ensure-entity -> crée 1 entité si table vide
+// - GET  /bootstrap/seed?dry_run=1 -> crée (ou simulateur) tâches TSD pour toutes les entités
 // - POST /bootstrap/seed-one { entity_id, category_key|label, control_type, due_date? }
 // ---------------------------------------------------------------------------
-async function pickCategoryForEntity(entityRow, explicitCategoryKeyOrLabel) {
-  if (explicitCategoryKeyOrLabel) return findCategoryByKeyOrLabel(explicitCategoryKeyOrLabel);
-  // Heuristique douce: si l'entité a un champ type/categorie/equipment, essaie de matcher
-  const candidates = ["category_key","category","equipment_type","type","kind","class"];
-  for (const c of candidates) {
-    if (entityRow && entityRow[c]) {
-      const cat = findCategoryByKeyOrLabel(String(entityRow[c]));
-      if (cat) return cat;
-    }
-  }
-  // défaut très safe : LV_SWITCHBOARD si existant, sinon première catégorie
-  return findCategoryByKeyOrLabel("LV_SWITCHBOARD") || tsdLibrary.categories[0];
-}
+router.get("/bootstrap/ensure-entity", async (_req, res) => {
+  try {
+    const out = await withTx(async (client) => ensureAtLeastOneEntity(client));
+    res.json({ ok: true, ...out });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 router.get("/bootstrap/seed", async (req, res) => {
   const dry = String(req.query.dry_run || "1") === "1";
@@ -405,6 +481,10 @@ router.get("/bootstrap/seed", async (req, res) => {
 
   try {
     const report = await withTx(async (client) => {
+      // s’assurer d’avoir au moins 1 entité
+      const ensured = await ensureAtLeastOneEntity(client);
+
+      // récupérer les entités (ou filtrées par site)
       const ents = await client.query(
         siteFilter ? `SELECT * FROM controls_entities WHERE site = $1` : `SELECT * FROM controls_entities`,
         siteFilter ? [siteFilter] : []
@@ -412,11 +492,10 @@ router.get("/bootstrap/seed", async (req, res) => {
 
       const actions = [];
       for (const e of ents.rows) {
-        const category = await pickCategoryForEntity(e, categoryParam);
+        const category = categoryParam ? findCategoryByKeyOrLabel(categoryParam) : (findCategoryByKeyOrLabel("LV_SWITCHBOARD") || tsdLibrary.categories[0]);
         if (!category) continue;
 
         for (const ctrl of category.controls || []) {
-          // Existe-t-il déjà une tâche active (Planned/Pending/Overdue) pour (site, entity_id, task_code) ?
           const exists = await client.query(
             `SELECT 1 FROM controls_tasks
              WHERE entity_id=$1 AND task_code=$2 AND status IN ('Planned','Pending','Overdue') LIMIT 1`,
@@ -432,20 +511,8 @@ router.get("/bootstrap/seed", async (req, res) => {
             (freqMonths ? addFrequencyFromMonths(new Date().toISOString(), freqMonths) : null) ||
             dayjs.utc().add(30, "day").toISOString();
 
+          const id = uuidv4();
           const task_name = `${category.label} – ${ctrl.type}`;
-          const payload = {
-            site: e.site || "Default",
-            entity_id: e.id,
-            task_name,
-            task_code: ctrl.type,
-            frequency_months: freqMonths,
-            next_control: nextCtrl,
-            value_type: ctrl.value_type || "checklist",
-            procedure_md: ctrl.procedure_md || "",
-            hazards_md: ctrl.hazards_md || "",
-            ppe_md: ctrl.ppe_md || "",
-            tools_md: ctrl.tools_md || "",
-          };
 
           actions.push({ entity_id: e.id, task_code: ctrl.type, action: dry ? "would_create" : "created" });
 
@@ -458,22 +525,19 @@ router.get("/bootstrap/seed", async (req, res) => {
                VALUES
                 ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())`,
               [
-                uuidv4(), payload.site, payload.entity_id, payload.task_name, payload.task_code,
-                payload.frequency_months, null, payload.next_control,
-                payload.value_type, null, payload.procedure_md, payload.hazards_md,
-                payload.ppe_md, payload.tools_md, "seed"
+                id, e.site || "Default", e.id, task_name, ctrl.type, freqMonths,
+                null, nextCtrl, ctrl.value_type || "checklist", null,
+                ctrl.procedure_md || "", ctrl.hazards_md || "", ctrl.ppe_md || "", ctrl.tools_md || "", "seed"
               ]
             );
           }
         }
       }
-      return { count_entities: ents.rowCount, actions };
+      return { count_entities: ents.rowCount, ensured_entity: ensured, actions };
     });
 
     res.json({ ok: true, dry_run: dry, ...report });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.post("/bootstrap/seed-one", async (req, res) => {
