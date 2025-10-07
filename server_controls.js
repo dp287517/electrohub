@@ -1,71 +1,64 @@
 /**
- * server_controls.js — backend Controls (Electrohub)
- * - Routes montées sous /api/controls
- * - Auto-rééchelonnement à la clôture selon tsd_library.js
+ * server_controls.js — ESM (type: module)
+ * Routes montées sous /api/controls
+ * Auto-rééchelonnement à la clôture selon tsd_library.js
  *
  * Prérequis:
  *   npm i express pg multer dayjs uuid
  *
- * Variables d'env utiles:
- *   DATABASE_URL=postgres://... (Neon)
- *   CONTROLS_BASE_PATH=/api/controls   (optionnel; par défaut /api/controls)
- *   CONTROLS_PORT=3011                 (optionnel; par défaut 3011)
+ * Variables d'env:
+ *   DATABASE_URL=postgres://...
+ *   CONTROLS_BASE_PATH=/api/controls  (optionnel, défaut /api/controls)
+ *   CONTROLS_PORT=3011                (optionnel, défaut 3011)
  */
 
-const express = require("express");
-const multer = require("multer");
-const { Pool } = require("pg");
-const dayjs = require("dayjs");
-const utc = require("dayjs/plugin/utc");
-const { v4: uuidv4 } = require("uuid");
+import express from "express";
+import multer from "multer";
+import { Pool } from "pg";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import { v4 as uuidv4 } from "uuid";
 
 dayjs.extend(utc);
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // DB Pool (Neon / Postgres)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-// ----------------------------------------------------------------------------
-/** Chargement de la librairie TSD (fréquences, checklist, etc.) */
-// ----------------------------------------------------------------------------
-function loadTsdLibrary() {
-  // Supporte exports CommonJS et ESM
-  // Attendu: module.exports = { tsdLibrary } OU export const tsdLibrary = ...
-  // Si jamais le module exporte directement l'objet, on accepte aussi.
-  // IMPORTANT: tsd_library.js doit être à la racine du repo.
-  let mod;
-  try {
-    mod = require("./tsd_library.js");
-  } catch (e) {
-    throw new Error(
-      "Impossible de charger tsd_library.js à la racine. Erreur: " + e.message
-    );
-  }
-  const tsdLibrary =
-    mod.tsdLibrary || (mod.default && mod.default.tsdLibrary) || mod.tsdLibrary || mod;
-  if (!tsdLibrary || !tsdLibrary.categories) {
-    throw new Error(
-      "tsd_library.js ne contient pas un objet { tsdLibrary } valide."
-    );
-  }
-  return tsdLibrary;
-}
+// ---------------------------------------------------------------------------
+// Charger la librairie TSD (ESM)
+//   - Supporte export nommé { tsdLibrary } ou export default { tsdLibrary: ... }
+//   - Ou export default directement l'objet library
+// ---------------------------------------------------------------------------
+let tsdLibrary;
+{
+  const mod = await import("./tsd_library.js");
+  tsdLibrary =
+    mod.tsdLibrary ??
+    mod.default?.tsdLibrary ??
+    mod.default ??
+    mod;
 
-const tsdLibrary = loadTsdLibrary();
+  if (!tsdLibrary || !Array.isArray(tsdLibrary.categories)) {
+    throw new Error(
+      "tsd_library.js n'expose pas un objet valide (attendu: { tsdLibrary: { categories: [...] } })."
+    );
+  }
+}
 const RESULT_OPTIONS =
-  (tsdLibrary.meta && tsdLibrary.meta.result_options) || [
+  tsdLibrary?.meta?.result_options ?? [
     "Conforme",
     "Non conforme",
     "Non applicable",
   ];
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Utils
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
 
 function addFrequency(dateISO, frequency) {
@@ -96,7 +89,7 @@ function findControlInCategory(category, controlType) {
 function nextDueDateFromLibrary(categoryKeyOrLabel, controlType, closedAtISO) {
   const category = findCategoryByKeyOrLabel(categoryKeyOrLabel);
   const control = findControlInCategory(category, controlType);
-  const freq = control && control.frequency;
+  const freq = control?.frequency;
   if (!freq) return null;
   return addFrequency(closedAtISO, freq);
 }
@@ -116,21 +109,20 @@ async function withTx(fn) {
   }
 }
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // App + Router (monté sous /api/controls)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 const router = express.Router();
-
 const EXISTS_ENTITY_SQL =
   "EXISTS (SELECT 1 FROM controls_entities ce WHERE ce.id = t.entity_id)";
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Health + TSD
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 router.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -156,9 +148,9 @@ router.get("/tsd/category/:key", (req, res) => {
   res.json(cat);
 });
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Entities (helper simple)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 router.get("/entities/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -173,9 +165,9 @@ router.get("/entities/:id", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // TASKS - Liste / Création / Clôture / Historique
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 router.get("/tasks", async (req, res) => {
   const {
     q,
@@ -306,7 +298,7 @@ router.post("/tasks", async (req, res) => {
         return {
           warning:
             category.fallback_note_if_missing ||
-            (tsdLibrary.meta && tsdLibrary.meta.missing_equipment_note) ||
+            tsdLibrary.meta?.missing_equipment_note ||
             "Equipement en attente d'intégration au système Electrohub.",
         };
       }
@@ -328,8 +320,8 @@ router.post("/tasks", async (req, res) => {
           control.type,
           `${category.label} – ${control.type}`,
           due,
-          (control.frequency && control.frequency.interval) || null,
-          (control.frequency && control.frequency.unit) || null,
+          control.frequency?.interval ?? null,
+          control.frequency?.unit ?? null,
           payload,
         ]
       );
@@ -481,9 +473,9 @@ router.get("/tasks/:id/history", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// Attachments (stockage metadata - à adapter si tu veux uploader réellement)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Attachments (métadonnées - stub)
+// ---------------------------------------------------------------------------
 router.post(
   "/tasks/:id/attachments",
   upload.single("file"),
@@ -499,7 +491,7 @@ router.post(
       );
       if (!t.length) return res.status(404).json({ error: "Tâche introuvable" });
 
-      // Stub: stocke uniquement des métadonnées avec une URL factice.
+      // Stub: stocke uniquement des métadonnées avec une URL factice
       const url = `attachment://${uuidv4()}/${originalname}`;
       await pool.query(
         `INSERT INTO controls_attachments
@@ -508,22 +500,16 @@ router.post(
         [uuidv4(), id, t[0].entity_id, url, originalname, mimetype, size]
       );
 
-      res.json({
-        ok: true,
-        url,
-        filename: originalname,
-        mime: mimetype,
-        bytes: size,
-      });
+      res.json({ ok: true, url, filename: originalname, mime: mimetype, bytes: size });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   }
 );
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Calendar (groupé par jour)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 router.get("/calendar", async (req, res) => {
   const { from, to, site_id, category } = req.query;
 
@@ -580,38 +566,30 @@ router.get("/calendar", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// IA (stubs) — à remplacer par tes vrais endpoints IA
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// IA (stubs) — remplace ces endpoints si besoin
+// ---------------------------------------------------------------------------
 router.post("/ai/analyze-before", async (req, res) => {
   const { image_url, hints = [] } = req.body || {};
   if (!image_url) return res.status(400).json({ error: "image_url requis" });
   res.json({
     ok: true,
     findings: [
-      {
-        type: "safety",
-        message: "Vérifier EPI: gants, visière, balisage",
-        confidence: 0.82,
-      },
-      {
-        type: "housekeeping",
-        message: "Objets combustibles à proximité du TGBT",
-        confidence: 0.74,
-      },
+      { type: "safety", message: "Vérifier EPI: gants, visière, balisage", confidence: 0.82 },
+      { type: "housekeeping", message: "Objets combustibles à proximité du TGBT", confidence: 0.74 },
     ],
     hints,
   });
 });
 
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Mount sous /api/controls (ou CONTROLS_BASE_PATH si défini)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 const BASE_PATH = process.env.CONTROLS_BASE_PATH || "/api/controls";
 app.use(BASE_PATH, router);
 
-// ----------------------------------------------------------------------------
-// Boot — Lignes demandées (NE PAS MODIFIER)
-// ----------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Boot — LIGNES DEMANDÉES (NE PAS MODIFIER)
+// ---------------------------------------------------------------------------
 const port = Number(process.env.CONTROLS_PORT || 3011);
 app.listen(port, () => console.log(`[controls] serveur démarré sur :${port}`));
