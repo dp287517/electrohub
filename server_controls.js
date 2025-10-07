@@ -1,10 +1,25 @@
 /**
  * server_controls.js — ESM (type: module)
- * Routes sous /api/controls
- * - Seed multi-catégories (ALL par défaut)
- * - Replanif fiable sur fréquence TSD (borne min si range)
- * - Endpoints checklist/schema & IA (analyse avant / lecture valeur)
- * - Support UUID ou INTEGER pour id/entity_id (introspection schema)
+ * API Controls (TSD) — Hiérarchie équipements + filtres + pièces jointes + Gantt coloré
+ *
+ * Monté sous: /api/controls
+ *
+ * Nouveaux endpoints clés:
+ *   GET  /api/controls/hierarchy/tree
+ *   GET  /api/controls/filters
+ *   GET  /api/controls/tasks/:id/schema        (labels checklist propres depuis TSD)
+ *   GET  /api/controls/tasks/:id/attachments   (liste)
+ *   GET  /api/controls/attachments/:id         (download binaire)
+ *   POST /api/controls/tasks/:id/attachments   (upload, inchangé)
+ *
+ * Déjà existants (inchangés, mais enrichis selon besoins):
+ *   GET  /api/controls/tasks?…   (filtres étendus)
+ *   GET  /api/controls/calendar  (ajoute color)
+ *   PATCH /api/controls/tasks/:id/close (replanif TSD)
+ *   GET  /api/controls/bootstrap/seed?category=ALL (toutes catégories)
+ *
+ * Prérequis:
+ *   npm i express pg multer dayjs uuid
  *
  * ENV:
  *   DATABASE_URL=postgres://...
@@ -60,21 +75,14 @@ function addMonths(baseISO, months) {
 function addByFreq(baseISO, frequency) {
   if (!frequency) return null;
   const { interval, unit, min, max } = frequency;
-  // si range (min/max), on prend min par défaut (safe)
-  if (min && min.interval && min.unit)
-    return dayjs.utc(baseISO).add(min.interval, min.unit).toISOString();
-  if (interval && unit)
-    return dayjs.utc(baseISO).add(interval, unit).toISOString();
+  if (min && min.interval && min.unit) return dayjs.utc(baseISO).add(min.interval, min.unit).toISOString();
+  if (interval && unit) return dayjs.utc(baseISO).add(interval, unit).toISOString();
   return null;
 }
 function monthsFromFreq(freq) {
   if (!freq) return null;
-  if (freq.min && freq.min.interval && freq.min.unit) {
-    return unitToMonths(freq.min.interval, freq.min.unit);
-  }
-  if (freq.interval && freq.unit) {
-    return unitToMonths(freq.interval, freq.unit);
-  }
+  if (freq.min && freq.min.interval && freq.min.unit) return unitToMonths(freq.min.interval, freq.min.unit);
+  if (freq.interval && freq.unit) return unitToMonths(freq.interval, freq.unit);
   return null;
 }
 function unitToMonths(interval, unit) {
@@ -101,7 +109,7 @@ function findControlInCategory(category, controlTypeOrCode) {
     (t) => t.type && String(t.type).toLowerCase() === low
   );
 }
-/** essaie de retrouver la définition TSD d’une tâche (par code puis par libellé) */
+/** Essaie de retrouver la définition TSD d’une tâche (par code puis par libellé) */
 function resolveTsdForTask(task) {
   const codeLow = String(task.task_code || "").toLowerCase();
   const nameLow = String(task.task_name || "").toLowerCase();
@@ -115,7 +123,6 @@ function resolveTsdForTask(task) {
   }
   return { category: null, control: null };
 }
-
 async function withTx(fn) {
   const client = await pool.connect();
   try {
@@ -157,19 +164,14 @@ function buildInsertSQL(table, values) {
   const cols = Object.keys(values);
   const placeholders = cols.map((_, i) => `$${i + 1}`);
   return {
-    sql: `INSERT INTO ${table} (${cols.join(",")}) VALUES (${placeholders.join(
-      ","
-    )}) RETURNING *`,
+    sql: `INSERT INTO ${table} (${cols.join(",")}) VALUES (${placeholders.join(",")}) RETURNING *`,
     params: cols.map((c) => values[c]),
   };
 }
-
-// insert générique (respect id UUID/int)
 async function insertRow(client, table, values) {
   const meta = await getColumnsMeta(client, table);
   const v = { ...values };
   if (meta.id && isUuidColumn(meta.id)) v.id = v.id || uuidv4();
-  // si colonne id est integer avec DEFAULT, ne rien fournir
   const pruned = pruneValuesByExistingColumns(v, meta);
   const { sql, params } = buildInsertSQL(table, pruned);
   const { rows } = await client.query(sql, params);
@@ -235,19 +237,6 @@ router.get("/bootstrap/ensure-entity", async (_req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-router.get("/entities/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    const { rows } = await pool.query(
-      "SELECT * FROM controls_entities WHERE id = $1",
-      [id]
-    );
-    if (!rows.length) return res.status(404).json({ error: "Entité introuvable" });
-    res.json(rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
 router.post("/bootstrap/create-entity", async (req, res) => {
   const body = req.body || {};
   try {
@@ -257,7 +246,12 @@ router.post("/bootstrap/create-entity", async (req, res) => {
         site: body.site ?? "Default",
         name: body.name ?? body.label ?? "Generic Entity",
         label: body.label ?? body.name ?? "Generic Entity",
-        category_key: body.category_key ?? null,
+        // facultatifs si colonnes présentes (pour lier à l'équipement d'origine)
+        equipment_table: body.equipment_table ?? null,
+        equipment_id: body.equipment_id ?? null,
+        atex_zone: body.atex_zone ?? null,
+        parent_switchboard_id: body.parent_switchboard_id ?? null,
+        site_id: body.site_id ?? null,
         created_at: now,
         updated_at: now,
         active: true,
@@ -271,17 +265,20 @@ router.post("/bootstrap/create-entity", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// TASKS
+// TASKS: liste étendue (filtres), schéma, pièces jointes
 // ---------------------------------------------------------------------------
 router.get("/tasks", async (req, res) => {
   const {
     q,
     status,
     site,
-    control,
+    building,        // (string | id) -> mappe sur table sites si dispo
+    category_key,    // filtre catégorie TSD
+    control,         // task_code exact
+    atex_zone,       // filtre zone ATEX
+    entity_id,
     due_from,
     due_to,
-    entity_id,
     page = 1,
     page_size = 50,
     order = "due_date.asc",
@@ -293,47 +290,34 @@ router.get("/tasks", async (req, res) => {
   let i = 1;
 
   if (String(skip_entity_check) !== "1") where.push(EXISTS_ENTITY_SQL);
-  if (q) {
-    where.push(`(t.task_name ILIKE $${i} OR t.task_code ILIKE $${i})`);
-    params.push(`%${q}%`);
-    i++;
-  }
+  if (q) { where.push(`(t.task_name ILIKE $${i} OR t.task_code ILIKE $${i})`); params.push(`%${q}%`); i++; }
   if (status) {
-    if (status === "open") {
-      where.push(`t.status = ANY ($${i})`);
-      params.push(OPEN_STATUSES);
-      i++;
-    } else if (status === "closed") where.push(`t.status = 'Done'`);
+    if (status === "open") { where.push(`t.status = ANY ($${i})`); params.push(OPEN_STATUSES); i++; }
+    else if (status === "closed") where.push(`t.status = 'Done'`);
     else if (status === "overdue") where.push(`t.status = 'Overdue'`);
-    else {
-      where.push(`t.status = $${i}`);
-      params.push(status);
-      i++;
-    }
+    else { where.push(`t.status = $${i}`); params.push(status); i++; }
   }
-  if (site) {
-    where.push(`t.site = $${i}`);
-    params.push(site);
+  if (site) { where.push(`t.site = $${i}`); params.push(site); i++; }
+  if (entity_id) { where.push(`t.entity_id = $${i}`); params.push(entity_id); i++; }
+  if (control) { where.push(`LOWER(t.task_code) = LOWER($${i})`); params.push(control); i++; }
+  if (due_from) { where.push(`t.next_control >= $${i}`); params.push(due_from); i++; }
+  if (due_to) { where.push(`t.next_control <= $${i}`); params.push(due_to); i++; }
+
+  // filtres “hiérarchie” via controls_entities si colonnes existent
+  if (building) {
+    where.push(`t.entity_id IN (SELECT id FROM controls_entities WHERE site = $${i} OR site_id::text = $${i} OR label ILIKE $${i})`);
+    params.push(String(building));
     i++;
   }
-  if (control) {
-    where.push(`LOWER(t.task_code) = LOWER($${i})`);
-    params.push(control);
+  if (atex_zone) {
+    where.push(`t.entity_id IN (SELECT id FROM controls_entities WHERE atex_zone::text = $${i})`);
+    params.push(String(atex_zone));
     i++;
   }
-  if (entity_id) {
-    where.push(`t.entity_id = $${i}`);
-    params.push(entity_id);
-    i++;
-  }
-  if (due_from) {
-    where.push(`t.next_control >= $${i}`);
-    params.push(due_from);
-    i++;
-  }
-  if (due_to) {
-    where.push(`t.next_control <= $${i}`);
-    params.push(due_to);
+  if (category_key) {
+    // on filtre par nom de catégorie TSD dans le libellé de la tâche
+    where.push(`t.task_name ILIKE $${i}`);
+    params.push(`%${category_key.replace(/_/g," ").split("-").join(" ")}%`);
     i++;
   }
 
@@ -342,13 +326,9 @@ router.get("/tasks", async (req, res) => {
   const orderCol =
     col === "due_date"
       ? "next_control"
-      : ["task_name", "task_code", "status", "next_control", "created_at", "updated_at"].includes(col)
-      ? col
-      : "next_control";
-  const sortSQL = `ORDER BY t.${orderCol} ${
-    dir?.toUpperCase() === "DESC" ? "DESC" : "ASC"
-  }`;
-  const limit = Math.max(1, Math.min(500, Number(page_size)));
+      : ["task_name","task_code","status","next_control","created_at","updated_at"].includes(col) ? col : "next_control";
+  const sortSQL = `ORDER BY t.${orderCol} ${dir?.toUpperCase() === "DESC" ? "DESC" : "ASC"}`;
+  const limit = Math.max(1, Math.min(1000, Number(page_size)));
   const offset = (Math.max(1, Number(page)) - 1) * limit;
 
   try {
@@ -373,7 +353,7 @@ router.get("/tasks", async (req, res) => {
   }
 });
 
-/** enrichit une tâche avec la définition TSD (checklist / observations / docs) */
+/** schéma riche (labels checklist “propres”) */
 router.get("/tasks/:id/schema", async (req, res) => {
   const { id } = req.params;
   try {
@@ -382,90 +362,103 @@ router.get("/tasks/:id/schema", async (req, res) => {
     const task = rows[0];
     const { category, control } = resolveTsdForTask(task);
 
+    // nettoyer checklist: toujours essayer de fournir un "label" lisible
+    const checklist = (control?.checklist || []).map((it, idx) => {
+      const key = it.key ?? it.id ?? `i_${idx}`;
+      const label = it.label || it.text || (typeof key === "string" ? key.replace(/^i_/, "Item ") : `Item ${idx+1}`);
+      return { ...it, key, label };
+    });
+
     res.json({
       task_id: task.id,
       label: task.task_name,
       task_code: task.task_code,
       frequency: control?.frequency || null,
-      checklist: control?.checklist || [],
+      checklist,
       observations: control?.observations || [],
       procedure_md: control?.procedure_md || task.procedure_md || "",
       hazards_md: control?.hazards_md || task.hazards_md || "",
       ppe_md: control?.ppe_md || task.ppe_md || "",
       tools_md: control?.tools_md || task.tools_md || "",
       tsd_category: category ? { key: category.key, label: category.label } : null,
+      // tags pour le Gantt/couleurs, utiles côté front
+      ui: {
+        category_key: category?.key || null,
+        color: colorForCategory(category?.key, task.task_code),
+      },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// création tâche unitaire
-router.post("/tasks", async (req, res) => {
-  const { entity_id, site = null, category_key, category_label, control_type, due_date } = req.body;
-  if (!entity_id || !(category_key || category_label) || !control_type) {
-    return res.status(400).json({ error: "entity_id, category_key|category_label et control_type sont requis" });
-  }
-  const category = findCategoryByKeyOrLabel(category_key || category_label);
-  if (!category) return res.status(422).json({ error: "Catégorie TSD inconnue" });
-  const control = findControlInCategory(category, control_type);
-  if (!control) return res.status(422).json({ error: "Type de contrôle inconnu" });
-
+// pièces jointes — LISTE
+router.get("/tasks/:id/attachments", async (req, res) => {
+  const { id } = req.params;
   try {
-    const created = await withTx(async (client) => {
-      // assurer entité
-      const entQ = await client.query(`SELECT * FROM controls_entities WHERE id = $1`, [entity_id]);
-      let ent = entQ.rows[0];
-      if (!ent) {
-        const ensured = await ensureAtLeastOneEntity(client);
-        ent = ensured.entity;
-      }
-
-      const now = new Date().toISOString();
-      const months = monthsFromFreq(control.frequency);
-      const nextCtrl =
-        due_date ||
-        (months ? addMonths(now, months) : addByFreq(now, control.frequency) || dayjs.utc(now).add(30, "day").toISOString());
-
-      const task = await insertRow(client, "controls_tasks", {
-        site: site || ent.site || "Default",
-        entity_id: ent.id,
-        task_name: `${category.label} – ${control.type}`,
-        task_code: control.type,
-        frequency_months: months || null,
-        last_control: null,
-        next_control: nextCtrl,
-        status: "Planned",
-        value_type: control.value_type || "checklist",
-        result_schema: null,
-        procedure_md: control.procedure_md || "",
-        hazards_md: control.hazards_md || "",
-        ppe_md: control.ppe_md || "",
-        tools_md: control.tools_md || "",
-        created_by: "system",
-        created_at: now,
-        updated_at: now,
-      });
-
-      await insertRow(client, "controls_history", {
-        task_id: task.id,
-        user: "system",
-        action: "task_created",
-        site: task.site || "Default",
-        date: now,
-        task_name: task.task_name,
-      });
-
-      return task;
-    });
-
-    res.status(201).json(created);
+    const { rows } = await pool.query(
+      `SELECT id, filename, mimetype, size, uploaded_at, created_at
+       FROM controls_attachments
+       WHERE task_id = $1
+       ORDER BY uploaded_at DESC NULLS LAST, created_at DESC`,
+      [id]
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+// téléchargement binaire
+router.get("/attachments/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { rows } = await pool.query(
+      `SELECT filename, mimetype, data FROM controls_attachments WHERE id=$1`,
+      [id]
+    );
+    if (!rows.length) return res.status(404).send("Not found");
+    const a = rows[0];
+    res.setHeader("Content-Type", a.mimetype || "application/octet-stream");
+    res.setHeader("Content-Disposition", `inline; filename="${a.filename || "file"}"`);
+    res.send(a.data);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// clôture + replanif
+// upload (inchangé)
+router.post("/tasks/:id/attachments", upload.single("file"), async (req, res) => {
+  const { id } = req.params;
+  const { originalname, mimetype, size, buffer } = req.file || {};
+  if (!buffer) return res.status(400).json({ error: "Aucun fichier reçu" });
+  try {
+    const { rows: t } = await pool.query(
+      `SELECT id, entity_id, site FROM controls_tasks WHERE id = $1`,
+      [id]
+    );
+    if (!t.length) return res.status(404).json({ error: "Tâche introuvable" });
+    const site = t[0].site || "Default";
+    const row = await insertRow(pool, "controls_attachments", {
+      site,
+      record_id: null,
+      task_id: id,
+      entity_id: t[0].entity_id,
+      filename: originalname,
+      mimetype,
+      size,
+      data: buffer,
+      uploaded_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    });
+    res.json({ ok: true, id: row.id, filename: originalname, mimetype, size });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Clôture + replanif (inchangé dans l'esprit : applique fréquence TSD à closed_at)
+// ---------------------------------------------------------------------------
 router.patch("/tasks/:id/close", async (req, res) => {
   const { id } = req.params;
   const {
@@ -491,7 +484,7 @@ router.patch("/tasks/:id/close", async (req, res) => {
       const task = taskRows[0];
       const site = task.site || task.entity_site || "Default";
 
-      // enregistrer le record
+      // record
       await insertRow(client, "controls_records", {
         site,
         task_id: task.id,
@@ -509,7 +502,6 @@ router.patch("/tasks/:id/close", async (req, res) => {
         lang: "fr",
       });
 
-      // attachements (si envoyés en base64)
       for (const a of attachments) {
         const filename = a.filename || a.name || `file-${Date.now()}`;
         const mimetype = a.mimetype || a.mime || "application/octet-stream";
@@ -547,16 +539,15 @@ router.patch("/tasks/:id/close", async (req, res) => {
         meta: JSON.stringify({}),
       });
 
-      // --- Replanif solide ---
+      // Replanif solide
       const { control } = resolveTsdForTask(task);
       const months =
         (task.frequency_months && Number(task.frequency_months)) ||
         monthsFromFreq(control?.frequency) ||
         null;
 
-      let nextDue =
+      const nextDue =
         (months ? addMonths(closed_at, months) : addByFreq(closed_at, control?.frequency)) ||
-        // fallback très safe : +6 mois
         dayjs.utc(closed_at).add(6, "month").toISOString();
 
       const nextTask = await insertRow(client, "controls_tasks", {
@@ -606,7 +597,6 @@ router.patch("/tasks/:id/close", async (req, res) => {
   }
 });
 
-// historique
 router.get("/tasks/:id/history", async (req, res) => {
   const { id } = req.params;
   try {
@@ -620,38 +610,373 @@ router.get("/tasks/:id/history", async (req, res) => {
   }
 });
 
-// upload d’un attachment “brut”
-router.post("/tasks/:id/attachments", upload.single("file"), async (req, res) => {
-  const { id } = req.params;
-  const { originalname, mimetype, size, buffer } = req.file || {};
-  if (!buffer) return res.status(400).json({ error: "Aucun fichier reçu" });
+// ---------------------------------------------------------------------------
+// Calendar Gantt (avec couleur)
+// ---------------------------------------------------------------------------
+router.get("/calendar", async (req, res) => {
+  const { from, to, site, control, skip_entity_check = "0" } = req.query;
+
+  const where = [];
+  const params = [];
+  let i = 1;
+
+  if (String(skip_entity_check) !== "1") where.push(EXISTS_ENTITY_SQL);
+  if (from) { where.push(`t.next_control >= $${i}`); params.push(from); i++; }
+  if (to)   { where.push(`t.next_control <= $${i}`); params.push(to); i++; }
+  if (site) { where.push(`t.site = $${i}`); params.push(site); i++; }
+  if (control) { where.push(`LOWER(t.task_code) = LOWER($${i})`); params.push(control); i++; }
+
+  const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
   try {
-    const { rows: t } = await pool.query(
-      `SELECT id, entity_id, site FROM controls_tasks WHERE id = $1`,
-      [id]
+    const { rows } = await pool.query(
+      `SELECT t.*
+       FROM controls_tasks t
+       ${whereSQL}
+       ORDER BY t.next_control ASC NULLS LAST`,
+      params
     );
-    if (!t.length) return res.status(404).json({ error: "Tâche introuvable" });
-    const site = t[0].site || "Default";
-    await insertRow(pool, "controls_attachments", {
-      site,
-      record_id: null,
-      task_id: id,
-      entity_id: t[0].entity_id,
-      filename: originalname,
-      mimetype,
-      size,
-      data: buffer,
-      uploaded_at: new Date().toISOString(),
-      created_at: new Date().toISOString(),
-    });
-    res.json({ ok: true, filename: originalname, mimetype, size });
+    const groups = rows.reduce((acc, r) => {
+      const due = r.next_control;
+      if (!due) return acc;
+      const k = dayjs.utc(due).format("YYYY-MM-DD");
+      const { category } = resolveTsdForTask(r);
+      (acc[k] = acc[k] || []).push({
+        id: r.id,
+        label: r.task_name,
+        status: r.status,
+        due_date: r.next_control,
+        task_code: r.task_code,
+        entity_id: r.entity_id,
+        site: r.site,
+        color: colorForCategory(category?.key, r.task_code),
+      });
+      return acc;
+    }, {});
+    res.json(groups);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // ---------------------------------------------------------------------------
-// SEED (multi-catégories par défaut)
+// Filtres disponibles (valeurs distinctes calculées)
+// ---------------------------------------------------------------------------
+router.get("/filters", async (_req, res) => {
+  try {
+    const [sites, codes, statuses, zones] = await Promise.all([
+      pool.query(`SELECT DISTINCT site FROM controls_tasks WHERE site IS NOT NULL ORDER BY site ASC`),
+      pool.query(`SELECT DISTINCT task_code FROM controls_tasks WHERE task_code IS NOT NULL ORDER BY task_code ASC`),
+      pool.query(`SELECT DISTINCT status FROM controls_tasks WHERE status IS NOT NULL ORDER BY status ASC`),
+      // ATEX zones si présente sur entities
+      pool.query(`SELECT DISTINCT atex_zone FROM controls_entities WHERE atex_zone IS NOT NULL ORDER BY atex_zone ASC`).catch(()=>({ rows: [] })),
+    ]);
+
+    // catégories TSD (pour filtres)
+    const categories = (tsdLibrary.categories || []).map(c => ({ key: c.key, label: c.label }));
+
+    res.json({
+      sites: sites.rows.map(r => r.site),
+      task_codes: codes.rows.map(r => r.task_code),
+      statuses: statuses.rows.map(r => r.status),
+      atex_zones: zones.rows.map(r => r.atex_zone).filter(Boolean),
+      categories,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Hiérarchie — Bâtiment → HV → Switchboards → Devices → ATEX
+//   Heuristique: on utilise controls_entities si des colonnes existent (site_id, atex_zone, parent_switchboard_id, equipment_table, equipment_id)
+//   + tables de base si elles existent: sites, hv_devices/hv_equipments, switchboards, devices, atex_equipments
+// ---------------------------------------------------------------------------
+router.get("/hierarchy/tree", async (_req, res) => {
+  try {
+    const client = await pool.connect();
+    try {
+      // Sites (bâtiments)
+      const sites = await safeQuery(client, `SELECT id, name, label FROM sites`);
+      const siteNodes = (sites?.rows || []).map(s => ({
+        id: s.id ?? s.name ?? s.label,
+        label: s.label || s.name || `Site ${s.id}`,
+        type: "building",
+        hv: [],
+        switchboards: [],
+        atex: [],
+      }));
+
+      // fallback si pas de table 'sites' → on fabrique depuis controls_entities.site
+      if (!siteNodes.length) {
+        const se = await client.query(`SELECT DISTINCT site FROM controls_entities WHERE site IS NOT NULL ORDER BY site ASC`);
+        for (const r of se.rows) {
+          siteNodes.push({ id: r.site, label: r.site, type: "building", hv: [], switchboards: [], atex: [] });
+        }
+        if (!siteNodes.length) {
+          // encore rien → un conteneur générique
+          siteNodes.push({ id: "Default", label: "Default", type: "building", hv: [], switchboards: [], atex: [] });
+        }
+      }
+
+      // Switchboards
+      const sw = await safeQuery(client, `SELECT id, name, label, site_id FROM switchboards`);
+      const swMapBySite = new Map();
+      for (const row of sw?.rows || []) {
+        const key = String(row.site_id ?? "");
+        if (!swMapBySite.has(key)) swMapBySite.set(key, []);
+        swMapBySite.get(key).push({ id: row.id, label: row.label || row.name || `SW ${row.id}`, devices: [] });
+      }
+
+      // Devices (LT)
+      const dev = await safeQuery(client, `SELECT id, name, label, switchboard_id FROM devices`);
+      const devBySw = new Map();
+      for (const row of dev?.rows || []) {
+        const key = String(row.switchboard_id ?? "");
+        if (!devBySw.has(key)) devBySw.set(key, []);
+        devBySw.get(key).push({ id: row.id, label: row.label || row.name || `Device ${row.id}` });
+      }
+
+      // Haute Tension
+      const hvd = await safeQuery(client, `SELECT id, name, label, site_id FROM hv_devices`);
+      const hve = await safeQuery(client, `SELECT id, name, label, site_id FROM hv_equipments`);
+      const hvBySite = new Map();
+      for (const row of (hvd?.rows || []).concat(hve?.rows || [])) {
+        const key = String(row.site_id ?? "");
+        if (!hvBySite.has(key)) hvBySite.set(key, []);
+        hvBySite.get(key).push({ id: row.id, label: row.label || row.name || `HV ${row.id}` });
+      }
+
+      // ATEX — zones et équipements
+      const aeq = await safeQuery(client, `SELECT id, name, label, zone, site_id FROM atex_equipments`);
+      const atexBySiteZone = new Map(); // { site_id -> { zone -> [equip] } }
+      for (const row of aeq?.rows || []) {
+        const sKey = String(row.site_id ?? "");
+        const zKey = String(row.zone ?? "Z?");
+        if (!atexBySiteZone.has(sKey)) atexBySiteZone.set(sKey, new Map());
+        const byZone = atexBySiteZone.get(sKey);
+        if (!byZone.has(zKey)) byZone.set(zKey, []);
+        byZone.get(zKey).push({ id: row.id, label: row.label || row.name || `ATEX ${row.id}` });
+      }
+
+      // Assembler l’arbre
+      for (const siteNode of siteNodes) {
+        // clé site pour lier
+        const key = String(siteNode.id);
+        // HV
+        for (const hv of hvBySite.get(key) || []) siteNode.hv.push({ ...hv, tasks: [] });
+        // Switchboards + devices
+        const swList = swMapBySite.get(key) || [];
+        for (const swNode of swList) {
+          const devs = devBySw.get(String(swNode.id)) || [];
+          swNode.devices = devs.map(d => ({ ...d, tasks: [] }));
+          swNode.tasks = [];
+          siteNode.switchboards.push(swNode);
+        }
+        // ATEX zones
+        const zones = atexBySiteZone.get(key) || new Map();
+        for (const [zone, eqs] of zones.entries()) {
+          siteNode.atex.push({
+            zone,
+            equipments: eqs.map(e => ({ ...e, tasks: [] })),
+            tasks: [],
+          });
+        }
+      }
+
+      // Lier les tâches aux nœuds (via controls_entities si possible)
+      const tasksQ = await client.query(
+        `SELECT t.id, t.task_name, t.task_code, t.status, t.next_control, t.entity_id, t.site
+         FROM controls_tasks t
+         ORDER BY t.next_control ASC NULLS LAST`
+      );
+      // lecture des entités pour récupérer liaison vers équipement/source si colonnes présentes
+      const entCols = await getColumnsMeta(client, "controls_entities");
+      const has = (c) => !!entCols[c];
+      const entQ = await client.query(
+        `SELECT id, site, label,
+                ${has("equipment_table") ? "equipment_table" : "NULL AS equipment_table"},
+                ${has("equipment_id") ? "equipment_id" : "NULL AS equipment_id"},
+                ${has("parent_switchboard_id") ? "parent_switchboard_id" : "NULL AS parent_switchboard_id"},
+                ${has("site_id") ? "site_id" : "NULL AS site_id"},
+                ${has("atex_zone") ? "atex_zone" : "NULL AS atex_zone"}
+         FROM controls_entities`
+      );
+      const entMap = new Map(entQ.rows.map(r => [String(r.id), r]));
+
+      // helpers de placement
+      const bySiteLabel = new Map(siteNodes.map(s => [String(s.label), s]));
+      const bySiteId = new Map(siteNodes.map(s => [String(s.id), s]));
+      const findSiteNode = (site, site_id) => bySiteId.get(String(site_id)) || bySiteLabel.get(String(site)) || bySiteId.get(String(site)) || siteNodes[0];
+
+      for (const t of tasksQ.rows) {
+        const ent = entMap.get(String(t.entity_id));
+        const due = t.next_control;
+        const siteNode = findSiteNode(ent?.site ?? t.site, ent?.site_id);
+
+        const taskObj = {
+          id: t.id,
+          label: t.task_name,
+          code: t.task_code,
+          status: t.status,
+          due_date: due,
+          color: colorForCategory(resolveTsdForTask(t).category?.key, t.task_code),
+        };
+
+        // dispatch par heuristique:
+        const eqTable = ent?.equipment_table?.toLowerCase?.() || "";
+        if (eqTable.includes("hv")) {
+          // HV
+          if (siteNode.hv.length) siteNode.hv[0].tasks.push(taskObj); // simple: première HV du site
+          else siteNode.hv.push({ id: "hv", label: "High voltage", tasks: [taskObj] });
+        } else if (eqTable.includes("switchboard")) {
+          // TGBT
+          if (siteNode.switchboards.length) siteNode.switchboards[0].tasks.push(taskObj);
+          else siteNode.switchboards.push({ id: "sw", label: "Switchboards", devices: [], tasks: [taskObj] });
+        } else if (eqTable.includes("device")) {
+          // Appareil aval
+          if (siteNode.switchboards.length && siteNode.switchboards[0].devices.length)
+            siteNode.switchboards[0].devices[0].tasks.push(taskObj);
+          else {
+            // fallback: créer un groupe générique
+            if (!siteNode.switchboards.length) siteNode.switchboards.push({ id:"sw", label:"Switchboards", devices:[], tasks:[] });
+            siteNode.switchboards[0].devices.push({ id:"dev", label:"Devices", tasks:[taskObj] });
+          }
+        } else if (eqTable.includes("atex")) {
+          // ATEX
+          const zone = ent?.atex_zone || "Z?";
+          let z = siteNode.atex.find(a => String(a.zone) === String(zone));
+          if (!z) { z = { zone, equipments: [], tasks: [] }; siteNode.atex.push(z); }
+          z.tasks.push(taskObj);
+        } else {
+          // fallback: poser au niveau site
+          (siteNode.tasks = siteNode.tasks || []).push(taskObj);
+        }
+      }
+
+      res.json(siteNodes);
+    } finally {
+      client.release();
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+async function safeQuery(client, sql) {
+  try { return await client.query(sql); } catch { return null; }
+}
+
+// ---------------------------------------------------------------------------
+// IA (inchangé: endpoints prêts pour le front)
+// ---------------------------------------------------------------------------
+router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
+  const { task_id, hints = [], attach = "0" } = req.body || {};
+  const file = req.file || null;
+
+  try {
+    let task = null;
+    if (task_id) {
+      const { rows } = await pool.query(`SELECT * FROM controls_tasks WHERE id=$1`, [task_id]);
+      task = rows[0] || null;
+    }
+    const { control } = task ? resolveTsdForTask(task) : { control: null };
+
+    if (file && task && attach === "1") {
+      await insertRow(pool, "controls_attachments", {
+        site: task.site || "Default",
+        record_id: null,
+        task_id: task.id,
+        entity_id: task.entity_id,
+        filename: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        data: file.buffer,
+        uploaded_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    res.json({
+      ok: true,
+      safety: {
+        ppe: control?.ppe_md || tsdLibrary?.meta?.defaults?.ppe_md || "Gants isolants, visière, tenue ignifugée, balisage.",
+        hazards: control?.hazards_md || "Risque d’arc, surfaces chaudes, parties nues sous tension.",
+      },
+      procedure: {
+        steps: (control?.procedure_steps || []).map((s, i) => ({ step: i + 1, text: s })) || [
+          { step: 1, text: "Vérifier l’environnement : propreté, humidité, obstacles." },
+          { step: 2, text: "Se positionner côté amont, ouvrir capot d’inspection." },
+          { step: 3, text: "Configurer l’appareil (mode adéquat)." },
+          { step: 4, text: "Effectuer la mesure et consigner la valeur." },
+        ],
+        camera_hints: control?.camera_hints || [
+          "Plan large pour contexte et dégagements.",
+          "Zoom sur borniers / points de mesure.",
+          "Photo nette du cadran au moment du relevé.",
+        ],
+      },
+      hints,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.post("/ai/read-value", upload.single("file"), async (req, res) => {
+  const { task_id, meter_type = "multimeter_voltage", unit_hint = "V", attach = "0" } = req.body || {};
+  const file = req.file || null;
+
+  try {
+    let task = null;
+    if (task_id) {
+      const { rows } = await pool.query(`SELECT * FROM controls_tasks WHERE id=$1`, [task_id]);
+      task = rows[0] || null;
+    }
+    if (file && task && attach === "1") {
+      await insertRow(pool, "controls_attachments", {
+        site: task?.site || "Default",
+        record_id: null,
+        task_id: task?.id || null,
+        entity_id: task?.entity_id || null,
+        filename: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        data: file.buffer,
+        uploaded_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      });
+    }
+    res.json({
+      ok: true,
+      meter_type,
+      unit_hint,
+      value_detected: null,
+      confidence: 0.0,
+      suggestions: [
+        "Recadrer plus près de l’afficheur.",
+        "Limiter les reflets; stabiliser l’appareil.",
+        `Vérifier l’échelle et l’unité (${unit_hint}).`,
+      ],
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Calendar color helper
+// ---------------------------------------------------------------------------
+function colorForCategory(catKey, taskCode = "") {
+  const k = String(catKey || "").toUpperCase();
+  if (k.includes("HV")) return "#ef4444";           // rouge
+  if (k.includes("ATEX")) return "#f59e0b";         // amber
+  if (k.includes("SWITCH")) return "#3b82f6";       // blue
+  if (taskCode.toLowerCase().includes("thermo")) return "#22c55e"; // vert
+  return "#6366f1"; // indigo default
+}
+
+// ---------------------------------------------------------------------------
+// Seed (ALL catégories) — inchangé côté principe, marche avec entités existantes
 // ---------------------------------------------------------------------------
 router.get("/bootstrap/seed", async (req, res) => {
   const dry = String(req.query.dry_run || "1") === "1";
@@ -661,15 +986,10 @@ router.get("/bootstrap/seed", async (req, res) => {
   try {
     const report = await withTx(async (client) => {
       const ensured = await ensureAtLeastOneEntity(client);
-
       const ents = await client.query(
-        siteFilter
-          ? `SELECT * FROM controls_entities WHERE site = $1`
-          : `SELECT * FROM controls_entities`,
+        siteFilter ? `SELECT * FROM controls_entities WHERE site = $1` : `SELECT * FROM controls_entities`,
         siteFilter ? [siteFilter] : []
       );
-
-      // Quelles catégories ?
       const categories =
         categoryParam && categoryParam !== "ALL"
           ? [findCategoryByKeyOrLabel(categoryParam)].filter(Boolean)
@@ -679,36 +999,23 @@ router.get("/bootstrap/seed", async (req, res) => {
       for (const e of ents.rows) {
         for (const cat of categories) {
           if (!cat) continue;
-
           for (const ctrl of cat.controls || []) {
-            // existe déjà ?
             const exists = await client.query(
               `SELECT 1 FROM controls_tasks
                WHERE entity_id=$1 AND task_code=$2 AND status IN ('Planned','Pending','Overdue') LIMIT 1`,
               [e.id, ctrl.type]
             );
             if (exists.rowCount) {
-              actions.push({
-                entity_id: e.id,
-                category: cat.key || cat.label,
-                task_code: ctrl.type,
-                action: "skipped_exists",
-              });
+              actions.push({ entity_id: e.id, category: cat.key || cat.label, task_code: ctrl.type, action: "skipped_exists" });
               continue;
             }
-
             const months = monthsFromFreq(ctrl.frequency);
             const nextCtrl =
               (months ? addMonths(new Date().toISOString(), months)
                       : addByFreq(new Date().toISOString(), ctrl.frequency)) ||
               dayjs.utc().add(30, "day").toISOString();
 
-            actions.push({
-              entity_id: e.id,
-              category: cat.key || cat.label,
-              task_code: ctrl.type,
-              action: dry ? "would_create" : "created",
-            });
+            actions.push({ entity_id: e.id, category: cat.key || cat.label, task_code: ctrl.type, action: dry ? "would_create" : "created" });
 
             if (!dry) {
               await insertRow(client, "controls_tasks", {
@@ -738,226 +1045,6 @@ router.get("/bootstrap/seed", async (req, res) => {
     });
 
     res.json({ ok: true, dry_run: dry, ...report });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-router.post("/bootstrap/seed-one", async (req, res) => {
-  const { entity_id, category_key, category_label, control_type, due_date } = req.body || {};
-  if (!entity_id || !(category_key || category_label) || !control_type) {
-    return res.status(400).json({
-      error: "entity_id, category_key|category_label et control_type sont requis",
-    });
-  }
-  try {
-    const created = await withTx(async (client) => {
-      const entQ = await client.query(`SELECT * FROM controls_entities WHERE id=$1`, [entity_id]);
-      if (!entQ.rowCount) throw new Error("Entité introuvable");
-      const ent = entQ.rows[0];
-
-      const category = findCategoryByKeyOrLabel(category_key || category_label);
-      if (!category) throw new Error("Catégorie TSD inconnue");
-      const ctrl = findControlInCategory(category, control_type);
-      if (!ctrl) throw new Error("Type de contrôle inconnu");
-
-      const activeExists = await client.query(
-        `SELECT 1 FROM controls_tasks WHERE entity_id=$1 AND task_code=$2 AND status IN ('Planned','Pending','Overdue') LIMIT 1`,
-        [ent.id, ctrl.type]
-      );
-      if (activeExists.rowCount) return { skipped: true, reason: "already_exists" };
-
-      const months = monthsFromFreq(ctrl.frequency);
-      const nextCtrl =
-        due_date ||
-        (months ? addMonths(new Date().toISOString(), months)
-                : addByFreq(new Date().toISOString(), ctrl.frequency)) ||
-        dayjs.utc().add(30, "day").toISOString();
-
-      const task = await insertRow(client, "controls_tasks", {
-        site: ent.site || "Default",
-        entity_id: ent.id,
-        task_name: `${category.label} – ${ctrl.type}`,
-        task_code: ctrl.type,
-        frequency_months: months || null,
-        last_control: null,
-        next_control: nextCtrl,
-        status: "Planned",
-        value_type: ctrl.value_type || "checklist",
-        result_schema: null,
-        procedure_md: ctrl.procedure_md || "",
-        hazards_md: ctrl.hazards_md || "",
-        ppe_md: ctrl.ppe_md || "",
-        tools_md: ctrl.tools_md || "",
-        created_by: "seed-one",
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      });
-
-      return { created: true, id: task.id };
-    });
-
-    res.json({ ok: true, ...created });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Calendar (groupé par jour)
-// ---------------------------------------------------------------------------
-router.get("/calendar", async (req, res) => {
-  const { from, to, site, control, skip_entity_check = "0" } = req.query;
-
-  const where = [];
-  const params = [];
-  let i = 1;
-
-  if (String(skip_entity_check) !== "1") where.push(EXISTS_ENTITY_SQL);
-  if (from) {
-    where.push(`t.next_control >= $${i}`);
-    params.push(from);
-    i++;
-  }
-  if (to) {
-    where.push(`t.next_control <= $${i}`);
-    params.push(to);
-    i++;
-  }
-  if (site) {
-    where.push(`t.site = $${i}`);
-    params.push(site);
-    i++;
-  }
-  if (control) {
-    where.push(`LOWER(t.task_code) = LOWER($${i})`);
-    params.push(control);
-    i++;
-  }
-
-  const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-  try {
-    const { rows } = await pool.query(
-      `SELECT
-         t.id, t.task_name AS label, t.status, t.next_control AS due_date,
-         t.task_code, t.entity_id, t.site
-       FROM controls_tasks t
-       ${whereSQL}
-       ORDER BY t.next_control ASC NULLS LAST`,
-      params
-    );
-    const groups = rows.reduce((acc, r) => {
-      if (!r.due_date) return acc;
-      const k = dayjs.utc(r.due_date).format("YYYY-MM-DD");
-      (acc[k] = acc[k] || []).push(r);
-      return acc;
-    }, {});
-    res.json(groups);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// IA (upload facultatif, logiques guidées par TSD)
-// ---------------------------------------------------------------------------
-router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
-  const { task_id, hints = [], attach = "0" } = req.body || {};
-  const file = req.file || null;
-
-  try {
-    let task = null;
-    if (task_id) {
-      const { rows } = await pool.query(`SELECT * FROM controls_tasks WHERE id=$1`, [task_id]);
-      task = rows[0] || null;
-    }
-    const { control } = task ? resolveTsdForTask(task) : { control: null };
-
-    // Optionnel : attacher l’image à la tâche
-    if (file && task && attach === "1") {
-      await insertRow(pool, "controls_attachments", {
-        site: task.site || "Default",
-        record_id: null,
-        task_id: task.id,
-        entity_id: task.entity_id,
-        filename: file.originalname,
-        mimetype: file.mimetype,
-        size: file.size,
-        data: file.buffer,
-        uploaded_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-      });
-    }
-
-    // Réponse structurée exploitable côté front
-    res.json({
-      ok: true,
-      // guidage sécurité et actionnable (dérivé de la TSD si dispo)
-      safety: {
-        ppe: control?.ppe_md || tsdLibrary?.meta?.defaults?.ppe_md || "Gants isolants, visière, tenue ignifugée, balisage.",
-        hazards: control?.hazards_md || "Risque d’arc, surfaces chaudes, parties nues sous tension.",
-      },
-      procedure: {
-        steps: (control?.procedure_steps || []).map((s, i) => ({ step: i + 1, text: s })) || [
-          { step: 1, text: "Vérifier l’environnement : propreté, humidité, obstacles." },
-          { step: 2, text: "Se positionner côté amont, ouvrir le capot d’inspection." },
-          { step: 3, text: "Configurer l’appareil : mode adéquat (ex: thermographie, IR)." },
-          { step: 4, text: "Réaliser la mesure selon le point indiqué, consigner la valeur." },
-        ],
-        camera_hints: control?.camera_hints || [
-          "Prendre un plan large pour contexte et dégagements.",
-          "Zoomer sur la zone de connexion/borniers.",
-          "Photo nette du cadran de l’appareil au moment de la mesure.",
-        ],
-      },
-      hints,
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-/** IA lecture valeur (placeholder propre pour intégration OCR ultérieure) */
-router.post("/ai/read-value", upload.single("file"), async (req, res) => {
-  const { task_id, meter_type = "multimeter_voltage", unit_hint = "V", attach = "0" } = req.body || {};
-  const file = req.file || null;
-
-  try {
-    let task = null;
-    if (task_id) {
-      const { rows } = await pool.query(`SELECT * FROM controls_tasks WHERE id=$1`, [task_id]);
-      task = rows[0] || null;
-    }
-
-    if (file && task && attach === "1") {
-      await insertRow(pool, "controls_attachments", {
-        site: task?.site || "Default",
-        record_id: null,
-        task_id: task?.id || null,
-        entity_id: task?.entity_id || null,
-        filename: file.originalname,
-        mimetype: file.mimetype,
-        size: file.size,
-        data: file.buffer,
-        uploaded_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
-      });
-    }
-
-    // Ici, on renvoie une structure prête pour parse OCR / règles
-    res.json({
-      ok: true,
-      meter_type,
-      unit_hint,
-      value_detected: null,           // à remplir par OCR plus tard
-      confidence: 0.0,
-      suggestions: [
-        "Recadrer plus près du cadran / afficheur.",
-        "Éviter les reflets ; stabiliser l’appareil.",
-        `Assurer que l'échelle correspond à l'unité attendue (${unit_hint}).`,
-      ],
-    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
