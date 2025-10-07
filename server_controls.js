@@ -1,7 +1,7 @@
 /**
  * server_controls.js — ESM (type: module)
  * Routes montées sous /api/controls
- * Auto-rééchelonnement à la clôture selon tsd_library.js
+ * Aligne strictement les colonnes sur ton schéma Postgres.
  *
  * Prérequis:
  *   npm i express pg multer dayjs uuid
@@ -61,6 +61,11 @@ const RESULT_OPTIONS =
 // ---------------------------------------------------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
 
+function addFrequencyFromMonths(baseISO, months = null) {
+  if (!months || isNaN(Number(months))) return null;
+  return dayjs.utc(baseISO).add(Number(months), "month").toISOString();
+}
+
 function addFrequency(dateISO, frequency) {
   if (!frequency) return null;
   const { interval, unit } = frequency;
@@ -86,12 +91,14 @@ function findControlInCategory(category, controlType) {
   );
 }
 
-function nextDueDateFromLibrary(categoryKeyOrLabel, controlType, closedAtISO) {
-  const category = findCategoryByKeyOrLabel(categoryKeyOrLabel);
-  const control = findControlInCategory(category, controlType);
-  const freq = control?.frequency;
-  if (!freq) return null;
-  return addFrequency(closedAtISO, freq);
+function frequencyMonthsFromLib(control) {
+  if (!control?.frequency) return null;
+  const u = String(control.frequency.unit || "").toLowerCase();
+  if (u === "month" || u === "months") return Number(control.frequency.interval || 0);
+  if (u === "year" || u === "years") return Number(control.frequency.interval || 0) * 12;
+  if (u === "week" || u === "weeks") return Math.round(Number(control.frequency.interval || 0) / 4);
+  if (u === "day" || u === "days") return Math.round(Number(control.frequency.interval || 0) / 30);
+  return null;
 }
 
 async function withTx(fn) {
@@ -113,10 +120,18 @@ async function withTx(fn) {
 // App + Router (monté sous /api/controls)
 // ---------------------------------------------------------------------------
 const app = express();
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true, limit: "20mb" }));
 
 const router = express.Router();
+
+// Statuts dans ta base : text libre; défaut 'Planned'. On mappe:
+// - frontend "open"   -> ('Planned','Pending','Overdue')
+// - frontend "closed" -> 'Done'
+// - frontend "overdue"-> 'Overdue'
+const OPEN_STATUSES = ["Planned", "Pending", "Overdue"];
+
+// Petit helper pour s'assurer que la tâche référence toujours une entité existante
 const EXISTS_ENTITY_SQL =
   "EXISTS (SELECT 1 FROM controls_entities ce WHERE ce.id = t.entity_id)";
 
@@ -167,86 +182,120 @@ router.get("/entities/:id", async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // TASKS - Liste / Création / Clôture / Historique
+//  -> IMPORTANT: on SELECT t.task_name AS label, t.next_control AS due_date
 // ---------------------------------------------------------------------------
 router.get("/tasks", async (req, res) => {
   const {
     q,
     status,
     site,
-    category,
+    category,       // n'est pas stocké dans la table, mais on laisse le param pour futures évolutions
     control,
     due_from,
     due_to,
     entity_id,
     page = 1,
     page_size = 50,
-    order = "due_date.asc",
+    order = "due_date.asc", // alias sur next_control
   } = req.query;
 
   const where = [];
   const params = [];
   let i = 1;
 
-  // Ne montrer que les tâches dont l'entité existe encore
   where.push(EXISTS_ENTITY_SQL);
 
   if (q) {
-    where.push(`(t.label ILIKE $${i} OR t.control_type ILIKE $${i})`);
+    where.push(`(t.task_name ILIKE $${i} OR t.task_code ILIKE $${i})`);
     params.push(`%${q}%`);
     i++;
   }
+
   if (status) {
-    if (status === "overdue") where.push(`t.status = 'open' AND t.due_date < NOW()`);
-    else {
+    if (status === "open") {
+      where.push(`t.status = ANY ($${i})`);
+      params.push(OPEN_STATUSES);
+      i++;
+    } else if (status === "closed") {
+      where.push(`t.status = 'Done'`);
+    } else if (status === "overdue") {
+      where.push(`t.status = 'Overdue'`);
+    } else {
+      // statut brut si besoin
       where.push(`t.status = $${i}`);
       params.push(status);
       i++;
     }
   }
+
   if (site) {
-    where.push(`t.site_id = $${i}`);
+    where.push(`t.site = $${i}`);
     params.push(site);
     i++;
   }
-  if (category) {
-    where.push(
-      `(LOWER(t.category_key) = LOWER($${i}) OR LOWER(t.category_label) = LOWER($${i}))`
-    );
-    params.push(category);
-    i++;
-  }
+
   if (control) {
-    where.push(`LOWER(t.control_type) = LOWER($${i})`);
+    where.push(`LOWER(t.task_code) = LOWER($${i})`);
     params.push(control);
     i++;
   }
+
   if (entity_id) {
     where.push(`t.entity_id = $${i}`);
     params.push(entity_id);
     i++;
   }
+
   if (due_from) {
-    where.push(`t.due_date >= $${i}`);
+    where.push(`t.next_control >= $${i}`);
     params.push(due_from);
     i++;
   }
   if (due_to) {
-    where.push(`t.due_date <= $${i}`);
+    where.push(`t.next_control <= $${i}`);
     params.push(due_to);
     i++;
   }
 
   const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const [col, dir] = String(order).split(".");
-  const sortSQL = `ORDER BY t.${col || "due_date"} ${
-    dir?.toUpperCase() === "DESC" ? "DESC" : "ASC"
-  }`;
+  // protège l'ORDER BY
+  const orderCol =
+    col === "due_date" ? "next_control" :
+    ["task_name", "task_code", "status", "next_control", "created_at", "updated_at"].includes(col)
+      ? col
+      : "next_control";
+  const sortSQL = `ORDER BY t.${orderCol} ${dir?.toUpperCase() === "DESC" ? "DESC" : "ASC"}`;
   const limit = Math.max(1, Math.min(500, Number(page_size)));
   const offset = (Math.max(1, Number(page)) - 1) * limit;
 
   try {
     const { rows } = await pool.query(
-      `SELECT t.* FROM controls_tasks t ${whereSQL} ${sortSQL} LIMIT ${limit} OFFSET ${offset}`,
+      `SELECT
+         t.id,
+         t.site,
+         t.entity_id,
+         t.task_name AS label,
+         t.task_code,
+         t.status,
+         t.next_control AS due_date,
+         t.frequency_months,
+         t.frequency_months_min,
+         t.frequency_months_max,
+         t.last_control,
+         t.value_type,
+         t.result_schema,
+         t.procedure_md,
+         t.hazards_md,
+         t.ppe_md,
+         t.tools_md,
+         t.created_by,
+         t.created_at,
+         t.updated_at
+       FROM controls_tasks t
+       ${whereSQL}
+       ${sortSQL}
+       LIMIT ${limit} OFFSET ${offset}`,
       params
     );
     res.json({ items: rows, page: Number(page), page_size: limit });
@@ -258,12 +307,12 @@ router.get("/tasks", async (req, res) => {
 router.post("/tasks", async (req, res) => {
   const {
     entity_id,
-    site_id = null,
+    site = null,           // si null, on va le déduire de l'entité
     category_key,
     category_label,
-    control_type,
-    due_date,
-    payload = {},
+    control_type,          // = task_code
+    due_date,              // alias voulu -> sera stocké en next_control
+    payload = {},          // ignoré en DB (pas de colonne dédiée), conservé pour futures évolutions
   } = req.body;
 
   if (!entity_id || !(category_key || category_label) || !control_type) {
@@ -281,20 +330,17 @@ router.post("/tasks", async (req, res) => {
       .status(422)
       .json({ error: "Type de contrôle inconnu pour cette catégorie" });
 
-  const frequency = control.frequency || null;
-  const due =
-    due_date ||
-    addFrequency(new Date().toISOString(), frequency) ||
-    dayjs.utc().add(30, "days").toISOString();
+  const freqMonths = frequencyMonthsFromLib(control);
+  const value_type = control.value_type || "checklist";
 
   try {
-    const result = await withTx(async (client) => {
-      // Vérifie que l'entité existe (sinon message générique)
-      const ent = await client.query(
-        `SELECT id FROM controls_entities WHERE id = $1`,
+    const created = await withTx(async (client) => {
+      // Vérifie que l'entité existe
+      const entQ = await client.query(
+        `SELECT id, site FROM controls_entities WHERE id = $1`,
         [entity_id]
       );
-      if (!ent.rowCount) {
+      if (!entQ.rowCount) {
         return {
           warning:
             category.fallback_note_if_missing ||
@@ -302,40 +348,62 @@ router.post("/tasks", async (req, res) => {
             "Equipement en attente d'intégration au système Electrohub.",
         };
       }
+      const entSite = site || entQ.rows[0].site || "Default";
 
+      const nextCtrl =
+        due_date ||
+        (freqMonths ? addFrequencyFromMonths(new Date().toISOString(), freqMonths) : null) ||
+        dayjs.utc().add(30, "day").toISOString();
+
+      // Prépare les textes (procédure / hazards / ppe / tools) d’après la lib si présents
+      const procedure_md = control.procedure_md || "";
+      const hazards_md   = control.hazards_md   || "";
+      const ppe_md       = control.ppe_md       || "";
+      const tools_md     = control.tools_md     || "";
+
+      const task_name = `${category.label} – ${control.type}`;
       const id = uuidv4();
+
       const { rows } = await client.query(
         `INSERT INTO controls_tasks
-          (id, entity_id, site_id, category_key, category_label, control_type, label, status, due_date,
-           frequency_interval, frequency_unit, payload, created_at, updated_at)
+          (id, site, entity_id, task_name, task_code, frequency_months,
+           last_control, next_control, status, value_type, result_schema,
+           procedure_md, hazards_md, ppe_md, tools_md, created_by, created_at, updated_at)
          VALUES
-          ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,NOW(),NOW())
+          ($1,$2,$3,$4,$5,$6,
+           $7,$8,'Planned',$9,$10,
+           $11,$12,$13,$14,$15,NOW(),NOW())
          RETURNING *`,
         [
           id,
+          entSite,
           entity_id,
-          site_id,
-          category.key,
-          category.label,
+          task_name,
           control.type,
-          `${category.label} – ${control.type}`,
-          due,
-          control.frequency?.interval ?? null,
-          control.frequency?.unit ?? null,
-          payload,
+          freqMonths,
+          null,
+          nextCtrl,
+          value_type,
+          null,           // result_schema (optionnel)
+          procedure_md,
+          hazards_md,
+          ppe_md,
+          tools_md,
+          "system",
         ]
       );
 
+      // Historique minimal
       await client.query(
-        `INSERT INTO controls_history (id, task_id, action, payload, created_at)
-         VALUES ($1,$2,$3,$4,NOW())`,
-        [uuidv4(), id, "task_created", { by: "system", reason: "manual_create" }]
+        `INSERT INTO controls_history (id, task_id, user, action, site, date, task_name)
+         VALUES ($1,$2,$3,$4,$5,NOW(),$6)`,
+        [uuidv4(), id, "system", "task_created", entSite, task_name]
       );
 
       return rows[0];
     });
 
-    res.status(201).json(result);
+    res.status(201).json(created);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -345,113 +413,184 @@ router.patch("/tasks/:id/close", async (req, res) => {
   const { id } = req.params;
   const {
     record_status = "done",
-    checklist = [],
-    observations = {},
-    attachments = [],
+    checklist = [],              // si tu veux, on pourra mapper vers checklist_result
+    observations = {},           // sera stocké dans results/comments
+    attachments = [],            // [{ filename, mime/mimetype, bytes, data(base64)? }]
     actor_id = null,
     closed_at = new Date().toISOString(),
+    comment = "",                // commentaire libre
   } = req.body;
 
   try {
     const outcome = await withTx(async (client) => {
-      // 1) Récupère la tâche
+      // 1) Récupère la tâche + entité (pour site)
       const { rows: taskRows } = await client.query(
-        `SELECT * FROM controls_tasks t WHERE t.id = $1`,
+        `SELECT t.*, e.site AS entity_site
+         FROM controls_tasks t
+         LEFT JOIN controls_entities e ON e.id = t.entity_id
+         WHERE t.id = $1`,
         [id]
       );
       if (!taskRows.length) throw new Error("Tâche introuvable");
       const task = taskRows[0];
+      const site = task.site || task.entity_site || "Default";
 
-      // 2) Enregistre un record
+      // 2) Enregistre un record (adapter aux colonnes de controls_records)
       const recordId = uuidv4();
       await client.query(
         `INSERT INTO controls_records
-          (id, task_id, entity_id, status, checklist, observations, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,NOW())`,
-        [recordId, task.id, task.entity_id, record_status, checklist, observations]
+          (id, site, task_id, entity_id, performed_at, performed_by, result_status,
+           text_value, checklist_result, results, comments, created_at, created_by, task_code, lang)
+         VALUES
+          ($1,$2,$3,$4,$5,$6,$7,
+           $8,$9,$10,$11,NOW(),$12,$13,$14)`,
+        [
+          recordId,
+          site,
+          task.id,
+          task.entity_id,
+          closed_at,
+          actor_id || "system",
+          record_status,
+          null,                    // text_value
+          JSON.stringify(checklist || []),  // checklist_result
+          JSON.stringify(observations || {}), // results (jsonb)
+          comment || "",
+          actor_id || "system",
+          task.task_code,
+          "fr",
+        ]
       );
 
-      // 3) Pièces jointes
+      // 3) Pièces jointes (métadonnées + data optionnelle)
       for (const a of attachments) {
+        const attId = uuidv4();
+        const filename = a.filename || a.name || `file-${attId}`;
+        const mimetype = a.mimetype || a.mime || "application/octet-stream";
+        const size = a.bytes || a.size || null;
+        const dataBuf =
+          a.data && typeof a.data === "string"
+            ? Buffer.from(a.data, "base64")
+            : null;
+
         await client.query(
           `INSERT INTO controls_attachments
-            (id, task_id, record_id, entity_id, url, filename, mime, bytes, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
-          [
-            uuidv4(),
-            task.id,
-            recordId,
-            task.entity_id,
-            a.url,
-            a.filename,
-            a.mime,
-            a.bytes || null,
-          ]
+            (id, site, record_id, task_id, entity_id,
+             filename, mimetype, size, data, uploaded_at, created_at)
+           VALUES
+            ($1,$2,$3,$4,$5,
+             $6,$7,$8,$9,NOW(),NOW())`,
+          [attId, site, recordId, task.id, task.entity_id, filename, mimetype, size, dataBuf]
         );
       }
 
-      // 4) Clôture de la tâche
+      // 4) Clôture de la tâche (status -> Done, last_control, updated_at)
       await client.query(
-        `UPDATE controls_tasks SET status='closed', closed_at=$2, updated_at=NOW() WHERE id=$1`,
+        `UPDATE controls_tasks
+           SET status='Done',
+               last_control = $2,
+               updated_at = NOW()
+         WHERE id = $1`,
         [task.id, closed_at]
       );
 
       await client.query(
-        `INSERT INTO controls_history (id, task_id, action, payload, created_at)
-         VALUES ($1,$2,$3,$4,NOW())`,
-        [uuidv4(), task.id, "task_closed", { by: actor_id, record_id: recordId }]
+        `INSERT INTO controls_history (id, task_id, user, action, site, date, task_name, meta)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          uuidv4(),
+          task.id,
+          actor_id || "system",
+          "task_closed",
+          site,
+          closed_at,
+          task.task_name,
+          JSON.stringify({ record_id: recordId }),
+        ]
       );
 
-      // 5) Auto-rééchelonnement selon la fréquence TSD
-      const nextDue = nextDueDateFromLibrary(
-        task.category_key || task.category_label,
-        task.control_type,
-        closed_at
-      );
+      // 5) Auto-rééchelonnement
+      //    d’abord: priorité aux mois stockés (frequency_months), sinon depuis la lib
+      let nextDue = null;
+      if (task.frequency_months) {
+        nextDue = addFrequencyFromMonths(closed_at, task.frequency_months);
+      } else {
+        // essai via librairie
+        // (on n'a pas category_key/label en base, on essaie via task_code uniquement)
+        let libNext = null;
+        for (const cat of tsdLibrary.categories || []) {
+          const ctrl = findControlInCategory(cat, task.task_code);
+          if (ctrl) {
+            libNext = addFrequency(closed_at, ctrl.frequency || null);
+            break;
+          }
+        }
+        nextDue = libNext;
+      }
 
       let nextTask = null;
       if (nextDue) {
+        // Respect de la contrainte unique ux_controls_tasks_active:
+        // on crée une nouvelle tâche 'Planned' avec le même (site, entity_id, task_code)
         const nextId = uuidv4();
-        await client.query(
+        const { rows: ins } = await client.query(
           `INSERT INTO controls_tasks
-            (id, entity_id, site_id, category_key, category_label, control_type, label, status, due_date,
-             frequency_interval, frequency_unit, payload, created_at, updated_at)
+            (id, site, entity_id, task_name, task_code, frequency_months,
+             last_control, next_control, status, value_type, result_schema,
+             procedure_md, hazards_md, ppe_md, tools_md, created_by, created_at, updated_at)
            VALUES
-            ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,NOW(),NOW())`,
+            ($1,$2,$3,$4,$5,$6,
+             $7,$8,'Planned',$9,$10,
+             $11,$12,$13,$14,$15,NOW(),NOW())
+           RETURNING *`,
           [
             nextId,
+            site,
             task.entity_id,
-            task.site_id,
-            task.category_key,
-            task.category_label,
-            task.control_type,
-            task.label,
+            task.task_name,
+            task.task_code,
+            task.frequency_months,
+            closed_at,
             nextDue,
-            task.frequency_interval,
-            task.frequency_unit,
-            task.payload,
+            task.value_type,
+            task.result_schema,
+            task.procedure_md,
+            task.hazards_md,
+            task.ppe_md,
+            task.tools_md,
+            actor_id || "system",
           ]
         );
 
         await client.query(
-          `INSERT INTO controls_history (id, task_id, action, payload, created_at)
-           VALUES ($1,$2,$3,$4,NOW())`,
+          `INSERT INTO controls_history (id, task_id, user, action, site, date, task_name, meta)
+           VALUES ($1,$2,$3,$4,$5,NOW(),$6,$7)`,
           [
             uuidv4(),
             nextId,
+            "system",
             "task_created",
-            { by: "system", reason: "auto_reschedule", from_task_id: task.id },
+            site,
+            task.task_name,
+            JSON.stringify({ reason: "auto_reschedule", from_task_id: task.id }),
           ]
         );
 
-        const { rows } = await client.query(
-          `SELECT * FROM controls_tasks WHERE id = $1`,
-          [nextId]
-        );
-        nextTask = rows[0];
+        nextTask = ins[0];
       }
 
-      return { task_closed: task.id, record_id: recordId, next_task: nextTask };
+      return {
+        task_closed: task.id,
+        record_id: recordId,
+        next_task: nextTask
+          ? {
+              id: nextTask.id,
+              label: nextTask.task_name,
+              due_date: nextTask.next_control,
+              status: nextTask.status,
+            }
+          : null,
+      };
     });
 
     res.json(outcome);
@@ -460,11 +599,12 @@ router.patch("/tasks/:id/close", async (req, res) => {
   }
 });
 
+// Historique par tâche (colonne/ordre conformes)
 router.get("/tasks/:id/history", async (req, res) => {
   const { id } = req.params;
   try {
     const { rows } = await pool.query(
-      `SELECT * FROM controls_history WHERE task_id = $1 ORDER BY created_at DESC`,
+      `SELECT * FROM controls_history WHERE task_id = $1 ORDER BY date DESC, id DESC`,
       [id]
     );
     res.json(rows);
@@ -474,7 +614,7 @@ router.get("/tasks/:id/history", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Attachments (métadonnées - stub)
+// Attachments (upload binaire -> columns réelles filename/mimetype/size/data)
 // ---------------------------------------------------------------------------
 router.post(
   "/tasks/:id/attachments",
@@ -486,21 +626,23 @@ router.post(
 
     try {
       const { rows: t } = await pool.query(
-        `SELECT id, entity_id FROM controls_tasks WHERE id = $1`,
+        `SELECT id, entity_id, site FROM controls_tasks WHERE id = $1`,
         [id]
       );
       if (!t.length) return res.status(404).json({ error: "Tâche introuvable" });
+      const site = t[0].site || "Default";
 
-      // Stub: stocke uniquement des métadonnées avec une URL factice
-      const url = `attachment://${uuidv4()}/${originalname}`;
       await pool.query(
         `INSERT INTO controls_attachments
-          (id, task_id, entity_id, url, filename, mime, bytes, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
-        [uuidv4(), id, t[0].entity_id, url, originalname, mimetype, size]
+          (id, site, record_id, task_id, entity_id,
+           filename, mimetype, size, data, uploaded_at, created_at)
+         VALUES
+          ($1,$2,$3,$4,$5,
+           $6,$7,$8,$9,NOW(),NOW())`,
+        [uuidv4(), site, null, id, t[0].entity_id, originalname, mimetype, size, buffer]
       );
 
-      res.json({ ok: true, url, filename: originalname, mime: mimetype, bytes: size });
+      res.json({ ok: true, filename: originalname, mimetype, size });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -508,36 +650,35 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// Calendar (groupé par jour)
+// Calendar (groupé par jour) — alias next_control -> due_date
 // ---------------------------------------------------------------------------
 router.get("/calendar", async (req, res) => {
-  const { from, to, site_id, category } = req.query;
+  const { from, to, site, control } = req.query;
 
   const where = [];
   const params = [];
   let i = 1;
 
   where.push(EXISTS_ENTITY_SQL);
+
   if (from) {
-    where.push(`t.due_date >= $${i}`);
+    where.push(`t.next_control >= $${i}`);
     params.push(from);
     i++;
   }
   if (to) {
-    where.push(`t.due_date <= $${i}`);
+    where.push(`t.next_control <= $${i}`);
     params.push(to);
     i++;
   }
-  if (site_id) {
-    where.push(`t.site_id = $${i}`);
-    params.push(site_id);
+  if (site) {
+    where.push(`t.site = $${i}`);
+    params.push(site);
     i++;
   }
-  if (category) {
-    where.push(
-      `(LOWER(t.category_key) = LOWER($${i}) OR LOWER(t.category_label) = LOWER($${i}))`
-    );
-    params.push(category);
+  if (control) {
+    where.push(`LOWER(t.task_code) = LOWER($${i})`);
+    params.push(control);
     i++;
   }
 
@@ -546,15 +687,21 @@ router.get("/calendar", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT
-         t.id, t.label, t.status, t.due_date, t.category_label,
-         t.control_type, t.entity_id, t.site_id
+         t.id,
+         t.task_name AS label,
+         t.status,
+         t.next_control AS due_date,
+         t.task_code,
+         t.entity_id,
+         t.site
        FROM controls_tasks t
        ${whereSQL}
-       ORDER BY t.due_date ASC`,
+       ORDER BY t.next_control ASC NULLS LAST`,
       params
     );
 
     const groups = rows.reduce((acc, r) => {
+      if (!r.due_date) return acc;
       const k = dayjs.utc(r.due_date).format("YYYY-MM-DD");
       (acc[k] = acc[k] || []).push(r);
       return acc;
