@@ -1,15 +1,15 @@
 /**
  * server_controls.js — ESM (type: module)
  * Routes montées sous /api/controls
- * Confort++ : bootstrap d'entités si table vide + seed TSD
+ * Gère dynamiquement UUID vs INTEGER pour id / entity_id (introspection schema)
  *
  * Prérequis:
  *   npm i express pg multer dayjs uuid
  *
- * Variables d'env:
+ * ENV:
  *   DATABASE_URL=postgres://...
- *   CONTROLS_BASE_PATH=/api/controls  (optionnel, défaut /api/controls)
- *   CONTROLS_PORT=3011                (optionnel, défaut 3011)
+ *   CONTROLS_BASE_PATH=/api/controls
+ *   CONTROLS_PORT=3011
  */
 
 import express from "express";
@@ -21,32 +21,33 @@ import { v4 as uuidv4 } from "uuid";
 
 dayjs.extend(utc);
 
-// ---------------------------------------------------------------------------
-// DB Pool (Neon / Postgres)
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// DB
+// ----------------------------------------------------------------------------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-// ---------------------------------------------------------------------------
-// Charger la librairie TSD (ESM)
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// TSD library
+// ----------------------------------------------------------------------------
 let tsdLibrary;
 {
   const mod = await import("./tsd_library.js");
   tsdLibrary = mod.tsdLibrary ?? mod.default?.tsdLibrary ?? mod.default ?? mod;
   if (!tsdLibrary || !Array.isArray(tsdLibrary.categories)) {
-    throw new Error("tsd_library.js invalide (attendu: { tsdLibrary: { categories: [...] } }).");
+    throw new Error("tsd_library.js invalide: attendu { tsdLibrary: { categories:[...] } }");
   }
 }
-const RESULT_OPTIONS =
-  tsdLibrary?.meta?.result_options ?? ["Conforme", "Non conforme", "Non applicable"];
+const RESULT_OPTIONS = tsdLibrary?.meta?.result_options ?? ["Conforme", "Non conforme", "Non applicable"];
 
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Utils
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
+const OPEN_STATUSES = ["Planned", "Pending", "Overdue"];
+const EXISTS_ENTITY_SQL = "EXISTS (SELECT 1 FROM controls_entities ce WHERE ce.id = t.entity_id)";
 
 function addFrequencyFromMonths(baseISO, months = null) {
   if (!months || isNaN(Number(months))) return null;
@@ -98,40 +99,56 @@ async function withTx(fn) {
   }
 }
 
-// Helpers dynamiques (introspection des colonnes pour INSERT souple)
-async function getTableColumns(client, tableName) {
+// ---------- Introspection schema (types & colonnes) ----------
+async function getColumnsMeta(client, table) {
   const { rows } = await client.query(
-    `SELECT column_name
+    `SELECT column_name, data_type, udt_name, column_default
      FROM information_schema.columns
      WHERE table_schema='public' AND table_name=$1`,
-    [tableName]
+    [table]
   );
-  return rows.map(r => r.column_name);
+  const meta = {};
+  for (const r of rows) meta[r.column_name] = r;
+  return meta;
 }
-function buildDynamicInsert(table, cols, valuesObj) {
-  const colsToUse = cols.filter(c => Object.prototype.hasOwnProperty.call(valuesObj, c));
-  const placeholders = colsToUse.map((_, idx) => `$${idx + 1}`);
-  const values = colsToUse.map(c => valuesObj[c]);
-  const sql = `INSERT INTO ${table} (${colsToUse.join(",")}) VALUES (${placeholders.join(",")})`;
-  return { sql, values };
+function isUuidColumn(colMeta) {
+  return colMeta && (colMeta.udt_name === "uuid" || colMeta.data_type === "uuid");
+}
+function isIntegerColumn(colMeta) {
+  if (!colMeta) return false;
+  const t = (colMeta.data_type || "").toLowerCase();
+  return t.includes("integer") || t.includes("bigint") || t === "smallint";
+}
+function hasDefault(colMeta) {
+  return !!(colMeta && colMeta.column_default);
+}
+function pruneValuesByExistingColumns(values, columnsMeta) {
+  const out = {};
+  for (const k of Object.keys(values)) {
+    if (columnsMeta[k]) out[k] = values[k];
+  }
+  return out;
+}
+function buildInsertSQL(table, values) {
+  const cols = Object.keys(values);
+  const placeholders = cols.map((_, i) => `$${i + 1}`);
+  return {
+    sql: `INSERT INTO ${table} (${cols.join(",")}) VALUES (${placeholders.join(",")}) RETURNING *`,
+    params: cols.map((c) => values[c]),
+  };
 }
 
-// ---------------------------------------------------------------------------
-// App + Router (monté sous /api/controls)
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// App + Router
+// ----------------------------------------------------------------------------
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true, limit: "20mb" }));
-
 const router = express.Router();
 
-// Statuts “ouverts” utilisés par l’UI
-const OPEN_STATUSES = ["Planned", "Pending", "Overdue"];
-const EXISTS_ENTITY_SQL = "EXISTS (SELECT 1 FROM controls_entities ce WHERE ce.id = t.entity_id)";
-
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Health + TSD
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 router.get("/health", (_req, res) => {
   res.json({ ok: true, tsd_loaded: !!tsdLibrary, categories: (tsdLibrary.categories || []).length });
 });
@@ -147,9 +164,9 @@ router.get("/tsd/category/:key", (req, res) => {
   res.json(cat);
 });
 
-// ---------------------------------------------------------------------------
-// Entities (helper + bootstrap)
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Entities
+// ----------------------------------------------------------------------------
 router.get("/entities/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -159,53 +176,41 @@ router.get("/entities/:id", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-/**
- * Crée 1 entité minimale de façon dynamique selon les colonnes existantes
- * body: { site?, name?, label?, category_key? ... }
- */
+// Crée UNE entité (auto-adaptée au schéma : uuid/int)
 router.post("/bootstrap/create-entity", async (req, res) => {
   const body = req.body || {};
   try {
     const created = await withTx(async (client) => {
-      const cols = await getTableColumns(client, "controls_entities");
-      const id = uuidv4();
+      const meta = await getColumnsMeta(client, "controls_entities");
       const now = new Date().toISOString();
-
-      // Valeurs par défaut très souples : on n'inclut dans l'INSERT que les colonnes réellement présentes
       const values = {
-        id,
-        site: body.site || "Default",
-        name: body.name || body.label || "Generic Entity",
-        label: body.label || body.name || "Generic Entity",
-        category_key: body.category_key || null,
+        site: body.site ?? "Default",
+        name: body.name ?? body.label ?? "Generic Entity",
+        label: body.label ?? body.name ?? "Generic Entity",
+        category_key: body.category_key ?? null,
         created_at: now,
         updated_at: now,
         active: true,
       };
-
-      const { sql, values: params } = buildDynamicInsert("controls_entities", cols, values);
-      await client.query(sql, params);
-
-      return { id, used_columns: cols.filter(c => Object.prototype.hasOwnProperty.call(values, c)) };
+      // gérer id: si uuid -> fournir uuid; si integer -> ne pas fournir (DEFAULT)
+      if (isUuidColumn(meta.id)) values.id = uuidv4();
+      const pruned = pruneValuesByExistingColumns(values, meta);
+      const { sql, params } = buildInsertSQL("controls_entities", pruned);
+      const { rows } = await client.query(sql, params);
+      return { id: rows[0].id, row: rows[0] };
     });
     res.status(201).json({ ok: true, ...created });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-/**
- * S’assure qu’il existe au moins 1 entité. Si aucune, en crée 1 “Default / Generic Entity”.
- * Renvoie { ensured: true, entity_id }
- */
+// s’assure d’avoir au moins 1 entité ; si vide → en crée une adaptée (uuid/int)
 async function ensureAtLeastOneEntity(client) {
-  const c = await client.query(`SELECT id FROM controls_entities LIMIT 1`);
-  if (c.rowCount > 0) return { ensured: false, entity_id: c.rows[0].id };
+  const cur = await client.query(`SELECT id FROM controls_entities LIMIT 1`);
+  if (cur.rowCount) return { ensured: false, entity: cur.rows[0] };
 
-  // Crée une entité minimale dynamiquement
-  const cols = await getTableColumns(client, "controls_entities");
-  const id = uuidv4();
+  const meta = await getColumnsMeta(client, "controls_entities");
   const now = new Date().toISOString();
   const values = {
-    id,
     site: "Default",
     name: "Generic Entity",
     label: "Generic Entity",
@@ -213,19 +218,28 @@ async function ensureAtLeastOneEntity(client) {
     updated_at: now,
     active: true,
   };
-  const { sql, values: params } = buildDynamicInsert("controls_entities", cols, values);
-  await client.query(sql, params);
-  return { ensured: true, entity_id: id };
+  if (isUuidColumn(meta.id)) values.id = uuidv4(); // sinon, laisser Postgres auto-incrémenter
+  const pruned = pruneValuesByExistingColumns(values, meta);
+  const { sql, params } = buildInsertSQL("controls_entities", pruned);
+  const { rows } = await client.query(sql, params);
+  return { ensured: true, entity: rows[0] };
 }
 
-// ---------------------------------------------------------------------------
-// TASKS - Liste / Création / Clôture / Historique
-//  -> alias SELECT: task_name AS label, next_control AS due_date
-// ---------------------------------------------------------------------------
+router.get("/bootstrap/ensure-entity", async (_req, res) => {
+  try {
+    const out = await withTx(async (client) => ensureAtLeastOneEntity(client));
+    res.json({ ok: true, ensured: out.ensured, entity_id: out.entity.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ----------------------------------------------------------------------------
+// TASKS: list / create / close / history
+//  (alias label=task_name, due_date=next_control)
+// ----------------------------------------------------------------------------
 router.get("/tasks", async (req, res) => {
   const {
-    q, status, site, category, control, due_from, due_to, entity_id,
-    page = 1, page_size = 50, order = "due_date.asc", skip_entity_check = "0"
+    q, status, site, control, due_from, due_to, entity_id,
+    page = 1, page_size = 50, order = "due_date.asc", skip_entity_check = "0",
   } = req.query;
 
   const where = [];
@@ -233,12 +247,11 @@ router.get("/tasks", async (req, res) => {
   let i = 1;
 
   if (String(skip_entity_check) !== "1") where.push(EXISTS_ENTITY_SQL);
-
   if (q) { where.push(`(t.task_name ILIKE $${i} OR t.task_code ILIKE $${i})`); params.push(`%${q}%`); i++; }
   if (status) {
     if (status === "open") { where.push(`t.status = ANY ($${i})`); params.push(OPEN_STATUSES); i++; }
-    else if (status === "closed") { where.push(`t.status = 'Done'`); }
-    else if (status === "overdue") { where.push(`t.status = 'Overdue'`); }
+    else if (status === "closed") where.push(`t.status = 'Done'`);
+    else if (status === "overdue") where.push(`t.status = 'Overdue'`);
     else { where.push(`t.status = $${i}`); params.push(status); i++; }
   }
   if (site) { where.push(`t.site = $${i}`); params.push(site); i++; }
@@ -249,8 +262,10 @@ router.get("/tasks", async (req, res) => {
 
   const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const [col, dir] = String(order).split(".");
-  const orderCol = col === "due_date" ? "next_control" :
-    ["task_name","task_code","status","next_control","created_at","updated_at"].includes(col) ? col : "next_control";
+  const orderCol =
+    col === "due_date" ? "next_control"
+    : ["task_name","task_code","status","next_control","created_at","updated_at"].includes(col) ? col
+    : "next_control";
   const sortSQL = `ORDER BY t.${orderCol} ${dir?.toUpperCase() === "DESC" ? "DESC" : "ASC"}`;
   const limit = Math.max(1, Math.min(500, Number(page_size)));
   const offset = (Math.max(1, Number(page)) - 1) * limit;
@@ -275,62 +290,68 @@ router.get("/tasks", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// insert task (respect id/uuid vs serial)
+async function insertTask(client, taskValuesBase) {
+  const meta = await getColumnsMeta(client, "controls_tasks");
+  const values = { ...taskValuesBase };
+  if (isUuidColumn(meta.id)) values.id = uuidv4(); // si integer -> laisser DEFAULT
+  const pruned = pruneValuesByExistingColumns(values, meta);
+  const { sql, params } = buildInsertSQL("controls_tasks", pruned);
+  const { rows } = await client.query(sql, params);
+  return rows[0];
+}
+
 router.post("/tasks", async (req, res) => {
-  const { entity_id, site = null, category_key, category_label, control_type, due_date, payload = {} } = req.body;
+  const { entity_id, site = null, category_key, category_label, control_type, due_date } = req.body;
   if (!entity_id || !(category_key || category_label) || !control_type) {
     return res.status(400).json({ error: "entity_id, category_key|category_label et control_type sont requis" });
   }
   const category = findCategoryByKeyOrLabel(category_key || category_label);
   if (!category) return res.status(422).json({ error: "Catégorie TSD inconnue" });
   const control = findControlInCategory(category, control_type);
-  if (!control) return res.status(422).json({ error: "Type de contrôle inconnu pour cette catégorie" });
-
-  const freqMonths = frequencyMonthsFromLib(control);
-  const value_type = control.value_type || "checklist";
+  if (!control) return res.status(422).json({ error: "Type de contrôle inconnu" });
 
   try {
     const created = await withTx(async (client) => {
-      // si entité absente -> en créer 1 minimale
-      const entQ = await client.query(`SELECT id, site FROM controls_entities WHERE id = $1`, [entity_id]);
-      let ensuredEntityId = entity_id;
-      let entSite = site || "Default";
-      if (!entQ.rowCount) {
-        const ensure = await ensureAtLeastOneEntity(client);
-        ensuredEntityId = ensure.entity_id;
-        // récupère la ligne complète
-        const got = await client.query(`SELECT id, site FROM controls_entities WHERE id = $1`, [ensuredEntityId]);
-        entSite = got.rows[0]?.site || entSite;
-      } else {
-        entSite = site || entQ.rows[0].site || "Default";
+      // assurer entité (type-safe)
+      const entQ = await client.query(`SELECT * FROM controls_entities WHERE id = $1`, [entity_id]);
+      let ent = entQ.rows[0];
+      if (!ent) {
+        const ensured = await ensureAtLeastOneEntity(client);
+        ent = ensured.entity;
       }
+      const freqMonths = frequencyMonthsFromLib(control);
+      const nextCtrl =
+        due_date ||
+        (freqMonths ? addFrequencyFromMonths(new Date().toISOString(), freqMonths) : null) ||
+        dayjs.utc().add(30, "day").toISOString();
 
-      const nextCtrl = due_date || (freqMonths ? addFrequencyFromMonths(new Date().toISOString(), freqMonths) : null) || dayjs.utc().add(30, "day").toISOString();
-      const procedure_md = control.procedure_md || "";
-      const hazards_md   = control.hazards_md   || "";
-      const ppe_md       = control.ppe_md       || "";
-      const tools_md     = control.tools_md     || "";
-      const task_name    = `${category.label} – ${control.type}`;
-      const id = uuidv4();
-
-      const { rows } = await client.query(
-        `INSERT INTO controls_tasks
-          (id, site, entity_id, task_name, task_code, frequency_months,
-           last_control, next_control, status, value_type, result_schema,
-           procedure_md, hazards_md, ppe_md, tools_md, created_by, created_at, updated_at)
-         VALUES
-          ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())
-         RETURNING *`,
-        [ id, entSite, ensuredEntityId, task_name, control.type, freqMonths, null, nextCtrl,
-          value_type, null, procedure_md, hazards_md, ppe_md, tools_md, "system" ]
-      );
+      const task = await insertTask(client, {
+        site: site || ent.site || "Default",
+        entity_id: ent.id,
+        task_name: `${category.label} – ${control.type}`,
+        task_code: control.type,
+        frequency_months: freqMonths,
+        last_control: null,
+        next_control: nextCtrl,
+        status: "Planned",
+        value_type: control.value_type || "checklist",
+        result_schema: null,
+        procedure_md: control.procedure_md || "",
+        hazards_md:   control.hazards_md   || "",
+        ppe_md:       control.ppe_md       || "",
+        tools_md:     control.tools_md     || "",
+        created_by: "system",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
       await client.query(
-        `INSERT INTO controls_history (id, task_id, user, action, site, date, task_name)
-         VALUES ($1,$2,$3,$4,$5,NOW(),$6)`,
-        [uuidv4(), id, "system", "task_created", entSite, task_name]
+        `INSERT INTO controls_history (task_id, "user", action, site, date, task_name)
+         VALUES ($1,$2,$3,$4,NOW(),$5)`,
+        [task.id, "system", "task_created", task.site || "Default", task.task_name]
       );
-
-      return rows[0];
+      return task;
     });
 
     res.status(201).json(created);
@@ -353,31 +374,30 @@ router.patch("/tasks/:id/close", async (req, res) => {
       const task = taskRows[0];
       const site = task.site || task.entity_site || "Default";
 
-      const recordId = uuidv4();
+      // record
       await client.query(
         `INSERT INTO controls_records
-          (id, site, task_id, entity_id, performed_at, performed_by, result_status,
+          (site, task_id, entity_id, performed_at, performed_by, result_status,
            text_value, checklist_result, results, comments, created_at, created_by, task_code, lang)
          VALUES
-          ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW(),$12,$13,$14)`,
-        [ recordId, site, task.id, task.entity_id, closed_at, actor_id || "system", record_status,
+          ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),$11,$12,$13)`,
+        [ site, task.id, task.entity_id, closed_at, actor_id || "system", record_status,
           null, JSON.stringify(checklist||[]), JSON.stringify(observations||{}), comment||"",
           actor_id || "system", task.task_code, "fr" ]
       );
 
+      // attachments
       for (const a of attachments) {
-        const attId = uuidv4();
-        const filename = a.filename || a.name || `file-${attId}`;
+        const filename = a.filename || a.name || `file-${Date.now()}`;
         const mimetype = a.mimetype || a.mime || "application/octet-stream";
         const size = a.bytes || a.size || null;
         const dataBuf = a.data && typeof a.data === "string" ? Buffer.from(a.data, "base64") : null;
         await client.query(
           `INSERT INTO controls_attachments
-            (id, site, record_id, task_id, entity_id,
-             filename, mimetype, size, data, uploaded_at, created_at)
+            (site, record_id, task_id, entity_id, filename, mimetype, size, data, uploaded_at, created_at)
            VALUES
-            ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())`,
-          [attId, site, recordId, task.id, task.entity_id, filename, mimetype, size, dataBuf]
+            ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+          [site, null, task.id, task.entity_id, filename, mimetype, size, dataBuf]
         );
       }
 
@@ -389,11 +409,12 @@ router.patch("/tasks/:id/close", async (req, res) => {
       );
 
       await client.query(
-        `INSERT INTO controls_history (id, task_id, user, action, site, date, task_name, meta)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [uuidv4(), task.id, actor_id || "system", "task_closed", site, closed_at, task.task_name, JSON.stringify({ record_id: recordId })]
+        `INSERT INTO controls_history (task_id, "user", action, site, date, task_name, meta)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [task.id, actor_id || "system", "task_closed", site, closed_at, task.task_name, JSON.stringify({ })]
       );
 
+      // reschedule
       let nextDue = null;
       if (task.frequency_months) nextDue = addFrequencyFromMonths(closed_at, task.frequency_months);
       else {
@@ -405,28 +426,34 @@ router.patch("/tasks/:id/close", async (req, res) => {
 
       let nextTask = null;
       if (nextDue) {
-        const nextId = uuidv4();
-        const { rows: ins } = await client.query(
-          `INSERT INTO controls_tasks
-            (id, site, entity_id, task_name, task_code, frequency_months,
-             last_control, next_control, status, value_type, result_schema,
-             procedure_md, hazards_md, ppe_md, tools_md, created_by, created_at, updated_at)
-           VALUES
-            ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())
-           RETURNING *`,
-          [ nextId, site, task.entity_id, task.task_name, task.task_code, task.frequency_months,
-            closed_at, nextDue, task.value_type, task.result_schema, task.procedure_md, task.hazards_md, task.ppe_md, task.tools_md, actor_id || "system" ]
-        );
+        nextTask = await insertTask(client, {
+          site,
+          entity_id: task.entity_id,
+          task_name: task.task_name,
+          task_code: task.task_code,
+          frequency_months: task.frequency_months,
+          last_control: closed_at,
+          next_control: nextDue,
+          status: "Planned",
+          value_type: task.value_type,
+          result_schema: task.result_schema,
+          procedure_md: task.procedure_md,
+          hazards_md: task.hazards_md,
+          ppe_md: task.ppe_md,
+          tools_md: task.tools_md,
+          created_by: actor_id || "system",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
 
         await client.query(
-          `INSERT INTO controls_history (id, task_id, user, action, site, date, task_name, meta)
-           VALUES ($1,$2,$3,$4,$5,NOW(),$6,$7)`,
-          [uuidv4(), nextId, "system", "task_created", site, task.task_name, JSON.stringify({ reason: "auto_reschedule", from_task_id: task.id })]
+          `INSERT INTO controls_history (task_id, "user", action, site, date, task_name, meta)
+           VALUES ($1,$2,$3,$4,NOW(),$5,$6)`,
+          [nextTask.id, "system", "task_created", site, task.task_name, JSON.stringify({ reason: "auto_reschedule", from_task_id: task.id })]
         );
-        nextTask = ins[0];
       }
 
-      return { task_closed: task.id, record_id: recordId, next_task: nextTask ? { id: nextTask.id, label: nextTask.task_name, due_date: nextTask.next_control, status: nextTask.status } : null };
+      return { task_closed: task.id, next_task: nextTask ? { id: nextTask.id, label: nextTask.task_name, due_date: nextTask.next_control, status: nextTask.status } : null };
     });
 
     res.json(outcome);
@@ -436,7 +463,10 @@ router.patch("/tasks/:id/close", async (req, res) => {
 router.get("/tasks/:id/history", async (req, res) => {
   const { id } = req.params;
   try {
-    const { rows } = await pool.query(`SELECT * FROM controls_history WHERE task_id = $1 ORDER BY date DESC, id DESC`, [id]);
+    const { rows } = await pool.query(
+      `SELECT * FROM controls_history WHERE task_id = $1 ORDER BY date DESC, task_id DESC`,
+      [id]
+    );
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -451,29 +481,18 @@ router.post("/tasks/:id/attachments", upload.single("file"), async (req, res) =>
     const site = t[0].site || "Default";
     await pool.query(
       `INSERT INTO controls_attachments
-        (id, site, record_id, task_id, entity_id,
-         filename, mimetype, size, data, uploaded_at, created_at)
+        (site, record_id, task_id, entity_id, filename, mimetype, size, data, uploaded_at, created_at)
        VALUES
-        ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),NOW())`,
-      [uuidv4(), site, null, id, t[0].entity_id, originalname, mimetype, size, buffer]
+        ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+      [site, null, id, t[0].entity_id, originalname, mimetype, size, buffer]
     );
     res.json({ ok: true, filename: originalname, mimetype, size });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ---------------------------------------------------------------------------
-// OPTION CONFORT : SEED ENTITIES + SEED TASKS
-// - GET  /bootstrap/ensure-entity -> crée 1 entité si table vide
-// - GET  /bootstrap/seed?dry_run=1 -> crée (ou simulateur) tâches TSD pour toutes les entités
-// - POST /bootstrap/seed-one { entity_id, category_key|label, control_type, due_date? }
-// ---------------------------------------------------------------------------
-router.get("/bootstrap/ensure-entity", async (_req, res) => {
-  try {
-    const out = await withTx(async (client) => ensureAtLeastOneEntity(client));
-    res.json({ ok: true, ...out });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
+// ----------------------------------------------------------------------------
+// Bootstrap/Seed (auto-crée une entité si vide; respecte uuid/int pour id)
+// ----------------------------------------------------------------------------
 router.get("/bootstrap/seed", async (req, res) => {
   const dry = String(req.query.dry_run || "1") === "1";
   const categoryParam = req.query.category || null;
@@ -481,10 +500,8 @@ router.get("/bootstrap/seed", async (req, res) => {
 
   try {
     const report = await withTx(async (client) => {
-      // s’assurer d’avoir au moins 1 entité
       const ensured = await ensureAtLeastOneEntity(client);
 
-      // récupérer les entités (ou filtrées par site)
       const ents = await client.query(
         siteFilter ? `SELECT * FROM controls_entities WHERE site = $1` : `SELECT * FROM controls_entities`,
         siteFilter ? [siteFilter] : []
@@ -492,10 +509,13 @@ router.get("/bootstrap/seed", async (req, res) => {
 
       const actions = [];
       for (const e of ents.rows) {
-        const category = categoryParam ? findCategoryByKeyOrLabel(categoryParam) : (findCategoryByKeyOrLabel("LV_SWITCHBOARD") || tsdLibrary.categories[0]);
+        const category =
+          categoryParam ? findCategoryByKeyOrLabel(categoryParam)
+          : (findCategoryByKeyOrLabel("LV_SWITCHBOARD") || tsdLibrary.categories[0]);
         if (!category) continue;
 
         for (const ctrl of category.controls || []) {
+          // existe déjà ?
           const exists = await client.query(
             `SELECT 1 FROM controls_tasks
              WHERE entity_id=$1 AND task_code=$2 AND status IN ('Planned','Pending','Overdue') LIMIT 1`,
@@ -511,25 +531,28 @@ router.get("/bootstrap/seed", async (req, res) => {
             (freqMonths ? addFrequencyFromMonths(new Date().toISOString(), freqMonths) : null) ||
             dayjs.utc().add(30, "day").toISOString();
 
-          const id = uuidv4();
-          const task_name = `${category.label} – ${ctrl.type}`;
-
           actions.push({ entity_id: e.id, task_code: ctrl.type, action: dry ? "would_create" : "created" });
 
           if (!dry) {
-            await client.query(
-              `INSERT INTO controls_tasks
-                (id, site, entity_id, task_name, task_code, frequency_months,
-                 last_control, next_control, status, value_type, result_schema,
-                 procedure_md, hazards_md, ppe_md, tools_md, created_by, created_at, updated_at)
-               VALUES
-                ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())`,
-              [
-                id, e.site || "Default", e.id, task_name, ctrl.type, freqMonths,
-                null, nextCtrl, ctrl.value_type || "checklist", null,
-                ctrl.procedure_md || "", ctrl.hazards_md || "", ctrl.ppe_md || "", ctrl.tools_md || "", "seed"
-              ]
-            );
+            await insertTask(client, {
+              site: e.site || "Default",
+              entity_id: e.id,
+              task_name: `${category.label} – ${ctrl.type}`,
+              task_code: ctrl.type,
+              frequency_months: freqMonths,
+              last_control: null,
+              next_control: nextCtrl,
+              status: "Planned",
+              value_type: ctrl.value_type || "checklist",
+              result_schema: null,
+              procedure_md: ctrl.procedure_md || "",
+              hazards_md:   ctrl.hazards_md   || "",
+              ppe_md:       ctrl.ppe_md       || "",
+              tools_md:     ctrl.tools_md     || "",
+              created_by: "seed",
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
           }
         }
       }
@@ -547,9 +570,9 @@ router.post("/bootstrap/seed-one", async (req, res) => {
   }
   try {
     const created = await withTx(async (client) => {
-      const entQ = await client.query(`SELECT id, site FROM controls_entities WHERE id=$1`, [entity_id]);
+      const entQ = await client.query(`SELECT * FROM controls_entities WHERE id=$1`, [entity_id]);
       if (!entQ.rowCount) throw new Error("Entité introuvable");
-      const site = entQ.rows[0].site || "Default";
+      const ent = entQ.rows[0];
 
       const category = findCategoryByKeyOrLabel(category_key || category_label);
       if (!category) throw new Error("Catégorie TSD inconnue");
@@ -558,7 +581,7 @@ router.post("/bootstrap/seed-one", async (req, res) => {
 
       const activeExists = await client.query(
         `SELECT 1 FROM controls_tasks WHERE entity_id=$1 AND task_code=$2 AND status IN ('Planned','Pending','Overdue') LIMIT 1`,
-        [entity_id, ctrl.type]
+        [ent.id, ctrl.type]
       );
       if (activeExists.rowCount) return { skipped: true, reason: "already_exists" };
 
@@ -566,32 +589,36 @@ router.post("/bootstrap/seed-one", async (req, res) => {
         (frequencyMonthsFromLib(ctrl) ? addFrequencyFromMonths(new Date().toISOString(), frequencyMonthsFromLib(ctrl)) : null) ||
         dayjs.utc().add(30, "day").toISOString();
 
-      const id = uuidv4();
-      await client.query(
-        `INSERT INTO controls_tasks
-          (id, site, entity_id, task_name, task_code, frequency_months,
-           last_control, next_control, status, value_type, result_schema,
-           procedure_md, hazards_md, ppe_md, tools_md, created_by, created_at, updated_at)
-         VALUES
-          ($1,$2,$3,$4,$5,$6,$7,$8,'Planned',$9,$10,$11,$12,$13,$14,$15,NOW(),NOW())`,
-        [
-          id, site, entity_id,
-          `${category.label} – ${ctrl.type}`, ctrl.type, frequencyMonthsFromLib(ctrl),
-          null, nextCtrl, ctrl.value_type || "checklist", null,
-          ctrl.procedure_md || "", ctrl.hazards_md || "", ctrl.ppe_md || "", ctrl.tools_md || "",
-          "seed-one"
-        ]
-      );
-      return { created: true, id };
+      const task = await insertTask(client, {
+        site: ent.site || "Default",
+        entity_id: ent.id,
+        task_name: `${category.label} – ${ctrl.type}`,
+        task_code: ctrl.type,
+        frequency_months: frequencyMonthsFromLib(ctrl),
+        last_control: null,
+        next_control: nextCtrl,
+        status: "Planned",
+        value_type: ctrl.value_type || "checklist",
+        result_schema: null,
+        procedure_md: ctrl.procedure_md || "",
+        hazards_md:   ctrl.hazards_md   || "",
+        ppe_md:       ctrl.ppe_md       || "",
+        tools_md:     ctrl.tools_md     || "",
+        created_by: "seed-one",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
+      return { created: true, id: task.id };
     });
 
     res.json({ ok: true, ...created });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ---------------------------------------------------------------------------
-// Calendar (groupé par jour) — alias next_control -> due_date
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Calendar
+// ----------------------------------------------------------------------------
 router.get("/calendar", async (req, res) => {
   const { from, to, site, control, skip_entity_check = "0" } = req.query;
 
@@ -609,8 +636,9 @@ router.get("/calendar", async (req, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT t.id, t.task_name AS label, t.status, t.next_control AS due_date,
-              t.task_code, t.entity_id, t.site
+      `SELECT
+         t.id, t.task_name AS label, t.status, t.next_control AS due_date,
+         t.task_code, t.entity_id, t.site
        FROM controls_tasks t
        ${whereSQL}
        ORDER BY t.next_control ASC NULLS LAST`,
@@ -626,9 +654,9 @@ router.get("/calendar", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // IA (stub)
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 router.post("/ai/analyze-before", async (req, res) => {
   const { image_url, hints = [] } = req.body || {};
   if (!image_url) return res.status(400).json({ error: "image_url requis" });
@@ -642,9 +670,9 @@ router.post("/ai/analyze-before", async (req, res) => {
   });
 });
 
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 // Mount + Boot
-// ---------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
 const BASE_PATH = process.env.CONTROLS_BASE_PATH || "/api/controls";
 app.use(BASE_PATH, router);
 
