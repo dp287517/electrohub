@@ -115,6 +115,28 @@ app.post("/api/auth/logout", async (_req, res) => {
   res.json({ ok: true });
 });
 
+/* ================================================================
+   🔥 Routes manquantes ajoutées pour compatibilité front actuelle
+   ================================================================ */
+
+// /api/auth/signin : identique à /login mais renvoie aussi { token }
+app.post("/api/auth/signin", express.json(), async (req, res) => {
+  const { email, site = process.env.DEFAULT_SITE || "Nyon" } = req.body || {};
+  const token = jwt.sign(
+    { id: email || "user", name: email || "user", site },
+    process.env.JWT_SECRET || "devsecret",
+    { expiresIn: "2h" }
+  );
+  res.cookie("token", token, { httpOnly: true, sameSite: "lax" });
+  res.json({ token });
+});
+
+// /api/auth/signup : placeholder pour inscription (à brancher sur DB plus tard)
+app.post("/api/auth/signup", express.json(), async (req, res) => {
+  // TODO: insérer l'utilisateur en base (pool.query(...))
+  res.status(201).json({ ok: true });
+});
+
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
 app.use(express.static(__dist));
