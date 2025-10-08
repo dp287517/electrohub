@@ -1,11 +1,11 @@
 // src/pages/Controls.jsx
 // Dashboard Contrôles (TSD) — Hiérarchie + Checklist + IA (sans Gantt)
 
-import React, { useEffect, useMemo, useState, Fragment } from 'react';
-import { get, post } from '../lib/api.js';
+import React, { useEffect, useMemo, useState } from 'react';
+import { get } from '../lib/api.js';
 import {
   ChevronRight, ChevronDown, SlidersHorizontal, Image as ImageIcon,
-  CheckCircle2, Upload, Paperclip, Sparkles
+  CheckCircle2, Upload, Paperclip, Sparkles, Link2, Rocket
 } from 'lucide-react';
 
 // ---------- UI helpers ----------
@@ -38,6 +38,13 @@ async function patchJSON(url, body) {
     headers: { 'Content-Type':'application/json' },
     body: JSON.stringify(body || {})
   });
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+// Utilitaires backend (bootstrap/seed)
+async function call(url) {
+  const r = await fetch(url);
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -372,11 +379,45 @@ export default function Controls() {
     return tasks.filter(t => wanted.includes(String(t.status))).length;
   };
 
+  // Actions backend
+  const autoLink = async () => {
+    try {
+      await call('/api/controls/bootstrap/auto-link?create=1&seed=0');
+      pushToast('Équipements reliés aux entités.', 'success');
+      await refreshHierarchy();
+    } catch (e) {
+      pushToast(`Auto-link: ${e.message}`, 'error');
+    }
+  };
+  const seedTasks = async () => {
+    try {
+      await call('/api/controls/bootstrap/auto-link?create=0&seed=1');
+      pushToast('Tâches seeded.', 'success');
+      await refreshHierarchy();
+    } catch (e) {
+      pushToast(`Seed: ${e.message}`, 'error');
+    }
+  };
+
   return (
     <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-indigo-50 to-emerald-50 rounded-3xl min-h-screen">
       <header className="flex items-center justify-between mb-6">
         <h1 className="text-3xl md:text-4xl font-bold text-gray-800">Contrôles (TSD)</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={autoLink}
+            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 hover:bg-gray-50 text-sm flex items-center gap-2"
+            title="Relier équipements → entités"
+          >
+            <Link2 size={16}/> Relier
+          </button>
+          <button
+            onClick={seedTasks}
+            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 hover:bg-gray-50 text-sm flex items-center gap-2"
+            title="Semer les tâches TSD sur les entités"
+          >
+            <Rocket size={16}/> Seed
+          </button>
           <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-xl ring-1 ring-black/10">
             <SlidersHorizontal size={16} className="text-gray-500"/>
             <select
@@ -406,7 +447,7 @@ export default function Controls() {
             <div className="p-6 text-center text-gray-600">Chargement…</div>
           ) : tree.length === 0 ? (
             <div className="p-6 text-center text-gray-500">
-              Aucune donnée. Vérifie que tes entités lient bien les équipements (controls_entities → *_id / related_* / equipment_ref).
+              Aucune donnée. Utilise « Relier » puis « Seed » si besoin.
             </div>
           ) : (
             <div className="space-y-4">
@@ -486,12 +527,10 @@ export default function Controls() {
                                 />
                                 {open && (
                                   <div className="pl-6 space-y-2">
-                                    {/* tâches du switchboard */}
                                     {(sb.tasks || []).map(t => (
                                       <TaskRow key={t.id} t={t} onSelect={setSelectedTask} statusFilter={statusFilter}/>
                                     ))}
                                     {countTasks(sb.tasks) === 0 && <div className="text-xs text-gray-400 pl-1">Aucune tâche (switchboard)</div>}
-                                    {/* Devices */}
                                     {(sb.devices || []).map((d, di) => {
                                       const kd = `${k}-dev-${di}`;
                                       const opend = !!expanded[kd];
