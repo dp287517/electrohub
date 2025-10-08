@@ -1,8 +1,7 @@
 /**
  * server_controls.js — ESM (type: module)
- * API Controls (TSD) — Hiérarchie équipements stricte + Checklist + IA + Gantt
- *
- * Monté sous: /api/controls  (configurable via CONTROLS_BASE_PATH)
+ * API Controls (TSD) — Hiérarchie stricte par équipements + Checklist + IA
+ * ✗ Gantt supprimé
  */
 
 import express from "express";
@@ -335,7 +334,7 @@ router.patch("/tasks/:id/close", async (req, res) => {
         lang: "fr",
       });
 
-      // éventuels fichiers inline en base64 (rare, mais supporté)
+      // fichiers inline (optionnels)
       for (const a of attachments) {
         const filename = a.filename || a.name || `file-${Date.now()}`;
         const mimetype = a.mimetype || a.mime || "application/octet-stream";
@@ -362,17 +361,6 @@ router.patch("/tasks/:id/close", async (req, res) => {
           WHERE id=$1`,
         [task.id, closed_at]
       );
-
-      // historique
-      await insertRow(client, "controls_history", {
-        task_id: task.id,
-        user: actor_id || "system",
-        action: "task_closed",
-        site,
-        date: closed_at,
-        task_name: task.task_name,
-        meta: JSON.stringify({ checklist_count: (checklist||[]).length }),
-      });
 
       // replanif
       const { control } = resolveTsdForTask(task);
@@ -405,24 +393,9 @@ router.patch("/tasks/:id/close", async (req, res) => {
         updated_at: new Date().toISOString(),
       });
 
-      await insertRow(client, "controls_history", {
-        task_id: nextTask.id,
-        user: "system",
-        action: "task_created",
-        site,
-        date: new Date().toISOString(),
-        task_name: task.task_name,
-        meta: JSON.stringify({ reason: "auto_reschedule", from_task_id: task.id }),
-      });
-
       return {
         task_closed: task.id,
-        next_task: {
-          id: nextTask.id,
-          label: nextTask.task_name,
-          due_date: nextTask.next_control,
-          status: nextTask.status,
-        },
+        next_task: { id: nextTask.id, label: nextTask.task_name, due_date: nextTask.next_control, status: nextTask.status },
       };
     });
 
@@ -433,170 +406,156 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// HIERARCHY/TREE — robuste aux schémas (label optionnel)
-//   Bâtiment → HV / Switchboards → Devices / ATEX
-//   Aucune tâche “orpheline” : uniquement celles liées via controls_entities.*_id
+// HIERARCHY/TREE — robuste, attache des tâches uniquement si l’entité pointe un équipement
+//  * ATEX: building
+//  * SB/DEV/HV: building_code
+//  * Reconstruit liens via related_type/related_id, equipment_ref, code, parent_code si nécessaire
 // ---------------------------------------------------------------------------
 router.get("/hierarchy/tree", async (_req, res) => {
   try {
     const client = await pool.connect();
     try {
-      // petit helper: fabrique une clause SELECT avec "NULL AS alias" si la colonne n'existe pas
-      const getColsMeta = (table) => getColumnsMeta(client, table);
-      const sel = (meta, col, alias = col) =>
-        (meta[col] ? `${col}` : `NULL`) + (alias && alias !== col ? ` AS ${alias}` : "");
+      // Métas & helpers
+      const getCols = (t) => getColumnsMeta(client, t);
+      const mSW  = await getCols("switchboards");
+      const mDEV = await getCols("devices");
+      const mHVE = await getCols("hv_equipments");
+      const mHVD = await getCols("hv_devices");
+      const mATX = await getCols("atex_equipments");
 
-      // --- Métas
-      const metaSW  = await getColsMeta("switchboards");
-      const metaDEV = await getColsMeta("devices");
-      const metaHVE = await getColsMeta("hv_equipments");
-      const metaHVD = await getColsMeta("hv_devices");
-      const metaATX = await getColsMeta("atex_equipments");
-
-      // --- Queries sûres (sans référence directe à une colonne manquante)
-      const qSW  = `
-        SELECT
-          ${sel(metaSW, "id")},
-          ${sel(metaSW, "name")},
-          ${sel(metaSW, "label")},
-          ${sel(metaSW, "code")},
-          ${sel(metaSW, "building_code")}
-        FROM switchboards
-        ORDER BY ${metaSW.building_code ? "building_code" : "id"} NULLS LAST, ${metaSW.name ? "name" : "id"} NULLS LAST, id ASC
-      `;
-
-      const qDEV = `
-        SELECT
-          ${sel(metaDEV, "id")},
-          ${sel(metaDEV, "name")},
-          ${sel(metaDEV, "label")},
-          ${sel(metaDEV, "code")},
-          ${sel(metaDEV, "building_code")},
-          ${sel(metaDEV, "switchboard_id")},
-          ${sel(metaDEV, "switchboard_code")}
-        FROM devices
-        ORDER BY ${metaDEV.building_code ? "building_code" : "id"} NULLS LAST, ${metaDEV.switchboard_id ? "switchboard_id" : "id"} NULLS LAST, ${metaDEV.name ? "name" : "id"} NULLS LAST, id ASC
-      `;
-
-      const qHVE = `
-        SELECT
-          ${sel(metaHVE, "id")},
-          ${sel(metaHVE, "name")},
-          ${sel(metaHVE, "label")},
-          ${sel(metaHVE, "code")},
-          ${sel(metaHVE, "building_code")}
-        FROM hv_equipments
-        ORDER BY ${metaHVE.building_code ? "building_code" : "id"} NULLS LAST, ${metaHVE.name ? "name" : "id"} NULLS LAST, id ASC
-      `;
-
-      const qHVD = `
-        SELECT
-          ${sel(metaHVD, "id")},
-          ${sel(metaHVD, "name")},
-          ${sel(metaHVD, "label")},
-          ${sel(metaHVD, "code")},
-          ${sel(metaHVD, "building_code")},
-          ${sel(metaHVD, "equipment_code")},
-          ${sel(metaHVD, "hv_equipment_id")}
-        FROM hv_devices
-        ORDER BY ${metaHVD.building_code ? "building_code" : "id"} NULLS LAST, ${metaHVD.name ? "name" : "id"} NULLS LAST, id ASC
-      `;
-
-      // ⚠️ ATEX : 'building' (pas building_code)
-      const qATX = `
-        SELECT
-          ${sel(metaATX, "id")},
-          ${sel(metaATX, "name")},
-          ${sel(metaATX, "label")},
-          ${sel(metaATX, "code")},
-          ${sel(metaATX, "building")},
-          ${sel(metaATX, "zone")}
-        FROM atex_equipments
-        ORDER BY ${metaATX.building ? "building" : "id"} NULLS LAST, ${metaATX.zone ? "zone" : "id"} NULLS LAST, ${metaATX.name ? "name" : "id"} NULLS LAST, id ASC
-      `;
-
-      // --- Exécution
-      const [sw, dev, hve, hvd, aeq] = await Promise.all([
-        client.query(qSW),
-        client.query(qDEV),
-        client.query(qHVE),
-        client.query(qHVD),
-        client.query(qATX),
-      ]);
-
-      // --- Builders
-      const siteMap = new Map(); // key = building label (string)
+      const val = (row, ...names) => names.find(n => row[n] != null) ? row[names.find(n => row[n] != null)] : null;
+      const labelize = (row, fallback) => val(row, "label", "name", "code") || `${fallback} ${row.id}`;
+      const siteMap = new Map();
       const siteGet = (label) => {
         const k = label || "Default";
         if (!siteMap.has(k)) siteMap.set(k, { id: k, label: k, hv: [], switchboards: [], atex: [] });
         return siteMap.get(k);
       };
-      const labelize = (row, fallbackPrefix) =>
-        row.label || row.name || row.code || `${fallbackPrefix} ${row.id}`;
 
-      // Switchboards par building_code
+      // --- charger équipements
+      const sw = await safeQuery(client, `
+        SELECT ${mSW.id ? "id" : "NULL AS id"},
+               ${mSW.name ? "name" : "NULL AS name"},
+               ${mSW.label ? "label" : "NULL AS label"},
+               ${mSW.code ? "code" : "NULL AS code"},
+               ${mSW.building_code ? "building_code" : "NULL AS building_code"}
+          FROM switchboards
+      `);
+
+      const dev = await safeQuery(client, `
+        SELECT ${mDEV.id ? "id" : "NULL AS id"},
+               ${mDEV.name ? "name" : "NULL AS name"},
+               ${mDEV.label ? "label" : "NULL AS label"},
+               ${mDEV.code ? "code" : "NULL AS code"},
+               ${mDEV.building_code ? "building_code" : "NULL AS building_code"},
+               ${mDEV.switchboard_id ? "switchboard_id" : "NULL AS switchboard_id"},
+               ${mDEV.switchboard_code ? "switchboard_code" : "NULL AS switchboard_code"},
+               ${mDEV.parent_code ? "parent_code" : "NULL AS parent_code"}
+          FROM devices
+      `);
+
+      const hve = await safeQuery(client, `
+        SELECT ${mHVE.id ? "id" : "NULL AS id"},
+               ${mHVE.name ? "name" : "NULL AS name"},
+               ${mHVE.label ? "label" : "NULL AS label"},
+               ${mHVE.code ? "code" : "NULL AS code"},
+               ${mHVE.building_code ? "building_code" : "NULL AS building_code"}
+          FROM hv_equipments
+      `);
+
+      const hvd = await safeQuery(client, `
+        SELECT ${mHVD.id ? "id" : "NULL AS id"},
+               ${mHVD.name ? "name" : "NULL AS name"},
+               ${mHVD.label ? "label" : "NULL AS label"},
+               ${mHVD.code ? "code" : "NULL AS code"},
+               ${mHVD.building_code ? "building_code" : "NULL AS building_code"},
+               ${mHVD.equipment_code ? "equipment_code" : "NULL AS equipment_code"},
+               ${mHVD.hv_equipment_id ? "hv_equipment_id" : "NULL AS hv_equipment_id"}
+          FROM hv_devices
+      `);
+
+      const aeq = await safeQuery(client, `
+        SELECT ${mATX.id ? "id" : "NULL AS id"},
+               ${mATX.name ? "name" : "NULL AS name"},
+               ${mATX.label ? "label" : "NULL AS label"},
+               ${mATX.code ? "code" : "NULL AS code"},
+               ${mATX.building ? "building" : "NULL AS building"},
+               ${mATX.zone ? "zone" : "NULL AS zone"}
+          FROM atex_equipments
+      `);
+
+      // --- index rapides
       const sbById = new Map();
       const sbByCode = new Map();
-      for (const s of sw.rows) {
+      for (const s of sw?.rows || []) {
         const site = siteGet(s.building_code);
-        const node = {
-          id: s.id,
-          label: labelize(s, "SW"),
-          code: s.code,
-          tasks: [],
-          devices: [],
-        };
+        const node = { id: s.id, label: labelize(s, "SW"), code: s.code, tasks: [], devices: [] };
         site.switchboards.push(node);
         if (s.id != null) sbById.set(String(s.id), node);
         if (s.code) sbByCode.set(String(s.code), node);
       }
 
-      // Devices sous leurs switchboards
       const devById = new Map();
-      for (const d of dev.rows) {
+      const devByCode = new Map();
+      for (const d of dev?.rows || []) {
         let parent = null;
         if (d.switchboard_id && sbById.has(String(d.switchboard_id))) {
           parent = sbById.get(String(d.switchboard_id));
         } else if (d.switchboard_code && sbByCode.has(String(d.switchboard_code))) {
           parent = sbByCode.get(String(d.switchboard_code));
         }
-        const node = { id: d.id, label: labelize(d, "Device"), tasks: [] };
+        const node = { id: d.id, label: labelize(d, "Device"), code: d.code, tasks: [] };
         devById.set(String(d.id), node);
+        if (d.code) devByCode.set(String(d.code), node);
         if (parent) parent.devices.push(node);
         else {
-          // fallback: groupe sans TGBT mais dans le même building_code
           const site = siteGet(d.building_code);
           site.switchboards.push({ id: `sw-${d.id}`, label: "(Sans TGBT)", tasks: [], devices: [node] });
         }
       }
 
-      // HV : équipements + devices (à plat sous HV du site)
       const hvListBySite = new Map(); // building_code -> array
+      const hvById = new Map();
+      const hvByCode = new Map();
       const pushHV = (b, node) => {
         const arr = hvListBySite.get(b) || [];
         arr.push(node);
         hvListBySite.set(b, arr);
       };
-      for (const h of hve.rows) pushHV(h.building_code, { id: h.id, label: labelize(h, "HV"), tasks: [] });
-      for (const h of hvd.rows) pushHV(h.building_code, { id: h.id, label: labelize(h, "HV"), tasks: [] });
+      for (const h of hve?.rows || []) {
+        const node = { id: h.id, label: labelize(h, "HV"), code: h.code, tasks: [] };
+        pushHV(h.building_code, node);
+        if (h.id != null) hvById.set(String(h.id), node);
+        if (h.code) hvByCode.set(String(h.code), node);
+      }
+      for (const h of hvd?.rows || []) {
+        const node = { id: h.id, label: labelize(h, "HV"), code: h.code, tasks: [] };
+        pushHV(h.building_code, node);
+        if (h.id != null) hvById.set(String(h.id), node);
+        if (h.code) hvByCode.set(String(h.code), node);
+      }
       for (const [b, arr] of hvListBySite.entries()) siteGet(b).hv.push(...arr);
 
-      // ATEX : building (pas building_code), groupé par zone
       const atexZoneBySite = new Map(); // building -> Map(zone -> { zone, equipments:[], tasks:[] })
-      for (const a of aeq.rows) {
+      const atxById = new Map();
+      const atxByCode = new Map();
+      for (const a of aeq?.rows || []) {
         const sKey = a.building || "Default";
         if (!atexZoneBySite.has(sKey)) atexZoneBySite.set(sKey, new Map());
         const mapZone = atexZoneBySite.get(sKey);
         const zKey = String(a.zone ?? "Z?");
         if (!mapZone.has(zKey)) mapZone.set(zKey, { zone: zKey, equipments: [], tasks: [] });
-        mapZone.get(zKey).equipments.push({ id: a.id, label: labelize(a, "ATEX"), tasks: [] });
+        const eq = { id: a.id, label: labelize(a, "ATEX"), code: a.code, tasks: [] };
+        mapZone.get(zKey).equipments.push(eq);
+        if (a.id != null) atxById.set(String(a.id), eq);
+        if (a.code) atxByCode.set(String(a.code), eq);
       }
       for (const [sKey, zones] of atexZoneBySite.entries()) {
         const site = siteGet(sKey);
         for (const z of zones.values()) site.atex.push(z);
       }
 
-      // Lire tâches + entités — on attache UNIQUEMENT si reliées à un équipement
+      // --- lire tâches + entités
       const tasksQ = await client.query(
         `SELECT t.id, t.task_name, t.task_code, t.status, t.next_control, t.entity_id, t.site
            FROM controls_tasks t
@@ -607,7 +566,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
       const entCols = await getColumnsMeta(client, "controls_entities");
       const has = (c) => !!entCols[c];
       const ents = await client.query(
-        `SELECT id, site, 
+        `SELECT id, site, label, name, equipment_type, equipment_ref, related_type, related_id, parent_code, code,
                 ${has("switchboard_id") ? "switchboard_id" : "NULL AS switchboard_id"},
                 ${has("device_id") ? "device_id" : "NULL AS device_id"},
                 ${has("hv_id") ? "hv_id" : "NULL AS hv_id"},
@@ -616,6 +575,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
       );
       const entMap = new Map(ents.rows.map(r => [String(r.id), r]));
 
+      // — helper de dispatch
       const pushTask = (arr, t) => {
         const { category } = resolveTsdForTask(t);
         arr.push({
@@ -628,41 +588,42 @@ router.get("/hierarchy/tree", async (_req, res) => {
         });
       };
 
-      // Dispatcher les tâches selon le lien d'entité
+      // — fonction de résolution de cible à partir d'une entité
+      const resolveTargetFromEntity = (e) => {
+        // 1) Liaison directe par id
+        if (e.switchboard_id && sbById.has(String(e.switchboard_id))) return sbById.get(String(e.switchboard_id));
+        if (e.device_id && devById.has(String(e.device_id))) return devById.get(String(e.device_id));
+        if (e.hv_id && hvById.has(String(e.hv_id))) return hvById.get(String(e.hv_id));
+        if (e.atex_id && atxById.has(String(e.atex_id))) return atxById.get(String(e.atex_id));
+
+        // 2) related_type / related_id
+        const rt = String(e.related_type || "").toLowerCase();
+        if (e.related_id) {
+          if (rt.includes("switch")) return sbById.get(String(e.related_id));
+          if (rt.includes("device")) return devById.get(String(e.related_id));
+          if (rt.includes("hv")) return hvById.get(String(e.related_id));
+          if (rt.includes("atex")) return atxById.get(String(e.related_id));
+        }
+
+        // 3) equipment_ref / code / parent_code
+        const ref = e.equipment_ref || e.code || e.parent_code;
+        if (ref) {
+          if (sbByCode.has(String(ref))) return sbByCode.get(String(ref));
+          if (devByCode.has(String(ref))) return devByCode.get(String(ref));
+          if (hvByCode.has(String(ref))) return hvByCode.get(String(ref));
+          if (atxByCode.has(String(ref))) return atxByCode.get(String(ref));
+        }
+
+        return null; // pas trouvé → pas d’attache
+      };
+
+      // attacher les tâches
       for (const t of tasksQ.rows) {
         const e = entMap.get(String(t.entity_id));
         if (!e) continue;
-
-        if (e.switchboard_id && sbById.has(String(e.switchboard_id))) {
-          pushTask(sbById.get(String(e.switchboard_id)).tasks, t);
-          continue;
-        }
-        if (e.device_id && devById.has(String(e.device_id))) {
-          pushTask(devById.get(String(e.device_id)).tasks, t);
-          continue;
-        }
-        if (e.hv_id) {
-          // retrouver dans hvListBySite
-          let placed = false;
-          for (const arr of hvListBySite.values()) {
-            const target = arr.find(h => String(h.id) === String(e.hv_id));
-            if (target) { pushTask(target.tasks, t); placed = true; break; }
-          }
-          if (placed) continue;
-        }
-        if (e.atex_id) {
-          // retrouver dans atexZoneBySite
-          let placed = false;
-          for (const zones of atexZoneBySite.values()) {
-            for (const z of zones.values()) {
-              const found = (z.equipments || []).find(eq => String(eq.id) === String(e.atex_id));
-              if (found) { pushTask(found.tasks, t); placed = true; break; }
-            }
-            if (placed) break;
-          }
-          if (placed) continue;
-        }
-        // sinon : pas de fallback → on ignore (zéro tâche orpheline)
+        const target = resolveTargetFromEntity(e);
+        if (!target) continue;
+        pushTask(target.tasks, t);
       }
 
       const tree = Array.from(siteMap.values()).sort((a, b) => String(a.label).localeCompare(String(b.label)));
@@ -676,53 +637,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// GANTT / Calendar (toutes tâches rattachées à une entité existante)
-// ---------------------------------------------------------------------------
-router.get("/calendar", async (req, res) => {
-  const { from, to, site } = req.query;
-
-  const where = ["t.entity_id IS NOT NULL"];
-  const params = [];
-  let i = 1;
-
-  if (from) { where.push(`t.next_control >= $${i}`); params.push(from); i++; }
-  if (to)   { where.push(`t.next_control <= $${i}`); params.push(to); i++; }
-  if (site) { where.push(`t.site = $${i}`); params.push(site); i++; }
-
-  const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-  try {
-    const { rows } = await pool.query(
-      `SELECT t.id, t.task_name, t.task_code, t.status, t.next_control
-         FROM controls_tasks t
-        ${whereSQL}
-        ORDER BY t.next_control ASC NULLS LAST`,
-      params
-    );
-    const groups = rows.reduce((acc, r) => {
-      const due = r.next_control;
-      if (!due) return acc;
-      const k = dayjs.utc(due).format("YYYY-MM-DD");
-      const { category } = resolveTsdForTask(r);
-      (acc[k] = acc[k] || []).push({
-        id: r.id,
-        label: r.task_name,
-        status: r.status,
-        due_date: r.next_control,
-        task_code: r.task_code,
-        color: colorForCategory(category?.key, r.task_code),
-      });
-      return acc;
-    }, {});
-    res.json(groups);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// IA — Analyse avant intervention (OpenAI derrière ton backend existant)
-//   Reçoit facultativement un fichier image. Stockage si attach=1.
+// IA — Analyse avant intervention (branchée pour ton backend OpenAI, pas de mock)
 // ---------------------------------------------------------------------------
 router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
   const { task_id, hints = "[]", attach = "0" } = req.body || {};
@@ -736,7 +651,6 @@ router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
     }
     const hintsArr = Array.isArray(hints) ? hints : JSON.parse(hints || "[]");
 
-    // Option: stocker la photo sur la tâche
     if (file && task && String(attach) === "1") {
       await insertRow(pool, "controls_attachments", {
         site: task.site || "Default",
@@ -752,9 +666,7 @@ router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
       });
     }
 
-    // DÉLÉGUER à ton service OpenAI existant si tu as une route dédiée:
-    // Ici on répond déjà avec les champs attendus par le front.
-    // Tu peux remplacer ce bloc par un appel à ton orchestrateur OpenAI interne.
+    // Ici tu peux appeler ton orchestrateur OpenAI interne et renvoyer sa réponse telle quelle.
     const { control } = task ? resolveTsdForTask(task) : { control: null };
     res.json({
       ok: true,
