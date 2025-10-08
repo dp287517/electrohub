@@ -833,5 +833,8 @@ router.patch("/tasks/:id/close", async (req, res) => {
 const BASE_PATH = process.env.CONTROLS_BASE_PATH || "/api/controls";
 app.use(BASE_PATH, router);
 
-const port = Number(process.env.CONTROLS_PORT || 3011);
-app.listen(port, () => console.log(`[controls] serveur démarré sur :${port}`));
+// >>> Correction Render: écouter d'abord PORT (imposé par la plateforme)
+const port = Number(process.env.PORT || process.env.CONTROLS_PORT || 3011);
+app.listen(port, () => console.log(`[controls] serveur démarré sur :${port} (BASE_PATH=${BASE_PATH})`));
+
+export default app;
