@@ -1,7 +1,14 @@
 /**
  * server_controls.js — ESM (type: module)
  * API Controls (TSD) — Hiérarchie stricte par équipements + Checklist + IA
- * ✗ Gantt supprimé
+ * ✗ Gantt retiré
+ *
+ * ENV requis:
+ *   DATABASE_URL=postgres://...
+ *   CONTROLS_BASE_PATH=/api/controls   (défaut)
+ *   CONTROLS_PORT=3011                 (défaut)
+ *
+ * Dépendances: express pg multer dayjs uuid
  */
 
 import express from "express";
@@ -43,88 +50,19 @@ const RESULT_OPTIONS = tsdLibrary?.meta?.result_options ?? [
 // ---------------------------------------------------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
 
-function monthsFromFreq(freq) {
-  if (!freq) return null;
-  if (freq.min?.interval && freq.min?.unit) return unitToMonths(freq.min.interval, freq.min.unit);
-  if (freq.interval && freq.unit) return unitToMonths(freq.interval, freq.unit);
-  return null;
-}
-function unitToMonths(interval, unit) {
-  const u = String(unit || "").toLowerCase();
-  if (u.startsWith("year")) return Number(interval) * 12;
-  if (u.startsWith("month")) return Number(interval);
-  if (u.startsWith("week")) return Math.round(Number(interval) / 4);
-  if (u.startsWith("day")) return Math.round(Number(interval) / 30);
-  return null;
-}
-function addMonthsISO(baseISO, months) {
-  return dayjs.utc(baseISO).add(Number(months), "month").toISOString();
-}
-function addByFreq(baseISO, frequency) {
-  if (!frequency) return null;
-  const { interval, unit, min } = frequency;
-  if (min?.interval && min?.unit) return dayjs.utc(baseISO).add(min.interval, min.unit).toISOString();
-  if (interval && unit) return dayjs.utc(baseISO).add(interval, unit).toISOString();
-  return null;
-}
-function colorForCategory(catKey, taskCode = "") {
-  const k = String(catKey || "").toUpperCase();
-  if (k.includes("HV")) return "#ef4444";           // rouge
-  if (k.includes("ATEX")) return "#f59e0b";         // amber
-  if (k.includes("SWITCH")) return "#3b82f6";       // blue
-  if (taskCode.toLowerCase().includes("thermo")) return "#22c55e"; // vert
-  return "#6366f1"; // indigo default
-}
-function findCategoryByKeyOrLabel(keyOrLabel) {
-  if (!keyOrLabel) return null;
-  const low = String(keyOrLabel).toLowerCase();
-  return (tsdLibrary.categories || []).find(
-    (c) =>
-      (c.key && String(c.key).toLowerCase() === low) ||
-      (c.label && String(c.label).toLowerCase() === low)
-  );
-}
-function resolveTsdForTask(task) {
-  const codeLow = String(task.task_code || "").toLowerCase();
-  const nameLow = String(task.task_name || "").toLowerCase();
-  for (const cat of tsdLibrary.categories || []) {
-    for (const ctrl of cat.controls || []) {
-      const ctrlLow = String(ctrl.type || "").toLowerCase();
-      if (ctrlLow === codeLow || nameLow.includes(ctrlLow)) {
-        return { category: cat, control: ctrl };
-      }
-    }
-  }
-  return { category: null, control: null };
-}
-async function safeQuery(client, sql, params = []) {
-  try { return await client.query(sql, params); } catch { return null; }
-}
-async function withTx(fn) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    const res = await fn(client);
-    await client.query("COMMIT");
-    return res;
-  } catch (e) {
-    await client.query("ROLLBACK");
-    throw e;
-  } finally {
-    client.release();
-  }
-}
 async function getColumnsMeta(client, table) {
   const { rows } = await client.query(
     `SELECT column_name, data_type, udt_name, column_default
-     FROM information_schema.columns
-     WHERE table_schema='public' AND table_name=$1`,
+       FROM information_schema.columns
+      WHERE table_schema='public' AND table_name=$1`,
     [table]
   );
   const meta = {};
   for (const r of rows) meta[r.column_name] = r;
   return meta;
 }
+const hasCol = (meta, c) => !!meta && !!meta[c];
+
 function isUuidColumn(colMeta) {
   return colMeta && (colMeta.udt_name === "uuid" || colMeta.data_type === "uuid");
 }
@@ -152,6 +90,59 @@ async function insertRow(client, table, values) {
   const { rows } = await client.query(sql, params);
   return rows[0];
 }
+function monthsFromFreq(freq) {
+  if (!freq) return null;
+  if (freq.min?.interval && freq.min?.unit) return unitToMonths(freq.min.interval, freq.min.unit);
+  if (freq.interval && freq.unit) return unitToMonths(freq.interval, freq.unit);
+  return null;
+}
+function unitToMonths(interval, unit) {
+  const u = String(unit || "").toLowerCase();
+  if (u.startsWith("year")) return Number(interval) * 12;
+  if (u.startsWith("month")) return Number(interval);
+  if (u.startsWith("week")) return Math.round(Number(interval) / 4);
+  if (u.startsWith("day")) return Math.round(Number(interval) / 30);
+  return null;
+}
+function addMonthsISO(baseISO, months) {
+  return dayjs.utc(baseISO).add(Number(months), "month").toISOString();
+}
+function addByFreq(baseISO, frequency) {
+  if (!frequency) return null;
+  const { interval, unit, min } = frequency;
+  if (min?.interval && min?.unit) return dayjs.utc(baseISO).add(min.interval, min.unit).toISOString();
+  if (interval && unit) return dayjs.utc(baseISO).add(interval, unit).toISOString();
+  return null;
+}
+function colorForCategory(catKey, taskCode = "") {
+  const k = String(catKey || "").toUpperCase();
+  if (k.includes("HV")) return "#ef4444";
+  if (k.includes("ATEX")) return "#f59e0b";
+  if (k.includes("SWITCH")) return "#3b82f6";
+  if (taskCode.toLowerCase().includes("thermo")) return "#22c55e";
+  return "#6366f1";
+}
+function resolveTsdForTask(task) {
+  const codeLow = String(task.task_code || "").toLowerCase();
+  const nameLow = String(task.task_name || "").toLowerCase();
+  for (const cat of tsdLibrary.categories || []) {
+    for (const ctrl of cat.controls || []) {
+      const ctrlLow = String(ctrl.type || "").toLowerCase();
+      if (ctrlLow === codeLow || nameLow.includes(ctrlLow)) {
+        return { category: cat, control: ctrl };
+      }
+    }
+  }
+  return { category: null, control: null };
+}
+async function safeQuery(client, sql, params = []) {
+  try { return await client.query(sql, params); } catch { return null; }
+}
+const firstValue = (row, ...names) => {
+  for (const n of names) if (row && row[n] != null) return row[n];
+  return null;
+};
+const labelize = (row, fallback) => firstValue(row, "label", "name", "code") || `${fallback} ${row?.id ?? ""}`;
 
 // ---------------------------------------------------------------------------
 // App + Router
@@ -162,7 +153,7 @@ app.use(express.urlencoded({ extended: true, limit: "30mb" }));
 const router = express.Router();
 
 // ---------------------------------------------------------------------------
-// Health / TSD minimal
+// Health / TSD
 // ---------------------------------------------------------------------------
 router.get("/health", (_req, res) => {
   res.json({
@@ -234,9 +225,9 @@ router.get("/tasks/:id/attachments", async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT id, filename, mimetype, size, uploaded_at, created_at
-       FROM controls_attachments
-       WHERE task_id = $1
-       ORDER BY uploaded_at DESC NULLS LAST, created_at DESC`,
+         FROM controls_attachments
+        WHERE task_id = $1
+        ORDER BY uploaded_at DESC NULLS LAST, created_at DESC`,
       [id]
     );
     res.json(rows);
@@ -406,25 +397,81 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// HIERARCHY/TREE — robuste, attache des tâches uniquement si l’entité pointe un équipement
+// HIERARCHY/TREE — robuste aux colonnes manquantes (ex: label)
 //  * ATEX: building
 //  * SB/DEV/HV: building_code
-//  * Reconstruit liens via related_type/related_id, equipment_ref, code, parent_code si nécessaire
+//  * Tâches uniquement si liées (controls_entities)
+//  * Fallbacks: related_type/related_id, equipment_ref, code, parent_code
 // ---------------------------------------------------------------------------
 router.get("/hierarchy/tree", async (_req, res) => {
   try {
     const client = await pool.connect();
     try {
-      // Métas & helpers
-      const getCols = (t) => getColumnsMeta(client, t);
-      const mSW  = await getCols("switchboards");
-      const mDEV = await getCols("devices");
-      const mHVE = await getCols("hv_equipments");
-      const mHVD = await getCols("hv_devices");
-      const mATX = await getCols("atex_equipments");
+      const mSW  = await getColumnsMeta(client, "switchboards");
+      const mDEV = await getColumnsMeta(client, "devices");
+      const mHVE = await getColumnsMeta(client, "hv_equipments");
+      const mHVD = await getColumnsMeta(client, "hv_devices");
+      const mATX = await getColumnsMeta(client, "atex_equipments");
 
-      const val = (row, ...names) => names.find(n => row[n] != null) ? row[names.find(n => row[n] != null)] : null;
-      const labelize = (row, fallback) => val(row, "label", "name", "code") || `${fallback} ${row.id}`;
+      // SELECTs qui n'incluent que des colonnes existantes (sinon NULL AS ...)
+      const sw = await safeQuery(client, `
+        SELECT
+          ${hasCol(mSW,"id") ? "id" : "NULL AS id"},
+          ${hasCol(mSW,"name") ? "name" : "NULL AS name"},
+          ${hasCol(mSW,"label") ? "label" : "NULL AS label"},
+          ${hasCol(mSW,"code") ? "code" : "NULL AS code"},
+          ${hasCol(mSW,"building_code") ? "building_code" : "NULL AS building_code"}
+        FROM switchboards
+      `);
+
+      const dev = await safeQuery(client, `
+        SELECT
+          ${hasCol(mDEV,"id") ? "id" : "NULL AS id"},
+          ${hasCol(mDEV,"name") ? "name" : "NULL AS name"},
+          ${hasCol(mDEV,"label") ? "label" : "NULL AS label"},
+          ${hasCol(mDEV,"code") ? "code" : "NULL AS code"},
+          ${hasCol(mDEV,"building_code") ? "building_code" : "NULL AS building_code"},
+          ${hasCol(mDEV,"switchboard_id") ? "switchboard_id" : "NULL AS switchboard_id"},
+          ${hasCol(mDEV,"switchboard_code") ? "switchboard_code" : "NULL AS switchboard_code"},
+          ${hasCol(mDEV,"parent_code") ? "parent_code" : "NULL AS parent_code"}
+        FROM devices
+      `);
+
+      const hve = await safeQuery(client, `
+        SELECT
+          ${hasCol(mHVE,"id") ? "id" : "NULL AS id"},
+          ${hasCol(mHVE,"name") ? "name" : "NULL AS name"},
+          ${hasCol(mHVE,"label") ? "label" : "NULL AS label"},
+          ${hasCol(mHVE,"code") ? "code" : "NULL AS code"},
+          ${hasCol(mHVE,"building_code") ? "building_code" : "NULL AS building_code"}
+        FROM hv_equipments
+      `);
+
+      const hvd = await safeQuery(client, `
+        SELECT
+          ${hasCol(mHVD,"id") ? "id" : "NULL AS id"},
+          ${hasCol(mHVD,"name") ? "name" : "NULL AS name"},
+          ${hasCol(mHVD,"label") ? "label" : "NULL AS label"},
+          ${hasCol(mHVD,"code") ? "code" : "NULL AS code"},
+          ${hasCol(mHVD,"building_code") ? "building_code" : "NULL AS building_code"},
+          ${hasCol(mHVD,"equipment_code") ? "equipment_code" : "NULL AS equipment_code"},
+          ${hasCol(mHVD,"hv_equipment_id") ? "hv_equipment_id" : "NULL AS hv_equipment_id"}
+        FROM hv_devices
+      `);
+
+      // ATEX: colonne building (pas building_code)
+      const aeq = await safeQuery(client, `
+        SELECT
+          ${hasCol(mATX,"id") ? "id" : "NULL AS id"},
+          ${hasCol(mATX,"name") ? "name" : "NULL AS name"},
+          ${hasCol(mATX,"label") ? "label" : "NULL AS label"},
+          ${hasCol(mATX,"code") ? "code" : "NULL AS code"},
+          ${hasCol(mATX,"building") ? "building" : "NULL AS building"},
+          ${hasCol(mATX,"zone") ? "zone" : "NULL AS zone"}
+        FROM atex_equipments
+      `);
+
+      // — structure racine par site/bâtiment
       const siteMap = new Map();
       const siteGet = (label) => {
         const k = label || "Default";
@@ -432,59 +479,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
         return siteMap.get(k);
       };
 
-      // --- charger équipements
-      const sw = await safeQuery(client, `
-        SELECT ${mSW.id ? "id" : "NULL AS id"},
-               ${mSW.name ? "name" : "NULL AS name"},
-               ${mSW.label ? "label" : "NULL AS label"},
-               ${mSW.code ? "code" : "NULL AS code"},
-               ${mSW.building_code ? "building_code" : "NULL AS building_code"}
-          FROM switchboards
-      `);
-
-      const dev = await safeQuery(client, `
-        SELECT ${mDEV.id ? "id" : "NULL AS id"},
-               ${mDEV.name ? "name" : "NULL AS name"},
-               ${mDEV.label ? "label" : "NULL AS label"},
-               ${mDEV.code ? "code" : "NULL AS code"},
-               ${mDEV.building_code ? "building_code" : "NULL AS building_code"},
-               ${mDEV.switchboard_id ? "switchboard_id" : "NULL AS switchboard_id"},
-               ${mDEV.switchboard_code ? "switchboard_code" : "NULL AS switchboard_code"},
-               ${mDEV.parent_code ? "parent_code" : "NULL AS parent_code"}
-          FROM devices
-      `);
-
-      const hve = await safeQuery(client, `
-        SELECT ${mHVE.id ? "id" : "NULL AS id"},
-               ${mHVE.name ? "name" : "NULL AS name"},
-               ${mHVE.label ? "label" : "NULL AS label"},
-               ${mHVE.code ? "code" : "NULL AS code"},
-               ${mHVE.building_code ? "building_code" : "NULL AS building_code"}
-          FROM hv_equipments
-      `);
-
-      const hvd = await safeQuery(client, `
-        SELECT ${mHVD.id ? "id" : "NULL AS id"},
-               ${mHVD.name ? "name" : "NULL AS name"},
-               ${mHVD.label ? "label" : "NULL AS label"},
-               ${mHVD.code ? "code" : "NULL AS code"},
-               ${mHVD.building_code ? "building_code" : "NULL AS building_code"},
-               ${mHVD.equipment_code ? "equipment_code" : "NULL AS equipment_code"},
-               ${mHVD.hv_equipment_id ? "hv_equipment_id" : "NULL AS hv_equipment_id"}
-          FROM hv_devices
-      `);
-
-      const aeq = await safeQuery(client, `
-        SELECT ${mATX.id ? "id" : "NULL AS id"},
-               ${mATX.name ? "name" : "NULL AS name"},
-               ${mATX.label ? "label" : "NULL AS label"},
-               ${mATX.code ? "code" : "NULL AS code"},
-               ${mATX.building ? "building" : "NULL AS building"},
-               ${mATX.zone ? "zone" : "NULL AS zone"}
-          FROM atex_equipments
-      `);
-
-      // --- index rapides
+      // Switchboards index
       const sbById = new Map();
       const sbByCode = new Map();
       for (const s of sw?.rows || []) {
@@ -495,6 +490,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
         if (s.code) sbByCode.set(String(s.code), node);
       }
 
+      // Devices index + placement sous switchboard
       const devById = new Map();
       const devByCode = new Map();
       for (const d of dev?.rows || []) {
@@ -514,9 +510,10 @@ router.get("/hierarchy/tree", async (_req, res) => {
         }
       }
 
-      const hvListBySite = new Map(); // building_code -> array
+      // HV
       const hvById = new Map();
       const hvByCode = new Map();
+      const hvListBySite = new Map(); // building_code -> array
       const pushHV = (b, node) => {
         const arr = hvListBySite.get(b) || [];
         arr.push(node);
@@ -536,9 +533,10 @@ router.get("/hierarchy/tree", async (_req, res) => {
       }
       for (const [b, arr] of hvListBySite.entries()) siteGet(b).hv.push(...arr);
 
-      const atexZoneBySite = new Map(); // building -> Map(zone -> { zone, equipments:[], tasks:[] })
+      // ATEX
       const atxById = new Map();
       const atxByCode = new Map();
+      const atexZoneBySite = new Map(); // building -> Map(zone -> { zone, equipments:[], tasks:[] })
       for (const a of aeq?.rows || []) {
         const sKey = a.building || "Default";
         if (!atexZoneBySite.has(sKey)) atexZoneBySite.set(sKey, new Map());
@@ -555,7 +553,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
         for (const z of zones.values()) site.atex.push(z);
       }
 
-      // --- lire tâches + entités
+      // Tâches + entités
       const tasksQ = await client.query(
         `SELECT t.id, t.task_name, t.task_code, t.status, t.next_control, t.entity_id, t.site
            FROM controls_tasks t
@@ -575,7 +573,6 @@ router.get("/hierarchy/tree", async (_req, res) => {
       );
       const entMap = new Map(ents.rows.map(r => [String(r.id), r]));
 
-      // — helper de dispatch
       const pushTask = (arr, t) => {
         const { category } = resolveTsdForTask(t);
         arr.push({
@@ -588,7 +585,6 @@ router.get("/hierarchy/tree", async (_req, res) => {
         });
       };
 
-      // — fonction de résolution de cible à partir d'une entité
       const resolveTargetFromEntity = (e) => {
         // 1) Liaison directe par id
         if (e.switchboard_id && sbById.has(String(e.switchboard_id))) return sbById.get(String(e.switchboard_id));
@@ -599,13 +595,13 @@ router.get("/hierarchy/tree", async (_req, res) => {
         // 2) related_type / related_id
         const rt = String(e.related_type || "").toLowerCase();
         if (e.related_id) {
-          if (rt.includes("switch")) return sbById.get(String(e.related_id));
-          if (rt.includes("device")) return devById.get(String(e.related_id));
-          if (rt.includes("hv")) return hvById.get(String(e.related_id));
-          if (rt.includes("atex")) return atxById.get(String(e.related_id));
+          if (rt.includes("switch")) return sbById.get(String(e.related_id)) || null;
+          if (rt.includes("device")) return devById.get(String(e.related_id)) || null;
+          if (rt.includes("hv")) return hvById.get(String(e.related_id)) || null;
+          if (rt.includes("atex")) return atxById.get(String(e.related_id)) || null;
         }
 
-        // 3) equipment_ref / code / parent_code
+        // 3) equipment_ref / code / parent_code (match sur codes)
         const ref = e.equipment_ref || e.code || e.parent_code;
         if (ref) {
           if (sbByCode.has(String(ref))) return sbByCode.get(String(ref));
@@ -614,16 +610,14 @@ router.get("/hierarchy/tree", async (_req, res) => {
           if (atxByCode.has(String(ref))) return atxByCode.get(String(ref));
         }
 
-        return null; // pas trouvé → pas d’attache
+        return null;
       };
 
-      // attacher les tâches
       for (const t of tasksQ.rows) {
         const e = entMap.get(String(t.entity_id));
         if (!e) continue;
         const target = resolveTargetFromEntity(e);
-        if (!target) continue;
-        pushTask(target.tasks, t);
+        if (target) pushTask(target.tasks, t);
       }
 
       const tree = Array.from(siteMap.values()).sort((a, b) => String(a.label).localeCompare(String(b.label)));
@@ -637,7 +631,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// IA — Analyse avant intervention (branchée pour ton backend OpenAI, pas de mock)
+// IA — Analyse avant intervention (branchée pour OpenAI en prod; no mock)
 // ---------------------------------------------------------------------------
 router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
   const { task_id, hints = "[]", attach = "0" } = req.body || {};
@@ -666,7 +660,8 @@ router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
       });
     }
 
-    // Ici tu peux appeler ton orchestrateur OpenAI interne et renvoyer sa réponse telle quelle.
+    // ici tu appelles ton orchestrateur OpenAI existant côté Electrohub;
+    // on renvoie des champs compatibles avec le front
     const { control } = task ? resolveTsdForTask(task) : { control: null };
     res.json({
       ok: true,
