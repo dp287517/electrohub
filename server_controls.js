@@ -673,7 +673,7 @@ router.get("/tasks/:id/schema", async (req, res) => {
       procedure_md: control?.procedure_md || task.procedure_md || "",
       hazards_md: control?.hazards_md || task.hazards_md || "",
       ppe_md: control?.ppe_md || task.ppe_md || "",
-      tools_md: control?.tools_md || task.tools_md || "",
+      tools_md: control?.tools_md || "",
       tsd_category: category ? { key: category.key, label: category.label } : null,
       ui: { category_key: category?.key || null, color: colorForCategory(category?.key, task.task_code) },
     });
@@ -828,13 +828,53 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Auto-bootstrap au démarrage (optionnel)
+// ---------------------------------------------------------------------------
+async function autoBootstrapIfEnabled() {
+  const enabled = String(process.env.CONTROLS_AUTOLINK_ON_START || "0") === "1";
+  if (!enabled) return;
+  try {
+    console.log("[controls] autoBootstrap: démarrage…");
+    const client = await pool.connect();
+    try {
+      // Heuristique: si aucune tâche ouverte n'existe, on lance un bootstrap
+      const openStatuses = ['Planned','Pending','Overdue'];
+      const q = await client.query(
+        `SELECT COUNT(*)::int AS n FROM controls_tasks WHERE status = ANY($1)`,
+        [openStatuses]
+      );
+      const n = q.rows?.[0]?.n || 0;
+      if (n > 0) {
+        console.log(`[controls] autoBootstrap: ${n} tâche(s) ouverte(s) détectée(s) → pas de seed`);
+        return;
+      }
+    } finally { client.release(); }
+
+    // Appelle la logique de bootstrap interne via une petite fonction locale
+    const fakeReq = { query: { create: '1', seed: '1' } };
+    const fakeRes = {
+      json: (x) => console.log("[controls] autoBootstrap OK:", JSON.stringify(x).slice(0, 400) + '…'),
+      status: (c) => ({ json: (x) => console.error("[controls] autoBootstrap ERR:", c, x) }),
+    };
+    await new Promise((resolve) => {
+      // utilise la route sans réseau\texportée ci-dessous sous forme de handler si besoin
+      router.handle({ ...fakeReq, method: 'GET', url: '/bootstrap/auto-link' }, fakeRes, resolve);
+    });
+  } catch (e) {
+    console.error('[controls] autoBootstrap failed:', e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Mount + Boot
 // ---------------------------------------------------------------------------
 const BASE_PATH = process.env.CONTROLS_BASE_PATH || "/api/controls";
 app.use(BASE_PATH, router);
 
-// >>> Correction Render: écouter d'abord PORT (imposé par la plateforme)
 const port = Number(process.env.CONTROLS_PORT || 3011);
-app.listen(port, () => console.log(`[controls] serveur démarré sur :${port} (BASE_PATH=${BASE_PATH})`));
+app.listen(port, async () => {
+  console.log(`[controls] serveur démarré sur :${port} (BASE_PATH=${BASE_PATH})`);
+  await autoBootstrapIfEnabled();
+});
 
 export default app;
