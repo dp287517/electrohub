@@ -1,8 +1,12 @@
 /**
- * server_controls.js — Controls (TSD) API (ESM, Render-friendly)
- * Robust entity<->task linking (integer/uuid), bootstrap + seed, diagnostics.
+ * server_controls.js — Controls (TSD) API (ESM)
+ * Corrigé pour controls_entities (pas d'equipment_table/equipment_id).
+ * Liaison équipements -> entités via switchboard_id/device_id/atex_id/hv_id
+ * (fallback related_type/related_id) + seed tâches TSD.
+ *
  * Monté sous: /api/controls
  */
+
 import express from "express";
 import multer from "multer";
 import { Pool } from "pg";
@@ -12,13 +16,17 @@ import { v4 as uuidv4 } from "uuid";
 
 dayjs.extend(utc);
 
-// ------------------------------- DB -----------------------------------------
+// ---------------------------------------------------------------------------
+// DB
+// ---------------------------------------------------------------------------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-// ------------------------------- TSD ----------------------------------------
+// ---------------------------------------------------------------------------
+// TSD
+// ---------------------------------------------------------------------------
 let tsdLibrary;
 {
   const mod = await import("./tsd_library.js");
@@ -33,7 +41,9 @@ const RESULT_OPTIONS = tsdLibrary?.meta?.result_options ?? [
   "Non applicable",
 ];
 
-// ------------------------------ Utils ---------------------------------------
+// ---------------------------------------------------------------------------
+// Utils
+// ---------------------------------------------------------------------------
 const upload = multer({ storage: multer.memoryStorage() });
 const OPEN_STATUSES = ["Planned", "Pending", "Overdue"];
 
@@ -41,14 +51,6 @@ const app = express();
 app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: true, limit: "30mb" }));
 const router = express.Router();
-
-const TABLES = ["hv_equipments","hv_devices","switchboards","devices","atex_equipments"];
-const KIND_BY_TABLE = {
-  hv_equipments: "hv", hv_devices: "hv",
-  switchboards: "switchboards",
-  devices: "devices",
-  atex_equipments: "atex_equipments",
-};
 
 function colorForCategory(catKey, taskCode = "") {
   const k = String(catKey || "").toUpperCase();
@@ -58,17 +60,20 @@ function colorForCategory(catKey, taskCode = "") {
   if (taskCode.toLowerCase().includes("thermo")) return "#22c55e";
   return "#6366f1";
 }
-function addMonths(baseISO, months) { return dayjs.utc(baseISO).add(Number(months), "month").toISOString(); }
+
+function addMonths(baseISO, months) {
+  return dayjs.utc(baseISO).add(Number(months), "month").toISOString();
+}
 function addByFreq(baseISO, frequency) {
   if (!frequency) return null;
   const { interval, unit, min } = frequency;
-  if (min?.interval && min?.unit) return dayjs.utc(baseISO).add(min.interval, min.unit).toISOString();
+  if (min && min.interval && min.unit) return dayjs.utc(baseISO).add(min.interval, min.unit).toISOString();
   if (interval && unit) return dayjs.utc(baseISO).add(interval, unit).toISOString();
   return null;
 }
 function monthsFromFreq(freq) {
   if (!freq) return null;
-  if (freq.min?.interval && freq.min?.unit) return unitToMonths(freq.min.interval, freq.min.unit);
+  if (freq.min && freq.min.interval && freq.min.unit) return unitToMonths(freq.min.interval, freq.min.unit);
   if (freq.interval && freq.unit) return unitToMonths(freq.interval, freq.unit);
   return null;
 }
@@ -102,12 +107,19 @@ function resolveTsdForTask(task) {
   }
   return { category: null, control: null };
 }
-
 async function withTx(fn) {
   const client = await pool.connect();
-  try { await client.query("BEGIN"); const r = await fn(client); await client.query("COMMIT"); return r; }
-  catch (e) { await client.query("ROLLBACK"); throw e; }
-  finally { client.release(); }
+  try {
+    await client.query("BEGIN");
+    const res = await fn(client);
+    await client.query("COMMIT");
+    return res;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 async function getColumnsMeta(client, table) {
@@ -117,14 +129,18 @@ async function getColumnsMeta(client, table) {
      WHERE table_schema='public' AND table_name=$1`,
     [table]
   );
-  const meta = {}; for (const r of rows) meta[r.column_name] = r; return meta;
+  const meta = {};
+  for (const r of rows) meta[r.column_name] = r;
+  return meta;
 }
 function isUuidColumn(colMeta) {
   return colMeta && (colMeta.udt_name === "uuid" || colMeta.data_type === "uuid");
 }
 function pruneValuesByExistingColumns(values, columnsMeta) {
   const out = {};
-  for (const k of Object.keys(values)) if (columnsMeta[k] !== undefined) out[k] = values[k];
+  for (const k of Object.keys(values)) {
+    if (columnsMeta[k] !== undefined) out[k] = values[k];
+  }
   return out;
 }
 function buildInsertSQL(table, values) {
@@ -144,51 +160,24 @@ async function insertRow(client, table, values) {
   const { rows } = await client.query(sql, params);
   return rows[0];
 }
-
-// ----------------------- Robust entity matching ------------------------------
-async function detectEntityIdColumns(client){
-  const m = await getColumnsMeta(client, "controls_entities");
-  return { has: m };
-}
-function entityWhereClause(kind, entMeta){
-  // Compare nativement ET en cast texte pour absorber int/uuid
-  const wh = [];
-  const map = { switchboards:"switchboard_id", devices:"device_id", atex_equipments:"atex_id", hv:"hv_id" };
-  const col = map[kind];
-  if (col && entMeta.has[col]) {
-    wh.push(`${col} = $1`);
-    wh.push(`CAST(${col} AS text) = CAST($1 AS text)`);
-  }
-  // fallback related_*
-  if (entMeta.has.related_type && entMeta.has.related_id){
-    wh.push(`(related_type = $2 AND related_id = $1)`);
-    wh.push(`(related_type = $2 AND CAST(related_id AS text) = CAST($1 AS text))`);
-  }
-  // fallback code si dispo ($3)
-  if (entMeta.has.code) wh.push(`(code = $3)`);
-  return `(${wh.join(" OR ")})`;
-}
-async function findEntityIdFor(client, kind, equipId, equipCode=null){
-  const entMeta = await detectEntityIdColumns(client);
-  const where = entityWhereClause(kind, entMeta);
-  const { rows } = await client.query(
-    `SELECT id FROM controls_entities WHERE ${where} LIMIT 1`,
-    [equipId, kind, equipCode]
-  );
-  return rows?.[0]?.id || null;
+async function safeQuery(client, sql, params = []) {
+  try { return await client.query(sql, params); } catch { return null; }
 }
 
 // ---------------------------------------------------------------------------
-// Hierarchy/debug
+// Détection colonnes par table (shape)
 // ---------------------------------------------------------------------------
 const CANDIDATE = {
-  building: ["building_code","building","site","site_id"],
-  name: ["name","label","title","designation"],
-  code: ["code","ref","reference"],
-  sw_id: ["switchboard_id","switchboard","parent_switchboard_id","panel_id"],
-  zone: ["zone","atex_zone","area"],
+  building: ["building_code", "building", "site", "site_id"],
+  name: ["name", "label", "title", "designation"],
+  code: ["code", "ref", "reference"],
+  sw_id: ["switchboard_id", "switchboard", "parent_switchboard_id", "panel_id"],
+  zone: ["zone", "atex_zone", "area"],
 };
-function pickCol(meta, candidates) { for (const c of candidates) if (meta[c]) return c; return null; }
+function pickCol(meta, candidates) {
+  for (const c of candidates) if (meta[c]) return c;
+  return null;
+}
 async function detectShape(client, table) {
   const meta = await getColumnsMeta(client, table);
   if (!Object.keys(meta).length) return null;
@@ -204,6 +193,10 @@ function buildingExpr(shape, alias = "bld") {
   if (shape?.building) return `${shape.building}::text AS ${alias}`;
   return `'Default'::text AS ${alias}`;
 }
+function zoneExpr(shape, alias = "zone") {
+  if (shape?.zone) return `${shape.zone}::text AS ${alias}`;
+  return `'Z?'::text AS ${alias}`;
+}
 function labelExpr(shape, alias = "label") {
   const fields = [];
   if (shape?.name) fields.push(shape.name);
@@ -213,11 +206,71 @@ function labelExpr(shape, alias = "label") {
   return `COALESCE(${fields.join(", ")}) AS ${alias}`;
 }
 
+// ----------------------------------------------------------------------------
+// Helpers liaison: trouve l'entity_id pour un équipement
+// ----------------------------------------------------------------------------
+async function findEntityIdFor(client, kind, equipId) {
+  // kind in: 'switchboards' | 'devices' | 'atex_equipments' | 'hv'
+  const clauses = [];
+  const params = [equipId];
+  switch (kind) {
+    case "switchboards":
+      clauses.push("switchboard_id = $1");
+      clauses.push("(related_type = 'switchboards' AND related_id = $1)");
+      break;
+    case "devices":
+      clauses.push("device_id = $1");
+      clauses.push("(related_type = 'devices' AND related_id = $1)");
+      break;
+    case "atex_equipments":
+      clauses.push("atex_id = $1");
+      clauses.push("(related_type = 'atex_equipments' AND related_id = $1)");
+      break;
+    case "hv":
+      clauses.push("hv_id = $1");
+      clauses.push("(related_type = 'hv' AND related_id = $1)");
+      break;
+    default:
+      clauses.push("related_id = $1");
+  }
+  const { rows } = await client.query(
+    `SELECT id FROM controls_entities WHERE ${clauses.join(" OR ")} LIMIT 1`,
+    params
+  );
+  return rows.length ? rows[0].id : null;
+}
+
+// ---------------------------------------------------------------------------
+// Health + TSD
+// ---------------------------------------------------------------------------
+router.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    tsd_loaded: !!tsdLibrary,
+    categories: (tsdLibrary.categories || []).length,
+  });
+});
+router.get("/tsd", (_req, res) => {
+  res.json({
+    meta: tsdLibrary.meta || {},
+    categories: (tsdLibrary.categories || []).map((c) => ({
+      key: c.key,
+      label: c.label,
+      db_table: c.db_table,
+    })),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hierarchy/debug
+// ---------------------------------------------------------------------------
 router.get("/hierarchy/debug", async (_req, res) => {
   const client = await pool.connect();
   try {
     const shapes = {};
-    for (const tbl of TABLES) shapes[tbl] = await detectShape(client, tbl);
+    for (const tbl of ["hv_equipments", "hv_devices", "switchboards", "devices", "atex_equipments"]) {
+      shapes[tbl] = await detectShape(client, tbl);
+    }
     const entCols = await getColumnsMeta(client, "controls_entities");
     res.json({ shapes, ent_has: Object.keys(entCols) });
   } catch (e) {
@@ -233,8 +286,30 @@ router.get("/hierarchy/debug", async (_req, res) => {
 router.get("/hierarchy/tree", async (_req, res) => {
   const client = await pool.connect();
   try {
-    const sh = {}; for (const tbl of TABLES) sh[tbl] = await detectShape(client, tbl);
+    const sh = {};
+    for (const tbl of ["hv_equipments", "hv_devices", "switchboards", "devices", "atex_equipments"]) {
+      sh[tbl] = await detectShape(client, tbl);
+    }
 
+    // 1) Bâtiments
+    async function distinctBuildings(shape) {
+      if (!shape) return [];
+      const sql = `SELECT DISTINCT ${buildingExpr(shape, "b")} FROM ${shape.table} WHERE ${buildingExpr(shape, "b").split(" AS ")[0]} IS NOT NULL`;
+      const rs = await safeQuery(client, sql);
+      return (rs?.rows || []).map(r => String(r.b));
+    }
+    const allB = new Set();
+    for (const tbl of ["switchboards", "devices", "hv_equipments", "hv_devices", "atex_equipments"]) {
+      const arr = await distinctBuildings(sh[tbl]);
+      arr.forEach(b => b && allB.add(b));
+    }
+    if (allB.size === 0) {
+      const se = await safeQuery(client, `SELECT DISTINCT building::text AS b FROM controls_entities WHERE building IS NOT NULL`);
+      (se?.rows || []).forEach(r => allB.add(String(r.b)));
+    }
+    if (allB.size === 0) allB.add("Default");
+
+    // 2) Charger lignes + entity_id
     async function loadRowsWithEntity(shape, kind) {
       if (!shape || !shape.id) return [];
       const fields = [
@@ -248,7 +323,10 @@ router.get("/hierarchy/tree", async (_req, res) => {
       const sql = `SELECT ${fields.join(", ")} FROM ${shape.table}`;
       const rs = await client.query(sql);
       const rows = rs.rows;
-      for (const r of rows) r.entity_id = await findEntityIdFor(client, kind, r.id, r.code || null);
+
+      for (const r of rows) {
+        r.entity_id = await findEntityIdFor(client, kind, r.id);
+      }
       return rows;
     }
 
@@ -271,9 +349,6 @@ router.get("/hierarchy/tree", async (_req, res) => {
       if (!devBySwitch.has(key)) devBySwitch.set(key, []);
       devBySwitch.get(key).push({ id: r.id, label: r.label, code: r.code, entity_id: r.entity_id, tasks: [] });
     }
-    for (const [b, list] of swByBuilding.entries())
-      for (const sb of list) sb.devices = devBySwitch.get(String(sb.id)) || [];
-
     const hvByBuilding = new Map();
     for (const r of [...hvEquip, ...hvDev]) {
       const b = String(r.building ?? "Default");
@@ -289,6 +364,25 @@ router.get("/hierarchy/tree", async (_req, res) => {
       if (!byZone.has(zKey)) byZone.set(zKey, []);
       byZone.get(zKey).push({ id: r.id, label: r.label, code: r.code, entity_id: r.entity_id, tasks: [] });
     }
+
+    for (const [b, list] of swByBuilding.entries()) {
+      for (const sb of list) {
+        sb.devices = devBySwitch.get(String(sb.id)) || [];
+      }
+    }
+
+    const siteNodes = Array.from(allB.values())
+      .sort((a,b)=>String(a).localeCompare(String(b)))
+      .map(b => ({
+        id: b,
+        label: b,
+        hv: hvByBuilding.get(b) || [],
+        switchboards: (swByBuilding.get(b) || []).map(sb => ({ ...sb, devices: (sb.devices || []) })),
+        atex: Array.from((atexByB.get(b) || new Map()).entries()).map(([zone, eqs]) => ({
+          zone, equipments: eqs, tasks: []
+        })),
+        tasks: [],
+      }));
 
     // 3) Attacher TÂCHES (par entity_id)
     const tasksQ = await client.query(
@@ -314,30 +408,18 @@ router.get("/hierarchy/tree", async (_req, res) => {
       const arr = tasksByEntity.get(String(e.entity_id)) || [];
       if (arr.length) e.tasks = arr;
     }
+    for (const site of siteNodes) {
+      for (const hv of site.hv) attachTasks(hv);
+      for (const sb of site.switchboards) {
+        attachTasks(sb);
+        for (const d of (sb.devices || [])) attachTasks(d);
+      }
+      for (const z of site.atex || []) {
+        for (const eq of (z.equipments || [])) attachTasks(eq);
+      }
+    }
 
-    const sites = new Set();
-    for (const list of [sw,hvEquip,hvDev,dev,atex])
-      for (const r of list) if (r?.building) sites.add(String(r.building));
-    if (!sites.size) sites.add("Default");
-
-    const tree = Array.from(sites.values())
-      .sort((a,b)=>String(a).localeCompare(String(b)))
-      .map(b => ({
-        id: b,
-        label: b,
-        hv: (hvByBuilding.get(b) || []).map(x => { attachTasks(x); return x; }),
-        switchboards: (swByBuilding.get(b) || []).map(sb => {
-          attachTasks(sb);
-          sb.devices = (sb.devices || []).map(d => { attachTasks(d); return d; });
-          return sb;
-        }),
-        atex: Array.from((atexByB.get(b) || new Map()).entries()).map(([zone, eqs]) => ({
-          zone, equipments: eqs.map(e => { attachTasks(e); return e; })
-        })),
-        tasks: [],
-      }));
-
-    res.json(tree);
+    res.json(siteNodes);
   } catch (e) {
     res.status(500).json({ error: e.message });
   } finally {
@@ -346,82 +428,95 @@ router.get("/hierarchy/tree", async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Bootstrap: crée entités manquantes + seed tâches TSD (idempotent)
+// Bootstrap: crée entités manquantes + seed tâches TSD
 // ---------------------------------------------------------------------------
-function catMapByTable(){
-  const m = new Map();
-  for (const c of tsdLibrary.categories || []) if (c.db_table) m.set(String(c.db_table).toLowerCase(), c);
-  return m;
-}
-function catForKind(kind, byTable){
-  if (kind==="hv") return byTable.get("hv") || byTable.get("hv_equipments");
-  if (kind==="switchboards") return byTable.get("switchboards");
-  if (kind==="devices") return byTable.get("devices");
-  if (kind==="atex_equipments") return byTable.get("atex_equipments");
-  return null;
-}
 router.get("/bootstrap/auto-link", async (req, res) => {
   const doCreate = String(req.query.create || "1") === "1";
-  const doSeed   = String(req.query.seed || "1") === "1";
+  const doSeed = String(req.query.seed || "1") === "1";
   try {
     const out = await withTx(async (client) => {
       const actions = [];
-      const shapes = {}; for (const t of TABLES) shapes[t] = await detectShape(client, t);
-
-      async function rowsOf(shape){
-        if (!shape?.id) return [];
-        const f = [
-          `${shape.id} AS id`, labelExpr(shape,"label"),
-          shape.code ? `${shape.code} AS code` : `NULL::text AS code`,
-          buildingExpr(shape,"building")
-        ];
-        const { rows } = await client.query(`SELECT ${f.join(", ")} FROM ${shape.table}`);
-        return rows;
+      const sh = {};
+      for (const tbl of ["hv_equipments", "hv_devices", "switchboards", "devices", "atex_equipments"]) {
+        sh[tbl] = await detectShape(client, tbl);
       }
-      const data = {}; for (const t of TABLES) data[t] = await rowsOf(shapes[t]);
 
-      const byTable = catMapByTable();
+      async function loadRows(shape) {
+        if (!shape || !shape.id) return [];
+        const fields = [
+          `${shape.id} AS id`,
+          labelExpr(shape, "label"),
+          shape.code ? `${shape.code} AS code` : `NULL::text AS code`,
+          buildingExpr(shape, "building"),
+        ];
+        if (shape.sw_id) fields.push(`${shape.sw_id} AS switchboard_id`);
+        if (shape.zone) fields.push(`${shape.zone} AS zone`);
+        const sql = `SELECT ${fields.join(", ")} FROM ${shape.table}`;
+        const rs = await safeQuery(client, sql);
+        return rs?.rows || [];
+      }
+      const hvEquip = await loadRows(sh["hv_equipments"]);
+      const hvDev   = await loadRows(sh["hv_devices"]);
+      const sw      = await loadRows(sh["switchboards"]);
+      const dev     = await loadRows(sh["devices"]);
+      const atex    = await loadRows(sh["atex_equipments"]);
 
-      async function ensureEntity(kind, row){
-        const existing = await findEntityIdFor(client, kind, row.id, row.code || null);
-        if (existing) return { id: existing, created:false };
-        if (!doCreate) return { id:null, created:false };
+      // map cat
+      const catsByDbTable = new Map();
+      for (const c of tsdLibrary.categories || []) {
+        if (c.db_table) catsByDbTable.set(String(c.db_table).toLowerCase(), c);
+      }
+      const catHV   = findCategoryByKeyOrLabel("hv_switchgear") || catsByDbTable.get("hv") || catsByDbTable.get("hv_equipments");
+      const catSW   = catsByDbTable.get("switchboards");
+      const catDEV  = catsByDbTable.get("devices");
+      const catATEX = catsByDbTable.get("atex_equipments");
 
-        const entMeta = await getColumnsMeta(client, "controls_entities");
+      async function ensureEntity(kind, row, extras = {}) {
+        // Recherche via colonnes spécifiques OU related_*
+        let where = "";
+        switch (kind) {
+          case "switchboards": where = "switchboard_id=$1 OR (related_type='switchboards' AND related_id=$1)"; break;
+          case "devices": where = "device_id=$1 OR (related_type='devices' AND related_id=$1)"; break;
+          case "atex_equipments": where = "atex_id=$1 OR (related_type='atex_equipments' AND related_id=$1)"; break;
+          case "hv": where = "hv_id=$1 OR (related_type='hv' AND related_id=$1)"; break;
+          default: where = "related_id=$1";
+        }
+        const ex = await client.query(`SELECT id FROM controls_entities WHERE ${where} LIMIT 1`, [row.id]);
+        if (ex.rowCount) return { id: ex.rows[0].id, created: false };
+        if (!doCreate) return { id: null, created: false };
+
+        const now = new Date().toISOString();
         const payload = {
-          site: String(row.building || "Default"),
-          building: String(row.building || "Default"),
+          site: String(row.building ?? "Default"),
+          building: String(row.building ?? "Default"),
           name: row.label,
-          code: row.code || null,
           equipment_type: kind,
           equipment_ref: row.code || null,
           related_type: kind,
           related_id: row.id,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          code: row.code || null,
+          created_at: now,
+          updated_at: now,
         };
-        if (entMeta.switchboard_id && kind==="switchboards") payload.switchboard_id = row.id;
-        if (entMeta.device_id && kind==="devices") payload.device_id = row.id;
-        if (entMeta.atex_id && kind==="atex_equipments") payload.atex_id = row.id;
-        if (entMeta.hv_id && kind==="hv") payload.hv_id = row.id;
+        // colonnes spécifiques si présentes
+        const entMeta = await getColumnsMeta(client, "controls_entities");
+        if (entMeta.switchboard_id && kind === "switchboards") payload.switchboard_id = row.id;
+        if (entMeta.device_id && kind === "devices") payload.device_id = row.id;
+        if (entMeta.atex_id && kind === "atex_equipments") payload.atex_id = row.id;
+        if (entMeta.hv_id && kind === "hv") payload.hv_id = row.id;
 
-        const cols = Object.keys(payload);
-        const placeholders = cols.map((_,i)=>`$${i+1}`).join(",");
-        const { rows } = await client.query(
-          `INSERT INTO controls_entities (${cols.join(",")}) VALUES (${placeholders}) RETURNING id`,
-          cols.map(c => payload[c])
-        );
-        actions.push({ action:"entity_created", kind, equip_id: row.id, entity_id: rows[0].id });
-        return { id: rows[0].id, created:true };
+        const ent = await insertRow(client, "controls_entities", payload);
+        actions.push({ action: "entity_created", kind, equip_id: row.id, entity_id: ent.id });
+        return { id: ent.id, created: true };
       }
 
-      async function seedTasks(entity_id, site, cat){
+      async function seedTasks(entity_id, site, cat) {
         if (!doSeed || !cat) return;
-        for (const ctrl of (cat.controls || [])) {
+        for (const ctrl of cat.controls || []) {
           const ex = await client.query(
             `SELECT 1 FROM controls_tasks
-             WHERE entity_id=$1 AND task_code=$2 AND status = ANY($3) LIMIT 1`,
-            [entity_id, ctrl.type, OPEN_STATUSES]
+             WHERE entity_id=$1 AND task_code=$2 AND status IN ('Planned','Pending','Overdue') LIMIT 1`,
+            [entity_id, ctrl.type]
           );
           if (ex.rowCount) { actions.push({ action:"seed_exists", entity_id, task_code: ctrl.type }); continue; }
 
@@ -430,29 +525,45 @@ router.get("/bootstrap/auto-link", async (req, res) => {
             ? addMonths(new Date().toISOString(), months)
             : addByFreq(new Date().toISOString(), ctrl.frequency)) || dayjs.utc().add(30,"day").toISOString();
 
-          await client.query(
-            `INSERT INTO controls_tasks
-             (site, entity_id, task_name, task_code, frequency_months, last_control, next_control, status, value_type, created_by, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-            [
-              site, entity_id, `${cat.label} – ${ctrl.type}`, ctrl.type,
-              months || null, null, nextCtrl, "Planned",
-              ctrl.value_type || "checklist",
-              "seed", new Date().toISOString(), new Date().toISOString()
-            ]
-          );
+          await insertRow(client, "controls_tasks", {
+            site,
+            entity_id,
+            task_name: `${cat.label} – ${ctrl.type}`,
+            task_code: ctrl.type,
+            frequency_months: months || null,
+            last_control: null,
+            next_control: nextCtrl,
+            status: "Planned",
+            value_type: ctrl.value_type || "checklist",
+            result_schema: null,
+            procedure_md: ctrl.procedure_md || "",
+            hazards_md: ctrl.hazards_md || "",
+            ppe_md: ctrl.ppe_md || "",
+            tools_md: ctrl.tools_md || "",
+            created_by: "seed",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          });
           actions.push({ action:"task_seeded", entity_id, task_code: ctrl.type });
         }
       }
 
       // Créer entités + seed
-      for (const t of TABLES) {
-        const kind = KIND_BY_TABLE[t];
-        const cat  = catForKind(kind, byTable);
-        for (const r of data[t]) {
-          const ent = await ensureEntity(kind, r);
-          if (ent.id) await seedTasks(ent.id, String(r.building || "Default"), cat);
-        }
+      for (const r of [...hvEquip, ...hvDev]) {
+        const ent = await ensureEntity("hv", r);
+        if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catHV);
+      }
+      for (const r of sw) {
+        const ent = await ensureEntity("switchboards", r);
+        if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catSW);
+      }
+      for (const r of dev) {
+        const ent = await ensureEntity("devices", r, { switchboard_id: r.switchboard_id ?? null });
+        if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catDEV);
+      }
+      for (const r of atex) {
+        const ent = await ensureEntity("atex_equipments", r);
+        if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catATEX);
       }
 
       return { actions };
@@ -505,7 +616,9 @@ router.get("/tasks", async (req, res) => {
          t.id, t.site, t.entity_id,
          t.task_name AS label, t.task_code, t.status,
          t.next_control AS due_date,
-         t.frequency_months, t.last_control, t.value_type,
+         t.frequency_months, t.frequency_months_min, t.frequency_months_max,
+         t.last_control, t.value_type, t.result_schema,
+         t.procedure_md, t.hazards_md, t.ppe_md, t.tools_md,
          t.created_by, t.created_at, t.updated_at
        FROM controls_tasks t
        ${whereSQL}
@@ -560,7 +673,7 @@ router.get("/tasks/:id/schema", async (req, res) => {
       procedure_md: control?.procedure_md || task.procedure_md || "",
       hazards_md: control?.hazards_md || task.hazards_md || "",
       ppe_md: control?.ppe_md || task.ppe_md || "",
-      tools_md: control?.tools_md || "",
+      tools_md: control?.tools_md || task.tools_md || "",
       tsd_category: category ? { key: category.key, label: category.label } : null,
       ui: { category_key: category?.key || null, color: colorForCategory(category?.key, task.task_code) },
     });
@@ -623,29 +736,38 @@ router.patch("/tasks/:id/close", async (req, res) => {
       const task = taskRows[0];
       const site = task.site || task.entity_site || "Default";
 
-      await client.query(
-        `INSERT INTO controls_records
-           (site, task_id, entity_id, performed_at, performed_by, result_status,
-            text_value, checklist_result, results, comments, created_at, created_by, task_code, lang)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-        [
-          site, task.id, task.entity_id, closed_at, (actor_id || "system"),
-          record_status, null, JSON.stringify(checklist || []), JSON.stringify(observations || {}),
-          comment || "", new Date().toISOString(), (actor_id || "system"), task.task_code, "fr"
-        ]
-      );
+      await insertRow(client, "controls_records", {
+        site,
+        task_id: task.id,
+        entity_id: task.entity_id,
+        performed_at: closed_at,
+        performed_by: actor_id || "system",
+        result_status: record_status,
+        text_value: null,
+        checklist_result: JSON.stringify(checklist || []),
+        results: JSON.stringify(observations || {}),
+        comments: comment || "",
+        created_at: new Date().toISOString(),
+        created_by: actor_id || "system",
+        task_code: task.task_code,
+        lang: "fr",
+      });
 
       for (const a of attachments) {
         const filename = a.filename || a.name || `file-${Date.now()}`;
         const mimetype = a.mimetype || a.mime || "application/octet-stream";
         const size = a.bytes || a.size || null;
-        const dataBuf = a.data && typeof a.data === "string" ? Buffer.from(a.data, "base64") : null;
+        const dataBuf =
+          a.data && typeof a.data === "string" ? Buffer.from(a.data, "base64") : null;
         await insertRow(client, "controls_attachments", {
           site,
           record_id: null,
           task_id: task.id,
           entity_id: task.entity_id,
-          filename, mimetype, size, data: dataBuf,
+          filename,
+          mimetype,
+          size,
+          data: dataBuf,
           uploaded_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
         });
@@ -668,22 +790,34 @@ router.patch("/tasks/:id/close", async (req, res) => {
         (months ? addMonths(closed_at, months) : addByFreq(closed_at, control?.frequency)) ||
         dayjs.utc(closed_at).add(6, "month").toISOString();
 
-      const { rows: nxt } = await client.query(
-        `INSERT INTO controls_tasks
-           (site, entity_id, task_name, task_code, frequency_months, last_control, next_control, status,
-            value_type, created_by, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'Planned',$8,$9,$10,$11)
-         RETURNING id, next_control, status`,
-        [
-          site, task.entity_id, task.task_name, task.task_code, months,
-          closed_at, nextDue, task.value_type, (actor_id || "system"),
-          new Date().toISOString(), new Date().toISOString()
-        ]
-      );
+      const nextTask = await insertRow(client, "controls_tasks", {
+        site,
+        entity_id: task.entity_id,
+        task_name: task.task_name,
+        task_code: task.task_code,
+        frequency_months: months,
+        last_control: closed_at,
+        next_control: nextDue,
+        status: "Planned",
+        value_type: task.value_type,
+        result_schema: task.result_schema,
+        procedure_md: task.procedure_md,
+        hazards_md: task.hazards_md,
+        ppe_md: task.ppe_md,
+        tools_md: task.tools_md,
+        created_by: actor_id || "system",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
 
       return {
         task_closed: task.id,
-        next_task: { id: nxt[0].id, label: task.task_name, due_date: nxt[0].next_control, status: nxt[0].status },
+        next_task: {
+          id: nextTask.id,
+          label: nextTask.task_name,
+          due_date: nextTask.next_control,
+          status: nextTask.status,
+        },
       };
     });
 
@@ -694,14 +828,53 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Auto-bootstrap au démarrage (optionnel)
+// ---------------------------------------------------------------------------
+async function autoBootstrapIfEnabled() {
+  const enabled = String(process.env.CONTROLS_AUTOLINK_ON_START || "0") === "1";
+  if (!enabled) return;
+  try {
+    console.log("[controls] autoBootstrap: démarrage…");
+    const client = await pool.connect();
+    try {
+      // Heuristique: si aucune tâche ouverte n'existe, on lance un bootstrap
+      const openStatuses = ['Planned','Pending','Overdue'];
+      const q = await client.query(
+        `SELECT COUNT(*)::int AS n FROM controls_tasks WHERE status = ANY($1)`,
+        [openStatuses]
+      );
+      const n = q.rows?.[0]?.n || 0;
+      if (n > 0) {
+        console.log(`[controls] autoBootstrap: ${n} tâche(s) ouverte(s) détectée(s) → pas de seed`);
+        return;
+      }
+    } finally { client.release(); }
+
+    // Appelle la logique de bootstrap interne via une petite fonction locale
+    const fakeReq = { query: { create: '1', seed: '1' } };
+    const fakeRes = {
+      json: (x) => console.log("[controls] autoBootstrap OK:", JSON.stringify(x).slice(0, 400) + '…'),
+      status: (c) => ({ json: (x) => console.error("[controls] autoBootstrap ERR:", c, x) }),
+    };
+    await new Promise((resolve) => {
+      // utilise la route sans réseau	exportée ci-dessous sous forme de handler si besoin
+      router.handle({ ...fakeReq, method: 'GET', url: '/bootstrap/auto-link' }, fakeRes, resolve);
+    });
+  } catch (e) {
+    console.error('[controls] autoBootstrap failed:', e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Mount + Boot
 // ---------------------------------------------------------------------------
 const BASE_PATH = process.env.CONTROLS_BASE_PATH || "/api/controls";
 app.use(BASE_PATH, router);
 
 const port = Number(process.env.CONTROLS_PORT || 3011);
-app.listen(port, () => {
-  console.log(`[controls] listening on :${port} (BASE_PATH=${BASE_PATH})`);
+app.listen(port, async () => {
+  console.log(`[controls] serveur démarré sur :${port} (BASE_PATH=${BASE_PATH})`);
+  await autoBootstrapIfEnabled();
 });
 
 export default app;
