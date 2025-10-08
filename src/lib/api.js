@@ -121,43 +121,67 @@ export const api = {
     health: () => get(`/api/projects/health`),
   },
 
-  /** --- CONTROLS (NOUVEAU) --- */
+  /** --- CONTROLS (MIS À NIVEAU) --- */
   controls: {
-    // Catalogue / Arborescence
-    tree: (params) => get("/api/controls/tree", { site: currentSite(), ...(params || {}) }),
-    catalog: (params) => get("/api/controls/catalog", { site: currentSite(), ...(params || {}) }),
+    // ---- Hiérarchie & TSD ----
+    // Nouvelle arborescence (site -> HV / Switchboards / Devices / ATEX -> tâches)
+    hierarchyTree: (params) =>
+      get("/api/controls/hierarchy/tree", { ...(params || {}) }),
 
-    // Sync (optionnel; laissé pour compat si bouton existe côté UI)
-    sync: ({ site = currentSite(), source = "db" } = {}) =>
-      post(`/api/controls/sync?source=${encodeURIComponent(source)}&read_site=*`, { site }),
+    // Debug de détection colonnes (utile en cas d'équipements vides)
+    hierarchyDebug: () => get("/api/controls/hierarchy/debug"),
 
-    // Tasks
-    listTasks: (params) => get("/api/controls/tasks", { site: currentSite(), ...(params || {}) }),
+    // Métadonnées TSD (catégories/contrôles)
+    tsdMeta: () => get("/api/controls/tsd"),
+
+    // ---- Bootstrap / Auto-link ----
+    // Relie entités ↔ équipements et seed (create=1/0, seed=1/0)
+    autoLink: ({ create = 1, seed = 1 } = {}) =>
+      get("/api/controls/bootstrap/auto-link", { create, seed }),
+
+    // ---- Tâches ----
+    // Liste paginée/filtrée
+    listTasks: (params) =>
+      get("/api/controls/tasks", { ...(params || {}) }),
+
+    // Tâches d'une entité spécifique
     tasksByEntity: (entity_id, q = "") =>
-      get("/api/controls/tasks", { site: currentSite(), entity_id, q }),
+      get("/api/controls/tasks", { entity_id, q }),
 
-    taskDetails: (id) => get(`/api/controls/tasks/${id}/details`),
-    completeTask: (id, payload) => post(`/api/controls/tasks/${id}/complete`, payload),
+    // Schéma détaillé de la tâche (checklist, obs, procédure, etc.)
+    taskSchema: (id) => get(`/api/controls/tasks/${id}/schema`),
 
-    // Pièces jointes
-    listAttachments: (taskId) => get(`/api/controls/tasks/${taskId}/attachments`),
-    uploadAttachments: (taskId, files, label) => {
+    // Clôture + replanification d'une tâche
+    closeTask: (id, payload) => put(`/api/controls/tasks/${id}/close`, payload),
+
+    // Pièce jointe sur une tâche
+    attachToTask: (taskId, file /* File */) => {
       const fd = new FormData();
-      (files || []).forEach((f) => fd.append("files", f));
-      if (label) fd.append("label", label);
-      return upload(`/api/controls/tasks/${taskId}/upload`, fd);
+      fd.append("file", file);
+      return upload(`/api/controls/tasks/${taskId}/attachments`, fd);
     },
 
-    // IA
-    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),
-    assistant: (taskId, question) => post(`/api/controls/tasks/${taskId}/assistant`, { question }),
-
-    // Logs
-    history: (params) => get("/api/controls/history", { site: currentSite(), ...(params || {}) }),
-    records: (params) => get("/api/controls/records", { site: currentSite(), ...(params || {}) }),
-
-    // Health
+    // ---- Health ----
     health: () => get(`/api/controls/health`),
+
+    // ---- ALIAS RÉTRO-COMPAT (ne change rien ailleurs) ----
+    // (Si des écrans plus anciens appellent encore ces fonctions)
+    tree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
+    catalog: (params) => get("/api/controls/tsd", { ...(params || {}) }),
+    sync: ({ create = 1, seed = 1 } = {}) =>
+      get("/api/controls/bootstrap/auto-link", { create, seed }),
+    taskDetails: (id) => get(`/api/controls/tasks/${id}/schema`),
+    completeTask: (id, payload) => put(`/api/controls/tasks/${id}/close`, payload),
+    uploadAttachments: (taskId, files, label) => {
+      const fd = new FormData();
+      (files || []).forEach((f) => fd.append("file", f));
+      if (label) fd.append("label", label); // ignoré côté backend actuel (sans impact)
+      return upload(`/api/controls/tasks/${taskId}/attachments`, fd);
+    },
+    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),   // laissé tel quel si déjà utilisé
+    assistant: (taskId, question) => post(`/api/controls/tasks/${taskId}/assistant`, { question }), // idem
+    history: (params) => get("/api/controls/history", params), // si route absente => 404 contrôlé au runtime
+    records: (params) => get("/api/controls/records", params), // idem
   },
 
   /** --- COMP-EXT (Prestataires externes) — NOUVEAU --- */
