@@ -48,6 +48,8 @@ const diagramTarget      = process.env.DIAGRAM_BASE_URL       || "http://127.0.0
 const controlsTarget     = process.env.CONTROLS_BASE_URL      || "http://127.0.0.1:3011";
 const oibtTarget         = process.env.OIBT_BASE_URL          || "http://127.0.0.1:3012";
 const projectsTarget     = process.env.PROJECTS_BASE_URL      || "http://127.0.0.1:3013";
+// 🔵 Comp-Ext (prestataires externes) — nouveau microservice sur 3014
+const compExtTarget      = process.env.COMP_EXT_BASE_URL      || "http://127.0.0.1:3014";
 
 // petit helper pour créer des proxys homogènes
 function mkProxy(target, { withRestream = false } = {}) {
@@ -86,6 +88,9 @@ app.use("/api/oibt",         mkProxy(oibtTarget));
 
 // >>> Projects : proxy bavard + re-stream (si un jour body était déjà parsé)
 app.use("/api/projects", mkProxy(projectsTarget, { withRestream: true }));
+
+// >>> Comp-Ext (prestataires externes) : même traitement que Projects (re-stream utile pour PUT/POST)
+app.use("/api/comp-ext", mkProxy(compExtTarget, { withRestream: true }));
 
 /* =================================================================
    Body parser APRES les proxys (pour nos routes locales uniquement)
@@ -132,7 +137,7 @@ app.post("/api/auth/signin", express.json(), async (req, res) => {
 });
 
 // /api/auth/signup : placeholder pour inscription (à brancher sur DB plus tard)
-app.post("/api/auth/signup", express.json(), async (req, res) => {
+app.post("/api/auth/signup", express.json(), async (_req, res) => {
   // TODO: insérer l'utilisateur en base (pool.query(...))
   res.status(201).json({ ok: true });
 });
