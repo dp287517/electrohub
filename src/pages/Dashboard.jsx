@@ -18,6 +18,13 @@ const apps = [
     description: 'Financial project management: business case, PIP, WBS, offers, orders, invoices, KPIs & AI',
     icon: '💳'
   },
+  // 👉 Nouveau : Prestataires externes
+  {
+    label: 'External Contractors',
+    to: '/app/comp-ext',
+    description: 'Vendors offers, JSA, prevention plan, access, visits, SAP WO & attachments',
+    icon: '🤝'
+  },
 ];
 
 export default function Dashboard() {
