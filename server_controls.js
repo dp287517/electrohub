@@ -1,12 +1,12 @@
 /**
  * server_controls.js — ESM (type: module)
- * API Controls (TSD) — Hiérarchie stricte par équipements + Checklist + IA
- * ✗ Gantt retiré
+ * API Controls (TSD) — Hiérarchie stricte Équipements + Checklist + IA
+ * (Gantt retiré)
  *
- * ENV requis:
+ * ENV:
  *   DATABASE_URL=postgres://...
- *   CONTROLS_BASE_PATH=/api/controls   (défaut)
- *   CONTROLS_PORT=3011                 (défaut)
+ *   CONTROLS_BASE_PATH=/api/controls
+ *   CONTROLS_PORT=3011
  *
  * Dépendances: express pg multer dayjs uuid
  */
@@ -138,11 +138,8 @@ function resolveTsdForTask(task) {
 async function safeQuery(client, sql, params = []) {
   try { return await client.query(sql, params); } catch { return null; }
 }
-const firstValue = (row, ...names) => {
-  for (const n of names) if (row && row[n] != null) return row[n];
-  return null;
-};
-const labelize = (row, fallback) => firstValue(row, "label", "name", "code") || `${fallback} ${row?.id ?? ""}`;
+const labelFromRow = (row, fallback) =>
+  (row?.name ?? row?.code ?? `${fallback} ${row?.id ?? ""}`).toString();
 
 // ---------------------------------------------------------------------------
 // App + Router
@@ -219,7 +216,6 @@ router.get("/tasks/:id/schema", async (req, res) => {
 // ---------------------------------------------------------------------------
 // ATTACHMENTS
 // ---------------------------------------------------------------------------
-// liste
 router.get("/tasks/:id/attachments", async (req, res) => {
   const { id } = req.params;
   try {
@@ -235,7 +231,6 @@ router.get("/tasks/:id/attachments", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-// download
 router.get("/attachments/:id", async (req, res) => {
   const { id } = req.params;
   try {
@@ -252,7 +247,6 @@ router.get("/attachments/:id", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-// upload
 router.post("/tasks/:id/attachments", upload.single("file"), async (req, res) => {
   const { id } = req.params;
   const { originalname, mimetype, size, buffer } = req.file || {};
@@ -307,7 +301,6 @@ router.patch("/tasks/:id/close", async (req, res) => {
       const task = taskRows[0];
       const site = task.site || task.entity_site || "Default";
 
-      // record
       await insertRow(client, "controls_records", {
         site,
         task_id: task.id,
@@ -325,7 +318,6 @@ router.patch("/tasks/:id/close", async (req, res) => {
         lang: "fr",
       });
 
-      // fichiers inline (optionnels)
       for (const a of attachments) {
         const filename = a.filename || a.name || `file-${Date.now()}`;
         const mimetype = a.mimetype || a.mime || "application/octet-stream";
@@ -353,7 +345,6 @@ router.patch("/tasks/:id/close", async (req, res) => {
         [task.id, closed_at]
       );
 
-      // replanif
       const { control } = resolveTsdForTask(task);
       const months =
         (task.frequency_months && Number(task.frequency_months)) ||
@@ -397,10 +388,10 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// HIERARCHY/TREE — robuste aux colonnes manquantes (ex: label)
+// HIERARCHY/TREE (AUCUNE référence SQL à "label")
 //  * ATEX: building
 //  * SB/DEV/HV: building_code
-//  * Tâches uniquement si liées (controls_entities)
+//  * Tâches seulement si entity liée (controls_entities)
 //  * Fallbacks: related_type/related_id, equipment_ref, code, parent_code
 // ---------------------------------------------------------------------------
 router.get("/hierarchy/tree", async (_req, res) => {
@@ -413,22 +404,21 @@ router.get("/hierarchy/tree", async (_req, res) => {
       const mHVD = await getColumnsMeta(client, "hv_devices");
       const mATX = await getColumnsMeta(client, "atex_equipments");
 
-      // SELECTs qui n'incluent que des colonnes existantes (sinon NULL AS ...)
+      // Switchboards (sans label)
       const sw = await safeQuery(client, `
         SELECT
           ${hasCol(mSW,"id") ? "id" : "NULL AS id"},
           ${hasCol(mSW,"name") ? "name" : "NULL AS name"},
-          ${hasCol(mSW,"label") ? "label" : "NULL AS label"},
           ${hasCol(mSW,"code") ? "code" : "NULL AS code"},
           ${hasCol(mSW,"building_code") ? "building_code" : "NULL AS building_code"}
         FROM switchboards
       `);
 
+      // Devices (sans label)
       const dev = await safeQuery(client, `
         SELECT
           ${hasCol(mDEV,"id") ? "id" : "NULL AS id"},
           ${hasCol(mDEV,"name") ? "name" : "NULL AS name"},
-          ${hasCol(mDEV,"label") ? "label" : "NULL AS label"},
           ${hasCol(mDEV,"code") ? "code" : "NULL AS code"},
           ${hasCol(mDEV,"building_code") ? "building_code" : "NULL AS building_code"},
           ${hasCol(mDEV,"switchboard_id") ? "switchboard_id" : "NULL AS switchboard_id"},
@@ -437,21 +427,21 @@ router.get("/hierarchy/tree", async (_req, res) => {
         FROM devices
       `);
 
+      // HV equipments (sans label)
       const hve = await safeQuery(client, `
         SELECT
           ${hasCol(mHVE,"id") ? "id" : "NULL AS id"},
           ${hasCol(mHVE,"name") ? "name" : "NULL AS name"},
-          ${hasCol(mHVE,"label") ? "label" : "NULL AS label"},
           ${hasCol(mHVE,"code") ? "code" : "NULL AS code"},
           ${hasCol(mHVE,"building_code") ? "building_code" : "NULL AS building_code"}
         FROM hv_equipments
       `);
 
+      // HV devices (sans label)
       const hvd = await safeQuery(client, `
         SELECT
           ${hasCol(mHVD,"id") ? "id" : "NULL AS id"},
           ${hasCol(mHVD,"name") ? "name" : "NULL AS name"},
-          ${hasCol(mHVD,"label") ? "label" : "NULL AS label"},
           ${hasCol(mHVD,"code") ? "code" : "NULL AS code"},
           ${hasCol(mHVD,"building_code") ? "building_code" : "NULL AS building_code"},
           ${hasCol(mHVD,"equipment_code") ? "equipment_code" : "NULL AS equipment_code"},
@@ -459,19 +449,18 @@ router.get("/hierarchy/tree", async (_req, res) => {
         FROM hv_devices
       `);
 
-      // ATEX: colonne building (pas building_code)
+      // ATEX (sans label) — building + zone
       const aeq = await safeQuery(client, `
         SELECT
           ${hasCol(mATX,"id") ? "id" : "NULL AS id"},
           ${hasCol(mATX,"name") ? "name" : "NULL AS name"},
-          ${hasCol(mATX,"label") ? "label" : "NULL AS label"},
           ${hasCol(mATX,"code") ? "code" : "NULL AS code"},
           ${hasCol(mATX,"building") ? "building" : "NULL AS building"},
           ${hasCol(mATX,"zone") ? "zone" : "NULL AS zone"}
         FROM atex_equipments
       `);
 
-      // — structure racine par site/bâtiment
+      // Racine par bâtiment/site
       const siteMap = new Map();
       const siteGet = (label) => {
         const k = label || "Default";
@@ -479,18 +468,18 @@ router.get("/hierarchy/tree", async (_req, res) => {
         return siteMap.get(k);
       };
 
-      // Switchboards index
+      // Switchboards
       const sbById = new Map();
       const sbByCode = new Map();
       for (const s of sw?.rows || []) {
         const site = siteGet(s.building_code);
-        const node = { id: s.id, label: labelize(s, "SW"), code: s.code, tasks: [], devices: [] };
+        const node = { id: s.id, label: labelFromRow(s, "SW"), code: s.code, tasks: [], devices: [] };
         site.switchboards.push(node);
         if (s.id != null) sbById.set(String(s.id), node);
         if (s.code) sbByCode.set(String(s.code), node);
       }
 
-      // Devices index + placement sous switchboard
+      // Devices
       const devById = new Map();
       const devByCode = new Map();
       for (const d of dev?.rows || []) {
@@ -500,7 +489,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
         } else if (d.switchboard_code && sbByCode.has(String(d.switchboard_code))) {
           parent = sbByCode.get(String(d.switchboard_code));
         }
-        const node = { id: d.id, label: labelize(d, "Device"), code: d.code, tasks: [] };
+        const node = { id: d.id, label: labelFromRow(d, "Device"), code: d.code, tasks: [] };
         devById.set(String(d.id), node);
         if (d.code) devByCode.set(String(d.code), node);
         if (parent) parent.devices.push(node);
@@ -520,13 +509,13 @@ router.get("/hierarchy/tree", async (_req, res) => {
         hvListBySite.set(b, arr);
       };
       for (const h of hve?.rows || []) {
-        const node = { id: h.id, label: labelize(h, "HV"), code: h.code, tasks: [] };
+        const node = { id: h.id, label: labelFromRow(h, "HV"), code: h.code, tasks: [] };
         pushHV(h.building_code, node);
         if (h.id != null) hvById.set(String(h.id), node);
         if (h.code) hvByCode.set(String(h.code), node);
       }
       for (const h of hvd?.rows || []) {
-        const node = { id: h.id, label: labelize(h, "HV"), code: h.code, tasks: [] };
+        const node = { id: h.id, label: labelFromRow(h, "HV"), code: h.code, tasks: [] };
         pushHV(h.building_code, node);
         if (h.id != null) hvById.set(String(h.id), node);
         if (h.code) hvByCode.set(String(h.code), node);
@@ -543,7 +532,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
         const mapZone = atexZoneBySite.get(sKey);
         const zKey = String(a.zone ?? "Z?");
         if (!mapZone.has(zKey)) mapZone.set(zKey, { zone: zKey, equipments: [], tasks: [] });
-        const eq = { id: a.id, label: labelize(a, "ATEX"), code: a.code, tasks: [] };
+        const eq = { id: a.id, label: labelFromRow(a, "ATEX"), code: a.code, tasks: [] };
         mapZone.get(zKey).equipments.push(eq);
         if (a.id != null) atxById.set(String(a.id), eq);
         if (a.code) atxByCode.set(String(a.code), eq);
@@ -553,7 +542,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
         for (const z of zones.values()) site.atex.push(z);
       }
 
-      // Tâches + entités
+      // Tâches rattachées aux entités
       const tasksQ = await client.query(
         `SELECT t.id, t.task_name, t.task_code, t.status, t.next_control, t.entity_id, t.site
            FROM controls_tasks t
@@ -564,7 +553,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
       const entCols = await getColumnsMeta(client, "controls_entities");
       const has = (c) => !!entCols[c];
       const ents = await client.query(
-        `SELECT id, site, label, name, equipment_type, equipment_ref, related_type, related_id, parent_code, code,
+        `SELECT id, site, name, equipment_type, equipment_ref, related_type, related_id, parent_code, code,
                 ${has("switchboard_id") ? "switchboard_id" : "NULL AS switchboard_id"},
                 ${has("device_id") ? "device_id" : "NULL AS device_id"},
                 ${has("hv_id") ? "hv_id" : "NULL AS hv_id"},
@@ -586,13 +575,11 @@ router.get("/hierarchy/tree", async (_req, res) => {
       };
 
       const resolveTargetFromEntity = (e) => {
-        // 1) Liaison directe par id
         if (e.switchboard_id && sbById.has(String(e.switchboard_id))) return sbById.get(String(e.switchboard_id));
         if (e.device_id && devById.has(String(e.device_id))) return devById.get(String(e.device_id));
         if (e.hv_id && hvById.has(String(e.hv_id))) return hvById.get(String(e.hv_id));
         if (e.atex_id && atxById.has(String(e.atex_id))) return atxById.get(String(e.atex_id));
 
-        // 2) related_type / related_id
         const rt = String(e.related_type || "").toLowerCase();
         if (e.related_id) {
           if (rt.includes("switch")) return sbById.get(String(e.related_id)) || null;
@@ -601,7 +588,6 @@ router.get("/hierarchy/tree", async (_req, res) => {
           if (rt.includes("atex")) return atxById.get(String(e.related_id)) || null;
         }
 
-        // 3) equipment_ref / code / parent_code (match sur codes)
         const ref = e.equipment_ref || e.code || e.parent_code;
         if (ref) {
           if (sbByCode.has(String(ref))) return sbByCode.get(String(ref));
@@ -609,7 +595,6 @@ router.get("/hierarchy/tree", async (_req, res) => {
           if (hvByCode.has(String(ref))) return hvByCode.get(String(ref));
           if (atxByCode.has(String(ref))) return atxByCode.get(String(ref));
         }
-
         return null;
       };
 
@@ -631,7 +616,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// IA — Analyse avant intervention (branchée pour OpenAI en prod; no mock)
+// IA — Analyse avant intervention (hook OpenAI externe d’Electrohub)
 // ---------------------------------------------------------------------------
 router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
   const { task_id, hints = "[]", attach = "0" } = req.body || {};
@@ -660,8 +645,6 @@ router.post("/ai/analyze-before", upload.single("file"), async (req, res) => {
       });
     }
 
-    // ici tu appelles ton orchestrateur OpenAI existant côté Electrohub;
-    // on renvoie des champs compatibles avec le front
     const { control } = task ? resolveTsdForTask(task) : { control: null };
     res.json({
       ok: true,
