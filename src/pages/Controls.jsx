@@ -1,14 +1,14 @@
 // src/pages/Controls.jsx
-// Dashboard Contrôles (TSD) — Hiérarchie + Checklist + IA (sans Gantt)
+// Dashboard Contrôles (TSD) — Hiérarchie + Checklist + IA (optionnelle)
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { get } from '../lib/api.js';
 import {
   ChevronRight, ChevronDown, SlidersHorizontal, Image as ImageIcon,
-  CheckCircle2, Upload, Paperclip, Sparkles, Link2, Rocket
+  CheckCircle2, Upload, Paperclip, Sparkles, Link2
 } from 'lucide-react';
 
-// ---------- UI helpers ----------
+/* ---------- UI helpers ---------- */
 const Pill = ({ color = 'bg-gray-200 text-gray-800', children }) => (
   <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>{children}</span>
 );
@@ -31,7 +31,7 @@ function Toast({ msg, type='info', onClose }) {
   );
 }
 
-// ---------- API helpers ----------
+/* ---------- helpers internes ---------- */
 async function patchJSON(url, body) {
   const r = await fetch(url, {
     method: 'PATCH',
@@ -42,14 +42,7 @@ async function patchJSON(url, body) {
   return r.json();
 }
 
-// Utilitaires backend (bootstrap/seed)
-async function call(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-// ---------- Inline checklist widget ----------
+/* ---------- Checklist inline ---------- */
 function ChecklistInline({ task, schema, onClosed, busy, pushToast }) {
   const [checklist, setChecklist] = useState(() =>
     (schema?.checklist || []).map(i => ({ key: i.key, label: i.label, value: '' }))
@@ -62,7 +55,6 @@ function ChecklistInline({ task, schema, onClosed, busy, pushToast }) {
   const [comment, setComment] = useState('');
   const [files, setFiles] = useState([]);
 
-  // options propres (depuis le 1er item si présent), sinon fallback TSD meta
   const checklistOptions = useMemo(() => {
     const first = (schema?.checklist || [])[0];
     if (first && Array.isArray(first.options) && first.options.length) return first.options;
@@ -165,7 +157,7 @@ function ChecklistInline({ task, schema, onClosed, busy, pushToast }) {
   );
 }
 
-// ---------- IA before-intervention ----------
+/* ---------- IA (optionnelle, route non bloquante) ---------- */
 function AiAssist({ task, onUploaded, pushToast }) {
   const [file, setFile] = useState(null);
   const [res, setRes] = useState(null);
@@ -180,7 +172,10 @@ function AiAssist({ task, onUploaded, pushToast }) {
       form.append('attach', '1');
       if (file) form.append('file', file);
       const r = await fetch('/api/controls/ai/analyze-before', { method: 'POST', body: form });
-      const json = await r.json();
+      // Cette route peut ne pas exister → on ne fait pas planter l'écran
+      const ct = r.headers.get('content-type') || '';
+      const json = ct.includes('application/json') ? await r.json() : null;
+      if (!r.ok) throw new Error(json?.error || `HTTP ${r.status}`);
       setRes(json);
       if (file && onUploaded) onUploaded();
     } catch (e) {
@@ -222,7 +217,7 @@ function AiAssist({ task, onUploaded, pushToast }) {
           <div className="bg-emerald-50 p-3 rounded-lg">
             <div className="text-xs font-semibold text-emerald-800 mb-1">Procédure suggérée</div>
             <ol className="text-sm text-emerald-900 space-y-1">
-              {(res?.procedure?.steps || []).map(s => (
+              {(res?.procedure?.steps || []).map((s) => (
                 <li key={s.step}>• {s.text}</li>
               ))}
             </ol>
@@ -233,7 +228,7 @@ function AiAssist({ task, onUploaded, pushToast }) {
   );
 }
 
-// ---------- Bloc détail sur la droite ----------
+/* ---------- Panneau de droite (détail tâche) ---------- */
 function DetailsPane({ selectedTask, refreshHierarchy, pushToast }) {
   const [schema, setSchema] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -248,7 +243,9 @@ function DetailsPane({ selectedTask, refreshHierarchy, pushToast }) {
         setSchema(s);
       } catch (e) {
         pushToast(`Schema: ${e.message}`, 'error');
-      } finally { setLoading(false); }
+      } finally {
+        setLoading(false);
+      }
     };
     load();
   }, [selectedTask]);
@@ -281,7 +278,9 @@ function DetailsPane({ selectedTask, refreshHierarchy, pushToast }) {
           <div>
             <div className="text-xs text-gray-500">Tâche</div>
             <div className="text-lg font-semibold text-gray-800">{selectedTask.label}</div>
-            <div className="text-xs text-gray-500 mt-1">Due: {fmtDate(selectedTask.due_date)} • <StatusPill status={selectedTask.status} /></div>
+            <div className="text-xs text-gray-500 mt-1">
+              Due: {fmtDate(selectedTask.due_date)} • <StatusPill status={selectedTask.status} />
+            </div>
           </div>
         </div>
       </div>
@@ -310,7 +309,7 @@ function DetailsPane({ selectedTask, refreshHierarchy, pushToast }) {
   );
 }
 
-// ---------- Hiérarchie ----------
+/* ---------- Hiérarchie / Arbre ---------- */
 function NodeHeader({ title, count, open, toggle, level = 0 }) {
   return (
     <div
@@ -345,6 +344,7 @@ function TaskRow({ t, onSelect, statusFilter }) {
   );
 }
 
+/* ---------- Page principale ---------- */
 export default function Controls() {
   const [tree, setTree] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -352,11 +352,11 @@ export default function Controls() {
   const [statusFilter, setStatusFilter] = useState('open'); // 'open' | 'done' | 'all'
   const [selectedTask, setSelectedTask] = useState(null);
   const [toast, setToast] = useState(null);
-
   const pushToast = (msg, type='info') => setToast({ msg, type });
 
   const refreshHierarchy = async () => {
     setLoading(true);
+    setSelectedTask(null);
     try {
       const t = await get('/api/controls/hierarchy/tree');
       setTree(Array.isArray(t) ? t : []);
@@ -365,6 +365,16 @@ export default function Controls() {
       setTree([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const autoLink = async ({ create = 1, seed = 1 } = {}) => {
+    try {
+      const res = await get('/api/controls/bootstrap/auto-link', { create, seed });
+      pushToast(`Auto-link OK (${Array.isArray(res?.actions)?res.actions.length:0} opérations)`, 'success');
+      await refreshHierarchy();
+    } catch (e) {
+      pushToast(`Auto-link: ${e.message}`, 'error');
     }
   };
 
@@ -377,47 +387,14 @@ export default function Controls() {
     if (statusFilter === 'all') return tasks.length;
     const wanted = statusFilter === 'open' ? ['Planned','Pending','Overdue'] : ['Done','Closed'];
     return tasks.filter(t => wanted.includes(String(t.status))).length;
-  };
-
-  // Actions backend
-  const autoLink = async () => {
-    try {
-      await call('/api/controls/bootstrap/auto-link?create=1&seed=0');
-      pushToast('Équipements reliés aux entités.', 'success');
-      await refreshHierarchy();
-    } catch (e) {
-      pushToast(`Auto-link: ${e.message}`, 'error');
-    }
-  };
-  const seedTasks = async () => {
-    try {
-      await call('/api/controls/bootstrap/auto-link?create=0&seed=1');
-      pushToast('Tâches seeded.', 'success');
-      await refreshHierarchy();
-    } catch (e) {
-      pushToast(`Seed: ${e.message}`, 'error');
-    }
-  };
+    };
 
   return (
     <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-indigo-50 to-emerald-50 rounded-3xl min-h-screen">
       <header className="flex items-center justify-between mb-6">
         <h1 className="text-3xl md:text-4xl font-bold text-gray-800">Contrôles (TSD)</h1>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={autoLink}
-            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 hover:bg-gray-50 text-sm flex items-center gap-2"
-            title="Relier équipements → entités"
-          >
-            <Link2 size={16}/> Relier
-          </button>
-          <button
-            onClick={seedTasks}
-            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 hover:bg-gray-50 text-sm flex items-center gap-2"
-            title="Semer les tâches TSD sur les entités"
-          >
-            <Rocket size={16}/> Seed
-          </button>
+        <div className="flex items-center gap-2">
+          {/* Filtre statut */}
           <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-xl ring-1 ring-black/10">
             <SlidersHorizontal size={16} className="text-gray-500"/>
             <select
@@ -431,6 +408,16 @@ export default function Controls() {
               <option value="all">Tous</option>
             </select>
           </div>
+
+          {/* Auto-link/seed (utile après reset DB) */}
+          <button
+            onClick={() => autoLink({ create: 1, seed: 1 })}
+            className="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 text-sm flex items-center gap-2"
+            title="Créer entités manquantes + semer les tâches"
+          >
+            <Link2 size={16}/> Relier & Seed
+          </button>
+
           <button
             onClick={refreshHierarchy}
             className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 hover:bg-gray-50 text-sm"
@@ -447,7 +434,7 @@ export default function Controls() {
             <div className="p-6 text-center text-gray-600">Chargement…</div>
           ) : tree.length === 0 ? (
             <div className="p-6 text-center text-gray-500">
-              Aucune donnée. Utilise « Relier » puis « Seed » si besoin.
+              Aucune donnée. Utilise “Relier & Seed” si tu viens de vider la base.
             </div>
           ) : (
             <div className="space-y-4">
@@ -527,10 +514,12 @@ export default function Controls() {
                                 />
                                 {open && (
                                   <div className="pl-6 space-y-2">
+                                    {/* tâches du switchboard */}
                                     {(sb.tasks || []).map(t => (
                                       <TaskRow key={t.id} t={t} onSelect={setSelectedTask} statusFilter={statusFilter}/>
                                     ))}
                                     {countTasks(sb.tasks) === 0 && <div className="text-xs text-gray-400 pl-1">Aucune tâche (switchboard)</div>}
+                                    {/* Devices */}
                                     {(sb.devices || []).map((d, di) => {
                                       const kd = `${k}-dev-${di}`;
                                       const opend = !!expanded[kd];
