@@ -25,6 +25,9 @@ import Oibt from './pages/Oibt.jsx';
 // Project (NOUVEAU)
 import Project from './pages/Project.jsx';
 
+// 👇 NEW: Prestataires externes (Comp-Ext)
+import Comp from './pages/Comp.jsx';
+
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
@@ -64,6 +67,9 @@ export default function App() {
 
           {/* Project (NOUVEAU) */}
           <Route path="/app/projects" element={<ProtectedRoute><Project /></ProtectedRoute>} />
+
+          {/* 👇 NEW: Comp-Ext (Prestataires externes) */}
+          <Route path="/app/comp-ext" element={<ProtectedRoute><Comp /></ProtectedRoute>} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
