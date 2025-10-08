@@ -1,8 +1,8 @@
 /**
  * server_controls.js — Controls (TSD) API (ESM)
- * - Hiérarchie dynamique avec détection des colonnes et RATTACHEMENT des tâches par entity_id
- * - Auto-link & Seed: crée controls_entities pour chaque équipement + seed tasks TSD
- * - Endpoints: /hierarchy/tree, /bootstrap/auto-link, /tasks, /tasks/:id/schema, /tasks/:id/close, attachments, AI mock
+ * Corrigé pour controls_entities (pas d'equipment_table/equipment_id).
+ * Liaison équipements -> entités via switchboard_id/device_id/atex_id/hv_id
+ * (fallback related_type/related_id) + seed tâches TSD.
  *
  * Monté sous: /api/controls
  */
@@ -25,7 +25,7 @@ const pool = new Pool({
 });
 
 // ---------------------------------------------------------------------------
-// Charger TSD
+// TSD
 // ---------------------------------------------------------------------------
 let tsdLibrary;
 {
@@ -165,7 +165,7 @@ async function safeQuery(client, sql, params = []) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: détection dynamique des colonnes
+// Détection colonnes par table (shape)
 // ---------------------------------------------------------------------------
 const CANDIDATE = {
   building: ["building_code", "building", "site", "site_id"],
@@ -174,12 +174,10 @@ const CANDIDATE = {
   sw_id: ["switchboard_id", "switchboard", "parent_switchboard_id", "panel_id"],
   zone: ["zone", "atex_zone", "area"],
 };
-
 function pickCol(meta, candidates) {
   for (const c of candidates) if (meta[c]) return c;
   return null;
 }
-
 async function detectShape(client, table) {
   const meta = await getColumnsMeta(client, table);
   if (!Object.keys(meta).length) return null;
@@ -191,7 +189,6 @@ async function detectShape(client, table) {
   const zone = pickCol(meta, CANDIDATE.zone);
   return { table, meta, id, building, name, code, sw_id, zone };
 }
-
 function buildingExpr(shape, alias = "bld") {
   if (shape?.building) return `${shape.building}::text AS ${alias}`;
   return `'Default'::text AS ${alias}`;
@@ -201,12 +198,46 @@ function zoneExpr(shape, alias = "zone") {
   return `'Z?'::text AS ${alias}`;
 }
 function labelExpr(shape, alias = "label") {
-  const coalesce = [
-    ...(shape?.name ? [shape.name] : []),
-    ...(shape?.code ? [shape.code] : []),
-    ...(shape?.id ? [`('${shape.table.slice(0,3).toUpperCase()}-'||${shape.id})`] : [`'${shape.table.toUpperCase()}'`]),
-  ].join(", ");
-  return `COALESCE(${coalesce}) AS ${alias}`;
+  const fields = [];
+  if (shape?.name) fields.push(shape.name);
+  if (shape?.code) fields.push(shape.code);
+  if (shape?.id) fields.push(`('${shape.table.slice(0,3).toUpperCase()}-'||${shape.id})`);
+  if (!fields.length) fields.push(`'${shape?.table?.toUpperCase() || "EQUIPMENT"}'`);
+  return `COALESCE(${fields.join(", ")}) AS ${alias}`;
+}
+
+// ----------------------------------------------------------------------------
+// Helpers liaison: trouve l'entity_id pour un équipement
+// ----------------------------------------------------------------------------
+async function findEntityIdFor(client, kind, equipId) {
+  // kind in: 'switchboards' | 'devices' | 'atex_equipments' | 'hv'
+  const clauses = [];
+  const params = [equipId];
+  switch (kind) {
+    case "switchboards":
+      clauses.push("switchboard_id = $1");
+      clauses.push("(related_type = 'switchboards' AND related_id = $1)");
+      break;
+    case "devices":
+      clauses.push("device_id = $1");
+      clauses.push("(related_type = 'devices' AND related_id = $1)");
+      break;
+    case "atex_equipments":
+      clauses.push("atex_id = $1");
+      clauses.push("(related_type = 'atex_equipments' AND related_id = $1)");
+      break;
+    case "hv":
+      clauses.push("hv_id = $1");
+      clauses.push("(related_type = 'hv' AND related_id = $1)");
+      break;
+    default:
+      clauses.push("related_id = $1");
+  }
+  const { rows } = await client.query(
+    `SELECT id FROM controls_entities WHERE ${clauses.join(" OR ")} LIMIT 1`,
+    params
+  );
+  return rows.length ? rows[0].id : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +250,6 @@ router.get("/health", (_req, res) => {
     categories: (tsdLibrary.categories || []).length,
   });
 });
-
 router.get("/tsd", (_req, res) => {
   res.json({
     meta: tsdLibrary.meta || {},
@@ -232,7 +262,7 @@ router.get("/tsd", (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// DEBUG — voir la détection des colonnes & mapping entities
+// Hierarchy/debug
 // ---------------------------------------------------------------------------
 router.get("/hierarchy/debug", async (_req, res) => {
   const client = await pool.connect();
@@ -251,7 +281,7 @@ router.get("/hierarchy/debug", async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Hierarchy/tree — inclut entity_id sur CHAQUE équipement, et attache les tâches
+// Hierarchy/tree — équipe chaque nœud avec entity_id et tâches
 // ---------------------------------------------------------------------------
 router.get("/hierarchy/tree", async (_req, res) => {
   const client = await pool.connect();
@@ -261,7 +291,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
       sh[tbl] = await detectShape(client, tbl);
     }
 
-    // 1) Bâtiments (union de tout)
+    // 1) Bâtiments
     async function distinctBuildings(shape) {
       if (!shape) return [];
       const sql = `SELECT DISTINCT ${buildingExpr(shape, "b")} FROM ${shape.table} WHERE ${buildingExpr(shape, "b").split(" AS ")[0]} IS NOT NULL`;
@@ -274,13 +304,13 @@ router.get("/hierarchy/tree", async (_req, res) => {
       arr.forEach(b => b && allB.add(b));
     }
     if (allB.size === 0) {
-      const se = await safeQuery(client, `SELECT DISTINCT site::text AS b FROM controls_entities WHERE site IS NOT NULL`);
+      const se = await safeQuery(client, `SELECT DISTINCT building::text AS b FROM controls_entities WHERE building IS NOT NULL`);
       (se?.rows || []).forEach(r => allB.add(String(r.b)));
     }
     if (allB.size === 0) allB.add("Default");
 
-    // 2) Charger lignes (shape-aware) + récupérer entity_id pour chaque
-    async function loadRowsWithEntity(shape, equipment_table_key) {
+    // 2) Charger lignes + entity_id
+    async function loadRowsWithEntity(shape, kind) {
       if (!shape || !shape.id) return [];
       const fields = [
         `${shape.id} AS id`,
@@ -294,49 +324,38 @@ router.get("/hierarchy/tree", async (_req, res) => {
       const rs = await client.query(sql);
       const rows = rs.rows;
 
-      // binder entities
       for (const r of rows) {
-        const eqId = r.id;
-        const { rows: ent } = await client.query(
-          `SELECT id FROM controls_entities WHERE equipment_table=$1 AND equipment_id=$2 LIMIT 1`,
-          [equipment_table_key, eqId]
-        );
-        r.entity_id = ent.length ? ent[0].id : null;
+        r.entity_id = await findEntityIdFor(client, kind, r.id);
       }
       return rows;
     }
 
-    // Conventions equipment_table (entities)
-    // hv -> pour hv_equipments & hv_devices
     const hvEquip = await loadRowsWithEntity(sh["hv_equipments"], "hv");
     const hvDev   = await loadRowsWithEntity(sh["hv_devices"], "hv");
     const sw      = await loadRowsWithEntity(sh["switchboards"], "switchboards");
     const dev     = await loadRowsWithEntity(sh["devices"], "devices");
     const atex    = await loadRowsWithEntity(sh["atex_equipments"], "atex_equipments");
 
-    // Index équipements
+    // Index
     const swByBuilding = new Map();
     for (const r of sw) {
       const b = String(r.building ?? "Default");
       if (!swByBuilding.has(b)) swByBuilding.set(b, []);
       swByBuilding.get(b).push({ id: r.id, label: r.label, code: r.code, entity_id: r.entity_id, devices: [], tasks: [] });
     }
-
     const devBySwitch = new Map();
     for (const r of dev) {
       const key = String(r.switchboard_id ?? "");
       if (!devBySwitch.has(key)) devBySwitch.set(key, []);
       devBySwitch.get(key).push({ id: r.id, label: r.label, code: r.code, entity_id: r.entity_id, tasks: [] });
     }
-
     const hvByBuilding = new Map();
     for (const r of [...hvEquip, ...hvDev]) {
       const b = String(r.building ?? "Default");
       if (!hvByBuilding.has(b)) hvByBuilding.set(b, []);
       hvByBuilding.get(b).push({ id: r.id, label: r.label, code: r.code, entity_id: r.entity_id, tasks: [] });
     }
-
-    const atexByB = new Map(); // building -> Map(zone -> [equip])
+    const atexByB = new Map(); // b -> Map(zone -> [equip])
     for (const r of atex) {
       const b = String(r.building ?? "Default");
       if (!atexByB.has(b)) atexByB.set(b, new Map());
@@ -346,38 +365,31 @@ router.get("/hierarchy/tree", async (_req, res) => {
       byZone.get(zKey).push({ id: r.id, label: r.label, code: r.code, entity_id: r.entity_id, tasks: [] });
     }
 
-    // Rattacher devices aux switchboards
     for (const [b, list] of swByBuilding.entries()) {
       for (const sb of list) {
         sb.devices = devBySwitch.get(String(sb.id)) || [];
       }
     }
 
-    // 3) Nœuds de site
     const siteNodes = Array.from(allB.values())
       .sort((a,b)=>String(a).localeCompare(String(b)))
       .map(b => ({
         id: b,
         label: b,
         hv: hvByBuilding.get(b) || [],
-        switchboards: (swByBuilding.get(b) || []).map(sb => ({
-          ...sb,
-          devices: (sb.devices || []),
-        })),
+        switchboards: (swByBuilding.get(b) || []).map(sb => ({ ...sb, devices: (sb.devices || []) })),
         atex: Array.from((atexByB.get(b) || new Map()).entries()).map(([zone, eqs]) => ({
           zone, equipments: eqs, tasks: []
         })),
         tasks: [],
       }));
 
-    // ---- Rattacher les tâches PAR entity_id (solide) ----
+    // 3) Attacher TÂCHES (par entity_id)
     const tasksQ = await client.query(
       `SELECT id, task_name, task_code, status, next_control, entity_id
        FROM controls_tasks
        ORDER BY next_control ASC NULLS LAST`
     );
-
-    // Index: entity_id -> liste de tâches
     const tasksByEntity = new Map();
     for (const t of tasksQ.rows) {
       if (!t.entity_id) continue;
@@ -392,21 +404,18 @@ router.get("/hierarchy/tree", async (_req, res) => {
         color: colorForCategory(resolveTsdForTask(t).category?.key, t.task_code),
       });
     }
-
-    // dispatcher dans l’arbre
-    function attachTasksToEquipment(e) {
-      const list = tasksByEntity.get(String(e.entity_id)) || [];
-      if (list.length) e.tasks = list;
+    function attachTasks(e) {
+      const arr = tasksByEntity.get(String(e.entity_id)) || [];
+      if (arr.length) e.tasks = arr;
     }
-
     for (const site of siteNodes) {
-      for (const hv of site.hv) attachTasksToEquipment(hv);
+      for (const hv of site.hv) attachTasks(hv);
       for (const sb of site.switchboards) {
-        attachTasksToEquipment(sb);
-        for (const d of (sb.devices || [])) attachTasksToEquipment(d);
+        attachTasks(sb);
+        for (const d of (sb.devices || [])) attachTasks(d);
       }
       for (const z of site.atex || []) {
-        for (const eq of (z.equipments || [])) attachTasksToEquipment(eq);
+        for (const eq of (z.equipments || [])) attachTasks(eq);
       }
     }
 
@@ -419,7 +428,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Bootstrap: auto-link des équipements -> entities + seed TSD
+// Bootstrap: crée entités manquantes + seed tâches TSD
 // ---------------------------------------------------------------------------
 router.get("/bootstrap/auto-link", async (req, res) => {
   const doCreate = String(req.query.create || "1") === "1";
@@ -427,7 +436,6 @@ router.get("/bootstrap/auto-link", async (req, res) => {
   try {
     const out = await withTx(async (client) => {
       const actions = [];
-
       const sh = {};
       for (const tbl of ["hv_equipments", "hv_devices", "switchboards", "devices", "atex_equipments"]) {
         sh[tbl] = await detectShape(client, tbl);
@@ -453,7 +461,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       const dev     = await loadRows(sh["devices"]);
       const atex    = await loadRows(sh["atex_equipments"]);
 
-      // Map db_table -> catégorie TSD
+      // map cat
       const catsByDbTable = new Map();
       for (const c of tsdLibrary.categories || []) {
         if (c.db_table) catsByDbTable.set(String(c.db_table).toLowerCase(), c);
@@ -463,33 +471,42 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       const catDEV  = catsByDbTable.get("devices");
       const catATEX = catsByDbTable.get("atex_equipments");
 
-      async function ensureEntity(equipment_table, row, extras = {}) {
-        const exists = await client.query(
-          `SELECT id FROM controls_entities WHERE equipment_table=$1 AND equipment_id=$2 LIMIT 1`,
-          [equipment_table, row.id]
-        );
-        if (exists.rowCount) return { id: exists.rows[0].id, created: false };
-
+      async function ensureEntity(kind, row, extras = {}) {
+        // Recherche via colonnes spécifiques OU related_*
+        let where = "";
+        switch (kind) {
+          case "switchboards": where = "switchboard_id=$1 OR (related_type='switchboards' AND related_id=$1)"; break;
+          case "devices": where = "device_id=$1 OR (related_type='devices' AND related_id=$1)"; break;
+          case "atex_equipments": where = "atex_id=$1 OR (related_type='atex_equipments' AND related_id=$1)"; break;
+          case "hv": where = "hv_id=$1 OR (related_type='hv' AND related_id=$1)"; break;
+          default: where = "related_id=$1";
+        }
+        const ex = await client.query(`SELECT id FROM controls_entities WHERE ${where} LIMIT 1`, [row.id]);
+        if (ex.rowCount) return { id: ex.rows[0].id, created: false };
         if (!doCreate) return { id: null, created: false };
 
         const now = new Date().toISOString();
-        const ent = await insertRow(client, "controls_entities", {
+        const payload = {
           site: String(row.building ?? "Default"),
+          building: String(row.building ?? "Default"),
           name: row.label,
-          equipment_type: equipment_table,
+          equipment_type: kind,
           equipment_ref: row.code || null,
-          related_type: equipment_table,
+          related_type: kind,
           related_id: row.id,
-          equipment_table,
-          equipment_id: row.id,
-          switchboard_id: extras.switchboard_id ?? null,
-          atex_id: equipment_table === "atex_equipments" ? row.id : null,
-          hv_id: equipment_table === "hv" ? row.id : null,
           code: row.code || null,
           created_at: now,
           updated_at: now,
-        });
-        actions.push({ action: "entity_created", equipment_table, equipment_id: row.id, entity_id: ent.id });
+        };
+        // colonnes spécifiques si présentes
+        const entMeta = await getColumnsMeta(client, "controls_entities");
+        if (entMeta.switchboard_id && kind === "switchboards") payload.switchboard_id = row.id;
+        if (entMeta.device_id && kind === "devices") payload.device_id = row.id;
+        if (entMeta.atex_id && kind === "atex_equipments") payload.atex_id = row.id;
+        if (entMeta.hv_id && kind === "hv") payload.hv_id = row.id;
+
+        const ent = await insertRow(client, "controls_entities", payload);
+        actions.push({ action: "entity_created", kind, equip_id: row.id, entity_id: ent.id });
         return { id: ent.id, created: true };
       }
 
@@ -531,22 +548,19 @@ router.get("/bootstrap/auto-link", async (req, res) => {
         }
       }
 
-      // HV
+      // Créer entités + seed
       for (const r of [...hvEquip, ...hvDev]) {
         const ent = await ensureEntity("hv", r);
         if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catHV);
       }
-      // Switchboards
       for (const r of sw) {
         const ent = await ensureEntity("switchboards", r);
         if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catSW);
       }
-      // Devices
       for (const r of dev) {
         const ent = await ensureEntity("devices", r, { switchboard_id: r.switchboard_id ?? null });
         if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catDEV);
       }
-      // ATEX
       for (const r of atex) {
         const ent = await ensureEntity("atex_equipments", r);
         if (ent.id) await seedTasks(ent.id, String(r.building ?? "Default"), catATEX);
@@ -562,7 +576,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// TASKS (liste + schema + attachments + close)
+// TASKS (liste + schema + close + attachments)
 // ---------------------------------------------------------------------------
 router.get("/tasks", async (req, res) => {
   const {
@@ -618,7 +632,6 @@ router.get("/tasks", async (req, res) => {
   }
 });
 
-// debug: tasks par entité
 router.get("/tasks/by-entity/:entity_id", async (req, res) => {
   const { entity_id } = req.params;
   try {
