@@ -433,107 +433,181 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// HIERARCHY/TREE — Bâtiment → HV / Switchboards → Devices / ATEX
-//   Aucune tâche "Default" : on ne garde que celles rattachées à un équipement via controls_entities.*_id
+// HIERARCHY/TREE — robuste aux schémas (label optionnel)
+//   Bâtiment → HV / Switchboards → Devices / ATEX
+//   Aucune tâche “orpheline” : uniquement celles liées via controls_entities.*_id
 // ---------------------------------------------------------------------------
 router.get("/hierarchy/tree", async (_req, res) => {
   try {
     const client = await pool.connect();
     try {
-      // Lire équipements
-      const sw = await safeQuery(client,
-        `SELECT id, name, label, code, building_code
-           FROM switchboards ORDER BY building_code NULLS LAST, name NULLS LAST, id ASC`);
-      const dev = await safeQuery(client,
-        `SELECT id, name, label, code, building_code, switchboard_id, switchboard_code
-           FROM devices ORDER BY building_code NULLS LAST, switchboard_id NULLS LAST, name NULLS LAST, id ASC`);
-      const hve = await safeQuery(client,
-        `SELECT id, name, label, code, building_code
-           FROM hv_equipments ORDER BY building_code NULLS LAST, name NULLS LAST, id ASC`);
-      const hvd = await safeQuery(client,
-        `SELECT id, name, label, code, building_code, equipment_code, hv_equipment_id
-           FROM hv_devices ORDER BY building_code NULLS LAST, name NULLS LAST, id ASC`);
-      const aeq = await safeQuery(client,
-        `SELECT id, name, label, code, building, zone
-           FROM atex_equipments ORDER BY building NULLS LAST, zone NULLS LAST, name NULLS LAST, id ASC`);
+      // petit helper: fabrique une clause SELECT avec "NULL AS alias" si la colonne n'existe pas
+      const getColsMeta = (table) => getColumnsMeta(client, table);
+      const sel = (meta, col, alias = col) =>
+        (meta[col] ? `${col}` : `NULL`) + (alias && alias !== col ? ` AS ${alias}` : "");
 
-      // Construire structures
-      const siteMap = new Map(); // key = building label
-      const getSite = (label) => {
+      // --- Métas
+      const metaSW  = await getColsMeta("switchboards");
+      const metaDEV = await getColsMeta("devices");
+      const metaHVE = await getColsMeta("hv_equipments");
+      const metaHVD = await getColsMeta("hv_devices");
+      const metaATX = await getColsMeta("atex_equipments");
+
+      // --- Queries sûres (sans référence directe à une colonne manquante)
+      const qSW  = `
+        SELECT
+          ${sel(metaSW, "id")},
+          ${sel(metaSW, "name")},
+          ${sel(metaSW, "label")},
+          ${sel(metaSW, "code")},
+          ${sel(metaSW, "building_code")}
+        FROM switchboards
+        ORDER BY ${metaSW.building_code ? "building_code" : "id"} NULLS LAST, ${metaSW.name ? "name" : "id"} NULLS LAST, id ASC
+      `;
+
+      const qDEV = `
+        SELECT
+          ${sel(metaDEV, "id")},
+          ${sel(metaDEV, "name")},
+          ${sel(metaDEV, "label")},
+          ${sel(metaDEV, "code")},
+          ${sel(metaDEV, "building_code")},
+          ${sel(metaDEV, "switchboard_id")},
+          ${sel(metaDEV, "switchboard_code")}
+        FROM devices
+        ORDER BY ${metaDEV.building_code ? "building_code" : "id"} NULLS LAST, ${metaDEV.switchboard_id ? "switchboard_id" : "id"} NULLS LAST, ${metaDEV.name ? "name" : "id"} NULLS LAST, id ASC
+      `;
+
+      const qHVE = `
+        SELECT
+          ${sel(metaHVE, "id")},
+          ${sel(metaHVE, "name")},
+          ${sel(metaHVE, "label")},
+          ${sel(metaHVE, "code")},
+          ${sel(metaHVE, "building_code")}
+        FROM hv_equipments
+        ORDER BY ${metaHVE.building_code ? "building_code" : "id"} NULLS LAST, ${metaHVE.name ? "name" : "id"} NULLS LAST, id ASC
+      `;
+
+      const qHVD = `
+        SELECT
+          ${sel(metaHVD, "id")},
+          ${sel(metaHVD, "name")},
+          ${sel(metaHVD, "label")},
+          ${sel(metaHVD, "code")},
+          ${sel(metaHVD, "building_code")},
+          ${sel(metaHVD, "equipment_code")},
+          ${sel(metaHVD, "hv_equipment_id")}
+        FROM hv_devices
+        ORDER BY ${metaHVD.building_code ? "building_code" : "id"} NULLS LAST, ${metaHVD.name ? "name" : "id"} NULLS LAST, id ASC
+      `;
+
+      // ⚠️ ATEX : 'building' (pas building_code)
+      const qATX = `
+        SELECT
+          ${sel(metaATX, "id")},
+          ${sel(metaATX, "name")},
+          ${sel(metaATX, "label")},
+          ${sel(metaATX, "code")},
+          ${sel(metaATX, "building")},
+          ${sel(metaATX, "zone")}
+        FROM atex_equipments
+        ORDER BY ${metaATX.building ? "building" : "id"} NULLS LAST, ${metaATX.zone ? "zone" : "id"} NULLS LAST, ${metaATX.name ? "name" : "id"} NULLS LAST, id ASC
+      `;
+
+      // --- Exécution
+      const [sw, dev, hve, hvd, aeq] = await Promise.all([
+        client.query(qSW),
+        client.query(qDEV),
+        client.query(qHVE),
+        client.query(qHVD),
+        client.query(qATX),
+      ]);
+
+      // --- Builders
+      const siteMap = new Map(); // key = building label (string)
+      const siteGet = (label) => {
         const k = label || "Default";
         if (!siteMap.has(k)) siteMap.set(k, { id: k, label: k, hv: [], switchboards: [], atex: [] });
         return siteMap.get(k);
       };
+      const labelize = (row, fallbackPrefix) =>
+        row.label || row.name || row.code || `${fallbackPrefix} ${row.id}`;
 
-      // Switchboards by building + attach devices later
+      // Switchboards par building_code
       const sbById = new Map();
       const sbByCode = new Map();
-      (sw?.rows || []).forEach(s => {
-        const site = getSite(s.building_code);
-        const node = { id: s.id, label: s.label || s.name || s.code || `SW ${s.id}`, code: s.code, tasks: [], devices: [] };
+      for (const s of sw.rows) {
+        const site = siteGet(s.building_code);
+        const node = {
+          id: s.id,
+          label: labelize(s, "SW"),
+          code: s.code,
+          tasks: [],
+          devices: [],
+        };
         site.switchboards.push(node);
-        sbById.set(String(s.id), node);
+        if (s.id != null) sbById.set(String(s.id), node);
         if (s.code) sbByCode.set(String(s.code), node);
-      });
+      }
 
-      // Devices under their switchboards
+      // Devices sous leurs switchboards
       const devById = new Map();
-      (dev?.rows || []).forEach(d => {
+      for (const d of dev.rows) {
         let parent = null;
         if (d.switchboard_id && sbById.has(String(d.switchboard_id))) {
           parent = sbById.get(String(d.switchboard_id));
         } else if (d.switchboard_code && sbByCode.has(String(d.switchboard_code))) {
           parent = sbByCode.get(String(d.switchboard_code));
-        } else {
-          // fallback: group by building if no parent switchboard found
-          parent = null;
         }
-        const node = { id: d.id, label: d.label || d.name || d.code || `Device ${d.id}`, tasks: [] };
+        const node = { id: d.id, label: labelize(d, "Device"), tasks: [] };
         devById.set(String(d.id), node);
         if (parent) parent.devices.push(node);
-        else getSite(d.building_code).switchboards.push({ id:`sw-${d.id}`, label:`(Sans TGBT)`, tasks: [], devices:[node] });
-      });
+        else {
+          // fallback: groupe sans TGBT mais dans le même building_code
+          const site = siteGet(d.building_code);
+          site.switchboards.push({ id: `sw-${d.id}`, label: "(Sans TGBT)", tasks: [], devices: [node] });
+        }
+      }
 
-      // HV equipments & devices (flat under HV)
+      // HV : équipements + devices (à plat sous HV du site)
       const hvListBySite = new Map(); // building_code -> array
       const pushHV = (b, node) => {
         const arr = hvListBySite.get(b) || [];
         arr.push(node);
         hvListBySite.set(b, arr);
       };
-      (hve?.rows || []).forEach(h => pushHV(h.building_code, { id: h.id, label: h.label || h.name || h.code || `HV ${h.id}`, tasks: [] }));
-      (hvd?.rows || []).forEach(h => pushHV(h.building_code, { id: h.id, label: h.label || h.name || h.code || `HV ${h.id}`, tasks: [] }));
-      for (const [b, arr] of hvListBySite.entries()) {
-        const site = getSite(b);
-        site.hv.push(...arr);
-      }
+      for (const h of hve.rows) pushHV(h.building_code, { id: h.id, label: labelize(h, "HV"), tasks: [] });
+      for (const h of hvd.rows) pushHV(h.building_code, { id: h.id, label: labelize(h, "HV"), tasks: [] });
+      for (const [b, arr] of hvListBySite.entries()) siteGet(b).hv.push(...arr);
 
-      // ATEX by site & zone
+      // ATEX : building (pas building_code), groupé par zone
       const atexZoneBySite = new Map(); // building -> Map(zone -> { zone, equipments:[], tasks:[] })
-      (aeq?.rows || []).forEach(a => {
+      for (const a of aeq.rows) {
         const sKey = a.building || "Default";
         if (!atexZoneBySite.has(sKey)) atexZoneBySite.set(sKey, new Map());
         const mapZone = atexZoneBySite.get(sKey);
         const zKey = String(a.zone ?? "Z?");
         if (!mapZone.has(zKey)) mapZone.set(zKey, { zone: zKey, equipments: [], tasks: [] });
-        mapZone.get(zKey).equipments.push({ id: a.id, label: a.label || a.name || a.code || `ATEX ${a.id}`, tasks: [] });
-      });
+        mapZone.get(zKey).equipments.push({ id: a.id, label: labelize(a, "ATEX"), tasks: [] });
+      }
       for (const [sKey, zones] of atexZoneBySite.entries()) {
-        const site = getSite(sKey);
+        const site = siteGet(sKey);
         for (const z of zones.values()) site.atex.push(z);
       }
 
-      // Lire tâches + entités et attacher UNIQUEMENT si entité pointe un équipement connu
+      // Lire tâches + entités — on attache UNIQUEMENT si reliées à un équipement
       const tasksQ = await client.query(
         `SELECT t.id, t.task_name, t.task_code, t.status, t.next_control, t.entity_id, t.site
            FROM controls_tasks t
           WHERE t.entity_id IS NOT NULL
           ORDER BY t.next_control ASC NULLS LAST`
       );
+
       const entCols = await getColumnsMeta(client, "controls_entities");
       const has = (c) => !!entCols[c];
       const ents = await client.query(
-        `SELECT id, site, label,
+        `SELECT id, site, 
                 ${has("switchboard_id") ? "switchboard_id" : "NULL AS switchboard_id"},
                 ${has("device_id") ? "device_id" : "NULL AS device_id"},
                 ${has("hv_id") ? "hv_id" : "NULL AS hv_id"},
@@ -554,6 +628,7 @@ router.get("/hierarchy/tree", async (_req, res) => {
         });
       };
 
+      // Dispatcher les tâches selon le lien d'entité
       for (const t of tasksQ.rows) {
         const e = entMap.get(String(t.entity_id));
         if (!e) continue;
@@ -566,32 +641,30 @@ router.get("/hierarchy/tree", async (_req, res) => {
           pushTask(devById.get(String(e.device_id)).tasks, t);
           continue;
         }
-        // HV — on met sur le premier HV du site si inconnu précisément
         if (e.hv_id) {
-          // retrouver site en scannant hvListBySite
-          for (const [b, arr] of hvListBySite.entries()) {
+          // retrouver dans hvListBySite
+          let placed = false;
+          for (const arr of hvListBySite.values()) {
             const target = arr.find(h => String(h.id) === String(e.hv_id));
-            if (target) { pushTask(target.tasks, t); break; }
+            if (target) { pushTask(target.tasks, t); placed = true; break; }
           }
-          continue;
+          if (placed) continue;
         }
-        // ATEX
         if (e.atex_id) {
-          for (const [sKey, zones] of atexZoneBySite.entries()) {
-            let done = false;
+          // retrouver dans atexZoneBySite
+          let placed = false;
+          for (const zones of atexZoneBySite.values()) {
             for (const z of zones.values()) {
               const found = (z.equipments || []).find(eq => String(eq.id) === String(e.atex_id));
-              if (found) { pushTask(found.tasks, t); done = true; break; }
+              if (found) { pushTask(found.tasks, t); placed = true; break; }
             }
-            if (done) break;
+            if (placed) break;
           }
-          continue;
+          if (placed) continue;
         }
-
-        // Si aucune liaison précise → on ignore (pas de tâche "Default")
+        // sinon : pas de fallback → on ignore (zéro tâche orpheline)
       }
 
-      // assembler
       const tree = Array.from(siteMap.values()).sort((a, b) => String(a.label).localeCompare(String(b.label)));
       res.json(tree);
     } finally {
