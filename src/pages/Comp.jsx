@@ -1,11 +1,12 @@
 // src/pages/Comp.jsx
 // External Contractors (Prestataires externes)
 // ✔ Onglets : Vendors | Planning | Analytics
-// ✔ Responsive premium : mobile-first, sections empilées, table -> cartes mobile
-// ✔ Graphiques colorés + grands (empilés verticalement)
-// ✔ Vrai calendrier mensuel (nav, Today, événements par jour)
-// ✔ Gantt fiable (ISO -> Date)
-// ✔ Drag & drop multi-fichiers + aperçu + progression
+// ✔ Tableau refait : propre, triable, filtrable, édition dans un Drawer (pas d’inputs qui se chevauchent)
+// ✔ Filtres avancés : search, offre/JSA/accès, PP applicable, owner, #visites min/max, période, fichiers
+// ✔ Mobile-first : cartes + drawer
+// ✔ Graphiques (Chart.js) colorés & grands (empilés verticalement)
+// ✔ Calendrier mensuel + Gantt : clic => MODALE visite (accès rapide + bouton ouvrir l’éditeur)
+// ✔ Gantt fiable (ISO -> Date), événements enrichis (vendor_id, vindex, start, end)
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
@@ -32,6 +33,7 @@ const API = {
     const r = await fetch(`/api/comp-ext/vendors${qs ? `?${qs}` : ""}`, { credentials: "include" });
     return r.json();
   },
+  getVendor: async (id) => (await fetch(`/api/comp-ext/vendors/${id}`, { credentials: "include" })).json(),
   create: async (payload) =>
     (
       await fetch(`/api/comp-ext/vendors`, {
@@ -165,17 +167,13 @@ const statusColor = {
 // Palette explicite (charts colorés)
 const palette = {
   emerald: "rgba(16,185,129,0.85)",
-  emeraldLine: "rgba(16,185,129,1)",
   blue: "rgba(59,130,246,0.85)",
-  blueLine: "rgba(59,130,246,1)",
   amber: "rgba(245,158,11,0.85)",
-  amberLine: "rgba(245,158,11,1)",
   rose: "rgba(244,63,94,0.85)",
-  roseLine: "rgba(244,63,94,1)",
   slateGrid: "rgba(148,163,184,0.25)",
 };
 
-// Chart options premium (inspiré de ta page Obsolescence)
+// Chart options premium
 const baseChartOptions = {
   responsive: true,
   maintainAspectRatio: false,
@@ -194,21 +192,18 @@ const barOptions = {
   },
 };
 
-// ----------------- Month Calendar (sans dépendance externe) -----------------
-function MonthCalendar({ events = [] }) {
-  const [month, setMonth] = useState(dayjs()); // mois courant
+// ----------------- Month Calendar -----------------
+function MonthCalendar({ events = [], onDayClick }) {
+  const [month, setMonth] = useState(dayjs());
   const eventsByDate = useMemo(() => {
     const map = {};
-    for (const e of events) {
-      (map[e.date] ||= []).push(e);
-    }
+    for (const e of events) (map[e.date] ||= []).push(e);
     return map;
   }, [events]);
 
-  // lundi = 0
   const startOfMonth = month.startOf("month").toDate();
   const endOfMonth = month.endOf("month").toDate();
-  const startDow = (startOfMonth.getDay() + 6) % 7; // 0..6 (Mon..Sun)
+  const startDow = (startOfMonth.getDay() + 6) % 7; // Mon..Sun => 0..6
   const gridStart = new Date(startOfMonth);
   gridStart.setDate(gridStart.getDate() - startDow);
   const days = [];
@@ -222,23 +217,15 @@ function MonthCalendar({ events = [] }) {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-lg font-semibold">
-          {month.format("MMMM YYYY")}
-        </div>
+        <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
-          <button
-            className="px-3 py-1.5 rounded border hover:bg-gray-50"
-            onClick={() => setMonth((m) => m.subtract(1, "month"))}
-          >
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.subtract(1, "month"))}>
             ← Prev
           </button>
           <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth(dayjs())}>
             Today
           </button>
-          <button
-            className="px-3 py-1.5 rounded border hover:bg-gray-50"
-            onClick={() => setMonth((m) => m.add(1, "month"))}
-          >
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.add(1, "month"))}>
             Next →
           </button>
         </div>
@@ -246,47 +233,34 @@ function MonthCalendar({ events = [] }) {
 
       <div className="grid grid-cols-7 text-xs font-medium text-gray-500">
         {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((l) => (
-          <div key={l} className="px-2 py-2">
-            {l}
-          </div>
+          <div key={l} className="px-2 py-2">{l}</div>
         ))}
       </div>
 
       <div className="grid grid-cols-7 border rounded-xl overflow-hidden">
         {days.map(({ d, iso, inMonth }) => {
           const list = eventsByDate[iso] || [];
+          const clickable = list.length > 0;
           return (
-            <div
+            <button
               key={iso}
-              className={`min-h-[88px] p-2 border-t border-l last:border-r
-                ${inMonth ? "bg-white" : "bg-gray-50"}
-              `}
+              onClick={() => clickable && onDayClick && onDayClick({ date: iso, events: list })}
+              className={`min-h-[96px] p-2 border-t border-l last:border-r text-left transition
+                ${inMonth ? "bg-white" : "bg-gray-50"} ${clickable ? "hover:bg-blue-50" : ""}`}
             >
               <div className="flex items-center justify-between">
-                <div className={`text-xs ${inMonth ? "text-gray-700" : "text-gray-400"}`}>
-                  {dayjs(d).format("D")}
-                </div>
-                {!!list.length && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                    {list.length}
-                  </span>
-                )}
+                <div className={`text-xs ${inMonth ? "text-gray-700" : "text-gray-400"}`}>{dayjs(d).format("D")}</div>
+                {!!list.length && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">{list.length}</span>}
               </div>
               <div className="mt-1 space-y-1">
                 {list.slice(0, 3).map((e, i) => (
-                  <div
-                    key={i}
-                    className="truncate text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700"
-                    title={e.label}
-                  >
-                    {e.label}
+                  <div key={i} className="truncate text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">
+                    {e.vendor_name} (V{e.vindex})
                   </div>
                 ))}
-                {list.length > 3 && (
-                  <div className="text-[11px] text-gray-500">+{list.length - 3} more…</div>
-                )}
+                {list.length > 3 && <div className="text-[11px] text-gray-500">+{list.length - 3} more…</div>}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
@@ -299,26 +273,52 @@ export default function Comp() {
   const [tab, setTab] = useState("vendors");
 
   const [list, setList] = useState([]);
-  const [filter, setFilter] = useState({ q: "" });
-  const [creating, setCreating] = useState({ name: "" });
+  const [loading, setLoading] = useState(false);
 
+  // Filters
+  const [q, setQ] = useState("");
+  const [fOffer, setFOffer] = useState("");
+  const [fJsa, setFJsa] = useState("");
+  const [fAccess, setFAccess] = useState("");
+  const [fPP, setFPP] = useState(""); // "", "yes", "no"
+  const [fOwner, setFOwner] = useState("");
+  const [fHasFiles, setFHasFiles] = useState(""); // "", "yes", "no"
+  const [fVisitsMin, setFVisitsMin] = useState("");
+  const [fVisitsMax, setFVisitsMax] = useState("");
+  const [fFrom, setFFrom] = useState("");
+  const [fTo, setFTo] = useState("");
+
+  // Sorting
+  const [sortBy, setSortBy] = useState({ field: "name", dir: "asc" });
+
+  // Drawer (edit/create)
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState(null); // vendor object (null => create)
+
+  // Visit modal
+  const [visitModal, setVisitModal] = useState({ open: false, date: null, items: [] });
+
+  // Planning / Analytics
   const [calendar, setCalendar] = useState({ tasks: [], events: [] });
   const [viewMode, setViewMode] = useState(ViewMode.Month);
-
   const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(false);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const jsaOptions = ["transmis", "receptionne", "signe"];
   const accessOptions = ["a_faire", "fait"];
 
+  // Loaders
   async function reloadVendors() {
-    const data = await API.list(filter);
-    setList(Array.isArray(data.items) ? data.items : []);
+    setLoading(true);
+    try {
+      const data = await API.list(q ? { q } : {});
+      setList(Array.isArray(data.items) ? data.items : []);
+    } finally {
+      setLoading(false);
+    }
   }
   async function reloadPlanning() {
     const data = await API.calendar();
-    // Convert ISO -> Date for Gantt
     const tasks = (data.tasks || []).map((t) => ({
       ...t,
       start: new Date(t.start),
@@ -332,31 +332,148 @@ export default function Comp() {
     setStats(await API.stats());
   }
   async function reloadAll() {
-    setLoading(true);
-    try {
-      await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics()]);
-    } finally {
-      setLoading(false);
-    }
+    await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics()]);
   }
-  useEffect(() => {
-    reloadAll();
-  }, []);
+  useEffect(() => { reloadAll(); }, []);
 
-  // Lazy refresh per tab switch
-  useEffect(() => {
-    if (tab === "planning") reloadPlanning();
-    if (tab === "analytics") reloadAnalytics();
-  }, [tab]);
+  // Derived filtered + sorted list
+  const filtered = useMemo(() => {
+    const from = fFrom ? dayjs(fFrom) : null;
+    const to = fTo ? dayjs(fTo) : null;
+    const min = fVisitsMin ? Number(fVisitsMin) : null;
+    const max = fVisitsMax ? Number(fVisitsMax) : null;
+
+    let arr = [...list];
+    arr = arr.filter(v => {
+      if (fOffer && v.offer_status !== fOffer) return false;
+      if (fJsa && v.jsa_status !== fJsa) return false;
+      if (fAccess && v.access_status !== fAccess) return false;
+      if (fPP === "yes" && !v.pp_applicable) return false;
+      if (fPP === "no" && v.pp_applicable) return false;
+      if (fOwner && !(v.owner || "").toLowerCase().includes(fOwner.toLowerCase())) return false;
+      if (fHasFiles === "yes" && !(v.files_count > 0)) return false;
+      if (fHasFiles === "no" && v.files_count > 0) return false;
+
+      const nVisits = v.visits?.length || 0;
+      if (min !== null && nVisits < min) return false;
+      if (max !== null && nVisits > max) return false;
+
+      if (from || to) {
+        const visits = v.visits || [];
+        const overlaps = visits.some(vis => {
+          const s = vis.start ? dayjs(vis.start) : null;
+          const e = vis.end ? dayjs(vis.end) : s;
+          if (!s) return false;
+          if (from && e && e.isBefore(from, "day")) return false;
+          if (to && s && s.isAfter(to, "day")) return false;
+          return true;
+        });
+        if (!overlaps) return false;
+      }
+
+      return true;
+    });
+
+    const dir = sortBy.dir === "asc" ? 1 : -1;
+    arr.sort((a,b) => {
+      const f = sortBy.field;
+      const av = f==="first_date" ? (a.visits?.[0]?.start || "") :
+                 f==="owner" ? (a.owner||"") :
+                 f==="files_count" ? (a.files_count||0) :
+                 f==="visits" ? (a.visits?.length||0) :
+                 (a.name||"");
+      const bv = f==="first_date" ? (b.visits?.[0]?.start || "") :
+                 f==="owner" ? (b.owner||"") :
+                 f==="files_count" ? (b.files_count||0) :
+                 f==="visits" ? (b.visits?.length||0) :
+                 (b.name||"");
+      if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
+      return String(av).localeCompare(String(bv)) * dir;
+    });
+
+    return arr;
+  }, [list, fOffer, fJsa, fAccess, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
+
+  // Sorting helpers
+  const sortIcon = (field) => sortBy.field !== field ? "↕" : (sortBy.dir === "asc" ? "↑" : "↓");
+  const setSort = (field) =>
+    setSortBy((s) => (s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" }));
+
+  // Drawer handlers
+  function openCreate() {
+    setEditing({
+      name: "",
+      offer_status: "en_attente",
+      jsa_status: "transmis",
+      pp_applicable: false,
+      pp_link: "",
+      access_status: "a_faire",
+      sap_wo: "",
+      owner: "",
+      visits: [],
+    });
+    setDrawerOpen(true);
+  }
+  function openEdit(v) {
+    setEditing(JSON.parse(JSON.stringify(v)));
+    setDrawerOpen(true);
+  }
+  async function saveEditing() {
+    const payload = {
+      ...editing,
+      visits: (editing.visits || []).map((x, i) => ({
+        index: x.index || i + 1,
+        start: x.start || null,
+        end: x.end || x.start || null,
+      })),
+    };
+    if (editing.id) await API.update(editing.id, payload);
+    else await API.create(payload);
+    setDrawerOpen(false);
+    setEditing(null);
+    await reloadVendors();
+    await reloadPlanning();
+    await reloadAnalytics();
+  }
+  async function deleteEditing() {
+    if (!editing?.id) return;
+    await API.remove(editing.id);
+    setDrawerOpen(false);
+    setEditing(null);
+    await reloadVendors();
+    await reloadPlanning();
+    await reloadAnalytics();
+  }
+
+  // Visit modal openers (Calendar & Gantt)
+  function openVisitModalForDay({ date, events }) {
+    setVisitModal({ open: true, date, items: events || [] });
+  }
+  function openVisitModalForTask(task) {
+    // task carries vendor_id & vindex (from backend)
+    const startISO = task.start instanceof Date ? task.start.toISOString().slice(0,10) : String(task.start).slice(0,10);
+    const event = {
+      date: startISO,
+      vendor_id: task.vendor_id,
+      vendor_name: task.name?.split("•")[0]?.trim() || "",
+      vindex: task.vindex,
+      start: task.startISO || startISO,
+      end: task.endISO || (task.end instanceof Date ? task.end.toISOString().slice(0,10) : String(task.end).slice(0,10)),
+    };
+    setVisitModal({ open: true, date: startISO, items: [event] });
+  }
+
+  // Gantt handler
+  const handleGanttSelect = (task, isSelected) => {
+    if (isSelected && task?.vendor_id && task?.vindex) openVisitModalForTask(task);
+  };
 
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>
-          <p className="text-gray-500 text-sm">
-            Vendors offers, JSA, prevention plan, access, visits, SAP WO & attachments
-          </p>
+          <p className="text-gray-500 text-sm">Vendors offers, JSA, prevention plan, access, visits, SAP WO & attachments</p>
         </div>
         <Tabs value={tab} onChange={setTab} />
       </header>
@@ -364,150 +481,185 @@ export default function Comp() {
       {/* VENDORS */}
       {tab === "vendors" && (
         <>
-          <div className="bg-white rounded-2xl border shadow-sm p-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-col sm:flex-row gap-2 flex-1">
-              <Input
-                value={filter.q}
-                onChange={(v) => setFilter((s) => ({ ...s, q: v }))}
-                placeholder="Search vendor…"
-              />
+          {/* Filtres avancés */}
+          <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+              <div className="flex-1">
+                <Input value={q} onChange={setQ} placeholder="Search by name / WO…" />
+              </div>
               <div className="flex gap-2">
-                <button
-                  className="px-3 py-2 rounded border hover:bg-gray-50"
-                  onClick={() => {
-                    setFilter({ q: "" });
-                    reloadVendors();
-                  }}
-                >
-                  Reset
+                <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>{ setQ(""); reloadVendors(); }}>
+                  Reset search
                 </button>
-                <button
-                  className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
-                  onClick={reloadVendors}
-                >
-                  Refresh
+                <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={reloadVendors}>
+                  Search
+                </button>
+                <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>
+                  + New vendor
                 </button>
               </div>
             </div>
-            <div className="flex gap-2">
-              <Input
-                value={creating.name}
-                onChange={(v) => setCreating({ ...creating, name: v })}
-                placeholder="New vendor name"
-                className="w-full sm:w-64"
-              />
-              <button
-                className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                onClick={async () => {
-                  if (!creating.name?.trim()) return;
-                  await API.create({ name: creating.name.trim() });
-                  setCreating({ name: "" });
-                  await reloadVendors();
-                }}
-              >
-                Add
-              </button>
+
+            <div className="grid md:grid-cols-3 lg:grid-cols-4 gap-3">
+              <Select value={fOffer} onChange={setFOffer} options={["en_attente","reçue","po_faite"]} placeholder="Offer status" />
+              <Select value={fJsa} onChange={setFJsa} options={["transmis","receptionne","signe"]} placeholder="JSA status" />
+              <Select value={fAccess} onChange={setFAccess} options={["a_faire","fait"]} placeholder="Access status" />
+              <Select value={fPP} onChange={setFPP} options={["yes","no"]} placeholder="PP applicable?" />
+              <Input value={fOwner} onChange={setFOwner} placeholder="Owner contains…" />
+              <Select value={fHasFiles} onChange={setFHasFiles} options={["yes","no"]} placeholder="Has files?" />
+              <div className="grid grid-cols-2 gap-2">
+                <Input value={fVisitsMin} onChange={setFVisitsMin} placeholder="#Visits min" type="number" />
+                <Input value={fVisitsMax} onChange={setFVisitsMax} placeholder="#Visits max" type="number" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Input value={fFrom} onChange={setFFrom} type="date" placeholder="From" />
+                <Input value={fTo} onChange={setFTo} type="date" placeholder="To" />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50" onClick={()=>{
+                setFOffer(""); setFJsa(""); setFAccess(""); setFPP(""); setFOwner(""); setFHasFiles("");
+                setFVisitsMin(""); setFVisitsMax(""); setFFrom(""); setFTo("");
+              }}>Clear filters</button>
+              <div className="text-sm text-gray-500 flex items-center">Showing <b className="mx-1">{filtered.length}</b> of {list.length}</div>
             </div>
           </div>
 
-          {/* Table desktop */}
-          <div className="hidden md:block bg-white rounded-2xl border shadow-sm overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-700 sticky top-[100px] z-10">
-                <tr>
-                  <th className="p-2 text-left">Name</th>
-                  <th className="p-2 text-left">Offer</th>
-                  <th className="p-2 text-left">JSA</th>
-                  <th className="p-2 text-left">Prevention plan</th>
-                  <th className="p-2 text-left">Access</th>
-                  <th className="p-2 text-left">SAP WO</th>
-                  <th className="p-2 text-left">Visits</th>
-                  <th className="p-2 text-left">Owner</th>
-                  <th className="p-2 text-left">Files</th>
-                  <th className="p-2 text-left">Actions</th>
+          {/* Tableau redesign — pas d’inputs inline, pas de chevauchement */}
+          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-gray-50 sticky top-[108px] z-10">
+                <tr className="text-left text-sm text-gray-700">
+                  <Th onClick={()=>setSort("name")} active={sortBy.field==="name"} dir={sortBy.dir}>Name {sortIcon("name")}</Th>
+                  <Th>Offer</Th>
+                  <Th>JSA</Th>
+                  <Th>PP</Th>
+                  <Th onClick={()=>setSort("visits")} active={sortBy.field==="visits"} dir={sortBy.dir}>Visits {sortIcon("visits")}</Th>
+                  <Th onClick={()=>setSort("first_date")} active={sortBy.field==="first_date"} dir={sortBy.dir}>First date {sortIcon("first_date")}</Th>
+                  <Th onClick={()=>setSort("owner")} active={sortBy.field==="owner"} dir={sortBy.dir}>Owner {sortIcon("owner")}</Th>
+                  <Th onClick={()=>setSort("files_count")} active={sortBy.field==="files_count"} dir={sortBy.dir}>Files {sortIcon("files_count")}</Th>
+                  <Th>Actions</Th>
                 </tr>
               </thead>
-              <tbody>
-                {list.map((v) => (
-                  <VendorRow
-                    key={v.id}
-                    v={v}
-                    offerOptions={offerOptions}
-                    jsaOptions={jsaOptions}
-                    accessOptions={accessOptions}
-                    onSaved={reloadAll}
-                    onDelete={async () => {
-                      await API.remove(v.id);
-                      await reloadAll();
-                    }}
-                  />
-                ))}
-                {!loading && (!list || list.length === 0) && (
-                  <tr>
-                    <td colSpan={10} className="p-4 text-gray-500">
-                      No vendors.
-                    </td>
-                  </tr>
+              <tbody className="text-sm">
+                {!loading && filtered.length === 0 && (
+                  <tr><td colSpan={9} className="p-4 text-gray-500">No vendors.</td></tr>
                 )}
                 {loading && (
-                  <tr>
-                    <td colSpan={10} className="p-4 text-gray-500">
-                      Loading…
-                    </td>
-                  </tr>
+                  <tr><td colSpan={9} className="p-4 text-gray-500">Loading…</td></tr>
                 )}
+
+                {filtered.map(v => {
+                  const first = v.visits?.[0];
+                  return (
+                    <tr key={v.id} className="border-t align-top hover:bg-gray-50">
+                      <td className="p-3">
+                        <div className="flex items-center gap-2">
+                          <button className="text-blue-700 font-medium hover:underline" onClick={()=>openEdit(v)} title="Edit">
+                            {v.name}
+                          </button>
+                          {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
+                        </div>
+                      </td>
+                      <td className="p-3"><Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></td>
+                      <td className="p-3"><Badge color={statusColor.jsa(v.jsa_status)}>{v.jsa_status}</Badge></td>
+                      <td className="p-3">
+                        {v.pp_applicable ? (
+                          v.pp_link ? (
+                            <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">Applicable (link)</a>
+                          ) : <span className="text-emerald-700">Applicable</span>
+                        ) : <span className="text-gray-500">N/A</span>}
+                      </td>
+                      <td className="p-3">{v.visits?.length || 0}</td>
+                      <td className="p-3">{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</td>
+                      <td className="p-3">{v.owner || "—"}</td>
+                      <td className="p-3">
+                        {v.files_count ? (
+                          <button className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
+                            onClick={()=>openEdit(v)}>
+                            {v.files_count} file{v.files_count>1?"s":""}
+                          </button>
+                        ) : <span className="text-gray-400 text-xs">0</span>}
+                      </td>
+                      <td className="p-3">
+                        <div className="flex gap-2">
+                          <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
+                          <button className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
 
           {/* Cartes mobile */}
           <div className="md:hidden grid grid-cols-1 gap-4">
-            {list.map((v) => (
-              <VendorCard
-                key={v.id}
-                v={v}
+            {filtered.map(v => (
+              <div key={v.id} className="bg-white rounded-2xl border shadow-sm p-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-base font-semibold">{v.name}</div>
+                    <div className="text-xs text-gray-500">Owner: {v.owner || "—"}</div>
+                  </div>
+                  <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={()=>openEdit(v)}>Edit</button>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div>Offer: <Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></div>
+                  <div>JSA: <Badge color={statusColor.jsa(v.jsa_status)}>{v.jsa_status}</Badge></div>
+                  <div>Visits: {v.visits?.length || 0}</div>
+                  <div>First: {v.visits?.[0]?.start ? dayjs(v.visits[0].start).format("DD/MM/YYYY") : "—"}</div>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  {v.pp_applicable ? <span className="text-emerald-700 text-sm">PP applicable</span> : <span className="text-gray-500 text-sm">PP N/A</span>}
+                  {v.pp_link && <a className="text-blue-700 underline text-sm" href={v.pp_link} target="_blank" rel="noreferrer">link</a>}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
+                  <button className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}>Delete</button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Drawer d'édition / création */}
+          {drawerOpen && (
+            <Drawer onClose={()=>{ setDrawerOpen(false); setEditing(null); }}>
+              <Editor
+                value={editing}
+                onChange={setEditing}
                 offerOptions={offerOptions}
                 jsaOptions={jsaOptions}
                 accessOptions={accessOptions}
-                onSaved={reloadAll}
-                onDelete={async () => {
-                  await API.remove(v.id);
-                  await reloadAll();
-                }}
+                onSave={saveEditing}
+                onDelete={editing?.id ? deleteEditing : null}
               />
-            ))}
-          </div>
+            </Drawer>
+          )}
         </>
       )}
 
-      {/* PLANNING : EMPILÉ (calendrier plein + Gantt plein) */}
+      {/* PLANNING */}
       {tab === "planning" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Calendar (Month view)">
-            <MonthCalendar events={calendar.events} />
+            <MonthCalendar events={calendar.events} onDayClick={openVisitModalForDay} />
           </Card>
-          <Card
-            title="Gantt"
-            actions={
-              <select
-                className="border rounded px-2 py-1 text-sm"
-                value={Object.keys(ViewMode).find((k) => ViewMode[k] === viewMode) || "Month"}
-                onChange={(e) =>
-                  setViewMode(
-                    { Week: ViewMode.Week, Month: ViewMode.Month, Year: ViewMode.Year }[e.target.value] ||
-                      ViewMode.Month
-                  )
-                }
-              >
-                <option value="Week">Week</option>
-                <option value="Month">Month</option>
-                <option value="Year">Year</option>
-              </select>
-            }
-          >
+          <Card title="Gantt" actions={
+            <select className="border rounded px-2 py-1 text-sm"
+              value={Object.keys(ViewMode).find((k) => ViewMode[k] === viewMode) || "Month"}
+              onChange={(e) => setViewMode({ Week: ViewMode.Week, Month: ViewMode.Month, Year: ViewMode.Year }[e.target.value] || ViewMode.Month)}
+            >
+              <option value="Week">Week</option>
+              <option value="Month">Month</option>
+              <option value="Year">Year</option>
+            </select>
+          }>
             <div className="h-[520px] overflow-x-auto">
               {calendar?.tasks?.length ? (
-                <Gantt tasks={calendar.tasks} viewMode={viewMode} />
+                <Gantt tasks={calendar.tasks} viewMode={viewMode} onSelect={handleGanttSelect} />
               ) : (
                 <div className="text-sm text-gray-500">No planned visits.</div>
               )}
@@ -516,51 +668,69 @@ export default function Comp() {
         </div>
       )}
 
-      {/* ANALYTICS : EMPILÉ (grands graphiques colorés) */}
+      {/* ANALYTICS */}
       {tab === "analytics" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Offers">
-            <div className="h-[380px]">
-              <Doughnut
-                data={donutData(stats?.counts?.offer || { en_attente: 0, recue: 0, po_faite: 0 }, [
-                  palette.amber,
-                  palette.blue,
-                  palette.emerald,
-                ])}
-                options={baseChartOptions}
-              />
+            <div className="h=[380px] h-[380px]">
+              <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, [palette.amber, palette.blue, palette.emerald])} options={baseChartOptions} />
             </div>
           </Card>
           <Card title="JSA">
             <div className="h-[380px]">
-              <Doughnut
-                data={donutData(stats?.counts?.jsa || { transmis: 0, receptionne: 0, signe: 0 }, [
-                  palette.amber,
-                  palette.blue,
-                  palette.emerald,
-                ])}
-                options={baseChartOptions}
-              />
+              <Doughnut data={donutData(stats?.counts?.jsa || { transmis:0, receptionne:0, signe:0 }, [palette.amber, palette.blue, palette.emerald])} options={baseChartOptions} />
             </div>
           </Card>
           <Card title="Access">
             <div className="h-[380px]">
-              <Bar
-                data={barData(stats?.counts?.access || { a_faire: 0, fait: 0 }, [
-                  palette.rose,
-                  palette.emerald,
-                ])}
-                options={barOptions}
-              />
+              <Bar data={barData(stats?.counts?.access || { a_faire:0, fait:0 }, ["#f43f5e", "#10b981"])} options={barOptions} />
             </div>
           </Card>
         </div>
+      )}
+
+      {/* Visit Modal (calendar & gantt) */}
+      {visitModal.open && (
+        <Modal onClose={()=>setVisitModal({ open:false, date:null, items:[] })} title={`Visits • ${dayjs(visitModal.date).format("DD/MM/YYYY")}`}>
+          <div className="space-y-3">
+            {visitModal.items.map((it, i) => (
+              <VisitItem
+                key={`${it.vendor_id}-${it.vindex}-${i}`}
+                item={it}
+                onOpenVendor={async () => {
+                  // Try in current list first
+                  let v = list.find(x => x.id === it.vendor_id);
+                  if (!v) {
+                    const fetched = await API.getVendor(it.vendor_id);
+                    v = fetched?.id ? fetched : null;
+                  }
+                  if (!v) return;
+                  setVisitModal({ open:false, date:null, items:[] });
+                  openEdit(v);
+                }}
+              />
+            ))}
+            {(!visitModal.items || visitModal.items.length===0) && (
+              <div className="text-sm text-gray-500">No visit details.</div>
+            )}
+          </div>
+        </Modal>
       )}
     </section>
   );
 }
 
-// ----------------- Reusable -----------------
+// ---------- Small components ----------
+function Th({ children, onClick, active, dir }) {
+  return (
+    <th className="p-3 font-medium select-none">
+      <button onClick={onClick} className={`inline-flex items-center gap-1 ${onClick ? "hover:underline" : ""}`}>
+        {children}
+      </button>
+    </th>
+  );
+}
+
 function Card({ title, actions, children }) {
   return (
     <div className="bg-white rounded-2xl border shadow-sm p-4">
@@ -573,248 +743,132 @@ function Card({ title, actions, children }) {
   );
 }
 
-function VendorRow({ v, onSaved, onDelete, offerOptions, jsaOptions, accessOptions }) {
-  const [edit, setEdit] = useState(v);
-  const [editing, setEditing] = useState(false);
-  const [visitCount, setVisitCount] = useState(v?.visits?.length || 1);
-  const [showAttach, setShowAttach] = useState(false);
-
-  useEffect(() => {
-    setEdit(v);
-    setVisitCount(v?.visits?.length || 1);
-  }, [v?.id]);
-
-  useEffect(() => {
-    setEdit((e) => {
-      const base = e?.visits || [];
-      const arr = Array.from({ length: visitCount }).map((_, i) => ({
-        index: i + 1,
-        start: base[i]?.start || "",
-        end: base[i]?.end || base[i]?.start || "",
-      }));
-      return { ...e, visits: arr };
-    });
-  }, [visitCount]);
-
-  async function save() {
-    const payload = {
-      ...edit,
-      visits: (edit.visits || []).map((x) => ({
-        index: x.index,
-        start: x.start || null,
-        end: x.end || x.start || null,
-      })),
-    };
-    await API.update(v.id, payload);
-    setEditing(false);
-    if (onSaved) onSaved();
-  }
-
+function Drawer({ children, onClose }) {
   return (
-    <tr className="border-t border-gray-100 align-top hover:bg-gray-50/50 transition">
-      <td className="p-2 min-w-[180px]">
-        <Input value={edit.name || ""} onChange={(x) => setEdit({ ...edit, name: x })} disabled={!editing} />
-      </td>
-      <td className="p-2">
-        <div className="flex items-center gap-2">
-          <Select
-            value={edit.offer_status || "en_attente"}
-            onChange={(x) => setEdit({ ...edit, offer_status: x })}
-            options={offerOptions}
-            disabled={!editing}
-          />
-          <Badge color={statusColor.offre(edit.offer_status || "en_attente")}>
-            {edit.offer_status || "en_attente"}
-          </Badge>
+    <div className="fixed inset-0 z-40">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-white shadow-2xl p-4 overflow-y-auto">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">Edit vendor</h3>
+          <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={onClose}>Close</button>
         </div>
-      </td>
-      <td className="p-2">
-        <div className="flex items-center gap-2">
-          <Select
-            value={edit.jsa_status || "transmis"}
-            onChange={(x) => setEdit({ ...edit, jsa_status: x })}
-            options={jsaOptions}
-            disabled={!editing}
-          />
-        </div>
-        <div className="mt-1">
-          <Badge color={statusColor.jsa(edit.jsa_status || "transmis")}>
-            {edit.jsa_status || "transmis"}
-          </Badge>
-        </div>
-      </td>
-      <td className="p-2">
-        <label className="flex items-center gap-2 mb-1 text-sm">
-          <input
-            type="checkbox"
-            checked={!!edit.pp_applicable}
-            onChange={(e) => setEdit({ ...edit, pp_applicable: e.target.checked })}
-            disabled={!editing}
-          />
-          Applicable
-        </label>
-        {edit.pp_applicable && (
-          <Input
-            value={edit.pp_link || ""}
-            onChange={(x) => setEdit({ ...edit, pp_link: x })}
-            placeholder="SafePermit link"
-            disabled={!editing}
-          />
-        )}
-      </td>
-      <td className="p-2">
-        <div className="flex items-center gap-2">
-          <Select
-            value={edit.access_status || "a_faire"}
-            onChange={(x) => setEdit({ ...edit, access_status: x })}
-            options={accessOptions}
-            disabled={!editing}
-          />
-          <Badge color={statusColor.access(edit.access_status || "a_faire")}>
-            {edit.access_status || "a_faire"}
-          </Badge>
-        </div>
-      </td>
-      <td className="p-2">
-        <Input
-          value={edit.sap_wo || ""}
-          onChange={(x) => setEdit({ ...edit, sap_wo: x })}
-          placeholder="Upcoming WO"
-          disabled={!editing}
-        />
-      </td>
-      <td className="p-2 min-w-[260px]">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs text-gray-600">Visits</span>
-          <input
-            type="number"
-            min={1}
-            className="border rounded px-2 py-1 text-sm w-20"
-            value={visitCount}
-            onChange={(e) => setVisitCount(Math.max(1, Number(e.target.value || 1)))}
-            disabled={!editing}
-          />
-        </div>
-        <div className="space-y-2">
-          {(edit.visits || []).map((vis, i) => (
-            <div key={i} className="grid grid-cols-2 gap-2">
-              <input
-                type="date"
-                className="border rounded px-2 py-1 text-sm"
-                value={vis.start || ""}
-                onChange={(e) => {
-                  const v2 = [...edit.visits];
-                  v2[i] = { ...v2[i], start: e.target.value };
-                  setEdit({ ...edit, visits: v2 });
-                }}
-                disabled={!editing}
-              />
-              <input
-                type="date"
-                className="border rounded px-2 py-1 text-sm"
-                value={vis.end || ""}
-                onChange={(e) => {
-                  const v2 = [...edit.visits];
-                  v2[i] = { ...v2[i], end: e.target.value };
-                  setEdit({ ...edit, visits: v2 });
-                }}
-                disabled={!editing}
-              />
-            </div>
-          ))}
-        </div>
-      </td>
-      <td className="p-2">
-        <Input
-          value={edit.owner || ""}
-          onChange={(x) => setEdit({ ...edit, owner: x })}
-          placeholder="Owner"
-          disabled={!editing}
-        />
-      </td>
-      <td className="p-2">
-        <button
-          className="px-2 py-1 rounded bg-purple-600 text-white hover:bg-purple-700 transition"
-          onClick={() => setShowAttach((s) => !s)}
-        >
-          📎 Files {v.files_count ? <Badge color="purple">{v.files_count}</Badge> : null}
-        </button>
-        {showAttach && <AttachmentsPanel vendorId={v.id} onChanged={onSaved} />}
-      </td>
-      <td className="p-2">
-        <div className="flex flex-col gap-2">
-          {!editing ? (
-            <button
-              className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600 transition"
-              onClick={() => setEditing(true)}
-            >
-              Edit
-            </button>
-          ) : (
-            <div className="flex gap-2">
-              <button
-                className="px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700 transition"
-                onClick={save}
-              >
-                Save
-              </button>
-              <button
-                className="px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 transition"
-                onClick={() => {
-                  setEdit(v);
-                  setVisitCount(v?.visits?.length || 1);
-                  setEditing(false);
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-          <button
-            className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
-            onClick={onDelete}
-          >
-            Delete
-          </button>
-        </div>
-      </td>
-    </tr>
+        {children}
+      </div>
+    </div>
   );
 }
 
-function VendorCard(props) {
-  const { v, onSaved, onDelete, offerOptions, jsaOptions, accessOptions } = props;
-  const [expanded, setExpanded] = useState(false);
+function Modal({ title, children, onClose }) {
   return (
-    <div className="bg-white rounded-2xl border shadow-sm p-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-base font-semibold">{v.name}</div>
-          <div className="text-xs text-gray-500">Owner: {v.owner || "—"}</div>
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[95vw] max-w-2xl bg-white rounded-2xl shadow-2xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">{title}</h3>
+          <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={onClose}>Close</button>
         </div>
-        <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={() => setExpanded((o) => !o)}>
-          {expanded ? "Hide" : "Details"}
-        </button>
+        {children}
       </div>
-      {expanded && (
-        <div className="mt-3">
-          <VendorRow
-            v={v}
-            onSaved={onSaved}
-            onDelete={onDelete}
-            offerOptions={offerOptions}
-            jsaOptions={jsaOptions}
-            accessOptions={accessOptions}
-          />
+    </div>
+  );
+}
+
+function VisitItem({ item, onOpenVendor }) {
+  return (
+    <div className="border rounded-xl p-3 flex items-center justify-between">
+      <div>
+        <div className="font-medium">{item.vendor_name || `Vendor #${item.vendor_id}`} • Visit {item.vindex}</div>
+        <div className="text-sm text-gray-600">
+          {dayjs(item.start).format("DD/MM/YYYY")} → {dayjs(item.end).format("DD/MM/YYYY")}
+        </div>
+      </div>
+      <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={onOpenVendor}>
+        Open vendor
+      </button>
+    </div>
+  );
+}
+
+function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, accessOptions }) {
+  const v = value || {};
+  const set = (patch) => onChange({ ...v, ...patch });
+
+  const [visitsCount, setVisitsCount] = useState(v?.visits?.length || 1);
+  useEffect(() => { setVisitsCount(v?.visits?.length || 1); }, [v?.id]);
+
+  useEffect(() => {
+    const base = v?.visits || [];
+    const arr = Array.from({ length: Math.max(1, Number(visitsCount) || 1) }).map((_, i) => ({
+      index: i + 1,
+      start: base[i]?.start || "",
+      end: base[i]?.end || base[i]?.start || "",
+    }));
+    set({ visits: arr });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visitsCount]);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Input value={v.name || ""} onChange={(x) => set({ name: x })} placeholder="Vendor name" />
+        <Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" />
+        <Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" />
+        <Select value={v.jsa_status || "transmis"} onChange={(x) => set({ jsa_status: x })} options={jsaOptions} placeholder="JSA status" />
+        <Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" />
+        <Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" />
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={!!v.pp_applicable} onChange={(e)=>set({ pp_applicable: e.target.checked })} />
+          <span className="text-sm">Prevention plan applicable</span>
+        </label>
+        {v.pp_applicable && (
+          <Input value={v.pp_link || ""} onChange={(x)=>set({ pp_link: x })} placeholder="SafePermit link" />
+        )}
+      </div>
+
+      <div className="border rounded-xl p-3">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="text-sm text-gray-600">Visits</div>
+          <input type="number" min={1} className="border rounded px-2 py-1 text-sm w-24"
+            value={visitsCount} onChange={(e)=>setVisitsCount(Math.max(1, Number(e.target.value||1)))} />
+        </div>
+        <div className="grid gap-2">
+          {(v.visits || []).map((vis, i) => (
+            <div key={i} className="grid grid-cols-2 gap-2">
+              <input type="date" className="border rounded px-2 py-1 text-sm" value={vis.start || ""} onChange={(e)=> {
+                const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value}; set({ visits: arr });
+              }} />
+              <input type="date" className="border rounded px-2 py-1 text-sm" value={vis.end || ""} onChange={(e)=> {
+                const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value}; set({ visits: arr });
+              }} />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {v.id && (
+        <div className="border rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-medium">Attachments</div>
+            <div className="text-xs text-gray-500">Drag & drop files or click</div>
+          </div>
+          <AttachmentsPanel vendorId={v.id} onChanged={()=>{ /* refresh counters side-effect handled on save */ }} />
         </div>
       )}
-      <div className="mt-3">
-        <button
-          className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
-          onClick={onDelete}
-        >
-          Delete
-        </button>
+
+      <div className="flex items-center justify-between">
+        {onDelete ? (
+          <button className="px-3 py-2 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={onDelete}>
+            Delete vendor
+          </button>
+        ) : <span />}
+        <div className="flex gap-2">
+          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>onChange(v)}>
+            Reset
+          </button>
+          <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={onSave}>
+            Save
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -833,13 +887,9 @@ function AttachmentsPanel({ vendorId, onChanged }) {
     try {
       const data = await API.listFiles(vendorId, category);
       setFiles(data.files || []);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
-  useEffect(() => {
-    load();
-  }, [vendorId, category]);
+  useEffect(() => { load(); }, [vendorId, category]);
 
   async function handleUpload(list) {
     if (!list?.length) return;
@@ -855,27 +905,18 @@ function AttachmentsPanel({ vendorId, onChanged }) {
   }
 
   return (
-    <div className="mt-2 bg-white border rounded-xl p-3 shadow-sm">
+    <div className="bg-white border rounded-xl p-3 shadow-sm">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">Category</span>
-          <Select
-            value={category}
-            onChange={setCategory}
-            options={["general", "offre", "jsa", "pp", "acces", "sap", "autre"]}
-            className="w-40"
-          />
+          <Select value={category} onChange={setCategory} options={["general","offre","jsa","pp","acces","sap","autre"]} className="w-40" />
         </div>
-        <div className="text-xs text-gray-500">Drag & drop files or click</div>
       </div>
 
       <div
         ref={boxRef}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setIsOver(true);
-        }}
-        onDragLeave={() => setIsOver(false)}
+        onDragOver={(e)=>{ e.preventDefault(); setIsOver(true); }}
+        onDragLeave={()=>setIsOver(false)}
         onDrop={onDrop}
         className={`w-full border-2 border-dashed rounded-xl p-6 text-center transition
           ${isOver ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"}`}
@@ -884,11 +925,11 @@ function AttachmentsPanel({ vendorId, onChanged }) {
           <div className="text-3xl">📂</div>
           <div className="text-sm text-gray-600">Drop your files here</div>
           <label className="inline-flex items-center gap-2 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 cursor-pointer transition">
-            <input type="file" multiple className="hidden" onChange={(e) => handleUpload(e.target.files)} />
+            <input type="file" multiple className="hidden" onChange={(e)=>handleUpload(e.target.files)} />
             <span>Select files</span>
           </label>
         </div>
-        {!!progress && progress < 100 && (
+        {!!progress && progress<100 && (
           <div className="mt-4">
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div className="h-2 rounded-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
@@ -901,17 +942,7 @@ function AttachmentsPanel({ vendorId, onChanged }) {
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {loading && <div className="text-gray-500">Loading…</div>}
         {!loading && files.length === 0 && <div className="text-gray-500">No files.</div>}
-        {files.map((f) => (
-          <FileCard
-            key={f.id}
-            f={f}
-            onDelete={async () => {
-              await API.deleteFile(f.id);
-              await load();
-              if (onChanged) onChanged();
-            }}
-          />
-        ))}
+        {files.map((f) => <FileCard key={f.id} f={f} onDelete={async ()=>{ await API.deleteFile(f.id); await load(); if (onChanged) onChanged(); }} />)}
       </div>
     </div>
   );
@@ -923,31 +954,16 @@ function FileCard({ f, onDelete }) {
   return (
     <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
       <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
-        {isImage ? (
-          <img src={f.url} alt={f.original_name} className="w-full h-full object-cover" />
-        ) : (
-          <div className="text-4xl">📄</div>
-        )}
+        {isImage ? <img src={f.url} alt={f.original_name} className="w-full h-full object-cover" /> : <div className="text-4xl">📄</div>}
       </div>
       <div className="p-3">
-        <div className="text-sm font-medium truncate" title={f.original_name}>
-          {f.original_name}
-        </div>
-        <div className="text-xs text-gray-500 mt-0.5">
-          {sizeKB} KB • {f.mime || "file"}
-        </div>
+        <div className="text-sm font-medium truncate" title={f.original_name}>{f.original_name}</div>
+        <div className="text-xs text-gray-500 mt-0.5">{sizeKB} KB • {f.mime || "file"}</div>
         <div className="flex items-center gap-2 mt-2">
-          <a
-            href={f.url}
-            className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
-            download
-          >
+          <a href={f.url} className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition" download>
             Download
           </a>
-          <button
-            onClick={onDelete}
-            className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
-          >
+          <button onClick={onDelete} className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition">
             Delete
           </button>
         </div>
@@ -964,13 +980,7 @@ function donutData(obj, colors) {
   return {
     labels,
     datasets: [
-      {
-        data,
-        backgroundColor: palette,
-        borderColor: palette.map((c) => c.replace("0.85", "1")),
-        borderWidth: 1.5,
-        hoverOffset: 8,
-      },
+      { data, backgroundColor: palette, borderColor: palette, borderWidth: 1.5, hoverOffset: 8 },
     ],
   };
 }
@@ -981,16 +991,7 @@ function barData(obj, colors) {
   return {
     labels,
     datasets: [
-      {
-        label: "Access",
-        data,
-        backgroundColor: [c1, c2],
-        borderColor: [c1, c2],
-        borderWidth: 1.5,
-        borderRadius: 8,
-        barPercentage: 0.6,
-        categoryPercentage: 0.6,
-      },
+      { label: "Access", data, backgroundColor: [c1, c2], borderColor: [c1, c2], borderWidth: 1.5, borderRadius: 8, barPercentage: 0.6, categoryPercentage: 0.6 },
     ],
   };
 }
