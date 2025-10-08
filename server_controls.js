@@ -605,6 +605,208 @@ async function safeQuery(client, sql) {
   try { return await client.query(sql); } catch { return null; }
 }
 
+// ---------- Helpers existence colonne/table ----------
+async function tableExists(client, tbl) {
+  const q = await client.query(
+    `SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=$1`, [tbl]
+  );
+  return !!q.rowCount;
+}
+async function colmap(client, tbl) {
+  const q = await client.query(
+    `SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name=$1`, [tbl]
+  );
+  const s = new Set(q.rows.map(r => r.column_name));
+  return (c) => s.has(c);
+}
+async function upsertEntityFor(client, {
+  site, building, name, code,
+  switchboard_id=null, device_id=null, atex_id=null, hv_id=null
+}) {
+  // Unicité heuristique: on essaie par (device_id|switchboard_id|atex_id|hv_id) sinon par code
+  let found = null;
+  if (device_id) {
+    found = await client.query(`SELECT id FROM controls_entities WHERE device_id=$1 LIMIT 1`, [device_id]);
+  } else if (switchboard_id) {
+    found = await client.query(`SELECT id FROM controls_entities WHERE switchboard_id=$1 LIMIT 1`, [switchboard_id]);
+  } else if (atex_id) {
+    found = await client.query(`SELECT id FROM controls_entities WHERE atex_id=$1 LIMIT 1`, [atex_id]);
+  } else if (hv_id) {
+    found = await client.query(`SELECT id FROM controls_entities WHERE hv_id=$1 LIMIT 1`, [hv_id]);
+  } else if (code) {
+    found = await client.query(`SELECT id FROM controls_entities WHERE code=$1 LIMIT 1`, [code]);
+  } else {
+    found = { rowCount: 0 };
+  }
+
+  const now = new Date().toISOString();
+  if (found.rowCount) {
+    const id = found.rows[0].id;
+    await client.query(
+      `UPDATE controls_entities
+         SET site=COALESCE($1,site),
+             building=COALESCE($2,building),
+             name=COALESCE($3,name),
+             code=COALESCE($4,code),
+             switchboard_id=COALESCE($5,switchboard_id),
+             device_id=COALESCE($6,device_id),
+             atex_id=COALESCE($7,atex_id),
+             hv_id=COALESCE($8,hv_id),
+             updated_at=NOW()
+       WHERE id=$9`,
+      [site, building, name, code, switchboard_id, device_id, atex_id, hv_id, id]
+    );
+    return { action: "updated", id };
+  } else {
+    const ins = await client.query(
+      `INSERT INTO controls_entities
+        (site, building, name, code, switchboard_id, device_id, atex_id, hv_id, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)
+       RETURNING id`,
+      [site||'Default', building||null, name||code||'Equipment', code||null, switchboard_id, device_id, atex_id, hv_id, now]
+    );
+    return { action: "created", id: ins.rows[0].id };
+  }
+}
+
+// ---------- Synchronisation entités depuis équipements ----------
+router.get("/bootstrap/sync-entities", async (req, res) => {
+  const dry = String(req.query.dry_run || "1") === "1";
+  try {
+    const out = await withTx(async (client) => {
+      const summary = { switchboards:[], devices:[], atex:[], hv:[], total_created:0, total_updated:0 };
+
+      // SWITCHBOARDS
+      if (await tableExists(client, "switchboards")) {
+        const has = await colmap(client, "switchboards");
+        const cols = [
+          has("id") ? "id" : null,
+          has("name") ? "name" : null,
+          has("label") ? "label" : null,
+          has("code") ? "code" : null,
+          has("building") ? "building" : null,
+          has("site") ? "site" : null,
+          has("site_id") ? "site_id" : null,
+        ].filter(Boolean).join(", ");
+        const sw = await client.query(`SELECT ${cols} FROM switchboards`);
+        for (const r of sw.rows) {
+          const name = r.label || r.name || `SW ${r.id}`;
+          const site = r.site || (r.site_id ? String(r.site_id) : 'Default');
+          const building = r.building || site;
+          if (dry) { summary.switchboards.push({ would:"upsert", id:r.id, name, building }); continue; }
+          const resu = await upsertEntityFor(client, {
+            site, building, name, code: r.code || null, switchboard_id: r.id
+          });
+          summary.switchboards.push({ ...resu, src_id:r.id, name, building });
+          summary[ resu.action === "created" ? "total_created" : "total_updated" ]++;
+        }
+      }
+
+      // DEVICES
+      if (await tableExists(client, "devices")) {
+        const has = await colmap(client, "devices");
+        const cols = [
+          has("id") ? "id" : null,
+          has("name") ? "name" : null,
+          has("label") ? "label" : null,
+          has("code") ? "code" : null,
+          has("switchboard_id") ? "switchboard_id" : null,
+        ].filter(Boolean).join(", ");
+        const dev = await client.query(`SELECT ${cols} FROM devices`);
+        // pour remonter le building depuis le switchboard
+        let swMap = new Map();
+        if (await tableExists(client, "switchboards")) {
+          const swCols = await colmap(client, "switchboards");
+          const swc = [
+            swCols("id") ? "id" : null,
+            swCols("building") ? "building" : null,
+            swCols("site") ? "site" : null,
+            swCols("site_id") ? "site_id" : null,
+            swCols("name") ? "name" : null,
+            swCols("label") ? "label" : null,
+            swCols("code") ? "code" : null,
+          ].filter(Boolean).join(", ");
+          const sw = await client.query(`SELECT ${swc} FROM switchboards`);
+          swMap = new Map(sw.rows.map(s => [String(s.id), s]));
+        }
+        for (const r of dev.rows) {
+          const name = r.label || r.name || `Device ${r.id}`;
+          const sw = swMap.get(String(r.switchboard_id||""));
+          const site = sw?.site || (sw?.site_id ? String(sw.site_id) : 'Default');
+          const building = sw?.building || site;
+          if (dry) { summary.devices.push({ would:"upsert", id:r.id, name, building, switchboard_id:r.switchboard_id }); continue; }
+          const resu = await upsertEntityFor(client, {
+            site, building, name, code: r.code || null, device_id: r.id, switchboard_id: r.switchboard_id || null
+          });
+          summary.devices.push({ ...resu, src_id:r.id, name, building });
+          summary[ resu.action === "created" ? "total_created" : "total_updated" ]++;
+        }
+      }
+
+      // ATEX
+      if (await tableExists(client, "atex_equipments")) {
+        const has = await colmap(client, "atex_equipments");
+        const cols = [
+          has("id") ? "id" : null,
+          has("name") ? "name" : null,
+          has("label") ? "label" : null,
+          has("code") ? "code" : null,
+          has("zone") ? "zone" : null,
+          has("building") ? "building" : null,
+          has("site") ? "site" : null,
+          has("site_id") ? "site_id" : null,
+        ].filter(Boolean).join(", ");
+        const ax = await client.query(`SELECT ${cols} FROM atex_equipments`);
+        for (const r of ax.rows) {
+          const name = r.label || r.name || `ATEX ${r.id}`;
+          const site = r.site || (r.site_id ? String(r.site_id) : 'Default');
+          const building = r.building || site;
+          if (dry) { summary.atex.push({ would:"upsert", id:r.id, name, building, zone:r.zone }); continue; }
+          const resu = await upsertEntityFor(client, {
+            site, building, name, code: r.code || null, atex_id: r.id
+          });
+          summary.atex.push({ ...resu, src_id:r.id, name, building });
+          summary[ resu.action === "created" ? "total_created" : "total_updated" ]++;
+        }
+      }
+
+      // HV (equipments + devices)
+      for (const tbl of ["hv_equipments","hv_devices"]) {
+        if (await tableExists(client, tbl)) {
+          const has = await colmap(client, tbl);
+          const cols = [
+            has("id") ? "id" : null,
+            has("name") ? "name" : null,
+            has("label") ? "label" : null,
+            has("code") ? "code" : null,
+            has("building") ? "building" : null,
+            has("site") ? "site" : null,
+            has("site_id") ? "site_id" : null,
+          ].filter(Boolean).join(", ");
+          const hv = await client.query(`SELECT ${cols} FROM ${tbl}`);
+          for (const r of hv.rows) {
+            const name = r.label || r.name || `HV ${r.id}`;
+            const site = r.site || (r.site_id ? String(r.site_id) : 'Default');
+            const building = r.building || site;
+            if (dry) { summary.hv.push({ would:"upsert", tbl, id:r.id, name, building }); continue; }
+            const resu = await upsertEntityFor(client, {
+              site, building, name, code: r.code || null, hv_id: r.id
+            });
+            summary.hv.push({ ...resu, tbl, src_id:r.id, name, building });
+            summary[ resu.action === "created" ? "total_created" : "total_updated" ]++;
+          }
+        }
+      }
+
+      return summary;
+    });
+
+    res.json({ ok:true, dry_run: dry, ...out });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // SEED — crée des tâches pour chaque entité selon la TSD (résultat “propre”)
 // ---------------------------------------------------------------------------
