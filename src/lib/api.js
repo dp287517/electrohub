@@ -159,4 +159,17 @@ export const api = {
     // Health
     health: () => get(`/api/controls/health`),
   },
+
+  /** --- COMP-EXT (Prestataires externes) — NOUVEAU --- */
+  compExt: {
+    // Prestataires (vendors)
+    list: (params) => get("/api/comp-ext/vendors", params),                 // params: { q? }
+    create: (payload) => post("/api/comp-ext/vendors", payload),            // { name, offer_status, jsa_status, pp_applicable, pp_link, access_status, sap_wo, visits[], owner }
+    update: (id, payload) => put(`/api/comp-ext/vendors/${id}`, payload),   // mêmes champs qu'au create (visites remplacées si fourni)
+    remove: (id) => del(`/api/comp-ext/vendors/${id}`),
+
+    // Planning
+    calendar: () => get("/api/comp-ext/calendar"),                          // { tasks[], events[] }
+    stats: () => get("/api/comp-ext/stats"),                                // agrégats pour graphes
+  },
 };
