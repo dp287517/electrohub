@@ -1,48 +1,47 @@
-// Controls.jsx — Frontend complet (arborescence + checklists inline + Gantt)
-// Style et structure inspirés de Obsolescence.jsx
-import React, { useEffect, useMemo, useState, Fragment } from 'react';
-import { get, post, patch } from '../lib/api.js';
-import { ChevronRight, ChevronDown, SlidersHorizontal, Calendar, Image as ImageIcon, CheckCircle2, Upload, TimerReset, History, Paperclip, X } from 'lucide-react';
+// Obsolescence.jsx
+// (CSP-safe, AI assistant, filters incl. Asset Type, PDF, radar centered, Gantt colors per building)
+import React, { useEffect, useState, Fragment } from 'react';
+import { get, post } from '../lib/api.js';
+import { HelpCircle, ChevronRight, ChevronDown, Calendar, Pencil, SlidersHorizontal } from 'lucide-react';
+import { Line, Doughnut, Radar } from 'react-chartjs-2';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
+import jsPDF from 'jspdf';
 
-const PALETTE = ['#2563eb','#ef4444','#f59e0b','#7c3aed','#16a34a','#0ea5e9','#059669','#d946ef','#3b82f6','#22c55e'];
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, BarController, BarElement,
+  PointElement, LineElement, ArcElement, Title, Tooltip, Legend, RadialLinearScale
+} from 'chart.js';
+import annotationPlugin from 'chartjs-plugin-annotation';
+import zoomPlugin from 'chartjs-plugin-zoom';
+
+ChartJS.register(
+  CategoryScale, LinearScale, BarController, BarElement, PointElement, LineElement,
+  ArcElement, Title, Tooltip, Legend, RadialLinearScale, annotationPlugin, zoomPlugin
+);
+
+const PALETTE = ['#2563eb','#16a34a','#dc2626','#7c3aed','#f59e0b','#0ea5e9','#059669','#d946ef','#ef4444','#3b82f6'];
 const withAlpha = (hex, a) => {
   const h = hex.replace('#',''); const bigint = parseInt(h, 16);
   const r = (bigint >> 16) & 255, g = (bigint >> 8) & 255, b = bigint & 255;
   return `rgba(${r},${g},${b},${a})`;
 };
-const colorForCategory = (k = '', code = '') => {
-  const up = String(k).toUpperCase();
-  if (up.includes('HV')) return '#ef4444';
-  if (up.includes('ATEX')) return '#f59e0b';
-  if (up.includes('SWITCH')) return '#3b82f6';
-  if (String(code).toLowerCase().includes('thermo')) return '#22c55e';
-  return '#6366f1';
-};
-const STATUS_COLORS = {
-  Planned: '#3b82f6',
-  Pending: '#f59e0b',
-  Overdue: '#ef4444',
-  Done: '#16a34a',
-};
 
-function Toast({ msg, type='info', onClose }) {
+function useUserSite() {
+  try { return (JSON.parse(localStorage.getItem('eh_user') || '{}')?.site) || '' } catch { return '' }
+}
+
+function Toast({ msg, type='info' }) {
   const colors = { success:'bg-green-600 text-white', error:'bg-red-600 text-white', info:'bg-blue-600 text-white' };
-  return (
-    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm ${colors[type]} ring-1 ring-black/10 flex items-center gap-3`}>
-      <span>{msg}</span>
-      <button onClick={onClose} className="opacity-80 hover:opacity-100">×</button>
-    </div>
-  );
+  return <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm ${colors[type]} ring-1 ring-black/10`}>{msg}</div>;
 }
 
 function Modal({ open, onClose, children, title, wide=false }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className={`w-full ${wide?'max-w-5xl':'max-w-2xl'} bg-white rounded-2xl shadow-2xl overflow-hidden ring-1 ring-black/5`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-indigo-50 to-blue-50">
+      <div className={`w-full ${wide?'max-w-4xl':'max-w-lg'} bg-white rounded-2xl shadow-2xl overflow-hidden ring-1 ring-black/5`}>
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-green-50 to-orange-50">
           <h3 className="text-xl font-bold text-gray-800">{title}</h3>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100">×</button>
         </div>
@@ -52,606 +51,674 @@ function Modal({ open, onClose, children, title, wide=false }) {
   );
 }
 
-// Helpers API
-async function apiGet(path, params) { return await get(`/api/controls${path}`, params); }
-async function apiPost(path, body, isFormData = false) {
-  return await post(`/api/controls${path}`, body, isFormData);
-}
-async function apiPatch(path, body) { return await patch(`/api/controls${path}`, body); }
-
-// Inline checklist widget
-function ChecklistInline({ task, schema, onCloseTask, busy }) {
-  const [checklist, setChecklist] = useState(() => (schema?.checklist || []).map(i => ({ key:i.key, label:i.label, value:'' })));
-  const [observations, setObservations] = useState(() => {
-    const obsBase = {};
-    (schema?.observations || []).forEach(o => { obsBase[o.key] = ''; });
-    return obsBase;
-  });
-  const [comment, setComment] = useState('');
-  const [files, setFiles] = useState([]);
-  const options = (schema?.checklist || []).[0]?.options || ["Conforme","Non conforme","Non applicable"];
-
-  const setValue = (key, v) => setChecklist(cs => cs.map(c => c.key === key ? { ...c, value:v } : c));
-
-  const submit = async () => {
-    const payload = {
-      record_status: 'done',
-      checklist,
-      observations,
-      attachments: files.map(f => ({ filename:f.name, mimetype:f.type, size:f.size, data:f._b64 })),
-      comment,
-      closed_at: new Date().toISOString().slice(0,10),
-    };
-    await onCloseTask(payload);
-    setFiles([]);
-  };
-
-  const handleFile = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const buf = await file.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-    setFiles(prev => [...prev, { name:file.name, type:file.type, size:file.size, _b64:b64 }]);
-  };
-
-  return (
-    <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 mt-2">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div>
-          <h4 className="font-semibold text-gray-800 mb-2">Checklist</h4>
-          <div className="space-y-2">
-            {(schema?.checklist || []).map((item, idx) => (
-              <div key={item.key || idx} className="flex items-center gap-3">
-                <div className="flex-1 text-sm text-gray-800">{item.label}</div>
-                <select className="p-2 rounded-lg bg-white ring-1 ring-black/10"
-                  value={checklist[idx]?.value || ''}
-                  onChange={e => setValue(item.key, e.target.value)}>
-                  <option value="">Sélectionner</option>
-                  {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div>
-          <h4 className="font-semibold text-gray-800 mb-2">Observations</h4>
-          <div className="space-y-2">
-            {(schema?.observations || []).map((o, i) => (
-              <div key={o.key || i}>
-                <label className="block text-xs text-gray-600 mb-1">{o.label}</label>
-                <input className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
-                  value={observations[o.key] || ''}
-                  onChange={e => setObservations(s => ({ ...s, [o.key]: e.target.value }))} />
-              </div>
-            ))}
-            <label className="block text-xs text-gray-600 mb-1">Commentaires</label>
-            <textarea className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10" rows={3} value={comment} onChange={e=>setComment(e.target.value)} />
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer hover:bg-gray-50">
-          <Upload size={16}/> Joindre une photo
-          <input type="file" className="hidden" onChange={handleFile} accept="image/*" />
-        </label>
-        {files.map((f,idx)=>(
-          <span key={idx} className="text-xs bg-white ring-1 ring-black/10 px-2 py-1 rounded-lg flex items-center gap-2">
-            <Paperclip size={14}/> {f.name}
-          </span>
-        ))}
-        <div className="flex-1" />
-        <button disabled={busy} onClick={submit} className={`px-4 py-2 rounded-lg text-white shadow ${busy?'bg-gray-400':'bg-green-600 hover:bg-green-700'} flex items-center gap-2`}>
-          <CheckCircle2 size={18}/> Clôturer & Replanifier
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// IA mini cartes (avant/pdt)
-function AICards({ taskId, onAttach }) {
-  const [beforeMsg, setBeforeMsg] = useState(null);
-  const [reading, setReading] = useState(null);
-  const [loadingA, setLoadingA] = useState(false);
-  const [loadingB, setLoadingB] = useState(false);
-
-  const sendBefore = async (file) => {
-    if (!file) return;
-    setLoadingA(true);
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('task_id', taskId);
-    fd.append('attach', '1');
-    try {
-      const resp = await apiPost('/ai/analyze-before', fd, true);
-      setBeforeMsg(resp);
-      onAttach?.();
-    } catch (e) {
-      setBeforeMsg({ error: e.message });
-    } finally { setLoadingA(false); }
-  };
-  const sendRead = async (file) => {
-    if (!file) return;
-    setLoadingB(true);
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('task_id', taskId);
-    fd.append('attach', '1');
-    fd.append('meter_type', 'multimeter_voltage');
-    fd.append('unit_hint', 'V');
-    try {
-      const resp = await apiPost('/ai/read-value', fd, true);
-      setReading(resp);
-      onAttach?.();
-    } catch (e) {
-      setReading({ error: e.message });
-    } finally { setLoadingB(false); }
-  };
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-      <div className="p-3 rounded-xl ring-1 ring-black/10 bg-white">
-        <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <ImageIcon size={18}/> Analyse avant intervention
-        </div>
-        <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white cursor-pointer hover:bg-indigo-700">
-          <Upload size={16}/> Importer une photo
-          <input type="file" className="hidden" accept="image/*" onChange={e=>sendBefore(e.target.files?.[0])} />
-        </label>
-        <div className="text-sm text-gray-700 mt-2 whitespace-pre-wrap min-h-[48px]">
-          {loadingA ? 'Analyse en cours…' : beforeMsg ? JSON.stringify(beforeMsg, null, 2) : 'Conseils de sécurité, EPI, positionnement, risques.'}
-        </div>
-      </div>
-      <div className="p-3 rounded-xl ring-1 ring-black/10 bg-white">
-        <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <ImageIcon size={18}/> Lecture pendant intervention
-        </div>
-        <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-green-600 text-white cursor-pointer hover:bg-green-700">
-          <Upload size={16}/> Photo de l'appareil
-          <input type="file" className="hidden" accept="image/*" onChange={e=>sendRead(e.target.files?.[0])} />
-        </label>
-        <div className="text-sm text-gray-700 mt-2 whitespace-pre-wrap min-h-[48px]">
-          {loadingB ? 'Extraction en cours…' : reading ? JSON.stringify(reading, null, 2) : 'Déposez une photo avec l\'afficheur visible.'}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default function Controls() {
-  const [tab, setTab] = useState('hierarchy'); // hierarchy | gantt | history
+export default function Obsolescence() {
+  const site = useUserSite();
+  const [tab, setTab] = useState('overview');
+  const [buildings, setBuildings] = useState([]);
+  const [expandedBuildings, setExpandedBuildings] = useState({});
+  const [switchboards, setSwitchboards] = useState({});
+  // Ajout: asset ('all' | 'sb' | 'hv')
+  const [selectedFilter, setSelectedFilter] = useState({ building: null, switchboard: null, asset: 'all' });
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({ building:'', category:'', status:'open', include_closed:false, q:'' });
-
-  const [tree, setTree] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState(null);
-
-  const [expanded, setExpanded] = useState({}); // key -> boolean
-  const [taskOpen, setTaskOpen] = useState({}); // taskId -> { schema, loading }
-  const [historyOpen, setHistoryOpen] = useState({}); // taskId -> rows
-  const [attachments, setAttachments] = useState({}); // taskId -> list
 
   const [ganttTasks, setGanttTasks] = useState([]);
 
-  // --- load filters
-  const loadFilters = async () => {
+  const [doughnutData, setDoughnutData] = useState([]);
+  const [buildingBuckets, setBuildingBuckets] = useState({});
+  const [capexForecast, setCapexForecast] = useState({});
+
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [avgUrgency, setAvgUrgency] = useState(45);
+  const [totalCapex, setTotalCapex] = useState(50000);
+
+  // AI assistant
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiQuery, setAiQuery] = useState('');
+  const [aiMessages, setAiMessages] = useState([]);
+  const [health, setHealth] = useState({ openai:false, web_cost:false });
+
+  // Quick Edit modal (SB seulement)
+  const [showQuick, setShowQuick] = useState(false);
+  const [quick, setQuick] = useState({ switchboard_id:null, service_year:'', avg_life_years:30, override_cost_per_device:'' });
+
+  const buildingColor = new Map();
+  const colorForBuilding = (b) => {
+    if (!buildingColor.has(b)) buildingColor.set(b, PALETTE[buildingColor.size % PALETTE.length]);
+    return buildingColor.get(b);
+  };
+
+  useEffect(() => {
+    (async () => {
+      try { const h = await get('/api/obsolescence/health'); setHealth(h); } catch {}
+      await loadBuildings();
+    })();
+    const t = setInterval(autoCheck, 300000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (tab === 'roll-up') loadGanttData();
+    if (tab === 'analysis') {
+      loadDoughnutData(); // (SB only metric today)
+      loadCapexForecast();
+      loadBuildingBuckets();
+    }
+  }, [tab, selectedFilter]);
+
+  const autoCheck = async () => {
     try {
-      const f = await apiGet('/filters');
-      setFilters(prev => ({
-        ...prev,
-        categories: f.categories || [],
-        sites: f.sites || [],
-        task_codes: f.task_codes || [],
-        statuses: f.statuses || [],
-      }));
+      await post('/api/obsolescence/auto-check');
+      await loadBuildings();
+      if (tab === 'roll-up') loadGanttData();
+      if (tab === 'analysis') { loadDoughnutData(); loadCapexForecast(); loadBuildingBuckets(); }
     } catch {}
   };
 
-  const loadTree = async () => {
+  const loadBuildings = async () => {
     try {
-      setLoading(true);
-      const data = await apiGet('/hierarchy/tree');
-      setTree(Array.isArray(data) ? data : []);
+      setBusy(true);
+      const data = await get('/api/obsolescence/buildings', { asset: selectedFilter.asset });
+      setBuildings(Array.isArray(data.data) ? data.data : []);
+      // Seed defaults + checks (SB)
+      await post('/api/obsolescence/ai-fill');
+      await post('/api/obsolescence/auto-check');
+      // KPIs
+      const u = await get('/api/obsolescence/avg-urgency');   setAvgUrgency(Number(u.avg || 45));
+      const c = await get('/api/obsolescence/total-capex');   setTotalCapex(Number(c.total || 50000));
     } catch (e) {
-      setToast({ msg:`Échec du chargement de l'arborescence: ${e.message}`, type:'error' });
-    } finally { setLoading(false); }
+      setToast({ msg: `Failed to load buildings: ${e.message}`, type: 'error' });
+    } finally { setBusy(false); }
   };
 
-  const reloadTaskExtras = async (taskId) => {
+  const loadSwitchboards = async (building) => {
     try {
-      const hist = await apiGet(`/tasks/${taskId}/history`);
-      const att = await apiGet(`/tasks/${taskId}/attachments`);
-      setHistoryOpen(prev => ({ ...prev, [taskId]: hist }));
-      setAttachments(prev => ({ ...prev, [taskId]: att }));
-    } catch {}
+      const data = await get('/api/obsolescence/switchboards', { building, asset: selectedFilter.asset });
+      setSwitchboards(prev => ({ ...prev, [building]: Array.isArray(data.data) ? data.data : [] }));
+    } catch (e) { setToast({ msg: `Switchboards/HV failed: ${e.message}`, type: 'error' }); }
   };
 
-  const toggleExpand = (key) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
-
-  const openTaskInline = async (task) => {
-    if (!taskOpen[task.id]) {
-      setTaskOpen(prev => ({ ...prev, [task.id]: { schema: null, loading: true, __visible:true } }));
-      try {
-        const s = await apiGet(`/tasks/${task.id}/schema`);
-        setTaskOpen(prev => ({ ...prev, [task.id]: { schema: s, loading: false, __visible:true } }));
-        await reloadTaskExtras(task.id);
-      } catch (e) {
-        setTaskOpen(prev => ({ ...prev, [task.id]: { error: e.message, loading: false, __visible:true } }));
-      }
-    } else {
-      setTaskOpen(prev => ({ ...prev, [task.id]: { ...(prev[task.id]||{}), __visible: !(prev[task.id]?.__visible) } }));
-    }
+  const toggleBuilding = (building) => {
+    setExpandedBuildings(prev => ({ ...prev, [building]: !prev[building] }));
+    if (!switchboards[building]) loadSwitchboards(building);
+    setSelectedFilter(prev => ({ ...prev, building, switchboard: null }));
   };
 
-  const closeTask = async (task, payload) => {
+  const loadGanttData = async () => {
     try {
-      setTaskOpen(prev => ({ ...prev, [task.id]: { ...(prev[task.id]||{}), closing:true } }));
-      const res = await apiPatch(`/tasks/${task.id}/close`, payload);
-      setToast({ msg:`Tâche clôturée. Nouvelle planifiée au ${res?.next_task?.due_date || 'N/A'}`, type:'success' });
-      await loadTree();
-      setTaskOpen(prev => {
-        const copy = { ...prev };
-        delete copy[task.id];
-        return copy;
-      });
-    } catch (e) {
-      setToast({ msg:`Échec de la clôture: ${e.message}`, type:'error' });
-      setTaskOpen(prev => ({ ...prev, [task.id]: { ...(prev[task.id]||{}), closing:false } }));
-    }
-  };
+      const params = {};
+      if (selectedFilter.building) params.building = selectedFilter.building;
+      if (selectedFilter.switchboard) params.switchboard = selectedFilter.switchboard;
+      params.asset = selectedFilter.asset;
 
-  const loadGantt = async () => {
-    try {
-      setLoading(true);
-      const params = { include_closed: filters.include_closed ? 1 : 0 };
-      const data = await apiGet('/calendar', params);
-      const tasks = [];
-      Object.keys(data || {}).forEach(day => {
-        const arr = data[day] || [];
-        arr.forEach(it => {
-          const start = new Date(it.due_date);
-          const end = new Date(new Date(it.due_date).getTime() + 24*3600*1000);
-          tasks.push({
-            id: String(it.id),
-            name: it.label,
-            start, end,
-            type: 'task',
-            progress: it.status === 'Done' ? 100 : 0,
+      const data = await get('/api/obsolescence/gantt-data', params);
+      const tasks = (data.tasks || [])
+        .map(t => ({ ...t, start:new Date(t.start), end:new Date(t.end) }))
+        .filter(t => !isNaN(t.start.getTime()) && !isNaN(t.end.getTime()))
+        .map(t => {
+          const nowY = new Date().getFullYear();
+          const remaining = t.end.getFullYear() - nowY;
+          const base = colorForBuilding(t.building || 'Unknown');
+          const hue = remaining < 5 ? '#ef4444' : remaining <= 10 ? '#f59e0b' : base;
+          return {
+            ...t,
             styles: {
-              backgroundColor: withAlpha(colorForCategory('', it.task_code), 0.9),
-              backgroundSelectedColor: withAlpha(colorForCategory('', it.task_code), 1),
+              backgroundColor: withAlpha(hue, 0.9),
+              backgroundSelectedColor: withAlpha(hue, 1),
               progressColor: '#111827',
               progressSelectedColor: '#111827'
             }
-          });
+          };
         });
-      });
       setGanttTasks(tasks);
     } catch (e) {
-      setToast({ msg:`Échec du chargement Gantt: ${e.message}`, type:'error' });
+      setToast({ msg: `Gantt failed: ${e.message}`, type: 'error' });
       setGanttTasks([]);
-    } finally { setLoading(false); }
+    }
   };
 
-  useEffect(() => { loadFilters(); loadTree(); }, []);
-  useEffect(() => { if (tab==='gantt') loadGantt(); }, [tab, filters.include_closed]);
+  const loadDoughnutData = async () => {
+    try {
+      // Doughnut actuel (SB) – pas de param asset pour garder la logique d’origine
+      const data = await get('/api/obsolescence/doughnut', { group:'building' });
+      setDoughnutData(Array.isArray(data.data) ? data.data : []);
+    } catch (e) {
+      setToast({ msg: `Doughnut failed: ${e.message}`, type: 'error' });
+      setDoughnutData([]);
+    }
+  };
 
-  const countTasks = (node) => {
-    const list = [];
-    if (node.tasks?.length) list.push(...node.tasks);
-    if (node.hv) node.hv.forEach(n=>list.push(...(n.tasks||[])));
-    if (node.switchboards) node.switchboards.forEach(sw => {
-      list.push(...(sw.tasks||[]));
-      (sw.devices||[]).forEach(d => list.push(...(d.tasks||[])));
+  const loadCapexForecast = async () => {
+    try {
+      const data = await get('/api/obsolescence/capex-forecast', { asset: selectedFilter.asset });
+      setCapexForecast(data && data.forecasts && typeof data.forecasts === 'object' ? data.forecasts : {});
+    } catch (e) {
+      setToast({ msg: `CAPEX failed: ${e.message}`, type: 'error' });
+      setCapexForecast({});
+    }
+  };
+
+  const loadBuildingBuckets = async () => {
+    try {
+      const data = await get('/api/obsolescence/building-urgency-buckets', { asset: selectedFilter.asset });
+      setBuildingBuckets(data && data.buckets && typeof data.buckets === 'object' ? data.buckets : {});
+    } catch (e) {
+      setToast({ msg: `Buckets failed: ${e.message}`, type: 'error' });
+      setBuildingBuckets({});
+    }
+  };
+
+  // ---- Charts helpers
+  const computeYears = () => Array.from({ length: 30 }, (_, i) => new Date().getFullYear() + i);
+
+  const getCapexChartData = (forecasts) => {
+    const years = computeYears();
+    const datasets = [];
+    const keys = Object.keys(forecasts || {});
+    keys.forEach((group, idx) => {
+      const color = PALETTE[idx % PALETTE.length];
+      const annual = years.map(y => (forecasts[group] || []).reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
+      const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
+      datasets.push({
+        type:'bar',
+        label:`${group} Annual (£)`,
+        data: annual,
+        backgroundColor: (ctx) => {
+          const { chartArea, ctx: c } = ctx.chart;
+          if (!chartArea) return color;
+          const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+          g.addColorStop(0, withAlpha(color, 0.9));
+          g.addColorStop(1, withAlpha(color, 0.25));
+          return g;
+        },
+        borderRadius: 6
+      });
+      datasets.push({
+        type:'line',
+        label:`${group} Cumulative (£)`,
+        data: cumul,
+        borderColor: color,
+        tension: 0.35,
+        borderWidth: 3,
+        pointRadius: 0,
+        fill: false,
+      });
     });
-    if (node.atex) node.atex.forEach(z => {
-      list.push(...(z.tasks||[]));
-      (z.equipments||[]).forEach(e => list.push(...(e.tasks||[])));
+    return { labels: years, datasets };
+  };
+
+  const getCapexChartDataSingle = (forecasts, group, idx) => {
+    const color = PALETTE[idx % PALETTE.length];
+    const years = computeYears();
+    const annual = years.map(y => (forecasts[group] || []).reduce((s, f) => s + (f.year === y ? f.capex_year : 0), 0));
+    const cumul = annual.reduce((acc, cur, i) => [...acc, (acc[i-1] || 0) + cur], []);
+    return {
+      labels: years,
+      datasets: [
+        {
+          type:'bar',
+          label:'Annual (£)',
+          data: annual,
+          backgroundColor: (ctx) => {
+            const { chartArea, ctx: c } = ctx.chart;
+            if (!chartArea) return color;
+            const g = c.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            g.addColorStop(0, withAlpha(color, 0.9));
+            g.addColorStop(1, withAlpha(color, 0.25));
+            return g;
+          },
+          borderRadius: 6
+        },
+        {
+          type:'line',
+          label:'Cumulative (£)',
+          data: cumul,
+          borderColor: color,
+          tension: 0.35,
+          borderWidth: 3,
+          pointRadius: 0,
+          fill:false
+        }
+      ]
+    };
+  };
+
+  const chartBigOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    elements: { point: { radius: 0, hoverRadius: 3 }, line: { borderWidth: 3, tension: 0.35 } },
+    scales: {
+      x: { grid: { display: false } },
+      y: { ticks: { callback: v => `£${Number(v).toLocaleString('en-GB')}` } }
+    },
+    plugins: {
+      legend: { position: 'top' },
+      zoom: { zoom: { wheel: { enabled: true }, mode: 'xy' } },
+      tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: £${Number(ctx.raw).toLocaleString('en-GB')}` } }
+    },
+    animation: { duration: 600 }
+  };
+
+  const getBuildingDoughnutData = (b) => ({
+    labels: ['Urgent <5y', 'Medium 5–10y', 'Low >10y'],
+    datasets: [{
+      data: [b?.urgent || 0, b?.medium || 0, b?.low || 0],
+      backgroundColor: ['#ef4444','#f59e0b','#16a34a'],
+      borderWidth: 0
+    }]
+  });
+  const doughnutSmallOptions = { responsive:true, plugins:{ legend:{ position:'bottom' } }, cutout:'70%' };
+
+  const getRadarData = () => {
+    const labels = ['Age pressure','Urgency','CAPEX density','Unknowns','Thermal risk'];
+    const groups = Object.keys(capexForecast || {});
+    if (!groups.length) return { labels, datasets: [] };
+    const datasets = groups.slice(0, 6).map((g,idx) => {
+      const color = PALETTE[idx%PALETTE.length];
+      const capexSum = (capexForecast[g]||[]).reduce((a,b)=>a+b.capex_year,0);
+      const urg = Number(avgUrgency)||45;
+      const age = 50; // proxy
+      const unknowns = Math.max(0, 100 - (buildingBuckets[g]?.total||1)*5);
+      const thermal = 40; // placeholder
+      return {
+        label: `Bldg ${g}`,
+        data: [age, urg, Math.min(100, capexSum/10000), unknowns, thermal],
+        borderColor: color,
+        backgroundColor: withAlpha(color, .2),
+        pointRadius: 0,
+        borderWidth: 2,
+      };
     });
-    const open = list.filter(t => t.status !== 'Done').length;
-    return { open, total: list.length };
+    return { labels, datasets };
+  };
+  const radarOptions = {
+    responsive:true,
+    maintainAspectRatio:false,
+    plugins:{ legend:{ position:'bottom' } },
+    scales:{ r:{ beginAtZero:true, max:100, grid:{ color:'#eee' } } },
+    elements:{ line:{ tension:0.25 } }
   };
 
-  const TaskRow = ({ t }) => {
-    const visible = !!taskOpen[t.id]?.__visible;
-    const busy = !!taskOpen[t.id]?.closing;
-
-    return (
-      <>
-        <tr className="hover:bg-indigo-50/50">
-          <td className="p-2 pl-8">
-            <button onClick={() => openTaskInline(t)} className="inline-flex items-center gap-2 text-left">
-              {visible ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
-              <span className="font-medium text-gray-800">{t.label}</span>
-              <span className="text-xs px-2 py-0.5 rounded-lg ml-2" style={{background:withAlpha(STATUS_COLORS[t.status]||'#6b7280',.15), color:STATUS_COLORS[t.status]||'#374151'}}>
-                {t.status}
-              </span>
-            </button>
-          </td>
-          <td className="p-2">{t.code}</td>
-          <td className="p-2">{t.due_date ? new Date(t.due_date).toLocaleDateString() : '—'}</td>
-          <td className="p-2 text-right">
-            <button onClick={() => openTaskInline(t)} className="text-indigo-700 hover:text-indigo-900">Détails</button>
-          </td>
-        </tr>
-        {visible && (
-          <tr>
-            <td colSpan={4} className="p-2 pl-12 bg-white">
-              {taskOpen[t.id]?.loading && <div className="text-sm text-gray-500">Chargement du formulaire…</div>}
-              {taskOpen[t.id]?.error && <div className="text-sm text-red-600">{taskOpen[t.id]?.error}</div>}
-              {taskOpen[t.id]?.schema && (
-                <div>
-                  <ChecklistInline
-                    task={t}
-                    schema={taskOpen[t.id].schema}
-                    busy={busy}
-                    onCloseTask={(payload)=>closeTask(t, payload)}
-                  />
-                  <AICards taskId={t.id} onAttach={()=>reloadTaskExtras(t.id)} />
-
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-3 rounded-xl ring-1 ring-black/10 bg-gray-50">
-                      <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2"><History size={16}/> Historique</div>
-                      <div className="text-sm text-gray-700 max-h-48 overflow-auto">
-                        {(historyOpen[t.id]||[]).length === 0 && <div className="text-gray-500">Aucun événement.</div>}
-                        {(historyOpen[t.id]||[]).map((h,idx)=>(
-                          <div key={idx} className="py-1 border-b border-gray-100">
-                            <div className="text-xs text-gray-500">{new Date(h.date || h.performed_at || Date.now()).toLocaleString()}</div>
-                            <div className="text-sm">{h.action || h.result_status || 'event'}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-xl ring-1 ring-black/10 bg-gray-50">
-                      <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2"><Paperclip size={16}/> Pièces jointes</div>
-                      <div className="text-sm text-gray-700 max-h-48 overflow-auto">
-                        {(attachments[t.id]||[]).length === 0 && <div className="text-gray-500">Aucune pièce jointe.</div>}
-                        {(attachments[t.id]||[]).map(a => (
-                          <div key={a.id} className="py-1 border-b border-gray-100 flex items-center justify-between gap-3">
-                            <span className="truncate">{a.filename}</span>
-                            <a className="text-blue-700 hover:text-blue-900 text-sm" href={`/api/controls/attachments/${a.id}`} target="_blank" rel="noreferrer">Ouvrir</a>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </td>
-          </tr>
-        )}
-      </>
-    );
+  // ICS
+  const downloadICS = (sb) => {
+    const y = sb.forecast_year || (new Date().getFullYear() + 1);
+    const dt = `${y}0101T090000Z`;
+    const ics =
+`BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ElectroHub//Obsolescence//EN
+BEGIN:VEVENT
+UID:${sb.id || Math.random()}@electrohub
+DTSTAMP:${dt}
+DTSTART:${dt}
+SUMMARY:Replace ${sb.name} (forecast)
+DESCRIPTION:Forecast replacement of ${sb.name}
+END:VEVENT
+END:VCALENDAR`;
+    const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `${sb.name}-forecast.ics`; a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const SectionHeader = ({ title, count, nodeKey }) => (
-    <tr className="bg-indigo-50">
-      <td className="p-2">
-        <button onClick={()=>toggleExpand(nodeKey)} className="inline-flex items-center gap-2 font-semibold text-indigo-800">
-          {expanded[nodeKey] ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}{title}
-        </button>
-      </td>
-      <td className="p-2 text-sm text-gray-500">—</td>
-      <td className="p-2 text-sm text-gray-500">Open: {count.open} / Total: {count.total}</td>
-      <td className="p-2"></td>
-    </tr>
-  );
+  const openQuick = (sb) => {
+    setQuick({
+      switchboard_id: sb.id,
+      service_year: sb.service_year || '',
+      avg_life_years: sb.avg_life_years || 30,
+      override_cost_per_device: ''
+    });
+    setShowQuick(true);
+  };
+  const saveQuick = async () => {
+    try {
+      await post('/api/obsolescence/quick-set', {
+        switchboard_id: quick.switchboard_id,
+        service_year: quick.service_year ? Number(quick.service_year) : undefined,
+        avg_life_years: Number(quick.avg_life_years) || undefined,
+        override_cost_per_device: quick.override_cost_per_device === '' ? undefined : Number(quick.override_cost_per_device)
+      });
+      setShowQuick(false);
+      await loadBuildings();
+      if (selectedFilter.building) await loadSwitchboards(selectedFilter.building);
+      setToast({ msg: 'Saved!', type: 'success' });
+    } catch (e) {
+      setToast({ msg: `Save failed: ${e.message}`, type: 'error' });
+    }
+  };
 
-  const BuildingBlock = ({ b }) => {
-    const bKey = `b:${b.id}`;
-    const c = countTasks(b);
-    return (
-      <Fragment>
-        <tr className="hover:bg-indigo-50/50">
-          <td className="p-3">
-            <button onClick={()=>toggleExpand(bKey)} className="inline-flex items-center gap-2 font-semibold text-gray-800">
-              {expanded[bKey] ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}
-              {b.label || b.id}
-            </button>
-          </td>
-          <td className="p-3"></td>
-          <td className="p-3 text-sm text-gray-600">Open: {c.open} / Total: {c.total}</td>
-          <td className="p-3"></td>
-        </tr>
+  const sendAi = async () => {
+    if (!aiQuery.trim()) return;
+    const q = aiQuery.trim();
+    setAiMessages(m => [...m, { role:'user', content:q }]);
+    setAiQuery('');
+    try {
+      const r = await post('/api/obsolescence/ai-query', { query:q, site });
+      setAiMessages(m => [...m, { role:'assistant', content:r.response }]);
+      if (r.web_cost) setToast({ msg:'Web-assist cost estimation is active.', type:'info' });
+    } catch (e) {
+      setAiMessages(m => [...m, { role:'assistant', content:`(Erreur AI) ${e.message}` }]);
+    }
+  };
 
-        {/* HV */}
-        {expanded[bKey] && (
-          <>
-            {b.hv?.length > 0 && (
-              <>
-                <SectionHeader title="High Voltage" count={countTasks({tasks:[], hv:b.hv})} nodeKey={`${bKey}:hv`} />
-                {expanded[`${bKey}:hv`] && b.hv.map(h => (
-                  <Fragment key={`hv:${h.id}`}>
-                    <tr className="bg-red-50">
-                      <td className="p-2 pl-6 font-medium text-red-800">{h.label}</td>
-                      <td className="p-2">{h.code || '—'}</td>
-                      <td className="p-2 text-sm text-gray-600">Tâches: {(h.tasks||[]).length}</td>
-                      <td className="p-2"></td>
-                    </tr>
-                    {(h.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                  </Fragment>
-                ))}
-              </>
-            )}
+  const exportPdf = async () => {
+    try {
+      setBusy(true);
+      const pdf = new jsPDF({ unit:'pt', format:'a4' });
+      const margin = 40;
+      let y = margin;
 
-            {/* SWITCHBOARDS + DEVICES */}
-            {b.switchboards?.length > 0 && (
-              <>
-                <SectionHeader title="Switchboards" count={countTasks({tasks:[], switchboards:b.switchboards})} nodeKey={`${bKey}:sw`} />
-                {expanded[`${bKey}:sw`] && b.switchboards.map(sw => (
-                  <Fragment key={`sw:${sw.id}`}>
-                    <tr className="bg-blue-50">
-                      <td className="p-2 pl-6 font-medium text-blue-800">{sw.label}</td>
-                      <td className="p-2">{sw.code || '—'}</td>
-                      <td className="p-2 text-sm text-gray-600">Tâches: {(sw.tasks||[]).length}</td>
-                      <td className="p-2"></td>
-                    </tr>
-                    {(sw.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                    {(sw.devices||[]).map(d => (
-                      <Fragment key={`dev:${d.id}`}>
-                        <tr className="bg-blue-50/50">
-                          <td className="p-2 pl-10 text-blue-900">{d.label}</td>
-                          <td className="p-2">{d.code || '—'}</td>
-                          <td className="p-2 text-sm text-gray-600">Tâches: {(d.tasks||[]).length}</td>
-                          <td className="p-2"></td>
-                        </tr>
-                        {(d.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                      </Fragment>
-                    ))}
-                  </Fragment>
-                ))}
-              </>
-            )}
+      const addTitle = (t) => { pdf.setFontSize(18); pdf.text(t, margin, y); y += 24; pdf.setFontSize(11); };
+      const addLine = () => { pdf.setDrawColor(230); pdf.line(margin, y, 555, y); y += 12; };
 
-            {/* ATEX */}
-            {b.atex?.length > 0 && (
-              <>
-                <SectionHeader title="ATEX" count={countTasks({tasks:[], atex:b.atex})} nodeKey={`${bKey}:atex`} />
-                {expanded[`${bKey}:atex`] && b.atex.map(z => (
-                  <Fragment key={`zone:${z.zone}`}>
-                    <tr className="bg-amber-50">
-                      <td className="p-2 pl-6 font-medium text-amber-800">Zone {z.zone}</td>
-                      <td className="p-2">—</td>
-                      <td className="p-2 text-sm text-gray-600">Tâches: {(z.tasks||[]).length}</td>
-                      <td className="p-2"></td>
-                    </tr>
-                    {(z.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                    {(z.equipments||[]).map(e => (
-                      <Fragment key={`atex-e:${e.id}`}>
-                        <tr className="bg-amber-50/60">
-                          <td className="p-2 pl-10 text-amber-900">{e.label}</td>
-                          <td className="p-2">{e.code || '—'}</td>
-                          <td className="p-2 text-sm text-gray-600">Tâches: {(e.tasks||[]).length}</td>
-                          <td className="p-2"></td>
-                        </tr>
-                        {(e.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                      </Fragment>
-                    ))}
-                  </Fragment>
-                ))}
-              </>
-            )}
+      // Page 1
+      addTitle('Obsolescence Report');
+      pdf.text(`Site: ${site || 'N/A'}`, margin, y); y += 16;
+      pdf.text(`Avg Urgency: ${Number(avgUrgency).toFixed(1)}%`, margin, y); y += 16;
+      pdf.text(`Total CAPEX Forecast: £${Number(totalCapex).toLocaleString('en-GB')}`, margin, y); y += 20;
+      addLine();
+      pdf.text('Buildings overview:', margin, y); y += 16;
 
-            {/* Tâches directement au niveau building (fallback) */}
-            {(b.tasks||[]).length > 0 && (
-              <>
-                <SectionHeader title="Autres tâches" count={countTasks({tasks:b.tasks})} nodeKey={`${bKey}:misc`} />
-                {expanded[`${bKey}:misc`] && (b.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-              </>
-            )}
-          </>
-        )}
-      </Fragment>
-    );
+      buildings.forEach(b => {
+        pdf.text(`• ${b.building} — assets: ${b.count}, total est.: £${Number(b.total_cost||0).toLocaleString('en-GB')}`, margin, y);
+        y += 16;
+        if (y > 760) { pdf.addPage(); y = margin; }
+      });
+
+      // Page 2 — Top urgences
+      pdf.addPage(); y = margin;
+      addTitle('Top priorities (horizon < 5y)');
+      const now = new Date().getFullYear();
+      const rows = Object.values(switchboards).flat().map(sb => ({
+        b: sb?.building || '', n: sb?.name || '', y: sb?.forecast_year || now+1, c: sb?.total_cost || 0
+      })).sort((a,b) => a.y - b.y).slice(0, 12);
+
+      rows.forEach(r => {
+        pdf.text(`• ${r.n} — forecast ${r.y} — £${Number(r.c).toLocaleString('en-GB')}`, margin, y);
+        y += 16;
+        if (y > 760) { pdf.addPage(); y = margin; }
+      });
+
+      // Disclaimers
+      pdf.addPage(); y = margin;
+      addTitle('Estimates & Scope');
+      pdf.text([
+        '— Values are indicative, based on current prices and a typical installation in your region.',
+        '— Prices include materials + labour; they exclude enclosures, cabling, and extra accessories.',
+        '— Web-assisted pricing is used when enabled; otherwise a calibrated ampere bracket / family heuristic is applied.'
+      ], margin, y);
+
+      pdf.save('obsolescence-report.pdf');
+      setToast({ msg: 'PDF exported!', type: 'success' });
+    } catch (e) {
+      setToast({ msg: `Export failed: ${e.message}`, type: 'error' });
+    } finally { setBusy(false); }
   };
 
   return (
-    <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-indigo-50 to-blue-50 rounded-3xl shadow-xl min-h-screen">
+    <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-green-50 to-orange-50 rounded-3xl shadow-xl min-h-screen">
       <header className="flex items-center justify-between mb-8">
-        <h1 className="text-4xl font-bold text-gray-800">Controls (TSD)</h1>
-        <div className="flex items-center gap-3">
-          <button onClick={()=>setShowFilters(true)} className="px-3 py-2 bg-white text-gray-700 rounded-xl shadow ring-1 ring-black/10 hover:bg-gray-50 flex items-center gap-2">
-            <SlidersHorizontal size={18}/> Filtres
+        <h1 className="text-4xl font-bold text-gray-800">Obsolescence Dashboard</h1>
+        <div className="flex gap-3">
+          <button onClick={() => setShowFilters(true)} className="px-3 py-2 bg-white text-gray-700 rounded-xl shadow ring-1 ring-black/10 hover:bg-gray-50 flex items-center gap-2">
+            <SlidersHorizontal size={18}/> Filters
+          </button>
+          <button onClick={exportPdf} className="px-4 py-2 bg-green-600 text-white rounded-xl shadow-md hover:bg-green-700">Export PDF</button>
+          <button onClick={() => setAiOpen(true)} className="p-3 bg-orange-500 text-white rounded-xl shadow-md hover:bg-orange-600" title="Ask the AI">
+            <HelpCircle size={20} />
           </button>
         </div>
       </header>
 
       <div className="flex gap-4 mb-8 border-b pb-2">
-        <button onClick={() => setTab('hierarchy')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'hierarchy' ? 'bg-white text-indigo-600 shadow-md' : 'text-gray-600'}`}>Arborescence</button>
-        <button onClick={() => setTab('gantt')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'gantt' ? 'bg-white text-blue-600 shadow-md' : 'text-gray-600'}`}>Gantt</button>
-        <button onClick={() => setTab('history')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'history' ? 'bg-white text-indigo-600 shadow-md' : 'text-gray-600'}`}>Historique</button>
+        <button onClick={() => setTab('overview')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'overview' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}>Overview</button>
+        <button onClick={() => setTab('roll-up')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'roll-up' ? 'bg-white text-orange-600 shadow-md' : 'text-gray-600'}`}>Roll-up</button>
+        <button onClick={() => setTab('analysis')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'analysis' ? 'bg-white text-green-600 shadow-md' : 'text-gray-600'}`}>Analysis</button>
       </div>
 
-      {tab === 'hierarchy' && (
-        <div className="overflow-x-auto bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-indigo-50 text-gray-700">
-                <th className="p-3">Élément</th>
-                <th className="p-3">Code</th>
-                <th className="p-3">Infos</th>
-                <th className="p-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tree.map((b, idx) => <BuildingBlock key={`b:${idx}`} b={b} />)}
-              {!tree.length && (
-                <tr><td colSpan={4} className="text-center text-gray-600 py-16">
-                  Aucune donnée. Utilisez le seed TSD côté backend si nécessaire.
-                </td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+      {/* KPI cards */}
+      {tab === 'overview' && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
+              <h3 className="text-lg font-bold text-gray-800">Total Buildings</h3>
+              <p className="text-3xl font-bold text-green-600">{buildings.length}</p>
+            </div>
+            <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
+              <h3 className="text-lg font-bold text-gray-800">Avg Urgency</h3>
+              <p className="text-3xl font-bold text-orange-600">{Number(avgUrgency).toFixed(1)}%</p>
+            </div>
+            <div className="p-6 bg-white rounded-2xl shadow-md ring-1 ring-black/5">
+              <h3 className="text-lg font-bold text-gray-800">Total CAPEX Forecast</h3>
+              <p className="text-3xl font-bold text-green-600">£{Number(totalCapex).toLocaleString('en-GB')}</p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-green-50 text-gray-700">
+                  <th className="p-4">Name</th>
+                  <th className="p-4">Service Year</th>
+                  <th className="p-4">Est. Replacement Cost</th>
+                  <th className="p-4">Forecast Replacement Date</th>
+                  <th className="p-4">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {buildings.map(b => (
+                  <Fragment key={`b-${b.building}`}>
+                    <tr className="hover:bg-green-50/50 transition-colors">
+                      <td className="p-4 cursor-pointer" onClick={() => { toggleBuilding(b.building); }}>
+                        {expandedBuildings[b.building] ? <ChevronDown className="inline mr-2" /> : <ChevronRight className="inline mr-2" />}
+                        {b.building} ({b.count} {selectedFilter.asset === 'hv' ? 'HV' : selectedFilter.asset === 'sb' ? 'switchboards' : 'assets'})
+                      </td>
+                      <td className="p-4"></td>
+                      <td className="p-4">£{Number(b.total_cost || 0).toLocaleString('en-GB')}</td>
+                      <td className="p-4"></td>
+                      <td className="p-4"></td>
+                    </tr>
+
+                    {expandedBuildings[b.building] && (switchboards[b.building] || []).map((sb) => (
+                      <tr key={`sb-${sb.id}`} className="bg-orange-50 hover:bg-orange-100 transition-colors">
+                        <td className="p-4 pl-8">{sb.name}</td>
+                        <td className="p-4">{sb.service_year ?? 'N/A'}</td>
+                        <td className="p-4">£{Number(sb.total_cost || 0).toLocaleString('en-GB')}</td>
+                        <td className="p-4">{sb.forecast_year ?? 'N/A'}</td>
+                        <td className="p-4 flex gap-3">
+                          {/* Quick edit reste pertinent pour SB uniquement */}
+                          {selectedFilter.asset !== 'hv' && (
+                            <button onClick={() => openQuick(sb)} className="text-green-700 hover:text-green-900" title="Quick edit"><Pencil size={16} /></button>
+                          )}
+                          {selectedFilter.asset === 'hv' && (
+                            <span className="text-xs text-gray-500 italic">Quick edit (SB only)</span>
+                          )}
+                          <button onClick={() => {
+                            const y = sb.forecast_year ?? (new Date().getFullYear() + 1);
+                            downloadICS({ ...sb, forecast_year: y });
+                          }} className="text-blue-700 hover:text-blue-900" title="Add to calendar"><Calendar size={16} /></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+            <p className="text-xs text-gray-500 mt-3">
+              Estimates are indicative, based on current prices and a typical installation in your region.
+              Prices include materials + labour; exclude enclosures, cabling, extra accessories. Web-assist is used if enabled.
+            </p>
+          </div>
+        </>
       )}
 
-      {tab === 'gantt' && (
+      {tab === 'roll-up' && (
         <div className="bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xl font-bold text-gray-800">Gantt des contrôles</h2>
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={!!filters.include_closed} onChange={e=>setFilters(s=>({ ...s, include_closed: e.target.checked }))} />
-              Afficher les tâches closes
-            </label>
+            <h2 className="text-xl font-bold text-gray-800">Gantt (Portfolio)</h2>
           </div>
           {ganttTasks.length ? (
             <div className="h-[620px] overflow-auto">
               <Gantt
                 tasks={ganttTasks}
-                viewMode={ViewMode.Month}
-                columnWidth={60}
-                listCellWidth="320px"
+                viewMode={ViewMode.Year}
+                columnWidth={120}
+                listCellWidth="300px"
                 todayColor="#ff6b00"
               />
             </div>
-          ) : <p className="text-gray-600 text-center py-20">Aucune donnée Gantt.</p>}
+          ) : <p className="text-gray-600 text-center py-20">No data available yet.</p>}
         </div>
       )}
 
-      {tab === 'history' && (
-        <div className="bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
-          <div className="text-gray-600">Sélectionnez une tâche dans l’arborescence pour consulter l’historique détaillé. Un onglet d’audit global pourra être ajouté ici si besoin (export CSV des records, etc.).</div>
+      {tab === 'analysis' && (
+        <div className="grid grid-cols-1 gap-8">
+          {/* Grand graphique plein écran */}
+          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5 h-[640px]">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX Forecast — All Buildings</h2>
+            {Object.keys(capexForecast || {}).length ? (
+              <Line data={getCapexChartData(capexForecast)} options={chartBigOptions} />
+            ) : <p className="text-gray-600 text-center py-20">No data.</p>}
+          </div>
+
+          {/* Radar centré */}
+          <div className="bg-white p-6 rounded-2xl shadow-md ring-1 ring-black/5">
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">Risk / Readiness Radar</h2>
+            <div className="h-[440px] flex items-center justify-center">
+              <div className="w-full max-w-[720px] h-full">
+                <Radar data={getRadarData()} options={radarOptions} />
+              </div>
+            </div>
+          </div>
+
+          {/* Doughnuts par bâtiment : <5y / 5–10y / >10y */}
+          <div>
+            <h2 className="text-2xl font-bold mb-2 text-gray-800">Replacement Horizon — by Building</h2>
+            <p className="text-xs text-gray-500 mb-4">
+              Counts of assets due per horizon (SB/HV depending on filter). Estimates exclude enclosures/cables/accessories.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {Object.keys(buildingBuckets || {}).map(b => (
+                <div key={b} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {b}</h3>
+                  <Doughnut data={getBuildingDoughnutData(buildingBuckets[b])} options={doughnutSmallOptions} />
+                  <div className="text-xs mt-2 text-gray-600">
+                    Total: {buildingBuckets[b]?.total || 0} {selectedFilter.asset==='hv' ? 'HV' : selectedFilter.asset==='sb' ? 'switchboards' : 'assets'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Mini-charts par bâtiment */}
+          <div>
+            <h2 className="text-2xl font-bold mb-4 text-gray-800">CAPEX — per Building</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {Object.keys(capexForecast || {}).map((group, idx) => (
+                <div key={group} className="bg-white p-5 rounded-2xl shadow-md ring-1 ring-black/5 h-[320px]">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Building {group}</h3>
+                  <Line data={getCapexChartDataSingle(capexForecast, group, idx)} options={{
+                    ...chartBigOptions, maintainAspectRatio:false, animation:{ duration:500 }
+                  }} />
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
       {/* Filters drawer */}
-      <Modal open={showFilters} onClose={()=>setShowFilters(false)} title="Filtres" wide>
+      <Modal open={showFilters} onClose={()=>setShowFilters(false)} title="Filters" wide>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Recherche</label>
-            <input className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10" value={filters.q||''} onChange={e=>setFilters(s=>({ ...s, q:e.target.value }))} placeholder="Nom de tâche / code…" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Statut</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Building</label>
             <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
-              value={filters.status||'open'}
-              onChange={e=>setFilters(s=>({ ...s, status:e.target.value }))}>
-              <option value="open">Open</option>
-              <option value="overdue">Overdue</option>
-              <option value="closed">Closed</option>
-              <option value="">Tous</option>
+              value={selectedFilter.building || ''} onChange={e => setSelectedFilter(s => ({ ...s, building: e.target.value || null, switchboard: null }))}>
+              <option value="">All</option>
+              {buildings.map(b => <option key={b.building} value={b.building}>{b.building}</option>)}
             </select>
           </div>
+
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Asset Type</label>
             <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
-              value={filters.category||''}
-              onChange={e=>setFilters(s=>({ ...s, category:e.target.value }))}>
-              <option value="">Toutes</option>
-              {(filters.categories||[]).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+              value={selectedFilter.asset} onChange={e => setSelectedFilter(s => ({ ...s, asset: e.target.value }))}>
+              <option value="all">All</option>
+              <option value="sb">Switchboards</option>
+              <option value="hv">High Voltage</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Switchboard / HV</label>
+            <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
+              value={selectedFilter.switchboard || ''} onChange={e => setSelectedFilter(s => ({ ...s, switchboard: e.target.value || null }))}>
+              <option value="">All</option>
+              {((selectedFilter.building ? (switchboards[selectedFilter.building] || []) : [])).map(sb =>
+                <option key={sb.id} value={sb.id}>{sb.name}</option>
+              )}
             </select>
           </div>
         </div>
         <div className="mt-4 flex justify-between">
-          <button onClick={()=>setFilters(f=>({ ...f, building:'', category:'', status:'open', q:'', include_closed:false }))} className="px-3 py-2 rounded-lg ring-1 ring-black/10 bg-gray-50">Effacer</button>
-          <button onClick={async ()=>{ setShowFilters(false); await loadTree(); if (tab==='gantt') await loadGantt(); }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Appliquer</button>
+          <button onClick={()=>setSelectedFilter({ building:null, switchboard:null, asset:'all' })} className="px-3 py-2 rounded-lg ring-1 ring-black/10 bg-gray-50">Clear</button>
+          <button onClick={async ()=>{
+            setShowFilters(false);
+            await loadBuildings();
+            if (selectedFilter.building) await loadSwitchboards(selectedFilter.building);
+            if (tab==='roll-up') loadGanttData();
+            if (tab==='analysis'){ loadCapexForecast(); loadDoughnutData(); loadBuildingBuckets(); }
+          }} className="px-4 py-2 bg-green-600 text-white rounded-lg">Apply</button>
         </div>
       </Modal>
 
-      {toast && <Toast {...toast} onClose={()=>setToast(null)} />}
-      {loading && <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-indigo-500 rounded-full"></div></div>}
+      {/* Quick edit (SB) */}
+      <Modal open={showQuick} onClose={() => setShowQuick(false)} title="Quick edit (Switchboard)">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Service Year</label>
+            <input type="number" min="1950" max="2100" step="1" value={quick.service_year ?? ''} onChange={e => setQuick(q => ({ ...q, service_year: e.target.value }))} className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Avg Life (years)</label>
+            <input type="number" min="10" max="60" step="1" value={quick.avg_life_years ?? 30} onChange={e => setQuick(q => ({ ...q, avg_life_years: Number(e.target.value) }))} className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Override Cost per Device (£) — optional</label>
+            <input type="number" min="0" step="10" value={quick.override_cost_per_device} onChange={e => setQuick(q => ({ ...q, override_cost_per_device: e.target.value }))} className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10" />
+          </div>
+          <button onClick={saveQuick} className="w-full p-2 bg-orange-600 text-white rounded-xl shadow-md hover:bg-orange-700">Save</button>
+        </div>
+      </Modal>
+
+      {/* AI Assistant */}
+      <Modal open={aiOpen} onClose={()=>setAiOpen(false)} title={`AI Assistant ${health.web_cost ? ' (web-assist ON)' : ''}`} wide>
+        <div className="space-y-3">
+          <div className="text-sm text-gray-600">
+            Ask questions (IEC obsolescence, MCCB/ACB/VCB pricing, roadmap per building, Temp/HeatTag sensors, electrical monitoring…).
+            The AI adds sensor/monitoring ideas + a dedicated box Estimates & Scope.
+          </div>
+          <div className="h-[320px] overflow-y-auto rounded-xl ring-1 ring-black/10 p-3 bg-gray-50">
+            {aiMessages.length === 0 && <div className="text-gray-500 text-sm">🧠 Try: “building 21 roadmap (HV only)” or “MCCB 250A installed price UK?”.</div>}
+            {aiMessages.map((m, i) => (
+              <div key={i} className={`mb-3 ${m.role==='user'?'text-right':''}`}>
+                <div className={`inline-block px-3 py-2 rounded-xl ${m.role==='user'?'bg-green-600 text-white':'bg-white ring-1 ring-black/10'}`} style={{maxWidth:'80%'}}>
+                  <div className="whitespace-pre-wrap text-sm">{m.content}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input className="flex-1 p-3 rounded-xl bg-white ring-1 ring-black/10" placeholder="Ask anything…" value={aiQuery} onChange={e=>setAiQuery(e.target.value)} onKeyDown={e=>e.key==='Enter' && sendAi()} />
+            <button onClick={sendAi} className="px-4 py-2 bg-green-600 text-white rounded-xl">Send</button>
+          </div>
+          {!health.openai && <div className="text-xs text-red-600">OpenAI non configuré — définis OPENAI_API_KEY.</div>}
+        </div>
+      </Modal>
+
+      {toast && <Toast {...toast} />}
+      {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-green-500 rounded-full"></div></div>}
     </section>
   );
 }
