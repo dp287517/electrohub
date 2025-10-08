@@ -1,7 +1,7 @@
 // Controls.jsx — Frontend complet (arborescence + checklists inline + Gantt)
 // Style et structure inspirés de Obsolescence.jsx
 import React, { useEffect, useMemo, useState, Fragment } from 'react';
-import { get, post, patch } from '../lib/api.js';
+import { get, post } from '../lib/api.js';
 import { ChevronRight, ChevronDown, SlidersHorizontal, Calendar, Image as ImageIcon, CheckCircle2, Upload, TimerReset, History, Paperclip, X } from 'lucide-react';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
@@ -60,7 +60,23 @@ async function apiGet(path, params) { return await get(`/api/controls${path}`, p
 async function apiPost(path, body, isFormData = false) {
   return await post(`/api/controls${path}`, body, isFormData);
 }
-async function apiPatch(path, body) { return await patch(`/api/controls${path}`, body); }
+// Local PATCH helper (avoid importing patch from api.js)
+async function apiPatch(path, body) {
+  const res = await fetch(`/api/controls${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(text || `PATCH ${path} failed (${res.status})`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { ok: true };
+  }
+}
 
 // Inline checklist widget
 function ChecklistInline({ task, schema, onCloseTask, busy }) {
@@ -77,7 +93,6 @@ function ChecklistInline({ task, schema, onCloseTask, busy }) {
   const [comment, setComment] = useState('');
   const [files, setFiles] = useState([]);
 
-  // ✅ FIX: no dot before [0]
   const options =
     ((schema?.checklist || [])[0]?.options) ||
     ["Conforme", "Non conforme", "Non applicable"];
