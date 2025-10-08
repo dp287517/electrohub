@@ -1,12 +1,10 @@
 // src/pages/Comp.jsx
 // External Contractors (Prestataires externes)
 // ✔ Onglets : Vendors | Planning | Analytics
-// ✔ Tableau refait : propre, triable, filtrable, édition dans un Drawer (pas d’inputs qui se chevauchent)
-// ✔ Filtres avancés : search, offre/JSA/accès, PP applicable, owner, #visites min/max, période, fichiers
-// ✔ Mobile-first : cartes + drawer
-// ✔ Graphiques (Chart.js) colorés & grands (empilés verticalement)
-// ✔ Calendrier mensuel + Gantt : clic => MODALE visite (accès rapide + bouton ouvrir l’éditeur)
-// ✔ Gantt fiable (ISO -> Date), événements enrichis (vendor_id, vindex, start, end)
+// ✔ Tableau : en-tête sticky séparé (ne couvre pas la 1re ligne) + tri + filtres + drawer d’édition
+// ✔ Calendrier & Gantt : clic => modale visite (nom entreprise), bouton Open vendor fonctionnel
+// ✔ Graphiques colorés (Chart.js) & grands (empilés)
+// ✔ DnD multi-fichiers
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
@@ -164,7 +162,7 @@ const statusColor = {
   access: (s) => (s === "fait" ? "green" : "red"),
 };
 
-// Palette explicite (charts colorés)
+// Palette (charts)
 const palette = {
   emerald: "rgba(16,185,129,0.85)",
   blue: "rgba(59,130,246,0.85)",
@@ -173,7 +171,7 @@ const palette = {
   slateGrid: "rgba(148,163,184,0.25)",
 };
 
-// Chart options premium
+// Chart options
 const baseChartOptions = {
   responsive: true,
   maintainAspectRatio: false,
@@ -192,7 +190,7 @@ const barOptions = {
   },
 };
 
-// ----------------- Month Calendar -----------------
+// ----------------- Month Calendar (with click) -----------------
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
   const eventsByDate = useMemo(() => {
@@ -450,22 +448,21 @@ export default function Comp() {
     setVisitModal({ open: true, date, items: events || [] });
   }
   function openVisitModalForTask(task) {
-    // task carries vendor_id & vindex (from backend)
-    const startISO = task.start instanceof Date ? task.start.toISOString().slice(0,10) : String(task.start).slice(0,10);
-    const event = {
+    if (!task) return;
+    const startISO = task.startISO || (task.start instanceof Date ? task.start.toISOString().slice(0,10) : String(task.start).slice(0,10));
+    const endISO   = task.endISO   || (task.end   instanceof Date ? task.end.toISOString().slice(0,10)   : String(task.end).slice(0,10));
+    const item = {
       date: startISO,
       vendor_id: task.vendor_id,
-      vendor_name: task.name?.split("•")[0]?.trim() || "",
+      vendor_name: task.name?.split("•")?.[0]?.trim() || task.vendor_name || `Vendor #${task.vendor_id}`,
       vindex: task.vindex,
-      start: task.startISO || startISO,
-      end: task.endISO || (task.end instanceof Date ? task.end.toISOString().slice(0,10) : String(task.end).slice(0,10)),
+      start: startISO,
+      end: endISO,
     };
-    setVisitModal({ open: true, date: startISO, items: [event] });
+    setVisitModal({ open: true, date: startISO, items: [item] });
   }
-
-  // Gantt handler
   const handleGanttSelect = (task, isSelected) => {
-    if (isSelected && task?.vendor_id && task?.vindex) openVisitModalForTask(task);
+    if (isSelected) openVisitModalForTask(task);
   };
 
   return (
@@ -526,20 +523,28 @@ export default function Comp() {
             </div>
           </div>
 
-          {/* Tableau redesign — pas d’inputs inline, pas de chevauchement */}
-          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+          {/* Sticky header BAR au-dessus du tableau (ne couvre pas la 1re ligne) */}
+          <div className="sticky top-[118px] z-20 bg-gray-50/95 backdrop-blur border rounded-2xl px-4 py-2">
+            <div className="grid grid-cols-[1.2fr_.8fr_.8fr_.7fr_.6fr_.8fr_.8fr_.6fr_.8fr] gap-2 text-sm font-medium text-gray-700">
+              <span className="cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</span>
+              <span>Offer</span>
+              <span>JSA</span>
+              <span>PP</span>
+              <span className="cursor-pointer" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</span>
+              <span className="cursor-pointer" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</span>
+              <span className="cursor-pointer" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</span>
+              <span className="cursor-pointer" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</span>
+              <span>Actions</span>
+            </div>
+          </div>
+
+          {/* Tableau (avec marge-top pour ne pas se faire masquer par le bandeau sticky) */}
+          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
             <table className="w-full">
-              <thead className="bg-gray-50 sticky top-[108px] z-10">
-                <tr className="text-left text-sm text-gray-700">
-                  <Th onClick={()=>setSort("name")} active={sortBy.field==="name"} dir={sortBy.dir}>Name {sortIcon("name")}</Th>
-                  <Th>Offer</Th>
-                  <Th>JSA</Th>
-                  <Th>PP</Th>
-                  <Th onClick={()=>setSort("visits")} active={sortBy.field==="visits"} dir={sortBy.dir}>Visits {sortIcon("visits")}</Th>
-                  <Th onClick={()=>setSort("first_date")} active={sortBy.field==="first_date"} dir={sortBy.dir}>First date {sortIcon("first_date")}</Th>
-                  <Th onClick={()=>setSort("owner")} active={sortBy.field==="owner"} dir={sortBy.dir}>Owner {sortIcon("owner")}</Th>
-                  <Th onClick={()=>setSort("files_count")} active={sortBy.field==="files_count"} dir={sortBy.dir}>Files {sortIcon("files_count")}</Th>
-                  <Th>Actions</Th>
+              {/* thead non sticky, conservé pour l'accessibilité (visually hidden) */}
+              <thead className="sr-only">
+                <tr>
+                  <th>Name</th><th>Offer</th><th>JSA</th><th>PP</th><th>Visits</th><th>First date</th><th>Owner</th><th>Files</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody className="text-sm">
@@ -554,7 +559,7 @@ export default function Comp() {
                   const first = v.visits?.[0];
                   return (
                     <tr key={v.id} className="border-t align-top hover:bg-gray-50">
-                      <td className="p-3">
+                      <td className="p-3 min-w-[220px]">
                         <div className="flex items-center gap-2">
                           <button className="text-blue-700 font-medium hover:underline" onClick={()=>openEdit(v)} title="Edit">
                             {v.name}
@@ -672,7 +677,7 @@ export default function Comp() {
       {tab === "analytics" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Offers">
-            <div className="h=[380px] h-[380px]">
+            <div className="h-[380px]">
               <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, [palette.amber, palette.blue, palette.emerald])} options={baseChartOptions} />
             </div>
           </Card>
@@ -698,7 +703,6 @@ export default function Comp() {
                 key={`${it.vendor_id}-${it.vindex}-${i}`}
                 item={it}
                 onOpenVendor={async () => {
-                  // Try in current list first
                   let v = list.find(x => x.id === it.vendor_id);
                   if (!v) {
                     const fetched = await API.getVendor(it.vendor_id);
@@ -721,7 +725,7 @@ export default function Comp() {
 }
 
 // ---------- Small components ----------
-function Th({ children, onClick, active, dir }) {
+function Th({ children, onClick }) {
   return (
     <th className="p-3 font-medium select-none">
       <button onClick={onClick} className={`inline-flex items-center gap-1 ${onClick ? "hover:underline" : ""}`}>
@@ -774,10 +778,12 @@ function Modal({ title, children, onClose }) {
 }
 
 function VisitItem({ item, onOpenVendor }) {
+  const vendorLabel = item.vendor_name || `Vendor #${item.vendor_id || "?"}`;
+  const idxLabel = typeof item.vindex === "number" ? `Visit ${item.vindex}` : "Visit";
   return (
     <div className="border rounded-xl p-3 flex items-center justify-between">
       <div>
-        <div className="font-medium">{item.vendor_name || `Vendor #${item.vendor_id}`} • Visit {item.vindex}</div>
+        <div className="font-medium">{vendorLabel} • {idxLabel}</div>
         <div className="text-sm text-gray-600">
           {dayjs(item.start).format("DD/MM/YYYY")} → {dayjs(item.end).format("DD/MM/YYYY")}
         </div>
@@ -851,7 +857,7 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
             <div className="font-medium">Attachments</div>
             <div className="text-xs text-gray-500">Drag & drop files or click</div>
           </div>
-          <AttachmentsPanel vendorId={v.id} onChanged={()=>{ /* refresh counters side-effect handled on save */ }} />
+          <AttachmentsPanel vendorId={v.id} onChanged={()=>{}} />
         </div>
       )}
 
@@ -972,7 +978,7 @@ function FileCard({ f, onDelete }) {
   );
 }
 
-// ----------------- Charts data builders (avec couleurs) -----------------
+// ----------------- Charts data builders -----------------
 function donutData(obj, colors) {
   const labels = Object.keys(obj);
   const data = labels.map((k) => obj[k] || 0);
