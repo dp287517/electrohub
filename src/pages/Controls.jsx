@@ -1,52 +1,28 @@
-// Controls.jsx — Frontend complet (arborescence + checklists inline + Gantt)
-// Style et structure inspirés de Obsolescence.jsx
+// src/pages/Controls.jsx
+// Frontend complet : Tâches, Hiérarchie, Gantt, Outils (confort) + Checklist TSD propre
 import React, { useEffect, useMemo, useState, Fragment } from 'react';
 import { get, post } from '../lib/api.js';
-import { ChevronRight, ChevronDown, SlidersHorizontal, Calendar, Image as ImageIcon, CheckCircle2, Upload, TimerReset, History, Paperclip, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, SlidersHorizontal, Calendar, Image as ImageIcon, CheckCircle2, Upload, TimerReset, Paperclip, RefreshCw, ListChecks } from 'lucide-react';
 import { Gantt, ViewMode } from 'gantt-task-react';
 import 'gantt-task-react/dist/index.css';
 
-const PALETTE = ['#2563eb','#ef4444','#f59e0b','#7c3aed','#16a34a','#0ea5e9','#059669','#d946ef','#3b82f6','#22c55e'];
-const withAlpha = (hex, a) => {
-  const h = hex.replace('#', '');
-  const bigint = parseInt(h, 16);
-  const r = (bigint >> 16) & 255;
-  const g = (bigint >> 8) & 255;
-  const b = bigint & 255;
-  return `rgba(${r},${g},${b},${a})`;
-};
-const colorForCategory = (k = '', code = '') => {
-  const up = String(k).toUpperCase();
-  if (up.includes('HV')) return '#ef4444';
-  if (up.includes('ATEX')) return '#f59e0b';
-  if (up.includes('SWITCH')) return '#3b82f6';
-  if (String(code).toLowerCase().includes('thermo')) return '#22c55e';
-  return '#6366f1';
-};
-const STATUS_COLORS = {
-  Planned: '#3b82f6',
-  Pending: '#f59e0b',
-  Overdue: '#ef4444',
-  Done: '#16a34a',
-};
-
+// ---------- Utils UI ----------
 function Toast({ msg, type='info', onClose }) {
-  const colors = { success:'bg-green-600 text-white', error:'bg-red-600 text-white', info:'bg-blue-600 text-white' };
-  return (
-    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm ${colors[type]} ring-1 ring-black/10 flex items-center gap-3`}>
-      <span>{msg}</span>
-      <button onClick={onClose} className="opacity-80 hover:opacity-100">×</button>
-    </div>
-  );
+  const colors = {
+    success: 'bg-green-600 text-white',
+    error: 'bg-red-600 text-white',
+    info: 'bg-blue-600 text-white'
+  };
+  useEffect(() => { if (!onClose) return; const t = setTimeout(onClose, 3000); return ()=>clearTimeout(t); }, [onClose]);
+  return <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm ${colors[type]} ring-1 ring-black/10`}>{msg}</div>;
 }
-
-function Modal({ open, onClose, children, title, wide=false }) {
+function Modal({ open, onClose, title, children, wide=false }) {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className={`w-full ${wide?'max-w-5xl':'max-w-2xl'} bg-white rounded-2xl shadow-2xl overflow-hidden ring-1 ring-black/5`}>
         <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-indigo-50 to-blue-50">
-          <h3 className="text-xl font-bold text-gray-800">{title}</h3>
+          <h3 className="text-lg md:text-xl font-bold text-gray-800">{title}</h3>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-100">×</button>
         </div>
         <div className="p-6 overflow-y-auto max-h-[75vh]">{children}</div>
@@ -54,80 +30,53 @@ function Modal({ open, onClose, children, title, wide=false }) {
     </div>
   );
 }
+const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : '—';
 
-// Helpers API
-async function apiGet(path, params) { return await get(`/api/controls${path}`, params); }
-async function apiPost(path, body, isFormData = false) {
-  return await post(`/api/controls${path}`, body, isFormData);
-}
-// Local PATCH helper (avoid importing patch from api.js)
-async function apiPatch(path, body) {
-  const res = await fetch(`/api/controls${path}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(text || `PATCH ${path} failed (${res.status})`);
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { ok: true };
-  }
-}
-
-// Inline checklist widget
+// ---------- Checklist inline ----------
 function ChecklistInline({ task, schema, onCloseTask, busy }) {
   const [checklist, setChecklist] = useState(() =>
-    (schema?.checklist || []).map(i => ({ key: i.key, label: i.label, value: '' }))
+    (schema?.checklist || []).map(i => ({
+      key: i.key,
+      label: i.label,
+      value: ''
+    }))
   );
-
   const [observations, setObservations] = useState(() => {
-    const obsBase = {};
-    (schema?.observations || []).forEach(o => { obsBase[o.key] = ''; });
-    return obsBase;
+    const base = {};
+    (schema?.observations || []).forEach(o => { base[o.key] = ''; });
+    return base;
   });
-
   const [comment, setComment] = useState('');
   const [files, setFiles] = useState([]);
 
-  const options =
-    ((schema?.checklist || [])[0]?.options) ||
-    ["Conforme", "Non conforme", "Non applicable"];
+  // IMPORTANT: options par item (ou options globales)
+  const getOptionsFor = (item) => (item?.options && item.options.length ? item.options : ["Conforme","Non conforme","Non applicable"]);
 
-  const setValue = (key, v) =>
-    setChecklist(cs => cs.map(c => (c.key === key ? { ...c, value: v } : c)));
-
-  const submit = async () => {
-    const payload = {
-      record_status: 'done',
-      checklist,
-      observations,
-      attachments: files.map(f => ({
-        filename: f.name,
-        mimetype: f.type,
-        size: f.size,
-        data: f._b64
-      })),
-      comment,
-      closed_at: new Date().toISOString().slice(0, 10)
-    };
-    await onCloseTask(payload);
-    setFiles([]);
-  };
+  const setValue = (key, v) => setChecklist(cs => cs.map(c => c.key === key ? { ...c, value:v } : c));
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const buf = await file.arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-    setFiles(prev => [...prev, { name: file.name, type: file.type, size: file.size, _b64: b64 }]);
+    setFiles(prev => [...prev, { name:file.name, type:file.type, size:file.size, _b64:b64 }]);
+  };
+
+  const submit = async () => {
+    const payload = {
+      record_status: 'done',
+      checklist,
+      observations,
+      attachments: files.map(f => ({ filename:f.name, mimetype:f.type, size:f.size, data:f._b64 })),
+      comment,
+      closed_at: new Date().toISOString(), // l’API accepte ISO, côté DB c’est casté
+    };
+    await onCloseTask(payload);
+    setFiles([]);
   };
 
   return (
-    <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 mt-2">
+    <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100 mt-4">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div>
           <h4 className="font-semibold text-gray-800 mb-2">Checklist</h4>
@@ -141,9 +90,7 @@ function ChecklistInline({ task, schema, onCloseTask, busy }) {
                   onChange={e => setValue(item.key, e.target.value)}
                 >
                   <option value="">Sélectionner</option>
-                  {options.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
+                  {getOptionsFor(item).map(opt => <option key={opt} value={opt}>{opt}</option>)}
                 </select>
               </div>
             ))}
@@ -168,7 +115,7 @@ function ChecklistInline({ task, schema, onCloseTask, busy }) {
               className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
               rows={3}
               value={comment}
-              onChange={e => setComment(e.target.value)}
+              onChange={e=>setComment(e.target.value)}
             />
           </div>
         </div>
@@ -176,538 +123,558 @@ function ChecklistInline({ task, schema, onCloseTask, busy }) {
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <label className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer hover:bg-gray-50">
-          <Upload size={16} /> Joindre une photo
+          <Upload size={16}/> Joindre une photo
           <input type="file" className="hidden" onChange={handleFile} accept="image/*" />
         </label>
-
-        {files.map((f, idx) => (
-          <span
-            key={idx}
-            className="text-xs bg-white ring-1 ring-black/10 px-2 py-1 rounded-lg flex items-center gap-2"
-          >
-            <Paperclip size={14} /> {f.name}
+        {files.map((f,idx)=>(
+          <span key={idx} className="text-xs bg-white ring-1 ring-black/10 px-2 py-1 rounded-lg flex items-center gap-2">
+            <Paperclip size={14}/> {f.name}
           </span>
         ))}
-
         <div className="flex-1" />
-
         <button
           disabled={busy}
           onClick={submit}
-          className={`px-4 py-2 rounded-lg text-white shadow ${
-            busy ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'
-          } flex items-center gap-2`}
+          className={`px-4 py-2 rounded-lg text-white shadow ${busy?'bg-gray-400':'bg-green-600 hover:bg-green-700'} flex items-center gap-2`}
         >
-          <CheckCircle2 size={18} /> Clôturer & Replanifier
+          <CheckCircle2 size={18}/> Clôturer & Replanifier
         </button>
       </div>
     </div>
   );
 }
 
-// IA mini cartes (avant/pdt)
-function AICards({ taskId, onAttach }) {
-  const [beforeMsg, setBeforeMsg] = useState(null);
-  const [reading, setReading] = useState(null);
-  const [loadingA, setLoadingA] = useState(false);
-  const [loadingB, setLoadingB] = useState(false);
-
-  const sendBefore = async (file) => {
-    if (!file) return;
-    setLoadingA(true);
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('task_id', taskId);
-    fd.append('attach', '1');
-    try {
-      const resp = await apiPost('/ai/analyze-before', fd, true);
-      setBeforeMsg(resp);
-      onAttach?.();
-    } catch (e) {
-      setBeforeMsg({ error: e.message });
-    } finally { setLoadingA(false); }
-  };
-  const sendRead = async (file) => {
-    if (!file) return;
-    setLoadingB(true);
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('task_id', taskId);
-    fd.append('attach', '1');
-    fd.append('meter_type', 'multimeter_voltage');
-    fd.append('unit_hint', 'V');
-    try {
-      const resp = await apiPost('/ai/read-value', fd, true);
-      setReading(resp);
-      onAttach?.();
-    } catch (e) {
-      setReading({ error: e.message });
-    } finally { setLoadingB(false); }
-  };
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-      <div className="p-3 rounded-xl ring-1 ring-black/10 bg-white">
-        <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <ImageIcon size={18}/> Analyse avant intervention
-        </div>
-        <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white cursor-pointer hover:bg-indigo-700">
-          <Upload size={16}/> Importer une photo
-          <input type="file" className="hidden" accept="image/*" onChange={e=>sendBefore(e.target.files?.[0])} />
-        </label>
-        <div className="text-sm text-gray-700 mt-2 whitespace-pre-wrap min-h-[48px]">
-          {loadingA ? 'Analyse en cours…' : beforeMsg ? JSON.stringify(beforeMsg, null, 2) : 'Conseils de sécurité, EPI, positionnement, risques.'}
-        </div>
-      </div>
-      <div className="p-3 rounded-xl ring-1 ring-black/10 bg-white">
-        <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2">
-          <ImageIcon size={18}/> Lecture pendant intervention
-        </div>
-        <label className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-green-600 text-white cursor-pointer hover:bg-green-700">
-          <Upload size={16}/> Photo de l'appareil
-          <input type="file" className="hidden" accept="image/*" onChange={e=>sendRead(e.target.files?.[0])} />
-        </label>
-        <div className="text-sm text-gray-700 mt-2 whitespace-pre-wrap min-h-[48px]">
-          {loadingB ? 'Extraction en cours…' : reading ? JSON.stringify(reading, null, 2) : 'Déposez une photo avec l\'afficheur visible.'}
-        </div>
-      </div>
-    </div>
-  );
-}
-
+// ---------- Page principale ----------
 export default function Controls() {
-  const [tab, setTab] = useState('hierarchy'); // hierarchy | gantt | history
-  const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({ building:'', category:'', status:'open', include_closed:false, q:'' });
-
-  const [tree, setTree] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState('tasks'); // tasks | hierarchy | gantt | tools
+  const [filters, setFilters] = useState({ site:'', task_code:'', status:'open', atex_zone:'', category_key:'', q:'' });
+  const [filterData, setFilterData] = useState({ sites:[], task_codes:[], statuses:[], atex_zones:[], categories:[] });
+  const [tasks, setTasks] = useState([]);
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(50);
+  const [order, setOrder] = useState('due_date.asc');
+  const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
 
-  const [expanded, setExpanded] = useState({}); // key -> boolean
-  const [taskOpen, setTaskOpen] = useState({}); // taskId -> { schema, loading }
-  const [historyOpen, setHistoryOpen] = useState({}); // taskId -> rows
-  const [attachments, setAttachments] = useState({}); // taskId -> list
+  const [openTaskId, setOpenTaskId] = useState(null);
+  const [taskSchema, setTaskSchema] = useState(null);
+  const [taskHistory, setTaskHistory] = useState([]);
+  const [taskAttachments, setTaskAttachments] = useState([]);
 
-  const [ganttTasks, setGanttTasks] = useState([]);
+  const [tree, setTree] = useState([]);
+  const [gantt, setGantt] = useState([]);
 
-  // --- load filters
-  const loadFilters = async () => {
-    try {
-      const f = await apiGet('/filters');
-      setFilters(prev => ({
-        ...prev,
-        categories: f.categories || [],
-        sites: f.sites || [],
-        task_codes: f.task_codes || [],
-        statuses: f.statuses || [],
-      }));
-    } catch {}
-  };
-
-  const loadTree = async () => {
-    try {
-      setLoading(true);
-      const data = await apiGet('/hierarchy/tree');
-      setTree(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setToast({ msg:`Échec du chargement de l'arborescence: ${e.message}`, type:'error' });
-    } finally { setLoading(false); }
-  };
-
-  const reloadTaskExtras = async (taskId) => {
-    try {
-      const hist = await apiGet(`/tasks/${taskId}/history`);
-      const att = await apiGet(`/tasks/${taskId}/attachments`);
-      setHistoryOpen(prev => ({ ...prev, [taskId]: hist }));
-      setAttachments(prev => ({ ...prev, [taskId]: att }));
-    } catch {}
-  };
-
-  const toggleExpand = (key) => setExpanded(prev => ({ ...prev, [key]: !prev[key] }));
-
-  const openTaskInline = async (task) => {
-    if (!taskOpen[task.id]) {
-      setTaskOpen(prev => ({ ...prev, [task.id]: { schema: null, loading: true, __visible:true } }));
+  // init
+  useEffect(() => {
+    (async () => {
       try {
-        const s = await apiGet(`/tasks/${task.id}/schema`);
-        setTaskOpen(prev => ({ ...prev, [task.id]: { schema: s, loading: false, __visible:true } }));
-        await reloadTaskExtras(task.id);
+        const f = await get('/api/controls/filters');
+        setFilterData(f || {});
       } catch (e) {
-        setTaskOpen(prev => ({ ...prev, [task.id]: { error: e.message, loading: false, __visible:true } }));
+        setToast({ msg:`Erreur chargement filtres: ${e.message}`, type:'error' });
       }
-    } else {
-      setTaskOpen(prev => ({ ...prev, [task.id]: { ...(prev[task.id]||{}), __visible: !(prev[task.id]?.__visible) } }));
-    }
-  };
+      await loadTasks(1);
+    })();
+  // eslint-disable-next-line
+  }, []);
 
-  const closeTask = async (task, payload) => {
+  // recharge quand filtres changent
+  useEffect(() => { loadTasks(1); /* eslint-disable-next-line */ }, [filters, order]);
+
+  const loadTasks = async (p = page) => {
+    if (tab !== 'tasks') return;
     try {
-      setTaskOpen(prev => ({ ...prev, [task.id]: { ...(prev[task.id]||{}), closing:true } }));
-      const res = await apiPatch(`/tasks/${task.id}/close`, payload);
-      setToast({ msg:`Tâche clôturée. Nouvelle planifiée au ${res?.next_task?.due_date || 'N/A'}`, type:'success' });
-      await loadTree();
-      setTaskOpen(prev => {
-        const copy = { ...prev };
-        delete copy[task.id];
-        return copy;
-      });
+      setBusy(true);
+      const params = { ...filters, page:p, page_size:pageSize, order };
+      const res = await get('/api/controls/tasks', params);
+      setTasks(res?.items || []);
+      setPage(p);
     } catch (e) {
-      setToast({ msg:`Échec de la clôture: ${e.message}`, type:'error' });
-      setTaskOpen(prev => ({ ...prev, [task.id]: { ...(prev[task.id]||{}), closing:false } }));
+      setToast({ msg:`Erreur chargement tâches: ${e.message}`, type:'error' });
+    } finally {
+      setBusy(false);
     }
   };
 
-  const loadGantt = async () => {
+  const openDetails = async (t) => {
     try {
-      setLoading(true);
-      const params = { include_closed: filters.include_closed ? 1 : 0 };
-      const data = await apiGet('/calendar', params);
-      const tasks = [];
-      Object.keys(data || {}).forEach(day => {
-        const arr = data[day] || [];
-        arr.forEach(it => {
-          const start = new Date(it.due_date);
-          const end = new Date(new Date(it.due_date).getTime() + 24*3600*1000);
-          tasks.push({
-            id: String(it.id),
-            name: it.label,
-            start, end,
+      setOpenTaskId(t.id);
+      setTaskSchema(null); setTaskHistory([]); setTaskAttachments([]);
+      const s = await get(`/api/controls/tasks/${t.id}/schema`);
+      setTaskSchema(s);
+      const h = await get(`/api/controls/tasks/${t.id}/history`);
+      setTaskHistory(Array.isArray(h)?h:[]);
+      const a = await get(`/api/controls/tasks/${t.id}/attachments`);
+      setTaskAttachments(Array.isArray(a)?a:[]);
+    } catch (e) {
+      setToast({ msg:`Erreur chargement détails: ${e.message}`, type:'error' });
+    }
+  };
+
+  const closeTask = async (payload) => {
+    try {
+      setBusy(true);
+      await post(`/api/controls/tasks/${openTaskId}/close`, payload, { method:'PATCH' });
+      setToast({ msg:'Tâche clôturée et replanifiée', type:'success' });
+      setOpenTaskId(null);
+      await loadTasks(1);
+      if (tab === 'hierarchy') await loadHierarchy();
+      if (tab === 'gantt') await loadCalendar();
+    } catch (e) {
+      setToast({ msg:`Clôture échouée: ${e.message}`, type:'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const uploadAttachment = async (file) => {
+    if (!openTaskId || !file) return;
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      await fetch(`/api/controls/tasks/${openTaskId}/attachments`, { method:'POST', body: form });
+      const a = await get(`/api/controls/tasks/${openTaskId}/attachments`);
+      setTaskAttachments(Array.isArray(a)?a:[]);
+      setToast({ msg:'Pièce jointe ajoutée', type:'success' });
+    } catch (e) {
+      setToast({ msg:`Upload échoué: ${e.message}`, type:'error' });
+    }
+  };
+
+  // Hiérarchie
+  const loadHierarchy = async () => {
+    try {
+      setBusy(true);
+      const t = await get('/api/controls/hierarchy/tree');
+      setTree(Array.isArray(t) ? t : []);
+    } catch (e) {
+      setToast({ msg:`Erreur hiérarchie: ${e.message}`, type:'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Gantt calendrier
+  const loadCalendar = async () => {
+    try {
+      setBusy(true);
+      const now = new Date();
+      const from = new Date(now.getFullYear(), 0, 1).toISOString().slice(0,10);
+      const to   = new Date(now.getFullYear()+1, 11, 31).toISOString().slice(0,10);
+      const groups = await get('/api/controls/calendar', { from, to });
+      const items = [];
+      Object.entries(groups || {}).forEach(([date, arr]) => {
+        (arr || []).forEach(ev => {
+          const start = new Date(date);
+          const end = new Date(date);
+          end.setDate(end.getDate()+1);
+          items.push({
+            id: `${ev.id}`,
+            name: ev.label,
+            start,
+            end,
             type: 'task',
-            progress: it.status === 'Done' ? 100 : 0,
+            progress: 0,
             styles: {
-              backgroundColor: withAlpha(colorForCategory('', it.task_code), 0.9),
-              backgroundSelectedColor: withAlpha(colorForCategory('', it.task_code), 1),
+              backgroundColor: ev.color || '#6366f1',
+              backgroundSelectedColor: ev.color || '#6366f1',
               progressColor: '#111827',
               progressSelectedColor: '#111827'
             }
           });
         });
       });
-      setGanttTasks(tasks);
+      setGantt(items);
     } catch (e) {
-      setToast({ msg:`Échec du chargement Gantt: ${e.message}`, type:'error' });
-      setGanttTasks([]);
-    } finally { setLoading(false); }
+      setToast({ msg:`Erreur calendrier: ${e.message}`, type:'error' });
+    } finally {
+      setBusy(false);
+    }
   };
 
-  useEffect(() => { loadFilters(); loadTree(); }, []);
-  useEffect(() => { if (tab==='gantt') loadGantt(); }, [tab, filters.include_closed]);
-
-  const countTasks = (node) => {
-    const list = [];
-    if (node.tasks?.length) list.push(...node.tasks);
-    if (node.hv) node.hv.forEach(n=>list.push(...(n.tasks||[])));
-    if (node.switchboards) node.switchboards.forEach(sw => {
-      list.push(...(sw.tasks||[]));
-      (sw.devices||[]).forEach(d => list.push(...(d.tasks||[])));
-    });
-    if (node.atex) node.atex.forEach(z => {
-      list.push(...(z.tasks||[]));
-      (z.equipments||[]).forEach(e => list.push(...(e.tasks||[])));
-    });
-    const open = list.filter(t => t.status !== 'Done').length;
-    return { open, total: list.length };
+  // Tools (sync / seed)
+  const syncEntities = async (dry=true) => {
+    try {
+      setBusy(true);
+      const r = await get('/api/controls/bootstrap/sync-entities', { dry_run: dry?1:0 });
+      setToast({ msg: dry ? `Dry-run sync: ${r.total_created||0} create / ${r.total_updated||0} update` : 'Sync terminé', type:'success' });
+    } catch (e) {
+      setToast({ msg:`Sync échoué: ${e.message}`, type:'error' });
+    } finally { setBusy(false); }
+  };
+  const seedTsd = async (dry=true) => {
+    try {
+      setBusy(true);
+      const r = await get('/api/controls/bootstrap/seed', { dry_run: dry?1:0, category:'ALL' });
+      const n = (r?.actions || []).filter(a => (dry? a.action==='would_create' : a.action==='created')).length;
+      setToast({ msg: dry ? `Dry-run seed: ${n} tâches` : `Seed créé: ${n} tâches`, type:'success' });
+    } catch (e) {
+      setToast({ msg:`Seed échoué: ${e.message}`, type:'error' });
+    } finally { setBusy(false); }
   };
 
-  const TaskRow = ({ t }) => {
-    const visible = !!taskOpen[t.id]?.__visible;
-    const busy = !!taskOpen[t.id]?.closing;
+  // Rendu helpers
+  const FilterBar = () => (
+    <div className="bg-white rounded-2xl shadow ring-1 ring-black/5 p-4 mb-4">
+      <div className="flex items-end gap-3 flex-wrap">
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Site</label>
+          <select className="p-2 rounded-lg bg-gray-50 ring-1 ring-black/10"
+            value={filters.site}
+            onChange={e=>setFilters(s=>({ ...s, site:e.target.value }))}>
+            <option value="">Tous</option>
+            {filterData.sites?.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Code tâche</label>
+          <select className="p-2 rounded-lg bg-gray-50 ring-1 ring-black/10"
+            value={filters.task_code}
+            onChange={e=>setFilters(s=>({ ...s, task_code:e.target.value }))}>
+            <option value="">Tous</option>
+            {filterData.task_codes?.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Statut</label>
+          <select className="p-2 rounded-lg bg-gray-50 ring-1 ring-black/10"
+            value={filters.status}
+            onChange={e=>setFilters(s=>({ ...s, status:e.target.value }))}>
+            <option value="open">Ouvertes</option>
+            {filterData.statuses?.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Zone ATEX</label>
+          <select className="p-2 rounded-lg bg-gray-50 ring-1 ring-black/10"
+            value={filters.atex_zone}
+            onChange={e=>setFilters(s=>({ ...s, atex_zone:e.target.value }))}>
+            <option value="">Toutes</option>
+            {filterData.atex_zones?.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Catégorie TSD</label>
+          <select className="p-2 rounded-lg bg-gray-50 ring-1 ring-black/10"
+            value={filters.category_key}
+            onChange={e=>setFilters(s=>({ ...s, category_key:e.target.value }))}>
+            <option value="">Toutes</option>
+            {filterData.categories?.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+          </select>
+        </div>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-xs text-gray-600 mb-1">Recherche</label>
+          <input className="w-full p-2 rounded-lg bg-gray-50 ring-1 ring-black/10"
+            placeholder="Label, code…"
+            value={filters.q}
+            onChange={e=>setFilters(s=>({ ...s, q:e.target.value }))} />
+        </div>
 
-    return (
-      <>
-        <tr className="hover:bg-indigo-50/50">
-          <td className="p-2 pl-8">
-            <button onClick={() => openTaskInline(t)} className="inline-flex items-center gap-2 text-left">
-              {visible ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
-              <span className="font-medium text-gray-800">{t.label}</span>
-              <span className="text-xs px-2 py-0.5 rounded-lg ml-2" style={{background:withAlpha(STATUS_COLORS[t.status]||'#6b7280',.15), color:STATUS_COLORS[t.status]||'#374151'}}>
-                {t.status}
-              </span>
-            </button>
-          </td>
-          <td className="p-2">{t.code}</td>
-          <td className="p-2">{t.due_date ? new Date(t.due_date).toLocaleDateString() : '—'}</td>
-          <td className="p-2 text-right">
-            <button onClick={() => openTaskInline(t)} className="text-indigo-700 hover:text-indigo-900">Détails</button>
-          </td>
-        </tr>
-        {visible && (
-          <tr>
-            <td colSpan={4} className="p-2 pl-12 bg-white">
-              {taskOpen[t.id]?.loading && <div className="text-sm text-gray-500">Chargement du formulaire…</div>}
-              {taskOpen[t.id]?.error && <div className="text-sm text-red-600">{taskOpen[t.id]?.error}</div>}
-              {taskOpen[t.id]?.schema && (
-                <div>
-                  <ChecklistInline
-                    task={t}
-                    schema={taskOpen[t.id].schema}
-                    busy={busy}
-                    onCloseTask={(payload)=>closeTask(t, payload)}
-                  />
-                  <AICards taskId={t.id} onAttach={()=>reloadTaskExtras(t.id)} />
-
-                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-3 rounded-xl ring-1 ring-black/10 bg-gray-50">
-                      <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2"><History size={16}/> Historique</div>
-                      <div className="text-sm text-gray-700 max-h-48 overflow-auto">
-                        {(historyOpen[t.id]||[]).length === 0 && <div className="text-gray-500">Aucun événement.</div>}
-                        {(historyOpen[t.id]||[]).map((h,idx)=>(
-                          <div key={idx} className="py-1 border-b border-gray-100">
-                            <div className="text-xs text-gray-500">{new Date(h.date || h.performed_at || Date.now()).toLocaleString()}</div>
-                            <div className="text-sm">{h.action || h.result_status || 'event'}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="p-3 rounded-xl ring-1 ring-black/10 bg-gray-50">
-                      <div className="font-semibold text-gray-800 mb-2 flex items-center gap-2"><Paperclip size={16}/> Pièces jointes</div>
-                      <div className="text-sm text-gray-700 max-h-48 overflow-auto">
-                        {(attachments[t.id]||[]).length === 0 && <div className="text-gray-500">Aucune pièce jointe.</div>}
-                        {(attachments[t.id]||[]).map(a => (
-                          <div key={a.id} className="py-1 border-b border-gray-100 flex items-center justify-between gap-3">
-                            <span className="truncate">{a.filename}</span>
-                            <a className="text-blue-700 hover:text-blue-900 text-sm" href={`/api/controls/attachments/${a.id}`} target="_blank" rel="noreferrer">Ouvrir</a>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </td>
-          </tr>
-        )}
-      </>
-    );
-  };
-
-  const SectionHeader = ({ title, count, nodeKey }) => (
-    <tr className="bg-indigo-50">
-      <td className="p-2">
-        <button onClick={()=>toggleExpand(nodeKey)} className="inline-flex items-center gap-2 font-semibold text-indigo-800">
-          {expanded[nodeKey] ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}{title}
-        </button>
-      </td>
-      <td className="p-2 text-sm text-gray-500">—</td>
-      <td className="p-2 text-sm text-gray-500">Open: {count.open} / Total: {count.total}</td>
-      <td className="p-2"></td>
-    </tr>
+        <div className="flex-1" />
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Tri</label>
+          <select className="p-2 rounded-lg bg-gray-50 ring-1 ring-black/10"
+            value={order}
+            onChange={e=>setOrder(e.target.value)}>
+            <option value="due_date.asc">Échéance ↑</option>
+            <option value="due_date.desc">Échéance ↓</option>
+            <option value="task_name.asc">Libellé ↑</option>
+            <option value="task_name.desc">Libellé ↓</option>
+            <option value="status.asc">Statut ↑</option>
+            <option value="status.desc">Statut ↓</option>
+          </select>
+        </div>
+      </div>
+    </div>
   );
 
-  const BuildingBlock = ({ b }) => {
-    const bKey = `b:${b.id}`;
-    const c = countTasks(b);
-    return (
-      <Fragment>
-        <tr className="hover:bg-indigo-50/50">
-          <td className="p-3">
-            <button onClick={()=>toggleExpand(bKey)} className="inline-flex items-center gap-2 font-semibold text-gray-800">
-              {expanded[bKey] ? <ChevronDown size={18}/> : <ChevronRight size={18}/>}
-              {b.label || b.id}
-            </button>
-          </td>
-          <td className="p-3"></td>
-          <td className="p-3 text-sm text-gray-600">Open: {c.open} / Total: {c.total}</td>
-          <td className="p-3"></td>
-        </tr>
-
-        {/* HV */}
-        {expanded[bKey] && (
-          <>
-            {b.hv?.length > 0 && (
-              <>
-                <SectionHeader title="High Voltage" count={countTasks({tasks:[], hv:b.hv})} nodeKey={`${bKey}:hv`} />
-                {expanded[`${bKey}:hv`] && b.hv.map(h => (
-                  <Fragment key={`hv:${h.id}`}>
-                    <tr className="bg-red-50">
-                      <td className="p-2 pl-6 font-medium text-red-800">{h.label}</td>
-                      <td className="p-2">{h.code || '—'}</td>
-                      <td className="p-2 text-sm text-gray-600">Tâches: {(h.tasks||[]).length}</td>
-                      <td className="p-2"></td>
-                    </tr>
-                    {(h.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                  </Fragment>
-                ))}
-              </>
-            )}
-
-            {/* SWITCHBOARDS + DEVICES */}
-            {b.switchboards?.length > 0 && (
-              <>
-                <SectionHeader title="Switchboards" count={countTasks({tasks:[], switchboards:b.switchboards})} nodeKey={`${bKey}:sw`} />
-                {expanded[`${bKey}:sw`] && b.switchboards.map(sw => (
-                  <Fragment key={`sw:${sw.id}`}>
-                    <tr className="bg-blue-50">
-                      <td className="p-2 pl-6 font-medium text-blue-800">{sw.label}</td>
-                      <td className="p-2">{sw.code || '—'}</td>
-                      <td className="p-2 text-sm text-gray-600">Tâches: {(sw.tasks||[]).length}</td>
-                      <td className="p-2"></td>
-                    </tr>
-                    {(sw.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                    {(sw.devices||[]).map(d => (
-                      <Fragment key={`dev:${d.id}`}>
-                        <tr className="bg-blue-50/50">
-                          <td className="p-2 pl-10 text-blue-900">{d.label}</td>
-                          <td className="p-2">{d.code || '—'}</td>
-                          <td className="p-2 text-sm text-gray-600">Tâches: {(d.tasks||[]).length}</td>
-                          <td className="p-2"></td>
-                        </tr>
-                        {(d.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                      </Fragment>
-                    ))}
-                  </Fragment>
-                ))}
-              </>
-            )}
-
-            {/* ATEX */}
-            {b.atex?.length > 0 && (
-              <>
-                <SectionHeader title="ATEX" count={countTasks({tasks:[], atex:b.atex})} nodeKey={`${bKey}:atex`} />
-                {expanded[`${bKey}:atex`] && b.atex.map(z => (
-                  <Fragment key={`zone:${z.zone}`}>
-                    <tr className="bg-amber-50">
-                      <td className="p-2 pl-6 font-medium text-amber-800">Zone {z.zone}</td>
-                      <td className="p-2">—</td>
-                      <td className="p-2 text-sm text-gray-600">Tâches: {(z.tasks||[]).length}</td>
-                      <td className="p-2"></td>
-                    </tr>
-                    {(z.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                    {(z.equipments||[]).map(e => (
-                      <Fragment key={`atex-e:${e.id}`}>
-                        <tr className="bg-amber-50/60">
-                          <td className="p-2 pl-10 text-amber-900">{e.label}</td>
-                          <td className="p-2">{e.code || '—'}</td>
-                          <td className="p-2 text-sm text-gray-600">Tâches: {(e.tasks||[]).length}</td>
-                          <td className="p-2"></td>
-                        </tr>
-                        {(e.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-                      </Fragment>
-                    ))}
-                  </Fragment>
-                ))}
-              </>
-            )}
-
-            {/* Tâches directement au niveau building (fallback) */}
-            {(b.tasks||[]).length > 0 && (
-              <>
-                <SectionHeader title="Autres tâches" count={countTasks({tasks:b.tasks})} nodeKey={`${bKey}:misc`} />
-                {expanded[`${bKey}:misc`] && (b.tasks||[]).map(t => <TaskRow key={`t:${t.id}`} t={t} />)}
-              </>
-            )}
-          </>
-        )}
-      </Fragment>
-    );
-  };
-
+  // ----------- RENDER -----------
   return (
-    <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-indigo-50 to-blue-50 rounded-3xl shadow-xl min-h-screen">
-      <header className="flex items-center justify-between mb-8">
-        <h1 className="text-4xl font-bold text-gray-800">Controls (TSD)</h1>
-        <div className="flex items-center gap-3">
-          <button onClick={()=>setShowFilters(true)} className="px-3 py-2 bg-white text-gray-700 rounded-xl shadow ring-1 ring-black/10 hover:bg-gray-50 flex items-center gap-2">
-            <SlidersHorizontal size={18}/> Filtres
-          </button>
+    <section className="p-6 md:p-8 max-w-7xl mx-auto bg-gradient-to-br from-indigo-50 to-blue-50 rounded-3xl shadow-xl min-h-screen">
+      <header className="flex items-center justify-between mb-6">
+        <h1 className="text-3xl md:text-4xl font-bold text-gray-800">Controls (TSD)</h1>
+        <div className="flex gap-2">
+          <button onClick={() => setTab('tasks')} className={`px-3 md:px-4 py-2 rounded-xl ${tab==='tasks'?'bg-white text-indigo-700 shadow':'text-gray-600 ring-1 ring-black/10'}`}>Tâches</button>
+          <button onClick={async ()=>{ setTab('hierarchy'); await loadHierarchy(); }} className={`px-3 md:px-4 py-2 rounded-xl ${tab==='hierarchy'?'bg-white text-indigo-700 shadow':'text-gray-600 ring-1 ring-black/10'}`}>Hiérarchie</button>
+          <button onClick={async ()=>{ setTab('gantt'); await loadCalendar(); }} className={`px-3 md:px-4 py-2 rounded-xl ${tab==='gantt'?'bg-white text-indigo-700 shadow':'text-gray-600 ring-1 ring-black/10'}`}>Gantt</button>
+          <button onClick={()=>setTab('tools')} className={`px-3 md:px-4 py-2 rounded-xl ${tab==='tools'?'bg-white text-indigo-700 shadow':'text-gray-600 ring-1 ring-black/10'}`}>Outils</button>
         </div>
       </header>
 
-      <div className="flex gap-4 mb-8 border-b pb-2">
-        <button onClick={() => setTab('hierarchy')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'hierarchy' ? 'bg-white text-indigo-600 shadow-md' : 'text-gray-600'}`}>Arborescence</button>
-        <button onClick={() => setTab('gantt')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'gantt' ? 'bg-white text-blue-600 shadow-md' : 'text-gray-600'}`}>Gantt</button>
-        <button onClick={() => setTab('history')} className={`px-6 py-3 rounded-t-xl font-semibold ${tab === 'history' ? 'bg-white text-indigo-600 shadow-md' : 'text-gray-600'}`}>Historique</button>
-      </div>
+      {/* TÂCHES */}
+      {tab === 'tasks' && (
+        <>
+          <FilterBar />
+          <div className="overflow-x-auto bg-white rounded-2xl shadow ring-1 ring-black/5">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-indigo-50 text-gray-700">
+                  <th className="p-3">Label</th>
+                  <th className="p-3">Code</th>
+                  <th className="p-3">Statut</th>
+                  <th className="p-3">Échéance</th>
+                  <th className="p-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tasks.length === 0 && (
+                  <tr><td colSpan={5} className="p-6 text-center text-gray-500">Aucune tâche</td></tr>
+                )}
+                {tasks.map(t => (
+                  <tr key={t.id} className="hover:bg-indigo-50/50">
+                    <td className="p-3">{t.label}</td>
+                    <td className="p-3 text-xs text-gray-600">{t.task_code}</td>
+                    <td className="p-3">
+                      <span className={`px-2 py-1 text-xs rounded-lg ${t.status==='Overdue'?'bg-red-100 text-red-700':t.status==='Planned'?'bg-blue-100 text-blue-700':'bg-amber-100 text-amber-700'}`}>
+                        {t.status}
+                      </span>
+                    </td>
+                    <td className="p-3">{fmtDate(t.due_date)}</td>
+                    <td className="p-3">
+                      <button className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700" onClick={() => openDetails(t)}>
+                        Détails
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
+          {/* pagination simple */}
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <button disabled={page<=1} onClick={()=>loadTasks(page-1)} className="px-3 py-1 rounded-lg ring-1 ring-black/10 bg-white disabled:opacity-50">Préc.</button>
+            <div className="text-sm text-gray-600">Page {page}</div>
+            <button disabled={tasks.length < pageSize} onClick={()=>loadTasks(page+1)} className="px-3 py-1 rounded-lg ring-1 ring-black/10 bg-white disabled:opacity-50">Suiv.</button>
+          </div>
+        </>
+      )}
+
+      {/* HIÉRARCHIE */}
       {tab === 'hierarchy' && (
-        <div className="overflow-x-auto bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="bg-indigo-50 text-gray-700">
-                <th className="p-3">Élément</th>
-                <th className="p-3">Code</th>
-                <th className="p-3">Infos</th>
-                <th className="p-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tree.map((b, idx) => <BuildingBlock key={`b:${idx}`} b={b} />)}
-              {!tree.length && (
-                <tr><td colSpan={4} className="text-center text-gray-600 py-16">
-                  Aucune donnée. Utilisez le seed TSD côté backend si nécessaire.
-                </td></tr>
+        <div className="bg-white rounded-2xl shadow ring-1 ring-black/5 p-4">
+          {tree.length === 0 && <div className="text-center text-gray-500 p-8">Aucun équipement. Lance “Sync Entities” et “Seed TSD” dans l’onglet Outils.</div>}
+          {tree.map((b, bi) => (
+            <div key={`b-${bi}`} className="mb-6">
+              <div className="text-xl font-semibold text-gray-800 mb-2">🏢 {b.label}</div>
+
+              {/* HV */}
+              {!!(b.hv || []).length && (
+                <div className="mb-3">
+                  <div className="font-semibold text-gray-700 mb-1">High Voltage</div>
+                  <div className="space-y-2">
+                    {b.hv.map((h, hi) => (
+                      <div key={`hv-${bi}-${hi}`} className="p-3 rounded-lg ring-1 ring-black/10">
+                        <div className="font-medium">{h.label}</div>
+                        {(h.tasks || []).length > 0 ? (
+                          <ul className="list-disc pl-5 mt-1">
+                            {h.tasks.map(t => (
+                              <li key={`hvt-${t.id}`}>
+                                <button className="text-indigo-700 hover:underline" onClick={()=>openDetails({ id:t.id })}>{t.label}</button>
+                                <span className="text-xs text-gray-500 ml-2">{fmtDate(t.due_date)} — {t.status}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : <div className="text-xs text-gray-500 mt-1">Aucune tâche</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
-            </tbody>
-          </table>
-        </div>
-      )}
 
-      {tab === 'gantt' && (
-        <div className="bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xl font-bold text-gray-800">Gantt des contrôles</h2>
-            <label className="inline-flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={!!filters.include_closed} onChange={e=>setFilters(s=>({ ...s, include_closed: e.target.checked }))} />
-              Afficher les tâches closes
-            </label>
-          </div>
-          {ganttTasks.length ? (
-            <div className="h-[620px] overflow-auto">
-              <Gantt
-                tasks={ganttTasks}
-                viewMode={ViewMode.Month}
-                columnWidth={60}
-                listCellWidth="320px"
-                todayColor="#ff6b00"
-              />
+              {/* Switchboards */}
+              {!!(b.switchboards || []).length && (
+                <div className="mb-3">
+                  <div className="font-semibold text-gray-700 mb-1">Switchboards</div>
+                  <div className="space-y-2">
+                    {b.switchboards.map((s, si) => (
+                      <div key={`sw-${bi}-${si}`} className="p-3 rounded-lg ring-1 ring-black/10">
+                        <div className="font-medium">{s.label}</div>
+                        {(s.tasks || []).length > 0 && (
+                          <ul className="list-disc pl-5 mt-1">
+                            {s.tasks.map(t => (
+                              <li key={`swt-${t.id}`}>
+                                <button className="text-indigo-700 hover:underline" onClick={()=>openDetails({ id:t.id })}>{t.label}</button>
+                                <span className="text-xs text-gray-500 ml-2">{fmtDate(t.due_date)} — {t.status}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {/* Devices */}
+                        {!!(s.devices || []).length && (
+                          <div className="mt-2">
+                            <div className="text-sm font-medium text-gray-700">Devices</div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-1">
+                              {s.devices.map((d, di) => (
+                                <div key={`dev-${bi}-${si}-${di}`} className="p-2 rounded ring-1 ring-black/10">
+                                  <div className="font-medium text-sm">{d.label}</div>
+                                  {(d.tasks || []).length
+                                    ? <ul className="list-disc pl-5">
+                                        {d.tasks.map(t => (
+                                          <li key={`dt-${t.id}`}>
+                                            <button className="text-indigo-700 hover:underline" onClick={()=>openDetails({ id:t.id })}>{t.label}</button>
+                                            <span className="text-xs text-gray-500 ml-2">{fmtDate(t.due_date)} — {t.status}</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    : <div className="text-xs text-gray-500">Aucune tâche</div>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* ATEX */}
+              {!!(b.atex || []).length && (
+                <div className="mb-3">
+                  <div className="font-semibold text-gray-700 mb-1">ATEX</div>
+                  <div className="space-y-2">
+                    {b.atex.map((z, zi) => (
+                      <div key={`atex-${bi}-${zi}`} className="p-3 rounded-lg ring-1 ring-black/10">
+                        <div className="font-medium">Zone {z.zone}</div>
+                        {(z.tasks || []).length > 0 && (
+                          <ul className="list-disc pl-5 mt-1">
+                            {z.tasks.map(t => (
+                              <li key={`zt-${t.id}`}>
+                                <button className="text-indigo-700 hover:underline" onClick={()=>openDetails({ id:t.id })}>{t.label}</button>
+                                <span className="text-xs text-gray-500 ml-2">{fmtDate(t.due_date)} — {t.status}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {!!(z.equipments || []).length && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-2">
+                            {z.equipments.map((e, ei) => (
+                              <div key={`ae-${ei}`} className="p-2 rounded ring-1 ring-black/10">
+                                <div className="font-medium text-sm">{e.label}</div>
+                                {(e.tasks || []).length
+                                  ? <ul className="list-disc pl-5">
+                                      {e.tasks.map(t => (
+                                        <li key={`aet-${t.id}`}>
+                                          <button className="text-indigo-700 hover:underline" onClick={()=>openDetails({ id:t.id })}>{t.label}</button>
+                                          <span className="text-xs text-gray-500 ml-2">{fmtDate(t.due_date)} — {t.status}</span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  : <div className="text-xs text-gray-500">Aucune tâche</div>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          ) : <p className="text-gray-600 text-center py-20">Aucune donnée Gantt.</p>}
+          ))}
         </div>
       )}
 
-      {tab === 'history' && (
-        <div className="bg-white rounded-2xl shadow-md ring-1 ring-black/5 p-6">
-          <div className="text-gray-600">Sélectionnez une tâche dans l’arborescence pour consulter l’historique détaillé. Un onglet d’audit global pourra être ajouté ici si besoin (export CSV des records, etc.).</div>
+      {/* GANTT */}
+      {tab === 'gantt' && (
+        <div className="bg-white rounded-2xl shadow ring-1 ring-black/5 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-semibold text-gray-800">Gantt — Tâches planifiées</div>
+            <button onClick={loadCalendar} className="px-3 py-2 rounded-lg bg-white ring-1 ring-black/10 hover:bg-gray-50 flex items-center gap-2"><RefreshCw size={16}/> Rafraîchir</button>
+          </div>
+          {gantt.length
+            ? <div className="h-[640px] overflow-auto">
+                <Gantt tasks={gantt} viewMode={ViewMode.Month} listCellWidth="320px" columnWidth={54} todayColor="#f97316" />
+              </div>
+            : <div className="text-center text-gray-500 p-10">Aucune donnée (lancez le seed si nécessaire).</div>
+          }
         </div>
       )}
 
-      {/* Filters drawer */}
-      <Modal open={showFilters} onClose={()=>setShowFilters(false)} title="Filtres" wide>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Recherche</label>
-            <input className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10" value={filters.q||''} onChange={e=>setFilters(s=>({ ...s, q:e.target.value }))} placeholder="Nom de tâche / code…" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Statut</label>
-            <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
-              value={filters.status||'open'}
-              onChange={e=>setFilters(s=>({ ...s, status:e.target.value }))}>
-              <option value="open">Open</option>
-              <option value="overdue">Overdue</option>
-              <option value="closed">Closed</option>
-              <option value="">Tous</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Catégorie</label>
-            <select className="w-full p-2 rounded-xl bg-gray-50 ring-1 ring-black/10"
-              value={filters.category||''}
-              onChange={e=>setFilters(s=>({ ...s, category:e.target.value }))}>
-              <option value="">Toutes</option>
-              {(filters.categories||[]).map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
+      {/* OUTILS */}
+      {tab === 'tools' && (
+        <div className="bg-white rounded-2xl shadow ring-1 ring-black/5 p-6">
+          <h3 className="text-xl font-bold text-gray-800 mb-3">Outils (confort)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 rounded-xl ring-1 ring-black/10">
+              <div className="font-semibold text-gray-800 mb-1 flex items-center gap-2"><ListChecks size={18}/> Sync Entities</div>
+              <p className="text-sm text-gray-600 mb-3">Crée/Met à jour <code>controls_entities</code> à partir des tables *switchboards*, *devices*, *atex_equipments*, *hv_*.</p>
+              <div className="flex gap-2">
+                <button onClick={()=>syncEntities(true)} className="px-3 py-2 rounded-lg bg-white ring-1 ring-black/10 hover:bg-gray-50">Dry-run</button>
+                <button onClick={()=>syncEntities(false)} className="px-3 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">Exécuter</button>
+              </div>
+            </div>
+            <div className="p-4 rounded-xl ring-1 ring-black/10">
+              <div className="font-semibold text-gray-800 mb-1 flex items-center gap-2"><TimerReset size={18}/> Seed TSD</div>
+              <p className="text-sm text-gray-600 mb-3">Génère les tâches selon la *tsd_library* pour chaque entité (fréquences incluses).</p>
+              <div className="flex gap-2">
+                <button onClick={()=>seedTsd(true)} className="px-3 py-2 rounded-lg bg-white ring-1 ring-black/10 hover:bg-gray-50">Dry-run</button>
+                <button onClick={()=>seedTsd(false)} className="px-3 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700">Créer</button>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="mt-4 flex justify-between">
-          <button onClick={()=>setFilters(f=>({ ...f, building:'', category:'', status:'open', q:'', include_closed:false }))} className="px-3 py-2 rounded-lg ring-1 ring-black/10 bg-gray-50">Effacer</button>
-          <button onClick={async ()=>{ setShowFilters(false); await loadTree(); if (tab==='gantt') await loadGantt(); }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg">Appliquer</button>
-        </div>
+      )}
+
+      {/* MODAL DÉTAILS */}
+      <Modal
+        open={!!openTaskId}
+        onClose={()=>setOpenTaskId(null)}
+        title={taskSchema?.label || 'Détails de la tâche'}
+        wide
+      >
+        {!taskSchema && <div className="text-center text-gray-500 py-10">Chargement…</div>}
+        {taskSchema && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div><div className="text-xs text-gray-500">Code</div><div className="font-medium">{taskSchema.task_code}</div></div>
+              <div><div className="text-xs text-gray-500">Catégorie</div><div className="font-medium">{taskSchema.tsd_category?.label || '—'}</div></div>
+              <div><div className="text-xs text-gray-500">Procédure</div><div className="text-xs text-gray-700 line-clamp-2">{taskSchema.procedure_md || '—'}</div></div>
+              <div><div className="text-xs text-gray-500">PPE</div><div className="text-xs text-gray-700 line-clamp-2">{taskSchema.ppe_md || '—'}</div></div>
+            </div>
+
+            {/* Checklist */}
+            <ChecklistInline task={{ id:openTaskId }} schema={taskSchema} onCloseTask={closeTask} busy={busy} />
+
+            {/* Pièces jointes */}
+            <div className="mt-4">
+              <div className="font-semibold text-gray-800 mb-2">Pièces jointes</div>
+              <div className="flex items-center gap-3 mb-2">
+                <label className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer hover:bg-gray-50">
+                  <ImageIcon size={16}/> Joindre
+                  <input type="file" className="hidden" onChange={(e)=>e.target.files && uploadAttachment(e.target.files[0])} />
+                </label>
+              </div>
+              {taskAttachments.length === 0 && <div className="text-sm text-gray-500">Aucune pièce jointe</div>}
+              <ul className="text-sm">
+                {taskAttachments.map(a => (
+                  <li key={a.id} className="flex items-center gap-2">
+                    <Paperclip size={14}/> <a className="text-indigo-700 hover:underline" href={`/api/controls/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a>
+                    <span className="text-xs text-gray-500">({a.mimetype}, {a.size} o)</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            {/* Historique */}
+            <div className="mt-4">
+              <div className="font-semibold text-gray-800 mb-2">Historique</div>
+              {taskHistory.length === 0 && <div className="text-sm text-gray-500">Aucun historique</div>}
+              <ul className="text-sm">
+                {taskHistory.map((h, i) => (
+                  <li key={i} className="flex items-center gap-2">
+                    <Calendar size={14}/> {fmtDate(h.date)} — {h.action} — <span className="text-gray-500">{h.user || h.user_name || 'system'}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {toast && <Toast {...toast} onClose={()=>setToast(null)} />}
-      {loading && <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-indigo-500 rounded-full"></div></div>}
+      {busy && <div className="fixed inset-0 flex items-center justify-center bg-black/20 z-50"><div className="animate-spin h-16 w-16 border-b-4 border-indigo-500 rounded-full"></div></div>}
     </section>
   );
 }
