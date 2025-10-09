@@ -196,4 +196,22 @@ export const api = {
     calendar: () => get("/api/comp-ext/calendar"),                          // { tasks[], events[] }
     stats: () => get("/api/comp-ext/stats"),                                // agrégats pour graphes
   },
+
+  /** --- ASK VEEVA (Lecture & Q/R Documents) — AJOUT --- */
+  askVeeva: {
+    /** Vérification de l’état du microservice */
+    health: () => get("/api/ask-veeva/health"),
+
+    /** Upload d’un .zip contenant les docs (clé de champ: 'zip') */
+    uploadZip: (formData /* FormData */) =>
+      upload("/api/ask-veeva/upload", formData),
+
+    /** Recherche sémantique simple, renvoie les meilleurs passages */
+    search: (query, k = 5) =>
+      post("/api/ask-veeva/search", { query, k }),
+
+    /** Pose une question libre ; la réponse inclut des citations */
+    ask: (question) =>
+      post("/api/ask-veeva/ask", { question }),
+  },
 };
