@@ -8,7 +8,7 @@ import multer from 'multer';
 import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
-import unzipper from 'unzipper';
+import StreamZip from 'node-stream-zip';
 import mammoth from 'mammoth';               // DOCX
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -232,6 +232,49 @@ async function insertChunksWithEmbeddings(client, docId, chunks) {
   }
 }
 
+/** Extraction ZIP robuste (zip64) avec node-stream-zip + messages d’erreur clairs */
+async function extractZipTo(zipAbsPath, outDir) {
+  await fsp.mkdir(outDir, { recursive: true });
+
+  // Vérif rapide de signature ZIP
+  const fd = await fsp.open(zipAbsPath, 'r');
+  try {
+    const sig = Buffer.alloc(4);
+    await fd.read(sig, 0, 4, 0);
+    if (!(sig[0] === 0x50 && sig[1] === 0x4b)) {
+      throw new Error('Fichier non-ZIP ou corrompu (signature invalide)');
+    }
+  } finally {
+    await fd.close();
+  }
+
+  const zip = new StreamZip.async({ file: zipAbsPath, storeEntries: true });
+  try {
+    const entries = await zip.entries();
+    const names = Object.keys(entries || {});
+    if (!names.length) throw new Error('Archive vide ou table centrale illisible (ZIP corrompu)');
+
+    for (const name of names) {
+      const e = entries[name];
+      const dest = path.join(outDir, name);
+      if (name.endsWith('/')) {
+        await fsp.mkdir(dest, { recursive: true });
+        continue;
+      }
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await zip.extract(name, dest);
+    }
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (msg.toLowerCase().includes('unexpected end of file')) {
+      throw new Error('ZIP incomplet/tronqué (unexpected end of file)');
+    }
+    throw e;
+  } finally {
+    await zip.close();
+  }
+}
+
 async function ingestSingleFile(client, absSrc, subdir = '') {
   const baseName = path.basename(absSrc);
   const relPath = path.join(subdir, baseName);
@@ -251,11 +294,6 @@ async function ingestSingleFile(client, absSrc, subdir = '') {
   const chunks = chunkText(text, { chunkSize: 1200, overlap: 200 });
   await insertChunksWithEmbeddings(client, docId, chunks);
   return { docId, chunks: chunks.length, bytes: stat.size };
-}
-
-async function extractZipTo(zipAbsPath, outDir) {
-  await fsp.mkdir(outDir, { recursive: true });
-  await fs.createReadStream(zipAbsPath).pipe(unzipper.Extract({ path: outDir })).promise();
 }
 
 async function walkFiles(dir) {
@@ -365,6 +403,11 @@ app.get('/api/ask-veeva/health', async (_req, res) => {
 app.post('/api/ask-veeva/uploadZip', upload.single('zip'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Aucun fichier reçu (zip)' });
+
+    // Log taille côté serveur (utile si proxy limite/tronque)
+    const stat = await fsp.stat(req.file.path).catch(() => null);
+    console.log('[ask-veeva] ZIP reçu:', req.file.originalname, 'size=', stat?.size);
+
     const jobId = await createJob('zip', 0);
     runIngestZip(jobId, req.file.path).catch(e => console.error('bg ingestZip failed', e));
     res.json({ ok: true, job_id: jobId });
