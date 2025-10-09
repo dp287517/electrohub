@@ -25,6 +25,13 @@ const apps = [
     description: 'Vendors offers, JSA, prevention plan, access, visits, SAP WO & attachments',
     icon: '🤝'
   },
+  // 👉 Nouveau : Ask Veeva (lecture et Q/R sur documents)
+  {
+    label: 'Ask Veeva',
+    to: '/app/ask-veeva',
+    description: 'Upload documents or ZIP files, index them, and ask any question across your library with AI.',
+    icon: '💬'
+  },
 ];
 
 export default function Dashboard() {
