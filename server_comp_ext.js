@@ -581,7 +581,7 @@ app.get('/api/comp-ext/files/:fileId/download', async (req, res) => {
     const fid = Number(req.params.fileId);
     if (!Number.isFinite(fid)) return res.status(400).json({ error: 'bad_file_id' });
     const row = (await pool.query(
-     `SELECT original_name, stored_name, mime FROM comp_ext_files WHERE id=$1`, [fid]
+     `SELECT stored_name, mime FROM comp_ext_files WHERE id=$1`, [fid]
     )).rows[0];
     if (!row) return res.status(404).json({ error: 'not_found' });
     const filePath = path.resolve(FILES_DIR, row.stored_name);
@@ -604,15 +604,35 @@ app.get('/api/comp-ext/files/:fileId/download', async (req, res) => {
 app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
   try {
     const fid = Number(req.params.fileId);
-    if (!Number.isFinite(fid)) return res.status(400).json({ error: 'bad_file_id' });
+    if (!Number.isFinite(fid)) {
+      return res.status(400).json({ error: 'bad_file_id' });
+    }
+
+    // On lit stored_name + mime et on reconstruit le chemin avec FILES_DIR
     const row = (await pool.query(
-      `SELECT original_name, disk_path, mime FROM comp_ext_files WHERE id=$1`, [fid]
+      `SELECT stored_name, mime FROM comp_ext_files WHERE id=$1`,
+      [fid]
     )).rows[0];
-    if (!row) return res.status(404).json({ error: 'not_found' });
+
+    if (!row) {
+      return res.status(404).json({ error: 'not_found' });
+    }
+
     const filePath = path.resolve(FILES_DIR, row.stored_name);
-    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'file_missing' });
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'file_missing' });
+    }
+
     res.setHeader('Content-Type', row.mime || 'application/octet-stream');
-    fs.createReadStream(filePath).on('error', err => { console.error('[comp-ext] stream error', err); res.status(500).end(); }).pipe(res);
+    // Optionnel : forcer l'affichage inline (certains navigateurs le font par défaut)
+    // res.setHeader('Content-Disposition', 'inline');
+
+    fs.createReadStream(filePath)
+      .on('error', err => {
+        console.error('[comp-ext] stream error', err);
+        res.status(500).end();
+      })
+      .pipe(res);
   } catch (e) {
     console.error('[comp-ext] file inline', e);
     res.status(500).json({ error: 'server_error' });
