@@ -2,12 +2,13 @@
 // External Contractors (Prestataires externes)
 //
 // ✅ Onglets : Vendors | Calendar | Gantt | Analytics | IA
-// ✅ Filtres globaux (disponibles sur tous les onglets), MASQUÉS par défaut via bouton "Filters"
-// ✅ Bandeau sticky aligné avec les colonnes (10 colonnes) — Name | Offer | MSRA | Pre-qual | PP | Visits | First date | Owner | Files | Actions
-// ✅ Un seul bouton "+ New vendor" (entête, pas dans les filtres)
+// ✅ Filtres globaux repliables (disponibles sur tous les onglets)
+// ✅ Vendors : thead sticky intégré + <colgroup> ⇒ ALIGNEMENT PARFAIT
+//    Colonnes (10): Name | Offer | MSRA | Pre-qual | PP | Visits | First date | Owner | Files | Actions
+// ✅ 1 seul bouton "+ New vendor" (dans l’entête, pas dans les filtres)
 // ✅ MSRA partout (plus "JSA"), Pre-qual incluse
-// ✅ Gantt coloré (vert/rouge), "Open vendor" fonctionne
-// ✅ IA : pose des questions à /api/comp-ext/ask
+// ✅ Gantt coloré (vert/rouge), "Open vendor" OK
+// ✅ IA : /api/comp-ext/ask
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
@@ -209,32 +210,10 @@ const barOptions = {
 // ----------------- Filtres globaux (toggle) -----------------
 function GlobalFilters({ state, setters, onSearch, onClear, visible }) {
   const {
-    q,
-    fOffer,
-    fMsra,
-    fPrequal,
-    fAccess,
-    fPP,
-    fOwner,
-    fHasFiles,
-    fVisitsMin,
-    fVisitsMax,
-    fFrom,
-    fTo,
+    q, fOffer, fMsra, fPrequal, fAccess, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo,
   } = state;
   const {
-    setQ,
-    setFOffer,
-    setFMsra,
-    setFPrequal,
-    setFAccess,
-    setFPP,
-    setFOwner,
-    setFHasFiles,
-    setFVisitsMin,
-    setFVisitsMax,
-    setFFrom,
-    setFTo,
+    setQ, setFOffer, setFMsra, setFPrequal, setFAccess, setFPP, setFOwner, setFHasFiles, setFVisitsMin, setFVisitsMax, setFFrom, setFTo,
   } = setters;
 
   if (!visible) return null;
@@ -245,12 +224,8 @@ function GlobalFilters({ state, setters, onSearch, onClear, visible }) {
           <Input value={q} onChange={setQ} placeholder="Search by name / WO…" />
         </div>
         <div className="flex gap-2">
-          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={onClear}>
-            Clear
-          </button>
-          <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={onSearch}>
-            Search
-          </button>
+          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={onClear}>Clear</button>
+          <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={onSearch}>Search</button>
         </div>
       </div>
 
@@ -286,7 +261,7 @@ function MonthCalendar({ events = [], onDayClick }) {
 
   const startOfMonth = month.startOf("month").toDate();
   const endOfMonth = month.endOf("month").toDate();
-  const startDow = (startOfMonth.getDay() + 6) % 7; // Mon..Sun => 0..6
+  const startDow = (startOfMonth.getDay() + 6) % 7;
   const gridStart = new Date(startOfMonth);
   gridStart.setDate(gridStart.getDate() - startDow);
   const days = [];
@@ -302,15 +277,9 @@ function MonthCalendar({ events = [], onDayClick }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.subtract(1, "month"))}>
-            ← Prev
-          </button>
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth(dayjs())}>
-            Today
-          </button>
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.add(1, "month"))}>
-            Next →
-          </button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.subtract(1, "month"))}>← Prev</button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth(dayjs())}>Today</button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.add(1, "month"))}>Next →</button>
         </div>
       </div>
 
@@ -365,9 +334,9 @@ export default function Comp() {
   const [fMsra, setFMsra] = useState("");
   const [fPrequal, setFPrequal] = useState("");
   const [fAccess, setFAccess] = useState("");
-  const [fPP, setFPP] = useState(""); // "", "yes", "no"
+  const [fPP, setFPP] = useState("");
   const [fOwner, setFOwner] = useState("");
-  const [fHasFiles, setFHasFiles] = useState(""); // "", "yes", "no"
+  const [fHasFiles, setFHasFiles] = useState("");
   const [fVisitsMin, setFVisitsMin] = useState("");
   const [fVisitsMax, setFVisitsMax] = useState("");
   const [fFrom, setFFrom] = useState("");
@@ -468,7 +437,6 @@ export default function Comp() {
         });
         if (!overlaps) return false;
       }
-
       return true;
     });
 
@@ -571,10 +539,10 @@ export default function Comp() {
     if (isSelected) openVisitModalForTask(task);
   };
 
-  // Sticky header offset
+  // Offsets sticky
   const stickyTop = 118;
 
-  // Actions filtres
+  // Filtre actions
   const filtersState = { q, fOffer, fMsra, fPrequal, fAccess, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo };
   const filtersSetters = { setQ, setFOffer, setFMsra, setFPrequal, setFAccess, setFPP, setFOwner, setFHasFiles, setFVisitsMin, setFVisitsMax, setFFrom, setFTo };
   const onSearch = () => reloadVendors();
@@ -595,10 +563,7 @@ export default function Comp() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            className="px-3 py-2 rounded border hover:bg-gray-50"
-            onClick={() => setFiltersOpen((v) => !v)}
-          >
+          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => setFiltersOpen((v) => !v)}>
             {filtersOpen ? "Hide filters" : "Filters"}
           </button>
           <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>
@@ -609,7 +574,7 @@ export default function Comp() {
 
       <Tabs value={tab} onChange={setTab} />
 
-      {/* FILTRES GLOBAUX (toggle) */}
+      {/* FILTRES GLOBAUX */}
       <GlobalFilters
         state={filtersState}
         setters={filtersSetters}
@@ -620,86 +585,127 @@ export default function Comp() {
 
       {/* VENDORS */}
       {tab === "vendors" && (
-        <>
-          {/* Sticky header aligné */}
-          <div
-            className="sticky z-20 bg-gray-50/95 backdrop-blur border rounded-2xl px-4 py-2"
-            style={{ top: stickyTop }}
-          >
-            <div className="grid grid-cols-[1.2fr_.8fr_.8fr_.8fr_.7fr_.6fr_.8fr_.8fr_.6fr_.8fr] gap-2 text-sm font-medium text-gray-700">
-              <span className="cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("offer_status")}>Offer {sortIcon("offer_status")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("msra_status")}>MSRA {sortIcon("msra_status")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("prequal_status")}>Pre-qual {sortIcon("prequal_status")}</span>
-              <span>PP</span>
-              <span className="cursor-pointer" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</span>
-              <span>Actions</span>
-            </div>
-          </div>
+        <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+          <table className="w-full table-fixed border-separate border-spacing-0">
+            {/* COLGROUP = colonnes synchronisées */}
+            <colgroup>
+              <col style={{ width: "15.2%" }} />
+              <col style={{ width: "10.2%" }} />
+              <col style={{ width: "10.2%" }} />
+              <col style={{ width: "10.2%" }} />
+              <col style={{ width: "8.9%" }} />
+              <col style={{ width: "7.6%" }} />
+              <col style={{ width: "10.2%" }} />
+              <col style={{ width: "10.2%" }} />
+              <col style={{ width: "7.6%" }} />
+              <col style={{ width: "9.7%" }} />
+            </colgroup>
 
-          {/* Tableau */}
-          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
-            <table className="w-full">
-              <thead className="sr-only">
-                <tr>
-                  <th>Name</th><th>Offer</th><th>MSRA</th><th>Pre-qual</th><th>PP</th><th>Visits</th><th>First date</th><th>Owner</th><th>Files</th><th>Actions</th>
-                </tr>
-              </thead>
-              <tbody className="text-sm">
-                {!loading && filtered.length === 0 && <tr><td colSpan={10} className="p-4 text-gray-500">No vendors.</td></tr>}
-                {loading && <tr><td colSpan={10} className="p-4 text-gray-500">Loading…</td></tr>}
-                {filtered.map(v => {
-                  const first = v.visits?.[0];
-                  const preq = v.prequal_status || "non_fait";
-                  return (
-                    <tr key={v.id} className="border-t align-top hover:bg-gray-50">
-                      <td className="p-3 min-w-[220px]">
-                        <div className="flex items-center gap-2">
-                          <button className="text-blue-700 font-medium hover:underline" onClick={()=>openEdit(v)} title="Edit">
-                            {v.name}
-                          </button>
-                          {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
-                        </div>
-                      </td>
-                      <td className="p-3"><Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></td>
-                      <td className="p-3"><Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>{v.msra_status || v.jsa_status}</Badge></td>
-                      <td className="p-3">
-                        <Badge color={preq==="reçue"||preq==="recue"?"blue":preq==="en_cours"?"yellow":"gray"}>{preq}</Badge>
-                      </td>
-                      <td className="p-3">
-                        {v.pp_applicable ? (
-                          v.pp_link ? (
-                            <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">Applicable (link)</a>
-                          ) : <span className="text-emerald-700">Applicable</span>
-                        ) : <span className="text-gray-500">N/A</span>}
-                      </td>
-                      <td className="p-3">{v.visits?.length || 0}</td>
-                      <td className="p-3">{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</td>
-                      <td className="p-3">{v.owner || "—"}</td>
-                      <td className="p-3">
-                        {v.files_count ? (
-                          <button className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
-                            onClick={()=>openEdit(v)}>
-                            {v.files_count} file{v.files_count>1?"s":""}
-                          </button>
-                        ) : <span className="text-gray-400 text-xs">0</span>}
-                      </td>
-                      <td className="p-3">
-                        <div className="flex gap-2">
-                          <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
-                          <button className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}>Delete</button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
+            {/* THEAD sticky */}
+            <thead>
+              <tr>
+                {[
+                  { k:"name", label:"Name" },
+                  { k:"offer_status", label:"Offer" },
+                  { k:"msra_status", label:"MSRA" },
+                  { k:"prequal_status", label:"Pre-qual" },
+                  { k:"pp", label:"PP", noSort:true },
+                  { k:"visits", label:"Visits" },
+                  { k:"first_date", label:"First date" },
+                  { k:"owner", label:"Owner" },
+                  { k:"files_count", label:"Files" },
+                  { k:"actions", label:"Actions", noSort:true },
+                ].map(col => (
+                  <th
+                    key={col.k}
+                    className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b bg-gray-50/95 backdrop-blur"
+                    style={{ position:"sticky", top: stickyTop, zIndex: 20 }}
+                  >
+                    {!col.noSort ? (
+                      <button
+                        onClick={()=>setSort(col.k)}
+                        className="inline-flex items-center gap-1 hover:underline"
+                      >
+                        <span>{col.label}</span>
+                        <span className="text-xs">
+                          {sortBy.field !== col.k ? "↕" : (sortBy.dir === "asc" ? "↑" : "↓")}
+                        </span>
+                      </button>
+                    ) : (
+                      <span>{col.label}</span>
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+
+            <tbody className="text-sm align-top">
+              {!loading && filtered.length === 0 && (
+                <tr><td colSpan={10} className="p-4 text-gray-500">No vendors.</td></tr>
+              )}
+              {loading && (
+                <tr><td colSpan={10} className="p-4 text-gray-500">Loading…</td></tr>
+              )}
+
+              {filtered.map(v => {
+                const first = v.visits?.[0];
+                const preq = v.prequal_status || "non_fait";
+                return (
+                  <tr key={v.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 border-t">
+                      <div className="flex items-center gap-2 min-w-[220px]">
+                        <button className="text-blue-700 font-medium hover:underline" onClick={()=>openEdit(v)} title="Edit">
+                          {v.name}
+                        </button>
+                        {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 border-t">
+                      <Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge>
+                    </td>
+                    <td className="px-4 py-3 border-t">
+                      <Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>{v.msra_status || v.jsa_status}</Badge>
+                    </td>
+                    <td className="px-4 py-3 border-t">
+                      <Badge color={preq==="reçue"||preq==="recue"?"blue":preq==="en_cours"?"yellow":"gray"}>{preq}</Badge>
+                    </td>
+                    <td className="px-4 py-3 border-t">
+                      {v.pp_applicable ? (
+                        v.pp_link ? (
+                          <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">Applicable (link)</a>
+                        ) : <span className="text-emerald-700">Applicable</span>
+                      ) : <span className="text-gray-500">N/A</span>}
+                    </td>
+                    <td className="px-4 py-3 border-t">{v.visits?.length || 0}</td>
+                    <td className="px-4 py-3 border-t">{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</td>
+                    <td className="px-4 py-3 border-t">{v.owner || "—"}</td>
+                    <td className="px-4 py-3 border-t">
+                      {v.files_count ? (
+                        <button
+                          className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
+                          onClick={()=>openEdit(v)}
+                        >
+                          {v.files_count} file{v.files_count>1?"s":""}
+                        </button>
+                      ) : <span className="text-gray-400 text-xs">0</span>}
+                    </td>
+                    <td className="px-4 py-3 border-t">
+                      <div className="flex gap-2">
+                        <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
+                        <button
+                          className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                          onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       {/* CALENDAR */}
@@ -784,7 +790,7 @@ export default function Comp() {
                 {aiA || "—"}
               </div>
               <div className="text-xs text-gray-500">
-                Astuce : tu peux demander “montre-moi les visites la semaine prochaine”, “qu’est-ce qu’il manque pour ces visites”, etc.
+                Astuce : “montre-moi les visites la semaine prochaine”, “qu’est-ce qu’il manque pour ces visites”, etc.
               </div>
             </div>
           </Card>
@@ -1032,7 +1038,6 @@ function AttachmentsPanel({ vendorId, onChanged }) {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [isOver, setIsOver] = useState(false);
-  const boxRef = useRef(null);
 
   async function load() {
     setLoading(true);
@@ -1066,7 +1071,6 @@ function AttachmentsPanel({ vendorId, onChanged }) {
       </div>
 
       <div
-        ref={boxRef}
         onDragOver={(e)=>{ e.preventDefault(); setIsOver(true); }}
         onDragLeave={()=>setIsOver(false)}
         onDrop={onDrop}
@@ -1103,16 +1107,17 @@ function AttachmentsPanel({ vendorId, onChanged }) {
 function FileCard({ f, onDelete }) {
   const isImage = (f.mime || "").startsWith("image/");
   const sizeKB = Math.max(1, Math.round(Number(f.size_bytes || 0) / 1024));
+  const url = f.download_url || f.inline_url || f.url;
   return (
     <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
       <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
-        {isImage ? <img src={f.inline_url || f.url} alt={f.original_name} className="w-full h-full object-cover" /> : <div className="text-4xl">📄</div>}
+        {isImage ? <img src={url} alt={f.original_name} className="w-full h-full object-cover" /> : <div className="text-4xl">📄</div>}
       </div>
       <div className="p-3">
         <div className="text-sm font-medium truncate" title={f.original_name}>{f.original_name}</div>
         <div className="text-xs text-gray-500 mt-0.5">{sizeKB} KB • {f.mime || "file"}</div>
         <div className="flex items-center gap-2 mt-2">
-          <a href={f.download_url || f.url} className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition" download>
+          <a href={url} className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition" download>
             Download
           </a>
           <button onClick={onDelete} className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition">
