@@ -74,12 +74,8 @@ const API = {
         if (e.lengthComputable && onProgress) onProgress(Math.round((100 * e.loaded) / e.total));
       };
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            resolve(JSON.parse(xhr.responseText));
-          } catch {
-            resolve({});
-          }
+        if (xhr.status >= 200 && xhr < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
         } else reject(new Error(`HTTP ${xhr.status}`));
       };
       xhr.onerror = () => reject(new Error("network_error"));
@@ -134,9 +130,7 @@ function Select({ value, onChange, options = [], placeholder, className = "", di
     >
       <option value="">{placeholder || "—"}</option>
       {options.map((o) => (
-        <option key={o} value={o}>
-          {o}
-        </option>
+        <option key={o} value={o}>{o}</option>
       ))}
     </select>
   );
@@ -146,16 +140,11 @@ function Label({ children }) {
 }
 function Badge({ children, color = "gray" }) {
   const map = {
-    gray: "bg-gray-100 text-gray-700",
-    blue: "bg-blue-100 text-blue-700",
-    green: "bg-emerald-100 text-emerald-700",
-    yellow: "bg-amber-100 text-amber-700",
-    red: "bg-rose-100 text-rose-700",
-    purple: "bg-violet-100 text-violet-700",
+    gray: "bg-gray-100 text-gray-700", blue: "bg-blue-100 text-blue-700",
+    green: "bg-emerald-100 text-emerald-700", yellow: "bg-amber-100 text-amber-700",
+    red: "bg-rose-100 text-rose-700", purple: "bg-violet-100 text-violet-700",
   };
-  return (
-    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[color] || map.gray}`}>{children}</span>
-  );
+  return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[color] || map.gray}`}>{children}</span>;
 }
 const statusColor = {
   offre: (s) => (s === "po_faite" ? "green" : s?.startsWith("re") ? "blue" : "yellow"),
@@ -175,21 +164,13 @@ const palette = {
 
 // Chart options
 const baseChartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: { position: "bottom", labels: { boxWidth: 12, boxHeight: 12 } },
-    tooltip: { mode: "index", intersect: false, padding: 10 },
-    title: { display: false },
-  },
+  responsive: true, maintainAspectRatio: false,
+  plugins: { legend: { position: "bottom", labels: { boxWidth: 12, boxHeight: 12 } }, tooltip: { mode: "index", intersect: false, padding: 10 }, title: { display: false } },
   layout: { padding: 8 },
 };
 const barOptions = {
   ...baseChartOptions,
-  scales: {
-    x: { grid: { display: false }, ticks: { color: "#475569" } },
-    y: { grid: { color: palette.slateGrid }, ticks: { color: "#475569", precision: 0 } },
-  },
+  scales: { x: { grid: { display: false }, ticks: { color: "#475569" } }, y: { grid: { color: palette.slateGrid }, ticks: { color: "#475569", precision: 0 } } },
 };
 
 // ----------------- Month Calendar (with click) -----------------
@@ -219,15 +200,9 @@ function MonthCalendar({ events = [], onDayClick }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.subtract(1, "month"))}>
-            ← Prev
-          </button>
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth(dayjs())}>
-            Today
-          </button>
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.add(1, "month"))}>
-            Next →
-          </button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.subtract(1, "month"))}>← Prev</button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth(dayjs())}>Today</button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.add(1, "month"))}>Next →</button>
         </div>
       </div>
 
@@ -306,20 +281,28 @@ export default function Comp() {
   const [stats, setStats] = useState(null);
   const [alerts, setAlerts] = useState([]);
 
-  // sticky offset dynamiques (corrige “bandeau au milieu”)
+  // sticky offsets + spacer height
   const tabsRef = useRef(null);
-  const [stickyTop, setStickyTop] = useState(112); // valeur par défaut raisonnable
+  const theadRef = useRef(null);
+  const [stickyTop, setStickyTop] = useState(112);
+  const [theadH, setTheadH] = useState(44);
+
+  const recomputeSticky = () => {
+    const tabsH = tabsRef.current?.clientHeight ?? 44;
+    const offsetTabs = 60; // top-[60px] des tabs
+    setStickyTop(offsetTabs + tabsH + 8);
+    const th = theadRef.current?.getBoundingClientRect()?.height ?? 44;
+    setTheadH(Math.max(36, Math.round(th)));
+  };
 
   useEffect(() => {
-    const compute = () => {
-      const tabsH = tabsRef.current?.clientHeight || 44; // hauteur visuelle des tabs
-      const offsetTabs = 60; // top-[60px] appliqué aux tabs (classe Tailwind)
-      setStickyTop(offsetTabs + tabsH + 8); // petit gap
-    };
-    compute();
-    window.addEventListener("resize", compute);
-    return () => window.removeEventListener("resize", compute);
+    recomputeSticky();
+    window.addEventListener("resize", recomputeSticky);
+    return () => window.removeEventListener("resize", recomputeSticky);
   }, []);
+
+  // re-mesure quand tab/filtres changent ou après data load
+  useEffect(() => { recomputeSticky(); }, [tab, showFilters, list.length]);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const jsaOptions = ["en_attente", "transmis", "receptionne", "signe"];
@@ -346,22 +329,12 @@ export default function Comp() {
       progress: 0,
       styles:
         t.status_color === "green"
-          ? {
-              barBackgroundColor: "#10b981",
-              barProgressColor: "#10b981",
-              barBackgroundSelectedColor: "#10b981",
-            }
-          : {
-              barBackgroundColor: "#ef4444",
-              barProgressColor: "#ef4444",
-              barBackgroundSelectedColor: "#ef4444",
-            },
+          ? { barBackgroundColor: "#10b981", barProgressColor: "#10b981", barBackgroundSelectedColor: "#10b981" }
+          : { barBackgroundColor: "#ef4444", barProgressColor: "#ef4444", barBackgroundSelectedColor: "#ef4444" },
     }));
     setCalendar({ tasks, events: data.events || [] });
   }
-  async function reloadAnalytics() {
-    setStats(await API.stats());
-  }
+  async function reloadAnalytics() { setStats(await API.stats()); }
   async function reloadAll() {
     const [_, __, ___, a] = await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics(), API.alerts()]);
     setAlerts(Array.isArray(a?.alerts) ? a.alerts : []);
@@ -403,7 +376,6 @@ export default function Comp() {
         });
         if (!overlaps) return false;
       }
-
       return true;
     });
 
@@ -433,7 +405,7 @@ export default function Comp() {
     return arr;
   }, [list, fOffer, fJsa, fAccess, fPreQ, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
 
-  // Planning filtré par filtres globaux
+  // Planning filtré
   const planningFiltered = useMemo(() => {
     const includeVendor = (vid) => {
       const v = list.find(x => x.id === vid);
@@ -455,8 +427,7 @@ export default function Comp() {
 
     const tasks = (calendar.tasks || []).filter(t => {
       if (!includeVendor(t.vendor_id)) return false;
-      const s = dayjs(t.start);
-      const e = dayjs(t.end);
+      const s = dayjs(t.start); const e = dayjs(t.end);
       if (fromD && e.isBefore(fromD, "day")) return false;
       if (toD && s.isAfter(toD, "day")) return false;
       return true;
@@ -479,76 +450,45 @@ export default function Comp() {
   // Drawer handlers
   function openCreate() {
     setEditing({
-      name: "",
-      offer_status: "en_attente",
-      jsa_status: "en_attente",
-      pp_applicable: false,
-      pp_link: "",
-      access_status: "a_faire",
+      name: "", owner: "",
+      offer_status: "en_attente", jsa_status: "en_attente", access_status: "a_faire",
       prequal_status: "non_fait",
-      work_permit_required: false,
-      work_permit_link: "",
-      sap_wo: "",
-      owner: "",
-      visits_slots: 1,
-      visits: [],
+      pp_applicable: false, pp_link: "",
+      work_permit_required: false, work_permit_link: "",
+      sap_wo: "", visits_slots: 1, visits: [],
     });
     setDrawerOpen(true);
   }
-  function openEdit(v) {
-    setEditing(JSON.parse(JSON.stringify(v)));
-    setDrawerOpen(true);
-  }
+  function openEdit(v) { setEditing(JSON.parse(JSON.stringify(v))); setDrawerOpen(true); }
   async function saveEditing() {
     const payload = {
       ...editing,
-      visits: (editing.visits || []).map((x, i) => ({
-        index: x.index || i + 1,
-        start: x.start || null,
-        end: x.end || x.start || null,
-      })),
+      visits: (editing.visits || []).map((x, i) => ({ index: x.index || i + 1, start: x.start || null, end: x.end || x.start || null })),
     };
     if (editing.id) await API.update(editing.id, payload);
     else await API.create(payload);
-    setDrawerOpen(false);
-    setEditing(null);
-    await reloadVendors();
-    await reloadPlanning();
-    await reloadAnalytics();
+    setDrawerOpen(false); setEditing(null);
+    await reloadVendors(); await reloadPlanning(); await reloadAnalytics();
   }
   async function deleteEditing() {
     if (!editing?.id) return;
     await API.remove(editing.id);
-    setDrawerOpen(false);
-    setEditing(null);
-    await reloadVendors();
-    await reloadPlanning();
-    await reloadAnalytics();
+    setDrawerOpen(false); setEditing(null);
+    await reloadVendors(); await reloadPlanning(); await reloadAnalytics();
   }
 
-  // Visit modal openers (Calendar & Gantt)
-  function openVisitModalForDay({ date, events }) {
-    setVisitModal({ open: true, date, items: events || [] });
-  }
+  // Visit modal
+  function openVisitModalForDay({ date, events }) { setVisitModal({ open: true, date, items: events || [] }); }
   function openVisitModalForTask(task) {
     if (!task) return;
     const startISO = task.startISO || (task.start instanceof Date ? task.start.toISOString().slice(0,10) : String(task.start).slice(0,10));
     const endISO   = task.endISO   || (task.end   instanceof Date ? task.end.toISOString().slice(0,10)   : String(task.end).slice(0,10));
-    const item = {
-      date: startISO,
-      vendor_id: task.vendor_id,
-      vendor_name: task.name?.split("•")?.[0]?.trim() || task.vendor_name || `Vendor #${task.vendor_id}`,
-      vindex: task.vindex,
-      start: startISO,
-      end: endISO,
-    };
+    const item = { date: startISO, vendor_id: task.vendor_id, vendor_name: task.name?.split("•")?.[0]?.trim() || task.vendor_name || `Vendor #${task.vendor_id}`, vindex: task.vindex, start: startISO, end: endISO };
     setVisitModal({ open: true, date: startISO, items: [item] });
   }
-  const handleGanttSelect = (task, isSelected) => {
-    if (isSelected) openVisitModalForTask(task);
-  };
+  const handleGanttSelect = (task, isSelected) => { if (isSelected) openVisitModalForTask(task); };
 
-  // Reset all filters
+  // Reset filters
   const clearFilters = () => {
     setFOffer(""); setFJsa(""); setFAccess(""); setFPreQ("");
     setFPP(""); setFOwner(""); setFHasFiles("");
@@ -567,15 +507,10 @@ export default function Comp() {
 
       {/* FILTRES GLOBAUX */}
       <div className="flex items-center justify-between">
-        <button
-          className="px-3 py-2 rounded border hover:bg-gray-50"
-          onClick={() => setShowFilters(s => !s)}
-        >
+        <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => setShowFilters(s => !s)}>
           {showFilters ? "Hide filters" : "Show filters"}
         </button>
-        <div className="text-sm text-gray-500">
-          {showFilters ? "Filters visible" : "Filters hidden"}
-        </div>
+        <div className="text-sm text-gray-500">{showFilters ? "Filters visible" : "Filters hidden"}</div>
       </div>
 
       {showFilters && (
@@ -585,12 +520,8 @@ export default function Comp() {
               <Input value={q} onChange={setQ} placeholder="Search by name / WO…" />
             </div>
             <div className="flex gap-2">
-              <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>{ setQ(""); reloadVendors(); }}>
-                Reset search
-              </button>
-              <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={reloadVendors}>
-                Search
-              </button>
+              <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>{ setQ(""); reloadVendors(); }}>Reset search</button>
+              <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={reloadVendors}>Search</button>
             </div>
           </div>
 
@@ -613,12 +544,8 @@ export default function Comp() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50" onClick={clearFilters}>
-              Clear filters
-            </button>
-            <div className="text-sm text-gray-500 flex items-center">
-              Showing <b className="mx-1">{filtered.length}</b> of {list.length}
-            </div>
+            <button className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50" onClick={clearFilters}>Clear filters</button>
+            <div className="text-sm text-gray-500 flex items-center">Showing <b className="mx-1">{filtered.length}</b> of {list.length}</div>
           </div>
         </div>
       )}
@@ -628,14 +555,12 @@ export default function Comp() {
         <>
           {/* Barre d’actions dédiée (New vendor) */}
           <div className="flex items-center justify-end">
-            <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>
-              + New vendor
-            </button>
+            <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
           </div>
 
           <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
             <table className="w-full">
-              <thead className="sticky z-10 bg-gray-50/95 backdrop-blur" style={{ top: `${stickyTop}px` }}>
+              <thead ref={theadRef} className="sticky z-10 bg-gray-50/95 backdrop-blur" style={{ top: `${stickyTop}px` }}>
                 <tr className="text-sm font-medium text-gray-700">
                   <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</th>
                   <th className="p-3 text-left">Offer</th>
@@ -652,6 +577,9 @@ export default function Comp() {
               </thead>
 
               <tbody className="text-sm">
+                {/* SPACER pour ne pas recouvrir la première ligne par l’en-tête sticky */}
+                <tr style={{ height: theadH }} aria-hidden="true"></tr>
+
                 {!loading && filtered.length === 0 && (
                   <tr><td colSpan={11} className="p-4 text-gray-500">No vendors.</td></tr>
                 )}
@@ -764,12 +692,12 @@ export default function Comp() {
         <div className="grid grid-cols-1 gap-6">
           <Card title="Offers">
             <div className="h-[380px]">
-              <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, [palette.amber, palette.blue, palette.emerald])} options={baseChartOptions} />
+              <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={baseChartOptions} />
             </div>
           </Card>
           <Card title="JSA">
             <div className="h-[380px]">
-              <Doughnut data={donutData(stats?.counts?.jsa || { en_attente:0, transmis:0, receptionne:0, signe:0 }, [palette.amber, palette.blue, palette.emerald])} options={baseChartOptions} />
+              <Doughnut data={donutData(stats?.counts?.jsa || { en_attente:0, transmis:0, receptionne:0, signe:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={baseChartOptions} />
             </div>
           </Card>
           <Card title="Access">
@@ -780,7 +708,7 @@ export default function Comp() {
         </div>
       )}
 
-      {/* Visit Modal (calendar & gantt) */}
+      {/* Visit Modal */}
       {visitModal.open && (
         <Modal onClose={()=>setVisitModal({ open:false, date:null, items:[] })} title={`Visits • ${dayjs(visitModal.date).format("DD/MM/YYYY")}`}>
           <div className="space-y-3">
@@ -873,7 +801,7 @@ function VisitItem({ item, onOpenVendor }) {
 
 function FileCard({ f, onDelete }) {
   const sizeKB = Math.max(1, Math.round(Number(f.size_bytes || 0) / 1024));
-  const url = `/api/comp-ext/download?file_id=${f.id}`;
+  const url = `/api/comp-ext/files/${f.id}/download`; // backend compat
   return (
     <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
       <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
@@ -975,7 +903,6 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
   const v = value || {};
   const set = (patch) => onChange({ ...v, ...patch });
 
-  // garder en mémoire le nombre de slots (visits_slots)
   const [visitsCount, setVisitsCount] = useState(v?.visits?.length || v?.visits_slots || 1);
   useEffect(() => { setVisitsCount(v?.visits?.length || v?.visits_slots || 1); }, [v?.id]);
 
@@ -993,46 +920,22 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
   return (
     <div className="space-y-4">
       <div className="grid sm:grid-cols-2 gap-3">
-        <div>
-          <Label>Vendor name</Label>
-          <Input value={v.name || ""} onChange={(x) => set({ name: x })} placeholder="Vendor name" />
-        </div>
-        <div>
-          <Label>Owner</Label>
-          <Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" />
-        </div>
+        <div><Label>Vendor name</Label><Input value={v.name || ""} onChange={(x) => set({ name: x })} placeholder="Vendor name" /></div>
+        <div><Label>Owner</Label><Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" /></div>
 
-        <div>
-          <Label>Offer status</Label>
-          <Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" />
-        </div>
-        <div>
-          <Label>JSA status</Label>
-          <Select value={v.jsa_status || "en_attente"} onChange={(x) => set({ jsa_status: x })} options={jsaOptions} placeholder="JSA status" />
-        </div>
-        <div>
-          <Label>Access status</Label>
-          <Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" />
-        </div>
-        <div>
-          <Label>Pré-qualification</Label>
-          <Select value={v.prequal_status || "non_fait"} onChange={(x) => set({ prequal_status: x })} options={preQualOptions} placeholder="Pré-qualification" />
-        </div>
+        <div><Label>Offer status</Label><Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" /></div>
+        <div><Label>JSA status</Label><Select value={v.jsa_status || "en_attente"} onChange={(x) => set({ jsa_status: x })} options={jsaOptions} placeholder="JSA status" /></div>
+        <div><Label>Access status</Label><Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" /></div>
+        <div><Label>Pré-qualification</Label><Select value={v.prequal_status || "non_fait"} onChange={(x) => set({ prequal_status: x })} options={preQualOptions} placeholder="Pré-qualification" /></div>
 
-        <div>
-          <Label>Upcoming WO</Label>
-          <Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" />
-        </div>
+        <div><Label>Upcoming WO</Label><Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" /></div>
 
         <div className="flex items-center gap-2 mt-1">
           <input id="pp_applicable" type="checkbox" checked={!!v.pp_applicable} onChange={(e)=>set({ pp_applicable: e.target.checked })} />
           <label htmlFor="pp_applicable" className="text-sm">Prevention plan applicable</label>
         </div>
         {v.pp_applicable && (
-          <div>
-            <Label>SafePermit link (PP)</Label>
-            <Input value={v.pp_link || ""} onChange={(x)=>set({ pp_link: x })} placeholder="SafePermit link" />
-          </div>
+          <div><Label>SafePermit link (PP)</Label><Input value={v.pp_link || ""} onChange={(x)=>set({ pp_link: x })} placeholder="SafePermit link" /></div>
         )}
 
         <div className="flex items-center gap-2 mt-1">
@@ -1040,10 +943,7 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
           <label htmlFor="wp_required" className="text-sm">Permis de travail requis</label>
         </div>
         {v.work_permit_required && (
-          <div>
-            <Label>SafePermit link (Permis de travail)</Label>
-            <Input value={v.work_permit_link || ""} onChange={(x)=>set({ work_permit_link: x })} placeholder="SafePermit link (Permis de travail)" />
-          </div>
+          <div><Label>SafePermit link (Permis de travail)</Label><Input value={v.work_permit_link || ""} onChange={(x)=>set({ work_permit_link: x })} placeholder="SafePermit link (Permis de travail)" /></div>
         )}
       </div>
 
@@ -1051,11 +951,8 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
         <div className="flex items-center gap-3 mb-2">
           <div className="text-sm text-gray-600">Visits</div>
           <input
-            type="number"
-            min={1}
-            className="border rounded px-2 py-1 text-sm w-24"
-            value={visitsCount}
-            onChange={(e)=>setVisitsCount(Math.max(1, Number(e.target.value||1)))}
+            type="number" min={1} className="border rounded px-2 py-1 text-sm w-24"
+            value={visitsCount} onChange={(e)=>setVisitsCount(Math.max(1, Number(e.target.value||1)))}
           />
         </div>
         <div className="grid gap-2">
@@ -1063,27 +960,13 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
             <div key={i} className="grid grid-cols-2 gap-2">
               <div>
                 <Label>Start</Label>
-                <input
-                  type="date"
-                  className="border rounded px-2 py-1 text-sm w-full"
-                  value={vis.start || ""}
-                  onChange={(e)=> {
-                    const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value};
-                    set({ visits: arr, visits_slots: visitsCount });
-                  }}
-                />
+                <input type="date" className="border rounded px-2 py-1 text-sm w-full"
+                  value={vis.start || ""} onChange={(e)=>{ const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value}; set({ visits: arr, visits_slots: visitsCount }); }} />
               </div>
               <div>
                 <Label>End</Label>
-                <input
-                  type="date"
-                  className="border rounded px-2 py-1 text-sm w-full"
-                  value={vis.end || ""}
-                  onChange={(e)=> {
-                    const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value};
-                    set({ visits: arr, visits_slots: visitsCount });
-                  }}
-                />
+                <input type="date" className="border rounded px-2 py-1 text-sm w-full"
+                  value={vis.end || ""} onChange={(e)=>{ const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value}; set({ visits: arr, visits_slots: visitsCount }); }} />
               </div>
             </div>
           ))}
@@ -1102,17 +985,11 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
 
       <div className="flex items-center justify-between">
         {onDelete ? (
-          <button className="px-3 py-2 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={onDelete}>
-            Delete vendor
-          </button>
+          <button className="px-3 py-2 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={onDelete}>Delete vendor</button>
         ) : <span />}
         <div className="flex gap-2">
-          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>onChange(v)}>
-            Reset
-          </button>
-          <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={onSave}>
-            Save
-          </button>
+          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>onChange(v)}>Reset</button>
+          <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={onSave}>Save</button>
         </div>
       </div>
     </div>
@@ -1124,21 +1001,11 @@ function donutData(obj, colors) {
   const labels = Object.keys(obj);
   const data = labels.map((k) => obj[k] || 0);
   const palette = colors || ["#93c5fd", "#34d399", "#fbbf24"];
-  return {
-    labels,
-    datasets: [
-      { data, backgroundColor: palette, borderColor: palette, borderWidth: 1.5, hoverOffset: 8 },
-    ],
-  };
+  return { labels, datasets: [{ data, backgroundColor: palette, borderColor: palette, borderWidth: 1.5, hoverOffset: 8 }] };
 }
 function barData(obj, colors) {
   const labels = Object.keys(obj);
   const data = labels.map((k) => obj[k] || 0);
   const [c1, c2] = colors || ["#f43f5e", "#10b981"];
-  return {
-    labels,
-    datasets: [
-      { label: "Access", data, backgroundColor: [c1, c2], borderColor: [c1, c2], borderWidth: 1.5, borderRadius: 8, barPercentage: 0.6, categoryPercentage: 0.6 },
-    ],
-  };
+  return { labels, datasets: [{ label: "Access", data, backgroundColor: [c1, c2], borderColor: [c1, c2], borderWidth: 1.5, borderRadius: 8, barPercentage: 0.6, categoryPercentage: 0.6 }] };
 }
