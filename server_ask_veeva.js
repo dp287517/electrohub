@@ -1,4 +1,4 @@
-// server_ask_veeva.js — Ask Veeva (sans S3, upload fractionné, RAG)
+// server_ask_veeva.js — Ask Veeva (sans S3, upload fractionné, RAG) — version PDF.js .mjs robust
 // ESM + Node
 
 import express from "express";
@@ -19,10 +19,12 @@ import OpenAI from "openai";
 // ZIP streaming
 import StreamZip from "node-stream-zip";
 
-// Parsers
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.js"; // <<< build legacy Node
+// PDF.js (Node): utiliser le build legacy en ESM (.mjs)
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { createRequire } from "module";
-const require = createRequire(import.meta.url);             // pour require.resolve en ESM
+const require = createRequire(import.meta.url); // pour require.resolve en ESM
+
+// DOCX/XLSX/CSV/TXT parsers
 import mammoth from "mammoth";
 import xlsx from "xlsx";
 
@@ -51,11 +53,25 @@ await fsp.mkdir(UPLOAD_DIR, { recursive: true });
 await fsp.mkdir(TMP_DIR, { recursive: true });
 await fsp.mkdir(PARTS_DIR, { recursive: true });
 
-// PDF.js (Node): legacy build + standard fonts pour éviter UnknownErrorException/TT:
+// -----------------------------------------------------------------------------
+// PDF.js (Node): legacy build + standard fonts
+//  - Certaines versions ne publient que *.mjs (pas *.js).
+//  - On résout le worker en legacy (si présent) sinon fallback vers build standard.
+// -----------------------------------------------------------------------------
+function resolvePdfWorker() {
+  try {
+    // priorité: legacy .mjs
+    return require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  } catch {
+    // fallback: build standard .mjs
+    return require.resolve("pdfjs-dist/build/pdf.worker.mjs");
+  }
+}
+const workerSrc = resolvePdfWorker();
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+
+// standard fonts pour éviter UnknownErrorException / TT: undefined function: 32
 const pdfjsPkgDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
-pdfjsLib.GlobalWorkerOptions.workerSrc = require.resolve(
-  "pdfjs-dist/legacy/build/pdf.worker.js"
-);
 const PDF_STANDARD_FONTS = path.join(pdfjsPkgDir, "standard_fonts/");
 
 // OpenAI
