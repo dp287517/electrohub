@@ -1,5 +1,6 @@
+// src/pages/Ask_veeva.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api"; // adapte le chemin si besoin
+import { api, get, post } from "../api.js"; // ✅ chemin + helpers nommés
 
 function classNames(...xs) {
   return xs.filter(Boolean).join(" ");
@@ -24,7 +25,8 @@ function useJobPolling(jobId, { interval = 1500 } = {}) {
     }
     const tick = async () => {
       try {
-        const j = await api.get(`/api/ask-veeva/jobs/${jobId}`);
+        // ✅ helper global `get`, pas `api.get`
+        const j = await get(`/api/ask-veeva/jobs/${jobId}`);
         setJob(j);
         if (j.status === "done" || j.status === "error") stop();
       } catch {
@@ -58,10 +60,9 @@ export default function AskVeeva() {
     if (!job || !job.total_files) return 0;
     const pct = Math.round((job.processed_files / job.total_files) * 100);
     return isFinite(pct) ? pct : 0;
-    // job.status: queued | running | done | error
   }, [job]);
 
-  // --- Handlers upload ZIP ---
+  // --- Upload ZIP ---
   const inputZipRef = useRef(null);
   const onPickZip = () => inputZipRef.current?.click();
   const onZipChange = async (e) => {
@@ -71,7 +72,8 @@ export default function AskVeeva() {
     fd.append("zip", f);
     setZipUploading(true);
     try {
-      const res = await api.post("/api/ask-veeva/uploadZip", fd); // bypass helper upload pour garder même code partout
+      // ✅ utiliser le helper `post` pour FormData
+      const res = await post("/api/ask-veeva/uploadZip", fd);
       setLastJobId(res.job_id);
       setTab("ingest");
     } catch (err) {
@@ -82,7 +84,7 @@ export default function AskVeeva() {
     }
   };
 
-  // --- Handlers upload Files ---
+  // --- Upload Files ---
   const inputFilesRef = useRef(null);
   const onPickFiles = () => inputFilesRef.current?.click();
   const onFilesChange = async (e) => {
@@ -92,7 +94,7 @@ export default function AskVeeva() {
     files.forEach((f) => fd.append("files", f));
     setFilesUploading(true);
     try {
-      const res = await api.post("/api/ask-veeva/uploadFiles", fd);
+      const res = await post("/api/ask-veeva/uploadFiles", fd);
       setLastJobId(res.job_id);
       setTab("ingest");
     } catch (err) {
@@ -103,7 +105,7 @@ export default function AskVeeva() {
     }
   };
 
-  // --- Drag & drop (pour fichier(s) ou zip) ---
+  // --- Drag & drop ---
   const dropRef = useRef(null);
   const onDragOver = (e) => {
     e.preventDefault();
@@ -122,13 +124,12 @@ export default function AskVeeva() {
     const files = Array.from(e.dataTransfer?.files || []);
     if (!files.length) return;
 
-    // Si 1 seul .zip -> route ZIP, sinon route files
     if (files.length === 1 && files[0].name.toLowerCase().endsWith(".zip")) {
       const fd = new FormData();
       fd.append("zip", files[0]);
       setZipUploading(true);
       try {
-        const res = await api.post("/api/ask-veeva/uploadZip", fd);
+        const res = await post("/api/ask-veeva/uploadZip", fd);
         setLastJobId(res.job_id);
         setTab("ingest");
       } catch (err) {
@@ -139,12 +140,11 @@ export default function AskVeeva() {
       return;
     }
 
-    // sinon multi-fichiers
     const fd = new FormData();
     files.forEach((f) => fd.append("files", f));
     setFilesUploading(true);
     try {
-      const res = await api.post("/api/ask-veeva/uploadFiles", fd);
+      const res = await post("/api/ask-veeva/uploadFiles", fd);
       setLastJobId(res.job_id);
       setTab("ingest");
     } catch (err) {
@@ -182,7 +182,6 @@ export default function AskVeeva() {
     }
   };
 
-  // --- UI ---
   return (
     <div className="w-full min-h-screen bg-gray-50">
       <div className="mx-auto max-w-6xl px-4 py-4 sm:py-6">
