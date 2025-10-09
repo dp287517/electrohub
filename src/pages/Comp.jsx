@@ -84,6 +84,16 @@ const API = {
   },
   deleteFile: async (fileId) =>
     (await fetch(`/api/comp-ext/files/${fileId}`, { method: "DELETE", credentials: "include" })).json(),
+
+  ask: async (question) =>
+    (
+      await fetch(`/api/comp-ext/ask`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ question }),
+      })
+    ).json(),
 };
 
 // ----------------- UI helpers -----------------
@@ -104,6 +114,7 @@ function Tabs({ value, onChange }) {
       {T("calendar", "Calendar", "📅")}
       {T("gantt", "Gantt", "📈")}
       {T("analytics", "Analytics", "📊")}
+      {T("ai", "AI", "✨")}
     </div>
   );
 }
@@ -133,7 +144,7 @@ function Select({ value, onChange, options = [], placeholder, className = "", di
   );
 }
 function Label({ children }) {
-  return <div className="text-xs font-medium text-gray-600">{children}</div>;
+  return <div className="text-xs font-medium text-gray-600 mb-1">{children}</div>;
 }
 function Badge({ children, color = "gray" }) {
   const map = {
@@ -144,13 +155,13 @@ function Badge({ children, color = "gray" }) {
   return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[color] || map.gray}`}>{children}</span>;
 }
 const statusColor = {
-  offre: (s) => (s === "po_faite" ? "green" : s?.startsWith("re") ? "blue" : "yellow"),
-  jsa: (s) => (s === "signe" ? "green" : s === "receptionne" ? "blue" : s === "en_attente" ? "yellow" : "yellow"),
+  offer: (s) => (s === "po_faite" ? "green" : s?.startsWith("re") ? "blue" : "yellow"),
+  msra: (s) => (s === "signe" ? "green" : s === "receptionne" ? "blue" : s === "en_attente" ? "yellow" : "yellow"),
   access: (s) => (s === "fait" ? "green" : "red"),
   prequal: (s) => (s === "reçue" || s === "recue" ? "green" : s === "en_cours" ? "blue" : "red"),
 };
 
-// ----------------- Month Calendar (with click) -----------------
+// ----------------- Month Calendar -----------------
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
   const eventsByDate = useMemo(() => {
@@ -231,7 +242,7 @@ export default function Comp() {
   const [showFilters, setShowFilters] = useState(false);
   const [q, setQ] = useState("");
   const [fOffer, setFOffer] = useState("");
-  const [fJsa, setFJsa] = useState("");
+  const [fMsra, setFMsra] = useState("");
   const [fAccess, setFAccess] = useState("");
   const [fPreQ, setFPreQ] = useState("");
   const [fPP, setFPP] = useState(""); // "", "yes", "no"
@@ -242,7 +253,7 @@ export default function Comp() {
   const [fFrom, setFFrom] = useState("");
   const [fTo, setFTo] = useState("");
 
-  // Sorting
+  // Tri
   const [sortBy, setSortBy] = useState({ field: "name", dir: "asc" });
 
   // Drawer (edit/create)
@@ -256,10 +267,14 @@ export default function Comp() {
   const [calendar, setCalendar] = useState({ tasks: [], events: [] });
   const [viewMode, setViewMode] = useState(ViewMode.Month);
   const [stats, setStats] = useState(null);
-  const [alerts, setAlerts] = useState([]);
+
+  // AI
+  const [aiQ, setAiQ] = useState("");
+  const [aiA, setAiA] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
-  const jsaOptions = ["en_attente", "transmis", "receptionne", "signe"];
+  const msraOptions = ["en_attente", "transmis", "receptionne", "signe"];
   const accessOptions = ["a_faire", "fait"];
   const preQualOptions = ["non_fait", "en_cours", "reçue"];
 
@@ -289,13 +304,10 @@ export default function Comp() {
     setCalendar({ tasks, events: data.events || [] });
   }
   async function reloadAnalytics() { setStats(await API.stats()); }
-  async function reloadAll() {
-    const [_, __, ___, a] = await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics(), API.alerts()]);
-    setAlerts(Array.isArray(a?.alerts) ? a.alerts : []);
-  }
+  async function reloadAll() { await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics()]); }
   useEffect(() => { reloadAll(); }, []);
 
-  // Derived filtered vendors
+  // Vendors filtrés
   const filtered = useMemo(() => {
     const from = fFrom ? dayjs(fFrom) : null;
     const to = fTo ? dayjs(fTo) : null;
@@ -305,7 +317,7 @@ export default function Comp() {
     let arr = [...list];
     arr = arr.filter(v => {
       if (fOffer && v.offer_status !== fOffer) return false;
-      if (fJsa && v.jsa_status !== fJsa) return false;
+      if (fMsra && v.msra_status !== fMsra && v.jsa_status !== fMsra) return false; // compat
       if (fAccess && v.access_status !== fAccess) return false;
       if (fPreQ && (v.prequal_status !== fPreQ && !(fPreQ==="reçue" && v.prequal_status==="recue"))) return false;
       if (fPP === "yes" && !v.pp_applicable) return false;
@@ -343,6 +355,7 @@ export default function Comp() {
         f==="visits" ? (a.visits?.length||0) :
         f==="prequal_status" ? (a.prequal_status||"") :
         f==="access_status" ? (a.access_status||"") :
+        f==="msra_status" ? (a.msra_status || a.jsa_status || "") :
         (a.name||"");
       const bv =
         f==="first_date" ? (b.visits?.[0]?.start || "") :
@@ -351,21 +364,22 @@ export default function Comp() {
         f==="visits" ? (b.visits?.length||0) :
         f==="prequal_status" ? (b.prequal_status||"") :
         f==="access_status" ? (b.access_status||"") :
+        f==="msra_status" ? (b.msra_status || b.jsa_status || "") :
         (b.name||"");
       if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
       return String(av).localeCompare(String(bv)) * dir;
     });
 
     return arr;
-  }, [list, fOffer, fJsa, fAccess, fPreQ, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
+  }, [list, fOffer, fMsra, fAccess, fPreQ, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
 
-  // Planning filtré
+  // Planning filtré par les mêmes filtres
   const planningFiltered = useMemo(() => {
     const includeVendor = (vid) => {
       const v = list.find(x => x.id === vid);
       if (!v) return true;
       if (fOffer && v.offer_status !== fOffer) return false;
-      if (fJsa && v.jsa_status !== fJsa) return false;
+      if (fMsra && v.msra_status !== fMsra && v.jsa_status !== fMsra) return false;
       if (fAccess && v.access_status !== fAccess) return false;
       if (fPreQ && (v.prequal_status !== fPreQ && !(fPreQ==="reçue" && v.prequal_status==="recue"))) return false;
       if (fPP === "yes" && !v.pp_applicable) return false;
@@ -394,9 +408,9 @@ export default function Comp() {
       return true;
     });
     return { tasks, events };
-  }, [calendar, list, fOffer, fJsa, fAccess, fPreQ, fPP, fOwner, fHasFiles, fFrom, fTo]);
+  }, [calendar, list, fOffer, fMsra, fAccess, fPreQ, fPP, fOwner, fHasFiles, fFrom, fTo]);
 
-  // Sorting helpers
+  // Tri helpers
   const sortIcon = (field) => sortBy.field !== field ? "↕" : (sortBy.dir === "asc" ? "↑" : "↓");
   const setSort = (field) =>
     setSortBy((s) => (s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" }));
@@ -405,7 +419,7 @@ export default function Comp() {
   function openCreate() {
     setEditing({
       name: "", owner: "",
-      offer_status: "en_attente", jsa_status: "en_attente", access_status: "a_faire",
+      offer_status: "en_attente", msra_status: "en_attente", access_status: "a_faire",
       prequal_status: "non_fait",
       pp_applicable: false, pp_link: "",
       work_permit_required: false, work_permit_link: "",
@@ -417,6 +431,8 @@ export default function Comp() {
   async function saveEditing() {
     const payload = {
       ...editing,
+      // Assure qu'on envoie msra_status (backend accepte jsa_status aussi, mais on reste propre)
+      msra_status: editing.msra_status ?? editing.jsa_status ?? "en_attente",
       visits: (editing.visits || []).map((x, i) => ({ index: x.index || i + 1, start: x.start || null, end: x.end || x.start || null })),
     };
     const resp = editing.id ? await API.update(editing.id, payload) : await API.create(payload);
@@ -447,27 +463,42 @@ export default function Comp() {
 
   // Reset filters
   const clearFilters = () => {
-    setFOffer(""); setFJsa(""); setFAccess(""); setFPreQ("");
+    setFOffer(""); setFMsra(""); setFAccess(""); setFPreQ("");
     setFPP(""); setFOwner(""); setFHasFiles("");
     setFVisitsMin(""); setFVisitsMax(""); setFFrom(""); setFTo("");
   };
+
+  // AI ask
+  async function askAI() {
+    const q = (aiQ || "").trim();
+    if (!q) return;
+    setAiLoading(true);
+    try {
+      const r = await API.ask(q);
+      setAiA(r?.answer || "(no answer)");
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>
-          <p className="text-gray-500 text-sm">Vendors offers, JSA, prevention plan, access, pre-qualification, visits, SAP WO & attachments</p>
+          <p className="text-gray-500 text-sm">Vendors offers, MSRA, prevention plan, access, pre-qualification, visits, SAP WO & attachments</p>
         </div>
         <Tabs value={tab} onChange={setTab} />
       </header>
 
-      {/* FILTRES GLOBAUX */}
+      {/* FILTRES GLOBAUX (communs à tous les onglets) */}
       <div className="flex items-center justify-between">
         <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => setShowFilters(s => !s)}>
           {showFilters ? "Hide filters" : "Show filters"}
         </button>
-        <div className="text-sm text-gray-500">{showFilters ? "Filters visible" : "Filters hidden"}</div>
+        {!showFilters && tab==="vendors" && (
+          <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
+        )}
       </div>
 
       {showFilters && (
@@ -485,7 +516,7 @@ export default function Comp() {
 
           <div className="grid md:grid-cols-3 lg:grid-cols-4 gap-3">
             <Select value={fOffer} onChange={setFOffer} options={["en_attente","reçue","po_faite"]} placeholder="Offer status" />
-            <Select value={fJsa} onChange={setFJsa} options={["en_attente","transmis","receptionne","signe"]} placeholder="JSA status" />
+            <Select value={fMsra} onChange={setFMsra} options={["en_attente","transmis","receptionne","signe"]} placeholder="MSRA status" />
             <Select value={fAccess} onChange={setFAccess} options={["a_faire","fait"]} placeholder="Access status" />
             <Select value={fPreQ} onChange={setFPreQ} options={["non_fait","en_cours","reçue"]} placeholder="Pré-qualification" />
             <Select value={fPP} onChange={setFPP} options={["yes","no"]} placeholder="PP applicable?" />
@@ -511,23 +542,20 @@ export default function Comp() {
       {/* VENDORS */}
       {tab === "vendors" && (
         <>
-          {/* Barre d’actions dédiée (New vendor) si tu veux aussi hors filtres */}
           {!showFilters && (
             <div className="flex items-center justify-end">
               <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
             </div>
           )}
 
-          {/* CONTENEUR SCROLLABLE VERTICAL — thead sticky top:0 ici */}
           <div className="bg-white rounded-2xl border shadow-sm mt-2">
             <div className="max-h-[70vh] overflow-auto">
               <table className="w-full">
-                {/* thead sticky dans ce conteneur */}
                 <thead className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur">
                   <tr className="text-sm font-medium text-gray-700">
                     <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</th>
                     <th className="p-3 text-left">Offer</th>
-                    <th className="p-3 text-left">JSA</th>
+                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("msra_status")}>MSRA {sortIcon("msra_status")}</th>
                     <th className="p-3 text-left">Pre-qual</th>
                     <th className="p-3 text-left">PP</th>
                     <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("access_status")}>Access {sortIcon("access_status")}</th>
@@ -559,8 +587,8 @@ export default function Comp() {
                             {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
                           </div>
                         </td>
-                        <td className="p-3"><Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></td>
-                        <td className="p-3"><Badge color={statusColor.jsa(v.jsa_status)}>{v.jsa_status}</Badge></td>
+                        <td className="p-3"><Badge color={statusColor.offer(v.offer_status)}>{v.offer_status}</Badge></td>
+                        <td className="p-3"><Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>{v.msra_status || v.jsa_status}</Badge></td>
                         <td className="p-3"><Badge color={statusColor.prequal(v.prequal_status)}>{v.prequal_status}</Badge></td>
                         <td className="p-3">
                           {v.pp_applicable ? (
@@ -597,14 +625,13 @@ export default function Comp() {
             </div>
           </div>
 
-          {/* Drawer d'édition / création */}
           {drawerOpen && (
             <Drawer onClose={()=>{ setDrawerOpen(false); setEditing(null); }}>
               <Editor
                 value={editing}
                 onChange={setEditing}
                 offerOptions={offerOptions}
-                jsaOptions={jsaOptions}
+                msraOptions={msraOptions}
                 accessOptions={accessOptions}
                 preQualOptions={preQualOptions}
                 onSave={saveEditing}
@@ -619,7 +646,7 @@ export default function Comp() {
       {tab === "calendar" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Calendar (Month view)">
-            <MonthCalendar events={planningFiltered.events} onDayClick={openVisitModalForDay} />
+            <MonthCalendar events={planningFiltered.events} onDayClick={(p)=>setVisitModal({ open:true, date:p.date, items:p.events })} />
           </Card>
         </div>
       )}
@@ -639,7 +666,7 @@ export default function Comp() {
           }>
             <div className="h-[520px] overflow-x-auto">
               {planningFiltered?.tasks?.length ? (
-                <Gantt tasks={planningFiltered.tasks} viewMode={viewMode} onSelect={handleGanttSelect} />
+                <Gantt tasks={planningFiltered.tasks} viewMode={viewMode} onSelect={(t, s)=>{ if (s) openVisitModalForTask(t); }} />
               ) : (
                 <div className="text-sm text-gray-500">No planned visits.</div>
               )}
@@ -656,14 +683,37 @@ export default function Comp() {
               <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:12, boxHeight:12 }}}}} />
             </div>
           </Card>
-          <Card title="JSA">
+          <Card title="MSRA">
             <div className="h-[380px]">
-              <Doughnut data={donutData(stats?.counts?.jsa || { en_attente:0, transmis:0, receptionne:0, signe:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:12, boxHeight:12 }}}}} />
+              <Doughnut data={donutData(stats?.counts?.msra || { en_attente:0, transmis:0, receptionne:0, signe:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)","rgba(99,102,241,0.85)"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:12, boxHeight:12 }}}}} />
             </div>
           </Card>
           <Card title="Access">
             <div className="h-[380px]">
               <Bar data={barData(stats?.counts?.access || { a_faire:0, fait:0 }, ["#f43f5e", "#10b981"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom"} }}} />
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* AI */}
+      {tab === "ai" && (
+        <div className="grid grid-cols-1 gap-6">
+          <Card title="Ask AI (OpenAI)">
+            <div className="space-y-3">
+              <Input value={aiQ} onChange={setAiQ} placeholder='Pose ta question… ex: "Quelles sont les prochaines visites ?" ou "Qu’est-ce qu’il manque pour les visites de cette semaine ?"' />
+              <div className="flex gap-2">
+                <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={askAI} disabled={aiLoading}>
+                  {aiLoading ? "Thinking…" : "Ask"}
+                </button>
+                <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>{ setAiQ(""); setAiA(""); }}>
+                  Clear
+                </button>
+              </div>
+              <pre className="whitespace-pre-wrap text-sm bg-gray-50 border rounded-lg p-3 min-h-[140px]">{aiA || "—"}</pre>
+              <div className="text-xs text-gray-500">
+                Astuces : “prochaines visites”, “visites pas prêtes”, “combien en MSRA signée”, “qui n’a pas de lien PP”, etc.
+              </div>
             </div>
           </Card>
         </div>
@@ -762,7 +812,7 @@ function VisitItem({ item, onOpenVendor }) {
 
 function FileCard({ f, onDelete }) {
   const sizeKB = Math.max(1, Math.round(Number(f.size_bytes || 0) / 1024));
-  const url = `/api/comp-ext/files/${f.id}/download`;
+  const url = f.url || `/api/comp-ext/files/${f.id}/download`;
   return (
     <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
       <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
@@ -790,7 +840,6 @@ function AttachmentsPanel({ vendorId, onChanged }) {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [isOver, setIsOver] = useState(false);
-  const boxRef = useRef(null);
 
   async function load() {
     setLoading(true);
@@ -819,12 +868,11 @@ function AttachmentsPanel({ vendorId, onChanged }) {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">Category</span>
-          <Select value={category} onChange={setCategory} options={["general","offre","jsa","pp","acces","sap","autre"]} className="w-40" />
+          <Select value={category} onChange={setCategory} options={["general","offre","msra","pp","acces","sap","autre"]} className="w-40" />
         </div>
       </div>
 
       <div
-        ref={boxRef}
         onDragOver={(e)=>{ e.preventDefault(); setIsOver(true); }}
         onDragLeave={()=>setIsOver(false)}
         onDrop={onDrop}
@@ -860,7 +908,7 @@ function AttachmentsPanel({ vendorId, onChanged }) {
   );
 }
 
-function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, accessOptions, preQualOptions }) {
+function Editor({ value, onChange, onSave, onDelete, offerOptions, msraOptions, accessOptions, preQualOptions }) {
   const v = value || {};
   const set = (patch) => onChange({ ...v, ...patch });
 
@@ -885,7 +933,7 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
         <div><Label>Owner</Label><Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" /></div>
 
         <div><Label>Offer status</Label><Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" /></div>
-        <div><Label>JSA status</Label><Select value={v.jsa_status || "en_attente"} onChange={(x) => set({ jsa_status: x })} options={jsaOptions} placeholder="JSA status" /></div>
+        <div><Label>MSRA status</Label><Select value={v.msra_status || v.jsa_status || "en_attente"} onChange={(x) => set({ msra_status: x })} options={msraOptions} placeholder="MSRA status" /></div>
         <div><Label>Access status</Label><Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" /></div>
         <div><Label>Pré-qualification</Label><Select value={v.prequal_status || "non_fait"} onChange={(x) => set({ prequal_status: x })} options={preQualOptions} placeholder="Pré-qualification" /></div>
 
