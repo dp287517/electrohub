@@ -528,7 +528,7 @@ app.post('/api/comp-ext/vendors/:id/files', upload.single('file'), async (req, r
     const ins = await pool.query(
       `INSERT INTO comp_ext_files
         (vendor_id, category, original_name, stored_name, mime, size_bytes, disk_path)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
        RETURNING id, category, original_name, stored_name, mime, size_bytes, created_at`,
       [id, category, f.originalname, f.filename, f.mimetype, f.size, path.join(FILES_DIR, f.filename)]
     );
@@ -581,10 +581,10 @@ app.get('/api/comp-ext/files/:fileId/download', async (req, res) => {
     const fid = Number(req.params.fileId);
     if (!Number.isFinite(fid)) return res.status(400).json({ error: 'bad_file_id' });
     const row = (await pool.query(
-      `SELECT original_name, disk_path, mime FROM comp_ext_files WHERE id=$1`, [fid]
+     `SELECT original_name, stored_name, mime FROM comp_ext_files WHERE id=$1`, [fid]
     )).rows[0];
     if (!row) return res.status(404).json({ error: 'not_found' });
-    const filePath = row.disk_path;
+    const filePath = path.resolve(FILES_DIR, row.stored_name);
     if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'file_missing' });
 
     const mime = row.mime || 'application/octet-stream';
@@ -609,7 +609,7 @@ app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
       `SELECT original_name, disk_path, mime FROM comp_ext_files WHERE id=$1`, [fid]
     )).rows[0];
     if (!row) return res.status(404).json({ error: 'not_found' });
-    const filePath = row.disk_path;
+    const filePath = path.resolve(FILES_DIR, row.stored_name);
     if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'file_missing' });
     res.setHeader('Content-Type', row.mime || 'application/octet-stream');
     fs.createReadStream(filePath).on('error', err => { console.error('[comp-ext] stream error', err); res.status(500).end(); }).pipe(res);
