@@ -15,6 +15,8 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import { OpenAI } from 'openai';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
 dotenv.config();
 
@@ -40,6 +42,12 @@ await fsp.mkdir(DATA_ROOT, { recursive: true });
 await fsp.mkdir(UPLOAD_DIR, { recursive: true });
 await fsp.mkdir(CORPUS_DIR, { recursive: true });
 
+// Localisation des assets PDF.js (polices & worker) en Node
+const PDFJS_PKG_PATH = require.resolve('pdfjs-dist/package.json');
+const PDFJS_DIR = path.dirname(PDFJS_PKG_PATH);
+const PDFJS_STANDARD_FONTS = path.join(PDFJS_DIR, 'standard_fonts'); // doit finir par / dans l’option
+const PDFJS_WORKER = path.join(PDFJS_DIR, 'legacy', 'build', 'pdf.worker.mjs');
+
 // Multer (stockage disque → streaming, adapté gros volumes)
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
@@ -60,7 +68,6 @@ const EMBEDDING_DIMS  = 1536;
 
 // --- DB bootstrap (pgvector + tables + index) ---
 async function ensureSchema() {
-  // Tables de base
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -87,9 +94,7 @@ async function ensureSchema() {
   // Auto-migration (si colonne embedding a une autre dimension)
   try {
     await pool.query(`ALTER TABLE askv_chunks ALTER COLUMN embedding TYPE vector(${EMBEDDING_DIMS})`);
-  } catch (_) {
-    // déjà au bon format ou table vide → ignorer
-  }
+  } catch (_) { /* ok */ }
 
   // Index
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id);`);
@@ -159,9 +164,23 @@ async function embedQuery(text) {
 
 /** Extraction texte PDF via pdfjs-dist (robuste ESM/Node 22) */
 async function extractPdfWithPdfjs(filePath) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs'); // import dynamique
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+
+  try {
+    if (pdfjs.GlobalWorkerOptions && PDFJS_WORKER) {
+      pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+    }
+  } catch (_) { /* safe */ }
+
   const data = await fsp.readFile(filePath);
-  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(data),
+    standardFontDataUrl: PDFJS_STANDARD_FONTS.endsWith(path.sep)
+      ? PDFJS_STANDARD_FONTS
+      : PDFJS_STANDARD_FONTS + path.sep,
+    isEvalSupported: false,
+  });
+
   const doc = await loadingTask.promise;
   const numPages = doc.numPages;
 
@@ -255,7 +274,6 @@ async function extractZipTo(zipAbsPath, outDir) {
     if (!names.length) throw new Error('Archive vide ou table centrale illisible (ZIP corrompu)');
 
     for (const name of names) {
-      const e = entries[name];
       const dest = path.join(outDir, name);
       if (name.endsWith('/')) {
         await fsp.mkdir(dest, { recursive: true });
