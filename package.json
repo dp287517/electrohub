@@ -16,6 +16,7 @@
     "@radix-ui/react-tooltip": "^1.1.2",
     "axios": "^1.7.7",
     "express-rate-limit": "^7.4.0",
+    "node-stream-zip": "^1.15.0",
     "bcryptjs": "^2.4.3",
     "concurrently": "^9.0.1",
     "cookie-parser": "^1.4.6",
