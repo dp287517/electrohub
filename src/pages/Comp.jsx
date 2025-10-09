@@ -55,6 +55,7 @@ const API = {
 
   calendar: async () => (await fetch(`/api/comp-ext/calendar`, { credentials: "include" })).json(),
   stats: async () => (await fetch(`/api/comp-ext/stats`, { credentials: "include" })).json(),
+  alerts: async () => (await fetch(`/api/comp-ext/alerts`, { credentials: "include" })).json(),
 
   listFiles: async (id, category) =>
     (
@@ -109,7 +110,7 @@ function Tabs({ value, onChange }) {
   return (
     <div className="flex flex-wrap gap-2 sticky top-[60px] z-20 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2">
       {T("vendors", "Vendors", "📋")}
-      {T("planning", "Planning", "📅")}
+      {T("calendar", "Calendar", "📅")}{T("gantt", "Gantt", "📈")}
       {T("analytics", "Analytics", "📊")}
     </div>
   );
@@ -252,7 +253,7 @@ function MonthCalendar({ events = [], onDayClick }) {
               </div>
               <div className="mt-1 space-y-1">
                 {list.slice(0, 3).map((e, i) => (
-                  <div key={i} className="truncate text-[11px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">
+                  <div key={i} className={`truncate text-[11px] px-1.5 py-0.5 rounded ${e.status_color==="green"?"bg-emerald-50 text-emerald-700":"bg-red-50 text-red-700"}`}>
                     {e.vendor_name} (V{e.vindex})
                   </div>
                 ))}
@@ -300,9 +301,11 @@ export default function Comp() {
   const [calendar, setCalendar] = useState({ tasks: [], events: [] });
   const [viewMode, setViewMode] = useState(ViewMode.Month);
   const [stats, setStats] = useState(null);
+  const [alerts, setAlerts] = useState([]);
+  const [showFilters, setShowFilters] = useState(false);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
-  const jsaOptions = ["transmis", "receptionne", "signe"];
+  const jsaOptions = ["en_attente", "transmis", "receptionne", "signe"];
   const accessOptions = ["a_faire", "fait"];
 
   // Loaders
@@ -323,6 +326,7 @@ export default function Comp() {
       end: new Date(t.end),
       type: "task",
       progress: 0,
+      styles: t.status_color === "green" ? { barBackgroundColor:"#10b981", barProgressColor:"#10b981", barBackgroundSelectedColor:"#10b981" } : { barBackgroundColor:"#ef4444", barProgressColor:"#ef4444", barBackgroundSelectedColor:"#ef4444" }
     }));
     setCalendar({ tasks, events: data.events || [] });
   }
@@ -330,7 +334,8 @@ export default function Comp() {
     setStats(await API.stats());
   }
   async function reloadAll() {
-    await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics()]);
+    const [_, __, ___, a] = await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics(), API.alerts()]);
+    setAlerts(Array.isArray(a?.alerts) ? a.alerts : []);
   }
   useEffect(() => { reloadAll(); }, []);
 
@@ -512,7 +517,7 @@ export default function Comp() {
                 <Input value={fFrom} onChange={setFFrom} type="date" placeholder="From" />
                 <Input value={fTo} onChange={setFTo} type="date" placeholder="To" />
               </div>
-            </div>
+            </div>) }
 
             <div className="flex flex-wrap gap-2">
               <button className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50" onClick={()=>{
@@ -646,12 +651,36 @@ export default function Comp() {
         </>
       )}
 
-      {/* PLANNING */}
-      {tab === "planning" && (
+      {/* CALENDAR */}
+      {tab === "calendar" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Calendar (Month view)">
             <MonthCalendar events={calendar.events} onDayClick={openVisitModalForDay} />
           </Card>
+          <Card title="Gantt" actions={
+            <select className="border rounded px-2 py-1 text-sm"
+              value={Object.keys(ViewMode).find((k) => ViewMode[k] === viewMode) || "Month"}
+              onChange={(e) => setViewMode({ Week: ViewMode.Week, Month: ViewMode.Month, Year: ViewMode.Year }[e.target.value] || ViewMode.Month)}
+            >
+              <option value="Week">Week</option>
+              <option value="Month">Month</option>
+              <option value="Year">Year</option>
+            </select>
+          }>
+            <div className="h-[520px] overflow-x-auto">
+              {calendar?.tasks?.length ? (
+                <Gantt tasks={calendar.tasks} viewMode={viewMode} onSelect={handleGanttSelect} />
+              ) : (
+                <div className="text-sm text-gray-500">No planned visits.</div>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* GANTT */}
+      {tab === "gantt" && (
+        <div className="grid grid-cols-1 gap-6">
           <Card title="Gantt" actions={
             <select className="border rounded px-2 py-1 text-sm"
               value={Object.keys(ViewMode).find((k) => ViewMode[k] === viewMode) || "Month"}
@@ -809,7 +838,7 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
       start: base[i]?.start || "",
       end: base[i]?.end || base[i]?.start || "",
     }));
-    set({ visits: arr });
+    set({ visits: arr, visits_slots: visitsCount });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visitsCount]);
 
@@ -829,6 +858,13 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
         {v.pp_applicable && (
           <Input value={v.pp_link || ""} onChange={(x)=>set({ pp_link: x })} placeholder="SafePermit link" />
         )}
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={!!v.work_permit_required} onChange={(e)=>set({ work_permit_required: e.target.checked })} />
+          <span className="text-sm">Permis de travail requis</span>
+        </label>
+        {v.work_permit_required && (
+          <Input value={v.work_permit_link || ""} onChange={(x)=>set({ work_permit_link: x })} placeholder="SafePermit link (Permis de travail)" />
+        )}
       </div>
 
       <div className="border rounded-xl p-3">
@@ -841,10 +877,10 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
           {(v.visits || []).map((vis, i) => (
             <div key={i} className="grid grid-cols-2 gap-2">
               <input type="date" className="border rounded px-2 py-1 text-sm" value={vis.start || ""} onChange={(e)=> {
-                const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value}; set({ visits: arr });
+                const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value}; set({ visits: arr, visits_slots: visitsCount });
               }} />
               <input type="date" className="border rounded px-2 py-1 text-sm" value={vis.end || ""} onChange={(e)=> {
-                const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value}; set({ visits: arr });
+                const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value}; set({ visits: arr, visits_slots: visitsCount });
               }} />
             </div>
           ))}
