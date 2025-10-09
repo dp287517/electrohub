@@ -1,4 +1,3 @@
-
 /* server_comp_ext.js (ESM)
  * Backend for "Prestataires externes" (comp-ext) — ES Module compatible
  * Requires: node >= 18, packages: express, pg, multer, cors
@@ -78,6 +77,7 @@ async function ensureSchema() {
         work_permit_required BOOLEAN NOT NULL DEFAULT FALSE,
         work_permit_link  TEXT,
         access_status    TEXT NOT NULL DEFAULT 'a_faire'     CHECK (access_status IN ('a_faire','fait')),
+        pre_qual_status  TEXT NOT NULL DEFAULT 'non_fait',
         sap_wo           TEXT,
         owner            TEXT,
         visits_slots     INT NOT NULL DEFAULT 1,
@@ -106,9 +106,31 @@ async function ensureSchema() {
       ADD CONSTRAINT comp_ext_vendors_jsa_check CHECK (jsa_status IN ('en_attente','transmis','receptionne','signe'));
     `);
 
+    // Add/ensure columns
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS work_permit_required BOOLEAN NOT NULL DEFAULT FALSE;`);
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS work_permit_link TEXT;`);
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS visits_slots INT NOT NULL DEFAULT 1;`);
+    await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS pre_qual_status TEXT NOT NULL DEFAULT 'non_fait';`);
+
+    // Ensure CHECK for pre_qual_status
+    await c.query(`
+      DO $$
+      DECLARE
+        r RECORD;
+      BEGIN
+        FOR r IN
+          SELECT conname FROM pg_constraint
+          WHERE conrelid = 'comp_ext_vendors'::regclass
+            AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%pre_qual_status%'
+        LOOP
+          EXECUTE 'ALTER TABLE comp_ext_vendors DROP CONSTRAINT ' || quote_ident(r.conname);
+        END LOOP;
+      END$$;
+    `);
+    await c.query(`
+      ALTER TABLE comp_ext_vendors
+      ADD CONSTRAINT comp_ext_vendors_prequal_check CHECK (pre_qual_status IN ('non_fait','en_cours','reçue','recue'));
+    `);
 
     await c.query(`
       CREATE TABLE IF NOT EXISTS comp_ext_visits (
@@ -163,7 +185,8 @@ app.get('/api/comp-ext/vendors', async (req, res) => {
     const vendors = (await pool.query(
       `SELECT v.id, v.name, v.offer_status, v.jsa_status, v.pp_applicable, v.pp_link,
               v.work_permit_required, v.work_permit_link,
-              v.access_status, v.sap_wo, v.owner, v.visits_slots, v.created_at, v.updated_at,
+              v.access_status, v.pre_qual_status,
+              v.sap_wo, v.owner, v.visits_slots, v.created_at, v.updated_at,
               COALESCE(f.cnt, 0) AS files_count
        FROM comp_ext_vendors v
        LEFT JOIN (
@@ -210,7 +233,8 @@ app.get('/api/comp-ext/vendors/:id', async (req, res) => {
     const v = (await pool.query(
       `SELECT id, name, offer_status, jsa_status, pp_applicable, pp_link,
               work_permit_required, work_permit_link,
-              access_status, sap_wo, owner, visits_slots, created_at, updated_at
+              access_status, pre_qual_status,
+              sap_wo, owner, visits_slots, created_at, updated_at
        FROM comp_ext_vendors WHERE id=$1`,
       [id]
     )).rows[0];
@@ -244,11 +268,13 @@ app.post('/api/comp-ext/vendors', async (req, res) => {
       `INSERT INTO comp_ext_vendors
         (name, offer_status, jsa_status, pp_applicable, pp_link,
          work_permit_required, work_permit_link,
-         access_status, sap_wo, owner, visits_slots)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         access_status, pre_qual_status,
+         sap_wo, owner, visits_slots)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING id, name, offer_status, jsa_status, pp_applicable, pp_link,
                  work_permit_required, work_permit_link,
-                 access_status, sap_wo, owner, visits_slots, created_at, updated_at`,
+                 access_status, pre_qual_status,
+                 sap_wo, owner, visits_slots, created_at, updated_at`,
       [
         String(body.name||'').trim(),
         body.offer_status || 'en_attente',
@@ -258,6 +284,7 @@ app.post('/api/comp-ext/vendors', async (req, res) => {
         !!body.work_permit_required,
         body.work_permit_link || null,
         body.access_status || 'a_faire',
+        body.pre_qual_status || 'non_fait',
         body.sap_wo || null,
         body.owner || null,
         Math.max(1, Number(body.visits_slots || (Array.isArray(body.visits) ? body.visits.length||1 : 1))),
@@ -310,6 +337,7 @@ app.put('/api/comp-ext/vendors/:id', async (req, res) => {
     if (typeof body.work_permit_required !== 'undefined') push('work_permit_required', !!body.work_permit_required);
     if (typeof body.work_permit_link !== 'undefined') push('work_permit_link', body.work_permit_link || null);
     if (typeof body.access_status !== 'undefined') push('access_status', body.access_status);
+    if (typeof body.pre_qual_status !== 'undefined') push('pre_qual_status', body.pre_qual_status);
     if (typeof body.sap_wo !== 'undefined') push('sap_wo', body.sap_wo || null);
     if (typeof body.owner !== 'undefined') push('owner', body.owner || null);
     if (typeof body.visits_slots !== 'undefined') push('visits_slots', Math.max(1, Number(body.visits_slots)||1));
@@ -337,7 +365,8 @@ app.put('/api/comp-ext/vendors/:id', async (req, res) => {
     const row = (await pool.query(
       `SELECT id, name, offer_status, jsa_status, pp_applicable, pp_link,
               work_permit_required, work_permit_link,
-              access_status, sap_wo, owner, visits_slots, created_at, updated_at
+              access_status, pre_qual_status,
+              sap_wo, owner, visits_slots, created_at, updated_at
        FROM comp_ext_vendors WHERE id=$1`,
       [id]
     )).rows[0];
