@@ -1,4 +1,6 @@
-// server_ask_veeva.js — microservice Ask Veeva (port 3015)
+// server_ask_veeva.js — Ask Veeva (Neon + pgvector + ingestion ZIP/fichiers)
+// Démarrage : node server_ask_veeva.js
+// Requis: OPENAI_API_KEY, NEON_DATABASE_URL
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -12,44 +14,93 @@ import mammoth from 'mammoth';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import pg from 'pg';
 import { OpenAI } from 'openai';
 
 dotenv.config();
 
+const { Pool } = pg;
+const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// --- Config ---
 const app = express();
-// sécurité minimale + CORS (utilisé derrière proxy, mais utile en dev direct)
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Upload mémoire (on réécrit ensuite sur disque)
-const upload = multer({ storage: multer.memoryStorage() });
-
-// Dossiers data
-const DATA_DIR   = path.join(__dirname, 'data');
+const PORT = Number(process.env.PORT || 3015);
+const DATA_DIR   = process.env.ASK_VEEVA_DATA_DIR || path.join(__dirname, 'data');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-const CORPUS_DIR = path.join(DATA_DIR, 'corpus');
-const INDEX_PATH = path.join(DATA_DIR, 'index.json');
-
+const CORPUS_DIR = path.join(DATA_DIR, 'corpus'); // stockage fichiers extraits
 await fsp.mkdir(DATA_DIR, { recursive: true });
 await fsp.mkdir(UPLOAD_DIR, { recursive: true });
 await fsp.mkdir(CORPUS_DIR, { recursive: true });
 
-/** OpenAI */
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBEDDINGS || 'text-embedding-3-large';
-const ANSWER_MODEL    = process.env.ASK_VEEVA_MODEL      || 'gpt-4.1-mini';
+// Multer (stockage disque, pour stream & gros fichiers)
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  filename: (_req, file, cb) => {
+    const safe = file.originalname.replace(/[^\w.\-]+/g, '_');
+    cb(null, `${Date.now()}_${safe}`);
+  }
+});
+const upload = multer({ storage });
 
-/** Utils */
-function cosine(a, b) {
-  const dot = a.reduce((s, v, i) => s + v * b[i], 0);
-  const na = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
-  const nb = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
-  return dot / (na * nb + 1e-10);
+// OpenAI
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBEDDINGS || 'text-embedding-3-large'; // 3072 dims
+const ANSWER_MODEL    = process.env.ASK_VEEVA_MODEL      || 'gpt-4.1-mini';
+const EMBEDDING_DIMS  = 3072;
+
+// --- DB bootstrap (pgvector + tables) ---
+async function ensureSchema() {
+  // extension + tables + index
+  await pool.query(`
+    CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE TABLE IF NOT EXISTS askv_documents (
+      id UUID PRIMARY KEY,
+      filename TEXT NOT NULL,
+      content_type TEXT,
+      size_bytes BIGINT,
+      sha256 TEXT,
+      storage_path TEXT NOT NULL,
+      pages INTEGER,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+    CREATE TABLE IF NOT EXISTS askv_chunks (
+      id BIGSERIAL PRIMARY KEY,
+      doc_id UUID REFERENCES askv_documents(id) ON DELETE CASCADE,
+      chunk_index INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      embedding vector(${EMBEDDING_DIMS})
+    );
+    CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id);
+    CREATE INDEX IF NOT EXISTS askv_chunks_vec_idx ON askv_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+    CREATE TABLE IF NOT EXISTS askv_jobs (
+      id UUID PRIMARY KEY,
+      kind TEXT NOT NULL,              -- 'zip' | 'files'
+      status TEXT NOT NULL,            -- 'queued' | 'running' | 'done' | 'error'
+      total_files INTEGER DEFAULT 0,
+      processed_files INTEGER DEFAULT 0,
+      error TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
 }
+await ensureSchema();
+
+// --- Helpers ---
+function sha256FileSync(filePath) {
+  const h = crypto.createHash('sha256');
+  const data = fs.readFileSync(filePath);
+  h.update(data);
+  return h.digest('hex');
+}
+
 function chunkText(text, { chunkSize = 1200, overlap = 200 } = {}) {
   const chunks = [];
   let i = 0;
@@ -62,118 +113,289 @@ function chunkText(text, { chunkSize = 1200, overlap = 200 } = {}) {
   }
   return chunks;
 }
-async function embed(texts) {
-  const res = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: texts });
-  return res.data.map((d) => d.embedding);
+
+async function embedBatch(texts) {
+  // OpenAI permet les batchs; on peut batcher par 100 raisonnablement
+  const res = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: texts
+  });
+  return res.data.map(d => d.embedding);
 }
 
-async function extractZipTo(zipBuffer, destDir) {
-  await fsp.mkdir(destDir, { recursive: true });
-  const tmpPath = path.join(UPLOAD_DIR, `${Date.now()}_${Math.random().toString(36).slice(2)}.zip`);
-  await fsp.writeFile(tmpPath, zipBuffer);
-  await fs.createReadStream(tmpPath).pipe(unzipper.Extract({ path: destDir })).promise();
-  await fsp.unlink(tmpPath);
+async function embedQuery(text) {
+  const res = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: [text]
+  });
+  return res.data[0].embedding;
 }
 
-async function loadTextFromFile(fullPath) {
+async function parseFileToText(fullPath, contentTypeGuess) {
   const ext = path.extname(fullPath).toLowerCase();
+  // Priorité par extension :
   if (ext === '.pdf') {
     const buf = await fsp.readFile(fullPath);
     const parsed = await pdfParse(buf);
-    return { text: parsed.text || '', pages: parsed.numpages || undefined };
+    return { text: parsed.text || '', pages: parsed.numpages || null, contentType: 'application/pdf' };
   }
   if (ext === '.docx') {
     const buf = await fsp.readFile(fullPath);
     const { value } = await mammoth.extractRawText({ buffer: buf });
-    return { text: value || '' };
+    return { text: value || '', pages: null, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
   }
-  if (ext === '.txt' || ext === '.md') {
+  if (ext === '.txt' || ext === '.md' || contentTypeGuess?.startsWith('text/')) {
     const txt = await fsp.readFile(fullPath, 'utf8');
-    return { text: txt };
+    return { text: txt, pages: null, contentType: contentTypeGuess || 'text/plain' };
   }
-  // autres extensions ignorées
-  return null;
+  // Non supporté : on ignore
+  return { text: null, pages: null, contentType: contentTypeGuess || 'application/octet-stream' };
 }
 
-async function buildIndexFromCorpus() {
-  const files = [];
-  async function walk(dir) {
-    const entries = await fsp.readdir(dir, { withFileTypes: true });
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) await walk(full);
-      else files.push(full);
+async function registerDocument(client, absPath, relPath, filename, contentType, sizeBytes, pages) {
+  const id = crypto.randomUUID();
+  const sha256 = sha256FileSync(absPath);
+  await client.query(
+    `INSERT INTO askv_documents (id, filename, content_type, size_bytes, sha256, storage_path, pages)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [id, filename, contentType, sizeBytes, sha256, relPath, pages]
+  );
+  return id;
+}
+
+async function insertChunksWithEmbeddings(client, docId, chunks) {
+  // Embedding par paquets pour réduire latence
+  const BATCH = 64;
+  let idx = 0;
+  for (let i = 0; i < chunks.length; i += BATCH) {
+    const batch = chunks.slice(i, i + BATCH);
+    const embeddings = await embedBatch(batch);
+    const values = [];
+    const params = [];
+    let p = 1;
+    for (let j = 0; j < batch.length; j++) {
+      const text = batch[j];
+      const emb = embeddings[j];
+      const vectorLiteral = `[${emb.join(',')}]`;
+      values.push(`($${p++}, $${p++}, $${p++}, ${`'${vectorLiteral}'`}::vector)`);
+      params.push(docId, idx, text);
+      idx++;
+    }
+    const sql = `INSERT INTO askv_chunks (doc_id, chunk_index, text, embedding) VALUES ${values.join(',')}`;
+    await client.query(sql, params);
+  }
+}
+
+async function ingestSingleFile(client, absSrc, subdir = '') {
+  // Copie vers CORPUS_DIR (arborescence)
+  const baseName = path.basename(absSrc);
+  const relPath = path.join(subdir, baseName);
+  const destAbs = path.join(CORPUS_DIR, relPath);
+  await fsp.mkdir(path.dirname(destAbs), { recursive: true });
+  await fsp.copyFile(absSrc, destAbs);
+
+  const stat = await fsp.stat(destAbs);
+  const { text, pages, contentType } = await parseFileToText(destAbs, null);
+
+  if (!text || !text.trim()) {
+    // Document non textuel ou non parsé : on l’enregistre sans chunks pour référentiel
+    const docId = await registerDocument(client, destAbs, relPath, baseName, contentType, stat.size, pages);
+    return { docId, chunks: 0, bytes: stat.size };
+  }
+
+  const docId = await registerDocument(client, destAbs, relPath, baseName, contentType, stat.size, pages);
+  const chunks = chunkText(text, { chunkSize: 1200, overlap: 200 });
+  await insertChunksWithEmbeddings(client, docId, chunks);
+  return { docId, chunks: chunks.length, bytes: stat.size };
+}
+
+async function extractZipTo(zipAbsPath, outDir) {
+  await fsp.mkdir(outDir, { recursive: true });
+  await fs.createReadStream(zipAbsPath).pipe(unzipper.Extract({ path: outDir })).promise();
+}
+
+async function walkFiles(dir) {
+  const out = [];
+  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      const sub = await walkFiles(full);
+      out.push(...sub);
+    } else {
+      out.push(full);
     }
   }
-  await walk(CORPUS_DIR);
+  return out;
+}
 
-  const docs = [];
-  for (const f of files) {
-    const loaded = await loadTextFromFile(f);
-    if (!loaded || !loaded.text?.trim()) continue;
-    const rel = path.relative(CORPUS_DIR, f);
-    const chunks = chunkText(loaded.text);
-    for (let i = 0; i < chunks.length; i++) {
-      const id = crypto.createHash('md5').update(rel + '#' + i).digest('hex');
-      docs.push({ id, text: chunks[i], meta: { filename: rel } });
+// --- Jobs ---
+async function createJob(kind, totalFiles = 0) {
+  const id = crypto.randomUUID();
+  await pool.query(
+    `INSERT INTO askv_jobs (id, kind, status, total_files, processed_files)
+     VALUES ($1,$2,'queued',$3,0)`,
+    [id, kind, totalFiles]
+  );
+  return id;
+}
+async function updateJob(id, fields = {}) {
+  const keys = Object.keys(fields);
+  if (!keys.length) return;
+  const set = keys.map((k, i) => `${k} = $${i + 1}`).join(', ') + `, updated_at = now()`;
+  const vals = keys.map(k => fields[k]);
+  await pool.query(`UPDATE askv_jobs SET ${set} WHERE id = $${keys.length + 1}`, [...vals, id]);
+}
+async function jobById(id) {
+  const { rows } = await pool.query(`SELECT * FROM askv_jobs WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+
+// --- Ingestion runners (async mais simples) ---
+async function runIngestZip(jobId, zipAbsPath) {
+  await updateJob(jobId, { status: 'running' });
+  const workDir = path.join(UPLOAD_DIR, `unz_${path.basename(zipAbsPath, '.zip')}_${Date.now()}`);
+  try {
+    await extractZipTo(zipAbsPath, workDir);
+    const files = await walkFiles(workDir);
+
+    await updateJob(jobId, { total_files: files.length });
+
+    const client = await pool.connect();
+    try {
+      let processed = 0;
+      for (const file of files) {
+        // On reloge le sous-chemin sous CORPUS_DIR
+        const subdir = path.relative(workDir, path.dirname(file));
+        await ingestSingleFile(client, file, subdir);
+        processed++;
+        if (processed % 5 === 0 || processed === files.length) {
+          await updateJob(jobId, { processed_files: processed });
+        }
+      }
+      await updateJob(jobId, { status: 'done', processed_files: files.length });
+    } finally {
+      client.release();
     }
+  } catch (e) {
+    console.error('[ingestZip]', e);
+    await updateJob(jobId, { status: 'error', error: String(e?.message || e) });
+  } finally {
+    // on peut nettoyer workDir si tu veux :
+    // await fsp.rm(workDir, { recursive: true, force: true });
+    // on peut aussi supprimer le zip d’upload :
+    // await fsp.rm(zipAbsPath, { force: true });
   }
+}
 
-  if (docs.length === 0) {
-    await fsp.writeFile(INDEX_PATH, JSON.stringify({ vectors: [], dims: 0 }));
-    return { files: 0, chunks: 0 };
+async function runIngestFiles(jobId, fileAbsPaths) {
+  await updateJob(jobId, { status: 'running', total_files: fileAbsPaths.length });
+  const client = await pool.connect();
+  try {
+    let processed = 0;
+    for (const file of fileAbsPaths) {
+      await ingestSingleFile(client, file, '');
+      processed++;
+      if (processed % 5 === 0 || processed === fileAbsPaths.length) {
+        await updateJob(jobId, { processed_files: processed });
+      }
+    }
+    await updateJob(jobId, { status: 'done', processed_files: fileAbsPaths.length });
+  } catch (e) {
+    console.error('[runIngestFiles]', e);
+    await updateJob(jobId, { status: 'error', error: String(e?.message || e) });
+  } finally {
+    client.release();
   }
-
-  const embeddings = await embed(docs.map((d) => d.text));
-  const dims = embeddings[0]?.length || 0;
-  const vectors = docs.map((d, i) => ({ id: d.id, embedding: embeddings[i], meta: d.meta, text: d.text }));
-
-  await fsp.writeFile(INDEX_PATH, JSON.stringify({ vectors, dims }));
-  return { files: new Set(vectors.map(v => v.meta.filename)).size, chunks: vectors.length };
 }
 
-async function ensureIndexExists() {
-  try { await fsp.access(INDEX_PATH); }
-  catch { await fsp.writeFile(INDEX_PATH, JSON.stringify({ vectors: [], dims: 0 })); }
-}
-
-async function searchIndex(query, k = 5) {
-  await ensureIndexExists();
-  const raw = JSON.parse(await fsp.readFile(INDEX_PATH, 'utf8'));
-  if (!raw.vectors?.length) return [];
-  const [qvec] = await embed([query]);
-  const scored = raw.vectors.map(v => ({ ...v, score: cosine(qvec, v.embedding) }));
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, k).map(v => ({ snippet: v.text.slice(0, 600), meta: v.meta, score: v.score }));
-}
-
-/** Routes */
-app.get('/api/ask-veeva/health', (_req, res) => {
-  res.json({ ok: true, service: 'ask-veeva', model: ANSWER_MODEL, embeddings: EMBEDDING_MODEL });
+// --- API ---
+app.get('/api/ask-veeva/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ ok: true, service: 'ask-veeva', model: ANSWER_MODEL, embeddings: EMBEDDING_MODEL });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
-app.post('/api/ask-veeva/upload', upload.single('zip'), async (req, res) => {
+/**
+ * Upload d’un ZIP géant -> ingestion asynchrone
+ * champ: "zip"
+ * retourne: { job_id }
+ */
+app.post('/api/ask-veeva/uploadZip', upload.single('zip'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'Aucun fichier .zip reçu' });
-    // 1) Purge corpus
-    await fsp.rm(CORPUS_DIR, { recursive: true, force: true });
-    await fsp.mkdir(CORPUS_DIR, { recursive: true });
-    // 2) Extraction
-    await extractZipTo(req.file.buffer, CORPUS_DIR);
-    // 3) Indexation
-    const stats = await buildIndexFromCorpus();
-    res.json({ ok: true, stats });
+    if (!req.file) return res.status(400).json({ error: 'Aucun fichier reçu (zip)' });
+    const jobId = await createJob('zip', 0);
+    // Lancement asynchrone (sans bloquer la requête)
+    runIngestZip(jobId, req.file.path).catch(e => console.error('bg ingestZip failed', e));
+    res.json({ ok: true, job_id: jobId });
   } catch (e) {
-    console.error('[upload]', e);
+    console.error('[uploadZip]', e);
     res.status(500).json({ error: e.message });
   }
 });
 
+/**
+ * Upload de plusieurs fichiers (drag & drop multiple)
+ * champ: "files" (multiples)
+ * retourne: { job_id }
+ */
+app.post('/api/ask-veeva/uploadFiles', upload.array('files', 2000), async (req, res) => {
+  try {
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: 'Aucun fichier reçu' });
+    const jobId = await createJob('files', files.length);
+    runIngestFiles(jobId, files.map(f => f.path)).catch(e => console.error('bg ingestFiles failed', e));
+    res.json({ ok: true, job_id: jobId });
+  } catch (e) {
+    console.error('[uploadFiles]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Statut d’un job d’ingestion */
+app.get('/api/ask-veeva/jobs/:id', async (req, res) => {
+  try {
+    const j = await jobById(req.params.id);
+    if (!j) return res.status(404).json({ error: 'job introuvable' });
+    res.json(j);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Recherche sémantique (k passages) */
 app.post('/api/ask-veeva/search', async (req, res) => {
   try {
     const { query, k = 5 } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query manquant' });
-    const matches = await searchIndex(query, k);
+    const qvec = await embedQuery(query);
+
+    // SELECT with pgvector cosine distance
+    const vectorLiteral = `[${qvec.join(',')}]`;
+    const { rows } = await pool.query(
+      `
+      SELECT c.id, c.doc_id, c.chunk_index, c.text,
+             d.filename, d.storage_path, d.pages,
+             1 - (c.embedding <=> ${`'${vectorLiteral}'`}::vector) AS score
+      FROM askv_chunks c
+      JOIN askv_documents d ON d.id = c.doc_id
+      ORDER BY c.embedding <-> ${`'${vectorLiteral}'`}::vector
+      LIMIT $1
+      `,
+      [k]
+    );
+
+    const matches = rows.map(r => ({
+      chunk_id: r.id,
+      doc_id: r.doc_id,
+      chunk_index: r.chunk_index,
+      snippet: r.text.slice(0, 600),
+      meta: { filename: r.filename, storage_path: r.storage_path, pages: r.pages },
+      score: Number(r.score)
+    }));
     res.json({ matches });
   } catch (e) {
     console.error('[search]', e);
@@ -181,18 +403,33 @@ app.post('/api/ask-veeva/search', async (req, res) => {
   }
 });
 
+/** Q/R : agrège top K, passe au modèle, renvoie réponse + citations */
 app.post('/api/ask-veeva/ask', async (req, res) => {
   try {
-    const { question } = req.body || {};
+    const { question, k = 6 } = req.body || {};
     if (!question) return res.status(400).json({ error: 'question manquante' });
 
-    const matches = await searchIndex(question, 6);
-    const contextBlocks = matches.map((m, i) => `SOURCE ${i + 1} (fichier: ${m.meta.filename})\n${m.snippet}`).join('\n\n');
-    const citations = matches.map((m) => ({ filename: m.meta.filename }));
+    const qvec = await embedQuery(question);
+    const vectorLiteral = `[${qvec.join(',')}]`;
+    const { rows } = await pool.query(
+      `
+      SELECT c.id, c.doc_id, c.chunk_index, c.text,
+             d.filename, d.storage_path, d.pages
+      FROM askv_chunks c
+      JOIN askv_documents d ON d.id = c.doc_id
+      ORDER BY c.embedding <-> ${`'${vectorLiteral}'`}::vector
+      LIMIT $1
+      `,
+      [k]
+    );
+
+    const contextBlocks = rows.map((r, i) => `SOURCE ${i + 1} (fichier: ${r.filename})
+${r.text}`).join('\n\n');
+    const citations = rows.map(r => ({ filename: r.filename }));
 
     const system = `Tu es Ask Veeva, un assistant de recherche documentaire.
-- Réponds en français.
-- Si l’information n’est pas dans le contexte, dis-le clairement.
+- Réponds en français de façon concise et sourcée.
+- Si l’information n’est pas dans le contexte, dis-le.
 - Appuie ta réponse sur les extraits fournis et liste les fichiers utilisés en fin de réponse.`;
 
     const user = `Question:
@@ -218,6 +455,5 @@ ${contextBlocks}`;
   }
 });
 
-// -------- Start (port 3015) -----------
-const PORT = Number(process.env.PORT || 3015);
+// -------- Start -----------
 app.listen(PORT, () => console.log(`Ask Veeva service listening on :${PORT}`));
