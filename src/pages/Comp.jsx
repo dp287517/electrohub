@@ -60,41 +60,33 @@ const API = {
       )
     ).json(),
 
-  // Envoi multi-fichiers => N requêtes single 'file' (backend = upload.single('file'))
+  // Envoi multi-fichiers en une requête : backend attend "files"
   uploadFiles: async (id, files, category = "general", onProgress) => {
-    const arr = Array.from(files || []);
-    let done = 0;
-    const sendOne = (f) =>
-      new Promise((resolve, reject) => {
-        const fd = new FormData();
-        fd.append("file", f);
-        const xhr = new XMLHttpRequest();
-        xhr.open(
-          "POST",
-          `/api/comp-ext/vendors/${id}/upload?category=${encodeURIComponent(category)}`,
-          true
-        );
-        xhr.withCredentials = true;
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable && onProgress) {
-            const filePercent = e.total ? e.loaded / e.total : 0;
-            const global = Math.round(((done + filePercent) / arr.length) * 100);
-            onProgress(global);
+    const fd = new FormData();
+    (Array.from(files || [])).forEach((f) => fd.append("files", f));
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(
+        "POST",
+        `/api/comp-ext/vendors/${id}/upload?category=${encodeURIComponent(category)}`,
+        true
+      );
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((100 * e.loaded) / e.total));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            resolve({});
           }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`HTTP ${xhr.status}`));
-        };
-        xhr.onerror = () => reject(new Error("network_error"));
-        xhr.send(fd);
-      }).then(() => {
-        done++;
-        if (onProgress) onProgress(Math.round((done / arr.length) * 100));
-      });
-
-    for (const f of arr) await sendOne(f);
-    return { ok: true };
+        } else reject(new Error(`HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error("network_error"));
+      xhr.send(fd);
+    });
   },
 
   deleteFile: async (fileId) =>
@@ -159,14 +151,12 @@ function Badge({ children, color = "gray" }) {
     purple: "bg-violet-100 text-violet-700",
   };
   return (
-    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[color] || map.gray}`}>
-      {children}
-    </span>
+    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[color] || map.gray}`}>{children}</span>
   );
 }
 const statusColor = {
   offre: (s) => (s === "po_faite" ? "green" : s?.startsWith("re") ? "blue" : "yellow"),
-  jsa: (s) => (s === "signe" ? "green" : s === "receptionne" ? "blue" : "yellow"),
+  jsa: (s) => (s === "signe" ? "green" : s === "receptionne" ? "blue" : s === "en_attente" ? "yellow" : "yellow"),
   access: (s) => (s === "fait" ? "green" : "red"),
   prequal: (s) => (s === "reçue" || s === "recue" ? "green" : s === "en_cours" ? "blue" : "red"),
 };
@@ -282,7 +272,7 @@ export default function Comp() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Filters (globaux)
+  // Filtres globaux (tous onglets)
   const [showFilters, setShowFilters] = useState(false);
   const [q, setQ] = useState("");
   const [fOffer, setFOffer] = useState("");
@@ -313,7 +303,7 @@ export default function Comp() {
   const [stats, setStats] = useState(null);
   const [alerts, setAlerts] = useState([]);
 
-  // Refs pour aligner le bandeau sticky
+  // Refs pour aligner bandeau sticky
   const headerRef = useRef(null);
   const tableRef = useRef(null);
 
@@ -376,7 +366,7 @@ export default function Comp() {
       if (fOffer && v.offer_status !== fOffer) return false;
       if (fJsa && v.jsa_status !== fJsa) return false;
       if (fAccess && v.access_status !== fAccess) return false;
-      if (fPreQ && (v.pre_qual_status !== fPreQ && !(fPreQ==="reçue" && v.pre_qual_status==="recue"))) return false;
+      if (fPreQ && (v.prequal_status !== fPreQ && !(fPreQ==="reçue" && v.prequal_status==="recue"))) return false;
       if (fPP === "yes" && !v.pp_applicable) return false;
       if (fPP === "no" && v.pp_applicable) return false;
       if (fOwner && !(v.owner || "").toLowerCase().includes(fOwner.toLowerCase())) return false;
@@ -406,18 +396,22 @@ export default function Comp() {
     const dir = sortBy.dir === "asc" ? 1 : -1;
     arr.sort((a,b) => {
       const f = sortBy.field;
-      const av = f==="first_date" ? (a.visits?.[0]?.start || "") :
-                 f==="owner" ? (a.owner||"") :
-                 f==="files_count" ? (a.files_count||0) :
-                 f==="visits" ? (a.visits?.length||0) :
-                 f==="pre_qual_status" ? (a.pre_qual_status||"") :
-                 (a.name||"");
-      const bv = f==="first_date" ? (b.visits?.[0]?.start || "") :
-                 f==="owner" ? (b.owner||"") :
-                 f==="files_count" ? (b.files_count||0) :
-                 f==="visits" ? (b.visits?.length||0) :
-                 f==="pre_qual_status" ? (b.pre_qual_status||"") :
-                 (b.name||"");
+      const av =
+        f==="first_date" ? (a.visits?.[0]?.start || "") :
+        f==="owner" ? (a.owner||"") :
+        f==="files_count" ? (a.files_count||0) :
+        f==="visits" ? (a.visits?.length||0) :
+        f==="prequal_status" ? (a.prequal_status||"") :
+        f==="access_status" ? (a.access_status||"") :
+        (a.name||"");
+      const bv =
+        f==="first_date" ? (b.visits?.[0]?.start || "") :
+        f==="owner" ? (b.owner||"") :
+        f==="files_count" ? (b.files_count||0) :
+        f==="visits" ? (b.visits?.length||0) :
+        f==="prequal_status" ? (b.prequal_status||"") :
+        f==="access_status" ? (b.access_status||"") :
+        (b.name||"");
       if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
       return String(av).localeCompare(String(bv)) * dir;
     });
@@ -425,7 +419,7 @@ export default function Comp() {
     return arr;
   }, [list, fOffer, fJsa, fAccess, fPreQ, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
 
-  // Planning filter
+  // Planning filtré par filtres globaux
   const planningFiltered = useMemo(() => {
     const from = fFrom ? dayjs(fFrom) : null;
     const to = fTo ? dayjs(fTo) : null;
@@ -435,7 +429,7 @@ export default function Comp() {
       if (fOffer && v.offer_status !== fOffer) return false;
       if (fJsa && v.jsa_status !== fJsa) return false;
       if (fAccess && v.access_status !== fAccess) return false;
-      if (fPreQ && (v.pre_qual_status !== fPreQ && !(fPreQ==="reçue" && v.pre_qual_status==="recue"))) return false;
+      if (fPreQ && (v.prequal_status !== fPreQ && !(fPreQ==="reçue" && v.prequal_status==="recue"))) return false;
       if (fPP === "yes" && !v.pp_applicable) return false;
       if (fPP === "no" && v.pp_applicable) return false;
       if (fOwner && !(v.owner || "").toLowerCase().includes(fOwner.toLowerCase())) return false;
@@ -476,9 +470,12 @@ export default function Comp() {
       pp_applicable: false,
       pp_link: "",
       access_status: "a_faire",
-      pre_qual_status: "non_fait",
+      prequal_status: "non_fait",
+      work_permit_required: false,
+      work_permit_link: "",
       sap_wo: "",
       owner: "",
+      visits_slots: 1,
       visits: [],
     });
     setDrawerOpen(true);
@@ -488,6 +485,7 @@ export default function Comp() {
     setDrawerOpen(true);
   }
   async function saveEditing() {
+    // Conformation stricte aux champs backend ; les dates vides seront ignorées côté API
     const payload = {
       ...editing,
       visits: (editing.visits || []).map((x, i) => ({
@@ -549,7 +547,6 @@ export default function Comp() {
       const table = tableRef.current;
       const header = headerRef.current;
       if (!table || !header) return;
-      // trouve la première ligne visible
       const firstRow = table.querySelector("tbody tr");
       if (!firstRow) return;
       const cells = Array.from(firstRow.children || []).filter((el) => el.tagName === "TD");
@@ -558,7 +555,6 @@ export default function Comp() {
       header.style.gridTemplateColumns = cols;
     };
     align();
-
     const ro = new ResizeObserver(() => align());
     if (tableRef.current) ro.observe(tableRef.current);
     window.addEventListener("resize", align);
@@ -578,7 +574,7 @@ export default function Comp() {
         <Tabs value={tab} onChange={setTab} />
       </header>
 
-      {/* FILTRES GLOBAUX (toggle) */}
+      {/* FILTRES GLOBAUX */}
       <div className="flex items-center justify-between">
         <button
           className="px-3 py-2 rounded border hover:bg-gray-50"
@@ -631,10 +627,7 @@ export default function Comp() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button
-              className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
-              onClick={clearFilters}
-            >
+            <button className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50" onClick={clearFilters}>
               Clear filters
             </button>
             <div className="text-sm text-gray-500 flex items-center">
@@ -647,21 +640,23 @@ export default function Comp() {
       {/* VENDORS */}
       {tab === "vendors" && (
         <>
-          {/* Bandeau sticky aligné sur les colonnes réelles */}
+          {/* Bandeau sticky aligné */}
           <div
             ref={headerRef}
             className="sticky top-[118px] z-20 bg-gray-50/95 backdrop-blur border rounded-2xl px-4 py-2 overflow-x-auto"
-            style={{ display: "grid", gap: "0.5rem" }} // gridTemplateColumns est injecté dynamiquement
+            style={{ display: "grid", gap: "0.5rem" }}
           >
             <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("name")}>Name {sortIcon("name")}</span>
             <span className="text-sm font-medium text-gray-700">Offer</span>
             <span className="text-sm font-medium text-gray-700">JSA</span>
             <span className="text-sm font-medium text-gray-700">Pre-qual</span>
             <span className="text-sm font-medium text-gray-700">PP</span>
+            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("access_status")}>Access {sortIcon("access_status")}</span>
             <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</span>
             <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</span>
             <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</span>
             <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</span>
+            <span className="text-sm font-medium text-gray-700">Actions</span>
           </div>
 
           <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
@@ -673,18 +668,20 @@ export default function Comp() {
                   <th>JSA</th>
                   <th>Pre-qual</th>
                   <th>PP</th>
+                  <th>Access</th>
                   <th>Visits</th>
                   <th>First date</th>
                   <th>Owner</th>
                   <th>Files</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody className="text-sm">
                 {!loading && filtered.length === 0 && (
-                  <tr><td colSpan={9} className="p-4 text-gray-500">No vendors.</td></tr>
+                  <tr><td colSpan={11} className="p-4 text-gray-500">No vendors.</td></tr>
                 )}
                 {loading && (
-                  <tr><td colSpan={9} className="p-4 text-gray-500">Loading…</td></tr>
+                  <tr><td colSpan={11} className="p-4 text-gray-500">Loading…</td></tr>
                 )}
 
                 {filtered.map(v => {
@@ -701,7 +698,7 @@ export default function Comp() {
                       </td>
                       <td className="p-3"><Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></td>
                       <td className="p-3"><Badge color={statusColor.jsa(v.jsa_status)}>{v.jsa_status}</Badge></td>
-                      <td className="p-3"><Badge color={statusColor.prequal(v.pre_qual_status)}>{v.pre_qual_status}</Badge></td>
+                      <td className="p-3"><Badge color={statusColor.prequal(v.prequal_status)}>{v.prequal_status}</Badge></td>
                       <td className="p-3">
                         {v.pp_applicable ? (
                           v.pp_link ? (
@@ -709,6 +706,7 @@ export default function Comp() {
                           ) : <span className="text-emerald-700">Applicable</span>
                         ) : <span className="text-gray-500">N/A</span>}
                       </td>
+                      <td className="p-3"><Badge color={statusColor.access(v.access_status)}>{v.access_status}</Badge></td>
                       <td className="p-3">{v.visits?.length || 0}</td>
                       <td className="p-3">{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</td>
                       <td className="p-3">{v.owner || "—"}</td>
@@ -721,6 +719,12 @@ export default function Comp() {
                             {v.files_count} file{v.files_count>1?"s":""}
                           </button>
                         ) : <span className="text-gray-400 text-xs">0</span>}
+                      </td>
+                      <td className="p-3">
+                        <div className="flex gap-2">
+                          <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
+                          <button className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}>Delete</button>
+                        </div>
                       </td>
                     </tr>
                   )
@@ -848,7 +852,7 @@ function Drawer({ children, onClose }) {
   return (
     <div className="fixed inset-0 z-40">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-white shadow-2xl p-4 overflow-y-auto">
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[560px] bg-white shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold">Edit vendor</h3>
           <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={onClose}>Close</button>
@@ -893,13 +897,12 @@ function VisitItem({ item, onOpenVendor }) {
 }
 
 function FileCard({ f, onDelete }) {
-  const isImage = (f.mime || "").startsWith("image/");
   const sizeKB = Math.max(1, Math.round(Number(f.size_bytes || 0) / 1024));
-  const url = `/api/comp-ext/files/${f.id}/download`;
+  const url = `/api/comp-ext/download?file_id=${f.id}`;
   return (
     <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
       <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
-        {isImage ? <img src={url} alt={f.original_name} className="w-full h-full object-cover" /> : <div className="text-4xl">📄</div>}
+        <div className="text-4xl">📄</div>
       </div>
       <div className="p-3">
         <div className="text-sm font-medium truncate" title={f.original_name}>{f.original_name}</div>
@@ -997,8 +1000,9 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
   const v = value || {};
   const set = (patch) => onChange({ ...v, ...patch });
 
+  // garder en mémoire le nombre de slots (visits_slots)
   const [visitsCount, setVisitsCount] = useState(v?.visits?.length || v?.visits_slots || 1);
-  useEffect(() => { setVisitsCount(v?.visits?.length || v?.visits_slots || 1); }, [v?.id]); // reset on vendor change
+  useEffect(() => { setVisitsCount(v?.visits?.length || v?.visits_slots || 1); }, [v?.id]);
 
   useEffect(() => {
     const base = v?.visits || [];
@@ -1019,7 +1023,7 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
         <Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" />
         <Select value={v.jsa_status || "en_attente"} onChange={(x) => set({ jsa_status: x })} options={jsaOptions} placeholder="JSA status" />
         <Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" />
-        <Select value={v.pre_qual_status || "non_fait"} onChange={(x) => set({ pre_qual_status: x })} options={preQualOptions} placeholder="Pré-qualification" />
+        <Select value={v.prequal_status || "non_fait"} onChange={(x) => set({ prequal_status: x })} options={preQualOptions} placeholder="Pré-qualification" />
         <Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" />
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={!!v.pp_applicable} onChange={(e)=>set({ pp_applicable: e.target.checked })} />
