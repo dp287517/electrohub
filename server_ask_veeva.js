@@ -1,5 +1,5 @@
 // server_ask_veeva.js — Ask Veeva (Neon + pgvector + ingestion ZIP/fichiers)
-// Démarrage : node server_ask_veeva.js
+// Démarrage local : node server_ask_veeva.js
 // Requis: OPENAI_API_KEY, NEON_DATABASE_URL
 import express from 'express';
 import cors from 'cors';
@@ -24,21 +24,23 @@ const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// --- Config ---
+// --- App config ---
 const app = express();
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-const PORT = Number(process.env.PORT || 3015);
-const DATA_DIR   = process.env.ASK_VEEVA_DATA_DIR || path.join(__dirname, 'data');
-const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-const CORPUS_DIR = path.join(DATA_DIR, 'corpus'); // stockage fichiers extraits
-await fsp.mkdir(DATA_DIR, { recursive: true });
+// IMPORTANT : on n’utilise PAS process.env.PORT pour éviter les conflits Render (10000)
+const PORT = Number(process.env.ASK_VEEVA_PORT || 3015);
+
+const DATA_ROOT   = process.env.ASK_VEEVA_DATA_DIR || path.join(__dirname, 'data');
+const UPLOAD_DIR  = path.join(DATA_ROOT, 'uploads');
+const CORPUS_DIR  = path.join(DATA_ROOT, 'corpus'); // stockage persistant des fichiers
+await fsp.mkdir(DATA_ROOT, { recursive: true });
 await fsp.mkdir(UPLOAD_DIR, { recursive: true });
 await fsp.mkdir(CORPUS_DIR, { recursive: true });
 
-// Multer (stockage disque, pour stream & gros fichiers)
+// Multer (stockage disque → streaming, adapté gros volumes)
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, file, cb) => {
@@ -51,14 +53,14 @@ const upload = multer({ storage });
 // OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ⚠️ IMPORTANT: on force un modèle 1536 dims pour l’index IVFFlat
-const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBEDDINGS || 'text-embedding-3-small'; // 1536 dims
+// Embeddings: 1536 dims (IVFFlat limite 2000 → OK)
+const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBEDDINGS || 'text-embedding-3-small';
 const ANSWER_MODEL    = process.env.ASK_VEEVA_MODEL      || 'gpt-4.1-mini';
-const EMBEDDING_DIMS  = 1536; // cohérent avec text-embedding-3-small
+const EMBEDDING_DIMS  = 1536;
 
-// --- DB bootstrap (pgvector + tables) ---
+// --- DB bootstrap (pgvector + tables + index) ---
 async function ensureSchema() {
-  // 1) Extension et tables si absentes
+  // Tables de base
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -82,20 +84,15 @@ async function ensureSchema() {
     );
   `);
 
-  // 2) Auto-migration si la colonne embedding a une autre dimension (ex: 3072)
-  // On tente un ALTER "best effort" (s’il est déjà bon, Postgres râlera → on ignore).
+  // Auto-migration (si colonne embedding a une autre dimension)
   try {
     await pool.query(`ALTER TABLE askv_chunks ALTER COLUMN embedding TYPE vector(${EMBEDDING_DIMS})`);
   } catch (_) {
-    // Ignore: soit déjà au bon format, soit table vide, soit typmod identique
+    // déjà au bon format ou table vide → ignorer
   }
 
-  // 3) Index (re)création si absent
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id);
-  `);
-
-  // IVFFlat nécessite ANALYZE et LISTS; si l’index existe avec mauvaise config, on peut le drop/recreate
+  // Index
+  await pool.query(`CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id);`);
   await pool.query(`
     DO $$
     BEGIN
@@ -107,7 +104,7 @@ async function ensureSchema() {
     END$$;
   `);
 
-  // 4) Jobs
+  // Table des jobs (ingestion async)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_jobs (
       id UUID PRIMARY KEY,
@@ -160,7 +157,7 @@ async function embedQuery(text) {
   return res.data[0].embedding;
 }
 
-/** Extraction texte PDF via pdfjs-dist (robuste en ESM/Node 22) */
+/** Extraction texte PDF via pdfjs-dist (robuste ESM/Node 22) */
 async function extractPdfWithPdfjs(filePath) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs'); // import dynamique
   const data = await fsp.readFile(filePath);
@@ -198,6 +195,7 @@ async function parseFileToText(fullPath, contentTypeGuess) {
     const txt = await fsp.readFile(fullPath, 'utf8');
     return { text: txt, pages: null, contentType: contentTypeGuess || 'text/plain' };
   }
+  // Autres extensions : on conserve le fichier et les métadonnées, mais pas de chunks
   return { text: null, pages: null, contentType: contentTypeGuess || 'application/octet-stream' };
 }
 
@@ -326,7 +324,7 @@ async function runIngestZip(jobId, zipAbsPath) {
     console.error('[ingestZip]', e);
     await updateJob(jobId, { status: 'error', error: String(e?.message || e) });
   } finally {
-    // Nettoyage optionnel:
+    // Optionnel: cleanup workDir / zip
     // await fsp.rm(workDir, { recursive: true, force: true });
     // await fsp.rm(zipAbsPath, { force: true });
   }
@@ -490,4 +488,4 @@ ${contextBlocks}`;
 });
 
 // -------- Start -----------
-app.listen(PORT, () => console.log(`Ask Veeva service listening on :${PORT}`));
+app.listen(PORT, () => console.log(`[ask-veeva] service listening on :${PORT}`));
