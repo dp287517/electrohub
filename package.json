@@ -49,8 +49,6 @@
     "uuid": "^9.0.1",
     "csv-stringify": "^6.5.0",
     "cors": "^2.8.5",
-
-    /* --- 🔵 AJOUTS POUR ASK VEEVA --- */
     "unzipper": "^0.11.2",
     "pdf-parse": "^1.1.1",
     "mammoth": "^1.8.0"
