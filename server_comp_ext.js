@@ -473,7 +473,7 @@ app.delete('/api/comp-ext/vendors/:id', async (req, res) => {
     await pool.query(`DELETE FROM comp_ext_vendors WHERE id=$1`, [id]);
     res.json({ ok: true });
   } catch (e) {
-    console.error('[comp-ext] vendor delete', e);
+       console.error('[comp-ext] vendor delete', e);
     res.status(400).json({ error: 'bad_request' });
   }
 });
@@ -580,7 +580,7 @@ app.get('/api/comp-ext/files/:fileId/download', async (req, res) => {
   try {
     const fid = Number(req.params.fileId);
     if (!Number.isFinite(fid)) return res.status(400).json({ error: 'bad_file_id' });
-    // >>> Correction : on lit aussi original_name pour nommer correctement le téléchargement
+    // lecture de original_name + stored_name + mime pour un download correct
     const row = (await pool.query(
      `SELECT original_name, stored_name, mime FROM comp_ext_files WHERE id=$1`, [fid]
     )).rows[0];
@@ -609,7 +609,6 @@ app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
       return res.status(400).json({ error: 'bad_file_id' });
     }
 
-    // On lit stored_name + mime et on reconstruit le chemin avec FILES_DIR
     const row = (await pool.query(
       `SELECT stored_name, mime FROM comp_ext_files WHERE id=$1`,
       [fid]
@@ -625,7 +624,6 @@ app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
     }
 
     res.setHeader('Content-Type', row.mime || 'application/octet-stream');
-    // Optionnel : forcer l'affichage inline
     // res.setHeader('Content-Disposition', 'inline');
 
     fs.createReadStream(filePath)
@@ -643,7 +641,7 @@ app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
 app.delete('/api/comp-ext/files/:fileId', async (req, res) => {
   try {
     const fid = Number(req.params.fileId);
-    // >>> Correction : on retourne stored_name et on reconstruit le chemin pour supprimer le fichier
+    // suppression via stored_name -> FILES_DIR
     const row = (await pool.query(
       `DELETE FROM comp_ext_files WHERE id=$1 RETURNING stored_name`, [fid]
     )).rows[0];
