@@ -9,8 +9,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import unzipper from 'unzipper';
-// ⛔️ pdf-parse supprimé
-import mammoth from 'mammoth';
+import mammoth from 'mammoth';               // DOCX
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
@@ -51,14 +50,18 @@ const upload = multer({ storage });
 
 // OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBEDDINGS || 'text-embedding-3-large'; // 3072 dims
+
+// ⚠️ IMPORTANT: on force un modèle 1536 dims pour l’index IVFFlat
+const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBEDDINGS || 'text-embedding-3-small'; // 1536 dims
 const ANSWER_MODEL    = process.env.ASK_VEEVA_MODEL      || 'gpt-4.1-mini';
-const EMBEDDING_DIMS  = 3072;
+const EMBEDDING_DIMS  = 1536; // cohérent avec text-embedding-3-small
 
 // --- DB bootstrap (pgvector + tables) ---
 async function ensureSchema() {
+  // 1) Extension et tables si absentes
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS vector;
+
     CREATE TABLE IF NOT EXISTS askv_documents (
       id UUID PRIMARY KEY,
       filename TEXT NOT NULL,
@@ -69,6 +72,7 @@ async function ensureSchema() {
       pages INTEGER,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+
     CREATE TABLE IF NOT EXISTS askv_chunks (
       id BIGSERIAL PRIMARY KEY,
       doc_id UUID REFERENCES askv_documents(id) ON DELETE CASCADE,
@@ -76,8 +80,35 @@ async function ensureSchema() {
       text TEXT NOT NULL,
       embedding vector(${EMBEDDING_DIMS})
     );
+  `);
+
+  // 2) Auto-migration si la colonne embedding a une autre dimension (ex: 3072)
+  // On tente un ALTER "best effort" (s’il est déjà bon, Postgres râlera → on ignore).
+  try {
+    await pool.query(`ALTER TABLE askv_chunks ALTER COLUMN embedding TYPE vector(${EMBEDDING_DIMS})`);
+  } catch (_) {
+    // Ignore: soit déjà au bon format, soit table vide, soit typmod identique
+  }
+
+  // 3) Index (re)création si absent
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id);
-    CREATE INDEX IF NOT EXISTS askv_chunks_vec_idx ON askv_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+  `);
+
+  // IVFFlat nécessite ANALYZE et LISTS; si l’index existe avec mauvaise config, on peut le drop/recreate
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes WHERE indexname = 'askv_chunks_vec_idx'
+      ) THEN
+        EXECUTE 'CREATE INDEX askv_chunks_vec_idx ON askv_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)';
+      END IF;
+    END$$;
+  `);
+
+  // 4) Jobs
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_jobs (
       id UUID PRIMARY KEY,
       kind TEXT NOT NULL,              -- 'zip' | 'files'
@@ -131,8 +162,7 @@ async function embedQuery(text) {
 
 /** Extraction texte PDF via pdfjs-dist (robuste en ESM/Node 22) */
 async function extractPdfWithPdfjs(filePath) {
-  // import dynamique pour éviter les soucis de chemins en build
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs'); // import dynamique
   const data = await fsp.readFile(filePath);
   const loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
   const doc = await loadingTask.promise;
@@ -155,7 +185,6 @@ async function parseFileToText(fullPath, contentTypeGuess) {
     try {
       return await extractPdfWithPdfjs(fullPath);
     } catch (e) {
-      // fallback: renvoyer vide mais garder la fiche document
       console.error('[PDF parse error]', fullPath, e);
       return { text: '', pages: null, contentType: 'application/pdf' };
     }
@@ -297,7 +326,7 @@ async function runIngestZip(jobId, zipAbsPath) {
     console.error('[ingestZip]', e);
     await updateJob(jobId, { status: 'error', error: String(e?.message || e) });
   } finally {
-    // Nettoyage optionnel
+    // Nettoyage optionnel:
     // await fsp.rm(workDir, { recursive: true, force: true });
     // await fsp.rm(zipAbsPath, { force: true });
   }
@@ -328,7 +357,7 @@ async function runIngestFiles(jobId, fileAbsPaths) {
 app.get('/api/ask-veeva/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ ok: true, service: 'ask-veeva', model: ANSWER_MODEL, embeddings: EMBEDDING_MODEL });
+    res.json({ ok: true, service: 'ask-veeva', model: ANSWER_MODEL, embeddings: EMBEDDING_MODEL, dims: EMBEDDING_DIMS });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
