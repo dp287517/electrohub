@@ -15,6 +15,8 @@
     "@projectstorm/react-diagrams-routing": "^7.0.4",
     "@radix-ui/react-tooltip": "^1.1.2",
     "axios": "^1.7.7",
+    "@aws-sdk/client-s3": "^3.679.0",
+    "@aws-sdk/s3-request-presigner": "^3.679.0",
     "express-rate-limit": "^7.4.0",
     "node-stream-zip": "^1.15.0",
     "bcryptjs": "^2.4.3",
