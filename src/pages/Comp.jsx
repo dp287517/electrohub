@@ -60,7 +60,7 @@ const API = {
       )
     ).json(),
 
-  // Envoi multi-fichiers => on fait N requêtes single 'file' pour matcher upload.single('file')
+  // Envoi multi-fichiers => N requêtes single 'file' (backend = upload.single('file'))
   uploadFiles: async (id, files, category = "general", onProgress) => {
     const arr = Array.from(files || []);
     let done = 0;
@@ -282,7 +282,7 @@ export default function Comp() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Filters (globaux, s’appliquent à tous les onglets)
+  // Filters (globaux)
   const [showFilters, setShowFilters] = useState(false);
   const [q, setQ] = useState("");
   const [fOffer, setFOffer] = useState("");
@@ -312,6 +312,10 @@ export default function Comp() {
   const [viewMode, setViewMode] = useState(ViewMode.Month);
   const [stats, setStats] = useState(null);
   const [alerts, setAlerts] = useState([]);
+
+  // Refs pour aligner le bandeau sticky
+  const headerRef = useRef(null);
+  const tableRef = useRef(null);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const jsaOptions = ["en_attente", "transmis", "receptionne", "signe"];
@@ -421,7 +425,7 @@ export default function Comp() {
     return arr;
   }, [list, fOffer, fJsa, fAccess, fPreQ, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
 
-  // Filters applied to planning views
+  // Planning filter
   const planningFiltered = useMemo(() => {
     const from = fFrom ? dayjs(fFrom) : null;
     const to = fTo ? dayjs(fTo) : null;
@@ -539,6 +543,31 @@ export default function Comp() {
     setFVisitsMin(""); setFVisitsMax(""); setFFrom(""); setFTo("");
   };
 
+  // ---------- Align sticky header with table columns ----------
+  useEffect(() => {
+    const align = () => {
+      const table = tableRef.current;
+      const header = headerRef.current;
+      if (!table || !header) return;
+      // trouve la première ligne visible
+      const firstRow = table.querySelector("tbody tr");
+      if (!firstRow) return;
+      const cells = Array.from(firstRow.children || []).filter((el) => el.tagName === "TD");
+      if (!cells.length) return;
+      const cols = cells.map((td) => `${td.getBoundingClientRect().width}px`).join(" ");
+      header.style.gridTemplateColumns = cols;
+    };
+    align();
+
+    const ro = new ResizeObserver(() => align());
+    if (tableRef.current) ro.observe(tableRef.current);
+    window.addEventListener("resize", align);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", align);
+    };
+  }, [filtered, loading]);
+
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -618,26 +647,36 @@ export default function Comp() {
       {/* VENDORS */}
       {tab === "vendors" && (
         <>
-          {/* Sticky header BAR */}
-          <div className="sticky top-[118px] z-20 bg-gray-50/95 backdrop-blur border rounded-2xl px-4 py-2">
-            <div className="grid grid-cols-[1.2fr_.7fr_.7fr_.9fr_.6fr_.6fr_.8fr_.6fr_.8fr] gap-2 text-sm font-medium text-gray-700">
-              <span className="cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</span>
-              <span>Offer</span>
-              <span>JSA</span>
-              <span>Pre-qual</span>
-              <span>PP</span>
-              <span className="cursor-pointer" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</span>
-              <span className="cursor-pointer" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</span>
-            </div>
+          {/* Bandeau sticky aligné sur les colonnes réelles */}
+          <div
+            ref={headerRef}
+            className="sticky top-[118px] z-20 bg-gray-50/95 backdrop-blur border rounded-2xl px-4 py-2 overflow-x-auto"
+            style={{ display: "grid", gap: "0.5rem" }} // gridTemplateColumns est injecté dynamiquement
+          >
+            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("name")}>Name {sortIcon("name")}</span>
+            <span className="text-sm font-medium text-gray-700">Offer</span>
+            <span className="text-sm font-medium text-gray-700">JSA</span>
+            <span className="text-sm font-medium text-gray-700">Pre-qual</span>
+            <span className="text-sm font-medium text-gray-700">PP</span>
+            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</span>
+            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</span>
+            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</span>
+            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</span>
           </div>
 
           <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
-            <table className="w-full">
+            <table ref={tableRef} className="w-full">
               <thead className="sr-only">
                 <tr>
-                  <th>Name</th><th>Offer</th><th>JSA</th><th>Pre-qual</th><th>PP</th><th>Visits</th><th>First date</th><th>Owner</th><th>Files</th>
+                  <th>Name</th>
+                  <th>Offer</th>
+                  <th>JSA</th>
+                  <th>Pre-qual</th>
+                  <th>PP</th>
+                  <th>Visits</th>
+                  <th>First date</th>
+                  <th>Owner</th>
+                  <th>Files</th>
                 </tr>
               </thead>
               <tbody className="text-sm">
@@ -675,8 +714,10 @@ export default function Comp() {
                       <td className="p-3">{v.owner || "—"}</td>
                       <td className="p-3">
                         {v.files_count ? (
-                          <button className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
-                            onClick={()=>openEdit(v)}>
+                          <button
+                            className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
+                            onClick={()=>openEdit(v)}
+                          >
                             {v.files_count} file{v.files_count>1?"s":""}
                           </button>
                         ) : <span className="text-gray-400 text-xs">0</span>}
@@ -706,7 +747,7 @@ export default function Comp() {
         </>
       )}
 
-      {/* CALENDAR (Gantt supprimé d’ici) */}
+      {/* CALENDAR */}
       {tab === "calendar" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Calendar (Month view)">
