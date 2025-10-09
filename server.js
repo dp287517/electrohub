@@ -50,6 +50,8 @@ const oibtTarget         = process.env.OIBT_BASE_URL          || "http://127.0.0
 const projectsTarget     = process.env.PROJECTS_BASE_URL      || "http://127.0.0.1:3013";
 // 🔵 Comp-Ext (prestataires externes) — nouveau microservice sur 3014
 const compExtTarget      = process.env.COMP_EXT_BASE_URL      || "http://127.0.0.1:3014";
+// 🔵 Ask Veeva (lecture de documents + Q/R) — nouveau microservice sur 3015
+const askVeevaTarget     = process.env.ASK_VEEVA_BASE_URL     || "http://127.0.0.1:3015";
 
 // petit helper pour créer des proxys homogènes
 function mkProxy(target, { withRestream = false } = {}) {
@@ -91,6 +93,9 @@ app.use("/api/projects", mkProxy(projectsTarget, { withRestream: true }));
 
 // >>> Comp-Ext (prestataires externes) : même traitement que Projects (re-stream utile pour PUT/POST)
 app.use("/api/comp-ext", mkProxy(compExtTarget, { withRestream: true }));
+
+// >>> Ask Veeva (ZIP + upload multipart) : re-stream INDISPENSABLE
+app.use("/api/ask-veeva", mkProxy(askVeevaTarget, { withRestream: true }));
 
 /* =================================================================
    Body parser APRES les proxys (pour nos routes locales uniquement)
