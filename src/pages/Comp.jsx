@@ -1,5 +1,11 @@
 // src/pages/Comp.jsx
 // External Contractors (Prestataires externes)
+// Onglets : Vendors | Calendar | Gantt | Analytics
+// - Header sticky aligné avec le tableau
+// - Un seul bouton "+ New vendor" (dans l'entête, plus dans les filtres)
+// - MSRA partout (+ Pre-qual)
+// - Calendrier (month) + Gantt coloré (vert/rouge)
+// - Edition avec labels + DnD fichiers + Download OK (backend délivre url)
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
@@ -61,7 +67,7 @@ const API = {
     ).json(),
   uploadFiles: async (id, files, category = "general", onProgress) => {
     const fd = new FormData();
-    (Array.from(files || [])).forEach((f) => fd.append("files", f));
+    (files || []).forEach((f) => fd.append("files", f));
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open(
@@ -75,7 +81,11 @@ const API = {
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch {
+            resolve({});
+          }
         } else reject(new Error(`HTTP ${xhr.status}`));
       };
       xhr.onerror = () => reject(new Error("network_error"));
@@ -84,16 +94,6 @@ const API = {
   },
   deleteFile: async (fileId) =>
     (await fetch(`/api/comp-ext/files/${fileId}`, { method: "DELETE", credentials: "include" })).json(),
-
-  ask: async (question) =>
-    (
-      await fetch(`/api/comp-ext/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ question }),
-      })
-    ).json(),
 };
 
 // ----------------- UI helpers -----------------
@@ -114,7 +114,6 @@ function Tabs({ value, onChange }) {
       {T("calendar", "Calendar", "📅")}
       {T("gantt", "Gantt", "📈")}
       {T("analytics", "Analytics", "📊")}
-      {T("ai", "AI", "✨")}
     </div>
   );
 }
@@ -138,30 +137,64 @@ function Select({ value, onChange, options = [], placeholder, className = "", di
     >
       <option value="">{placeholder || "—"}</option>
       {options.map((o) => (
-        <option key={o} value={o}>{o}</option>
+        <option key={o} value={o}>
+          {o}
+        </option>
       ))}
     </select>
   );
 }
-function Label({ children }) {
-  return <div className="text-xs font-medium text-gray-600 mb-1">{children}</div>;
-}
 function Badge({ children, color = "gray" }) {
   const map = {
-    gray: "bg-gray-100 text-gray-700", blue: "bg-blue-100 text-blue-700",
-    green: "bg-emerald-100 text-emerald-700", yellow: "bg-amber-100 text-amber-700",
-    red: "bg-rose-100 text-rose-700", purple: "bg-violet-100 text-violet-700",
+    gray: "bg-gray-100 text-gray-700",
+    blue: "bg-blue-100 text-blue-700",
+    green: "bg-emerald-100 text-emerald-700",
+    yellow: "bg-amber-100 text-amber-700",
+    red: "bg-rose-100 text-rose-700",
+    purple: "bg-violet-100 text-violet-700",
   };
-  return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[color] || map.gray}`}>{children}</span>;
+  return (
+    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${map[color] || map.gray}`}>
+      {children}
+    </span>
+  );
 }
 const statusColor = {
-  offer: (s) => (s === "po_faite" ? "green" : s?.startsWith("re") ? "blue" : "yellow"),
-  msra: (s) => (s === "signe" ? "green" : s === "receptionne" ? "blue" : s === "en_attente" ? "yellow" : "yellow"),
+  offre: (s) => (s === "po_faite" ? "green" : s?.startsWith("re") ? "blue" : "yellow"),
+  msra: (s) => (s === "signe" ? "green" : s === "receptionne" ? "blue" : "yellow"),
   access: (s) => (s === "fait" ? "green" : "red"),
-  prequal: (s) => (s === "reçue" || s === "recue" ? "green" : s === "en_cours" ? "blue" : "red"),
+  prequal: (s) => (s === "reçue" || s === "recue" ? "blue" : s === "en_cours" ? "amber" : "gray"),
 };
 
-// ----------------- Month Calendar -----------------
+// Palette (charts)
+const palette = {
+  emerald: "rgba(16,185,129,0.85)",
+  blue: "rgba(59,130,246,0.85)",
+  amber: "rgba(245,158,11,0.85)",
+  rose: "rgba(244,63,94,0.85)",
+  slateGrid: "rgba(148,163,184,0.25)",
+};
+
+// Chart options
+const baseChartOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { position: "bottom", labels: { boxWidth: 12, boxHeight: 12 } },
+    tooltip: { mode: "index", intersect: false, padding: 10 },
+    title: { display: false },
+  },
+  layout: { padding: 8 },
+};
+const barOptions = {
+  ...baseChartOptions,
+  scales: {
+    x: { grid: { display: false }, ticks: { color: "#475569" } },
+    y: { grid: { color: palette.slateGrid }, ticks: { color: "#475569", precision: 0 } },
+  },
+};
+
+// ----------------- Month Calendar (with click) -----------------
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
   const eventsByDate = useMemo(() => {
@@ -188,9 +221,15 @@ function MonthCalendar({ events = [], onDayClick }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.subtract(1, "month"))}>← Prev</button>
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth(dayjs())}>Today</button>
-          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.add(1, "month"))}>Next →</button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.subtract(1, "month"))}>
+            ← Prev
+          </button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth(dayjs())}>
+            Today
+          </button>
+          <button className="px-3 py-1.5 rounded border hover:bg-gray-50" onClick={() => setMonth((m) => m.add(1, "month"))}>
+            Next →
+          </button>
         </div>
       </div>
 
@@ -238,13 +277,12 @@ export default function Comp() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Filtres globaux
-  const [showFilters, setShowFilters] = useState(false);
+  // Filters
   const [q, setQ] = useState("");
   const [fOffer, setFOffer] = useState("");
   const [fMsra, setFMsra] = useState("");
   const [fAccess, setFAccess] = useState("");
-  const [fPreQ, setFPreQ] = useState("");
+  const [fPrequal, setFPrequal] = useState("");
   const [fPP, setFPP] = useState(""); // "", "yes", "no"
   const [fOwner, setFOwner] = useState("");
   const [fHasFiles, setFHasFiles] = useState(""); // "", "yes", "no"
@@ -253,12 +291,12 @@ export default function Comp() {
   const [fFrom, setFFrom] = useState("");
   const [fTo, setFTo] = useState("");
 
-  // Tri
+  // Sorting
   const [sortBy, setSortBy] = useState({ field: "name", dir: "asc" });
 
   // Drawer (edit/create)
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
+  const [editing, setEditing] = useState(null); // vendor object (null => create)
 
   // Visit modal
   const [visitModal, setVisitModal] = useState({ open: false, date: null, items: [] });
@@ -267,16 +305,13 @@ export default function Comp() {
   const [calendar, setCalendar] = useState({ tasks: [], events: [] });
   const [viewMode, setViewMode] = useState(ViewMode.Month);
   const [stats, setStats] = useState(null);
-
-  // AI
-  const [aiQ, setAiQ] = useState("");
-  const [aiA, setAiA] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
+  const [alerts, setAlerts] = useState([]);
+  const [showFilters, setShowFilters] = useState(false);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const msraOptions = ["en_attente", "transmis", "receptionne", "signe"];
   const accessOptions = ["a_faire", "fait"];
-  const preQualOptions = ["non_fait", "en_cours", "reçue"];
+  const prequalOptions = ["non_fait", "en_cours", "reçue"];
 
   // Loaders
   async function reloadVendors() {
@@ -298,16 +333,36 @@ export default function Comp() {
       progress: 0,
       styles:
         t.status_color === "green"
-          ? { barBackgroundColor: "#10b981", barProgressColor: "#10b981", barBackgroundSelectedColor: "#10b981" }
-          : { barBackgroundColor: "#ef4444", barProgressColor: "#ef4444", barBackgroundSelectedColor: "#ef4444" },
+          ? {
+              barBackgroundColor: "#10b981",
+              barProgressColor: "#10b981",
+              barBackgroundSelectedColor: "#10b981",
+            }
+          : {
+              barBackgroundColor: "#ef4444",
+              barProgressColor: "#ef4444",
+              barBackgroundSelectedColor: "#ef4444",
+            },
     }));
     setCalendar({ tasks, events: data.events || [] });
   }
-  async function reloadAnalytics() { setStats(await API.stats()); }
-  async function reloadAll() { await Promise.all([reloadVendors(), reloadPlanning(), reloadAnalytics()]); }
-  useEffect(() => { reloadAll(); }, []);
+  async function reloadAnalytics() {
+    setStats(await API.stats());
+  }
+  async function reloadAll() {
+    const [_, __, ___, a] = await Promise.all([
+      reloadVendors(),
+      reloadPlanning(),
+      reloadAnalytics(),
+      API.alerts(),
+    ]);
+    setAlerts(Array.isArray(a?.alerts) ? a.alerts : []);
+  }
+  useEffect(() => {
+    reloadAll();
+  }, []);
 
-  // Vendors filtrés
+  // Derived filtered + sorted list
   const filtered = useMemo(() => {
     const from = fFrom ? dayjs(fFrom) : null;
     const to = fTo ? dayjs(fTo) : null;
@@ -315,11 +370,11 @@ export default function Comp() {
     const max = fVisitsMax ? Number(fVisitsMax) : null;
 
     let arr = [...list];
-    arr = arr.filter(v => {
+    arr = arr.filter((v) => {
       if (fOffer && v.offer_status !== fOffer) return false;
-      if (fMsra && v.msra_status !== fMsra && v.jsa_status !== fMsra) return false; // compat
+      if (fMsra && (v.msra_status || v.jsa_status) !== fMsra) return false;
+      if (fPrequal && (v.prequal_status || "") !== fPrequal) return false;
       if (fAccess && v.access_status !== fAccess) return false;
-      if (fPreQ && (v.prequal_status !== fPreQ && !(fPreQ==="reçue" && v.prequal_status==="recue"))) return false;
       if (fPP === "yes" && !v.pp_applicable) return false;
       if (fPP === "no" && v.pp_applicable) return false;
       if (fOwner && !(v.owner || "").toLowerCase().includes(fOwner.toLowerCase())) return false;
@@ -332,7 +387,7 @@ export default function Comp() {
 
       if (from || to) {
         const visits = v.visits || [];
-        const overlaps = visits.some(vis => {
+        const overlaps = visits.some((vis) => {
           const s = vis.start ? dayjs(vis.start) : null;
           const e = vis.end ? dayjs(vis.end) : s;
           if (!s) return false;
@@ -342,298 +397,482 @@ export default function Comp() {
         });
         if (!overlaps) return false;
       }
+
       return true;
     });
 
     const dir = sortBy.dir === "asc" ? 1 : -1;
-    arr.sort((a,b) => {
+    arr.sort((a, b) => {
       const f = sortBy.field;
       const av =
-        f==="first_date" ? (a.visits?.[0]?.start || "") :
-        f==="owner" ? (a.owner||"") :
-        f==="files_count" ? (a.files_count||0) :
-        f==="visits" ? (a.visits?.length||0) :
-        f==="prequal_status" ? (a.prequal_status||"") :
-        f==="access_status" ? (a.access_status||"") :
-        f==="msra_status" ? (a.msra_status || a.jsa_status || "") :
-        (a.name||"");
+        f === "first_date"
+          ? a.visits?.[0]?.start || ""
+          : f === "owner"
+          ? a.owner || ""
+          : f === "files_count"
+          ? a.files_count || 0
+          : f === "visits"
+          ? a.visits?.length || 0
+          : f === "prequal_status"
+          ? a.prequal_status || ""
+          : f === "msra_status"
+          ? a.msra_status || a.jsa_status || ""
+          : a.name || "";
       const bv =
-        f==="first_date" ? (b.visits?.[0]?.start || "") :
-        f==="owner" ? (b.owner||"") :
-        f==="files_count" ? (b.files_count||0) :
-        f==="visits" ? (b.visits?.length||0) :
-        f==="prequal_status" ? (b.prequal_status||"") :
-        f==="access_status" ? (b.access_status||"") :
-        f==="msra_status" ? (b.msra_status || b.jsa_status || "") :
-        (b.name||"");
+        f === "first_date"
+          ? b.visits?.[0]?.start || ""
+          : f === "owner"
+          ? b.owner || ""
+          : f === "files_count"
+          ? b.files_count || 0
+          : f === "visits"
+          ? b.visits?.length || 0
+          : f === "prequal_status"
+          ? b.prequal_status || ""
+          : f === "msra_status"
+          ? b.msra_status || b.jsa_status || ""
+          : b.name || "";
       if (typeof av === "number" && typeof bv === "number") return (av - bv) * dir;
       return String(av).localeCompare(String(bv)) * dir;
     });
 
     return arr;
-  }, [list, fOffer, fMsra, fAccess, fPreQ, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
+  }, [
+    list,
+    fOffer,
+    fMsra,
+    fPrequal,
+    fAccess,
+    fPP,
+    fOwner,
+    fHasFiles,
+    fVisitsMin,
+    fVisitsMax,
+    fFrom,
+    fTo,
+    sortBy,
+  ]);
 
-  // Planning filtré par les mêmes filtres
-  const planningFiltered = useMemo(() => {
-    const includeVendor = (vid) => {
-      const v = list.find(x => x.id === vid);
-      if (!v) return true;
-      if (fOffer && v.offer_status !== fOffer) return false;
-      if (fMsra && v.msra_status !== fMsra && v.jsa_status !== fMsra) return false;
-      if (fAccess && v.access_status !== fAccess) return false;
-      if (fPreQ && (v.prequal_status !== fPreQ && !(fPreQ==="reçue" && v.prequal_status==="recue"))) return false;
-      if (fPP === "yes" && !v.pp_applicable) return false;
-      if (fPP === "no" && v.pp_applicable) return false;
-      if (fOwner && !(v.owner || "").toLowerCase().includes(fOwner.toLowerCase())) return false;
-      if (fHasFiles === "yes" && !(v.files_count > 0)) return false;
-      if (fHasFiles === "no" && v.files_count > 0) return false;
-      return true;
-    };
-
-    const fromD = fFrom ? dayjs(fFrom) : null;
-    const toD = fTo ? dayjs(fTo) : null;
-
-    const tasks = (calendar.tasks || []).filter(t => {
-      if (!includeVendor(t.vendor_id)) return false;
-      const s = dayjs(t.start); const e = dayjs(t.end);
-      if (fromD && e.isBefore(fromD, "day")) return false;
-      if (toD && s.isAfter(toD, "day")) return false;
-      return true;
-    });
-    const events = (calendar.events || []).filter(ev => {
-      if (!includeVendor(ev.vendor_id)) return false;
-      const d = dayjs(ev.date);
-      if (fromD && d.isBefore(fromD, "day")) return false;
-      if (toD && d.isAfter(toD, "day")) return false;
-      return true;
-    });
-    return { tasks, events };
-  }, [calendar, list, fOffer, fMsra, fAccess, fPreQ, fPP, fOwner, fHasFiles, fFrom, fTo]);
-
-  // Tri helpers
-  const sortIcon = (field) => sortBy.field !== field ? "↕" : (sortBy.dir === "asc" ? "↑" : "↓");
+  // Sorting helpers
+  const sortIcon = (field) => (sortBy.field !== field ? "↕" : sortBy.dir === "asc" ? "↑" : "↓");
   const setSort = (field) =>
-    setSortBy((s) => (s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" }));
+    setSortBy((s) =>
+      s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" }
+    );
 
   // Drawer handlers
   function openCreate() {
     setEditing({
-      name: "", owner: "",
-      offer_status: "en_attente", msra_status: "en_attente", access_status: "a_faire",
+      name: "",
+      offer_status: "en_attente",
+      msra_status: "en_attente",
       prequal_status: "non_fait",
-      pp_applicable: false, pp_link: "",
-      work_permit_required: false, work_permit_link: "",
-      sap_wo: "", visits_slots: 1, visits: [],
+      pp_applicable: false,
+      pp_link: "",
+      work_permit_required: false,
+      work_permit_link: "",
+      access_status: "a_faire",
+      sap_wo: "",
+      owner: "",
+      visits: [],
+      visits_slots: 1,
     });
     setDrawerOpen(true);
   }
-  function openEdit(v) { setEditing(JSON.parse(JSON.stringify(v))); setDrawerOpen(true); }
+  function openEdit(v) {
+    setEditing(JSON.parse(JSON.stringify(v)));
+    setDrawerOpen(true);
+  }
   async function saveEditing() {
     const payload = {
       ...editing,
-      // Assure qu'on envoie msra_status (backend accepte jsa_status aussi, mais on reste propre)
-      msra_status: editing.msra_status ?? editing.jsa_status ?? "en_attente",
-      visits: (editing.visits || []).map((x, i) => ({ index: x.index || i + 1, start: x.start || null, end: x.end || x.start || null })),
+      visits: (editing.visits || []).map((x, i) => ({
+        index: x.index || i + 1,
+        start: x.start || null,
+        end: x.end || x.start || null,
+      })),
     };
-    const resp = editing.id ? await API.update(editing.id, payload) : await API.create(payload);
-    if (resp?.error) {
-      alert("Save error");
-      return;
-    }
-    setDrawerOpen(false); setEditing(null);
-    await reloadVendors(); await reloadPlanning(); await reloadAnalytics();
+    if (editing.id) await API.update(editing.id, payload);
+    else await API.create(payload);
+    setDrawerOpen(false);
+    setEditing(null);
+    await reloadAll();
   }
   async function deleteEditing() {
     if (!editing?.id) return;
     await API.remove(editing.id);
-    setDrawerOpen(false); setEditing(null);
-    await reloadVendors(); await reloadPlanning(); await reloadAnalytics();
+    setDrawerOpen(false);
+    setEditing(null);
+    await reloadAll();
   }
 
   // Visit modal
-  function openVisitModalForDay({ date, events }) { setVisitModal({ open: true, date, items: events || [] }); }
+  function openVisitModalForDay({ date, events }) {
+    setVisitModal({ open: true, date, items: events || [] });
+  }
   function openVisitModalForTask(task) {
     if (!task) return;
-    const startISO = task.startISO || (task.start instanceof Date ? task.start.toISOString().slice(0,10) : String(task.start).slice(0,10));
-    const endISO   = task.endISO   || (task.end   instanceof Date ? task.end.toISOString().slice(0,10)   : String(task.end).slice(0,10));
-    const item = { date: startISO, vendor_id: task.vendor_id, vendor_name: task.name?.split("•")?.[0]?.trim() || task.vendor_name || `Vendor #${task.vendor_id}`, vindex: task.vindex, start: startISO, end: endISO };
+    const startISO =
+      task.startISO ||
+      (task.start instanceof Date ? task.start.toISOString().slice(0, 10) : String(task.start).slice(0, 10));
+    const endISO =
+      task.endISO ||
+      (task.end instanceof Date ? task.end.toISOString().slice(0, 10) : String(task.end).slice(0, 10));
+    const item = {
+      date: startISO,
+      vendor_id: task.vendor_id,
+      vendor_name: task.name?.split("•")?.[0]?.trim() || task.vendor_name || `Vendor #${task.vendor_id}`,
+      vindex: task.vindex,
+      start: startISO,
+      end: endISO,
+    };
     setVisitModal({ open: true, date: startISO, items: [item] });
   }
-  const handleGanttSelect = (task, isSelected) => { if (isSelected) openVisitModalForTask(task); };
-
-  // Reset filters
-  const clearFilters = () => {
-    setFOffer(""); setFMsra(""); setFAccess(""); setFPreQ("");
-    setFPP(""); setFOwner(""); setFHasFiles("");
-    setFVisitsMin(""); setFVisitsMax(""); setFFrom(""); setFTo("");
+  const handleGanttSelect = (task, isSelected) => {
+    if (isSelected) openVisitModalForTask(task);
   };
 
-  // AI ask
-  async function askAI() {
-    const q = (aiQ || "").trim();
-    if (!q) return;
-    setAiLoading(true);
-    try {
-      const r = await API.ask(q);
-      setAiA(r?.answer || "(no answer)");
-    } finally {
-      setAiLoading(false);
-    }
-  }
+  // Sticky header offset (kept simple & stable)
+  const stickyTop = 118; // px, calibré pour notre layout
 
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>
-          <p className="text-gray-500 text-sm">Vendors offers, MSRA, prevention plan, access, pre-qualification, visits, SAP WO & attachments</p>
+          <p className="text-gray-500 text-sm">
+            Vendors offers, MSRA, pre-qualification, prevention plan, access, visits, SAP WO & attachments
+          </p>
         </div>
-        <Tabs value={tab} onChange={setTab} />
+        <div className="flex items-center gap-2">
+          <button
+            className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            onClick={openCreate}
+          >
+            + New vendor
+          </button>
+        </div>
       </header>
 
-      {/* FILTRES GLOBAUX (communs à tous les onglets) */}
-      <div className="flex items-center justify-between">
-        <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => setShowFilters(s => !s)}>
-          {showFilters ? "Hide filters" : "Show filters"}
-        </button>
-        {!showFilters && tab==="vendors" && (
-          <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
-        )}
-      </div>
-
-      {showFilters && (
-        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
-          <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-            <div className="flex-1">
-              <Input value={q} onChange={setQ} placeholder="Search by name / WO…" />
-            </div>
-            <div className="flex gap-2">
-              <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>{ setQ(""); reloadVendors(); }}>Reset search</button>
-              <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={reloadVendors}>Search</button>
-              <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-3 lg:grid-cols-4 gap-3">
-            <Select value={fOffer} onChange={setFOffer} options={["en_attente","reçue","po_faite"]} placeholder="Offer status" />
-            <Select value={fMsra} onChange={setFMsra} options={["en_attente","transmis","receptionne","signe"]} placeholder="MSRA status" />
-            <Select value={fAccess} onChange={setFAccess} options={["a_faire","fait"]} placeholder="Access status" />
-            <Select value={fPreQ} onChange={setFPreQ} options={["non_fait","en_cours","reçue"]} placeholder="Pré-qualification" />
-            <Select value={fPP} onChange={setFPP} options={["yes","no"]} placeholder="PP applicable?" />
-            <Input value={fOwner} onChange={setFOwner} placeholder="Owner contains…" />
-            <Select value={fHasFiles} onChange={setFHasFiles} options={["yes","no"]} placeholder="Has files?" />
-            <div className="grid grid-cols-2 gap-2">
-              <Input value={fVisitsMin} onChange={setFVisitsMin} placeholder="#Visits min" type="number" />
-              <Input value={fVisitsMax} onChange={setFVisitsMax} placeholder="#Visits max" type="number" />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Input value={fFrom} onChange={setFFrom} type="date" placeholder="From" />
-              <Input value={fTo} onChange={setFTo} type="date" placeholder="To" />
-            </div>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50" onClick={clearFilters}>Clear filters</button>
-            <div className="text-sm text-gray-500 flex items-center">Showing <b className="mx-1">{filtered.length}</b> of {list.length}</div>
-          </div>
-        </div>
-      )}
+      <Tabs value={tab} onChange={setTab} />
 
       {/* VENDORS */}
       {tab === "vendors" && (
         <>
-          {!showFilters && (
-            <div className="flex items-center justify-end">
-              <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
+          {/* Barre Filtres (sans bouton + New vendor) */}
+          <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+              <div className="flex-1">
+                <Input value={q} onChange={setQ} placeholder="Search by name / WO…" />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="px-3 py-2 rounded border hover:bg-gray-50"
+                  onClick={() => {
+                    setQ("");
+                    reloadVendors();
+                  }}
+                >
+                  Reset search
+                </button>
+                <button
+                  className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700"
+                  onClick={reloadVendors}
+                >
+                  Search
+                </button>
+                {/* (Bouton New vendor retiré d'ici) */}
+              </div>
             </div>
-          )}
 
-          <div className="bg-white rounded-2xl border shadow-sm mt-2">
-            <div className="max-h-[70vh] overflow-auto">
-              <table className="w-full">
-                <thead className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur">
-                  <tr className="text-sm font-medium text-gray-700">
-                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</th>
-                    <th className="p-3 text-left">Offer</th>
-                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("msra_status")}>MSRA {sortIcon("msra_status")}</th>
-                    <th className="p-3 text-left">Pre-qual</th>
-                    <th className="p-3 text-left">PP</th>
-                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("access_status")}>Access {sortIcon("access_status")}</th>
-                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</th>
-                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</th>
-                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</th>
-                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</th>
-                    <th className="p-3 text-left">Actions</th>
-                  </tr>
-                </thead>
+            <div className="grid md:grid-cols-3 lg:grid-cols-4 gap-3">
+              <Select value={fOffer} onChange={setFOffer} options={["en_attente", "reçue", "po_faite"]} placeholder="Offer status" />
+              <Select value={fMsra} onChange={setFMsra} options={["en_attente", "transmis", "receptionne", "signe"]} placeholder="MSRA status" />
+              <Select value={fPrequal} onChange={setFPrequal} options={["non_fait", "en_cours", "reçue"]} placeholder="Pre-qual status" />
+              <Select value={fAccess} onChange={setFAccess} options={["a_faire", "fait"]} placeholder="Access status" />
+              <Select value={fPP} onChange={setFPP} options={["yes", "no"]} placeholder="PP applicable?" />
+              <Input value={fOwner} onChange={setFOwner} placeholder="Owner contains…" />
+              <Select value={fHasFiles} onChange={setFHasFiles} options={["yes", "no"]} placeholder="Has files?" />
+              <div className="grid grid-cols-2 gap-2">
+                <Input value={fVisitsMin} onChange={setFVisitsMin} placeholder="#Visits min" type="number" />
+                <Input value={fVisitsMax} onChange={setFVisitsMax} placeholder="#Visits max" type="number" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Input value={fFrom} onChange={setFFrom} type="date" placeholder="From" />
+                <Input value={fTo} onChange={setFTo} type="date" placeholder="To" />
+              </div>
+            </div>
 
-                <tbody className="text-sm">
-                  {!loading && filtered.length === 0 && (
-                    <tr><td colSpan={11} className="p-4 text-gray-500">No vendors.</td></tr>
-                  )}
-                  {loading && (
-                    <tr><td colSpan={11} className="p-4 text-gray-500">Loading…</td></tr>
-                  )}
-
-                  {filtered.map(v => {
-                    const first = v.visits?.[0];
-                    return (
-                      <tr key={v.id} className="border-t align-top hover:bg-gray-50">
-                        <td className="p-3 min-w-[220px]">
-                          <div className="flex items-center gap-2">
-                            <button className="text-blue-700 font-medium hover:underline" onClick={()=>openEdit(v)} title="Edit">
-                              {v.name}
-                            </button>
-                            {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
-                          </div>
-                        </td>
-                        <td className="p-3"><Badge color={statusColor.offer(v.offer_status)}>{v.offer_status}</Badge></td>
-                        <td className="p-3"><Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>{v.msra_status || v.jsa_status}</Badge></td>
-                        <td className="p-3"><Badge color={statusColor.prequal(v.prequal_status)}>{v.prequal_status}</Badge></td>
-                        <td className="p-3">
-                          {v.pp_applicable ? (
-                            v.pp_link ? (
-                              <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">Applicable (link)</a>
-                            ) : <span className="text-emerald-700">Applicable</span>
-                          ) : <span className="text-gray-500">N/A</span>}
-                        </td>
-                        <td className="p-3"><Badge color={statusColor.access(v.access_status)}>{v.access_status}</Badge></td>
-                        <td className="p-3">{v.visits?.length || 0}</td>
-                        <td className="p-3">{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</td>
-                        <td className="p-3">{v.owner || "—"}</td>
-                        <td className="p-3">
-                          {v.files_count ? (
-                            <button
-                              className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
-                              onClick={()=>openEdit(v)}
-                            >
-                              {v.files_count} file{v.files_count>1?"s":""}
-                            </button>
-                          ) : <span className="text-gray-400 text-xs">0</span>}
-                        </td>
-                        <td className="p-3">
-                          <div className="flex gap-2">
-                            <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
-                            <button className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}>Delete</button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="px-3 py-1.5 rounded border text-sm hover:bg-gray-50"
+                onClick={() => {
+                  setFOffer("");
+                  setFMsra("");
+                  setFPrequal("");
+                  setFAccess("");
+                  setFPP("");
+                  setFOwner("");
+                  setFHasFiles("");
+                  setFVisitsMin("");
+                  setFVisitsMax("");
+                  setFFrom("");
+                  setFTo("");
+                }}
+              >
+                Clear filters
+              </button>
+              <div className="text-sm text-gray-500 flex items-center">
+                Showing <b className="mx-1">{filtered.length}</b> of {list.length}
+              </div>
             </div>
           </div>
 
+          {/* Sticky header : aligné avec le tableau, au-dessus et ne recouvre pas la 1ère ligne */}
+          <div
+            className="sticky z-20 bg-gray-50/95 backdrop-blur border rounded-2xl px-4 py-2"
+            style={{ top: stickyTop }}
+          >
+            <div className="grid grid-cols-[1.2fr_.8fr_.8fr_.8fr_.7fr_.6fr_.8fr_.8fr_.6fr_.8fr] gap-2 text-sm font-medium text-gray-700">
+              <span className="cursor-pointer" onClick={() => setSort("name")}>
+                Name {sortIcon("name")}
+              </span>
+              <span className="cursor-pointer" onClick={() => setSort("offer_status")}>
+                Offer {sortIcon("offer_status")}
+              </span>
+              <span className="cursor-pointer" onClick={() => setSort("msra_status")}>
+                MSRA {sortIcon("msra_status")}
+              </span>
+              <span className="cursor-pointer" onClick={() => setSort("prequal_status")}>
+                Pre-qual {sortIcon("prequal_status")}
+              </span>
+              <span>PP</span>
+              <span className="cursor-pointer" onClick={() => setSort("visits")}>
+                Visits {sortIcon("visits")}
+              </span>
+              <span className="cursor-pointer" onClick={() => setSort("first_date")}>
+                First date {sortIcon("first_date")}
+              </span>
+              <span className="cursor-pointer" onClick={() => setSort("owner")}>
+                Owner {sortIcon("owner")}
+              </span>
+              <span className="cursor-pointer" onClick={() => setSort("files_count")}>
+                Files {sortIcon("files_count")}
+              </span>
+              <span>Actions</span>
+            </div>
+          </div>
+
+          {/* Tableau (avec marge-top pour ne pas se faire masquer par le bandeau sticky) */}
+          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
+            <table className="w-full">
+              {/* thead non sticky, conservé pour l'accessibilité (visually hidden) */}
+              <thead className="sr-only">
+                <tr>
+                  <th>Name</th>
+                  <th>Offer</th>
+                  <th>MSRA</th>
+                  <th>Pre-qual</th>
+                  <th>PP</th>
+                  <th>Visits</th>
+                  <th>First date</th>
+                  <th>Owner</th>
+                  <th>Files</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {!loading && filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={10} className="p-4 text-gray-500">
+                      No vendors.
+                    </td>
+                  </tr>
+                )}
+                {loading && (
+                  <tr>
+                    <td colSpan={10} className="p-4 text-gray-500">
+                      Loading…
+                    </td>
+                  </tr>
+                )}
+
+                {filtered.map((v) => {
+                  const first = v.visits?.[0];
+                  const preq = v.prequal_status || "non_fait";
+                  return (
+                    <tr key={v.id} className="border-t align-top hover:bg-gray-50">
+                      <td className="p-3 min-w-[220px]">
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="text-blue-700 font-medium hover:underline"
+                            onClick={() => openEdit(v)}
+                            title="Edit"
+                          >
+                            {v.name}
+                          </button>
+                          {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
+                        </div>
+                      </td>
+
+                      <td className="p-3">
+                        <Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge>
+                      </td>
+
+                      <td className="p-3">
+                        <Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>
+                          {v.msra_status || v.jsa_status}
+                        </Badge>
+                      </td>
+
+                      <td className="p-3">
+                        <Badge
+                          color={
+                            preq === "reçue" || preq === "recue"
+                              ? "blue"
+                              : preq === "en_cours"
+                              ? "yellow"
+                              : "gray"
+                          }
+                        >
+                          {preq}
+                        </Badge>
+                      </td>
+
+                      <td className="p-3">
+                        {v.pp_applicable ? (
+                          v.pp_link ? (
+                            <a
+                              className="text-emerald-700 underline"
+                              href={v.pp_link}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Applicable (link)
+                            </a>
+                          ) : (
+                            <span className="text-emerald-700">Applicable</span>
+                          )
+                        ) : (
+                          <span className="text-gray-500">N/A</span>
+                        )}
+                      </td>
+
+                      <td className="p-3">{v.visits?.length || 0}</td>
+                      <td className="p-3">
+                        {first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}
+                      </td>
+                      <td className="p-3">{v.owner || "—"}</td>
+                      <td className="p-3">
+                        {v.files_count ? (
+                          <button
+                            className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
+                            onClick={() => openEdit(v)}
+                          >
+                            {v.files_count} file{v.files_count > 1 ? "s" : ""}
+                          </button>
+                        ) : (
+                          <span className="text-gray-400 text-xs">0</span>
+                        )}
+                      </td>
+                      <td className="p-3">
+                        <div className="flex gap-2">
+                          <button
+                            className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600"
+                            onClick={() => openEdit(v)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                            onClick={async () => {
+                              await API.remove(v.id);
+                              await reloadAll();
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Cartes mobile */}
+          <div className="md:hidden grid grid-cols-1 gap-4">
+            {filtered.map((v) => (
+              <div key={v.id} className="bg-white rounded-2xl border shadow-sm p-4">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-base font-semibold">{v.name}</div>
+                    <div className="text-xs text-gray-500">Owner: {v.owner || "—"}</div>
+                  </div>
+                  <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={() => openEdit(v)}>
+                    Edit
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    Offer: <Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge>
+                  </div>
+                  <div>
+                    MSRA: <Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>{v.msra_status || v.jsa_status}</Badge>
+                  </div>
+                  <div>Pre-qual: {v.prequal_status || "non_fait"}</div>
+                  <div>Visits: {v.visits?.length || 0}</div>
+                  <div>First: {v.visits?.[0]?.start ? dayjs(v.visits[0].start).format("DD/MM/YYYY") : "—"}</div>
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  {v.pp_applicable ? (
+                    <span className="text-emerald-700 text-sm">PP applicable</span>
+                  ) : (
+                    <span className="text-gray-500 text-sm">PP N/A</span>
+                  )}
+                  {v.pp_link && (
+                    <a className="text-blue-700 underline text-sm" href={v.pp_link} target="_blank" rel="noreferrer">
+                      link
+                    </a>
+                  )}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600"
+                    onClick={() => openEdit(v)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                    onClick={async () => {
+                      await API.remove(v.id);
+                      await reloadAll();
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Drawer d'édition / création */}
           {drawerOpen && (
-            <Drawer onClose={()=>{ setDrawerOpen(false); setEditing(null); }}>
+            <Drawer
+              onClose={() => {
+                setDrawerOpen(false);
+                setEditing(null);
+              }}
+            >
               <Editor
                 value={editing}
                 onChange={setEditing}
                 offerOptions={offerOptions}
                 msraOptions={msraOptions}
+                prequalOptions={prequalOptions}
                 accessOptions={accessOptions}
-                preQualOptions={preQualOptions}
                 onSave={saveEditing}
                 onDelete={editing?.id ? deleteEditing : null}
               />
@@ -646,7 +885,7 @@ export default function Comp() {
       {tab === "calendar" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Calendar (Month view)">
-            <MonthCalendar events={planningFiltered.events} onDayClick={(p)=>setVisitModal({ open:true, date:p.date, items:p.events })} />
+            <MonthCalendar events={calendar.events} onDayClick={openVisitModalForDay} />
           </Card>
         </div>
       )}
@@ -654,19 +893,28 @@ export default function Comp() {
       {/* GANTT */}
       {tab === "gantt" && (
         <div className="grid grid-cols-1 gap-6">
-          <Card title="Gantt" actions={
-            <select className="border rounded px-2 py-1 text-sm"
-              value={Object.keys(ViewMode).find((k) => ViewMode[k] === viewMode) || "Month"}
-              onChange={(e) => setViewMode({ Week: ViewMode.Week, Month: ViewMode.Month, Year: ViewMode.Year }[e.target.value] || ViewMode.Month)}
-            >
-              <option value="Week">Week</option>
-              <option value="Month">Month</option>
-              <option value="Year">Year</option>
-            </select>
-          }>
+          <Card
+            title="Gantt"
+            actions={
+              <select
+                className="border rounded px-2 py-1 text-sm"
+                value={Object.keys(ViewMode).find((k) => ViewMode[k] === viewMode) || "Month"}
+                onChange={(e) =>
+                  setViewMode(
+                    { Week: ViewMode.Week, Month: ViewMode.Month, Year: ViewMode.Year }[e.target.value] ||
+                      ViewMode.Month
+                  )
+                }
+              >
+                <option value="Week">Week</option>
+                <option value="Month">Month</option>
+                <option value="Year">Year</option>
+              </select>
+            }
+          >
             <div className="h-[520px] overflow-x-auto">
-              {planningFiltered?.tasks?.length ? (
-                <Gantt tasks={planningFiltered.tasks} viewMode={viewMode} onSelect={(t, s)=>{ if (s) openVisitModalForTask(t); }} />
+              {calendar?.tasks?.length ? (
+                <Gantt tasks={calendar.tasks} viewMode={viewMode} onSelect={handleGanttSelect} />
               ) : (
                 <div className="text-sm text-gray-500">No planned visits.</div>
               )}
@@ -680,66 +928,61 @@ export default function Comp() {
         <div className="grid grid-cols-1 gap-6">
           <Card title="Offers">
             <div className="h-[380px]">
-              <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:12, boxHeight:12 }}}}} />
+              <Doughnut
+                data={donutData(
+                  stats?.counts?.offer || { en_attente: 0, recue: 0, po_faite: 0 },
+                  [palette.amber, palette.blue, palette.emerald]
+                )}
+                options={baseChartOptions}
+              />
             </div>
           </Card>
           <Card title="MSRA">
             <div className="h-[380px]">
-              <Doughnut data={donutData(stats?.counts?.msra || { en_attente:0, transmis:0, receptionne:0, signe:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)","rgba(99,102,241,0.85)"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:12, boxHeight:12 }}}}} />
+              <Doughnut
+                data={donutData(
+                  stats?.counts?.msra || { en_attente: 0, transmis: 0, receptionne: 0, signe: 0 },
+                  [palette.amber, palette.blue, palette.emerald, palette.rose]
+                )}
+                options={baseChartOptions}
+              />
             </div>
           </Card>
           <Card title="Access">
             <div className="h-[380px]">
-              <Bar data={barData(stats?.counts?.access || { a_faire:0, fait:0 }, ["#f43f5e", "#10b981"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom"} }}} />
+              <Bar
+                data={barData(stats?.counts?.access || { a_faire: 0, fait: 0 }, ["#f43f5e", "#10b981"])}
+                options={barOptions}
+              />
             </div>
           </Card>
         </div>
       )}
 
-      {/* AI */}
-      {tab === "ai" && (
-        <div className="grid grid-cols-1 gap-6">
-          <Card title="Ask AI (OpenAI)">
-            <div className="space-y-3">
-              <Input value={aiQ} onChange={setAiQ} placeholder='Pose ta question… ex: "Quelles sont les prochaines visites ?" ou "Qu’est-ce qu’il manque pour les visites de cette semaine ?"' />
-              <div className="flex gap-2">
-                <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={askAI} disabled={aiLoading}>
-                  {aiLoading ? "Thinking…" : "Ask"}
-                </button>
-                <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>{ setAiQ(""); setAiA(""); }}>
-                  Clear
-                </button>
-              </div>
-              <pre className="whitespace-pre-wrap text-sm bg-gray-50 border rounded-lg p-3 min-h-[140px]">{aiA || "—"}</pre>
-              <div className="text-xs text-gray-500">
-                Astuces : “prochaines visites”, “visites pas prêtes”, “combien en MSRA signée”, “qui n’a pas de lien PP”, etc.
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* Visit Modal */}
+      {/* Visit Modal (calendar & gantt) */}
       {visitModal.open && (
-        <Modal onClose={()=>setVisitModal({ open:false, date:null, items:[] })} title={`Visits • ${dayjs(visitModal.date).format("DD/MM/YYYY")}`}>
+        <Modal
+          onClose={() => setVisitModal({ open: false, date: null, items: [] })}
+          title={`Visits • ${dayjs(visitModal.date).format("DD/MM/YYYY")}`}
+        >
           <div className="space-y-3">
             {visitModal.items.map((it, i) => (
               <VisitItem
                 key={`${it.vendor_id}-${it.vindex}-${i}`}
                 item={it}
                 onOpenVendor={async () => {
-                  let v = list.find(x => x.id === it.vendor_id);
+                  let v = list.find((x) => x.id === it.vendor_id);
                   if (!v) {
                     const fetched = await API.getVendor(it.vendor_id);
                     v = fetched?.id ? fetched : null;
                   }
                   if (!v) return;
-                  setVisitModal({ open:false, date:null, items:[] });
+                  setVisitModal({ open: false, date: null, items: [] });
                   openEdit(v);
                 }}
               />
             ))}
-            {(!visitModal.items || visitModal.items.length===0) && (
+            {(!visitModal.items || visitModal.items.length === 0) && (
               <div className="text-sm text-gray-500">No visit details.</div>
             )}
           </div>
@@ -769,7 +1012,9 @@ function Drawer({ children, onClose }) {
       <div className="absolute right-0 top-0 h-full w-full sm:w-[560px] bg-white shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold">Edit vendor</h3>
-          <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={onClose}>Close</button>
+          <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={onClose}>
+            Close
+          </button>
         </div>
         {children}
       </div>
@@ -784,7 +1029,9 @@ function Modal({ title, children, onClose }) {
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[95vw] max-w-2xl bg-white rounded-2xl shadow-2xl p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold">{title}</h3>
-          <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={onClose}>Close</button>
+          <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={onClose}>
+            Close
+          </button>
         </div>
         {children}
       </div>
@@ -798,7 +1045,9 @@ function VisitItem({ item, onOpenVendor }) {
   return (
     <div className="border rounded-xl p-3 flex items-center justify-between">
       <div>
-        <div className="font-medium">{vendorLabel} • {idxLabel}</div>
+        <div className="font-medium">
+          {vendorLabel} • {idxLabel}
+        </div>
         <div className="text-sm text-gray-600">
           {dayjs(item.start).format("DD/MM/YYYY")} → {dayjs(item.end).format("DD/MM/YYYY")}
         </div>
@@ -810,23 +1059,190 @@ function VisitItem({ item, onOpenVendor }) {
   );
 }
 
-function FileCard({ f, onDelete }) {
-  const sizeKB = Math.max(1, Math.round(Number(f.size_bytes || 0) / 1024));
-  const url = f.url || `/api/comp-ext/files/${f.id}/download`;
+function Labeled({ label, children }) {
   return (
-    <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
-      <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
-        <div className="text-4xl">📄</div>
+    <label className="text-sm space-y-1">
+      <div className="text-gray-600">{label}</div>
+      {children}
+    </label>
+  );
+}
+
+function Editor({ value, onChange, onSave, onDelete, offerOptions, msraOptions, prequalOptions, accessOptions }) {
+  const v = value || {};
+  const set = (patch) => onChange({ ...v, ...patch });
+
+  const [visitsCount, setVisitsCount] = useState(v?.visits?.length || v?.visits_slots || 1);
+  useEffect(() => {
+    setVisitsCount(v?.visits?.length || v?.visits_slots || 1);
+  }, [v?.id]);
+
+  useEffect(() => {
+    const base = v?.visits || [];
+    const arr = Array.from({ length: Math.max(1, Number(visitsCount) || 1) }).map((_, i) => ({
+      index: i + 1,
+      start: base[i]?.start || "",
+      end: base[i]?.end || base[i]?.start || "",
+    }));
+    set({ visits: arr, visits_slots: visitsCount });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visitsCount]);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Labeled label="Vendor name">
+          <Input value={v.name || ""} onChange={(x) => set({ name: x })} placeholder="Vendor name" />
+        </Labeled>
+        <Labeled label="Owner">
+          <Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" />
+        </Labeled>
+
+        <Labeled label="Offer status">
+          <Select
+            value={v.offer_status || "en_attente"}
+            onChange={(x) => set({ offer_status: x })}
+            options={offerOptions}
+            placeholder="Offer status"
+          />
+        </Labeled>
+
+        <Labeled label="MSRA status">
+          <Select
+            value={v.msra_status || "en_attente"}
+            onChange={(x) => set({ msra_status: x })}
+            options={msraOptions}
+            placeholder="MSRA status"
+          />
+        </Labeled>
+
+        <Labeled label="Pre-qualification status">
+          <Select
+            value={v.prequal_status || "non_fait"}
+            onChange={(x) => set({ prequal_status: x })}
+            options={prequalOptions}
+            placeholder="Pre-qual status"
+          />
+        </Labeled>
+
+        <Labeled label="Access status">
+          <Select
+            value={v.access_status || "a_faire"}
+            onChange={(x) => set({ access_status: x })}
+            options={accessOptions}
+            placeholder="Access status"
+          />
+        </Labeled>
+
+        <Labeled label="Upcoming WO">
+          <Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" />
+        </Labeled>
+
+        <Labeled label="Prevention plan applicable">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!v.pp_applicable}
+              onChange={(e) => set({ pp_applicable: e.target.checked })}
+            />
+            <span className="text-sm">Yes</span>
+          </div>
+        </Labeled>
+
+        {v.pp_applicable && (
+          <Labeled label="SafePermit link (Prévention plan)">
+            <Input value={v.pp_link || ""} onChange={(x) => set({ pp_link: x })} placeholder="https://…" />
+          </Labeled>
+        )}
+
+        <Labeled label="Permis de travail requis">
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!v.work_permit_required}
+              onChange={(e) => set({ work_permit_required: e.target.checked })}
+            />
+            <span className="text-sm">Yes</span>
+          </div>
+        </Labeled>
+
+        {v.work_permit_required && (
+          <Labeled label="SafePermit link (Permis de travail)">
+            <Input
+              value={v.work_permit_link || ""}
+              onChange={(x) => set({ work_permit_link: x })}
+              placeholder="https://…"
+            />
+          </Labeled>
+        )}
       </div>
-      <div className="p-3">
-        <div className="text-sm font-medium truncate" title={f.original_name}>{f.original_name}</div>
-        <div className="text-xs text-gray-500 mt-0.5">{sizeKB} KB • {f.mime || "file"}</div>
-        <div className="flex items-center gap-2 mt-2">
-          <a href={url} className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition">
-            Download
-          </a>
-          <button onClick={onDelete} className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition">
-            Delete
+
+      <div className="border rounded-xl p-3">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="text-sm text-gray-600">Visits</div>
+          <input
+            type="number"
+            min={1}
+            className="border rounded px-2 py-1 text-sm w-24"
+            value={visitsCount}
+            onChange={(e) => setVisitsCount(Math.max(1, Number(e.target.value || 1)))}
+          />
+        </div>
+        <div className="grid gap-2">
+          {(v.visits || []).map((vis, i) => (
+            <div key={i} className="grid grid-cols-2 gap-2">
+              <input
+                type="date"
+                className="border rounded px-2 py-1 text-sm"
+                value={vis.start || ""}
+                onChange={(e) => {
+                  const arr = [...v.visits];
+                  arr[i] = { ...arr[i], start: e.target.value };
+                  set({ visits: arr, visits_slots: visitsCount });
+                }}
+              />
+              <input
+                type="date"
+                className="border rounded px-2 py-1 text-sm"
+                value={vis.end || ""}
+                onChange={(e) => {
+                  const arr = [...v.visits];
+                  arr[i] = { ...arr[i], end: e.target.value };
+                  set({ visits: arr, visits_slots: visitsCount });
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {v.id && (
+        <div className="border rounded-xl p-3">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-medium">Attachments</div>
+            <div className="text-xs text-gray-500">Drag & drop files or click</div>
+          </div>
+          <AttachmentsPanel vendorId={v.id} onChanged={() => {}} />
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        {onDelete ? (
+          <button
+            className="px-3 py-2 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+            onClick={onDelete}
+          >
+            Delete vendor
+          </button>
+        ) : (
+          <span />
+        )}
+        <div className="flex gap-2">
+          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={() => onChange(v)}>
+            Reset
+          </button>
+          <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={onSave}>
+            Save
           </button>
         </div>
       </div>
@@ -840,15 +1256,20 @@ function AttachmentsPanel({ vendorId, onChanged }) {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [isOver, setIsOver] = useState(false);
+  const boxRef = useRef(null);
 
   async function load() {
     setLoading(true);
     try {
       const data = await API.listFiles(vendorId, category);
       setFiles(data.files || []);
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }
-  useEffect(() => { load(); }, [vendorId, category]);
+  useEffect(() => {
+    load();
+  }, [vendorId, category]);
 
   async function handleUpload(list) {
     if (!list?.length) return;
@@ -868,13 +1289,22 @@ function AttachmentsPanel({ vendorId, onChanged }) {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">Category</span>
-          <Select value={category} onChange={setCategory} options={["general","offre","msra","pp","acces","sap","autre"]} className="w-40" />
+          <Select
+            value={category}
+            onChange={setCategory}
+            options={["general", "offre", "msra", "pp", "acces", "sap", "autre"]}
+            className="w-40"
+          />
         </div>
       </div>
 
       <div
-        onDragOver={(e)=>{ e.preventDefault(); setIsOver(true); }}
-        onDragLeave={()=>setIsOver(false)}
+        ref={boxRef}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setIsOver(true);
+        }}
+        onDragLeave={() => setIsOver(false)}
         onDrop={onDrop}
         className={`w-full border-2 border-dashed rounded-xl p-6 text-center transition
           ${isOver ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"}`}
@@ -883,11 +1313,11 @@ function AttachmentsPanel({ vendorId, onChanged }) {
           <div className="text-3xl">📂</div>
           <div className="text-sm text-gray-600">Drop your files here</div>
           <label className="inline-flex items-center gap-2 px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 cursor-pointer transition">
-            <input type="file" multiple className="hidden" onChange={(e)=>handleUpload(e.target.files)} />
+            <input type="file" multiple className="hidden" onChange={(e) => handleUpload(e.target.files)} />
             <span>Select files</span>
           </label>
         </div>
-        {!!progress && progress<100 && (
+        {!!progress && progress < 100 && (
           <div className="mt-4">
             <div className="w-full bg-gray-200 rounded-full h-2">
               <div className="h-2 rounded-full bg-blue-600 transition-all" style={{ width: `${progress}%` }} />
@@ -901,120 +1331,87 @@ function AttachmentsPanel({ vendorId, onChanged }) {
         {loading && <div className="text-gray-500">Loading…</div>}
         {!loading && files.length === 0 && <div className="text-gray-500">No files.</div>}
         {files.map((f) => (
-          <FileCard key={f.id} f={f} onDelete={async ()=>{ await API.deleteFile(f.id); await load(); if (onChanged) onChanged(); }} />
+          <FileCard
+            key={f.id}
+            f={f}
+            onDelete={async () => {
+              await API.deleteFile(f.id);
+              await load();
+              if (onChanged) onChanged();
+            }}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function Editor({ value, onChange, onSave, onDelete, offerOptions, msraOptions, accessOptions, preQualOptions }) {
-  const v = value || {};
-  const set = (patch) => onChange({ ...v, ...patch });
-
-  const [visitsCount, setVisitsCount] = useState(v?.visits?.length || v?.visits_slots || 1);
-  useEffect(() => { setVisitsCount(v?.visits?.length || v?.visits_slots || 1); }, [v?.id]);
-
-  useEffect(() => {
-    const base = v?.visits || [];
-    const arr = Array.from({ length: Math.max(1, Number(visitsCount) || 1) }).map((_, i) => ({
-      index: i + 1,
-      start: base[i]?.start || "",
-      end: base[i]?.end || base[i]?.start || "",
-    }));
-    set({ visits: arr, visits_slots: visitsCount });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visitsCount]);
-
+function FileCard({ f, onDelete }) {
+  const isImage = (f.mime || "").startsWith("image/");
+  const sizeKB = Math.max(1, Math.round(Number(f.size_bytes || 0) / 1024));
   return (
-    <div className="space-y-4">
-      <div className="grid sm:grid-cols-2 gap-3">
-        <div><Label>Vendor name</Label><Input value={v.name || ""} onChange={(x) => set({ name: x })} placeholder="Vendor name" /></div>
-        <div><Label>Owner</Label><Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" /></div>
-
-        <div><Label>Offer status</Label><Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" /></div>
-        <div><Label>MSRA status</Label><Select value={v.msra_status || v.jsa_status || "en_attente"} onChange={(x) => set({ msra_status: x })} options={msraOptions} placeholder="MSRA status" /></div>
-        <div><Label>Access status</Label><Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" /></div>
-        <div><Label>Pré-qualification</Label><Select value={v.prequal_status || "non_fait"} onChange={(x) => set({ prequal_status: x })} options={preQualOptions} placeholder="Pré-qualification" /></div>
-
-        <div><Label>Upcoming WO</Label><Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" /></div>
-
-        <div className="flex items-center gap-2 mt-1">
-          <input id="pp_applicable" type="checkbox" checked={!!v.pp_applicable} onChange={(e)=>set({ pp_applicable: e.target.checked })} />
-          <label htmlFor="pp_applicable" className="text-sm">Prevention plan applicable</label>
-        </div>
-        {v.pp_applicable && (
-          <div><Label>SafePermit link (PP)</Label><Input value={v.pp_link || ""} onChange={(x)=>set({ pp_link: x })} placeholder="SafePermit link" /></div>
-        )}
-
-        <div className="flex items-center gap-2 mt-1">
-          <input id="wp_required" type="checkbox" checked={!!v.work_permit_required} onChange={(e)=>set({ work_permit_required: e.target.checked })} />
-          <label htmlFor="wp_required" className="text-sm">Permis de travail requis</label>
-        </div>
-        {v.work_permit_required && (
-          <div><Label>SafePermit link (Permis de travail)</Label><Input value={v.work_permit_link || ""} onChange={(x)=>set({ work_permit_link: x })} placeholder="SafePermit link (Permis de travail)" /></div>
+    <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
+      <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
+        {isImage ? (
+          <img src={f.inline_url || f.url} alt={f.original_name} className="w-full h-full object-cover" />
+        ) : (
+          <div className="text-4xl">📄</div>
         )}
       </div>
-
-      <div className="border rounded-xl p-3">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="text-sm text-gray-600">Visits</div>
-          <input
-            type="number" min={1} className="border rounded px-2 py-1 text-sm w-24"
-            value={visitsCount} onChange={(e)=>setVisitsCount(Math.max(1, Number(e.target.value||1)))}
-          />
+      <div className="p-3">
+        <div className="text-sm font-medium truncate" title={f.original_name}>
+          {f.original_name}
         </div>
-        <div className="grid gap-2">
-          {(v.visits || []).map((vis, i) => (
-            <div key={i} className="grid grid-cols-2 gap-2">
-              <div>
-                <Label>Start</Label>
-                <input type="date" className="border rounded px-2 py-1 text-sm w-full"
-                  value={vis.start || ""} onChange={(e)=>{ const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value}; set({ visits: arr, visits_slots: visitsCount }); }} />
-              </div>
-              <div>
-                <Label>End</Label>
-                <input type="date" className="border rounded px-2 py-1 text-sm w-full"
-                  value={vis.end || ""} onChange={(e)=>{ const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value}; set({ visits: arr, visits_slots: visitsCount }); }} />
-              </div>
-            </div>
-          ))}
+        <div className="text-xs text-gray-500 mt-0.5">
+          {sizeKB} KB • {f.mime || "file"}
         </div>
-      </div>
-
-      {v.id && (
-        <div className="border rounded-xl p-3">
-          <div className="flex items-center justify-between mb-2">
-            <div className="font-medium">Attachments</div>
-            <div className="text-xs text-gray-500">Drag & drop files or click</div>
-          </div>
-          <AttachmentsPanel vendorId={v.id} onChanged={()=>{}} />
-        </div>
-      )}
-
-      <div className="flex items-center justify-between">
-        {onDelete ? (
-          <button className="px-3 py-2 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={onDelete}>Delete vendor</button>
-        ) : <span />}
-        <div className="flex gap-2">
-          <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>onChange(v)}>Reset</button>
-          <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={onSave}>Save</button>
+        <div className="flex items-center gap-2 mt-2">
+          <a
+            href={f.download_url || f.url}
+            className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
+            download
+          >
+            Download
+          </a>
+          <button
+            onClick={onDelete}
+            className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
+          >
+            Delete
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-// ----------------- Charts helpers -----------------
+// ----------------- Charts data builders -----------------
 function donutData(obj, colors) {
   const labels = Object.keys(obj);
   const data = labels.map((k) => obj[k] || 0);
   const palette = colors || ["#93c5fd", "#34d399", "#fbbf24"];
-  return { labels, datasets: [{ data, backgroundColor: palette, borderColor: palette, borderWidth: 1.5, hoverOffset: 8 }] };
+  return {
+    labels,
+    datasets: [{ data, backgroundColor: palette, borderColor: palette, borderWidth: 1.5, hoverOffset: 8 }],
+  };
 }
 function barData(obj, colors) {
   const labels = Object.keys(obj);
   const data = labels.map((k) => obj[k] || 0);
   const [c1, c2] = colors || ["#f43f5e", "#10b981"];
-  return { labels, datasets: [{ label: "Access", data, backgroundColor: [c1, c2], borderColor: [c1, c2], borderWidth: 1.5, borderRadius: 8, barPercentage: 0.6, categoryPercentage: 0.6 }] };
+  return {
+    labels,
+    datasets: [
+      {
+        label: "Access",
+        data,
+        backgroundColor: [c1, c2],
+        borderColor: [c1, c2],
+        borderWidth: 1.5,
+        borderRadius: 8,
+        barPercentage: 0.6,
+        categoryPercentage: 0.6,
+      },
+    ],
+  };
 }
