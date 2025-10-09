@@ -10,6 +10,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import StreamZip from 'node-stream-zip';
 import mammoth from 'mammoth';               // DOCX
+import XLSX from 'xlsx';                      // Excel/CSV
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
@@ -64,7 +65,11 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // Embeddings: 1536 dims (IVFFlat limite 2000 → OK)
 const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBEDDINGS || 'text-embedding-3-small';
 const ANSWER_MODEL    = process.env.ASK_VEEVA_MODEL      || 'gpt-4.1-mini';
+const TRANSCRIBE_MODEL= process.env.ASK_VEEVA_TRANSCRIBE_MODEL || 'whisper-1';
 const EMBEDDING_DIMS  = 1536;
+
+// Seuil max pour tenter une transcription via API (en Mo)
+const MAX_TRANSCRIBE_MB = Number(process.env.ASK_VEEVA_MAX_TRANSCRIBE_MB || 200);
 
 // --- DB bootstrap (pgvector + tables + index) ---
 async function ensureSchema() {
@@ -195,8 +200,68 @@ async function extractPdfWithPdfjs(filePath) {
   return { text: fullText, pages: numPages, contentType: 'application/pdf' };
 }
 
+/** Extraction Excel/CSV en texte "lisible" pour embeddings */
+function extractExcelLikeToText(filePath) {
+  const wb = XLSX.readFile(filePath, { cellDates: true, cellNF: false, cellText: false });
+  const sheetNames = wb.SheetNames || [];
+  const lines = [];
+  for (const name of sheetNames) {
+    const ws = wb.Sheets[name];
+    if (!ws) continue;
+    lines.push(`### SHEET: ${name}`);
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
+    for (const row of rows) {
+      const cells = (row || []).map(v => (v === null || v === undefined) ? '' : String(v));
+      lines.push(cells.join('\t'));
+      // petite limite de sécurité (éviter des giga-textes)
+      if (lines.join('\n').length > 2_000_000) { // ~2MB de texte
+        lines.push('...[truncated]');
+        break;
+      }
+    }
+  }
+  const text = lines.join('\n');
+  return { text, pages: null, contentType: 'application/vnd.ms-excel' };
+}
+
+/** Transcription audio/vidéo via OpenAI */
+async function transcribeMedia(filePath, contentTypeGuess) {
+  const stat = await fsp.stat(filePath);
+  const sizeMB = stat.size / (1024 * 1024);
+  if (sizeMB > MAX_TRANSCRIBE_MB) {
+    return {
+      text: null, // on ne transcrit pas: trop gros pour l'API
+      pages: null,
+      contentType: contentTypeGuess || 'video/mp4',
+      note: `Media too large for transcription (${sizeMB.toFixed(1)} MB > ${MAX_TRANSCRIBE_MB} MB)`
+    };
+  }
+
+  const stream = fs.createReadStream(filePath);
+  try {
+    const resp = await openai.audio.transcriptions.create({
+      file: stream,
+      model: TRANSCRIBE_MODEL,
+      // language: 'fr', // tu peux forcer si majorité FR
+      // prompt: 'Vocabulaire pharma, GxP, Veeva, change control…' // boost possible
+    });
+    const txt = resp?.text || '';
+    return { text: txt, pages: null, contentType: contentTypeGuess || 'video/mp4' };
+  } catch (e) {
+    console.error('[transcribeMedia]', e);
+    return {
+      text: null,
+      pages: null,
+      contentType: contentTypeGuess || 'video/mp4',
+      note: `Transcription failed: ${e?.message || e}`
+    };
+  }
+}
+
 async function parseFileToText(fullPath, contentTypeGuess) {
   const ext = path.extname(fullPath).toLowerCase();
+
+  // --- PDF ---
   if (ext === '.pdf') {
     try {
       return await extractPdfWithPdfjs(fullPath);
@@ -205,15 +270,39 @@ async function parseFileToText(fullPath, contentTypeGuess) {
       return { text: '', pages: null, contentType: 'application/pdf' };
     }
   }
+
+  // --- DOCX ---
   if (ext === '.docx') {
     const buf = await fsp.readFile(fullPath);
     const { value } = await mammoth.extractRawText({ buffer: buf });
     return { text: value || '', pages: null, contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
   }
+
+  // --- Excel / CSV ---
+  if (ext === '.xlsx' || ext === '.xls' || ext === '.csv') {
+    try {
+      return extractExcelLikeToText(fullPath);
+    } catch (e) {
+      console.error('[Excel parse error]', fullPath, e);
+      // fallback brut
+      const raw = await fsp.readFile(fullPath, 'utf8').catch(() => '');
+      return { text: raw, pages: null, contentType: 'text/csv' };
+    }
+  }
+
+  // --- Media (audio/vidéo) → transcription
+  const MEDIA_EXTS = new Set(['.mp4', '.mp3', '.m4a', '.wav', '.webm', '.mpeg', '.mpga', '.ogg']);
+  if (MEDIA_EXTS.has(ext)) {
+    const res = await transcribeMedia(fullPath, contentTypeGuess);
+    return res;
+  }
+
+  // --- Texte brut / Markdown ---
   if (ext === '.txt' || ext === '.md' || contentTypeGuess?.startsWith('text/')) {
     const txt = await fsp.readFile(fullPath, 'utf8');
     return { text: txt, pages: null, contentType: contentTypeGuess || 'text/plain' };
   }
+
   // Autres extensions : on conserve le fichier et les métadonnées, mais pas de chunks
   return { text: null, pages: null, contentType: contentTypeGuess || 'application/octet-stream' };
 }
@@ -301,14 +390,17 @@ async function ingestSingleFile(client, absSrc, subdir = '') {
   await fsp.copyFile(absSrc, destAbs);
 
   const stat = await fsp.stat(destAbs);
-  const { text, pages, contentType } = await parseFileToText(destAbs, null);
+  const { text, pages, contentType, note } = await parseFileToText(destAbs, null);
 
+  // On enregistre toujours le document
+  const docId = await registerDocument(client, destAbs, relPath, baseName, contentType, stat.size, pages);
+
+  // Si pas de texte (binaire, media trop gros, etc.) → pas de chunks
   if (!text || !text.trim()) {
-    const docId = await registerDocument(client, destAbs, relPath, baseName, contentType, stat.size, pages);
+    if (note) console.warn(`[ingest] note for ${baseName}: ${note}`);
     return { docId, chunks: 0, bytes: stat.size };
   }
 
-  const docId = await registerDocument(client, destAbs, relPath, baseName, contentType, stat.size, pages);
   const chunks = chunkText(text, { chunkSize: 1200, overlap: 200 });
   await insertChunksWithEmbeddings(client, docId, chunks);
   return { docId, chunks: chunks.length, bytes: stat.size };
