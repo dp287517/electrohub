@@ -74,7 +74,7 @@ const API = {
         if (e.lengthComputable && onProgress) onProgress(Math.round((100 * e.loaded) / e.total));
       };
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr < 300) {
+        if (xhr.status >= 200 && xhr.status < 300) {
           try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
         } else reject(new Error(`HTTP ${xhr.status}`));
       };
@@ -87,7 +87,7 @@ const API = {
 };
 
 // ----------------- UI helpers -----------------
-function Tabs({ value, onChange, innerRef }) {
+function Tabs({ value, onChange }) {
   const T = (id, label, emoji) => (
     <button
       onClick={() => onChange(id)}
@@ -99,10 +99,7 @@ function Tabs({ value, onChange, innerRef }) {
     </button>
   );
   return (
-    <div
-      ref={innerRef}
-      className="flex flex-wrap gap-2 sticky top-[60px] z-20 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
-    >
+    <div className="flex flex-wrap gap-2 sticky top-[60px] z-20 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2">
       {T("vendors", "Vendors", "📋")}
       {T("calendar", "Calendar", "📅")}
       {T("gantt", "Gantt", "📈")}
@@ -151,26 +148,6 @@ const statusColor = {
   jsa: (s) => (s === "signe" ? "green" : s === "receptionne" ? "blue" : s === "en_attente" ? "yellow" : "yellow"),
   access: (s) => (s === "fait" ? "green" : "red"),
   prequal: (s) => (s === "reçue" || s === "recue" ? "green" : s === "en_cours" ? "blue" : "red"),
-};
-
-// Palette (charts)
-const palette = {
-  emerald: "rgba(16,185,129,0.85)",
-  blue: "rgba(59,130,246,0.85)",
-  amber: "rgba(245,158,11,0.85)",
-  rose: "rgba(244,63,94,0.85)",
-  slateGrid: "rgba(148,163,184,0.25)",
-};
-
-// Chart options
-const baseChartOptions = {
-  responsive: true, maintainAspectRatio: false,
-  plugins: { legend: { position: "bottom", labels: { boxWidth: 12, boxHeight: 12 } }, tooltip: { mode: "index", intersect: false, padding: 10 }, title: { display: false } },
-  layout: { padding: 8 },
-};
-const barOptions = {
-  ...baseChartOptions,
-  scales: { x: { grid: { display: false }, ticks: { color: "#475569" } }, y: { grid: { color: palette.slateGrid }, ticks: { color: "#475569", precision: 0 } } },
 };
 
 // ----------------- Month Calendar (with click) -----------------
@@ -250,7 +227,7 @@ export default function Comp() {
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Filtres globaux (tous onglets)
+  // Filtres globaux
   const [showFilters, setShowFilters] = useState(false);
   const [q, setQ] = useState("");
   const [fOffer, setFOffer] = useState("");
@@ -270,7 +247,7 @@ export default function Comp() {
 
   // Drawer (edit/create)
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editing, setEditing] = useState(null); // vendor object (null => create)
+  const [editing, setEditing] = useState(null);
 
   // Visit modal
   const [visitModal, setVisitModal] = useState({ open: false, date: null, items: [] });
@@ -280,29 +257,6 @@ export default function Comp() {
   const [viewMode, setViewMode] = useState(ViewMode.Month);
   const [stats, setStats] = useState(null);
   const [alerts, setAlerts] = useState([]);
-
-  // sticky offsets + spacer height
-  const tabsRef = useRef(null);
-  const theadRef = useRef(null);
-  const [stickyTop, setStickyTop] = useState(112);
-  const [theadH, setTheadH] = useState(44);
-
-  const recomputeSticky = () => {
-    const tabsH = tabsRef.current?.clientHeight ?? 44;
-    const offsetTabs = 60; // top-[60px] des tabs
-    setStickyTop(offsetTabs + tabsH + 8);
-    const th = theadRef.current?.getBoundingClientRect()?.height ?? 44;
-    setTheadH(Math.max(36, Math.round(th)));
-  };
-
-  useEffect(() => {
-    recomputeSticky();
-    window.addEventListener("resize", recomputeSticky);
-    return () => window.removeEventListener("resize", recomputeSticky);
-  }, []);
-
-  // re-mesure quand tab/filtres changent ou après data load
-  useEffect(() => { recomputeSticky(); }, [tab, showFilters, list.length]);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const jsaOptions = ["en_attente", "transmis", "receptionne", "signe"];
@@ -465,8 +419,11 @@ export default function Comp() {
       ...editing,
       visits: (editing.visits || []).map((x, i) => ({ index: x.index || i + 1, start: x.start || null, end: x.end || x.start || null })),
     };
-    if (editing.id) await API.update(editing.id, payload);
-    else await API.create(payload);
+    const resp = editing.id ? await API.update(editing.id, payload) : await API.create(payload);
+    if (resp?.error) {
+      alert("Save error");
+      return;
+    }
     setDrawerOpen(false); setEditing(null);
     await reloadVendors(); await reloadPlanning(); await reloadAnalytics();
   }
@@ -502,7 +459,7 @@ export default function Comp() {
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>
           <p className="text-gray-500 text-sm">Vendors offers, JSA, prevention plan, access, pre-qualification, visits, SAP WO & attachments</p>
         </div>
-        <Tabs value={tab} onChange={setTab} innerRef={tabsRef} />
+        <Tabs value={tab} onChange={setTab} />
       </header>
 
       {/* FILTRES GLOBAUX */}
@@ -522,6 +479,7 @@ export default function Comp() {
             <div className="flex gap-2">
               <button className="px-3 py-2 rounded border hover:bg-gray-50" onClick={()=>{ setQ(""); reloadVendors(); }}>Reset search</button>
               <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={reloadVendors}>Search</button>
+              <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
             </div>
           </div>
 
@@ -553,87 +511,90 @@ export default function Comp() {
       {/* VENDORS */}
       {tab === "vendors" && (
         <>
-          {/* Barre d’actions dédiée (New vendor) */}
-          <div className="flex items-center justify-end">
-            <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
-          </div>
+          {/* Barre d’actions dédiée (New vendor) si tu veux aussi hors filtres */}
+          {!showFilters && (
+            <div className="flex items-center justify-end">
+              <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>+ New vendor</button>
+            </div>
+          )}
 
-          <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
-            <table className="w-full">
-              <thead ref={theadRef} className="sticky z-10 bg-gray-50/95 backdrop-blur" style={{ top: `${stickyTop}px` }}>
-                <tr className="text-sm font-medium text-gray-700">
-                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</th>
-                  <th className="p-3 text-left">Offer</th>
-                  <th className="p-3 text-left">JSA</th>
-                  <th className="p-3 text-left">Pre-qual</th>
-                  <th className="p-3 text-left">PP</th>
-                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("access_status")}>Access {sortIcon("access_status")}</th>
-                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</th>
-                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</th>
-                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</th>
-                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</th>
-                  <th className="p-3 text-left">Actions</th>
-                </tr>
-              </thead>
+          {/* CONTENEUR SCROLLABLE VERTICAL — thead sticky top:0 ici */}
+          <div className="bg-white rounded-2xl border shadow-sm mt-2">
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="w-full">
+                {/* thead sticky dans ce conteneur */}
+                <thead className="sticky top-0 z-10 bg-gray-50/95 backdrop-blur">
+                  <tr className="text-sm font-medium text-gray-700">
+                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</th>
+                    <th className="p-3 text-left">Offer</th>
+                    <th className="p-3 text-left">JSA</th>
+                    <th className="p-3 text-left">Pre-qual</th>
+                    <th className="p-3 text-left">PP</th>
+                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("access_status")}>Access {sortIcon("access_status")}</th>
+                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</th>
+                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</th>
+                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</th>
+                    <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</th>
+                    <th className="p-3 text-left">Actions</th>
+                  </tr>
+                </thead>
 
-              <tbody className="text-sm">
-                {/* SPACER pour ne pas recouvrir la première ligne par l’en-tête sticky */}
-                <tr style={{ height: theadH }} aria-hidden="true"></tr>
+                <tbody className="text-sm">
+                  {!loading && filtered.length === 0 && (
+                    <tr><td colSpan={11} className="p-4 text-gray-500">No vendors.</td></tr>
+                  )}
+                  {loading && (
+                    <tr><td colSpan={11} className="p-4 text-gray-500">Loading…</td></tr>
+                  )}
 
-                {!loading && filtered.length === 0 && (
-                  <tr><td colSpan={11} className="p-4 text-gray-500">No vendors.</td></tr>
-                )}
-                {loading && (
-                  <tr><td colSpan={11} className="p-4 text-gray-500">Loading…</td></tr>
-                )}
-
-                {filtered.map(v => {
-                  const first = v.visits?.[0];
-                  return (
-                    <tr key={v.id} className="border-t align-top hover:bg-gray-50">
-                      <td className="p-3 min-w-[220px]">
-                        <div className="flex items-center gap-2">
-                          <button className="text-blue-700 font-medium hover:underline" onClick={()=>openEdit(v)} title="Edit">
-                            {v.name}
-                          </button>
-                          {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
-                        </div>
-                      </td>
-                      <td className="p-3"><Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></td>
-                      <td className="p-3"><Badge color={statusColor.jsa(v.jsa_status)}>{v.jsa_status}</Badge></td>
-                      <td className="p-3"><Badge color={statusColor.prequal(v.prequal_status)}>{v.prequal_status}</Badge></td>
-                      <td className="p-3">
-                        {v.pp_applicable ? (
-                          v.pp_link ? (
-                            <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">Applicable (link)</a>
-                          ) : <span className="text-emerald-700">Applicable</span>
-                        ) : <span className="text-gray-500">N/A</span>}
-                      </td>
-                      <td className="p-3"><Badge color={statusColor.access(v.access_status)}>{v.access_status}</Badge></td>
-                      <td className="p-3">{v.visits?.length || 0}</td>
-                      <td className="p-3">{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</td>
-                      <td className="p-3">{v.owner || "—"}</td>
-                      <td className="p-3">
-                        {v.files_count ? (
-                          <button
-                            className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
-                            onClick={()=>openEdit(v)}
-                          >
-                            {v.files_count} file{v.files_count>1?"s":""}
-                          </button>
-                        ) : <span className="text-gray-400 text-xs">0</span>}
-                      </td>
-                      <td className="p-3">
-                        <div className="flex gap-2">
-                          <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
-                          <button className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}>Delete</button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                  {filtered.map(v => {
+                    const first = v.visits?.[0];
+                    return (
+                      <tr key={v.id} className="border-t align-top hover:bg-gray-50">
+                        <td className="p-3 min-w-[220px]">
+                          <div className="flex items-center gap-2">
+                            <button className="text-blue-700 font-medium hover:underline" onClick={()=>openEdit(v)} title="Edit">
+                              {v.name}
+                            </button>
+                            {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
+                          </div>
+                        </td>
+                        <td className="p-3"><Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></td>
+                        <td className="p-3"><Badge color={statusColor.jsa(v.jsa_status)}>{v.jsa_status}</Badge></td>
+                        <td className="p-3"><Badge color={statusColor.prequal(v.prequal_status)}>{v.prequal_status}</Badge></td>
+                        <td className="p-3">
+                          {v.pp_applicable ? (
+                            v.pp_link ? (
+                              <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">Applicable (link)</a>
+                            ) : <span className="text-emerald-700">Applicable</span>
+                          ) : <span className="text-gray-500">N/A</span>}
+                        </td>
+                        <td className="p-3"><Badge color={statusColor.access(v.access_status)}>{v.access_status}</Badge></td>
+                        <td className="p-3">{v.visits?.length || 0}</td>
+                        <td className="p-3">{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</td>
+                        <td className="p-3">{v.owner || "—"}</td>
+                        <td className="p-3">
+                          {v.files_count ? (
+                            <button
+                              className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
+                              onClick={()=>openEdit(v)}
+                            >
+                              {v.files_count} file{v.files_count>1?"s":""}
+                            </button>
+                          ) : <span className="text-gray-400 text-xs">0</span>}
+                        </td>
+                        <td className="p-3">
+                          <div className="flex gap-2">
+                            <button className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600" onClick={()=>openEdit(v)}>Edit</button>
+                            <button className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100" onClick={async()=>{ await API.remove(v.id); await reloadAll(); }}>Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           {/* Drawer d'édition / création */}
@@ -692,17 +653,17 @@ export default function Comp() {
         <div className="grid grid-cols-1 gap-6">
           <Card title="Offers">
             <div className="h-[380px]">
-              <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={baseChartOptions} />
+              <Doughnut data={donutData(stats?.counts?.offer || { en_attente:0, recue:0, po_faite:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:12, boxHeight:12 }}}}} />
             </div>
           </Card>
           <Card title="JSA">
             <div className="h-[380px]">
-              <Doughnut data={donutData(stats?.counts?.jsa || { en_attente:0, transmis:0, receptionne:0, signe:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={baseChartOptions} />
+              <Doughnut data={donutData(stats?.counts?.jsa || { en_attente:0, transmis:0, receptionne:0, signe:0 }, ["rgba(245,158,11,0.85)","rgba(59,130,246,0.85)","rgba(16,185,129,0.85)"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom", labels:{ boxWidth:12, boxHeight:12 }}}}} />
             </div>
           </Card>
           <Card title="Access">
             <div className="h-[380px]">
-              <Bar data={barData(stats?.counts?.access || { a_faire:0, fait:0 }, ["#f43f5e", "#10b981"])} options={barOptions} />
+              <Bar data={barData(stats?.counts?.access || { a_faire:0, fait:0 }, ["#f43f5e", "#10b981"])} options={{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:"bottom"} }}} />
             </div>
           </Card>
         </div>
@@ -801,7 +762,7 @@ function VisitItem({ item, onOpenVendor }) {
 
 function FileCard({ f, onDelete }) {
   const sizeKB = Math.max(1, Math.round(Number(f.size_bytes || 0) / 1024));
-  const url = `/api/comp-ext/files/${f.id}/download`; // backend compat
+  const url = `/api/comp-ext/files/${f.id}/download`;
   return (
     <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
       <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
@@ -996,7 +957,7 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
   );
 }
 
-// ----------------- Charts data builders -----------------
+// ----------------- Charts helpers -----------------
 function donutData(obj, colors) {
   const labels = Object.keys(obj);
   const data = labels.map((k) => obj[k] || 0);
