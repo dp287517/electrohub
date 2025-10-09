@@ -1,294 +1,374 @@
 // src/pages/Ask_veeva.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../lib/api.js";
-import { uploadSmart, pollJob } from "../utils/ask_veeva.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { health, search, ask, uploadSmall, chunkedUpload, pollJob } from "../utils/ask_veeva.js";
 
-export default function AskVeevaPage() {
-  const [health, setHealth] = useState(null);
-  const [files, setFiles] = useState([]);        // FileList -> Array<File>
-  const [busy, setBusy] = useState(false);
-  const [jobs, setJobs] = useState([]);          // [{ id, status, ... }]
-  const [uploadProgress, setUploadProgress] = useState(null); // {part,totalParts,progress}
-
-  const [query, setQuery] = useState("");
-  const [matches, setMatches] = useState([]);
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState(null);
-
-  const inputRef = useRef(null);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const h = await api.askVeeva.health();
-        setHealth(h);
-      } catch (e) {
-        setHealth({ ok: false, error: e.message || String(e) });
-      }
-    })();
-  }, []);
-
-  function onPickClick() {
-    inputRef.current?.click();
-  }
-
-  function onFilesPicked(e) {
-    const list = Array.from(e.target.files || []);
-    setFiles(list);
-  }
-
-  function onDrop(ev) {
-    ev.preventDefault();
-    const list = Array.from(ev.dataTransfer?.files || []);
-    setFiles(list);
-  }
-  function onDragOver(ev) { ev.preventDefault(); }
-
-  async function handleUpload() {
-    if (!files.length) return;
-    setBusy(true);
-    setUploadProgress(null);
-    const createdJobs = [];
-
-    // Envoie un par un (si multiples fichiers unitaires)
-    for (const file of files) {
-      try {
-        const res = await uploadSmart(file, setUploadProgress);
-        // res: {job_id, ok,...}
-        if (res?.job_id) {
-          createdJobs.push({ id: res.job_id });
-          // démarrer polling
-          const stop = pollJob(res.job_id, {
-            onTick: (j) => {
-              setJobs(prev => {
-                const idx = prev.findIndex(x => x.id === j.id);
-                if (idx >= 0) {
-                  const copy = prev.slice();
-                  copy[idx] = j;
-                  return copy;
-                }
-                return [...prev, j];
-              });
-            }
-          });
-          // on pourrait stocker stop() si on veut stopper manuellement
-        }
-      } catch (e) {
-        alert(`Upload échoué pour ${file.name}: ${e.message || e}`);
-      } finally {
-        setUploadProgress(null);
-      }
-    }
-
-    setBusy(false);
-    setFiles([]);
-  }
-
-  async function runSearch() {
-    setMatches([]);
-    if (!query.trim()) return;
-    try {
-      const out = await api.askVeeva.search({ query, k: 8 });
-      setMatches(out.matches || []);
-    } catch (e) {
-      alert(e.message || e);
-    }
-  }
-
-  async function runAsk() {
-    setAnswer(null);
-    if (!question.trim()) return;
-    try {
-      const out = await api.askVeeva.ask({ question, k: 6 });
-      setAnswer(out);
-    } catch (e) {
-      alert(e.message || e);
-    }
-  }
-
-  const canUpload = useMemo(() => files.length > 0 && !busy, [files, busy]);
-
+function TabButton({ active, onClick, children }) {
   return (
-    <div className="max-w-6xl mx-auto py-6">
-      <header className="mb-6">
-        <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva — Lecture & Recherche documentaire</h1>
-        <p className="text-gray-600 mt-1">
-          Glissez-déposez vos fichiers (.zip, .pdf, .docx, .xlsx/.xls, .csv, .txt, .mp4). Les ZIP volumineux utilisent l’upload fractionné.
-        </p>
+    <button
+      onClick={onClick}
+      className={
+        "px-4 py-2 rounded-t-lg text-sm font-medium " +
+        (active
+          ? "bg-white border-x border-t border-gray-200"
+          : "bg-gray-100 text-gray-600 hover:bg-gray-200")
+      }
+    >
+      {children}
+    </button>
+  );
+}
 
-        {health && (
-          <div className={`mt-3 text-sm px-3 py-2 rounded ${health.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-            {health.ok ? (
-              <>
-                OK — embeddings: <code>{health.embeddings}</code>, modèle: <code>{health.model}</code>, dims: {health.dims}
-                {!health.s3Configured && <span className="ml-2 text-amber-700">• S3 non configuré : mode upload fractionné activé si nécessaire</span>}
-              </>
-            ) : (
-              <>Backend indisponible : {health.error}</>
-            )}
-          </div>
-        )}
-      </header>
-
-      {/* UPLOAD */}
-      <section className="grid gap-4 sm:grid-cols-5">
-        <div className="sm:col-span-3">
-          <div
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            className="border-2 border-dashed rounded-xl p-6 bg-white"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="font-medium">Importer des documents</div>
-                <div className="text-sm text-gray-500">
-                  ZIP &gt; 300 Mo : envoi en morceaux (aucune troncature). Vous pouvez aussi envoyer des fichiers unitaires.
-                </div>
-              </div>
-              <button onClick={onPickClick} className="btn btn-primary whitespace-nowrap">
-                Choisir des fichiers
-              </button>
-              <input ref={inputRef} type="file" multiple className="hidden"
-                accept=".zip,.pdf,.docx,.xlsx,.xls,.csv,.txt,.md,.mp4,.mov,.m4v"
-                onChange={onFilesPicked} />
-            </div>
-
-            {files.length > 0 && (
-              <ul className="mt-4 text-sm max-h-40 overflow-auto">
-                {files.map((f, i) => (
-                  <li key={i} className="flex items-center justify-between py-1 border-b last:border-none">
-                    <span className="truncate">{f.name}</span>
-                    <span className="text-gray-500 ml-3">{(f.size / (1024*1024)).toFixed(1)} Mo</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <div className="mt-4 flex items-center gap-3">
-              <button
-                onClick={handleUpload}
-                disabled={!canUpload}
-                className={`btn ${canUpload ? 'btn-primary' : 'btn-disabled'}`}
-              >
-                {busy ? 'Envoi…' : 'Lancer l’upload'}
-              </button>
-
-              {uploadProgress && (
-                <div className="flex-1">
-                  <div className="text-xs text-gray-600 mb-1">
-                    Part {uploadProgress.part}/{uploadProgress.totalParts}
-                  </div>
-                  <div className="w-full bg-gray-200 rounded h-2 overflow-hidden">
-                    <div
-                      className="bg-blue-600 h-2"
-                      style={{ width: `${Math.max(0, Math.min(100, uploadProgress.progress))}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Jobs */}
-          <div className="mt-4 bg-white border rounded-xl p-4">
-            <div className="font-medium mb-2">Ingestions en cours / récentes</div>
-            {jobs.length === 0 ? (
-              <div className="text-sm text-gray-500">Aucun job encore.</div>
-            ) : (
-              <ul className="space-y-2">
-                {jobs.map((j) => (
-                  <li key={j.id} className="text-sm flex items-center justify-between">
-                    <div className="truncate">
-                      <span className="font-mono">{j.id.slice(0, 8)}</span>
-                      <span className="ml-2 text-gray-600">{j.kind}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span
-                        className={`px-2 py-0.5 rounded text-xs ${
-                          j.status === 'done' ? 'bg-green-100 text-green-700' :
-                          j.status === 'error' ? 'bg-red-100 text-red-700' :
-                          'bg-amber-100 text-amber-700'
-                        }`}
-                      >
-                        {j.status}
-                      </span>
-                      <span className="text-xs text-gray-500">
-                        {j.processed_files}/{j.total_files}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-
-        {/* Search & Ask */}
-        <div className="sm:col-span-2">
-          <div className="bg-white border rounded-xl p-4">
-            <div className="font-medium mb-2">Recherche</div>
-            <div className="flex gap-2">
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Rechercher dans vos documents…"
-                className="input flex-1"
-              />
-              <button onClick={runSearch} className="btn btn-secondary">Chercher</button>
-            </div>
-            {matches?.length > 0 && (
-              <div className="mt-3 space-y-3 max-h-64 overflow-auto">
-                {matches.map((m, idx) => (
-                  <div key={idx} className="border rounded p-2">
-                    <div className="text-xs text-gray-500 mb-1">{m.meta?.filename} — score {(m.score||0).toFixed(3)}</div>
-                    <div className="text-sm whitespace-pre-wrap">{m.snippet}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="bg-white border rounded-xl p-4 mt-4">
-            <div className="font-medium mb-2">Poser une question</div>
-            <textarea
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              className="input min-h-[100px]"
-              placeholder="Ex: Quels sont les contrôles périodiques requis pour l’équipement X ?"
-            />
-            <div className="mt-2 flex justify-end">
-              <button onClick={runAsk} className="btn btn-primary">Demander</button>
-            </div>
-
-            {answer && (
-              <div className="mt-3">
-                {answer.text && (
-                  <div className="prose prose-sm max-w-none whitespace-pre-wrap">{answer.text}</div>
-                )}
-                {answer.citations?.length > 0 && (
-                  <div className="mt-2 text-xs text-gray-600">
-                    <div className="font-medium">Citations :</div>
-                    <ul className="list-disc ml-5">
-                      {answer.citations.map((c, i) => (
-                        <li key={i}>
-                          {c.filename} <span className="text-gray-400">({(c.score||0).toFixed(3)})</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-        </div>
-      </section>
+function CitationChips({ citations }) {
+  if (!citations?.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2 mt-2">
+      {citations.map((c, i) => (
+        <span
+          key={i}
+          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200"
+          title={`score: ${c.score?.toFixed?.(3)}`}
+        >
+          {c.filename}
+        </span>
+      ))}
     </div>
   );
 }
 
-/* ——————————————————————————————————————————————————————————————
- *  Styles utilitaires (si tu utilises Tailwind, tu as déjà ces classes ;
- *  sinon, adapte aux styles existants)
- *  .btn, .btn-primary, .btn-secondary, .btn-disabled, .input
- * —————————————————————————————————————————————————————————————— */
+function Message({ role, text, citations }) {
+  const isUser = role === "user";
+  return (
+    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
+      <div
+        className={
+          "max-w-[90%] sm:max-w-[70%] md:max-w-[60%] rounded-2xl px-4 py-3 shadow " +
+          (isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-800 rounded-bl-sm border")
+        }
+      >
+        <div className="whitespace-pre-wrap break-words">{text}</div>
+        {!isUser && <CitationChips citations={citations} />}
+      </div>
+    </div>
+  );
+}
+
+function ChatBox() {
+  const [ready, setReady] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [input, setInput] = useState("");
+  const [k, setK] = useState(6);
+  const listRef = useRef(null);
+
+  const [messages, setMessages] = useState(() => {
+    // état persistant léger (sessionStorage) pour garder le fil si on quitte/retourne
+    try {
+      const raw = sessionStorage.getItem("askVeeva_chat");
+      return raw ? JSON.parse(raw) : [{ role: "assistant", text: "Bonjour 👋 — Posez votre question." }];
+    } catch {
+      return [{ role: "assistant", text: "Bonjour 👋 — Posez votre question." }];
+    }
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
+  }, [messages]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const h = await health();
+        if (alive) setReady(!!h?.ok);
+      } catch {
+        setReady(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    // auto-scroll
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, sending]);
+
+  async function onSend() {
+    const q = input.trim();
+    if (!q || sending) return;
+    setInput("");
+    setMessages((m) => [...m, { role: "user", text: q }]);
+    setSending(true);
+    try {
+      // 1) Récup top-k pour contexte côté serveur (le backend fait déjà la recherche)
+      const resp = await ask(q, k);
+      const text = resp?.text || "Désolé, aucune réponse.";
+      const citations = resp?.citations || [];
+      setMessages((m) => [...m, { role: "assistant", text, citations }]);
+    } catch (e) {
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function quickAsk(s) {
+    setInput(s);
+    // pour UX, on envoie directement
+    setTimeout(onSend, 20);
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Bandeau haut (optionnel) */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm text-gray-600">
+          {ready ? "Connecté" : "Hors-ligne"} •
+          <span className="ml-2">Top-K</span>
+          <select
+            className="ml-1 border rounded px-1 py-0.5 text-sm"
+            value={k}
+            onChange={(e) => setK(Number(e.target.value))}
+          >
+            {[3, 6, 8, 10].map((n) => (
+              <option key={n} value={n}>{n}</option>
+            ))}
+          </select>
+        </div>
+        <div className="hidden sm:flex gap-2">
+          {["Montre-moi les SOP PPE", "Quelles sont les étapes de validation ?", "Où est la dernière version ?"].map(
+            (s, i) => (
+              <button
+                key={i}
+                onClick={() => quickAsk(s)}
+                className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
+              >
+                {s}
+              </button>
+            )
+          )}
+        </div>
+      </div>
+
+      {/* Zone messages */}
+      <div
+        ref={listRef}
+        className="flex-1 overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
+      >
+        {messages.map((m, i) => (
+          <Message key={i} role={m.role} text={m.text} citations={m.citations} />
+        ))}
+        {sending && (
+          <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>
+        )}
+      </div>
+
+      {/* Saisie */}
+      <div className="mt-3 flex items-end gap-2">
+        <textarea
+          rows={2}
+          className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="Posez votre question…"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          }}
+          disabled={!ready || sending}
+        />
+        <button
+          onClick={onSend}
+          disabled={!ready || sending || !input.trim()}
+          className="h-10 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+        >
+          Envoyer
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ImportBox() {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [job, setJob] = useState(null);
+  const [log, setLog] = useState([]);
+
+  const canUpload = useMemo(() => !!file && !busy, [file, busy]);
+
+  function appendLog(s) {
+    setLog((l) => [...l, `${new Date().toLocaleTimeString()} — ${s}`]);
+  }
+
+  async function onUpload() {
+    if (!file) return;
+    setBusy(true);
+    setProgress(null);
+    setJob(null);
+    setLog([]);
+
+    try {
+      // stratégie : si ZIP > 280 Mo → chunked; sinon upload direct
+      const isZip = /\.zip$/i.test(file.name);
+      if (isZip && file.size > 280 * 1024 * 1024) {
+        appendLog("Gros ZIP détecté : envoi fractionné…");
+        const ret = await chunkedUpload(file, {
+          onProgress: ({ part, totalParts, uploadedBytes, totalBytes }) => {
+            setProgress(Math.round((uploadedBytes / totalBytes) * 100));
+          },
+        });
+        if (!ret?.job_id) throw new Error("Chunked terminé mais job_id vide");
+        appendLog(`Job créé : ${ret.job_id}`);
+        await followJob(ret.job_id);
+      } else {
+        appendLog("Envoi direct…");
+        const ret = await uploadSmall(file);
+        if (!ret?.job_id) throw new Error("Upload OK mais job_id vide");
+        appendLog(`Job créé : ${ret.job_id}`);
+        await followJob(ret.job_id);
+      }
+    } catch (e) {
+      appendLog(`ERREUR: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }
+
+  async function followJob(jobId) {
+    setJob({ id: jobId, status: "queued" });
+    const p = pollJob(jobId, {
+      onTick: (j) => setJob(j),
+    });
+    const done = await p.promise;
+    if (done?.status === "done") {
+      appendLog("✅ Ingestion terminée.");
+    } else if (done?.status === "error") {
+      appendLog(`❌ Ingestion en erreur: ${done?.error || "inconnue"}`);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Dropzone + input */}
+      <div
+        className="border-2 border-dashed rounded-xl p-6 text-center bg-white"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          const f = e.dataTransfer.files?.[0];
+          if (f) setFile(f);
+        }}
+      >
+        <div className="text-lg font-medium">Importer des documents</div>
+        <div className="text-sm text-gray-500 mt-1">
+          Formats pris en charge : ZIP, PDF, DOCX, XLSX/XLS, CSV, TXT, MP4.
+        </div>
+        <div className="mt-4">
+          <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 cursor-pointer">
+            <input
+              type="file"
+              className="hidden"
+              onChange={(e) => setFile(e.target.files?.[0] || null)}
+            />
+            Choisir un fichier…
+          </label>
+        </div>
+        {file && (
+          <div className="mt-3 text-sm text-gray-700">
+            Fichier : <span className="font-medium">{file.name}</span>{" "}
+            <span className="text-gray-500">({(file.size / (1024 * 1024)).toFixed(1)} Mo)</span>
+          </div>
+        )}
+        <div className="mt-4">
+          <button
+            onClick={onUpload}
+            disabled={!canUpload}
+            className="px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+          >
+            Importer
+          </button>
+        </div>
+        {progress !== null && (
+          <div className="mt-4">
+            <div className="w-full h-2 bg-gray-200 rounded">
+              <div
+                className="h-2 bg-blue-600 rounded"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <div className="text-xs text-gray-600 mt-1">{progress}%</div>
+          </div>
+        )}
+      </div>
+
+      {/* Job status */}
+      {job && (
+        <div className="p-4 border rounded-lg bg-white">
+          <div className="text-sm text-gray-600">Job</div>
+          <div className="font-mono text-xs break-all">{job.id}</div>
+          <div className="mt-1 text-sm">
+            Statut :{" "}
+            <span
+              className={
+                job.status === "done"
+                  ? "text-green-700"
+                  : job.status === "error"
+                  ? "text-red-700"
+                  : "text-gray-700"
+              }
+            >
+              {job.status}
+            </span>
+          </div>
+          <div className="text-sm text-gray-600">
+            Fichiers : {job.processed_files}/{job.total_files}
+          </div>
+          {job.error && <div className="text-sm text-red-700 mt-1">{job.error}</div>}
+        </div>
+      )}
+
+      {/* Logs */}
+      {!!log.length && (
+        <div className="p-3 border rounded-lg bg-gray-50 text-xs font-mono space-y-1 max-h-48 overflow-auto">
+          {log.map((l, i) => (
+            <div key={i}>{l}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function AskVeevaPage() {
+  const [tab, setTab] = useState("chat"); // 'chat' | 'import'
+
+  return (
+    <section className="max-w-6xl mx-auto">
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva</h1>
+      </div>
+
+      {/* onglets */}
+      <div className="flex gap-2">
+        <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>
+          Recherche IA
+        </TabButton>
+        <TabButton active={tab === "import"} onClick={() => setTab("import")}>
+          Import
+        </TabButton>
+      </div>
+
+      <div className="border border-t-0 rounded-b-lg rounded-tr-lg bg-white p-4">
+        {tab === "chat" ? <ChatBox /> : <ImportBox />}
+      </div>
+    </section>
+  );
+}
