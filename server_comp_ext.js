@@ -1,91 +1,120 @@
-// server_comp_ext.js (ESM)
-// API "Prestataires externes" — Postgres/Neon + Upload multi-fichiers (multer)
-// - Création auto des tables (vendors, visits, files) + migrations douces
-// - CRUD, calendar (dates ISO + couleurs/ready), stats, alerts
-// - Uploads multiples par vendor + listing + download + delete
-//
-// ENV :
-//   DATABASE_URL ou NEON_DATABASE_URL (sslmode=require sur Neon recommandé)
-//   COMP_EXT_PORT=3014
-//   CORS_ORIGIN=http://localhost:3000 (ou ton domaine)
-//   COMP_EXT_UPLOAD_DIR=./uploads/comp-ext
-//
-// Lancer : node server_comp_ext.js
+/* server_comp_ext.js (ESM)
+ * Backend "Prestataires externes" (comp-ext)
+ *
+ * ENV:
+ *  - COMP_EXT_PORT (default 3014)
+ *  - DATABASE_URL (PostgreSQL connection string)
+ *  - FILES_DIR (optional, default ./uploads/comp_ext)
+ *  - OPENAI_API_KEY (optional, pour /api/comp-ext/ask)
+ */
 
-import express from "express";
-import helmet from "helmet";
-import cookieParser from "cookie-parser";
-import dotenv from "dotenv";
-import { Pool } from "pg";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
-import fsp from "fs/promises";
-import crypto from "crypto";
-import mime from "mime-types";
-import { fileURLToPath } from "url";
+import fs from 'fs';
+import path from 'path';
+import express from 'express';
+import cors from 'cors';
+import multer from 'multer';
+import pg from 'pg';
+import { fileURLToPath } from 'url';
 
-dotenv.config();
-
-// ---------- DB ----------
-const DATABASE_URL = process.env.DATABASE_URL || process.env.NEON_DATABASE_URL;
-if (!DATABASE_URL) {
-  console.error("[comp-ext] DATABASE_URL/NEON_DATABASE_URL manquant(e).");
-  process.exit(1);
+let OpenAI = null;
+try {
+  ({ default: OpenAI } = await import('openai'));
+} catch (_) {
+  // openai non installé => fallback côté /ask
 }
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
 
-// ---------- Helpers ----------
+const { Pool } = pg;
+
+// ---------- ESM dirname ----------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const UPLOAD_BASE = path.resolve(
-  process.env.COMP_EXT_UPLOAD_DIR || path.join(__dirname, "uploads", "comp-ext")
-);
 
-const toISODate = (v) => (v ? new Date(v).toISOString().slice(0, 10) : null); // YYYY-MM-DD
-const nint = (x, d = 0) => (Number.isFinite(Number(x)) ? Number(x) : d);
-function sanitizeFilename(name) {
-  return (name || "").replace(/[/\\?%*:|"<>]/g, "_").replace(/\s+/g, "_").slice(0, 140);
+// ---------- Config ----------
+const PORT = Number(process.env.COMP_EXT_PORT || 3014);
+const DATABASE_URL = process.env.DATABASE_URL || 'postgres://localhost:5432/comp_ext';
+const FILES_DIR = process.env.FILES_DIR || path.join(__dirname, 'uploads', 'comp_ext');
+fs.mkdirSync(FILES_DIR, { recursive: true });
+
+// DB pool
+const pool = new Pool({ connectionString: DATABASE_URL });
+
+// Express app
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Multer storage
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, FILES_DIR),
+  filename: (_req, file, cb) => {
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const safe = (file.originalname || 'file').replace(/[^\w.\-]+/g, '_');
+    cb(null, `${unique}-${safe}`);
+  },
+});
+const upload = multer({ storage });
+
+// ---------- Utils ----------
+function toISODate(d) {
+  if (!d) return null;
+  const x = new Date(d);
+  const y = new Date(Date.UTC(x.getFullYear(), x.getMonth(), x.getDate()));
+  return y.toISOString().slice(0, 10);
 }
-async function ensureDir(dir) {
-  await fsp.mkdir(dir, { recursive: true });
+function daysBetween(a, b) {
+  const MS = 24 * 3600 * 1000;
+  const d = Math.floor((new Date(a).setHours(0, 0, 0, 0) - new Date(b).setHours(0, 0, 0, 0)) / MS);
+  return d;
 }
-function isValidISODate(s) {
-  if (!s) return false;
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(new Date(s).getTime());
+function normRecue(s) {
+  if (!s) return s;
+  return s === 'recue' ? 'reçue' : s;
 }
 
-// ---------- Schema & migrations douces ----------
+// ---------- Schema & migrations ----------
 async function ensureSchema() {
   const c = await pool.connect();
   try {
-    await c.query("BEGIN");
+    await c.query('BEGIN');
 
-    // Table vendors
     await c.query(`
       CREATE TABLE IF NOT EXISTS comp_ext_vendors (
         id                   BIGSERIAL PRIMARY KEY,
         name                 TEXT NOT NULL,
         offer_status         TEXT NOT NULL DEFAULT 'en_attente' CHECK (offer_status IN ('en_attente','reçue','recue','po_faite')),
-        jsa_status           TEXT NOT NULL DEFAULT 'en_attente',
+        msra_status          TEXT,
+        jsa_status           TEXT,  -- legacy/compat
+        prequal_status       TEXT NOT NULL DEFAULT 'non_fait' CHECK (prequal_status IN ('non_fait','en_cours','reçue','recue')),
         pp_applicable        BOOLEAN NOT NULL DEFAULT FALSE,
         pp_link              TEXT,
-        access_status        TEXT NOT NULL DEFAULT 'a_faire' CHECK (access_status IN ('a_faire','fait')),
-        prequal_status       TEXT NOT NULL DEFAULT 'non_fait',
         work_permit_required BOOLEAN NOT NULL DEFAULT FALSE,
         work_permit_link     TEXT,
-        visits_slots         INT NOT NULL DEFAULT 1,
+        access_status        TEXT NOT NULL DEFAULT 'a_faire' CHECK (access_status IN ('a_faire','fait')),
         sap_wo               TEXT,
         owner                TEXT,
+        visits_slots         INT NOT NULL DEFAULT 1,
         created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
 
-    // Harmoniser la contrainte JSA (ajout 'en_attente')
+    // Migration JSA -> MSRA
+    await c.query(`
+      UPDATE comp_ext_vendors
+         SET msra_status = COALESCE(msra_status, jsa_status)
+       WHERE (msra_status IS NULL) AND (jsa_status IS NOT NULL);
+    `);
+    await c.query(`
+      UPDATE comp_ext_vendors
+         SET msra_status = CASE
+           WHEN msra_status IN ('en_attente','transmis','receptionne','signe') THEN msra_status
+           WHEN msra_status IS NULL THEN 'en_attente'
+           ELSE 'en_attente'
+         END;
+    `);
+
+    // Drop contraintes jsa_status
     await c.query(`
       DO $$
       DECLARE r RECORD;
@@ -101,41 +130,30 @@ async function ensureSchema() {
         END LOOP;
       END$$;
     `);
-    await c.query(`
-      ALTER TABLE comp_ext_vendors
-      ADD CONSTRAINT comp_ext_vendors_jsa_check
-      CHECK (jsa_status IN ('en_attente','transmis','receptionne','signe'));
-    `);
 
-    // Ajouter colonnes manquantes (si anciennes bases)
-    await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS prequal_status TEXT NOT NULL DEFAULT 'non_fait';`);
-    await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS work_permit_required BOOLEAN NOT NULL DEFAULT FALSE;`);
-    await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS work_permit_link TEXT;`);
-    await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS visits_slots INT NOT NULL DEFAULT 1;`);
-
-    // Normaliser les valeurs de prequal_status
-    await c.query(`
-      UPDATE comp_ext_vendors
-      SET prequal_status = 'recue'
-      WHERE prequal_status = 'reçue';
-    `);
+    // Replace contraintes msra_status
     await c.query(`
       DO $$
+      DECLARE r RECORD;
       BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name='comp_ext_vendors' AND column_name='prequal_status'
-        ) THEN
-          ALTER TABLE comp_ext_vendors
-            ADD CONSTRAINT comp_ext_vendors_prequal_check
-            CHECK (prequal_status IN ('non_fait','en_cours','recue','reçue'));
-        END IF;
-      EXCEPTION WHEN duplicate_object THEN
-        -- contrainte déjà créée : ignorer
+        FOR r IN
+          SELECT conname
+          FROM pg_constraint
+          WHERE conrelid = 'comp_ext_vendors'::regclass
+            AND contype = 'c'
+            AND pg_get_constraintdef(oid) LIKE '%msra_status%'
+        LOOP
+          EXECUTE 'ALTER TABLE comp_ext_vendors DROP CONSTRAINT ' || quote_ident(r.conname);
+        END LOOP;
       END$$;
     `);
+    await c.query(`ALTER TABLE comp_ext_vendors ALTER COLUMN msra_status SET NOT NULL;`);
+    await c.query(`
+      ALTER TABLE comp_ext_vendors
+      ADD CONSTRAINT comp_ext_vendors_msra_check CHECK (msra_status IN ('en_attente','transmis','receptionne','signe'));
+    `);
 
-    // Table visits
+    // Visits
     await c.query(`
       CREATE TABLE IF NOT EXISTS comp_ext_visits (
         id         BIGSERIAL PRIMARY KEY,
@@ -149,7 +167,7 @@ async function ensureSchema() {
     await c.query(`CREATE INDEX IF NOT EXISTS idx_comp_ext_visits_vendor_id ON comp_ext_visits(vendor_id);`);
     await c.query(`CREATE INDEX IF NOT EXISTS idx_comp_ext_visits_dates ON comp_ext_visits(start_date, end_date);`);
 
-    // Table files
+    // Files
     await c.query(`
       CREATE TABLE IF NOT EXISTS comp_ext_files (
         id             BIGSERIAL PRIMARY KEY,
@@ -165,84 +183,48 @@ async function ensureSchema() {
     `);
     await c.query(`CREATE INDEX IF NOT EXISTS idx_comp_ext_files_vendor ON comp_ext_files(vendor_id);`);
 
-    await c.query("COMMIT");
-    console.log("[comp-ext] Schéma OK (migrations appliquées)");
+    await c.query('COMMIT');
+    console.log('[comp-ext] Schema ensured (MSRA + prequal).');
   } catch (e) {
-    await c.query("ROLLBACK");
-    console.error("[comp-ext] ensureSchema error", e);
+    await c.query('ROLLBACK');
+    console.error('[comp-ext] ensureSchema error', e);
     throw e;
   } finally {
     c.release();
   }
 }
 
-// ---------- App ----------
-const app = express();
-app.use(helmet());
-app.use(express.json({ limit: "10mb" }));
-app.use(cookieParser());
+// ---------- Health ----------
+app.get('/api/comp-ext/health', (_req, res) => res.json({ ok: true }));
 
-// CORS
-app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", process.env.CORS_ORIGIN || "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Site");
-  if (req.method === "OPTIONS") return res.end();
-  next();
-});
-
-// Health
-app.get("/api/comp-ext/health", (_req, res) => res.json({ ok: true }));
-
-// ---------- Multer ----------
-await ensureDir(UPLOAD_BASE);
-const storage = multer.diskStorage({
-  destination: async (req, _file, cb) => {
-    try {
-      const dir = path.join(UPLOAD_BASE, String(req.params.id || "misc"));
-      await ensureDir(dir);
-      cb(null, dir);
-    } catch (e) {
-      cb(e, UPLOAD_BASE);
-    }
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || `.${mime.extension(file.mimetype) || "bin"}`;
-    const base = sanitizeFilename(
-      path.basename(file.originalname, path.extname(file.originalname))
-    );
-    cb(null, `${Date.now()}_${crypto.randomBytes(6).toString("hex")}_${base}${ext}`);
-  },
-});
-const upload = multer({ storage });
-
-// ---------- Vendors ----------
-app.get("/api/comp-ext/vendors", async (req, res) => {
-  const q = (req.query.q || "").trim();
+// ---------- Vendors (list) ----------
+app.get('/api/comp-ext/vendors', async (req, res) => {
   try {
-    const params = [];
-    let where = "";
-    if (q) {
-      params.push(`%${q.toLowerCase()}%`);
-      where = `WHERE LOWER(name) LIKE $${params.length} OR LOWER(COALESCE(sap_wo,'')) LIKE $${params.length}`;
-    }
-
-    const rows = (
+    const { q } = req.query;
+    const where = q ? `WHERE v.name ILIKE '%' || $1 || '%' OR v.sap_wo ILIKE '%' || $1 || '%'` : '';
+    const params = q ? [q] : [];
+    const vendors = (
       await pool.query(
-        `SELECT id, name, offer_status, jsa_status, pp_applicable, pp_link, access_status,
-                prequal_status, work_permit_required, work_permit_link, visits_slots,
-                sap_wo, owner, created_at, updated_at
-         FROM comp_ext_vendors ${where}
-         ORDER BY id DESC`,
+        `SELECT v.id, v.name, v.offer_status, v.msra_status, v.jsa_status,
+                v.prequal_status, v.pp_applicable, v.pp_link,
+                v.work_permit_required, v.work_permit_link,
+                v.access_status, v.sap_wo, v.owner, v.visits_slots,
+                v.created_at, v.updated_at,
+                COALESCE(f.cnt, 0) AS files_count
+         FROM comp_ext_vendors v
+         LEFT JOIN (
+           SELECT vendor_id, COUNT(*)::INT AS cnt FROM comp_ext_files GROUP BY vendor_id
+         ) f ON f.vendor_id = v.id
+         ${where}
+         ORDER BY v.id DESC`,
         params
       )
     ).rows;
 
-    const ids = rows.map((r) => r.id);
-    let visitsBy = {},
-      filesCountBy = {};
+    const ids = vendors.map((v) => v.id);
+    let visitsByVendor = {};
     if (ids.length) {
-      const vist = (
+      const vrows = (
         await pool.query(
           `SELECT vendor_id, vindex, start_date, end_date
            FROM comp_ext_visits
@@ -251,284 +233,442 @@ app.get("/api/comp-ext/vendors", async (req, res) => {
           [ids]
         )
       ).rows;
-      visitsBy = vist.reduce((acc, r) => {
-        (acc[r.vendor_id] ||= []).push({
+      for (const r of vrows) {
+        (visitsByVendor[r.vendor_id] ||= []).push({
           index: r.vindex,
           start: toISODate(r.start_date),
           end: toISODate(r.end_date),
         });
-        return acc;
-      }, {});
-      const fct = (
-        await pool.query(
-          `SELECT vendor_id, COUNT(*) AS n
-           FROM comp_ext_files
-           WHERE vendor_id = ANY($1::bigint[])
-           GROUP BY vendor_id`,
-          [ids]
-        )
-      ).rows;
-      filesCountBy = fct.reduce((acc, r) => ((acc[r.vendor_id] = Number(r.n || 0)), acc), {});
+      }
     }
 
-    res.json({
-      items: rows.map((r) => ({
-        ...r,
-        visits: visitsBy[r.id] || [],
-        files_count: filesCountBy[r.id] || 0,
-      })),
-    });
+    const items = vendors.map((v) => ({
+      ...v,
+      msra_status: v.msra_status || v.jsa_status || 'en_attente',
+      prequal_status: normRecue(v.prequal_status),
+      visits: visitsByVendor[v.id] || [],
+    }));
+
+    res.json({ items });
   } catch (e) {
-    console.error("[comp-ext] vendors list", e);
-    res.status(500).json({ error: "server_error" });
+    console.error('[comp-ext] vendors list', e);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
-// Get single vendor (pour ouverture modale depuis calendrier/Gantt)
-app.get("/api/comp-ext/vendors/:id", async (req, res) => {
-  const id = Number(req.params.id);
+// ---------- Vendor (get one) ----------
+app.get('/api/comp-ext/vendors/:id', async (req, res) => {
   try {
+    const id = Number(req.params.id);
     const v = (
       await pool.query(
-        `SELECT id, name, offer_status, jsa_status, pp_applicable, pp_link, access_status,
-                prequal_status, work_permit_required, work_permit_link, visits_slots,
-                sap_wo, owner, created_at, updated_at
+        `SELECT id, name, offer_status, msra_status, jsa_status,
+                prequal_status, pp_applicable, pp_link,
+                work_permit_required, work_permit_link,
+                access_status, sap_wo, owner, visits_slots, created_at, updated_at
          FROM comp_ext_vendors WHERE id=$1`,
         [id]
       )
     ).rows[0];
-    if (!v) return res.status(404).json({ error: "not_found" });
+    if (!v) return res.status(404).json({ error: 'not_found' });
 
     const visits = (
       await pool.query(
-        `SELECT vindex, start_date, end_date FROM comp_ext_visits WHERE vendor_id=$1 ORDER BY vindex`,
+        `SELECT vindex, start_date, end_date
+           FROM comp_ext_visits
+          WHERE vendor_id=$1
+          ORDER BY vindex`,
+        [id]
+      )
+    ).rows.map((r) => ({
+      index: r.vindex,
+      start: toISODate(r.start_date),
+      end: toISODate(r.end_date),
+    }));
+
+    const files = (
+      await pool.query(
+        `SELECT id, category, original_name, stored_name, mime, size_bytes, created_at
+           FROM comp_ext_files
+          WHERE vendor_id=$1
+          ORDER BY id DESC`,
         [id]
       )
     ).rows;
 
-    const fcount = (
-      await pool.query(`SELECT COUNT(*) AS n FROM comp_ext_files WHERE vendor_id=$1`, [id])
-    ).rows[0];
-
     res.json({
       ...v,
-      visits: visits.map((r) => ({
-        index: r.vindex,
-        start: toISODate(r.start_date),
-        end: toISODate(r.end_date),
-      })),
-      files_count: Number(fcount.n || 0),
+      msra_status: v.msra_status || v.jsa_status || 'en_attente',
+      prequal_status: normRecue(v.prequal_status),
+      visits,
+      files: files.map(f => ({ ...f, url: `/api/comp-ext/files/${f.id}/download` })),
+      files_count: files.length,
     });
   } catch (e) {
-    console.error("[comp-ext] get vendor", e);
-    res.status(500).json({ error: "server_error" });
+    console.error('[comp-ext] vendor get', e);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
-app.post("/api/comp-ext/vendors", async (req, res) => {
-  const {
-    name = "",
-    offer_status = "en_attente",
-    jsa_status = "en_attente",
-    pp_applicable = false,
-    pp_link = "",
-    access_status = "a_faire",
-    prequal_status = "non_fait",
-    work_permit_required = false,
-    work_permit_link = "",
-    visits_slots = 1,
-    sap_wo = "",
-    visits = [],
-    owner = "",
-  } = req.body || {};
-
+// ---------- Vendor (create) ----------
+app.post('/api/comp-ext/vendors', async (req, res) => {
   const c = await pool.connect();
   try {
-    await c.query("BEGIN");
+    const body = req.body || {};
+    await c.query('BEGIN');
+
+    const msra = body.msra_status || body.jsa_status || 'en_attente';
+    const preq = normRecue(body.prequal_status || 'non_fait');
+
     const ins = await c.query(
       `INSERT INTO comp_ext_vendors
-        (name, offer_status, jsa_status, pp_applicable, pp_link, access_status,
-         prequal_status, work_permit_required, work_permit_link, visits_slots,
-         sap_wo, owner)
+        (name, offer_status, msra_status, prequal_status,
+         pp_applicable, pp_link, work_permit_required, work_permit_link,
+         access_status, sap_wo, owner, visits_slots)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-       RETURNING id, name, offer_status, jsa_status, pp_applicable, pp_link, access_status,
-                 prequal_status, work_permit_required, work_permit_link, visits_slots,
-                 sap_wo, owner, created_at, updated_at`,
+       RETURNING id, name, offer_status, msra_status, prequal_status,
+                 pp_applicable, pp_link, work_permit_required, work_permit_link,
+                 access_status, sap_wo, owner, visits_slots, created_at, updated_at`,
       [
-        String(name).trim(),
-        offer_status,
-        jsa_status,
-        !!pp_applicable,
-        pp_link || null,
-        access_status,
-        prequal_status,
-        !!work_permit_required,
-        work_permit_link || null,
-        Math.max(1, Number(visits_slots) || 1),
-        sap_wo || null,
-        owner || null,
+        String(body.name || '').trim(),
+        normRecue(body.offer_status || 'en_attente'),
+        msra,
+        preq,
+        !!body.pp_applicable,
+        body.pp_link || null,
+        !!body.work_permit_required,
+        body.work_permit_link || null,
+        body.access_status || 'a_faire',
+        body.sap_wo || null,
+        body.owner || null,
+        Math.max(1, Number(body.visits_slots || (Array.isArray(body.visits) ? body.visits.length || 1 : 1))),
       ]
     );
-    const v = ins.rows[0];
+    const vendor = ins.rows[0];
+    const vid = vendor.id;
 
-    if (Array.isArray(visits)) {
-      let idx = 1;
-      for (const x of visits) {
-        const s = toISODate(x?.start);
-        if (!isValidISODate(s)) continue;
-        const e = toISODate(x?.end) || s;
+    const visits = Array.isArray(body.visits) ? body.visits : [];
+    let idx = 1;
+    for (const v of visits) {
+      const s = v && v.start ? toISODate(v.start) : null;
+      const e = v && v.end ? toISODate(v.end) : s;
+      if (s && e) {
         await c.query(
-          `INSERT INTO comp_ext_visits (vendor_id, vindex, start_date, end_date) VALUES ($1,$2,$3,$4)`,
-          [v.id, nint(x.index, idx++), s, e]
+          `INSERT INTO comp_ext_visits (vendor_id, vindex, start_date, end_date)
+           VALUES ($1,$2,$3,$4)`,
+          [vid, idx, s, e]
         );
+        idx++;
       }
     }
 
-    await c.query("COMMIT");
-    const vrows = (
-      await pool.query(
-        `SELECT vindex, start_date, end_date FROM comp_ext_visits WHERE vendor_id=$1 ORDER BY vindex`,
-        [v.id]
-      )
-    ).rows;
+    await c.query('COMMIT');
     res.status(201).json({
-      ...v,
-      visits: vrows.map((r) => ({
-        index: r.vindex,
-        start: toISODate(r.start_date),
-        end: toISODate(r.end_date),
-      })),
+      ...vendor,
+      visits: visits.map((v, i) => ({ index: i + 1, start: v.start || null, end: v.end || v.start || null })),
       files_count: 0,
     });
   } catch (e) {
-    await c.query("ROLLBACK");
-    console.error("[comp-ext] create vendor", e);
-    res.status(500).json({ error: "server_error" });
+    await c.query('ROLLBACK');
+    console.error('[comp-ext] vendor create', e);
+    res.status(400).json({ error: 'bad_request' });
   } finally {
     c.release();
   }
 });
 
-app.put("/api/comp-ext/vendors/:id", async (req, res) => {
-  const id = Number(req.params.id);
-  const {
-    name,
-    offer_status,
-    jsa_status,
-    pp_applicable,
-    pp_link,
-    access_status,
-    prequal_status,
-    work_permit_required,
-    work_permit_link,
-    visits_slots,
-    sap_wo,
-    visits,
-    owner,
-  } = req.body || {};
-
+// ---------- Vendor (update) ----------
+app.put('/api/comp-ext/vendors/:id', async (req, res) => {
   const c = await pool.connect();
   try {
-    await c.query("BEGIN");
-    const ex = await c.query(`SELECT id FROM comp_ext_vendors WHERE id=$1`, [id]);
-    if (!ex.rowCount) {
-      await c.query("ROLLBACK");
-      return res.status(404).json({ error: "not_found" });
+    const id = Number(req.params.id);
+    const body = req.body || {};
+    await c.query('BEGIN');
+
+    const sets = [];
+    const vals = [];
+    const push = (col, val) => { vals.push(val); sets.push(`${col}=$${vals.length}`); };
+
+    if (typeof body.name !== 'undefined') push('name', String(body.name).trim());
+    if (typeof body.offer_status !== 'undefined') push('offer_status', normRecue(body.offer_status));
+
+    if (typeof body.msra_status !== 'undefined') push('msra_status', body.msra_status);
+    else if (typeof body.jsa_status !== 'undefined') push('msra_status', body.jsa_status);
+
+    if (typeof body.prequal_status !== 'undefined') push('prequal_status', normRecue(body.prequal_status));
+
+    if (typeof body.pp_applicable !== 'undefined') push('pp_applicable', !!body.pp_applicable);
+    if (typeof body.pp_link !== 'undefined') push('pp_link', body.pp_link || null);
+    if (typeof body.work_permit_required !== 'undefined') push('work_permit_required', !!body.work_permit_required);
+    if (typeof body.work_permit_link !== 'undefined') push('work_permit_link', body.work_permit_link || null);
+    if (typeof body.access_status !== 'undefined') push('access_status', body.access_status);
+    if (typeof body.sap_wo !== 'undefined') push('sap_wo', body.sap_wo || null);
+    if (typeof body.owner !== 'undefined') push('owner', body.owner || null);
+    if (typeof body.visits_slots !== 'undefined') push('visits_slots', Math.max(1, Number(body.visits_slots) || 1));
+    if (sets.length) push('updated_at', new Date());
+
+    if (sets.length) {
+      await c.query(`UPDATE comp_ext_vendors SET ${sets.join(', ')} WHERE id=$${vals.length} RETURNING id`, [...vals, id]);
     }
 
-    const set = [], params = [];
-    const push = (col, val) => { params.push(val); set.push(`${col}=$${params.length}`); };
-    if (typeof name !== "undefined") push("name", String(name).trim());
-    if (typeof offer_status !== "undefined") push("offer_status", offer_status);
-    if (typeof jsa_status !== "undefined") push("jsa_status", jsa_status);
-    if (typeof pp_applicable !== "undefined") push("pp_applicable", !!pp_applicable);
-    if (typeof pp_link !== "undefined") push("pp_link", pp_link || null);
-    if (typeof access_status !== "undefined") push("access_status", access_status);
-    if (typeof prequal_status !== "undefined") push("prequal_status", prequal_status);
-    if (typeof work_permit_required !== "undefined") push("work_permit_required", !!work_permit_required);
-    if (typeof work_permit_link !== "undefined") push("work_permit_link", work_permit_link || null);
-    if (typeof visits_slots !== "undefined") push("visits_slots", Math.max(1, Number(visits_slots) || 1));
-    if (typeof sap_wo !== "undefined") push("sap_wo", sap_wo || null);
-    if (typeof owner !== "undefined") push("owner", owner || null);
-    push("updated_at", new Date());
-
-    if (set.length) {
-      await c.query(`UPDATE comp_ext_vendors SET ${set.join(", ")} WHERE id=$${params.length + 1}`, [...params, id]);
-    }
-
-    if (Array.isArray(visits)) {
+    if (Array.isArray(body.visits)) {
       await c.query(`DELETE FROM comp_ext_visits WHERE vendor_id=$1`, [id]);
       let idx = 1;
-      for (const x of visits) {
-        const s = toISODate(x?.start);
-        if (!isValidISODate(s)) continue;
-        const e = toISODate(x?.end) || s;
-        await c.query(
-          `INSERT INTO comp_ext_visits (vendor_id, vindex, start_date, end_date) VALUES ($1,$2,$3,$4)`,
-          [id, nint(x.index, idx++), s, e]
-        );
+      for (const v of body.visits) {
+        const s = v && v.start ? toISODate(v.start) : null;
+        const e = v && v.end ? toISODate(v.end) : s;
+        if (s && e) {
+          await c.query(
+            `INSERT INTO comp_ext_visits (vendor_id, vindex, start_date, end_date)
+             VALUES ($1,$2,$3,$4)`,
+            [id, idx, s, e]
+          );
+          idx++;
+        }
       }
     }
 
-    await c.query("COMMIT");
+    await c.query('COMMIT');
 
-    const vrow = (
+    const row = (
       await pool.query(
-        `SELECT id, name, offer_status, jsa_status, pp_applicable, pp_link, access_status,
-                prequal_status, work_permit_required, work_permit_link, visits_slots,
-                sap_wo, owner, created_at, updated_at
+        `SELECT id, name, offer_status, msra_status, jsa_status,
+                prequal_status, pp_applicable, pp_link,
+                work_permit_required, work_permit_link,
+                access_status, sap_wo, owner, visits_slots, created_at, updated_at
          FROM comp_ext_vendors WHERE id=$1`,
         [id]
       )
     ).rows[0];
-    const vrows = (
+    const visits = (
       await pool.query(
-        `SELECT vindex, start_date, end_date FROM comp_ext_visits WHERE vendor_id=$1 ORDER BY vindex`,
+        `SELECT vindex, start_date, end_date
+           FROM comp_ext_visits
+          WHERE vendor_id=$1
+          ORDER BY vindex`,
         [id]
       )
-    ).rows;
-    const fcount = (
-      await pool.query(`SELECT COUNT(*) AS n FROM comp_ext_files WHERE vendor_id=$1`, [id])
-    ).rows[0];
+    ).rows.map((r) => ({ index: r.vindex, start: toISODate(r.start_date), end: toISODate(r.end_date) }));
+    const files_count = (await pool.query(`SELECT COUNT(*)::INT AS n FROM comp_ext_files WHERE vendor_id=$1`, [id])).rows[0].n;
 
     res.json({
-      ...vrow,
-      visits: vrows.map((r) => ({
-        index: r.vindex,
-        start: toISODate(r.start_date),
-        end: toISODate(r.end_date),
-      })),
-      files_count: Number(fcount.n || 0),
+      ...row,
+      msra_status: row.msra_status || row.jsa_status || 'en_attente',
+      prequal_status: normRecue(row.prequal_status),
+      visits,
+      files_count,
     });
   } catch (e) {
-    await c.query("ROLLBACK");
-    console.error("[comp-ext] update vendor", e);
-    res.status(500).json({ error: "server_error" });
+    await c.query('ROLLBACK');
+    console.error('[comp-ext] vendor update', e);
+    res.status(400).json({ error: 'bad_request' });
   } finally {
     c.release();
   }
 });
 
-app.delete("/api/comp-ext/vendors/:id", async (req, res) => {
-  const id = Number(req.params.id);
+// ---------- Vendor (delete) ----------
+app.delete('/api/comp-ext/vendors/:id', async (req, res) => {
   try {
+    const id = Number(req.params.id);
     await pool.query(`DELETE FROM comp_ext_vendors WHERE id=$1`, [id]);
-    // delete vendor folder
-    const dir = path.join(UPLOAD_BASE, String(id));
-    if (fs.existsSync(dir)) await fsp.rm(dir, { recursive: true, force: true });
-    res.json({ success: true });
+    res.json({ ok: true });
   } catch (e) {
-    console.error("[comp-ext] delete vendor", e);
-    res.status(500).json({ error: "server_error" });
+    console.error('[comp-ext] vendor delete', e);
+    res.status(400).json({ error: 'bad_request' });
   }
 });
 
-// ---------- Calendar & Gantt (avec couleurs/ready) ----------
-app.get("/api/comp-ext/calendar", async (_req, res) => {
+// ---------- Visits ----------
+app.get('/api/comp-ext/visits', async (req, res) => {
+  try {
+    const vendor_id = Number(req.query.vendor_id || 0);
+    if (!vendor_id) return res.status(400).json({ error: 'vendor_id_required' });
+    const rows = (
+      await pool.query(
+        `SELECT id, vindex, start_date, end_date
+           FROM comp_ext_visits
+          WHERE vendor_id=$1
+          ORDER BY vindex`,
+        [vendor_id]
+      )
+    ).rows.map((r) => ({
+      id: r.id,
+      vindex: r.vindex,
+      start_date: toISODate(r.start_date),
+      end_date: toISODate(r.end_date),
+    }));
+    res.json({ visits: rows });
+  } catch (e) {
+    console.error('[comp-ext] visits list', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// ---------- Files ----------
+// Static debug (optionnel)
+app.use('/api/comp-ext/_files', express.static(FILES_DIR, { fallthrough: true }));
+
+// Liste
+app.get('/api/comp-ext/vendors/:id/files', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const category = req.query && req.query.category ? String(req.query.category) : null;
+    const files = (
+      await pool.query(
+        `SELECT id, category, original_name, stored_name, mime, size_bytes, created_at
+           FROM comp_ext_files
+          WHERE vendor_id=$1 ${category ? 'AND category=$2' : ''}
+          ORDER BY id DESC`,
+        category ? [id, category] : [id]
+      )
+    ).rows.map((f) => ({
+      ...f,
+      url: `/api/comp-ext/files/${f.id}/download`,
+      download_url: `/api/comp-ext/files/${f.id}/download`,
+      inline_url: `/api/comp-ext/files/${f.id}/inline`,
+    }));
+    res.json({ files });
+  } catch (e) {
+    console.error('[comp-ext] files list', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Upload (single)
+app.post('/api/comp-ext/vendors/:id/files', upload.single('file'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!req.file) return res.status(400).json({ error: 'file_required' });
+    const category = (req.body && req.body.category) || null;
+    const f = req.file;
+    const ins = await pool.query(
+      `INSERT INTO comp_ext_files
+        (vendor_id, category, original_name, stored_name, mime, size_bytes, disk_path)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id, category, original_name, stored_name, mime, size_bytes, created_at`,
+      [id, category, f.originalname, f.filename, f.mimetype, f.size, path.join(FILES_DIR, f.filename)]
+    );
+    const row = ins.rows[0];
+    res.status(201).json({
+      file: {
+        ...row,
+        url: `/api/comp-ext/files/${row.id}/download`,
+        download_url: `/api/comp-ext/files/${row.id}/download`,
+        inline_url: `/api/comp-ext/files/${row.id}/inline`,
+      },
+    });
+  } catch (e) {
+    console.error('[comp-ext] file upload', e);
+    res.status(400).json({ error: 'bad_request' });
+  }
+});
+
+// Upload (multi / compat)
+app.post('/api/comp-ext/vendors/:id/upload', upload.any(), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const category = (req.query && req.query.category) || null;
+    const files = Array.isArray(req.files) ? req.files : [];
+    const out = [];
+    for (const f of files) {
+      const ins = await pool.query(
+        `INSERT INTO comp_ext_files
+          (vendor_id, category, original_name, stored_name, mime, size_bytes, disk_path)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         RETURNING id, category, original_name, stored_name, mime, size_bytes, created_at`,
+        [id, category, f.originalname, f.filename, f.mimetype, f.size, path.join(FILES_DIR, f.filename)]
+      );
+      const row = ins.rows[0];
+      out.push({
+        ...row,
+        url: `/api/comp-ext/files/${row.id}/download`,
+        download_url: `/api/comp-ext/files/${row.id}/download`,
+        inline_url: `/api/comp-ext/files/${row.id}/inline`,
+      });
+    }
+    res.status(201).json({ files: out });
+  } catch (e) {
+    console.error('[comp-ext] upload (compat)', e);
+    res.status(400).json({ error: 'bad_request' });
+  }
+});
+
+// Download (attachment)
+app.get('/api/comp-ext/files/:fileId/download', async (req, res) => {
+  try {
+    const fid = Number(req.params.fileId);
+    if (!Number.isFinite(fid)) return res.status(400).json({ error: 'bad_file_id' });
+
+    const row = (await pool.query(`SELECT original_name, disk_path, mime FROM comp_ext_files WHERE id=$1`, [fid])).rows[0];
+    if (!row) return res.status(404).json({ error: 'not_found' });
+
+    const filePath = row.disk_path;
+    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'file_missing' });
+
+    const mime = row.mime || 'application/octet-stream';
+    const filename = (row.original_name || 'file').replace(/"/g, '');
+    const asciiName = filename.replace(/[^\x20-\x7E]+/g, '_');
+    const encoded = encodeURIComponent(filename);
+
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', `attachment; filename="${asciiName}"; filename*=UTF-8''${encoded}`);
+
+    fs.createReadStream(filePath).on('error', (err) => {
+      console.error('[comp-ext] stream error', err);
+      res.status(500).end();
+    }).pipe(res);
+  } catch (e) {
+    console.error('[comp-ext] file download', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Inline (aperçu)
+app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
+  try {
+    const fid = Number(req.params.fileId);
+    if (!Number.isFinite(fid)) return res.status(400).json({ error: 'bad_file_id' });
+
+    const row = (await pool.query(`SELECT original_name, disk_path, mime FROM comp_ext_files WHERE id=$1`, [fid])).rows[0];
+    if (!row) return res.status(404).json({ error: 'not_found' });
+
+    const filePath = row.disk_path;
+    if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'file_missing' });
+
+    res.setHeader('Content-Type', row.mime || 'application/octet-stream');
+    fs.createReadStream(filePath).on('error', (err) => {
+      console.error('[comp-ext] stream error', err);
+      res.status(500).end();
+    }).pipe(res);
+  } catch (e) {
+    console.error('[comp-ext] file inline', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Delete
+app.delete('/api/comp-ext/files/:fileId', async (req, res) => {
+  try {
+    const fid = Number(req.params.fileId);
+    const row = (await pool.query(`DELETE FROM comp_ext_files WHERE id=$1 RETURNING disk_path`, [fid])).rows[0];
+    if (row && row.disk_path && fs.existsSync(row.disk_path)) {
+      fs.unlink(row.disk_path, () => {});
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[comp-ext] file delete', e);
+    res.status(400).json({ error: 'bad_request' });
+  }
+});
+
+// ---------- Calendar & Gantt feed ----------
+app.get('/api/comp-ext/calendar', async (_req, res) => {
   try {
     const rows = (
       await pool.query(
-        `SELECT v.id AS vendor_id, v.name, v.offer_status, v.jsa_status, v.access_status,
+        `SELECT v.id AS vendor_id, v.name,
+                v.offer_status, v.msra_status, v.access_status,
                 vi.vindex, vi.start_date, vi.end_date
          FROM comp_ext_visits vi
          JOIN comp_ext_vendors v ON v.id = vi.vendor_id
@@ -541,28 +681,23 @@ app.get("/api/comp-ext/calendar", async (_req, res) => {
     for (const r of rows) {
       const s = toISODate(r.start_date);
       const e = toISODate(r.end_date || r.start_date);
-      const ready =
-        r.offer_status === "po_faite" &&
-        r.jsa_status === "signe" &&
-        r.access_status === "fait";
-      const status_color = ready ? "green" : "red";
+      const ready = r.offer_status === 'po_faite' && (r.msra_status || 'en_attente') === 'signe' && r.access_status === 'fait';
+      const color = ready ? 'green' : 'red';
 
-      // Tâche Gantt enrichie
       tasks.push({
         id: `${r.vendor_id}-${r.vindex}`,
         name: `${r.name} • Visite ${r.vindex}`,
-        start: s, // le front reconvertira en Date si nécessaire
+        start: s,
         end: e,
         vendor_id: r.vendor_id,
         vendor_name: r.name,
         vindex: r.vindex,
         startISO: s,
         endISO: e,
+        status_color: color,
         ready,
-        status_color,
       });
 
-      // Événements par jour pour calendrier
       const ds = new Date(s);
       const de = new Date(e);
       for (let d = new Date(ds); d <= de; d.setDate(d.getDate() + 1)) {
@@ -573,21 +708,21 @@ app.get("/api/comp-ext/calendar", async (_req, res) => {
           vindex: r.vindex,
           start: s,
           end: e,
+          status_color: color,
           ready,
-          status_color,
         });
       }
     }
 
     res.json({ tasks, events });
   } catch (e) {
-    console.error("[comp-ext] calendar", e);
-    res.status(500).json({ error: "server_error" });
+    console.error('[comp-ext] calendar', e);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
 // ---------- Stats ----------
-app.get("/api/comp-ext/stats", async (_req, res) => {
+app.get('/api/comp-ext/stats', async (_req, res) => {
   try {
     const offer = (
       await pool.query(
@@ -599,13 +734,13 @@ app.get("/api/comp-ext/stats", async (_req, res) => {
       )
     ).rows[0];
 
-    const jsa = (
+    const msra = (
       await pool.query(
         `SELECT
-           SUM(CASE WHEN jsa_status = 'en_attente'  THEN 1 ELSE 0 END) AS en_attente,
-           SUM(CASE WHEN jsa_status = 'transmis'    THEN 1 ELSE 0 END) AS transmis,
-           SUM(CASE WHEN jsa_status = 'receptionne' THEN 1 ELSE 0 END) AS receptionne,
-           SUM(CASE WHEN jsa_status = 'signe'       THEN 1 ELSE 0 END) AS signe
+           SUM(CASE WHEN msra_status = 'en_attente'  THEN 1 ELSE 0 END) AS en_attente,
+           SUM(CASE WHEN msra_status = 'transmis'    THEN 1 ELSE 0 END) AS transmis,
+           SUM(CASE WHEN msra_status = 'receptionne' THEN 1 ELSE 0 END) AS receptionne,
+           SUM(CASE WHEN msra_status = 'signe'       THEN 1 ELSE 0 END) AS signe
          FROM comp_ext_vendors`
       )
     ).rows[0];
@@ -623,42 +758,25 @@ app.get("/api/comp-ext/stats", async (_req, res) => {
 
     res.json({
       counts: {
-        offer: {
-          en_attente: Number(offer.en_attente || 0),
-          recue: Number(offer.recue || 0),
-          po_faite: Number(offer.po_faite || 0),
-        },
-        jsa: {
-          en_attente: Number(jsa.en_attente || 0),
-          transmis: Number(jsa.transmis || 0),
-          receptionne: Number(jsa.receptionne || 0),
-          signe: Number(jsa.signe || 0),
-        },
-        access: { a_faire: Number(access.a_faire || 0), fait: Number(access.fait || 0) },
+        offer: { en_attente: Number(offer.en_attente || 0), recue: Number(offer.recue || 0), po_faite: Number(offer.po_faite || 0) },
+        msra:  { en_attente: Number(msra.en_attente || 0), transmis: Number(msra.transmis || 0), receptionne: Number(msra.receptionne || 0), signe: Number(msra.signe || 0) },
+        access:{ a_faire: Number(access.a_faire || 0), fait: Number(access.fait || 0) },
       },
       total: Number(count.n || 0),
     });
   } catch (e) {
-    console.error("[comp-ext] stats", e);
-    res.status(500).json({ error: "server_error" });
+    console.error('[comp-ext] stats', e);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
 // ---------- Alerts ----------
-function daysBetween(aISO, bISO) {
-  const MS = 24 * 3600 * 1000;
-  const a = new Date(aISO);
-  const b = new Date(bISO);
-  a.setHours(0,0,0,0);
-  b.setHours(0,0,0,0);
-  return Math.round((a - b) / MS);
-}
-
-app.get("/api/comp-ext/alerts", async (_req, res) => {
+app.get('/api/comp-ext/alerts', async (_req, res) => {
   try {
     const rows = (
       await pool.query(
-        `SELECT v.id AS vendor_id, v.name, v.offer_status, v.jsa_status, v.access_status,
+        `SELECT v.id AS vendor_id, v.name,
+                v.offer_status, v.msra_status, v.access_status,
                 v.pp_applicable, v.pp_link, v.work_permit_required, v.work_permit_link,
                 vi.vindex, vi.start_date, vi.end_date
          FROM comp_ext_vendors v
@@ -667,185 +785,147 @@ app.get("/api/comp-ext/alerts", async (_req, res) => {
       )
     ).rows;
 
-    const today = toISODate(new Date());
+    const todayISO = toISODate(new Date());
     const alerts = [];
-
     for (const r of rows) {
       const s = r.start_date ? toISODate(r.start_date) : null;
-      const ready =
-        r.offer_status === "po_faite" &&
-        r.jsa_status === "signe" &&
-        r.access_status === "fait";
+      const ready = r.offer_status === 'po_faite' && (r.msra_status || 'en_attente') === 'signe' && r.access_status === 'fait';
 
       if (s) {
-        const d = daysBetween(s, today); // >0 : futur, 0 : aujourd’hui, <0 : passé
+        const dStart = daysBetween(s, todayISO);
         if (!ready) {
-          if (d <= 0) {
-            alerts.push({
-              level: "error",
-              vendor_id: r.vendor_id,
-              title: "Visite non prête",
-              message: `${r.name} • Visite ${r.vindex} : statuts incomplets (offer/jsa/access).`,
-              date: s,
-              kind: "visit_not_ready",
-            });
-          } else if (d <= 7) {
-            alerts.push({
-              level: "warn",
-              vendor_id: r.vendor_id,
-              title: "Visite bientôt non prête",
-              message: `${r.name} • Visite ${r.vindex} dans ${d}j : statuts incomplets.`,
-              date: s,
-              kind: "visit_not_ready_soon",
-            });
+          if (dStart <= 0) {
+            alerts.push({ level: 'error', vendor_id: r.vendor_id, title: 'Visite non prête', message: `${r.name} • Visite ${r.vindex} : statuts incomplets (offer/MSRA/access).`, date: s, kind: 'visit_not_ready' });
+          } else if (dStart <= 7) {
+            alerts.push({ level: 'warn', vendor_id: r.vendor_id, title: 'Visite bientôt non prête', message: `${r.name} • Visite ${r.vindex} dans ${dStart}j : statuts incomplets.`, date: s, kind: 'visit_not_ready_soon' });
           }
         }
       }
-
       if (r.pp_applicable && !r.pp_link) {
-        alerts.push({
-          level: "warn",
-          vendor_id: r.vendor_id,
-          title: "Lien PP manquant",
-          message: `${r.name} : Prévention plan applicable mais lien absent.`,
-          kind: "pp_link_missing",
-        });
+        alerts.push({ level: 'warn', vendor_id: r.vendor_id, title: 'Lien PP manquant', message: `${r.name} : Prévention plan applicable mais lien absent.`, kind: 'pp_link_missing' });
       }
       if (r.work_permit_required && !r.work_permit_link) {
-        alerts.push({
-          level: "warn",
-          vendor_id: r.vendor_id,
-          title: "Lien Permis de travail manquant",
-          message: `${r.name} : Permis de travail requis mais lien absent.`,
-          kind: "work_permit_link_missing",
-        });
+        alerts.push({ level: 'warn', vendor_id: r.vendor_id, title: 'Lien Permis de travail manquant', message: `${r.name} : Permis de travail requis mais lien absent.`, kind: 'work_permit_link_missing' });
       }
     }
 
     res.json({ alerts });
   } catch (e) {
-    console.error("[comp-ext] alerts", e);
-    res.status(500).json({ error: "server_error" });
+    console.error('[comp-ext] alerts', e);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
-// ---------- Files ----------
-await ensureDir(UPLOAD_BASE);
-
-app.post(
-  "/api/comp-ext/vendors/:id/upload",
-  upload.array("files", 20),
-  async (req, res) => {
-    const vendorId = Number(req.params.id);
-    const category = String(req.query.category || "general").slice(0, 60);
-    const files = req.files || [];
-    if (!files.length) return res.status(400).json({ error: "no_files" });
-
-    const c = await pool.connect();
-    try {
-      await c.query("BEGIN");
-      const out = [];
-      for (const f of files) {
-        const ins = await c.query(
-          `INSERT INTO comp_ext_files (vendor_id, category, original_name, stored_name, mime, size_bytes, disk_path)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           RETURNING id, vendor_id, category, original_name, stored_name, mime, size_bytes, disk_path, created_at`,
-          [
-            vendorId,
-            category,
-            f.originalname,
-            path.basename(f.filename),
-            f.mimetype,
-            Number(f.size || 0),
-            f.path,
-          ]
-        );
-        out.push(ins.rows[0]);
-      }
-      await c.query("COMMIT");
-      res
-        .status(201)
-        .json({ files: out.map((r) => ({ ...r, url: `/api/comp-ext/download?file_id=${r.id}` })) });
-    } catch (e) {
-      await c.query("ROLLBACK");
-      console.error("[comp-ext] upload", e);
-      res.status(500).json({ error: "server_error" });
-    } finally {
-      c.release();
-    }
-  }
-);
-
-app.get("/api/comp-ext/vendors/:id/files", async (req, res) => {
-  const vendorId = Number(req.params.id);
-  const category = req.query.category ? String(req.query.category) : null;
+// ---------- Ask (OpenAI) ----------
+app.post('/api/comp-ext/ask', async (req, res) => {
   try {
-    const params = [vendorId];
-    let where = `WHERE vendor_id=$1`;
-    if (category) {
-      params.push(category);
-      where += ` AND category=$2`;
+    const question = (req.body?.question || '').trim();
+    if (!question) return res.status(400).json({ error: 'question_required' });
+
+    const now = new Date();
+    const today = toISODate(now);
+    const in30 = toISODate(new Date(now.getTime() + 30 * 86400000));
+
+    const [vendorsRows, visitsRows] = await Promise.all([
+      pool.query(
+        `SELECT id, name, offer_status, msra_status, access_status, prequal_status,
+                pp_applicable, (pp_link IS NOT NULL AND pp_link <> '') AS has_pp_link,
+                work_permit_required, (work_permit_link IS NOT NULL AND work_permit_link <> '') AS has_wp_link
+           FROM comp_ext_vendors
+           ORDER BY id DESC`
+      ),
+      pool.query(
+        `SELECT v.vendor_id, v.vindex, v.start_date, v.end_date, e.name
+           FROM comp_ext_visits v
+           JOIN comp_ext_vendors e ON e.id = v.vendor_id
+          WHERE (v.start_date <= $1::date AND v.end_date >= $2::date)
+             OR (v.start_date BETWEEN $2::date AND $1::date)
+             OR (v.end_date   BETWEEN $2::date AND $1::date)
+          ORDER BY v.start_date ASC`,
+        [in30, today]
+      ),
+    ]);
+
+    const vendors = vendorsRows.rows;
+    const visits = visitsRows.rows.map((r) => ({
+      vendor_id: r.vendor_id,
+      vendor_name: r.name,
+      vindex: r.vindex,
+      start: toISODate(r.start_date),
+      end: toISODate(r.end_date),
+    }));
+
+    const notReady = [];
+    for (const v of vendors) {
+      const ready = v.offer_status === 'po_faite' && v.msra_status === 'signe' && v.access_status === 'fait';
+      if (!ready) notReady.push(v);
     }
-    const rows = (
-      await pool.query(
-        `SELECT id, vendor_id, category, original_name, stored_name, mime, size_bytes, disk_path, created_at
-         FROM comp_ext_files ${where} ORDER BY created_at DESC`,
-        params
-      )
-    ).rows;
-    res.json({
-      files: rows.map((r) => ({ ...r, url: `/api/comp-ext/download?file_id=${r.id}` })),
+
+    if (!OpenAI || !process.env.OPENAI_API_KEY) {
+      const summary = [
+        `Question: ${question}`,
+        `Prochaines visites (≤ 30 jours): ${visits.length}`,
+        ...visits.slice(0, 10).map((x) => `• ${x.vendor_name} (V${x.vindex}) ${x.start} → ${x.end}`),
+        notReady.length ? `Vendors non prêts: ${notReady.length} (ex: ${notReady.slice(0, 5).map((x) => x.name).join(', ')})` : `Tous les vendors semblent prêts.`,
+      ].join('\n');
+      return res.json({ answer: summary, llm: false });
+    }
+
+    const system = `Tu es un assistant pour un outil de prestataires externes.
+Analyse vendors (offer_status, msra_status, access_status, prequal_status, liens) et visites (dates).
+Règle "prêt": offer_status="po_faite" AND msra_status="signe" AND access_status="fait".
+Réponds en français avec des actions concrètes.`;
+
+    const context = {
+      today,
+      vendors: vendors.map((v) => ({
+        id: v.id, name: v.name,
+        offer_status: v.offer_status,
+        msra_status: v.msra_status,
+        access_status: v.access_status,
+        prequal_status: normRecue(v.prequal_status),
+        pp_applicable: !!v.pp_applicable,
+        has_pp_link: !!v.has_pp_link,
+        work_permit_required: !!v.work_permit_required,
+        has_wp_link: !!v.has_wp_link,
+      })),
+      upcoming_visits: visits,
+    };
+
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const prompt = `Question: ${question}\nContexte JSON:\n${JSON.stringify(context)}\nRéponds clairement, en listant les points et les manques si pertinents.`;
+
+    const resp = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt },
+      ],
     });
-  } catch (e) {
-    console.error("[comp-ext] list files", e);
-    res.status(500).json({ error: "server_error" });
-  }
-});
 
-app.get("/api/comp-ext/download", async (req, res) => {
-  const id = Number(req.query.file_id);
-  if (!id) return res.status(400).json({ error: "missing_file_id" });
-  try {
-    const row = (
-      await pool.query(
-        `SELECT original_name, mime, disk_path FROM comp_ext_files WHERE id=$1`,
-        [id]
-      )
-    ).rows[0];
-    if (!row) return res.status(404).json({ error: "not_found" });
-    if (!fs.existsSync(row.disk_path)) return res.status(410).json({ error: "gone" });
-    res.setHeader("Content-Type", row.mime || "application/octet-stream");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(row.original_name)}"`
-    );
-    fs.createReadStream(row.disk_path).pipe(res);
+    const answer = resp.choices?.[0]?.message?.content?.trim() || '(pas de réponse)';
+    res.json({ answer, llm: true });
   } catch (e) {
-    console.error("[comp-ext] download", e);
-    res.status(500).json({ error: "server_error" });
-  }
-});
-
-app.delete("/api/comp-ext/files/:file_id", async (req, res) => {
-  const id = Number(req.params.file_id);
-  try {
-    const row = (
-      await pool.query(`DELETE FROM comp_ext_files WHERE id=$1 RETURNING disk_path`, [id])
-    ).rows[0];
-    if (!row) return res.status(404).json({ error: "not_found" });
-    try {
-      if (row.disk_path && fs.existsSync(row.disk_path)) await fsp.unlink(row.disk_path);
-    } catch {}
-    res.json({ success: true });
-  } catch (e) {
-    console.error("[comp-ext] delete file", e);
-    res.status(500).json({ error: "server_error" });
+    console.error('[comp-ext] ask error', e);
+    res.status(500).json({ error: 'server_error', answer: "L'IA n'est pas disponible (clé absente/erreur)." });
   }
 });
 
 // ---------- Boot ----------
-const port = Number(process.env.COMP_EXT_PORT || 3014);
-await ensureSchema();
-app.listen(port, () =>
-  console.log(`[comp-ext] API prête sur :${port} — uploads: ${UPLOAD_BASE}`)
-);
+async function start() {
+  await ensureSchema();
+  app.listen(PORT, () => {
+    console.log(`[comp-ext] API prête sur :${PORT} — uploads: ${FILES_DIR}`);
+  });
+}
+
+const thisPath = fileURLToPath(import.meta.url);
+if (process.argv[1] && path.resolve(process.argv[1]) === thisPath) {
+  start().catch((err) => {
+    console.error('[comp-ext] failed to start', err);
+    process.exit(1);
+  });
+}
+
+export { app, ensureSchema, pool };
