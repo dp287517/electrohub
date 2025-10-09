@@ -9,7 +9,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import unzipper from 'unzipper';
-import pdfParse from 'pdf-parse';
+// ⛔️ pdf-parse supprimé
 import mammoth from 'mammoth';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
@@ -57,7 +57,6 @@ const EMBEDDING_DIMS  = 3072;
 
 // --- DB bootstrap (pgvector + tables) ---
 async function ensureSchema() {
-  // extension + tables + index
   await pool.query(`
     CREATE EXTENSION IF NOT EXISTS vector;
     CREATE TABLE IF NOT EXISTS askv_documents (
@@ -115,7 +114,6 @@ function chunkText(text, { chunkSize = 1200, overlap = 200 } = {}) {
 }
 
 async function embedBatch(texts) {
-  // OpenAI permet les batchs; on peut batcher par 100 raisonnablement
   const res = await openai.embeddings.create({
     model: EMBEDDING_MODEL,
     input: texts
@@ -131,13 +129,36 @@ async function embedQuery(text) {
   return res.data[0].embedding;
 }
 
+/** Extraction texte PDF via pdfjs-dist (robuste en ESM/Node 22) */
+async function extractPdfWithPdfjs(filePath) {
+  // import dynamique pour éviter les soucis de chemins en build
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const data = await fsp.readFile(filePath);
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(data) });
+  const doc = await loadingTask.promise;
+  const numPages = doc.numPages;
+
+  let fullText = '';
+  for (let p = 1; p <= numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    const strings = content.items.map(it => ('str' in it ? it.str : (it?.unicode || '')));
+    fullText += strings.join(' ') + '\n';
+  }
+  await doc.destroy?.();
+  return { text: fullText, pages: numPages, contentType: 'application/pdf' };
+}
+
 async function parseFileToText(fullPath, contentTypeGuess) {
   const ext = path.extname(fullPath).toLowerCase();
-  // Priorité par extension :
   if (ext === '.pdf') {
-    const buf = await fsp.readFile(fullPath);
-    const parsed = await pdfParse(buf);
-    return { text: parsed.text || '', pages: parsed.numpages || null, contentType: 'application/pdf' };
+    try {
+      return await extractPdfWithPdfjs(fullPath);
+    } catch (e) {
+      // fallback: renvoyer vide mais garder la fiche document
+      console.error('[PDF parse error]', fullPath, e);
+      return { text: '', pages: null, contentType: 'application/pdf' };
+    }
   }
   if (ext === '.docx') {
     const buf = await fsp.readFile(fullPath);
@@ -148,7 +169,6 @@ async function parseFileToText(fullPath, contentTypeGuess) {
     const txt = await fsp.readFile(fullPath, 'utf8');
     return { text: txt, pages: null, contentType: contentTypeGuess || 'text/plain' };
   }
-  // Non supporté : on ignore
   return { text: null, pages: null, contentType: contentTypeGuess || 'application/octet-stream' };
 }
 
@@ -164,7 +184,6 @@ async function registerDocument(client, absPath, relPath, filename, contentType,
 }
 
 async function insertChunksWithEmbeddings(client, docId, chunks) {
-  // Embedding par paquets pour réduire latence
   const BATCH = 64;
   let idx = 0;
   for (let i = 0; i < chunks.length; i += BATCH) {
@@ -187,7 +206,6 @@ async function insertChunksWithEmbeddings(client, docId, chunks) {
 }
 
 async function ingestSingleFile(client, absSrc, subdir = '') {
-  // Copie vers CORPUS_DIR (arborescence)
   const baseName = path.basename(absSrc);
   const relPath = path.join(subdir, baseName);
   const destAbs = path.join(CORPUS_DIR, relPath);
@@ -198,7 +216,6 @@ async function ingestSingleFile(client, absSrc, subdir = '') {
   const { text, pages, contentType } = await parseFileToText(destAbs, null);
 
   if (!text || !text.trim()) {
-    // Document non textuel ou non parsé : on l’enregistre sans chunks pour référentiel
     const docId = await registerDocument(client, destAbs, relPath, baseName, contentType, stat.size, pages);
     return { docId, chunks: 0, bytes: stat.size };
   }
@@ -251,7 +268,7 @@ async function jobById(id) {
   return rows[0] || null;
 }
 
-// --- Ingestion runners (async mais simples) ---
+// --- Ingestion runners ---
 async function runIngestZip(jobId, zipAbsPath) {
   await updateJob(jobId, { status: 'running' });
   const workDir = path.join(UPLOAD_DIR, `unz_${path.basename(zipAbsPath, '.zip')}_${Date.now()}`);
@@ -265,7 +282,6 @@ async function runIngestZip(jobId, zipAbsPath) {
     try {
       let processed = 0;
       for (const file of files) {
-        // On reloge le sous-chemin sous CORPUS_DIR
         const subdir = path.relative(workDir, path.dirname(file));
         await ingestSingleFile(client, file, subdir);
         processed++;
@@ -281,9 +297,8 @@ async function runIngestZip(jobId, zipAbsPath) {
     console.error('[ingestZip]', e);
     await updateJob(jobId, { status: 'error', error: String(e?.message || e) });
   } finally {
-    // on peut nettoyer workDir si tu veux :
+    // Nettoyage optionnel
     // await fsp.rm(workDir, { recursive: true, force: true });
-    // on peut aussi supprimer le zip d’upload :
     // await fsp.rm(zipAbsPath, { force: true });
   }
 }
@@ -319,16 +334,11 @@ app.get('/api/ask-veeva/health', async (_req, res) => {
   }
 });
 
-/**
- * Upload d’un ZIP géant -> ingestion asynchrone
- * champ: "zip"
- * retourne: { job_id }
- */
+/** ZIP -> job async (champ "zip") */
 app.post('/api/ask-veeva/uploadZip', upload.single('zip'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Aucun fichier reçu (zip)' });
     const jobId = await createJob('zip', 0);
-    // Lancement asynchrone (sans bloquer la requête)
     runIngestZip(jobId, req.file.path).catch(e => console.error('bg ingestZip failed', e));
     res.json({ ok: true, job_id: jobId });
   } catch (e) {
@@ -337,11 +347,7 @@ app.post('/api/ask-veeva/uploadZip', upload.single('zip'), async (req, res) => {
   }
 });
 
-/**
- * Upload de plusieurs fichiers (drag & drop multiple)
- * champ: "files" (multiples)
- * retourne: { job_id }
- */
+/** Multi-fichiers -> job async (champ "files") */
 app.post('/api/ask-veeva/uploadFiles', upload.array('files', 2000), async (req, res) => {
   try {
     const files = req.files || [];
@@ -355,7 +361,7 @@ app.post('/api/ask-veeva/uploadFiles', upload.array('files', 2000), async (req, 
   }
 });
 
-/** Statut d’un job d’ingestion */
+/** Statut job */
 app.get('/api/ask-veeva/jobs/:id', async (req, res) => {
   try {
     const j = await jobById(req.params.id);
@@ -366,14 +372,13 @@ app.get('/api/ask-veeva/jobs/:id', async (req, res) => {
   }
 });
 
-/** Recherche sémantique (k passages) */
+/** Recherche sémantique */
 app.post('/api/ask-veeva/search', async (req, res) => {
   try {
     const { query, k = 5 } = req.body || {};
     if (!query) return res.status(400).json({ error: 'query manquant' });
-    const qvec = await embedQuery(query);
 
-    // SELECT with pgvector cosine distance
+    const qvec = await embedQuery(query);
     const vectorLiteral = `[${qvec.join(',')}]`;
     const { rows } = await pool.query(
       `
@@ -403,7 +408,7 @@ app.post('/api/ask-veeva/search', async (req, res) => {
   }
 });
 
-/** Q/R : agrège top K, passe au modèle, renvoie réponse + citations */
+/** Q/R */
 app.post('/api/ask-veeva/ask', async (req, res) => {
   try {
     const { question, k = 6 } = req.body || {};
