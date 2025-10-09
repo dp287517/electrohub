@@ -419,7 +419,7 @@ app.put('/api/comp-ext/vendors/:id', async (req, res) => {
     if (sets.length) push('updated_at', new Date());
 
     if (sets.length) {
-      await c.query(`UPDATE comp_ext_vendors SET ${sets.join(', ')} WHERE id=$${vals.length} RETURNING id`, [...vals, id]);
+      await c.query(`UPDATE comp_ext_vendors SET ${sets.join(', ')} WHERE id=$${vals.length + 1} RETURNING id`, [...vals, id]);
     }
 
     if (Array.isArray(b.visits)) {
