@@ -28,6 +28,9 @@ import Project from './pages/Project.jsx';
 // 👇 NEW: Prestataires externes (Comp-Ext)
 import Comp from './pages/Comp.jsx';
 
+// 👇 NEW: Ask Veeva (Lecture & Q/R Documents)
+import AskVeeva from './pages/Ask_veeva.jsx';
+
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
@@ -70,6 +73,9 @@ export default function App() {
 
           {/* 👇 NEW: Comp-Ext (Prestataires externes) */}
           <Route path="/app/comp-ext" element={<ProtectedRoute><Comp /></ProtectedRoute>} />
+
+          {/* 👇 NEW: Ask Veeva */}
+          <Route path="/app/ask-veeva" element={<ProtectedRoute><AskVeeva /></ProtectedRoute>} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
