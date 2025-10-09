@@ -35,6 +35,25 @@ async function jsonFetch(url, options = {}) {
   return ct.includes("application/json") ? res.json() : null;
 }
 
+/** 🔹 Utilitaire bas niveau pour appels JSON "bruts" (multipart S3, etc.) */
+export async function apiBaseFetchJSON(path, options = {}) {
+  const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
+  const headers = new Headers(options.headers || {});
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const res = await fetch(finalUrl, {
+    credentials: "include",
+    ...options,
+    headers,
+  });
+  const ct = res.headers.get("content-type") || "";
+  const payload = ct.includes("application/json") ? await res.json() : await res.text();
+  if (!res.ok) {
+    const msg = typeof payload === "string" ? payload : (payload?.error || `HTTP ${res.status}`);
+    throw new Error(msg);
+  }
+  return payload;
+}
+
 /** Generic helpers */
 export async function get(path, params) {
   const qs = params
@@ -197,21 +216,11 @@ export const api = {
     stats: () => get("/api/comp-ext/stats"),                                // agrégats pour graphes
   },
 
-  /** --- ASK VEEVA (Lecture & Q/R Documents) — AJOUT --- */
+  /** --- ASK VEEVA (upload + search/ask) --- */
   askVeeva: {
-    /** Vérification de l’état du microservice */
     health: () => get("/api/ask-veeva/health"),
-
-    /** Upload d’un .zip contenant les docs (clé de champ: 'zip') */
-    uploadZip: (formData /* FormData */) =>
-      upload("/api/ask-veeva/upload", formData),
-
-    /** Recherche sémantique simple, renvoie les meilleurs passages */
-    search: (query, k = 5) =>
-      post("/api/ask-veeva/search", { query, k }),
-
-    /** Pose une question libre ; la réponse inclut des citations */
-    ask: (question) =>
-      post("/api/ask-veeva/ask", { question }),
+    job: (id) => get(`/api/ask-veeva/jobs/${id}`),
+    search: (payload) => post("/api/ask-veeva/search", payload),
+    ask: (payload) => post("/api/ask-veeva/ask", payload),
   },
 };
