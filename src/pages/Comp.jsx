@@ -60,7 +60,7 @@ const API = {
       )
     ).json(),
 
-  // Envoi multi-fichiers en une requête : backend attend "files"
+  // multi-fichiers => "files" (backend: upload.array('files'))
   uploadFiles: async (id, files, category = "general", onProgress) => {
     const fd = new FormData();
     (Array.from(files || [])).forEach((f) => fd.append("files", f));
@@ -140,6 +140,9 @@ function Select({ value, onChange, options = [], placeholder, className = "", di
       ))}
     </select>
   );
+}
+function Label({ children }) {
+  return <div className="text-xs font-medium text-gray-600">{children}</div>;
 }
 function Badge({ children, color = "gray" }) {
   const map = {
@@ -303,9 +306,7 @@ export default function Comp() {
   const [stats, setStats] = useState(null);
   const [alerts, setAlerts] = useState([]);
 
-  // Refs pour aligner bandeau sticky
-  const headerRef = useRef(null);
-  const tableRef = useRef(null);
+  const tableTopSticky = "top-[118px]"; // colle l'en-tête sous les tabs
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const jsaOptions = ["en_attente", "transmis", "receptionne", "signe"];
@@ -438,19 +439,22 @@ export default function Comp() {
       return true;
     };
 
+    const fromD = fFrom ? dayjs(fFrom) : null;
+    const toD = fTo ? dayjs(fTo) : null;
+
     const tasks = (calendar.tasks || []).filter(t => {
       if (!includeVendor(t.vendor_id)) return false;
       const s = dayjs(t.start);
       const e = dayjs(t.end);
-      if (from && e.isBefore(from, "day")) return false;
-      if (to && s.isAfter(to, "day")) return false;
+      if (fromD && e.isBefore(fromD, "day")) return false;
+      if (toD && s.isAfter(toD, "day")) return false;
       return true;
     });
     const events = (calendar.events || []).filter(ev => {
       if (!includeVendor(ev.vendor_id)) return false;
       const d = dayjs(ev.date);
-      if (from && d.isBefore(from, "day")) return false;
-      if (to && d.isAfter(to, "day")) return false;
+      if (fromD && d.isBefore(fromD, "day")) return false;
+      if (toD && d.isAfter(toD, "day")) return false;
       return true;
     });
     return { tasks, events };
@@ -485,7 +489,7 @@ export default function Comp() {
     setDrawerOpen(true);
   }
   async function saveEditing() {
-    // Conformation stricte aux champs backend ; les dates vides seront ignorées côté API
+    // Dates vides acceptées : le backend les ignore
     const payload = {
       ...editing,
       visits: (editing.visits || []).map((x, i) => ({
@@ -541,29 +545,6 @@ export default function Comp() {
     setFVisitsMin(""); setFVisitsMax(""); setFFrom(""); setFTo("");
   };
 
-  // ---------- Align sticky header with table columns ----------
-  useEffect(() => {
-    const align = () => {
-      const table = tableRef.current;
-      const header = headerRef.current;
-      if (!table || !header) return;
-      const firstRow = table.querySelector("tbody tr");
-      if (!firstRow) return;
-      const cells = Array.from(firstRow.children || []).filter((el) => el.tagName === "TD");
-      if (!cells.length) return;
-      const cols = cells.map((td) => `${td.getBoundingClientRect().width}px`).join(" ");
-      header.style.gridTemplateColumns = cols;
-    };
-    align();
-    const ro = new ResizeObserver(() => align());
-    if (tableRef.current) ro.observe(tableRef.current);
-    window.addEventListener("resize", align);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", align);
-    };
-  }, [filtered, loading]);
-
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -600,11 +581,6 @@ export default function Comp() {
               <button className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700" onClick={reloadVendors}>
                 Search
               </button>
-              {tab==="vendors" && (
-                <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>
-                  + New vendor
-                </button>
-              )}
             </div>
           </div>
 
@@ -640,42 +616,31 @@ export default function Comp() {
       {/* VENDORS */}
       {tab === "vendors" && (
         <>
-          {/* Bandeau sticky aligné */}
-          <div
-            ref={headerRef}
-            className="sticky top-[118px] z-20 bg-gray-50/95 backdrop-blur border rounded-2xl px-4 py-2 overflow-x-auto"
-            style={{ display: "grid", gap: "0.5rem" }}
-          >
-            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("name")}>Name {sortIcon("name")}</span>
-            <span className="text-sm font-medium text-gray-700">Offer</span>
-            <span className="text-sm font-medium text-gray-700">JSA</span>
-            <span className="text-sm font-medium text-gray-700">Pre-qual</span>
-            <span className="text-sm font-medium text-gray-700">PP</span>
-            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("access_status")}>Access {sortIcon("access_status")}</span>
-            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</span>
-            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</span>
-            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</span>
-            <span className="cursor-pointer text-sm font-medium text-gray-700" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</span>
-            <span className="text-sm font-medium text-gray-700">Actions</span>
+          {/* Barre d’actions dédiée (New vendor) */}
+          <div className="flex items-center justify-end">
+            <button className="px-3 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700" onClick={openCreate}>
+              + New vendor
+            </button>
           </div>
 
           <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
-            <table ref={tableRef} className="w-full">
-              <thead className="sr-only">
-                <tr>
-                  <th>Name</th>
-                  <th>Offer</th>
-                  <th>JSA</th>
-                  <th>Pre-qual</th>
-                  <th>PP</th>
-                  <th>Access</th>
-                  <th>Visits</th>
-                  <th>First date</th>
-                  <th>Owner</th>
-                  <th>Files</th>
-                  <th>Actions</th>
+            <table className="w-full">
+              <thead className={`sticky ${tableTopSticky} z-10 bg-gray-50/95 backdrop-blur`}>
+                <tr className="text-sm font-medium text-gray-700">
+                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</th>
+                  <th className="p-3 text-left">Offer</th>
+                  <th className="p-3 text-left">JSA</th>
+                  <th className="p-3 text-left">Pre-qual</th>
+                  <th className="p-3 text-left">PP</th>
+                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("access_status")}>Access {sortIcon("access_status")}</th>
+                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("visits")}>Visits {sortIcon("visits")}</th>
+                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("first_date")}>First date {sortIcon("first_date")}</th>
+                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("owner")}>Owner {sortIcon("owner")}</th>
+                  <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("files_count")}>Files {sortIcon("files_count")}</th>
+                  <th className="p-3 text-left">Actions</th>
                 </tr>
               </thead>
+
               <tbody className="text-sm">
                 {!loading && filtered.length === 0 && (
                   <tr><td colSpan={11} className="p-4 text-gray-500">No vendors.</td></tr>
@@ -1018,26 +983,57 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
   return (
     <div className="space-y-4">
       <div className="grid sm:grid-cols-2 gap-3">
-        <Input value={v.name || ""} onChange={(x) => set({ name: x })} placeholder="Vendor name" />
-        <Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" />
-        <Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" />
-        <Select value={v.jsa_status || "en_attente"} onChange={(x) => set({ jsa_status: x })} options={jsaOptions} placeholder="JSA status" />
-        <Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" />
-        <Select value={v.prequal_status || "non_fait"} onChange={(x) => set({ prequal_status: x })} options={preQualOptions} placeholder="Pré-qualification" />
-        <Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" />
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={!!v.pp_applicable} onChange={(e)=>set({ pp_applicable: e.target.checked })} />
-          <span className="text-sm">Prevention plan applicable</span>
-        </label>
+        <div>
+          <Label>Vendor name</Label>
+          <Input value={v.name || ""} onChange={(x) => set({ name: x })} placeholder="Vendor name" />
+        </div>
+        <div>
+          <Label>Owner</Label>
+          <Input value={v.owner || ""} onChange={(x) => set({ owner: x })} placeholder="Owner" />
+        </div>
+
+        <div>
+          <Label>Offer status</Label>
+          <Select value={v.offer_status || "en_attente"} onChange={(x) => set({ offer_status: x })} options={offerOptions} placeholder="Offer status" />
+        </div>
+        <div>
+          <Label>JSA status</Label>
+          <Select value={v.jsa_status || "en_attente"} onChange={(x) => set({ jsa_status: x })} options={jsaOptions} placeholder="JSA status" />
+        </div>
+        <div>
+          <Label>Access status</Label>
+          <Select value={v.access_status || "a_faire"} onChange={(x) => set({ access_status: x })} options={accessOptions} placeholder="Access status" />
+        </div>
+        <div>
+          <Label>Pré-qualification</Label>
+          <Select value={v.prequal_status || "non_fait"} onChange={(x) => set({ prequal_status: x })} options={preQualOptions} placeholder="Pré-qualification" />
+        </div>
+
+        <div>
+          <Label>Upcoming WO</Label>
+          <Input value={v.sap_wo || ""} onChange={(x) => set({ sap_wo: x })} placeholder="Upcoming WO" />
+        </div>
+
+        <div className="flex items-center gap-2 mt-1">
+          <input id="pp_applicable" type="checkbox" checked={!!v.pp_applicable} onChange={(e)=>set({ pp_applicable: e.target.checked })} />
+          <label htmlFor="pp_applicable" className="text-sm">Prevention plan applicable</label>
+        </div>
         {v.pp_applicable && (
-          <Input value={v.pp_link || ""} onChange={(x)=>set({ pp_link: x })} placeholder="SafePermit link" />
+          <div>
+            <Label>SafePermit link (PP)</Label>
+            <Input value={v.pp_link || ""} onChange={(x)=>set({ pp_link: x })} placeholder="SafePermit link" />
+          </div>
         )}
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={!!v.work_permit_required} onChange={(e)=>set({ work_permit_required: e.target.checked })} />
-          <span className="text-sm">Permis de travail requis</span>
-        </label>
+
+        <div className="flex items-center gap-2 mt-1">
+          <input id="wp_required" type="checkbox" checked={!!v.work_permit_required} onChange={(e)=>set({ work_permit_required: e.target.checked })} />
+          <label htmlFor="wp_required" className="text-sm">Permis de travail requis</label>
+        </div>
         {v.work_permit_required && (
-          <Input value={v.work_permit_link || ""} onChange={(x)=>set({ work_permit_link: x })} placeholder="SafePermit link (Permis de travail)" />
+          <div>
+            <Label>SafePermit link (Permis de travail)</Label>
+            <Input value={v.work_permit_link || ""} onChange={(x)=>set({ work_permit_link: x })} placeholder="SafePermit link (Permis de travail)" />
+          </div>
         )}
       </div>
 
@@ -1055,24 +1051,30 @@ function Editor({ value, onChange, onSave, onDelete, offerOptions, jsaOptions, a
         <div className="grid gap-2">
           {(v.visits || []).map((vis, i) => (
             <div key={i} className="grid grid-cols-2 gap-2">
-              <input
-                type="date"
-                className="border rounded px-2 py-1 text-sm"
-                value={vis.start || ""}
-                onChange={(e)=> {
-                  const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value};
-                  set({ visits: arr, visits_slots: visitsCount });
-                }}
-              />
-              <input
-                type="date"
-                className="border rounded px-2 py-1 text-sm"
-                value={vis.end || ""}
-                onChange={(e)=> {
-                  const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value};
-                  set({ visits: arr, visits_slots: visitsCount });
-                }}
-              />
+              <div>
+                <Label>Start</Label>
+                <input
+                  type="date"
+                  className="border rounded px-2 py-1 text-sm w-full"
+                  value={vis.start || ""}
+                  onChange={(e)=> {
+                    const arr=[...v.visits]; arr[i]={...arr[i], start: e.target.value};
+                    set({ visits: arr, visits_slots: visitsCount });
+                  }}
+                />
+              </div>
+              <div>
+                <Label>End</Label>
+                <input
+                  type="date"
+                  className="border rounded px-2 py-1 text-sm w-full"
+                  value={vis.end || ""}
+                  onChange={(e)=> {
+                    const arr=[...v.visits]; arr[i]={...arr[i], end: e.target.value};
+                    set({ visits: arr, visits_slots: visitsCount });
+                  }}
+                />
+              </div>
             </div>
           ))}
         </div>
