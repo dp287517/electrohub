@@ -1,6 +1,6 @@
 // src/pages/Ask_veeva.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, get, post } from "../api.js"; // ✅ chemin + helpers nommés
+import { api, get, post } from "../lib/api.js"; // ✅ chemin + helpers nommés
 
 function classNames(...xs) {
   return xs.filter(Boolean).join(" ");
