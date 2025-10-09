@@ -59,8 +59,6 @@ const API = {
         { credentials: "include" }
       )
     ).json(),
-
-  // multi-fichiers => "files" (backend: upload.array('files'))
   uploadFiles: async (id, files, category = "general", onProgress) => {
     const fd = new FormData();
     (Array.from(files || [])).forEach((f) => fd.append("files", f));
@@ -88,13 +86,12 @@ const API = {
       xhr.send(fd);
     });
   },
-
   deleteFile: async (fileId) =>
     (await fetch(`/api/comp-ext/files/${fileId}`, { method: "DELETE", credentials: "include" })).json(),
 };
 
 // ----------------- UI helpers -----------------
-function Tabs({ value, onChange }) {
+function Tabs({ value, onChange, innerRef }) {
   const T = (id, label, emoji) => (
     <button
       onClick={() => onChange(id)}
@@ -106,7 +103,10 @@ function Tabs({ value, onChange }) {
     </button>
   );
   return (
-    <div className="flex flex-wrap gap-2 sticky top-[60px] z-20 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2">
+    <div
+      ref={innerRef}
+      className="flex flex-wrap gap-2 sticky top-[60px] z-20 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
+    >
       {T("vendors", "Vendors", "📋")}
       {T("calendar", "Calendar", "📅")}
       {T("gantt", "Gantt", "📈")}
@@ -306,7 +306,20 @@ export default function Comp() {
   const [stats, setStats] = useState(null);
   const [alerts, setAlerts] = useState([]);
 
-  const tableTopSticky = "top-[118px]"; // colle l'en-tête sous les tabs
+  // sticky offset dynamiques (corrige “bandeau au milieu”)
+  const tabsRef = useRef(null);
+  const [stickyTop, setStickyTop] = useState(112); // valeur par défaut raisonnable
+
+  useEffect(() => {
+    const compute = () => {
+      const tabsH = tabsRef.current?.clientHeight || 44; // hauteur visuelle des tabs
+      const offsetTabs = 60; // top-[60px] appliqué aux tabs (classe Tailwind)
+      setStickyTop(offsetTabs + tabsH + 8); // petit gap
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, []);
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const jsaOptions = ["en_attente", "transmis", "receptionne", "signe"];
@@ -422,8 +435,6 @@ export default function Comp() {
 
   // Planning filtré par filtres globaux
   const planningFiltered = useMemo(() => {
-    const from = fFrom ? dayjs(fFrom) : null;
-    const to = fTo ? dayjs(fTo) : null;
     const includeVendor = (vid) => {
       const v = list.find(x => x.id === vid);
       if (!v) return true;
@@ -489,7 +500,6 @@ export default function Comp() {
     setDrawerOpen(true);
   }
   async function saveEditing() {
-    // Dates vides acceptées : le backend les ignore
     const payload = {
       ...editing,
       visits: (editing.visits || []).map((x, i) => ({
@@ -552,7 +562,7 @@ export default function Comp() {
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>
           <p className="text-gray-500 text-sm">Vendors offers, JSA, prevention plan, access, pre-qualification, visits, SAP WO & attachments</p>
         </div>
-        <Tabs value={tab} onChange={setTab} />
+        <Tabs value={tab} onChange={setTab} innerRef={tabsRef} />
       </header>
 
       {/* FILTRES GLOBAUX */}
@@ -625,7 +635,7 @@ export default function Comp() {
 
           <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto mt-2">
             <table className="w-full">
-              <thead className={`sticky ${tableTopSticky} z-10 bg-gray-50/95 backdrop-blur`}>
+              <thead className="sticky z-10 bg-gray-50/95 backdrop-blur" style={{ top: `${stickyTop}px` }}>
                 <tr className="text-sm font-medium text-gray-700">
                   <th className="p-3 text-left cursor-pointer" onClick={()=>setSort("name")}>Name {sortIcon("name")}</th>
                   <th className="p-3 text-left">Offer</th>
