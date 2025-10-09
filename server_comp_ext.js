@@ -580,8 +580,9 @@ app.get('/api/comp-ext/files/:fileId/download', async (req, res) => {
   try {
     const fid = Number(req.params.fileId);
     if (!Number.isFinite(fid)) return res.status(400).json({ error: 'bad_file_id' });
+    // >>> Correction : on lit aussi original_name pour nommer correctement le téléchargement
     const row = (await pool.query(
-     `SELECT stored_name, mime FROM comp_ext_files WHERE id=$1`, [fid]
+     `SELECT original_name, stored_name, mime FROM comp_ext_files WHERE id=$1`, [fid]
     )).rows[0];
     if (!row) return res.status(404).json({ error: 'not_found' });
     const filePath = path.resolve(FILES_DIR, row.stored_name);
@@ -624,7 +625,7 @@ app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
     }
 
     res.setHeader('Content-Type', row.mime || 'application/octet-stream');
-    // Optionnel : forcer l'affichage inline (certains navigateurs le font par défaut)
+    // Optionnel : forcer l'affichage inline
     // res.setHeader('Content-Disposition', 'inline');
 
     fs.createReadStream(filePath)
@@ -642,10 +643,14 @@ app.get('/api/comp-ext/files/:fileId/inline', async (req, res) => {
 app.delete('/api/comp-ext/files/:fileId', async (req, res) => {
   try {
     const fid = Number(req.params.fileId);
+    // >>> Correction : on retourne stored_name et on reconstruit le chemin pour supprimer le fichier
     const row = (await pool.query(
-      `DELETE FROM comp_ext_files WHERE id=$1 RETURNING disk_path`, [fid]
+      `DELETE FROM comp_ext_files WHERE id=$1 RETURNING stored_name`, [fid]
     )).rows[0];
-    if (row?.disk_path && fs.existsSync(row.disk_path)) fs.unlink(row.disk_path, () => {});
+    if (row?.stored_name) {
+      const filePath = path.resolve(FILES_DIR, row.stored_name);
+      if (fs.existsSync(filePath)) fs.unlink(filePath, () => {});
+    }
     res.json({ ok: true });
   } catch (e) {
     console.error('[comp-ext] file delete', e);
