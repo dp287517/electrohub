@@ -69,7 +69,7 @@ async function ensureSchema() {
   try {
     await c.query('BEGIN');
 
-    // 1) Créer tables minimales si absentes
+    // 1) Tables minimales
     await c.query(`
       CREATE TABLE IF NOT EXISTS comp_ext_vendors (
         id BIGSERIAL PRIMARY KEY,
@@ -104,7 +104,7 @@ async function ensureSchema() {
       );
     `);
 
-    // 2) Colonnes manquantes (ADD IF NOT EXISTS), avant toute UPDATE
+    // 2) Colonnes manquantes
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS offer_status TEXT;`);
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS msra_status TEXT;`);
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS prequal_status TEXT;`);
@@ -117,12 +117,10 @@ async function ensureSchema() {
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS owner TEXT;`);
     await c.query(`ALTER TABLE comp_ext_vendors ADD COLUMN IF NOT EXISTS visits_slots INT NOT NULL DEFAULT 1;`);
 
-    // 3) Defaults et normalisations
+    // 3) Normalisations
     await c.query(`UPDATE comp_ext_vendors SET offer_status = COALESCE(offer_status, 'en_attente');`);
     await c.query(`UPDATE comp_ext_vendors SET access_status = COALESCE(access_status, 'a_faire');`);
-    // migration jsa -> msra
     await c.query(`UPDATE comp_ext_vendors SET msra_status = COALESCE(msra_status, jsa_status, 'en_attente');`);
-    // normalise msra
     await c.query(`
       UPDATE comp_ext_vendors
       SET msra_status = CASE
@@ -130,7 +128,6 @@ async function ensureSchema() {
         ELSE 'en_attente'
       END;
     `);
-    // prequal
     await c.query(`UPDATE comp_ext_vendors SET prequal_status = COALESCE(prequal_status, 'non_fait');`);
     await c.query(`
       UPDATE comp_ext_vendors
@@ -140,85 +137,95 @@ async function ensureSchema() {
       END;
     `);
 
-    // 4) Nettoyage contraintes existantes potentiellement incompatibles
-    // offer_status
+    // 4) Drop contraintes existantes potentiellement incompatibles
+    const dropLike = async (needle) => {
+      await c.query(`
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN SELECT conname FROM pg_constraint
+            WHERE conrelid='comp_ext_vendors'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE ${pg.escapeLiteral('%' + needle + '%')}
+          LOOP
+            EXECUTE 'ALTER TABLE comp_ext_vendors DROP CONSTRAINT ' || quote_ident(r.conname);
+          END LOOP;
+        END$$;
+      `);
+    };
+    await dropLike('offer_status');
+    await dropLike('msra_status');
+    await dropLike('prequal_status');
+    await dropLike('access_status');
+
+    // 5) Re-créer contraintes si absentes (guard IF NOT EXISTS)
     await c.query(`
       DO $$
-      DECLARE r RECORD;
       BEGIN
-        FOR r IN SELECT conname FROM pg_constraint
-          WHERE conrelid='comp_ext_vendors'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%offer_status%'
-        LOOP EXECUTE 'ALTER TABLE comp_ext_vendors DROP CONSTRAINT ' || quote_ident(r.conname);
-        END LOOP;
-      END$$;
-    `);
-    // msra_status
-    await c.query(`
-      DO $$
-      DECLARE r RECORD;
-      BEGIN
-        FOR r IN SELECT conname FROM pg_constraint
-          WHERE conrelid='comp_ext_vendors'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%msra_status%'
-        LOOP EXECUTE 'ALTER TABLE comp_ext_vendors DROP CONSTRAINT ' || quote_ident(r.conname);
-        END LOOP;
-      END$$;
-    `);
-    // prequal_status
-    await c.query(`
-      DO $$
-      DECLARE r RECORD;
-      BEGIN
-        FOR r IN SELECT conname FROM pg_constraint
-          WHERE conrelid='comp_ext_vendors'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%prequal_status%'
-        LOOP EXECUTE 'ALTER TABLE comp_ext_vendors DROP CONSTRAINT ' || quote_ident(r.conname);
-        END LOOP;
-      END$$;
-    `);
-    // access_status
-    await c.query(`
-      DO $$
-      DECLARE r RECORD;
-      BEGIN
-        FOR r IN SELECT conname FROM pg_constraint
-          WHERE conrelid='comp_ext_vendors'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%access_status%'
-        LOOP EXECUTE 'ALTER TABLE comp_ext_vendors DROP CONSTRAINT ' || quote_ident(r.conname);
-        END LOOP;
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid='comp_ext_vendors'::regclass
+             AND conname='comp_ext_vendors_offer_check'
+        ) THEN
+          ALTER TABLE comp_ext_vendors
+          ADD CONSTRAINT comp_ext_vendors_offer_check
+          CHECK (offer_status IN ('en_attente','reçue','recue','po_faite'));
+        END IF;
       END$$;
     `);
 
-    // 5) Re-créer contraintes AFTER data OK
+    await c.query(`UPDATE comp_ext_vendors SET msra_status = COALESCE(msra_status, 'en_attente');`);
     await c.query(`
-      ALTER TABLE comp_ext_vendors
-      ADD CONSTRAINT comp_ext_vendors_offer_check
-      CHECK (offer_status IN ('en_attente','reçue','recue','po_faite'));
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid='comp_ext_vendors'::regclass
+             AND conname='comp_ext_vendors_msra_check'
+        ) THEN
+          ALTER TABLE comp_ext_vendors
+          ADD CONSTRAINT comp_ext_vendors_msra_check
+          CHECK (msra_status IN ('en_attente','transmis','receptionne','signe'));
+        END IF;
+      END$$;
     `);
+    await c.query(`ALTER TABLE comp_ext_vendors ALTER COLUMN msra_status SET NOT NULL;`);
+
     await c.query(`
-      ALTER TABLE comp_ext_vendors
-      ALTER COLUMN msra_status SET NOT NULL;
-    `);
-    await c.query(`
-      ALTER TABLE comp_ext_vendors
-      ADD CONSTRAINT comp_ext_vendors_msra_check
-      CHECK (msra_status IN ('en_attente','transmis','receptionne','signe'));
-    `);
-    await c.query(`
-      ALTER TABLE comp_ext_vendors
-      ADD CONSTRAINT comp_ext_vendors_prequal_check
-      CHECK (prequal_status IN ('non_fait','en_cours','reçue','recue'));
-    `);
-    await c.query(`
-      ALTER TABLE comp_ext_vendors
-      ADD CONSTRAINT comp_ext_vendors_access_check
-      CHECK (access_status IN ('a_faire','fait'));
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid='comp_ext_vendors'::regclass
+             AND conname='comp_ext_vendors_prequal_check'
+        ) THEN
+          ALTER TABLE comp_ext_vendors
+          ADD CONSTRAINT comp_ext_vendors_prequal_check
+          CHECK (prequal_status IN ('non_fait','en_cours','reçue','recue'));
+        END IF;
+      END$$;
     `);
 
-    // Indexes utiles
+    await c.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+           WHERE conrelid='comp_ext_vendors'::regclass
+             AND conname='comp_ext_vendors_access_check'
+        ) THEN
+          ALTER TABLE comp_ext_vendors
+          ADD CONSTRAINT comp_ext_vendors_access_check
+          CHECK (access_status IN ('a_faire','fait'));
+        END IF;
+      END$$;
+    `);
+
+    // 6) Indexes
     await c.query(`CREATE INDEX IF NOT EXISTS idx_comp_ext_visits_vendor_id ON comp_ext_visits(vendor_id);`);
     await c.query(`CREATE INDEX IF NOT EXISTS idx_comp_ext_visits_dates ON comp_ext_visits(start_date, end_date);`);
     await c.query(`CREATE INDEX IF NOT EXISTS idx_comp_ext_files_vendor ON comp_ext_files(vendor_id);`);
 
     await c.query('COMMIT');
-    console.log('[comp-ext] Schema ensured (columns added first, then migrated & constrained).');
+    console.log('[comp-ext] Schema ensured (guards on ADD CONSTRAINT).');
   } catch (e) {
     await c.query('ROLLBACK');
     console.error('[comp-ext] ensureSchema error', e);
@@ -735,19 +742,12 @@ app.get('/api/comp-ext/alerts', async (_req, res) => {
       if (s) {
         const dStart = daysBetween(s, todayISO);
         if (!ready) {
-          if (dStart <= 0) {
-            alerts.push({ level:'error', vendor_id:r.vendor_id, title:'Visite non prête', message:`${r.name} • Visite ${r.vindex} : statuts incomplets (offer/MSRA/access).`, date:s, kind:'visit_not_ready' });
-          } else if (dStart <= 7) {
-            alerts.push({ level:'warn', vendor_id:r.vendor_id, title:'Visite bientôt non prête', message:`${r.name} • Visite ${r.vindex} dans ${dStart}j : statuts incomplets.`, date:s, kind:'visit_not_ready_soon' });
-          }
+          if (dStart <= 0) alerts.push({ level:'error', vendor_id:r.vendor_id, title:'Visite non prête', message:`${r.name} • Visite ${r.vindex} : statuts incomplets (offer/MSRA/access).`, date:s, kind:'visit_not_ready' });
+          else if (dStart <= 7) alerts.push({ level:'warn', vendor_id:r.vendor_id, title:'Visite bientôt non prête', message:`${r.name} • Visite ${r.vindex} dans ${dStart}j : statuts incomplets.`, date:s, kind:'visit_not_ready_soon' });
         }
       }
-      if (r.pp_applicable && !r.pp_link) {
-        alerts.push({ level:'warn', vendor_id:r.vendor_id, title:'Lien PP manquant', message:`${r.name} : Prévention plan applicable mais lien absent.`, kind:'pp_link_missing' });
-      }
-      if (r.work_permit_required && !r.work_permit_link) {
-        alerts.push({ level:'warn', vendor_id:r.vendor_id, title:'Lien Permis de travail manquant', message:`${r.name} : Permis de travail requis mais lien absent.`, kind:'work_permit_link_missing' });
-      }
+      if (r.pp_applicable && !r.pp_link) alerts.push({ level:'warn', vendor_id:r.vendor_id, title:'Lien PP manquant', message:`${r.name} : Prévention plan applicable mais lien absent.`, kind:'pp_link_missing' });
+      if (r.work_permit_required && !r.work_permit_link) alerts.push({ level:'warn', vendor_id:r.vendor_id, title:'Lien Permis de travail manquant', message:`${r.name} : Permis de travail requis mais lien absent.`, kind:'work_permit_link_missing' });
     }
     res.json({ alerts });
   } catch (e) {
