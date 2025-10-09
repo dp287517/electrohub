@@ -4,9 +4,9 @@
  * Requires: node >= 18, packages: express, pg, multer, cors
  *
  * ENV:
- *  - PORT (default 3001)
  *  - DATABASE_URL (PostgreSQL connection string)
  *  - FILES_DIR (optional, default ./uploads/comp_ext)
+ *  - COMP_EXT_PORT (optional, default 3014)
  */
 
 import fs from 'fs';
@@ -24,7 +24,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ---------- Config ----------
-const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
 const DATABASE_URL = process.env.DATABASE_URL || 'postgres://localhost:5432/comp_ext';
 const FILES_DIR = process.env.FILES_DIR || path.join(__dirname, 'uploads', 'comp_ext');
 fs.mkdirSync(FILES_DIR, { recursive: true });
@@ -32,7 +31,7 @@ fs.mkdirSync(FILES_DIR, { recursive: true });
 // DB pool
 const pool = new Pool({ connectionString: DATABASE_URL });
 
-// Express app (exported + runnable)
+// Express app
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -153,7 +152,9 @@ async function ensureSchema() {
 // ---------- Middleware ----------
 app.get('/api/comp-ext/health', (_req, res) => res.json({ ok: true }));
 
-// ---------- Vendors (list) ----------
+/* ========================= VENDORS ========================= */
+
+// List vendors
 app.get('/api/comp-ext/vendors', async (req, res) => {
   try {
     const { q } = req.query;
@@ -202,7 +203,7 @@ app.get('/api/comp-ext/vendors', async (req, res) => {
   }
 });
 
-// ---------- Vendor (get one) ----------
+// Get one vendor
 app.get('/api/comp-ext/vendors/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -233,7 +234,7 @@ app.get('/api/comp-ext/vendors/:id', async (req, res) => {
   }
 });
 
-// ---------- Vendor (create) ----------
+// Create vendor
 app.post('/api/comp-ext/vendors', async (req, res) => {
   const c = await pool.connect();
   try {
@@ -290,7 +291,7 @@ app.post('/api/comp-ext/vendors', async (req, res) => {
   }
 });
 
-// ---------- Vendor (update) ----------
+// Update vendor
 app.put('/api/comp-ext/vendors/:id', async (req, res) => {
   const c = await pool.connect();
   try {
@@ -353,7 +354,7 @@ app.put('/api/comp-ext/vendors/:id', async (req, res) => {
   }
 });
 
-// ---------- Vendor (delete) ----------
+// Delete vendor
 app.delete('/api/comp-ext/vendors/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -365,7 +366,8 @@ app.delete('/api/comp-ext/vendors/:id', async (req, res) => {
   }
 });
 
-// ---------- Visits (list by vendor) ----------
+/* ========================= VISITS ========================= */
+
 app.get('/api/comp-ext/visits', async (req, res) => {
   try {
     const vendor_id = Number(req.query.vendor_id || 0);
@@ -381,7 +383,8 @@ app.get('/api/comp-ext/visits', async (req, res) => {
   }
 });
 
-// ---------- Files ----------
+/* ========================= FILES ========================= */
+
 app.get('/api/comp-ext/vendors/:id/files', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -469,7 +472,9 @@ app.delete('/api/comp-ext/files/:fileId', async (req, res) => {
   }
 });
 
-// ---------- Calendar & Gantt feed ----------
+/* ========================= CALENDAR / GANTT / STATS / ALERTS ========================= */
+
+// Calendar & Gantt feed
 app.get('/api/comp-ext/calendar', async (_req, res) => {
   try {
     const rows = (
@@ -527,7 +532,7 @@ app.get('/api/comp-ext/calendar', async (_req, res) => {
   }
 });
 
-// ---------- Stats ----------
+// Stats
 app.get('/api/comp-ext/stats', async (_req, res) => {
   try {
     const offer = (
@@ -585,7 +590,7 @@ app.get('/api/comp-ext/stats', async (_req, res) => {
   }
 });
 
-// ---------- Alerts ----------
+// Alerts
 app.get('/api/comp-ext/alerts', async (_req, res) => {
   try {
     const rows = (
@@ -657,21 +662,15 @@ app.get('/api/comp-ext/alerts', async (_req, res) => {
   }
 });
 
-// ---------- Start server if run directly ----------
-async function start() {
-  await ensureSchema();
-  app.listen(PORT, () => {
-    console.log(`[comp-ext] API listening on http://localhost:${PORT}`);
-  });
-}
+/* ========================= BOOT ========================= */
 
-// ESM "main" check
-const thisPath = fileURLToPath(import.meta.url);
-if (process.argv[1] && path.resolve(process.argv[1]) === thisPath) {
-  start().catch(err => {
-    console.error('[comp-ext] failed to start', err);
-    process.exit(1);
-  });
-}
+const UPLOAD_BASE = FILES_DIR;
+const port = Number(process.env.COMP_EXT_PORT || 3014);
 
+await ensureSchema();
+app.listen(port, () => {
+  console.log(`[comp-ext] API prête sur :${port} — uploads: ${UPLOAD_BASE}`);
+});
+
+// Exports (optional import in a parent server)
 export { app, ensureSchema, pool };
