@@ -370,7 +370,7 @@ export default function Comp() {
   const [aiLoading, setAiLoading] = useState(false);
 
   // Offset sticky : header (60px) + hauteur onglets (--tabs-h) + marge
-  const stickyTop = "calc(60px + var(--tabs-h, 44px) + 8px)";
+  const stickyTop = "calc(var(--tabs-h, 44px) + 8px)";
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const msraOptions = ["en_attente", "transmis", "receptionne", "signe"];
@@ -836,7 +836,7 @@ function VendorsTable({ items = [], loading, sortBy, onSort, onEdit, onDelete, s
       <div className="hidden sm:block overflow-x-auto">
         <table className="w-full text-sm">
           <thead
-            className="sticky z-20 top-0 bg-gray-50/90 backdrop-blur supports-[backdrop-filter]:bg-gray-50/70"
+            className="sticky z-20 bg-gray-50/90 backdrop-blur supports-[backdrop-filter]:bg-gray-50/70"
             style={{ top: stickyTop }}
           >
             <tr className="text-left border-b">
