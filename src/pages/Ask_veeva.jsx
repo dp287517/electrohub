@@ -8,8 +8,12 @@ import {
   chunkedUpload,
   pollJob,
   buildFileURL,
-  // buildStreamURL, // supprimé : pas d'endpoint /stream côté serveur
+  // buildStreamURL, // pas d'endpoint /stream côté serveur
   findDocs, // garde en try/catch (endpoint pas encore implémenté côté serveur)
+  initUser,
+  sendFeedback,
+  getPersonalization,
+  logEvent,
 } from "../utils/ask_veeva.js";
 
 /* ------------------------- Petits utilitaires UI ------------------------- */
@@ -17,15 +21,9 @@ function clsx(...xs) {
   return xs.filter(Boolean).join(" ");
 }
 const copy = async (s) => {
-  try {
-    await navigator.clipboard.writeText(s);
-    return true;
-  } catch {
-    return false;
-  }
+  try { await navigator.clipboard.writeText(s); return true; } catch { return false; }
 };
-const isVideoFilename = (name = "") =>
-  /\.(mp4|mov|m4v|webm)$/i.test(name);
+const isVideoFilename = (name = "") => /\.(mp4|mov|m4v|webm)$/i.test(name);
 
 /* --------------------------------- UI bits -------------------------------- */
 function TabButton({ active, onClick, children }) {
@@ -60,7 +58,36 @@ function CitationChips({ citations, onPeek }) {
   );
 }
 
-function Message({ role, text, citations, onPeek }) {
+/** Boutons de feedback sous une réponse assistant */
+function FeedbackBar({ email, question, citations }) {
+  const firstDocId = citations?.[0]?.doc_id || null;
+
+  async function rate(useful) {
+    try {
+      await sendFeedback({ email, question, doc_id: firstDocId, useful, note: null });
+    } catch {}
+  }
+  return (
+    <div className="flex items-center gap-2 mt-2">
+      <button
+        onClick={() => rate(true)}
+        className="text-xs px-2 py-1 rounded bg-green-50 text-green-700 border border-green-200 hover:bg-green-100"
+        title="Réponse utile"
+      >
+        👍 Utile
+      </button>
+      <button
+        onClick={() => rate(false)}
+        className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+        title="Réponse pas utile"
+      >
+        👎 Pas utile
+      </button>
+    </div>
+  );
+}
+
+function Message({ role, text, citations, onPeek, email, questionOfMsg }) {
   const isUser = role === "user";
   return (
     <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
@@ -72,6 +99,47 @@ function Message({ role, text, citations, onPeek }) {
       >
         <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
         {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
+        {!isUser && <FeedbackBar email={email} question={questionOfMsg} citations={citations} />}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Prompt d'identification rapide (poste/secteur) ---------- */
+function UserProfilePrompt({ defaultRole = "", defaultSector = "", onSubmit, onCancel }) {
+  const [role, setRole] = useState(defaultRole);
+  const [sector, setSector] = useState(defaultSector);
+
+  return (
+    <div className="p-4 bg-white border rounded-lg shadow-sm space-y-2">
+      <p className="text-sm">Pour mieux te répondre, précise ton domaine :</p>
+      <select value={role} onChange={e => setRole(e.target.value)} className="border rounded px-2 py-1 w-full">
+        <option value="">-- Sélectionne ton poste --</option>
+        <option>Qualité</option>
+        <option>EHS</option>
+        <option>Utilités</option>
+        <option>Packaging</option>
+      </select>
+      {role && (
+        <select value={sector} onChange={e => setSector(e.target.value)} className="border rounded px-2 py-1 w-full">
+          <option value="">-- Secteur --</option>
+          <option>SSOL</option>
+          <option>LIQ</option>
+          <option>Bulk</option>
+          <option>Autre</option>
+        </select>
+      )}
+      <div className="flex gap-2">
+        <button
+          disabled={!role}
+          onClick={() => onSubmit({ role, sector })}
+          className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+        >
+          Valider
+        </button>
+        <button onClick={onCancel} className="px-3 py-1.5 bg-gray-100 rounded text-sm">
+          plus tard
+        </button>
       </div>
     </div>
   );
@@ -179,11 +247,18 @@ function SidebarContexts({
 }
 
 /* ------------------------------- Viewer pane ------------------------------- */
-function Viewer({ file, onClose }) {
+function Viewer({ file, onClose, email }) {
   if (!file) return null;
 
   const fileURL = buildFileURL(file.doc_id);
   const looksVideo = isVideoFilename(file.filename);
+
+  useEffect(() => {
+    // log doc_opened
+    (async () => {
+      try { await logEvent({ user_email: email, type: "doc_opened", doc_id: file.doc_id, meta: { filename: file.filename } }); } catch {}
+    })();
+  }, [file?.doc_id]);
 
   return (
     <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4">
@@ -243,11 +318,20 @@ function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [k, setK] = useState(6); // valeur par défaut alignée backend
+  const [k, setK] = useState(6); // aligné backend
+  const [contextMode, setContextMode] = useState("auto"); // "auto" | "none"
   const [contexts, setContexts] = useState([]); // [{doc_id, filename, chunks:[]}]
   const [selectedDocs, setSelectedDocs] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
+
+  const [email, setEmail] = useState(() => {
+    try { return localStorage.getItem("askV.email") || ""; } catch { return ""; }
+  });
+  const [profileNeeded, setProfileNeeded] = useState(false);
+  const [lastAsked, setLastAsked] = useState(null); // pour relancer après profil
+
+  const [personalization, setPersonalization] = useState(null);
 
   const listRef = useRef(null);
   const [messages, setMessages] = useState(() => {
@@ -273,14 +357,28 @@ function ChatBox() {
         setReady(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
+
+  useEffect(() => {
+    // Charger la personnalisation si email présent
+    (async () => {
+      if (!email) return;
+      try {
+        const pers = await getPersonalization(email);
+        setPersonalization(pers?.user ? pers : null);
+      } catch {}
+    })();
+  }, [email]);
+
+  function saveEmailLocally(next) {
+    setEmail(next);
+    try { localStorage.setItem("askV.email", next || ""); } catch {}
+  }
 
   function toggleSelect(docId) {
     setSelectedDocs((prev) => {
@@ -299,18 +397,27 @@ function ChatBox() {
 
   async function runAsk(q, docFilter = []) {
     setSending(true);
+    setLastAsked(q);
     try {
-      // Le backend n’accepte que {question,k,docFilter} (pas history/wantVideos)
-      const resp = await ask(q, k, docFilter);
+      const resp = await ask(q, k, docFilter, email || null, contextMode);
+
+      // Si le backend demande le profil (poste/secteur)
+      if (resp && resp.needProfile) {
+        setProfileNeeded(true);
+        setMessages((m) => [...m, { role: "assistant", text: resp.question || "Pour continuer, j’ai besoin de ton domaine (poste/secteur)." }]);
+        return;
+      }
+
       const text = resp?.text || "Désolé, aucune réponse.";
       const citations = (resp?.citations || []).map((c) => ({
         filename: c.filename,
         score: c.score,
         doc_id: c.doc_id,
       }));
-      setMessages((m) => [...m, { role: "assistant", text, citations }]);
+      setMessages((m) => [...m, { role: "assistant", text, citations, questionOfMsg: q }]);
       setContexts(resp?.contexts || []);
       setSuggestions(resp?.suggestions || []);
+
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
     } finally {
@@ -357,26 +464,43 @@ function ChatBox() {
         setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
       }
     } catch {
-      // endpoint pas dispo : ignorer silencieusement
+      // endpoint pas dispo
     }
   }
 
   function onClearChat() {
-    try {
-      sessionStorage.removeItem("askVeeva_chat");
-    } catch {}
+    try { sessionStorage.removeItem("askVeeva_chat"); } catch {}
     setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
     setContexts([]);
     setSelectedDocs(new Set());
     setSuggestions([]);
   }
 
+  async function handleProfileSubmit({ role, sector }) {
+    if (!email) {
+      setMessages((m) => [...m, { role: "assistant", text: "Renseigne d’abord ton email en haut à droite pour associer ton profil." }]);
+      return;
+    }
+    try {
+      await initUser({ email, role, sector });
+      setProfileNeeded(false);
+      // Relancer la dernière question automatiquement
+      if (lastAsked) {
+        setMessages((m) => [...m, { role: "assistant", text: "Merci ! Je relance ta dernière question avec ton profil." }]);
+        await runAsk(lastAsked, selectedDocs.size ? Array.from(selectedDocs) : []);
+      }
+    } catch (e) {
+      setMessages((m) => [...m, { role: "assistant", text: `Erreur profil: ${e?.message || e}` }]);
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* Bandeau */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <div className="text-sm text-gray-600 flex items-center gap-2">
+        <div className="text-sm text-gray-600 flex items-center gap-3 flex-wrap">
           <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
+
           <label className="flex items-center gap-1">
             <span>Top-K</span>
             <select
@@ -390,8 +514,25 @@ function ChatBox() {
               ))}
             </select>
           </label>
+
+          <label className="flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={contextMode === "none"}
+              onChange={(e) => setContextMode(e.target.checked ? "none" : "auto")}
+            />
+            <span>Sans contexte</span>
+          </label>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            value={email}
+            onChange={(e) => saveEmailLocally(e.target.value)}
+            placeholder="email@entreprise.com"
+            className="text-xs border rounded px-2 py-1"
+            title="Utilisé pour personnaliser et enregistrer ton profil"
+          />
           <button
             onClick={onClearChat}
             className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
@@ -416,6 +557,16 @@ function ChatBox() {
         </div>
       </div>
 
+      {/* Si le backend réclame le profil : mini-form */}
+      {profileNeeded && (
+        <div className="mb-3">
+          <UserProfilePrompt
+            onSubmit={handleProfileSubmit}
+            onCancel={() => setProfileNeeded(false)}
+          />
+        </div>
+      )}
+
       {/* Layout 2 colonnes : Chat (2fr) | Sidebar (1fr) */}
       <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-4">
         {/* Chat */}
@@ -425,7 +576,15 @@ function ChatBox() {
             className="h-[52vh] sm:h-[60vh] xl:h-[66vh] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
           >
             {messages.map((m, i) => (
-              <Message key={i} role={m.role} text={m.text} citations={m.citations} onPeek={handlePeek} />
+              <Message
+                key={i}
+                role={m.role}
+                text={m.text}
+                citations={m.citations}
+                onPeek={handlePeek}
+                email={email}
+                questionOfMsg={m.questionOfMsg}
+              />
             ))}
             {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
           </div>
@@ -487,11 +646,21 @@ function ChatBox() {
               onOpen={handleOpen}
             />
           </div>
+
+          {/* Bloc “perso” simple si dispo */}
+          {personalization?.user && (
+            <div className="mt-3 p-3 border rounded-lg bg-white text-xs">
+              <div className="font-semibold text-sm mb-1">Profil</div>
+              <div>Email : {personalization.user.email}</div>
+              <div>Poste : {personalization.user.role || "—"}</div>
+              <div>Secteur : {personalization.user.sector || "—"}</div>
+            </div>
+          )}
         </aside>
       </div>
 
       {/* Viewer modal */}
-      <Viewer file={viewerFile} onClose={() => setViewerFile(null)} />
+      <Viewer file={viewerFile} onClose={() => setViewerFile(null)} email={email} />
     </div>
   );
 }
