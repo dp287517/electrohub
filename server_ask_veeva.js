@@ -739,49 +739,65 @@ app.post("/api/ask-veeva/search", async (req, res) => {
   }
 });
 
-app.post("/api/ask-veeva/ask", async (req, res) => {
+aapp.post("/api/ask-veeva/ask", async (req, res) => {
   try {
-    const { question, k = 6 } = req.body || {};
+    const { question, k = 6, docFilter = [] } = req.body || {};
     if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
 
-    // DB vide ? message explicite
-    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
+    // DB vide ?
+    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM public.askv_chunks`);
     if (!dc[0]?.n) {
       return res.json({
         ok: true,
         text: "Aucun document n'est indexé pour le moment. Importez des fichiers puis relancez votre question.",
-        citations: []
+        citations: [],
+        contexts: [],
       });
     }
 
+    // Embedding de la question
     const emb = (await embedBatch([question]))[0];
     const qvec = toVectorLiteral(emb);
 
+    // Filtre par doc_id si demandé
+    const filterSQL = Array.isArray(docFilter) && docFilter.length
+      ? `WHERE c.doc_id = ANY($3::uuid[])`
+      : ``;
+
+    const params = Array.isArray(docFilter) && docFilter.length ? [qvec, k, docFilter] : [qvec, k];
+
     const { rows } = await pool.query(
       `
-      SELECT d.filename, c.content, 1 - (c.embedding <=> $1::vector) AS score
-      FROM askv_chunks c
-      JOIN askv_documents d ON d.id = c.doc_id
+      SELECT 
+        d.id AS doc_id, d.filename, 
+        c.chunk_index, c.content,
+        1 - (c.embedding <=> $1::vector) AS score
+      FROM public.askv_chunks c
+      JOIN public.askv_documents d ON d.id = c.doc_id
+      ${filterSQL}
       ORDER BY c.embedding <=> $1::vector
       LIMIT $2
       `,
-      [qvec, k]
+      params
     );
 
-    const context = rows
-      .map((r, i) => `#${i + 1} — ${r.filename}\n${(r.content || "").slice(0, 2000)}`)
-      .join("\n\n---\n\n");
+    // Contexte compact (≤ ~2k chars par chunk), utile au modèle et à l’UI
+    const contextBlocks = rows.map((r, i) => {
+      const snippet = (r.content || "").slice(0, 2000);
+      return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
+    }).join("\n\n---\n\n");
 
+    // Prompt concis + instruction de citation
     const prompt = [
       {
         role: "system",
         content:
-          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'information n'est pas dans le contexte, dis-le.",
+          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'info n'est pas dans le contexte, dis-le clairement. Structure si utile (listes courtes)."
       },
       {
         role: "user",
         content:
-          `QUESTION:\n${question}\n\nCONTEXTE (extraits):\n${context}\n\nConsigne: cite les fichiers pertinents en fin de réponse.`,
+          `QUESTION:\n${question}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier.pdf].`
       },
     ];
 
@@ -792,8 +808,26 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     });
 
     const text = out.choices?.[0]?.message?.content || "";
-    const citations = rows.map((r) => ({ filename: r.filename, score: Number(r.score) }));
-    res.json({ ok: true, text, citations });
+
+    // Citations enrichies pour la sidebar
+    const citations = rows.map((r) => ({
+      doc_id: r.doc_id,
+      filename: r.filename,
+      chunk_index: r.chunk_index,
+      score: Number(r.score),
+      snippet: (r.content || "").slice(0, 400),
+    }));
+
+    // Contexts groupés par document pour l’affichage latéral
+    const byDoc = new Map();
+    for (const c of citations) {
+      const list = byDoc.get(c.doc_id) || { doc_id: c.doc_id, filename: c.filename, chunks: [] };
+      list.chunks.push({ chunk_index: c.chunk_index, snippet: c.snippet, score: c.score });
+      byDoc.set(c.doc_id, list);
+    }
+    const contexts = Array.from(byDoc.values());
+
+    res.json({ ok: true, text, citations, contexts });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
