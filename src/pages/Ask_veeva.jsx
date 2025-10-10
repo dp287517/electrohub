@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   health,
   ask,
-  search as apiSearch, // (optionnel) encore dispo
+  // search as apiSearch, // (optionnel) encore dispo si tu veux un onglet "Recherche"
   uploadSmall,
   chunkedUpload,
   pollJob,
   buildFileURL,
-  buildStreamURL,
-  findDocs,
+  // buildStreamURL, // supprimé : pas d'endpoint /stream côté serveur
+  findDocs, // garde en try/catch (endpoint pas encore implémenté côté serveur)
 } from "../utils/ask_veeva.js";
 
 /* ------------------------- Petits utilitaires UI ------------------------- */
@@ -17,8 +17,15 @@ function clsx(...xs) {
   return xs.filter(Boolean).join(" ");
 }
 const copy = async (s) => {
-  try { await navigator.clipboard.writeText(s); return true; } catch { return false; }
+  try {
+    await navigator.clipboard.writeText(s);
+    return true;
+  } catch {
+    return false;
+  }
 };
+const isVideoFilename = (name = "") =>
+  /\.(mp4|mov|m4v|webm)$/i.test(name);
 
 /* --------------------------------- UI bits -------------------------------- */
 function TabButton({ active, onClick, children }) {
@@ -86,7 +93,7 @@ function SidebarContexts({
       <div className="flex items-center justify-between gap-2 mb-2">
         <h3 className="font-semibold text-base">Documents du contexte</h3>
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-600">{selected.size} séléctionné(s)</span>
+          <span className="text-xs text-gray-600">{selected.size} sélectionné(s)</span>
           <button
             onClick={onAskSelected}
             disabled={!selected.size}
@@ -151,13 +158,13 @@ function SidebarContexts({
                   Focus seul
                 </button>
                 <button
-                  onClick={() => onPeek?.({ doc_id: d.doc_id, filename: d.filename, mime: d.mime })}
+                  onClick={() => onPeek?.({ doc_id: d.doc_id, filename: d.filename })}
                   className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
                 >
                   Aperçu
                 </button>
                 <button
-                  onClick={() => onOpen?.({ doc_id: d.doc_id, filename: d.filename, mime: d.mime })}
+                  onClick={() => onOpen?.({ doc_id: d.doc_id, filename: d.filename })}
                   className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
                 >
                   Ouvrir
@@ -175,9 +182,8 @@ function SidebarContexts({
 function Viewer({ file, onClose }) {
   if (!file) return null;
 
-  const isVideo = (file.mime || "").startsWith("video/");
   const fileURL = buildFileURL(file.doc_id);
-  const streamURL = buildStreamURL(file.doc_id);
+  const looksVideo = isVideoFilename(file.filename);
 
   return (
     <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4">
@@ -214,12 +220,11 @@ function Viewer({ file, onClose }) {
         </div>
 
         <div className="flex-1 overflow-hidden">
-          {isVideo ? (
+          {looksVideo ? (
             <div className="w-full h-full p-2">
-              <video src={streamURL} controls className="w-full h-[70vh] max-h-full" />
+              <video src={fileURL} controls className="w-full h-[70vh] max-h-full" />
             </div>
           ) : (
-            // IMPORTANT: on utilise un <iframe> et pas <object>/<embed> → évite CSP "object-src 'none'"
             <iframe
               title="preview"
               src={fileURL}
@@ -238,9 +243,8 @@ function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [k, setK] = useState(0); // 0 = large
-  const [wantVideos, setWantVideos] = useState(false);
-  const [contexts, setContexts] = useState([]); // [{doc_id, filename, chunks:[], mime}]
+  const [k, setK] = useState(6); // valeur par défaut alignée backend
+  const [contexts, setContexts] = useState([]); // [{doc_id, filename, chunks:[]}]
   const [selectedDocs, setSelectedDocs] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
@@ -269,17 +273,14 @@ function ChatBox() {
         setReady(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
-
-  const history = useMemo(
-    () => messages.filter(m => m.role !== "assistant").slice(-6).map(({ role, text }) => ({ role, text })),
-    [messages]
-  );
 
   function toggleSelect(docId) {
     setSelectedDocs((prev) => {
@@ -299,17 +300,16 @@ function ChatBox() {
   async function runAsk(q, docFilter = []) {
     setSending(true);
     try {
-      const resp = await ask(q, k, docFilter, { history, wantVideos }); // l’API accepte les 2 champs
+      // Le backend n’accepte que {question,k,docFilter} (pas history/wantVideos)
+      const resp = await ask(q, k, docFilter);
       const text = resp?.text || "Désolé, aucune réponse.";
       const citations = (resp?.citations || []).map((c) => ({
         filename: c.filename,
         score: c.score,
         doc_id: c.doc_id,
-        mime: c.mime,
       }));
       setMessages((m) => [...m, { role: "assistant", text, citations }]);
-      const ctx = (resp?.contexts || []).map(c => ({ ...c, mime: c.mime }));
-      setContexts(ctx);
+      setContexts(resp?.contexts || []);
       setSuggestions(resp?.suggestions || []);
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
@@ -343,8 +343,7 @@ function ChatBox() {
   }
 
   async function handlePeek(c) {
-    // Affiche un aperçu dans le viewer
-    setViewerFile({ doc_id: c.doc_id, filename: c.filename, mime: c.mime });
+    setViewerFile({ doc_id: c.doc_id, filename: c.filename });
   }
   function handleOpen(c) {
     window.open(buildFileURL(c.doc_id), "_blank", "noopener");
@@ -352,14 +351,20 @@ function ChatBox() {
 
   async function tryDidYouMean(q) {
     if (!q || q.length < 3) return;
-    const ret = await findDocs(q);
-    if (ret?.items?.length) {
-      setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
+    try {
+      const ret = await findDocs(q);
+      if (ret?.items?.length) {
+        setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
+      }
+    } catch {
+      // endpoint pas dispo : ignorer silencieusement
     }
   }
 
   function onClearChat() {
-    try { sessionStorage.removeItem("askVeeva_chat"); } catch {}
+    try {
+      sessionStorage.removeItem("askVeeva_chat");
+    } catch {}
     setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
     setContexts([]);
     setSelectedDocs(new Set());
@@ -373,21 +378,17 @@ function ChatBox() {
         <div className="text-sm text-gray-600 flex items-center gap-2">
           <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
           <label className="flex items-center gap-1">
-            <span>Portée</span>
+            <span>Top-K</span>
             <select
               className="border rounded px-1 py-0.5 text-sm"
               value={k}
               onChange={(e) => setK(Number(e.target.value))}
-              title="0 = large (sans limite stricte côté UI, borné serveur)"
+              title="Nombre de passages contextuels"
             >
-              {[0, 6, 10, 20, 40].map((n) => (
-                <option key={n} value={n}>{n === 0 ? "Large (0)" : n}</option>
+              {[6, 10, 20, 40].map((n) => (
+                <option key={n} value={n}>{n}</option>
               ))}
             </select>
-          </label>
-          <label className="flex items-center gap-1 ml-2">
-            <input type="checkbox" checked={wantVideos} onChange={(e) => setWantVideos(e.target.checked)} />
-            <span>Favoriser les vidéos</span>
           </label>
         </div>
         <div className="flex items-center gap-2">
