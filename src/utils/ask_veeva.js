@@ -55,26 +55,26 @@ export async function health() {
 }
 
 /**
- * ASK (RAG) — k par défaut = 6 pour garantir du contexte côté serveur.
- * docFilter: uuid[] optionnel pour cibler des docs.
+ * ASK (RAG) — avec personnalisation.
+ * @param {string} question
+ * @param {number} k - nombre de chunks
+ * @param {string[]} docFilter - filtrer par docs
+ * @param {string} email - utilisateur courant
+ * @param {string} contextMode - "auto" (par défaut) ou "none"
  */
-export async function ask(question, k = 6, docFilter = []) {
-  return post("/api/ask-veeva/ask", { question, k, docFilter });
+export async function ask(question, k = 6, docFilter = [], email = null, contextMode = "auto") {
+  return post("/api/ask-veeva/ask", { question, k, docFilter, email, contextMode });
 }
 
 /**
- * Simple vector search (compat).
- * @param {string} query
- * @param {number} k
+ * Simple vector search (compatibilité)
  */
-export async function search(query, k = 10) {
-  return post("/api/ask-veeva/search", { query, k });
+export async function search(query, k = 10, email = null) {
+  return post("/api/ask-veeva/search", { query, k, email });
 }
 
 /**
- * (Optionnel / futur) Fuzzy doc finder — “Vouliez-vous dire…”
- * Le backend n’a pas encore /find-docs. Si tu l’actives plus tard, garde cette API.
- * Pour l’instant, elle lèvera 404 -> à appeler dans un try/catch côté UI.
+ * (Optionnel) Fuzzy doc finder — “Vouliez-vous dire…”
  */
 export async function findDocs(q) {
   const qs = new URLSearchParams({ q: q ?? "" }).toString();
@@ -83,7 +83,7 @@ export async function findDocs(q) {
 
 /* ------------------------------ Uploads ------------------------------ */
 
-/** Upload direct (ZIP <= ~300MB côté serveur, ou fichier simple) */
+/** Upload direct (ZIP ≤ 300MB ou fichier simple) */
 export async function uploadSmall(file) {
   const fd = new FormData();
   const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -96,13 +96,11 @@ export async function uploadSmall(file) {
 }
 
 /**
- * Chunked upload pour gros ZIP.
- * onProgress reçoit { uploadedBytes, totalBytes }.
+ * Chunked upload (ZIP > 300MB)
  */
 export async function chunkedUpload(file, opts = {}) {
   const { onProgress = () => {}, partTimeoutMs = 60000, maxRetries = 3 } = opts;
 
-  // 1) init
   const initRes = await post("/api/ask-veeva/chunked/init", {
     filename: file.name,
     size: file.size,
@@ -110,7 +108,6 @@ export async function chunkedUpload(file, opts = {}) {
   if (!initRes?.uploadId || !initRes?.partSize) throw new Error("Init chunked échoué");
   const { uploadId, partSize } = initRes;
 
-  // 2) stream parts
   const totalParts = Math.ceil(file.size / partSize);
   let uploadedBytes = 0;
   onProgress({ uploadedBytes, totalBytes: file.size });
@@ -120,13 +117,11 @@ export async function chunkedUpload(file, opts = {}) {
       const start = (part - 1) * partSize;
       const end = Math.min(start + partSize, file.size);
       const blob = file.slice(start, end);
-
       const fd = new FormData();
       fd.append("chunk", blob, `${file.name}.part${part}`);
-
       const qs = new URLSearchParams({ uploadId, partNumber: String(part) });
-      let lastErr = null;
 
+      let lastErr = null;
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
           await fetchPathForm(`/api/ask-veeva/chunked/part?${qs.toString()}`, fd, partTimeoutMs);
@@ -134,7 +129,7 @@ export async function chunkedUpload(file, opts = {}) {
           break;
         } catch (e) {
           lastErr = e;
-          await sleep(400 * (attempt + 1)); // simple backoff
+          await sleep(400 * (attempt + 1));
         }
       }
       if (lastErr) throw lastErr;
@@ -143,15 +138,13 @@ export async function chunkedUpload(file, opts = {}) {
       onProgress({ uploadedBytes, totalBytes: file.size });
     }
 
-    // 3) complete
     const complete = await post("/api/ask-veeva/chunked/complete", {
       uploadId,
       totalParts,
       originalName: file.name,
     });
-    return complete; // { ok, job_id }
+    return complete;
   } catch (e) {
-    // Try to abort cleanly
     try {
       await post("/api/ask-veeva/chunked/abort", { uploadId, upto: totalParts });
     } catch {}
@@ -159,10 +152,9 @@ export async function chunkedUpload(file, opts = {}) {
   }
 }
 
-/** Poll job until done/error (adaptive backoff) */
+/** Poll job until done/error */
 export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 } = {}) {
   let stopped = false;
-
   async function loop() {
     let waitMs = minMs;
     while (!stopped) {
@@ -177,21 +169,47 @@ export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 
       }
     }
   }
-
   return {
     stop: () => { stopped = true; },
     promise: loop(),
   };
 }
 
+/* ------------------------------ Feedback / Profil / Perso ------------------------------ */
+
+/** Initialise ou met à jour le profil utilisateur */
+export async function initUser({ email, name, role, sector }) {
+  return post("/api/ask-veeva/initUser", { email, name, role, sector });
+}
+
+/** Journalisation d'événement (doc ouvert, etc.) */
+export async function logEvent(event) {
+  return post("/api/ask-veeva/logEvent", event);
+}
+
+/** Envoie un feedback sur une réponse IA */
+export async function sendFeedback({ email, question, doc_id, useful, note }) {
+  return post("/api/ask-veeva/feedback", { user_email: email, question, doc_id, useful, note });
+}
+
+/** Récupère la personnalisation (profil + docs favoris, etc.) */
+export async function getPersonalization(email) {
+  return post("/api/ask-veeva/personalize", { email });
+}
+
+/** Ajoute ou met à jour un synonyme (admin/auto) */
+export async function addSynonym(term, alt_term, weight = 1.0) {
+  return post("/api/ask-veeva/synonyms/update", { term, alt_term, weight });
+}
+
 /* ------------------------------ Viewer helpers ------------------------------ */
 
-/** URL pour ouvrir/télécharger l’original conservé côté serveur */
+/** URL pour ouvrir/télécharger l’original */
 export function buildFileURL(docId) {
   return `/api/ask-veeva/file/${docId}`;
 }
 
-/** Pas de route /stream côté backend pour l’instant — retire-la si non utilisée */
-export function buildStreamURL(/* docId */) {
-  throw new Error("Streaming non disponible : pas d'endpoint /api/ask-veeva/stream côté serveur.");
+/** Optionnel : flux vidéo si plus tard disponible */
+export function buildStreamURL(docId) {
+  return `/api/ask-veeva/stream/${docId}`;
 }
