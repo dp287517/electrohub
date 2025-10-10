@@ -13,6 +13,8 @@ import {
   initUser,
   setUserEmail,
   getUserEmail,
+  openDoc,
+  checkFile,
 } from "../utils/ask_veeva.js";
 
 /* ------------------------- Petits utilitaires UI ------------------------- */
@@ -69,11 +71,16 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
-function CitationChips({ citations, onPeek }) {
+function CitationChips({ citations, onPeek, max = 3 }) {
+  const [expanded, setExpanded] = useState(false);
   if (!citations?.length) return null;
+
+  const shown = expanded ? citations : citations.slice(0, max);
+  const remaining = Math.max(0, citations.length - shown.length);
+
   return (
     <div className="flex flex-wrap gap-2 mt-2">
-      {citations.map((c, i) => (
+      {shown.map((c, i) => (
         <button
           key={i}
           onClick={() => onPeek?.(c)}
@@ -83,6 +90,15 @@ function CitationChips({ citations, onPeek }) {
           {c.filename}
         </button>
       ))}
+      {remaining > 0 && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-gray-50 text-gray-700 border hover:bg-gray-100"
+          title="Afficher toutes les citations"
+        >
+          +{remaining} de plus
+        </button>
+      )}
     </div>
   );
 }
@@ -207,6 +223,7 @@ function SidebarContexts({
 
 /* ------------------------------- Viewer pane ------------------------------- */
 function Viewer({ file, onClose }) {
+  const [err, setErr] = useState(null);
   if (!file) return null;
 
   const fileURL = buildFileURL(file.doc_id);
@@ -219,6 +236,11 @@ function Viewer({ file, onClose }) {
           <div className="min-w-0 pr-2">
             <div className="text-sm text-gray-500">Prévisualisation</div>
             <div className="font-medium text-[13px] break-words whitespace-break-spaces">{file.filename}</div>
+            {err && (
+              <div className="mt-1 text-xs text-red-700">
+                Impossible d’afficher le document ({err}). Utilisez “Ouvrir l’original”.
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <a
@@ -249,7 +271,12 @@ function Viewer({ file, onClose }) {
         <div className="flex-1 overflow-hidden">
           {looksVideo ? (
             <div className="w-full h-full p-2">
-              <video src={fileURL} controls className="w-full h-[70vh] max-h-full" />
+              <video
+                src={fileURL}
+                controls
+                className="w-full h-[70vh] max-h-full"
+                onError={() => setErr("erreur de lecture vidéo")}
+              />
             </div>
           ) : (
             <iframe
@@ -257,6 +284,7 @@ function Viewer({ file, onClose }) {
               src={fileURL}
               className="w-full h-[80vh]"
               loading="eager"
+              onError={() => setErr("erreur de chargement iframe")}
             />
           )}
         </div>
@@ -276,7 +304,7 @@ function ChatBox() {
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
 
-  // New: profil courant
+  // Profil courant
   const [user, setUser] = useState(null);   // {email, role, sector...}
   const [email, setEmail] = useState(getUserEmail());
   const [waitingProfile, setWaitingProfile] = useState(false);
@@ -339,7 +367,8 @@ function ChatBox() {
   async function runAsk(q, docFilter = []) {
     setSending(true);
     try {
-      const resp = await ask(q, k, docFilter, email, "auto");
+      // Utilise la signature claire (mais la lib tolère aussi l'ancien ordre)
+      const resp = await ask(q, k, docFilter, "auto", email);
 
       // Profil manquant -> le backend le dit une seule fois; on affiche et on attend la réponse user
       if (resp?.needProfile) {
@@ -371,8 +400,6 @@ function ChatBox() {
     let role = detectRole(text);
     let sector = detectSector(text);
 
-    // si on n'a rien dans cette réplique mais que l'utilisateur répond en deux temps,
-    // on garde le state waitingProfile pour la réplique suivante.
     if (!emailInline && !role && !sector) return false;
 
     const payload = {
@@ -383,7 +410,7 @@ function ChatBox() {
 
     if (payload.email && payload.email !== email) {
       setEmail(payload.email);
-      setUserEmail(payload.email); // cookie + localStorage (lu par middleware backend)
+      setUserEmail(payload.email);
     }
 
     try {
@@ -391,12 +418,10 @@ function ChatBox() {
       if (ret?.ok && ret?.user) {
         setUser(ret.user);
       }
-      // si au moins un des champs a été compris, on peut sortir du mode attente
       if (role || sector) {
         setWaitingProfile(false);
         const q = pendingQuestion || "Merci. Quelle est votre question ?";
         setPendingQuestion(null);
-        // rejouer l'ASK initial
         await runAsk(q, selectedDocs.size ? Array.from(selectedDocs) : []);
         return true;
       }
@@ -416,8 +441,7 @@ function ChatBox() {
     // 1) si on attend le profil, tenter de le déduire/enregistrer à partir de ce message
     if (waitingProfile) {
       const updated = await tryCompleteProfileFrom(q);
-      if (updated) return; // la relance de la question est gérée par tryCompleteProfileFrom
-      // sinon on laisse l'utilisateur compléter (ne pas spammer l'API)
+      if (updated) return;
       return;
     }
 
@@ -446,7 +470,17 @@ function ChatBox() {
   }
 
   async function handlePeek(c) { setViewerFile({ doc_id: c.doc_id, filename: c.filename }); }
-  function handleOpen(c) { window.open(buildFileURL(c.doc_id), "_blank", "noopener"); }
+
+  async function handleOpen(c) {
+    // Vérifier la dispo côté serveur avant d’ouvrir
+    const res = await checkFile(c.doc_id);
+    if (!res.ok) {
+      alert(`Impossible d’ouvrir le fichier : ${res.error || "inconnu"}`);
+      return;
+    }
+    try { await openDoc(c.doc_id, { from: "sidebar" }); } catch {}
+    window.open(buildFileURL(c.doc_id), "_blank", "noopener");
+  }
 
   async function tryDidYouMean(q) {
     if (!q || q.length < 3) return;
@@ -481,12 +515,12 @@ function ChatBox() {
           <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
           <span className="text-xs px-2 py-0.5 rounded bg-gray-100">{userBadge}</span>
           <label className="flex items-center gap-1">
-            <span>Top-K</span>
+            <span title="Top-K = nombre d’extraits de documents passés au modèle">Top-K</span>
             <select
               className="border rounded px-1 py-0.5 text-sm"
               value={k}
               onChange={(e) => setK(Number(e.target.value))}
-              title="Nombre de passages contextuels"
+              title="Nombre de passages contextuels récupérés pour répondre"
             >
               {[6, 10, 20, 40].map((n) => (
                 <option key={n} value={n}>{n}</option>
