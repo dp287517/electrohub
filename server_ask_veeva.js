@@ -74,7 +74,7 @@ const PDF_STANDARD_FONTS = path.join(pdfjsPkgDir, "standard_fonts/");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBED_MODEL || "text-embedding-3-small"; // 1536 dims
 const EMBEDDING_DIMS = 1536;
-const ANSWER_MODEL = process.env.ASK_VEEVA_ANSWER_MODEL || "gpt-5";
+const ANSWER_MODEL = process.env.ASK_VEEVA_ANSWER_MODEL || "gpt-4o-mini";
 
 // Performances (tunables)
 const EMBED_BATCH = Math.max(4, Number(process.env.ASK_VEEVA_EMBED_BATCH || 8));
