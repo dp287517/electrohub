@@ -704,6 +704,77 @@ app.post("/api/ask-veeva/chunked/abort", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
+// ROUTES — SERVEURS DE FICHIERS (viewer PDF / streaming vidéo)
+// -----------------------------------------------------------------------------
+app.get("/api/ask-veeva/file/:docId", async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const { rows } = await pool.query(
+      `SELECT filename, path, mime FROM public.askv_documents WHERE id = $1`,
+      [docId]
+    );
+    const row = rows[0];
+    if (!row) return res.status(404).send("Document introuvable");
+    const abs = row.path;
+    const mime = row.mime || "application/octet-stream";
+
+    const exists = await fsp.stat(abs).catch(() => null);
+    if (!exists) return res.status(404).send("Fichier non disponible sur le disque");
+
+    res.type(mime);
+    // "inline" par défaut (pdf dans iframe) ; si tu veux forcer download, utilise attachment
+    // res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(row.filename)}"`);
+    res.sendFile(path.resolve(abs));
+  } catch (e) {
+    res.status(500).send(String(e?.message || e));
+  }
+});
+
+app.get("/api/ask-veeva/stream/:docId", async (req, res) => {
+  try {
+    const { docId } = req.params;
+    const { rows } = await pool.query(
+      `SELECT filename, path, mime FROM public.askv_documents WHERE id = $1`,
+      [docId]
+    );
+    const row = rows[0];
+    if (!row) return res.status(404).send("Document introuvable");
+    const abs = row.path;
+    const mime = row.mime || "video/mp4";
+
+    const stat = await fsp.stat(abs).catch(() => null);
+    if (!stat) return res.status(404).send("Fichier non disponible");
+
+    const range = req.headers.range;
+    if (!range) {
+      // Pas de range: renvoyer tout (utile pour formats non vidéo)
+      res.writeHead(200, { "Content-Length": stat.size, "Content-Type": mime });
+      fs.createReadStream(abs).pipe(res);
+      return;
+    }
+
+    // Range parsing
+    const CHUNK_SIZE = 1 * 1024 * 1024; // 1 Mo
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = Math.min(start + CHUNK_SIZE, stat.size - 1);
+    const contentLength = end - start + 1;
+
+    res.writeHead(206, {
+      "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": contentLength,
+      "Content-Type": mime,
+    });
+
+    const stream = fs.createReadStream(abs, { start, end });
+    stream.pipe(res);
+  } catch (e) {
+    res.status(500).send(String(e?.message || e));
+  }
+});
+
+// -----------------------------------------------------------------------------
 // SEARCH + ASK
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/search", async (req, res) => {
@@ -766,7 +837,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
 
     const params = Array.isArray(docFilter) && docFilter.length ? [qvec, k, docFilter] : [qvec, k];
 
-    const { rows } = await pool.query(
+    let { rows } = await pool.query(
       `
       SELECT 
         d.id AS doc_id, d.filename, 
@@ -781,7 +852,45 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       params
     );
 
-    // Contexte compact (≤ ~2k chars par chunk), utile au modèle et à l’UI
+    // Fallback si rien trouvé : élargir et diversifier
+    if (!rows.length) {
+      const widenK = Math.max(50, k);
+      const widenParams = Array.isArray(docFilter) && docFilter.length
+        ? [qvec, widenK, docFilter] : [qvec, widenK];
+
+      const ret = await pool.query(
+        `
+        SELECT 
+          d.id AS doc_id, d.filename, 
+          c.chunk_index, c.content,
+          1 - (c.embedding <=> $1::vector) AS score
+        FROM public.askv_chunks c
+        JOIN public.askv_documents d ON d.id = c.doc_id
+        ${filterSQL}
+        ORDER BY c.embedding <=> $1::vector
+        LIMIT $2
+        `,
+        widenParams
+      );
+      rows = ret.rows || [];
+    }
+
+    // Diversification: écarter les chunks trop voisins pour le même doc
+    const SEPARATION = 3; // chunks espacés d'au moins 3 index
+    const seen = new Map(); // doc_id -> derniers indices retenus
+    const diversified = [];
+    for (const r of rows) {
+      const arr = seen.get(r.doc_id) || [];
+      if (arr.every((idx) => Math.abs(idx - r.chunk_index) >= SEPARATION)) {
+        diversified.push(r);
+        arr.push(r.chunk_index);
+        // ne garde que quelques derniers pour limiter la taille
+        seen.set(r.doc_id, arr.slice(-4));
+      }
+    }
+    rows = diversified.slice(0, k);
+
+    // Contexte compact pour le prompt
     const contextBlocks = rows.map((r, i) => {
       const snippet = (r.content || "").slice(0, 2000);
       return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
@@ -792,12 +901,12 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       {
         role: "system",
         content:
-          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'info n'est pas dans le contexte, dis-le clairement. Structure si utile (listes courtes)."
+          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'information n'est pas dans le contexte, dis-le clairement. Structure avec des listes courtes si utile."
       },
       {
         role: "user",
         content:
-          `QUESTION:\n${question}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier.pdf].`
+          `QUESTION:\n${question}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Base-toi d'abord sur le contexte fourni.\n- Si c’est insuffisant, indique clairement ce qui manque.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier.pdf].`
       },
     ];
 
