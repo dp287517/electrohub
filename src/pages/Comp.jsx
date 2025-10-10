@@ -127,7 +127,7 @@ function Tabs({ value, onChange }) {
   return (
     <div
       ref={ref}
-      className="flex flex-wrap gap-2 sticky top-[60px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
+      className="flex flex-wrap gap-2 sticky top=[60px] md:top-[60px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
     >
       {T("vendors", "Vendors", "📋")}
       {T("calendar", "Calendar", "📅")}
@@ -561,7 +561,7 @@ export default function Comp() {
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>
-          <p className="text-gray-500 text-sm">
+        <p className="text-gray-500 text-sm">
             Vendors offers, MSRA, pre-qualification, prevention plan, access, visits, SAP WO & attachments
           </p>
         </div>
@@ -586,194 +586,20 @@ export default function Comp() {
         onClear={onClear}
       />
 
-      {/* VENDORS */}
+      {/* VENDORS — TABLE REDONE */}
       {tab === "vendors" && (
-        <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
-          {/* wrapper pour largeur min et grille à colonnes fixes */}
-          <div className="min-w-[980px]">
-            {/* HEADER sticky (grille) */}
-            <div
-              className="sticky bg-gray-50/95 backdrop-blur z-30"
-              style={{ top: "calc(60px + var(--tabs-h, 44px) + 8px)" }}
-              role="rowgroup"
-            >
-              <div
-                className="grid border-b text-sm font-medium text-gray-700"
-                style={{
-                  gridTemplateColumns:
-                    "15.2% 10.2% 10.2% 10.2% 8.9% 7.6% 10.2% 10.2% 7.6% 9.7%",
-                }}
-                role="row"
-              >
-                {[
-                  { k: "name", label: "Name" },
-                  { k: "offer_status", label: "Offer" },
-                  { k: "msra_status", label: "MSRA" },
-                  { k: "prequal_status", label: "Pre-qual" },
-                  { k: "pp", label: "PP", noSort: true },
-                  { k: "visits", label: "Visits" },
-                  { k: "first_date", label: "First date" },
-                  { k: "owner", label: "Owner" },
-                  { k: "files_count", label: "Files" },
-                  { k: "actions", label: "Actions", noSort: true },
-                ].map((col) => (
-                  <div key={col.k} className="px-4 py-2" role="columnheader">
-                    {!col.noSort ? (
-                      <button
-                        onClick={() => setSort(col.k)}
-                        className="inline-flex items-center gap-1 hover:underline"
-                      >
-                        <span>{col.label}</span>
-                        <span className="text-xs">
-                          {sortBy.field !== col.k ? "↕" : sortBy.dir === "asc" ? "↑" : "↓"}
-                        </span>
-                      </button>
-                    ) : (
-                      <span>{col.label}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* BODY (lignes en grille, mêmes colonnes) */}
-            <div role="rowgroup" className="text-sm">
-              {!loading && filtered.length === 0 && (
-                <div className="px-4 py-4 text-gray-500">No vendors.</div>
-              )}
-              {loading && (
-                <div className="px-4 py-4 text-gray-500">Loading…</div>
-              )}
-
-              {filtered.map((v) => {
-                const first = v.visits?.[0];
-                const preq = v.prequal_status || "non_fait";
-                return (
-                  <div
-                    key={v.id}
-                    role="row"
-                    className="grid border-t hover:bg-gray-50"
-                    style={{
-                      gridTemplateColumns:
-                        "15.2% 10.2% 10.2% 10.2% 8.9% 7.6% 10.2% 10.2% 7.6% 9.7%",
-                    }}
-                  >
-                    {/* Name */}
-                    <div className="px-4 py-3">
-                      <div className="flex items-center gap-2 min-w-[220px]">
-                        <button
-                          className="text-blue-700 font-medium hover:underline"
-                          onClick={() => openEdit(v)}
-                          title="Edit"
-                        >
-                          {v.name}
-                        </button>
-                        {v.sap_wo && (
-                          <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Offer */}
-                    <div className="px-4 py-3">
-                      <Badge color={statusColor.offre(v.offer_status)}>
-                        {v.offer_status}
-                      </Badge>
-                    </div>
-
-                    {/* MSRA */}
-                    <div className="px-4 py-3">
-                      <Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>
-                        {v.msra_status || v.jsa_status}
-                      </Badge>
-                    </div>
-
-                    {/* Pre-qual */}
-                    <div className="px-4 py-3">
-                      <Badge
-                        color={
-                          preq === "reçue" || preq === "recue"
-                            ? "blue"
-                            : preq === "en_cours"
-                            ? "yellow"
-                            : "gray"
-                        }
-                      >
-                        {preq}
-                      </Badge>
-                    </div>
-
-                    {/* PP */}
-                    <div className="px-4 py-3">
-                      {v.pp_applicable ? (
-                        v.pp_link ? (
-                          <a
-                            className="text-emerald-700 underline"
-                            href={v.pp_link}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Applicable (link)
-                          </a>
-                        ) : (
-                          <span className="text-emerald-700">Applicable</span>
-                        )
-                      ) : (
-                        <span className="text-gray-500">N/A</span>
-                      )}
-                    </div>
-
-                    {/* Visits */}
-                    <div className="px-4 py-3">{v.visits?.length || 0}</div>
-
-                    {/* First date */}
-                    <div className="px-4 py-3">
-                      {first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}
-                    </div>
-
-                    {/* Owner */}
-                    <div className="px-4 py-3">{v.owner || "—"}</div>
-
-                    {/* Files */}
-                    <div className="px-4 py-3">
-                      {v.files_count ? (
-                        <button
-                          className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
-                          onClick={() => openEdit(v)}
-                        >
-                          {v.files_count} file{v.files_count > 1 ? "s" : ""}
-                        </button>
-                      ) : (
-                        <span className="text-gray-400 text-xs">0</span>
-                      )}
-                    </div>
-
-                    {/* Actions */}
-                    <div className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <button
-                          className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600"
-                          onClick={() => openEdit(v)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
-                          onClick={async () => {
-                            await API.remove(v.id);
-                            await reloadAll();
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <VendorsTable
+          items={filtered}
+          loading={loading}
+          sortBy={sortBy}
+          onSort={setSort}
+          onEdit={openEdit}
+          onDelete={async (id) => {
+            await API.remove(id);
+            await reloadAll();
+          }}
+          stickyTop={stickyTop}
+        />
       )}
 
       {/* CALENDAR */}
@@ -908,6 +734,242 @@ export default function Comp() {
         </Drawer>
       )}
     </section>
+  );
+}
+
+/* ----------------- Vendors Table (refonte complète) ----------------- */
+function VendorsTable({ items = [], loading, sortBy, onSort, onEdit, onDelete, stickyTop }) {
+  const cols = [
+    { k: "name", label: "Name", sortable: true },
+    { k: "offer_status", label: "Offer", sortable: true },
+    { k: "msra_status", label: "MSRA", sortable: true },
+    { k: "prequal_status", label: "Pre-qual", sortable: true },
+    { k: "pp", label: "PP", sortable: false },
+    { k: "visits", label: "Visits", sortable: true },
+    { k: "first_date", label: "First date", sortable: true },
+    { k: "owner", label: "Owner", sortable: true },
+    { k: "files_count", label: "Files", sortable: true },
+    { k: "actions", label: "Actions", sortable: false },
+  ];
+
+  return (
+    <div className="bg-white rounded-2xl border shadow-sm">
+      {/* Mobile: cartes */}
+      <div className="sm:hidden divide-y">
+        {loading && <div className="p-4 text-gray-500">Loading…</div>}
+        {!loading && items.length === 0 && <div className="p-4 text-gray-500">No vendors.</div>}
+        {items.map((v) => {
+          const preq = v.prequal_status || "non_fait";
+          const first = v.visits?.[0];
+          return (
+            <div key={v.id} className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <button className="text-blue-700 font-semibold hover:underline" onClick={() => onEdit(v)}>
+                    {v.name}
+                  </button>
+                  {v.sap_wo && <div className="text-xs text-gray-500 mt-0.5">WO {v.sap_wo}</div>}
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600 text-xs"
+                    onClick={() => onEdit(v)}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 text-xs"
+                    onClick={() => onDelete(v.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+                <div className="text-gray-500">Offer</div>
+                <div><Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge></div>
+
+                <div className="text-gray-500">MSRA</div>
+                <div><Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>{v.msra_status || v.jsa_status}</Badge></div>
+
+                <div className="text-gray-500">Pre-qual</div>
+                <div>
+                  <Badge color={preq === "reçue" || preq === "recue" ? "blue" : preq === "en_cours" ? "yellow" : "gray"}>
+                    {preq}
+                  </Badge>
+                </div>
+
+                <div className="text-gray-500">PP</div>
+                <div>
+                  {v.pp_applicable ? (
+                    v.pp_link ? (
+                      <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">Applicable (link)</a>
+                    ) : <span className="text-emerald-700">Applicable</span>
+                  ) : <span className="text-gray-500">N/A</span>}
+                </div>
+
+                <div className="text-gray-500">Visits</div>
+                <div>{v.visits?.length || 0}</div>
+
+                <div className="text-gray-500">First date</div>
+                <div>{first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}</div>
+
+                <div className="text-gray-500">Owner</div>
+                <div>{v.owner || "—"}</div>
+
+                <div className="text-gray-500">Files</div>
+                <div>
+                  {v.files_count ? (
+                    <button className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs" onClick={() => onEdit(v)}>
+                      {v.files_count} file{v.files_count > 1 ? "s" : ""}
+                    </button>
+                  ) : <span className="text-gray-400 text-xs">0</span>}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop: vrai tableau */}
+      <div className="hidden sm:block overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead
+            className="sticky z-20 top-0 bg-gray-50/90 backdrop-blur supports-[backdrop-filter]:bg-gray-50/70"
+            style={{ top: stickyTop }}
+          >
+            <tr className="text-left border-b">
+              {cols.map((c) => (
+                <th key={c.k} className="px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">
+                  {c.sortable ? (
+                    <button
+                      onClick={() => onSort(c.k)}
+                      className="inline-flex items-center gap-1 hover:underline"
+                    >
+                      <span>{c.label}</span>
+                      <span className="text-xs">
+                        {sortBy.field !== c.k ? "↕" : sortBy.dir === "asc" ? "↑" : "↓"}
+                      </span>
+                    </button>
+                  ) : (
+                    <span>{c.label}</span>
+                  )}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td colSpan={cols.length} className="px-4 py-4 text-gray-500">
+                  Loading…
+                </td>
+              </tr>
+            )}
+            {!loading && items.length === 0 && (
+              <tr>
+                <td colSpan={cols.length} className="px-4 py-4 text-gray-500">
+                  No vendors.
+                </td>
+              </tr>
+            )}
+            {!loading && items.map((v, idx) => {
+              const first = v.visits?.[0];
+              const preq = v.prequal_status || "non_fait";
+              return (
+                <tr key={v.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
+                  {/* Name */}
+                  <td className="px-4 py-3 min-w-[220px]">
+                    <div className="flex items-center gap-2">
+                      <button className="text-blue-700 font-medium hover:underline" onClick={() => onEdit(v)} title="Edit">
+                        {v.name}
+                      </button>
+                      {v.sap_wo && <span className="text-xs text-gray-500">• WO {v.sap_wo}</span>}
+                    </div>
+                  </td>
+
+                  {/* Offer */}
+                  <td className="px-4 py-3">
+                    <Badge color={statusColor.offre(v.offer_status)}>{v.offer_status}</Badge>
+                  </td>
+
+                  {/* MSRA */}
+                  <td className="px-4 py-3">
+                    <Badge color={statusColor.msra(v.msra_status || v.jsa_status)}>{v.msra_status || v.jsa_status}</Badge>
+                  </td>
+
+                  {/* Pre-qual */}
+                  <td className="px-4 py-3">
+                    <Badge color={preq === "reçue" || preq === "recue" ? "blue" : preq === "en_cours" ? "yellow" : "gray"}>
+                      {preq}
+                    </Badge>
+                  </td>
+
+                  {/* PP */}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    {v.pp_applicable ? (
+                      v.pp_link ? (
+                        <a className="text-emerald-700 underline" href={v.pp_link} target="_blank" rel="noreferrer">
+                          Applicable (link)
+                        </a>
+                      ) : (
+                        <span className="text-emerald-700">Applicable</span>
+                      )
+                    ) : (
+                      <span className="text-gray-500">N/A</span>
+                    )}
+                  </td>
+
+                  {/* Visits */}
+                  <td className="px-4 py-3">{v.visits?.length || 0}</td>
+
+                  {/* First date */}
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    {first?.start ? dayjs(first.start).format("DD/MM/YYYY") : "—"}
+                  </td>
+
+                  {/* Owner */}
+                  <td className="px-4 py-3">{v.owner || "—"}</td>
+
+                  {/* Files */}
+                  <td className="px-4 py-3">
+                    {v.files_count ? (
+                      <button
+                        className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 text-xs"
+                        onClick={() => onEdit(v)}
+                      >
+                        {v.files_count} file{v.files_count > 1 ? "s" : ""}
+                      </button>
+                    ) : (
+                      <span className="text-gray-400 text-xs">0</span>
+                    )}
+                  </td>
+
+                  {/* Actions */}
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2">
+                      <button
+                        className="px-2 py-1 rounded bg-amber-500 text-white hover:bg-amber-600"
+                        onClick={() => onEdit(v)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100"
+                        onClick={() => onDelete(v.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
