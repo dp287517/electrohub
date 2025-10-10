@@ -103,6 +103,7 @@ async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`); // pour gen_random_uuid()
 
+  // --- Schéma nominal (si tables absentes) ---
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_documents (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -135,6 +136,22 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     );
+  `);
+
+  // --- PATCH: Harmonisation idempotente si tables déjà existaient sans colonnes récentes ---
+  await pool.query(`
+    ALTER TABLE askv_documents
+      ADD COLUMN IF NOT EXISTS path  TEXT,
+      ADD COLUMN IF NOT EXISTS mime  TEXT,
+      ADD COLUMN IF NOT EXISTS bytes BIGINT,
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+  `);
+  await pool.query(`
+    ALTER TABLE askv_jobs
+      ADD COLUMN IF NOT EXISTS error TEXT,
+      ADD COLUMN IF NOT EXISTS total_files INT DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS processed_files INT DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
   `);
 
   // Index vector (IVFFLAT) – ok car dims=1536 (< 2000)
@@ -242,14 +259,21 @@ async function parsePDF(absPath) {
   });
   const doc = await loadingTask.promise;
   let out = "";
+  // --- PATCH: robustesse page-by-page ---
   for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p);
-    const content = await page.getTextContent({ normalizeWhitespace: true });
-    const text = content.items.map((it) => it.str).join(" ");
-    out += `\n\n[PAGE ${p}]\n${text}`;
-    page.cleanup();
+    try {
+      const page = await doc.getPage(p);
+      const content = await page.getTextContent({ normalizeWhitespace: true });
+      const text = content.items.map((it) => it.str).join(" ");
+      out += `\n\n[PAGE ${p}]\n${text}`;
+      page.cleanup();
+    } catch (e) {
+      out += `\n\n[PAGE ${p}] (erreur d'extraction)`;
+    }
   }
   await doc.cleanup();
+  // Certaines versions exposent destroy() via loadingTask ; on tente prudemment
+  try { loadingTask.destroy?.(); } catch {}
   return out.trim();
 }
 async function parseDOCX(absPath) {
