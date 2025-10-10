@@ -3,37 +3,31 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   health,
   ask,
-  find,            // <= utils/ask_veeva.js doit exposer find(query, limit)
+  search as apiSearch, // (optionnel) encore dispo
   uploadSmall,
   chunkedUpload,
   pollJob,
+  buildFileURL,
+  buildStreamURL,
+  findDocs,
 } from "../utils/ask_veeva.js";
 
-/* ------------------------------ helpers UI ------------------------------ */
-
+/* ------------------------- Petits utilitaires UI ------------------------- */
 function clsx(...xs) {
   return xs.filter(Boolean).join(" ");
 }
+const copy = async (s) => {
+  try { await navigator.clipboard.writeText(s); return true; } catch { return false; }
+};
 
-function guessKindFromFilename(name = "") {
-  const ext = (name.split(".").pop() || "").toLowerCase();
-  if (["mp4", "mov", "m4v", "webm"].includes(ext)) return "video";
-  if (["pdf"].includes(ext)) return "pdf";
-  if (["doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "txt", "md"].includes(ext)) return "doc";
-  return "other";
-}
-
-/* ------------------------------ UI atoms ------------------------------ */
-
+/* --------------------------------- UI bits -------------------------------- */
 function TabButton({ active, onClick, children }) {
   return (
     <button
       onClick={onClick}
       className={clsx(
-        "px-3 sm:px-4 py-2 rounded-t-lg text-sm font-medium transition",
-        active
-          ? "bg-white border-x border-t border-gray-200"
-          : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+        "px-4 py-2 rounded-t-lg text-sm font-medium",
+        active ? "bg-white border-x border-t border-gray-200" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
       )}
     >
       {children}
@@ -41,290 +35,217 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
-function CitationChips({ citations, onOpenDoc }) {
+function CitationChips({ citations, onPeek }) {
   if (!citations?.length) return null;
   return (
     <div className="flex flex-wrap gap-2 mt-2">
       {citations.map((c, i) => (
         <button
           key={i}
-          type="button"
-          onClick={() => onOpenDoc?.(c)}
-          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-          title={`score: ${c.score?.toFixed?.(3) ?? "-"}`}
+          onClick={() => onPeek?.(c)}
+          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+          title={`${c.filename} • score: ${c.score?.toFixed?.(3)}`}
         >
-          <span className="i-mdi-eye text-[13px]" aria-hidden>👁</span>
-          <span className="truncate max-w-[14rem]" title={c.filename}>{c.filename}</span>
+          {c.filename}
         </button>
       ))}
     </div>
   );
 }
 
-function Message({ role, text, citations, onOpenDoc }) {
+function Message({ role, text, citations, onPeek }) {
   const isUser = role === "user";
   return (
-    <div className={clsx("flex", isUser ? "justify-end" : "justify-start")}>
+    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
       <div
         className={clsx(
-          "max-w-[92%] sm:max-w-[78%] lg:max-w-[70%] rounded-2xl px-4 py-3 shadow leading-relaxed",
-          isUser
-            ? "bg-blue-600 text-white rounded-br-sm"
-            : "bg-white text-gray-900 rounded-bl-sm border"
+          "max-w-[95%] sm:max-w-[75%] md:max-w-[65%] rounded-2xl px-4 py-3 shadow",
+          isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-800 rounded-bl-sm border"
         )}
       >
-        <div className="whitespace-pre-wrap break-words">{text}</div>
-        {!isUser && (
-          <CitationChips citations={citations} onOpenDoc={onOpenDoc} />
-        )}
+        <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
+        {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
       </div>
     </div>
   );
 }
 
-/* --------------------------- Recherche globale -------------------------- */
-
-function GlobalSearch({ onPickDoc }) {
-  const [q, setQ] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [items, setItems] = useState([]);
-  const [suggestions, setSuggestions] = useState([]);
-
-  async function onSearch(e) {
-    e?.preventDefault?.();
-    const query = q.trim();
-    if (!query || busy) return;
-    setBusy(true);
-    setItems([]);
-    setSuggestions([]);
-    try {
-      const res = await find(query, 120); // backend: hybride (filename fuzzy + trgm)
-      setItems(res?.items || []);
-      setSuggestions(res?.suggestions || []);
-    } catch (e) {
-      setItems([]);
-      setSuggestions([]);
-      console.error(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
+/* --------------------------- Sidebar (multi-focus) --------------------------- */
+function SidebarContexts({
+  contexts,
+  selected,
+  toggleSelect,
+  selectOnly,
+  clearSelection,
+  onAskSelected,
+  onPeek,
+  onOpen,
+}) {
   return (
-    <div className="space-y-3">
-      <form onSubmit={onSearch} className="flex gap-2">
-        <input
-          className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-          placeholder="Rechercher un document ou une vidéo… (ex: N2000-2, vignette TnT, 'vignetteuse')"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <button
-          className="px-3 sm:px-4 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50"
-          disabled={!q.trim() || busy}
-        >
-          Rechercher
-        </button>
-      </form>
-
-      {suggestions?.length > 0 && (
-        <div className="text-xs text-gray-700">
-          Vouliez-vous dire&nbsp;:
-          <div className="mt-1 flex flex-wrap gap-2">
-            {suggestions.map((s, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  setQ(s);
-                  setTimeout(onSearch, 0);
-                }}
-                className="px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-800 border border-yellow-200 hover:bg-yellow-100"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <h3 className="font-semibold text-base">Documents du contexte</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-600">{selected.size} séléctionné(s)</span>
+          <button
+            onClick={onAskSelected}
+            disabled={!selected.size}
+            className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            Re-poser (focus)
+          </button>
+          {!!selected.size && (
+            <button
+              onClick={clearSelection}
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            >
+              Vider
+            </button>
+          )}
         </div>
-      )}
+      </div>
 
-      {!!items.length && (
-        <div className="space-y-2 max-h-64 overflow-auto pr-1">
-          {items.map((it) => {
-            const kind = guessKindFromFilename(it.filename);
-            return (
-              <div
-                key={it.doc_id}
-                className="flex items-center justify-between gap-2 border rounded-lg p-2 hover:bg-gray-50"
-              >
-                <div className="min-w-0">
-                  <div className="text-sm font-medium truncate" title={it.filename}>
-                    {it.filename}
+      <div className="space-y-3 overflow-auto pr-1">
+        {!contexts?.length && (
+          <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>
+        )}
+        {contexts?.map((d) => {
+          const checked = selected.has(d.doc_id);
+          return (
+            <div key={d.doc_id} className="border rounded-lg p-3 bg-white">
+              <div className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={checked}
+                  onChange={() => toggleSelect(d.doc_id)}
+                  title="Ajouter/retirer du focus multiple"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium text-[13px] break-words whitespace-break-spaces leading-snug">
+                    {d.filename}
                   </div>
-                  <div className="text-xs text-gray-500">
-                    {kind === "video" ? "Vidéo" : kind === "pdf" ? "PDF" : "Document"}
-                    {typeof it.score === "number" && (
-                      <> • score ~ {it.score.toFixed(2)}</>
+                  <div className="mt-2 text-[12px] text-gray-700 space-y-1">
+                    {d.chunks?.slice(0, 4).map((c, i) => (
+                      <div key={i} className="border-l-2 border-gray-200 pl-2">
+                        <div className="text-gray-400"># {c.chunk_index}</div>
+                        <div className="break-words whitespace-break-spaces">
+                          {c.snippet}
+                        </div>
+                      </div>
+                    ))}
+                    {d.chunks && d.chunks.length > 4 && (
+                      <div className="text-[11px] text-gray-400">
+                        +{d.chunks.length - 4} autres extraits…
+                      </div>
                     )}
                   </div>
                 </div>
+              </div>
+
+              <div className="mt-2 flex flex-wrap gap-2">
                 <button
-                  onClick={() => onPickDoc?.(it)}
-                  className="shrink-0 text-xs px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                  onClick={() => selectOnly(d.doc_id)}
+                  className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                >
+                  Focus seul
+                </button>
+                <button
+                  onClick={() => onPeek?.({ doc_id: d.doc_id, filename: d.filename, mime: d.mime })}
+                  className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+                >
+                  Aperçu
+                </button>
+                <button
+                  onClick={() => onOpen?.({ doc_id: d.doc_id, filename: d.filename, mime: d.mime })}
+                  className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
                 >
                   Ouvrir
                 </button>
               </div>
-            );
-          })}
-        </div>
-      )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-/* ----------------------------- Sidebar contexte ----------------------------- */
+/* ------------------------------- Viewer pane ------------------------------- */
+function Viewer({ file, onClose }) {
+  if (!file) return null;
 
-function SidebarContexts({ contexts, activeDocId, onFocusDoc, onOpenDoc }) {
-  if (!contexts?.length) {
-    return (
-      <div className="text-sm text-gray-500">
-        Aucun document dans le contexte. Utilisez la recherche ci-dessous pour ouvrir un fichier/vidéo.
-      </div>
-    );
-  }
+  const isVideo = (file.mime || "").startsWith("video/");
+  const fileURL = buildFileURL(file.doc_id);
+  const streamURL = buildStreamURL(file.doc_id);
+
   return (
-    <div className="space-y-3">
-      {contexts.map((d) => {
-        const active = d.doc_id === activeDocId;
-        return (
-          <div
-            key={d.doc_id}
-            className={clsx("border rounded-lg p-3", active ? "border-indigo-400 bg-indigo-50" : "bg-white")}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="font-medium text-sm truncate" title={d.filename}>
-                {d.filename}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => onOpenDoc?.({ doc_id: d.doc_id, filename: d.filename })}
-                  className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-                  title="Ouvrir dans le viewer"
-                >
-                  👁 Ouvrir
-                </button>
-                <button
-                  onClick={() => onFocusDoc?.(d.doc_id)}
-                  className={clsx(
-                    "text-xs px-2 py-1 rounded",
-                    active ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200"
-                  )}
-                >
-                  {active ? "Focalisé" : "Focus"}
-                </button>
-              </div>
-            </div>
-            <div className="mt-2 text-xs text-gray-600">
-              {d.chunks?.slice(0, 3).map((c, i) => (
-                <div key={i} className="mb-1">
-                  <span className="inline-block min-w-10 text-gray-400">#{c.chunk_index ?? "–"}</span>
-                  <span className="opacity-80">{c.snippet}</span>
-                </div>
-              ))}
-              {d.chunks && d.chunks.length > 3 && (
-                <div className="text-[11px] text-gray-400">+{d.chunks.length - 3} autres extraits…</div>
-              )}
-            </div>
+    <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-2 border-b">
+          <div className="min-w-0 pr-2">
+            <div className="text-sm text-gray-500">Prévisualisation</div>
+            <div className="font-medium text-[13px] break-words whitespace-break-spaces">{file.filename}</div>
           </div>
-        );
-      })}
-    </div>
-  );
-}
+          <div className="flex items-center gap-2">
+            <a
+              href={fileURL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+              title="Ouvrir dans un nouvel onglet"
+            >
+              Ouvrir l’original
+            </a>
+            <button
+              onClick={() => copy(fileURL)}
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+              title="Copier l’URL"
+            >
+              Copier l’URL
+            </button>
+            <button
+              onClick={onClose}
+              className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
 
-/* ------------------------------- Viewer panel ------------------------------- */
-
-function Viewer({ doc, onClose }) {
-  if (!doc) {
-    return (
-      <div className="h-full border rounded-lg bg-white flex items-center justify-center text-sm text-gray-500">
-        Sélectionnez un document ou une vidéo à droite/ci-dessous.
-      </div>
-    );
-  }
-  const { doc_id, filename } = doc;
-  const kind = guessKindFromFilename(filename || "");
-  const fileUrl = `/api/ask-veeva/file/${doc_id}`;
-  const streamUrl = `/api/ask-veeva/stream/${doc_id}`;
-
-  return (
-    <div className="h-full border rounded-lg bg-white flex flex-col">
-      <div className="px-3 py-2 border-b flex items-center justify-between gap-2">
-        <div className="truncate font-medium text-sm" title={filename}>{filename}</div>
-        <div className="flex items-center gap-2">
-          <a
-            href={fileUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-            title="Ouvrir dans un nouvel onglet"
-          >
-            ↗ Ouvrir
-          </a>
-          <button
-            onClick={onClose}
-            className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
-          >
-            Fermer
-          </button>
+        <div className="flex-1 overflow-hidden">
+          {isVideo ? (
+            <div className="w-full h-full p-2">
+              <video src={streamURL} controls className="w-full h-[70vh] max-h-full" />
+            </div>
+          ) : (
+            // IMPORTANT: on utilise un <iframe> et pas <object>/<embed> → évite CSP "object-src 'none'"
+            <iframe
+              title="preview"
+              src={fileURL}
+              className="w-full h-[80vh]"
+              loading="eager"
+            />
+          )}
         </div>
       </div>
-
-      <div className="flex-1 min-h-0">
-        {kind === "video" ? (
-          <video
-            controls
-            src={streamUrl}
-            className="w-full h-full rounded-b-lg"
-            style={{ height: "calc(100% - 0px)" }}
-          />
-        ) : kind === "pdf" ? (
-          <object
-            data={fileUrl}
-            type="application/pdf"
-            className="w-full h-full"
-          >
-            <div className="p-4 text-sm">
-              Le PDF ne peut pas être affiché.{" "}
-              <a className="text-blue-600 underline" href={fileUrl} target="_blank" rel="noreferrer">
-                Ouvrir le fichier
-              </a>
-            </div>
-          </object>
-        ) : (
-          <iframe
-            title="document"
-            src={fileUrl}
-            className="w-full h-full"
-          />
-        )}
-      </div>
     </div>
   );
 }
 
-/* --------------------------------- Chat box -------------------------------- */
-
+/* --------------------------------- Chat Box -------------------------------- */
 function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [contexts, setContexts] = useState([]);          // pour la sidebar
-  const [activeDocId, setActiveDocId] = useState(null);  // doc focalisé
-  const [viewerDoc, setViewerDoc] = useState(null);      // doc ouvert dans le viewer
-  const [askSuggestions, setAskSuggestions] = useState([]); // “Vouliez-vous dire…?”
-  const listRef = useRef(null);
+  const [k, setK] = useState(0); // 0 = large
+  const [wantVideos, setWantVideos] = useState(false);
+  const [contexts, setContexts] = useState([]); // [{doc_id, filename, chunks:[], mime}]
+  const [selectedDocs, setSelectedDocs] = useState(() => new Set());
+  const [suggestions, setSuggestions] = useState([]);
+  const [viewerFile, setViewerFile] = useState(null);
 
+  const listRef = useRef(null);
   const [messages, setMessages] = useState(() => {
     try {
       const raw = sessionStorage.getItem("askVeeva_chat");
@@ -334,14 +255,10 @@ function ChatBox() {
     }
   });
 
-  // persist chat
   useEffect(() => {
-    try {
-      sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
-    } catch {}
+    sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
   }, [messages]);
 
-  // health
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -355,32 +272,45 @@ function ChatBox() {
     return () => { alive = false; };
   }, []);
 
-  // auto-scroll
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
+  const history = useMemo(
+    () => messages.filter(m => m.role !== "assistant").slice(-6).map(({ role, text }) => ({ role, text })),
+    [messages]
+  );
+
+  function toggleSelect(docId) {
+    setSelectedDocs((prev) => {
+      const n = new Set(prev);
+      if (n.has(docId)) n.delete(docId);
+      else n.add(docId);
+      return n;
+    });
+  }
+  function selectOnly(docId) {
+    setSelectedDocs(new Set([docId]));
+  }
+  function clearSelection() {
+    setSelectedDocs(new Set());
+  }
+
   async function runAsk(q, docFilter = []) {
     setSending(true);
-    setAskSuggestions([]);
     try {
-      // on envoie un historique court (mémoire de la conversation, 12 derniers)
-      const history = messages.slice(-12).map(m => ({
-        role: m.role,
-        text: m.text,
-      }));
-      const resp = await ask(q, /*k*/ 12, docFilter, history);
-
+      const resp = await ask(q, k, docFilter, { history, wantVideos }); // l’API accepte les 2 champs
       const text = resp?.text || "Désolé, aucune réponse.";
       const citations = (resp?.citations || []).map((c) => ({
-        doc_id: c.doc_id,
         filename: c.filename,
         score: c.score,
+        doc_id: c.doc_id,
+        mime: c.mime,
       }));
       setMessages((m) => [...m, { role: "assistant", text, citations }]);
-      setContexts(resp?.contexts || []);
-      if (docFilter?.length) setActiveDocId(docFilter[0]);
-      setAskSuggestions(resp?.suggestions || []);
+      const ctx = (resp?.contexts || []).map(c => ({ ...c, mime: c.mime }));
+      setContexts(ctx);
+      setSuggestions(resp?.suggestions || []);
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
     } finally {
@@ -393,37 +323,74 @@ function ChatBox() {
     if (!q || sending) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", text: q }]);
-    await runAsk(q, activeDocId ? [activeDocId] : []);
+    const docFilter = selectedDocs.size ? Array.from(selectedDocs) : [];
+    await runAsk(q, docFilter);
   }
 
   function quickAsk(s) {
     setInput(s);
-    setTimeout(onSend, 20);
+    setTimeout(onSend, 10);
+  }
+
+  async function onAskSelected() {
+    const lastQ =
+      [...messages].reverse().find((m) => m.role === "user")?.text ||
+      input ||
+      "Peux-tu détailler ?";
+    if (!selectedDocs.size) return;
+    setMessages((m) => [...m, { role: "user", text: `${lastQ} (focus multi)` }]);
+    await runAsk(lastQ, Array.from(selectedDocs));
+  }
+
+  async function handlePeek(c) {
+    // Affiche un aperçu dans le viewer
+    setViewerFile({ doc_id: c.doc_id, filename: c.filename, mime: c.mime });
+  }
+  function handleOpen(c) {
+    window.open(buildFileURL(c.doc_id), "_blank", "noopener");
+  }
+
+  async function tryDidYouMean(q) {
+    if (!q || q.length < 3) return;
+    const ret = await findDocs(q);
+    if (ret?.items?.length) {
+      setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
+    }
   }
 
   function onClearChat() {
-    try {
-      sessionStorage.removeItem("askVeeva_chat");
-    } catch {}
+    try { sessionStorage.removeItem("askVeeva_chat"); } catch {}
     setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
     setContexts([]);
-    setActiveDocId(null);
-    setAskSuggestions([]);
-  }
-
-  function openDoc(c) {
-    if (!c?.doc_id) return;
-    setViewerDoc({ doc_id: c.doc_id, filename: c.filename });
+    setSelectedDocs(new Set());
+    setSuggestions([]);
   }
 
   return (
     <div className="flex flex-col h-full">
-      {/* Bandeau haut */}
+      {/* Bandeau */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <div className="text-sm text-gray-700">
-          {ready ? "Connecté" : "Hors-ligne"}
+        <div className="text-sm text-gray-600 flex items-center gap-2">
+          <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
+          <label className="flex items-center gap-1">
+            <span>Portée</span>
+            <select
+              className="border rounded px-1 py-0.5 text-sm"
+              value={k}
+              onChange={(e) => setK(Number(e.target.value))}
+              title="0 = large (sans limite stricte côté UI, borné serveur)"
+            >
+              {[0, 6, 10, 20, 40].map((n) => (
+                <option key={n} value={n}>{n === 0 ? "Large (0)" : n}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 ml-2">
+            <input type="checkbox" checked={wantVideos} onChange={(e) => setWantVideos(e.target.checked)} />
+            <span>Favoriser les vidéos</span>
+          </label>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <button
             onClick={onClearChat}
             className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
@@ -431,68 +398,59 @@ function ChatBox() {
             Supprimer la conversation
           </button>
           <div className="hidden sm:flex gap-2">
-            {["Montre-moi les SOP PPE", "Quelles sont les étapes de validation ?", "Où est la dernière version ?"].map(
-              (s, i) => (
-                <button
-                  key={i}
-                  onClick={() => quickAsk(s)}
-                  className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
-                >
-                  {s}
-                </button>
-              )
-            )}
+            {[
+              "Montre-moi les SOP PPE",
+              "Quelles sont les étapes de validation ?",
+              "Où est la dernière version ?",
+            ].map((s, i) => (
+              <button
+                key={i}
+                onClick={() => quickAsk(s)}
+                className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
+              >
+                {s}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* 3 colonnes responsive : Chat (2) • Sidebar (1) • Viewer (2) */}
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
+      {/* Layout 2 colonnes : Chat (2fr) | Sidebar (1fr) */}
+      <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-4">
         {/* Chat */}
-        <div className="xl:col-span-2">
+        <div className="flex flex-col">
           <div
             ref={listRef}
-            className="min-h-[48vh] md:min-h-[54vh] xl:h-[calc(100vh-260px)] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
+            className="h-[52vh] sm:h-[60vh] xl:h-[66vh] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
           >
             {messages.map((m, i) => (
-              <Message
-                key={i}
-                role={m.role}
-                text={m.text}
-                citations={m.citations}
-                onOpenDoc={openDoc}
-              />
+              <Message key={i} role={m.role} text={m.text} citations={m.citations} onPeek={handlePeek} />
             ))}
             {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
           </div>
 
-          {/* Suggestions “vouliez-vous dire” */}
-          {!!askSuggestions.length && (
-            <div className="mt-2 text-xs text-gray-700">
-              Vouliez-vous dire&nbsp;:
-              <div className="mt-1 flex flex-wrap gap-2">
-                {askSuggestions.map((s, i) => (
-                  <button
-                    key={i}
-                    onClick={() => {
-                      setInput(s);
-                      setTimeout(onSend, 20);
-                    }}
-                    className="px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-800 border border-yellow-200 hover:bg-yellow-100"
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
+          {/* Saisie + suggestions */}
+          {!!suggestions.length && (
+            <div className="mt-2 flex items-start gap-2 flex-wrap">
+              <div className="text-xs text-gray-600 mt-1">Vouliez-vous dire :</div>
+              {suggestions.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => quickAsk(s)}
+                  className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+                  title="Lancer une recherche avec ce terme"
+                >
+                  {s}
+                </button>
+              ))}
             </div>
           )}
 
-          {/* Saisie */}
           <div className="mt-3 flex items-end gap-2">
             <textarea
               rows={2}
               className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              placeholder={activeDocId ? "Votre question (focus sur le doc sélectionné)..." : "Posez votre question…"}
+              placeholder={selectedDocs.size ? "Votre question (focus multi activé)..." : "Posez votre question…"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -501,6 +459,7 @@ function ChatBox() {
                   onSend();
                 }
               }}
+              onBlur={() => tryDidYouMean(input)}
               disabled={!ready || sending}
             />
             <button
@@ -513,46 +472,30 @@ function ChatBox() {
           </div>
         </div>
 
-        {/* Sidebar Contexte + Recherche */}
-        <aside className="xl:col-span-1">
-          <div className="border rounded-lg p-3 bg-white xl:h-[calc(100vh-260px)] min-h-[48vh] overflow-auto space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Documents du contexte</h3>
-              {activeDocId && (
-                <button className="text-xs text-indigo-700 underline" onClick={() => setActiveDocId(null)}>
-                  Retirer le focus
-                </button>
-              )}
-            </div>
+        {/* Sidebar */}
+        <aside className="min-h-0">
+          <div className="border rounded-lg p-3 bg-white h-[52vh] sm:h-[60vh] xl:h-[66vh] overflow-hidden">
             <SidebarContexts
               contexts={contexts}
-              activeDocId={activeDocId}
-              onFocusDoc={(docId) => setActiveDocId(docId)}
-              onOpenDoc={(doc) => setViewerDoc({ doc_id: doc.doc_id, filename: doc.filename })}
-            />
-            <div className="pt-2 border-t" />
-            <GlobalSearch
-              onPickDoc={(it) => setViewerDoc({ doc_id: it.doc_id, filename: it.filename })}
+              selected={selectedDocs}
+              toggleSelect={toggleSelect}
+              selectOnly={selectOnly}
+              clearSelection={clearSelection}
+              onAskSelected={onAskSelected}
+              onPeek={handlePeek}
+              onOpen={handleOpen}
             />
           </div>
         </aside>
-
-        {/* Viewer */}
-        <div className="xl:col-span-2">
-          <div className="xl:h-[calc(100vh-260px)] min-h-[48vh]">
-            <Viewer
-              doc={viewerDoc}
-              onClose={() => setViewerDoc(null)}
-            />
-          </div>
-        </div>
       </div>
+
+      {/* Viewer modal */}
+      <Viewer file={viewerFile} onClose={() => setViewerFile(null)} />
     </div>
   );
 }
 
 /* -------------------------------- Import box ------------------------------- */
-
 function ImportBox() {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -602,20 +545,14 @@ function ImportBox() {
 
   async function followJob(jobId) {
     setJob({ id: jobId, status: "queued" });
-    const p = pollJob(jobId, {
-      onTick: (j) => setJob(j),
-    });
+    const p = pollJob(jobId, { onTick: (j) => setJob(j) });
     const done = await p.promise;
-    if (done?.status === "done") {
-      appendLog("✅ Ingestion terminée.");
-    } else if (done?.status === "error") {
-      appendLog(`❌ Ingestion en erreur: ${done?.error || "inconnue"}`);
-    }
+    if (done?.status === "done") appendLog("✅ Ingestion terminée.");
+    else if (done?.status === "error") appendLog(`❌ Ingestion en erreur: ${done?.error || "inconnue"}`);
   }
 
   return (
     <div className="space-y-4">
-      {/* Dropzone + input */}
       <div
         className="border-2 border-dashed rounded-xl p-6 text-center bg-white"
         onDragOver={(e) => e.preventDefault()}
@@ -627,20 +564,16 @@ function ImportBox() {
       >
         <div className="text-lg font-medium">Importer des documents</div>
         <div className="text-sm text-gray-500 mt-1">
-          Formats pris en charge : ZIP, PDF, DOCX, XLSX/XLS, CSV, TXT, MP4.
+          Formats pris en charge : ZIP, PDF, DOCX, XLSX/XLS, CSV, TXT, MP4/WEBM/MOV.
         </div>
         <div className="mt-4">
           <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 cursor-pointer">
-            <input
-              type="file"
-              className="hidden"
-              onChange={(e) => setFile(e.target.files?.[0] || null)}
-            />
+            <input type="file" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
             Choisir un fichier…
           </label>
         </div>
         {file && (
-          <div className="mt-3 text-sm text-gray-700">
+          <div className="mt-3 text-sm text-gray-700 break-all">
             Fichier : <span className="font-medium">{file.name}</span>{" "}
             <span className="text-gray-500">({(file.size / (1024 * 1024)).toFixed(1)} Mo)</span>
           </div>
@@ -664,7 +597,6 @@ function ImportBox() {
         )}
       </div>
 
-      {/* Job status */}
       {job && (
         <div className="p-4 border rounded-lg bg-white">
           <div className="text-sm text-gray-600">Job</div>
@@ -690,7 +622,6 @@ function ImportBox() {
         </div>
       )}
 
-      {/* Logs */}
       {!!log.length && (
         <div className="p-3 border rounded-lg bg-gray-50 text-xs font-mono space-y-1 max-h-48 overflow-auto">
           {log.map((l, i) => (
@@ -702,18 +633,16 @@ function ImportBox() {
   );
 }
 
-/* ----------------------------------- Page ---------------------------------- */
-
+/* ---------------------------------- Page ---------------------------------- */
 export default function AskVeevaPage() {
   const [tab, setTab] = useState("chat"); // 'chat' | 'import'
 
   return (
-    <section className="mx-auto w-full max-w-[1760px] px-3 sm:px-4">
+    <section className="max-w-[1400px] 2xl:max-w-[1600px] mx-auto px-3 sm:px-4">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva</h1>
       </div>
 
-      {/* Onglets */}
       <div className="flex gap-2">
         <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>
           Recherche IA
