@@ -370,7 +370,7 @@ export default function Comp() {
   const [aiLoading, setAiLoading] = useState(false);
 
   // Offset sticky : header (60px) + hauteur onglets (--tabs-h) + marge
-  const stickyTop = "calc(var(--tabs-h, 44px) + 8px)";
+  const stickyTop = "calc(var(--tabs-h, 44px) - 8px)";
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const msraOptions = ["en_attente", "transmis", "receptionne", "signe"];
