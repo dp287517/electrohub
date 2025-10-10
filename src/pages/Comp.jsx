@@ -369,6 +369,9 @@ export default function Comp() {
   const [aiA, setAiA] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
 
+  // Offset sticky : header (60px) + hauteur onglets (--tabs-h) + marge
+  const stickyTop = "calc(60px + var(--tabs-h, 44px) + 8px)";
+
   const offerOptions = ["en_attente", "reçue", "po_faite"];
   const msraOptions = ["en_attente", "transmis", "receptionne", "signe"];
   const prequalOptions = ["non_fait", "en_cours", "reçue"];
@@ -586,62 +589,6 @@ export default function Comp() {
       {/* VENDORS */}
       {tab === "vendors" && (
         <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto relative">
-          {/* ===== Sticky header "miroir" en dehors du tableau ===== */}
-          <div
-            className="sticky z-30"
-            style={{ top: "calc(60px + var(--tabs-h, 44px) + 8px)" }}
-          >
-            <table className="w-full table-fixed border-separate border-spacing-0">
-              {/* même colgroup pour l’alignement */}
-              <colgroup>
-                <col style={{ width: "15.2%" }} />
-                <col style={{ width: "10.2%" }} />
-                <col style={{ width: "10.2%" }} />
-                <col style={{ width: "10.2%" }} />
-                <col style={{ width: "8.9%" }} />
-                <col style={{ width: "7.6%" }} />
-                <col style={{ width: "10.2%" }} />
-                <col style={{ width: "10.2%" }} />
-                <col style={{ width: "7.6%" }} />
-                <col style={{ width: "9.7%" }} />
-              </colgroup>
-              <thead>
-                <tr>
-                  {[
-                    { k:"name", label:"Name" },
-                    { k:"offer_status", label:"Offer" },
-                    { k:"msra_status", label:"MSRA" },
-                    { k:"prequal_status", label:"Pre-qual" },
-                    { k:"pp", label:"PP", noSort:true },
-                    { k:"visits", label:"Visits" },
-                    { k:"first_date", label:"First date" },
-                    { k:"owner", label:"Owner" },
-                    { k:"files_count", label:"Files" },
-                    { k:"actions", label:"Actions", noSort:true },
-                  ].map(col => (
-                    <th
-                      key={col.k}
-                      className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b bg-gray-50/95 backdrop-blur"
-                    >
-                      {!col.noSort ? (
-                        <button
-                          onClick={() => setSort(col.k)}
-                          className="inline-flex items-center gap-1 hover:underline"
-                        >
-                          <span>{col.label}</span>
-                          <span className="text-xs">↕</span>
-                        </button>
-                      ) : (
-                        <span>{col.label}</span>
-                      )}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-            </table>
-          </div>
-
-          {/* ===== Tableau principal (thead caché pour garder la hauteur) ===== */}
           <table className="w-full table-fixed border-separate border-spacing-0">
             <colgroup>
               <col style={{ width: "15.2%" }} />
@@ -656,10 +603,42 @@ export default function Comp() {
               <col style={{ width: "9.7%" }} />
             </colgroup>
 
-            <thead style={{ visibility: "hidden" }}>
+            {/* THEAD sticky (plus de header miroir) */}
+            <thead
+              style={{ position: "sticky", top: "calc(60px + var(--tabs-h, 44px) + 8px)", zIndex: 50 }}
+              className="bg-gray-50/95 backdrop-blur"
+            >
               <tr>
-                {["Name","Offer","MSRA","Pre-qual","PP","Visits","First date","Owner","Files","Actions"].map((label,i)=>(
-                  <th key={i} className="px-4 py-2 border-b text-sm">{label}</th>
+                {[
+                  { k:"name", label:"Name" },
+                  { k:"offer_status", label:"Offer" },
+                  { k:"msra_status", label:"MSRA" },
+                  { k:"prequal_status", label:"Pre-qual" },
+                  { k:"pp", label:"PP", noSort:true },
+                  { k:"visits", label:"Visits" },
+                  { k:"first_date", label:"First date" },
+                  { k:"owner", label:"Owner" },
+                  { k:"files_count", label:"Files" },
+                  { k:"actions", label:"Actions", noSort:true },
+                ].map(col => (
+                  <th
+                    key={col.k}
+                    className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b"
+                  >
+                    {!col.noSort ? (
+                      <button
+                        onClick={() => setSort(col.k)}
+                        className="inline-flex items-center gap-1 hover:underline"
+                      >
+                        <span>{col.label}</span>
+                        <span className="text-xs">
+                          {sortBy.field !== col.k ? "↕" : (sortBy.dir === "asc" ? "↑" : "↓")}
+                        </span>
+                      </button>
+                    ) : (
+                      <span>{col.label}</span>
+                    )}
+                  </th>
                 ))}
               </tr>
             </thead>
