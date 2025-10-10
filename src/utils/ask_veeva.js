@@ -1,7 +1,9 @@
 // src/utils/ask_veeva.js
 import { get, post } from "../lib/api.js";
 
-/** ---- helpers communs ---- */
+/* ------------------------------------------------------------------ *
+ * Small fetch helpers
+ * ------------------------------------------------------------------ */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function withTimeoutFetch(input, init = {}, ms = 30000) {
@@ -23,37 +25,64 @@ async function tryJson(res) {
   return null;
 }
 
-/** ---------------------------------------------------------------------------
- *  API: Health
- * ------------------------------------------------------------------------- */
+async function fetchPathForm(path, formData, timeoutMs = 30000) {
+  const res = await withTimeoutFetch(
+    path,
+    {
+      method: "POST",
+      body: formData,
+      credentials: "include",
+    },
+    timeoutMs
+  );
+
+  if (!res.ok) {
+    const maybeJson = await tryJson(res);
+    if (maybeJson?.error) throw new Error(maybeJson.error);
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  return (await tryJson(res)) ?? null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Public API wrappers
+ * ------------------------------------------------------------------ */
+
+/** Healthcheck */
 export async function health() {
   return get("/api/ask-veeva/health");
 }
 
-/** ---------------------------------------------------------------------------
- *  API: Search (top-k chunks)
- * ------------------------------------------------------------------------- */
-export async function search(query, k = 6) {
+/**
+ * ASK (RAG) — wide by default (k=0), optional doc focus (docFilter: uuid[])
+ * Mirrors backend: returns { ok, text, citations, contexts, suggestions }
+ */
+export async function ask(question, k = 0, docFilter = []) {
+  return post("/api/ask-veeva/ask", { question, k, docFilter });
+}
+
+/**
+ * Simple vector search (kept for compatibility, but you can ignore it if you rely only on ask()).
+ * @param {string} query
+ * @param {number} k
+ */
+export async function search(query, k = 10) {
   return post("/api/ask-veeva/search", { query, k });
 }
 
-/** ---------------------------------------------------------------------------
- *  API: Ask (RAG) avec filtre optionnel sur des documents
- * ---------------------------------------------------------------------------
- * @param {string} question - La question utilisateur
- * @param {number} [k=6] - Nombre d'extraits à fournir au modèle
- * @param {string[]} [docFilter=[]] - Tableau d'UUID (documents ciblés)
- * @returns {Promise<{ok:boolean,text:string,citations:any[],contexts:any[]}>}
+/**
+ * Fuzzy doc finder — used for “Vouliez-vous dire…”
+ * Backend route supports q= (string). Returns array of { id, filename, mime? }.
  */
-export async function ask(question, k = 6, docFilter = []) {
-  // garde-fous: unique + UUID-like simples (facultatif, mais évite du bruit)
-  const list = Array.isArray(docFilter) ? [...new Set(docFilter.filter(Boolean))] : [];
-  return post("/api/ask-veeva/ask", { question, k, docFilter: list });
+export async function findDocs(q) {
+  const qs = new URLSearchParams({ q: q ?? "" }).toString();
+  return get(`/api/ask-veeva/find-docs?${qs}`);
 }
 
-/** ---------------------------------------------------------------------------
- *  API: Upload direct (petits fichiers / ZIP <= ~300 Mo côté serveur)
- * ------------------------------------------------------------------------- */
+/* ------------------------------ Uploads ------------------------------ */
+
+/** Upload direct (ZIP <= ~300MB server-side, or any small file) */
 export async function uploadSmall(file) {
   const fd = new FormData();
   const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -65,11 +94,9 @@ export async function uploadSmall(file) {
   return fetchPathForm("/api/ask-veeva/uploadFile", fd);
 }
 
-/** ---------------------------------------------------------------------------
- *  API: Upload fractionné (gros ZIP)
- * ---------------------------------------------------------------------------
- * @param {File} file
- * @param {{onProgress?:Function, partTimeoutMs?:number, maxRetries?:number}} opts
+/**
+ * Chunked upload for very large ZIP files.
+ * onProgress receives { uploadedBytes, totalBytes } (and you can compute %).
  */
 export async function chunkedUpload(file, opts = {}) {
   const { onProgress = () => {}, partTimeoutMs = 60000, maxRetries = 3 } = opts;
@@ -82,10 +109,10 @@ export async function chunkedUpload(file, opts = {}) {
   if (!initRes?.uploadId || !initRes?.partSize) throw new Error("Init chunked échoué");
   const { uploadId, partSize } = initRes;
 
-  // 2) part-by-part avec retry
+  // 2) stream parts
   const totalParts = Math.ceil(file.size / partSize);
   let uploadedBytes = 0;
-  onProgress({ part: 0, totalParts, uploadedBytes, totalBytes: file.size });
+  onProgress({ uploadedBytes, totalBytes: file.size });
 
   try {
     for (let part = 1; part <= totalParts; part++) {
@@ -106,13 +133,13 @@ export async function chunkedUpload(file, opts = {}) {
           break;
         } catch (e) {
           lastErr = e;
-          await sleep(400 * (attempt + 1)); // backoff simple
+          await sleep(400 * (attempt + 1)); // simple backoff
         }
       }
       if (lastErr) throw lastErr;
 
       uploadedBytes += blob.size;
-      onProgress({ part, totalParts, uploadedBytes, totalBytes: file.size });
+      onProgress({ uploadedBytes, totalBytes: file.size });
     }
 
     // 3) complete
@@ -123,7 +150,7 @@ export async function chunkedUpload(file, opts = {}) {
     });
     return complete; // { ok, job_id }
   } catch (e) {
-    // Abort propre si une part échoue
+    // Try to abort cleanly
     try {
       await post("/api/ask-veeva/chunked/abort", { uploadId, upto: totalParts });
     } catch {}
@@ -131,12 +158,7 @@ export async function chunkedUpload(file, opts = {}) {
   }
 }
 
-/** ---------------------------------------------------------------------------
- *  API: Poll job (backoff adaptatif)
- * ---------------------------------------------------------------------------
- * @param {string} jobId
- * @param {{onTick?:(j:any)=>void,minMs?:number,maxMs?:number}} opts
- */
+/** Poll job until done/error (adaptive backoff) */
 export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 } = {}) {
   let stopped = false;
 
@@ -161,42 +183,14 @@ export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 
   };
 }
 
-/** ---------------------------------------------------------------------------
- *  Helpers d’URL pour viewer/streaming (backend file & stream routes)
- * ------------------------------------------------------------------------- */
-/**
- * URL d’accès direct au fichier (PDF inline, doc, etc.)
- * @param {string} docId
- * @returns {string}
- */
-export function fileUrl(docId) {
-  return `/api/ask-veeva/file/${encodeURIComponent(docId)}`;
+/* ------------------------------ Viewer helpers ------------------------------ */
+
+/** Build URL to preview/download a stored file by doc id */
+export function buildFileURL(docId) {
+  return `/api/ask-veeva/file/${docId}`;
 }
 
-/**
- * URL de streaming vidéo (gère les Range requests côté serveur)
- * @param {string} docId
- * @returns {string}
- */
-export function streamUrl(docId) {
-  return `/api/ask-veeva/stream/${encodeURIComponent(docId)}`;
-}
-
-/** ---------------------------------------------------------------------------
- *  util interne pour multipart
- * ------------------------------------------------------------------------- */
-async function fetchPathForm(path, formData, timeoutMs = 30000) {
-  const res = await withTimeoutFetch(path, {
-    method: "POST",
-    body: formData,
-    credentials: "include",
-  }, timeoutMs);
-
-  if (!res.ok) {
-    const maybeJson = await tryJson(res);
-    if (maybeJson?.error) throw new Error(maybeJson.error);
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-  return (await tryJson(res)) ?? null;
+/** Build URL to stream a video by doc id */
+export function buildStreamURL(docId) {
+  return `/api/ask-veeva/stream/${docId}`;
 }
