@@ -588,8 +588,9 @@ export default function Comp() {
 
       {/* VENDORS */}
       {tab === "vendors" && (
-        <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto relative">
+        <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
           <table className="w-full table-fixed border-separate border-spacing-0">
+            {/* Largeurs synchronisées */}
             <colgroup>
               <col style={{ width: "15.2%" }} />
               <col style={{ width: "10.2%" }} />
@@ -603,11 +604,8 @@ export default function Comp() {
               <col style={{ width: "9.7%" }} />
             </colgroup>
 
-            {/* THEAD sticky (plus de header miroir) */}
-            <thead
-              style={{ position: "sticky", top: "calc(60px + var(--tabs-h, 44px) + 8px)", zIndex: 50 }}
-              className="bg-gray-50/95 backdrop-blur"
-            >
+            {/* THEAD : sticky appliqué sur CHAQUE <th> (solide cross-browser) */}
+            <thead className="bg-gray-50/95 backdrop-blur">
               <tr>
                 {[
                   { k:"name", label:"Name" },
@@ -623,7 +621,12 @@ export default function Comp() {
                 ].map(col => (
                   <th
                     key={col.k}
-                    className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b"
+                    className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b bg-gray-50/95 backdrop-blur"
+                    style={{
+                      position: "sticky",
+                      top: "calc(60px + var(--tabs-h, 44px) + 8px)",
+                      zIndex: 30
+                    }}
                   >
                     {!col.noSort ? (
                       <button
