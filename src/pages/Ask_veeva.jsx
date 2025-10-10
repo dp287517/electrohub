@@ -52,11 +52,66 @@ function Message({ role, text, citations }) {
   );
 }
 
+/** ---------- Sidebar des documents / focus ---------- */
+function SidebarContexts({ contexts, activeDocId, onFocusDoc, onAskDoc }) {
+  if (!contexts?.length)
+    return <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>;
+
+  return (
+    <div className="space-y-3">
+      {contexts.map((d) => {
+        const active = d.doc_id === activeDocId;
+        return (
+          <div
+            key={d.doc_id}
+            className={"border rounded-lg p-3 " + (active ? "border-indigo-400 bg-indigo-50" : "bg-white")}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="font-medium text-sm truncate" title={d.filename}>
+                {d.filename}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onFocusDoc(d.doc_id)}
+                  className={
+                    "text-xs px-2 py-1 rounded " + (active ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200")
+                  }
+                >
+                  {active ? "Focalisé" : "Focus"}
+                </button>
+                <button
+                  onClick={() => onAskDoc(d.doc_id)}
+                  className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  Re-poser sur ce doc
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-gray-600">
+              {d.chunks?.slice(0, 3).map((c, i) => (
+                <div key={i} className="mb-1">
+                  <span className="inline-block min-w-10 text-gray-400">#{c.chunk_index}</span>
+                  <span className="opacity-80">{c.snippet}</span>
+                </div>
+              ))}
+              {d.chunks && d.chunks.length > 3 && (
+                <div className="text-[11px] text-gray-400">+{d.chunks.length - 3} autres extraits…</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
   const [k, setK] = useState(6);
+  const [contexts, setContexts] = useState([]);          // ← données pour la sidebar
+  const [activeDocId, setActiveDocId] = useState(null);  // ← doc focalisé
   const listRef = useRef(null);
 
   const [messages, setMessages] = useState(() => {
@@ -93,26 +148,31 @@ function ChatBox() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
+  async function runAsk(q, docFilter = []) {
+    setSending(true);
+    try {
+      const resp = await ask(q, k, docFilter); // ← patch: support docFilter
+      const text = resp?.text || "Désolé, aucune réponse.";
+      const citations = (resp?.citations || []).map((c) => ({
+        filename: c.filename,
+        score: c.score,
+      }));
+      setMessages((m) => [...m, { role: "assistant", text, citations }]);
+      setContexts(resp?.contexts || []);
+      if (docFilter?.length) setActiveDocId(docFilter[0]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
+    } finally {
+      setSending(false);
+    }
+  }
+
   async function onSend() {
     const q = input.trim();
     if (!q || sending) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", text: q }]);
-    setSending(true);
-    try {
-      // 1) Récup top-k pour contexte côté serveur (le backend fait déjà la recherche)
-      const resp = await ask(q, k);
-      const text = resp?.text || "Désolé, aucune réponse.";
-      const citations = resp?.citations || [];
-      setMessages((m) => [...m, { role: "assistant", text, citations }]);
-    } catch (e) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` },
-      ]);
-    } finally {
-      setSending(false);
-    }
+    await runAsk(q, activeDocId ? [activeDocId] : []);
   }
 
   function quickAsk(s) {
@@ -121,74 +181,123 @@ function ChatBox() {
     setTimeout(onSend, 20);
   }
 
+  function onClearChat() {
+    try {
+      sessionStorage.removeItem("askVeeva_chat");
+    } catch {}
+    setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
+    setContexts([]);
+    setActiveDocId(null);
+  }
+
   return (
     <div className="flex flex-col h-full">
-      {/* Bandeau haut (optionnel) */}
-      <div className="flex items-center justify-between mb-3">
-        <div className="text-sm text-gray-600">
-          {ready ? "Connecté" : "Hors-ligne"} •
-          <span className="ml-2">Top-K</span>
+      {/* Bandeau haut */}
+      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+        <div className="text-sm text-gray-600 flex items-center gap-2">
+          <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
+          <span>Top-K</span>
           <select
-            className="ml-1 border rounded px-1 py-0.5 text-sm"
+            className="border rounded px-1 py-0.5 text-sm"
             value={k}
             onChange={(e) => setK(Number(e.target.value))}
           >
             {[3, 6, 8, 10].map((n) => (
-              <option key={n} value={n}>{n}</option>
+              <option key={n} value={n}>
+                {n}
+              </option>
             ))}
           </select>
         </div>
-        <div className="hidden sm:flex gap-2">
-          {["Montre-moi les SOP PPE", "Quelles sont les étapes de validation ?", "Où est la dernière version ?"].map(
-            (s, i) => (
-              <button
-                key={i}
-                onClick={() => quickAsk(s)}
-                className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
-              >
-                {s}
-              </button>
-            )
-          )}
+        <div className="flex gap-2">
+          <button
+            onClick={onClearChat}
+            className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+          >
+            Supprimer la conversation
+          </button>
+          <div className="hidden sm:flex gap-2">
+            {["Montre-moi les SOP PPE", "Quelles sont les étapes de validation ?", "Où est la dernière version ?"].map(
+              (s, i) => (
+                <button
+                  key={i}
+                  onClick={() => quickAsk(s)}
+                  className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
+                >
+                  {s}
+                </button>
+              )
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Zone messages */}
-      <div
-        ref={listRef}
-        className="flex-1 overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
-      >
-        {messages.map((m, i) => (
-          <Message key={i} role={m.role} text={m.text} citations={m.citations} />
-        ))}
-        {sending && (
-          <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>
-        )}
-      </div>
+      {/* 2 colonnes responsive : chat + sidebar */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Chat (2/3) */}
+        <div className="lg:col-span-2">
+          <div
+            ref={listRef}
+            className="h-[50vh] sm:h-[60vh] lg:h-[64vh] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
+          >
+            {messages.map((m, i) => (
+              <Message key={i} role={m.role} text={m.text} citations={m.citations} />
+            ))}
+            {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
+          </div>
 
-      {/* Saisie */}
-      <div className="mt-3 flex items-end gap-2">
-        <textarea
-          rows={2}
-          className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-          placeholder="Posez votre question…"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              onSend();
-            }
-          }}
-          disabled={!ready || sending}
-        />
-        <button
-          onClick={onSend}
-          disabled={!ready || sending || !input.trim()}
-          className="h-10 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
-        >
-          Envoyer
-        </button>
+          {/* Saisie */}
+          <div className="mt-3 flex items-end gap-2">
+            <textarea
+              rows={2}
+              className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder={activeDocId ? "Votre question (focus doc sélectionné)..." : "Posez votre question…"}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  onSend();
+                }
+              }}
+              disabled={!ready || sending}
+            />
+            <button
+              onClick={onSend}
+              disabled={!ready || sending || !input.trim()}
+              className="h-10 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              Envoyer
+            </button>
+          </div>
+        </div>
+
+        {/* Sidebar (1/3) */}
+        <aside className="lg:col-span-1">
+          <div className="border rounded-lg p-3 bg-white h-[50vh] sm:h-[60vh] lg:h-[64vh] overflow-auto">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold">Documents du contexte</h3>
+              {activeDocId && (
+                <button className="text-xs text-indigo-700 underline" onClick={() => setActiveDocId(null)}>
+                  Retirer le focus
+                </button>
+              )}
+            </div>
+            <SidebarContexts
+              contexts={contexts}
+              activeDocId={activeDocId}
+              onFocusDoc={(docId) => setActiveDocId(docId)}
+              onAskDoc={(docId) => {
+                const lastQ =
+                  [...messages].reverse().find((m) => m.role === "user")?.text ||
+                  input ||
+                  "Peux-tu détailler ?";
+                setMessages((m) => [...m, { role: "user", text: `${lastQ} (focus: ${docId})` }]);
+                runAsk(lastQ, [docId]);
+              }}
+            />
+          </div>
+        </aside>
       </div>
     </div>
   );
@@ -299,10 +408,7 @@ function ImportBox() {
         {progress !== null && (
           <div className="mt-4">
             <div className="w-full h-2 bg-gray-200 rounded">
-              <div
-                className="h-2 bg-blue-600 rounded"
-                style={{ width: `${progress}%` }}
-              />
+              <div className="h-2 bg-blue-600 rounded" style={{ width: `${progress}%` }} />
             </div>
             <div className="text-xs text-gray-600 mt-1">{progress}%</div>
           </div>
@@ -315,7 +421,7 @@ function ImportBox() {
           <div className="text-sm text-gray-600">Job</div>
           <div className="font-mono text-xs break-all">{job.id}</div>
           <div className="mt-1 text-sm">
-            Statut :{" "}
+            Statut:{" "}
             <span
               className={
                 job.status === "done"
