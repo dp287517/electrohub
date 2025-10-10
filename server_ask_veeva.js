@@ -55,15 +55,11 @@ await fsp.mkdir(PARTS_DIR, { recursive: true });
 
 // -----------------------------------------------------------------------------
 // PDF.js (Node): legacy build + standard fonts
-//  - Certaines versions ne publient que *.mjs (pas *.js).
-//  - On résout le worker en legacy (si présent) sinon fallback vers build standard.
 // -----------------------------------------------------------------------------
 function resolvePdfWorker() {
   try {
-    // priorité: legacy .mjs
     return require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
   } catch {
-    // fallback: build standard .mjs
     return require.resolve("pdfjs-dist/build/pdf.worker.mjs");
   }
 }
@@ -103,7 +99,7 @@ async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`); // pour gen_random_uuid()
 
-  // --- Schéma nominal (si tables absentes) ---
+  // Schéma nominal (si tables absentes)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_documents (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -138,7 +134,7 @@ async function ensureSchema() {
     );
   `);
 
-  // --- PATCH: Harmonisation idempotente si tables déjà existaient sans colonnes récentes ---
+  // PATCH: harmonisation idempotente si anciennes bases
   await pool.query(`
     ALTER TABLE askv_documents
       ADD COLUMN IF NOT EXISTS path  TEXT,
@@ -153,8 +149,14 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS processed_files INT DEFAULT 0,
       ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
   `);
+  await pool.query(`
+    ALTER TABLE askv_chunks
+      ADD COLUMN IF NOT EXISTS content TEXT,
+      ADD COLUMN IF NOT EXISTS embedding vector(${EMBEDDING_DIMS}),
+      ADD COLUMN IF NOT EXISTS chunk_index INT
+  `);
 
-  // Index vector (IVFFLAT) – ok car dims=1536 (< 2000)
+  // Index vector (IVFFLAT)
   await pool.query(`
     DO $$
     BEGIN
@@ -259,7 +261,7 @@ async function parsePDF(absPath) {
   });
   const doc = await loadingTask.promise;
   let out = "";
-  // --- PATCH: robustesse page-by-page ---
+  // robustesse page-by-page
   for (let p = 1; p <= doc.numPages; p++) {
     try {
       const page = await doc.getPage(p);
@@ -267,12 +269,11 @@ async function parsePDF(absPath) {
       const text = content.items.map((it) => it.str).join(" ");
       out += `\n\n[PAGE ${p}]\n${text}`;
       page.cleanup();
-    } catch (e) {
+    } catch {
       out += `\n\n[PAGE ${p}] (erreur d'extraction)`;
     }
   }
   await doc.cleanup();
-  // Certaines versions exposent destroy() via loadingTask ; on tente prudemment
   try { loadingTask.destroy?.(); } catch {}
   return out.trim();
 }
@@ -464,13 +465,14 @@ async function pump() {
 // -----------------------------------------------------------------------------
 app.get("/api/ask-veeva/health", async (_req, res) => {
   try {
-    await pool.query("SELECT 1");
+    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
     res.json({
       ok: true,
       service: "ask-veeva",
       model: ANSWER_MODEL,
       embeddings: EMBEDDING_MODEL,
       dims: EMBEDDING_DIMS,
+      docCount: dc[0]?.n ?? 0,
       s3Configured: false,
       limits: {
         EMBED_BATCH,
@@ -644,6 +646,10 @@ app.post("/api/ask-veeva/search", async (req, res) => {
     const { query, k = 6 } = req.body || {};
     if (!query || String(query).trim() === "") return res.status(400).json({ error: "query requis" });
 
+    // DB vide ? renvoyer vide proprement
+    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
+    if (!dc[0]?.n) return res.json({ ok: true, matches: [] });
+
     const emb = (await embedBatch([query]))[0];
     const { rows } = await pool.query(
       `
@@ -657,7 +663,7 @@ app.post("/api/ask-veeva/search", async (req, res) => {
     );
     const matches = rows.map((r) => ({
       meta: { filename: r.filename },
-      snippet: r.content.slice(0, 1000),
+      snippet: (r.content || "").slice(0, 1000),
       score: Number(r.score),
     }));
     res.json({ ok: true, matches });
@@ -670,6 +676,16 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
   try {
     const { question, k = 6 } = req.body || {};
     if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
+
+    // DB vide ? message explicite
+    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
+    if (!dc[0]?.n) {
+      return res.json({
+        ok: true,
+        text: "Aucun document n'est indexé pour le moment. Importez des fichiers puis relancez votre question.",
+        citations: []
+      });
+    }
 
     const emb = (await embedBatch([question]))[0];
     const { rows } = await pool.query(
