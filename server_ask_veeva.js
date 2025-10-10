@@ -739,7 +739,7 @@ app.post("/api/ask-veeva/search", async (req, res) => {
   }
 });
 
-aapp.post("/api/ask-veeva/ask", async (req, res) => {
+app.post("/api/ask-veeva/ask", async (req, res) => {
   try {
     const { question, k = 6, docFilter = [] } = req.body || {};
     if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
