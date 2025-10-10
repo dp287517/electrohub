@@ -101,7 +101,7 @@ const API = {
 };
 
 // ----------------- UI helpers -----------------
-function Tabs({ value, onChange }) {
+function Tabs({ value, onChange, sticky = true }) {
   // Mesure dynamique de la hauteur de la barre d'onglets pour caler toutes les stickies
   const ref = useRef(null);
   useEffect(() => {
@@ -127,7 +127,7 @@ function Tabs({ value, onChange }) {
   return (
     <div
       ref={ref}
-      className="flex flex-wrap gap-2 sticky top-[20px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
+      className={`flex flex-wrap gap-2 ${sticky ? "sticky top-[20px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60" : ""} py-2`}
     >
       {T("vendors", "Vendors", "📋")}
       {T("calendar", "Calendar", "📅")}
@@ -259,22 +259,30 @@ function GlobalFilters({ state, setters, onSearch, onClear, visible }) {
 // ----------------- Month Calendar -----------------
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
+
+  // Regroupe les événements par date "YYYY-MM-DD"
   const eventsByDate = useMemo(() => {
     const map = {};
-    for (const e of events) (map[e.date] ||= []).push(e);
+    for (const e of events) {
+      const key = e.date || e.start || e.end; // fallback si 'date' pas présent
+      if (!key) continue;
+      const iso = dayjs(key).format("YYYY-MM-DD");
+      (map[iso] ||= []).push(e);
+    }
     return map;
   }, [events]);
 
+  // Grille mensuelle (lundi → dimanche) SANS toISOString() (évite les décalages)
   const startOfMonth = month.startOf("month").toDate();
   const endOfMonth = month.endOf("month").toDate();
-  const startDow = (startOfMonth.getDay() + 6) % 7;
+  const startDow = (startOfMonth.getDay() + 6) % 7; // lundi = 0
   const gridStart = new Date(startOfMonth);
   gridStart.setDate(gridStart.getDate() - startDow);
   const days = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(gridStart);
     d.setDate(gridStart.getDate() + i);
-    const iso = d.toISOString().slice(0, 10);
+    const iso = dayjs(d).format("YYYY-MM-DD"); // <-- pas de toISOString() ici
     days.push({ d, iso, inMonth: d >= startOfMonth && d <= endOfMonth });
   }
 
@@ -369,7 +377,8 @@ export default function Comp() {
   const [aiA, setAiA] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
 
-  // Offset sticky : header (60px) + hauteur onglets (--tabs-h) + marge
+  // IMPORTANT : quand le bandeau global n'est pas visible (onglet vendors),
+  // le header du tableau a un top à 0px pour coller le bandeau local.
   const stickyTop = "calc(var(--tabs-h, 44px) - 8px)";
 
   const offerOptions = ["en_attente", "reçue", "po_faite"];
@@ -389,10 +398,11 @@ export default function Comp() {
   }
   async function reloadPlanning() {
     const data = await API.calendar();
+    // ⚠️ Conversion via dayjs(...).toDate() pour éviter le décalage d’1 jour
     const tasks = (data.tasks || []).map((t) => ({
       ...t,
-      start: new Date(t.start),
-      end: new Date(t.end),
+      start: dayjs(t.start).toDate(),
+      end: dayjs(t.end).toDate(),
       type: "task",
       progress: 0,
       styles:
@@ -400,7 +410,12 @@ export default function Comp() {
           ? { barBackgroundColor: "#10b981", barProgressColor: "#10b981", barBackgroundSelectedColor: "#10b981" }
           : { barBackgroundColor: "#ef4444", barProgressColor: "#ef4444", barBackgroundSelectedColor: "#ef4444" },
     }));
-    setCalendar({ tasks, events: data.events || [] });
+    // Les events doivent rester en YYYY-MM-DD sans conversion UTC
+    const events = (data.events || []).map((e) => ({
+      ...e,
+      date: dayjs(e.date || e.start || e.end).format("YYYY-MM-DD"),
+    }));
+    setCalendar({ tasks, events });
   }
   async function reloadAnalytics() {
     setStats(await API.stats());
@@ -531,8 +546,8 @@ export default function Comp() {
   }
   function openVisitModalForTask(task) {
     if (!task) return;
-    const startISO = task.startISO || (task.start instanceof Date ? task.start.toISOString().slice(0,10) : String(task.start).slice(0,10));
-    const endISO   = task.endISO   || (task.end   instanceof Date ? task.end.toISOString().slice(0,10)   : String(task.end).slice(0,10));
+    const startISO = dayjs(task.start instanceof Date ? task.start : task.startISO || task.start).format("YYYY-MM-DD");
+    const endISO   = dayjs(task.end   instanceof Date ? task.end   : task.endISO   || task.end).format("YYYY-MM-DD");
     const item = {
       date: startISO,
       vendor_id: task.vendor_id,
@@ -561,7 +576,7 @@ export default function Comp() {
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">External Contractors</h1>
-        <p className="text-gray-500 text-sm">
+          <p className="text-gray-500 text-sm">
             Vendors offers, MSRA, pre-qualification, prevention plan, access, visits, SAP WO & attachments
           </p>
         </div>
@@ -575,7 +590,8 @@ export default function Comp() {
         </div>
       </header>
 
-      <Tabs value={tab} onChange={setTab} />
+      {/* Tabs global sticky pour tout sauf Vendors */}
+      {tab !== "vendors" && <Tabs value={tab} onChange={setTab} />}
 
       {/* FILTRES GLOBAUX */}
       <GlobalFilters
@@ -586,20 +602,26 @@ export default function Comp() {
         onClear={onClear}
       />
 
-      {/* VENDORS — TABLE REDONE */}
+      {/* VENDORS — bandeau local + tableau */}
       {tab === "vendors" && (
-        <VendorsTable
-          items={filtered}
-          loading={loading}
-          sortBy={sortBy}
-          onSort={setSort}
-          onEdit={openEdit}
-          onDelete={async (id) => {
-            await API.remove(id);
-            await reloadAll();
-          }}
-          stickyTop={stickyTop}
-        />
+        <>
+          {/* Onglets juste au-dessus du tableau, non-sticky */}
+          <Tabs value={tab} onChange={setTab} sticky={false} />
+
+          <VendorsTable
+            items={filtered}
+            loading={loading}
+            sortBy={sortBy}
+            onSort={setSort}
+            onEdit={openEdit}
+            onDelete={async (id) => {
+              await API.remove(id);
+              await reloadAll();
+            }}
+            // Le header du tableau colle sous le bandeau local
+            stickyTop={"0px"}
+          />
+        </>
       )}
 
       {/* CALENDAR */}
@@ -656,7 +678,7 @@ export default function Comp() {
         </div>
       )}
 
-      {/* IA (ancienne zone 1Q/1R conservée telle quelle) */}
+      {/* IA */}
       {tab === "ai" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Assistant IA">
