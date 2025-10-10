@@ -1,5 +1,5 @@
 // server_ask_veeva.js — Ask Veeva (sans S3, upload fractionné, RAG)
-// PDF.js .mjs robuste + Personalization + /me + /find-docs + email auto (SSO)
+// + Personalization + Auto-profile (poste/secteur) + /me
 // ESM + Node
 
 import express from "express";
@@ -50,7 +50,6 @@ const DATA_ROOT = path.join(process.cwd(), "uploads", "ask-veeva");
 const UPLOAD_DIR = path.join(DATA_ROOT, "incoming");
 const TMP_DIR = path.join(DATA_ROOT, "tmp");
 const PARTS_DIR = path.join(DATA_ROOT, "parts");
-// Nouveau : dossier persistant pour conserver les originaux
 const STORE_DIR = path.join(DATA_ROOT, "store");
 
 await fsp.mkdir(UPLOAD_DIR, { recursive: true });
@@ -71,7 +70,6 @@ function resolvePdfWorker() {
 const workerSrc = resolvePdfWorker();
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
-// standard fonts pour éviter UnknownErrorException / TT: undefined function: 32
 const pdfjsPkgDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
 const PDF_STANDARD_FONTS = path.join(pdfjsPkgDir, "standard_fonts/");
 
@@ -81,14 +79,14 @@ const EMBEDDING_MODEL = process.env.ASK_VEEVA_EMBED_MODEL || "text-embedding-3-s
 const EMBEDDING_DIMS = 1536;
 const ANSWER_MODEL = process.env.ASK_VEEVA_ANSWER_MODEL || "gpt-4o-mini";
 
-// Performances (tunables)
+// Performances
 const EMBED_BATCH = Math.max(4, Number(process.env.ASK_VEEVA_EMBED_BATCH || 8));
 const MAX_CONCURRENT_JOBS = Math.max(1, Number(process.env.ASK_VEEVA_MAX_CONCURRENT_JOBS || 1));
 const PDF_CHUNK_SIZE = Math.max(600, Number(process.env.ASK_VEEVA_PDF_CHUNK_SIZE || 1200));
 const PDF_CHUNK_OVERLAP = Math.max(0, Number(process.env.ASK_VEEVA_PDF_CHUNK_OVERLAP || 200));
-const CHUNK_PART_SIZE = Math.max(2, Number(process.env.ASK_VEEVA_CHUNK_MB || 10)) * 1024 * 1024; // 10 Mo par défaut
+const CHUNK_PART_SIZE = Math.max(2, Number(process.env.ASK_VEEVA_CHUNK_MB || 10)) * 1024 * 1024;
 
-// Pas de S3 dans cette version
+// Pas de S3
 const S3_BUCKET = null;
 
 // -----------------------------------------------------------------------------
@@ -101,7 +99,7 @@ const pool = new Pool({
 });
 
 // -----------------------------------------------------------------------------
-// Helpers génériques
+// Helpers
 // -----------------------------------------------------------------------------
 function nowISO() {
   const d = new Date();
@@ -112,30 +110,30 @@ function safeEmail(x) {
   const s = String(x).trim();
   return s && /\S+@\S+\.\S+/.test(s) ? s.toLowerCase() : null;
 }
-// essaie d’inférer l’email depuis SSO/Reverse proxy (headers usuels)
-// x-user-email (custom), x-auth-request-email (oauth2-proxy), x-forwarded-user, x-remote-user, ou cookie simple email=
-function getRequestEmail(req) {
-  const h = req.headers || {};
-  const cand =
-    h["x-user-email"] ||
-    h["x-auth-request-email"] ||
-    h["x-forwarded-user"] ||
-    h["x-remote-user"] ||
-    null;
-  if (cand) return safeEmail(cand);
-  const ck = String(h.cookie || "");
-  const m = ck.match(/(?:^|;\s*)email=([^;]+)/i);
-  return safeEmail(m?.[1] || null);
+function readCookie(req, name) {
+  const raw = req.headers?.cookie || "";
+  const m = raw.match(new RegExp(`(?:^|; )${name}=([^;]+)`));
+  return m ? decodeURIComponent(m[1]) : null;
 }
+
+// Auto-resolve email middleware
+app.use((req, _res, next) => {
+  const hdr = req.headers["x-user-email"] || req.headers["x-auth-email"];
+  const fromHdr = safeEmail(hdr);
+  const fromCookie = safeEmail(readCookie(req, "veeva_email"));
+  const fromQuery = safeEmail(req.query?.email);
+  const fromBody = safeEmail(req.body?.email);
+  req.userEmail = fromHdr || fromCookie || fromQuery || fromBody || null;
+  next();
+});
 
 // -----------------------------------------------------------------------------
 // Schéma (incluant Perso/Feedback/Synonymes)
 // -----------------------------------------------------------------------------
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`); // pour gen_random_uuid()
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
 
-  // Schéma nominal (si tables absentes)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_documents (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -160,8 +158,8 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_jobs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      kind TEXT NOT NULL,  -- 'zip','zip-chunked','file'
-      status TEXT NOT NULL DEFAULT 'queued', -- queued|running|done|error
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
       total_files INT DEFAULT 0,
       processed_files INT DEFAULT 0,
       error TEXT,
@@ -170,7 +168,6 @@ async function ensureSchema() {
     );
   `);
 
-  // Nouvelles tables : personnalisation
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_users (
       id SERIAL PRIMARY KEY,
@@ -188,7 +185,7 @@ async function ensureSchema() {
     CREATE TABLE IF NOT EXISTS askv_events (
       id BIGSERIAL PRIMARY KEY,
       user_email TEXT,
-      type TEXT,          -- ask_issued, ask_answered, doc_opened, feedback, search, etc.
+      type TEXT,
       question TEXT,
       answer_len INT,
       latency_ms INT,
@@ -211,87 +208,80 @@ async function ensureSchema() {
     );
   `);
 
-  // PATCHs idempotents
-  await pool.query(`
-    ALTER TABLE askv_documents
-      ADD COLUMN IF NOT EXISTS path  TEXT,
-      ADD COLUMN IF NOT EXISTS mime  TEXT,
-      ADD COLUMN IF NOT EXISTS bytes BIGINT,
-      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()
-  `);
-  await pool.query(`
-    ALTER TABLE askv_jobs
-      ADD COLUMN IF NOT EXISTS error TEXT,
-      ADD COLUMN IF NOT EXISTS total_files INT DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS processed_files INT DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()
-  `);
-  await pool.query(`
-    ALTER TABLE askv_chunks
-      ADD COLUMN IF NOT EXISTS content TEXT,
-      ADD COLUMN IF NOT EXISTS embedding vector(${EMBEDDING_DIMS}),
-      ADD COLUMN IF NOT EXISTS chunk_index INT
-  `);
-
-  // --- Compat legacy: bases qui ont "storage_path" au lieu de "path"
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='askv_documents' AND column_name='storage_path'
-      ) THEN
-        UPDATE askv_documents SET path = storage_path WHERE path IS NULL;
-        BEGIN
-          ALTER TABLE askv_documents ALTER COLUMN storage_path DROP NOT NULL;
-        EXCEPTION WHEN others THEN END;
-
-        CREATE OR REPLACE FUNCTION public.askv_sync_paths()
-        RETURNS trigger AS $f$
-        BEGIN
-          IF NEW.path IS NULL AND NEW.storage_path IS NOT NULL THEN
-            NEW.path := NEW.storage_path;
-          ELSIF NEW.storage_path IS NULL AND NEW.path IS NOT NULL THEN
-            NEW.storage_path := NEW.path;
-          END IF;
-          RETURN NEW;
-        END
-        $f$ LANGUAGE plpgsql;
-
-        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_askv_sync_paths') THEN
-          CREATE TRIGGER trg_askv_sync_paths
-          BEFORE INSERT OR UPDATE ON public.askv_documents
-          FOR EACH ROW EXECUTE FUNCTION public.askv_sync_paths();
-        END IF;
-      END IF;
-    END
-    $$;
-  `);
-
-  // Index vector (IVFFLAT)
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='askv_chunks_embedding_ivf'
-      ) THEN
-        CREATE INDEX askv_chunks_embedding_ivf
-        ON askv_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-      END IF;
-    END $$;
-  `);
-
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id, chunk_index);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_documents_fname_idx ON askv_documents(filename);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_events_user_idx ON askv_events(user_email, ts);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_synonyms_term_idx ON askv_synonyms(term, weight DESC);`);
 
-  // (optionnel) analyse pour de meilleurs plans
   await pool.query(`ANALYZE askv_chunks;`);
 }
 
 // -----------------------------------------------------------------------------
-// Multer — Upload direct (petits ZIP/fichiers)
+// Utilities Perso
+// -----------------------------------------------------------------------------
+async function getUserByEmail(email) {
+  if (!email) return null;
+  const { rows } = await pool.query(`SELECT * FROM askv_users WHERE email=$1`, [email]);
+  return rows[0] || null;
+}
+async function ensureUser(email) {
+  if (!email) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO askv_users(email) VALUES($1)
+     ON CONFLICT (email) DO UPDATE SET updated_at=now()
+     RETURNING *`,
+    [email]
+  );
+  return rows[0];
+}
+
+async function expandQueryWithSynonyms(q) {
+  const { rows } = await pool.query(
+    `SELECT alt_term FROM askv_synonyms WHERE LOWER(term)=LOWER($1) ORDER BY weight DESC LIMIT 10`,
+    [q]
+  );
+  if (!rows.length) return q;
+  const extra = rows.map(r => r.alt_term).join(" ");
+  return `${q} ${extra}`;
+}
+
+function softRoleBiasScore(filename = "", role = "", sector = "") {
+  const f = filename.toLowerCase();
+  let bonus = 0;
+  if (role && f.includes(role.toLowerCase())) bonus += 0.05;
+  if (sector && f.includes(sector.toLowerCase())) bonus += 0.05;
+  return bonus;
+}
+
+// NLU ultra légère pour poste/secteur
+const ROLE_CANON = [
+  ["qualité","qualite","quality"],
+  ["ehs","hse","sse"],
+  ["utilités","utilites","utilities","utility","utilite"],
+  ["packaging","conditionnement","pack"]
+];
+const SECTOR_CANON = [
+  ["ssol","solide","solids"],
+  ["liq","liquide","liquids","liquid"],
+  ["bulk","vrac"],
+  ["autre","other","generic"]
+];
+function detectFromList(text, lists) {
+  const s = (text || "").toLowerCase();
+  for (const group of lists) {
+    if (group.some(alias => s.includes(alias))) return group[0]; // canon
+  }
+  // Accept reply like "Packaging" exact-ish
+  for (const group of lists) {
+    if (group.some(alias => s.trim() === alias)) return group[0];
+  }
+  return null;
+}
+function detectRole(text){ return detectFromList(text, ROLE_CANON); }
+function detectSector(text){ return detectFromList(text, SECTOR_CANON); }
+
+// -----------------------------------------------------------------------------
+// Multer — Upload
 // -----------------------------------------------------------------------------
 const uploadDirect = multer({
   storage: multer.diskStorage({
@@ -301,16 +291,15 @@ const uploadDirect = multer({
       cb(null, safe);
     },
   }),
-  limits: { fileSize: 300 * 1024 * 1024 }, // 300 Mo max pour l’upload direct
+  limits: { fileSize: 300 * 1024 * 1024 },
 });
 
-// Multer — Upload des parts (chunked)
 const uploadChunk = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, PARTS_DIR),
     filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`),
   }),
-  limits: { fileSize: Math.min(CHUNK_PART_SIZE * 2, 64 * 1024 * 1024) }, // sécurité
+  limits: { fileSize: Math.min(CHUNK_PART_SIZE * 2, 64 * 1024 * 1024) },
 });
 
 // -----------------------------------------------------------------------------
@@ -340,7 +329,7 @@ async function jobById(id) {
 }
 
 // -----------------------------------------------------------------------------
-// ZIP streaming → onFile(tmpAbs, fname, ext, bytes)
+// ZIP streaming
 // -----------------------------------------------------------------------------
 async function streamIngestZip(absZipPath, onFile) {
   const zip = new StreamZip.async({ file: absZipPath, storeEntries: true });
@@ -411,11 +400,11 @@ async function parseTXT(absPath) {
 }
 async function parseMP4(absPath) {
   const stat = await fsp.stat(absPath);
-  return { _noIndex: true, bytes: stat.size }; // pas d’ASR local ici
+  return { _noIndex: true, bytes: stat.size };
 }
 
 // -----------------------------------------------------------------------------
-// Chunking texte → fenêtres
+// Chunking
 // -----------------------------------------------------------------------------
 function windows(text, size = PDF_CHUNK_SIZE, overlap = PDF_CHUNK_OVERLAP) {
   const out = [];
@@ -434,14 +423,10 @@ function windows(text, size = PDF_CHUNK_SIZE, overlap = PDF_CHUNK_OVERLAP) {
 // Embeddings + util pgvector
 // -----------------------------------------------------------------------------
 async function embedBatch(texts) {
-  const res = await openai.embeddings.create({
-    model: EMBEDDING_MODEL,
-    input: texts,
-  });
+  const res = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: texts });
   return res.data.map((d) => d.embedding);
 }
 function toVectorLiteral(arr) {
-  // Convertit Array<number> en littéral pgvector: "[0.1,0.2,...]"
   return "[" + arr.map((x) => {
     const v = Number(x);
     return Number.isFinite(v) ? v.toString() : "0";
@@ -449,26 +434,22 @@ function toVectorLiteral(arr) {
 }
 
 // -----------------------------------------------------------------------------
-// Ingestion d’un fichier concret (conserve l’original)
+// Ingestion fichier
 // -----------------------------------------------------------------------------
 async function ingestConcreteFile(absPath, originalName, ext, bytes) {
-  // 1) copie de l’original
   const safeName = `${nowISO()}_${(originalName || path.basename(absPath)).replace(/[^\w.\-]+/g, "_")}`;
   const finalAbs = path.join(STORE_DIR, safeName);
   await fsp.copyFile(absPath, finalAbs);
 
-  // 2) vidéos → doc sans chunks, mais ouvrable
   if (ext === ".mp4" || ext === ".mov" || ext === ".m4v" || ext === ".webm") {
     const info = await parseMP4(absPath);
-    const mime = ext === ".webm" ? "video/webm" : "video/mp4";
     const { rows } = await pool.query(
       `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
-      [originalName, finalAbs, mime, bytes || info.bytes || 0]
+      [originalName, finalAbs, "video/mp4", bytes || info.bytes || 0]
     );
     return { docId: rows[0].id, chunks: 0, skipped: true };
   }
 
-  // 3) parser texte
   let parsed = "";
   if (ext === ".pdf") parsed = await parsePDF(absPath);
   else if (ext === ".docx") parsed = await parseDOCX(absPath);
@@ -483,7 +464,6 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
     return { docId: rows[0].id, chunks: 0, skipped: true };
   }
 
-  // 4) aucun texte extrait → doc ouvrable sans chunks
   if (!parsed || parsed.trim().length === 0) {
     const { rows } = await pool.query(
       `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
@@ -492,7 +472,6 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
     return { docId: rows[0].id, chunks: 0, skipped: true };
   }
 
-  // 5) créer doc + embeddings
   const { rows } = await pool.query(
     `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
     [originalName, finalAbs, "text/plain", bytes || 0]
@@ -558,7 +537,7 @@ async function runIngestSingleFile(jobId, absPath, originalName) {
 }
 
 // -----------------------------------------------------------------------------
-// Mini-queue (1 worker concurrent configurable)
+// Mini-queue
 // -----------------------------------------------------------------------------
 const RUNNING = new Set();
 const QUEUE = [];
@@ -582,50 +561,6 @@ async function pump() {
     RUNNING.delete(next);
     setTimeout(pump, 10);
   }
-}
-
-// -----------------------------------------------------------------------------
-// Utilities Perso
-// -----------------------------------------------------------------------------
-async function getUserByEmail(email) {
-  if (!email) return null;
-  const { rows } = await pool.query(`SELECT * FROM askv_users WHERE email=$1`, [email]);
-  return rows[0] || null;
-}
-async function ensureUser(email) {
-  if (!email) return null;
-  const u = await getUserByEmail(email);
-  if (u) return u;
-  const { rows } = await pool.query(
-    `INSERT INTO askv_users(email) VALUES ($1)
-     ON CONFLICT (email) DO UPDATE SET updated_at=now()
-     RETURNING *`,
-    [email]
-  );
-  return rows[0];
-}
-
-async function expandQueryWithSynonyms(q) {
-  // expansion simple terme à terme (sépare sur espaces)
-  const terms = String(q || "").split(/\s+/).filter(Boolean);
-  if (!terms.length) return q;
-  const extra = [];
-  for (const t of terms) {
-    const r = await pool.query(
-      `SELECT alt_term FROM askv_synonyms WHERE LOWER(term)=LOWER($1) ORDER BY weight DESC LIMIT 5`,
-      [t]
-    );
-    if (r.rows.length) extra.push(...r.rows.map(x => x.alt_term));
-  }
-  return extra.length ? `${q} ${extra.join(" ")}` : q;
-}
-
-function softRoleBiasScore(filename = "", role = "", sector = "") {
-  const f = filename.toLowerCase();
-  let bonus = 0;
-  if (role && f.includes(role.toLowerCase())) bonus += 0.05;
-  if (sector && f.includes(sector.toLowerCase())) bonus += 0.05;
-  return bonus;
 }
 
 // -----------------------------------------------------------------------------
@@ -658,13 +593,339 @@ app.get("/api/ask-veeva/jobs/:id", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// ROUTES — Upload direct (petits ZIP/fichiers)
+// ROUTES — /me (profil courant) & personnalisation
+// -----------------------------------------------------------------------------
+app.get("/api/ask-veeva/me", async (req, res) => {
+  try {
+    const email = safeEmail(req.userEmail);
+    if (!email) return res.json({ ok: true, user: null });
+    const user = await ensureUser(email);
+    res.json({ ok: true, user });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/initUser", async (req, res) => {
+  try {
+    const email = safeEmail(req.userEmail) || safeEmail(req.body?.email);
+    if (!email) return res.status(400).json({ error: "email manquant" });
+    const { name, role, sector } = req.body || {};
+    const { rows } = await pool.query(
+      `INSERT INTO askv_users (email, name, role, sector)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (email)
+       DO UPDATE SET name=COALESCE(EXCLUDED.name, askv_users.name),
+                     role=COALESCE(EXCLUDED.role, askv_users.role),
+                     sector=COALESCE(EXCLUDED.sector, askv_users.sector),
+                     updated_at=now()
+       RETURNING *`,
+      [email, name || null, role || null, sector || null]
+    );
+    res.json({ ok: true, user: rows[0] });
+  } catch (e) {
+    console.error("initUser:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/logEvent", async (req, res) => {
+  try {
+    const { type, question, doc_id, useful, note, meta } = req.body || {};
+    await pool.query(
+      `INSERT INTO askv_events(user_email,type,question,doc_id,useful,note,meta)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [safeEmail(req.userEmail), type || null, question || null, doc_id || null, useful ?? null, note || null, meta || {}]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("logEvent:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/feedback", async (req, res) => {
+  try {
+    const { question, doc_id, useful, note } = req.body || {};
+    await pool.query(
+      `INSERT INTO askv_events(user_email,type,question,doc_id,useful,note)
+       VALUES ($1,'feedback',$2,$3,$4,$5)`,
+      [safeEmail(req.userEmail), question || null, doc_id || null, useful ?? null, note || null]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("feedback:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/synonyms/update", async (req, res) => {
+  try {
+    const { term, alt_term, weight } = req.body || {};
+    if (!term || !alt_term) return res.status(400).json({ error: "term/alt_term requis" });
+    await pool.query(
+      `INSERT INTO askv_synonyms(term, alt_term, weight)
+       VALUES ($1,$2,$3)
+       ON CONFLICT(term, alt_term) DO UPDATE SET weight = EXCLUDED.weight`,
+      [term, alt_term, Number(weight ?? 1.0)]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/personalize", async (_req, res) => {
+  try {
+    const email = safeEmail(_req.userEmail);
+    const user = await getUserByEmail(email);
+    const prefs = (await pool.query(
+      `SELECT doc_id, COUNT(*)::int AS uses
+         FROM askv_events WHERE user_email=$1 AND type='doc_opened'
+         GROUP BY doc_id ORDER BY uses DESC LIMIT 10`,
+      [email]
+    )).rows;
+    res.json({ ok: true, user, top_docs: prefs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// -----------------------------------------------------------------------------
+// SEARCH + ASK
+// -----------------------------------------------------------------------------
+app.post("/api/ask-veeva/search", async (req, res) => {
+  const t0 = Date.now();
+  try {
+    let { query, k = 6 } = req.body || {};
+    if (!query || String(query).trim() === "") return res.status(400).json({ error: "query requis" });
+
+    try { query = await expandQueryWithSynonyms(query); } catch {}
+
+    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
+    let vecMatches = [];
+    if (dc[0]?.n) {
+      const emb = (await embedBatch([query]))[0];
+      const qvec = toVectorLiteral(emb);
+      const { rows } = await pool.query(
+        `
+        SELECT d.id AS doc_id, d.filename, c.content, 1 - (c.embedding <=> $1::vector) AS score
+        FROM askv_chunks c
+        JOIN askv_documents d ON d.id = c.doc_id
+        ORDER BY c.embedding <=> $1::vector
+        LIMIT $2
+        `,
+        [qvec, k]
+      );
+      vecMatches = rows.map((r) => ({
+        meta: { doc_id: r.doc_id, filename: r.filename },
+        snippet: (r.content || "").slice(0, 1000),
+        score: Number(r.score),
+      }));
+    }
+
+    const { rows: fileRows } = await pool.query(
+      `
+      SELECT id AS doc_id, filename, mime
+      FROM askv_documents
+      WHERE filename ILIKE '%' || $1 || '%'
+      ORDER BY created_at DESC
+      LIMIT $2
+      `,
+      [req.body?.query ?? "", Math.max(k, 12)]
+    );
+
+    const fileMatches = fileRows.map((r) => ({
+      meta: { doc_id: r.doc_id, filename: r.filename, mime: r.mime, file_url: `/api/ask-veeva/file/${r.doc_id}` },
+      snippet: r.mime?.startsWith("video/") ? "[vidéo]" : "",
+      score: 0.42,
+    }));
+
+    const byId = new Map();
+    for (const m of [...vecMatches, ...fileMatches]) {
+      const id = m.meta?.doc_id || m.meta?.filename + ":" + m.snippet;
+      if (!byId.has(id)) byId.set(id, m);
+    }
+    const merged = Array.from(byId.values()).slice(0, Math.max(k, 12));
+
+    try {
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,latency_ms,meta) VALUES ($1,'search',$2,$3,$4)`,
+        [safeEmail(req.userEmail), req.body?.query || null, Date.now() - t0, { k }]
+      );
+    } catch {}
+
+    res.json({ ok: true, matches: merged });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+app.post("/api/ask-veeva/ask", async (req, res) => {
+  const t0 = Date.now();
+  try {
+    let { question, k = 6, docFilter = [], contextMode = "auto" } = req.body || {};
+    if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
+
+    const userEmail = safeEmail(req.userEmail);
+    let user = userEmail ? await ensureUser(userEmail) : null;
+
+    // Auto-profil : si poste/secteur manquants, essaye de déduire depuis la question
+    if (user && (!user.role || !user.sector)) {
+      const candRole = detectRole(question);
+      const candSector = detectSector(question);
+      if (candRole || candSector) {
+        await pool.query(
+          `UPDATE askv_users
+             SET role = COALESCE($2, role),
+                 sector = COALESCE($3, sector),
+                 updated_at = now()
+           WHERE email = $1`,
+          [userEmail, candRole, candSector]
+        );
+        user = await getUserByEmail(userEmail);
+      }
+      if (!user.role || !user.sector) {
+        const missing = !user.role && !user.sector
+          ? "ton poste (Qualité, EHS, Utilités, Packaging) puis ton secteur (SSOL, LIQ, Bulk, Autre)"
+          : (!user.role ? "ton poste (Qualité, EHS, Utilités, Packaging)" : "ton secteur (SSOL, LIQ, Bulk, Autre)");
+        return res.json({
+          ok: false,
+          needProfile: true,
+          question: `Avant de continuer, indique ${missing}. Tu peux répondre par exemple : « Packaging » puis « SSOL ».`
+        });
+      }
+    }
+
+    if (contextMode === "none") {
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4)`,
+        [userEmail, question, Date.now() - t0, { contextMode }]
+      );
+      return res.json({
+        ok: true,
+        text: `Mode sans contexte activé. Je peux répondre de manière générale, mais pour des infos précises, active le contexte.\n\nQuestion: ${question}`,
+        citations: [],
+        contexts: [],
+      });
+    }
+
+    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM public.askv_chunks`);
+    if (!dc[0]?.n) {
+      return res.json({
+        ok: true,
+        text: "Aucun document n'est indexé pour le moment. Importez des fichiers puis relancez votre question.",
+        citations: [],
+        contexts: [],
+      });
+    }
+
+    try { question = await expandQueryWithSynonyms(question); } catch {}
+
+    const emb = (await embedBatch([question]))[0];
+    const qvec = toVectorLiteral(emb);
+
+    const filterSQL = Array.isArray(docFilter) && docFilter.length
+      ? `WHERE c.doc_id = ANY($3::uuid[])`
+      : ``;
+    const params = Array.isArray(docFilter) && docFilter.length ? [qvec, k, docFilter] : [qvec, k];
+
+    let { rows } = await pool.query(
+      `
+      SELECT 
+        d.id AS doc_id, d.filename, 
+        c.chunk_index, c.content,
+        1 - (c.embedding <=> $1::vector) AS score
+      FROM public.askv_chunks c
+      JOIN public.askv_documents d ON d.id = c.doc_id
+      ${filterSQL}
+      ORDER BY c.embedding <=> $1::vector
+      LIMIT $2
+      `,
+      params
+    );
+
+    // Boost perso
+    let prefBoost = {};
+    try {
+      const boosts = await pool.query(
+        `SELECT doc_id, COUNT(*)::int AS cnt
+         FROM askv_events
+         WHERE user_email=$1 AND type='doc_opened'
+         GROUP BY doc_id`,
+        [userEmail]
+      );
+      for (const b of boosts.rows) prefBoost[b.doc_id] = 1 + Math.min(0.1 * Number(b.cnt || 0), 0.5);
+    } catch {}
+
+    rows = rows.map(r => {
+      const p = prefBoost[r.doc_id] || 1;
+      const roleBias = softRoleBiasScore(r.filename, user?.role, user?.sector);
+      return { ...r, score: r.score * p + roleBias };
+    }).sort((a,b)=> b.score - a.score);
+
+    const contextBlocks = rows.map((r, i) => {
+      const snippet = (r.content || "").slice(0, 2000);
+      return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
+    }).join("\n\n---\n\n");
+
+    const prompt = [
+      { role: "system",
+        content:
+          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'info n'est pas dans le contexte, dis-le clairement. Structure si utile (listes courtes)." },
+      { role: "user",
+        content:
+          `QUESTION:\n${question}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier.pdf].` },
+    ];
+
+    const out = await openai.chat.completions.create({
+      model: ANSWER_MODEL,
+      messages: prompt,
+      temperature: 0.2,
+    });
+
+    const text = out.choices?.[0]?.message?.content || "";
+
+    const citations = rows.map((r) => ({
+      doc_id: r.doc_id,
+      filename: r.filename,
+      chunk_index: r.chunk_index,
+      score: Number(r.score),
+      snippet: (r.content || "").slice(0, 400),
+    }));
+
+    const byDoc = new Map();
+    for (const c of citations) {
+      const list = byDoc.get(c.doc_id) || { doc_id: c.doc_id, filename: c.filename, chunks: [] };
+      list.chunks.push({ chunk_index: c.chunk_index, snippet: c.snippet, score: c.score });
+      byDoc.set(c.doc_id, list);
+    }
+    const contexts = Array.from(byDoc.values());
+
+    try {
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_issued',$2,$3)`,
+        [userEmail, String(req.body?.question || ""), { k, docFilter, contextMode }]
+      );
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
+        [userEmail, String(req.body?.question || ""), text.length, Date.now() - t0, { citations: citations.length }]
+      );
+    } catch {}
+
+    res.json({ ok: true, text, citations, contexts });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// -----------------------------------------------------------------------------
+// ROUTES — Upload direct / chunked
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/uploadZip", uploadDirect.single("zip"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "zip manquant" });
     const st = await fsp.stat(req.file.path);
-    // estimation du nombre d’entrées
     let total = 0;
     try {
       const zip = new StreamZip.async({ file: req.file.path, storeEntries: true });
@@ -693,9 +954,6 @@ app.post("/api/ask-veeva/uploadFile", uploadDirect.single("file"), async (req, r
   }
 });
 
-// -----------------------------------------------------------------------------
-// ROUTES — Upload fractionné (chunked) pour gros ZIP
-// -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/chunked/init", async (req, res) => {
   try {
     const { filename, size } = req.body || {};
@@ -709,23 +967,7 @@ app.post("/api/ask-veeva/chunked/init", async (req, res) => {
   }
 });
 
-app.post("/api/ask-veeva/chunked/part", uploadChunk.single("chunk"), async (req, res) => {
-  try {
-    const { uploadId, partNumber } = req.query || {};
-    if (!uploadId || !partNumber) return res.status(400).json({ error: "uploadId/partNumber requis" });
-    if (!req.file) return res.status(400).json({ error: "chunk manquant" });
-    const safeId = String(uploadId).replace(/[^\w\-]/g, "");
-    const pnum = Number(partNumber);
-    if (!Number.isInteger(pnum) || pnum <= 0) return res.status(400).json({ error: "partNumber invalide" });
-    const dest = path.join(PARTS_DIR, `${safeId}.${pnum}.part`);
-    await fsp.rename(req.file.path, dest);
-    res.json({ ok: true, received: req.file.size });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-async function concatPartsToZip(uploadId, totalParts, destZipAbs) {
+const concatPartsToZip = async (uploadId, totalParts, destZipAbs) => {
   await fsp.mkdir(path.dirname(destZipAbs), { recursive: true });
   const ws = fs.createWriteStream(destZipAbs);
   try {
@@ -744,7 +986,23 @@ async function concatPartsToZip(uploadId, totalParts, destZipAbs) {
   } finally {
     ws.end();
   }
-}
+};
+
+app.post("/api/ask-veeva/chunked/part", uploadChunk.single("chunk"), async (req, res) => {
+  try {
+    const { uploadId, partNumber } = req.query || {};
+    if (!uploadId || !partNumber) return res.status(400).json({ error: "uploadId/partNumber requis" });
+    if (!req.file) return res.status(400).json({ error: "chunk manquant" });
+    const safeId = String(uploadId).replace(/[^\w\-]/g, "");
+    const pnum = Number(partNumber);
+    if (!Number.isInteger(pnum) || pnum <= 0) return res.status(400).json({ error: "partNumber invalide" });
+    const dest = path.join(PARTS_DIR, `${safeId}.${pnum}.part`);
+    await fsp.rename(req.file.path, dest);
+    res.json({ ok: true, received: req.file.size });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.post("/api/ask-veeva/chunked/complete", async (req, res) => {
   try {
@@ -766,15 +1024,12 @@ app.post("/api/ask-veeva/chunked/complete", async (req, res) => {
       const entries = await zip.entries();
       total = Object.values(entries).filter((e) => !e.isDirectory).length;
       await zip.close();
-    } catch {
-      total = 0;
-    }
+    } catch { total = 0; }
 
     const jobId = await createJob("zip-chunked", total);
     enqueue(() => runIngestZip(jobId, finalZip)).catch((e) => console.error("ingest zip chunked fail", e));
     res.json({ ok: true, job_id: jobId });
 
-    // nettoyage des parts
     (async () => {
       await fsp.rm(path.join(PARTS_DIR, `${safeId}.json`), { force: true }).catch(() => {});
       for (let i = 1; i <= parts; i++) {
@@ -803,373 +1058,7 @@ app.post("/api/ask-veeva/chunked/abort", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// ROUTES — Personnalisation & Feedback
-// -----------------------------------------------------------------------------
-app.get("/api/ask-veeva/me", async (req, res) => {
-  try {
-    const email = safeEmail(getRequestEmail(req));
-    const user = await getUserByEmail(email);
-    res.json({ ok: true, email, user });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/ask-veeva/initUser", async (req, res) => {
-  try {
-    const inferred = safeEmail(getRequestEmail(req));
-    const email = safeEmail(req.body?.email) || inferred;
-    if (!email) return res.status(400).json({ error: "email introuvable (SSO/session)" });
-    const { name, role, sector } = req.body || {};
-    const { rows } = await pool.query(
-      `INSERT INTO askv_users (email, name, role, sector)
-       VALUES ($1,$2,$3,$4)
-       ON CONFLICT (email)
-       DO UPDATE SET name=COALESCE(EXCLUDED.name, askv_users.name),
-                     role=COALESCE(EXCLUDED.role, askv_users.role),
-                     sector=COALESCE(EXCLUDED.sector, askv_users.sector),
-                     updated_at=now()
-       RETURNING *`,
-      [email, name || null, role || null, sector || null]
-    );
-    res.json({ ok: true, user: rows[0] });
-  } catch (e) {
-    console.error("initUser:", e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/ask-veeva/logEvent", async (req, res) => {
-  try {
-    const inferred = safeEmail(getRequestEmail(req));
-    const { user_email, type, question, doc_id, useful, note, meta } = req.body || {};
-    const email = safeEmail(user_email) || inferred;
-    await pool.query(
-      `INSERT INTO askv_events(user_email,type,question,doc_id,useful,note,meta)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [email, type || null, question || null, doc_id || null, useful ?? null, note || null, meta || {}]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("logEvent:", e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/ask-veeva/feedback", async (req, res) => {
-  try {
-    const inferred = safeEmail(getRequestEmail(req));
-    const { user_email, question, doc_id, useful, note } = req.body || {};
-    const email = safeEmail(user_email) || inferred;
-    await pool.query(
-      `INSERT INTO askv_events(user_email,type,question,doc_id,useful,note)
-       VALUES ($1,'feedback',$2,$3,$4,$5)`,
-      [email, question || null, doc_id || null, useful ?? null, note || null]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("feedback:", e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/ask-veeva/synonyms/update", async (req, res) => {
-  try {
-    const { term, alt_term, weight } = req.body || {};
-    if (!term || !alt_term) return res.status(400).json({ error: "term/alt_term requis" });
-    await pool.query(
-      `INSERT INTO askv_synonyms(term, alt_term, weight)
-       VALUES ($1,$2,$3)
-       ON CONFLICT(term, alt_term) DO UPDATE SET weight = EXCLUDED.weight`,
-      [term, alt_term, Number(weight ?? 1.0)]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/ask-veeva/personalize", async (req, res) => {
-  try {
-    const email = safeEmail(req.body?.email) || safeEmail(getRequestEmail(req));
-    const user = await ensureUser(email);
-    const prefs = (await pool.query(
-      `SELECT doc_id, COUNT(*)::int AS uses
-         FROM askv_events WHERE user_email=$1 AND type='doc_opened'
-         GROUP BY doc_id ORDER BY uses DESC LIMIT 10`,
-      [email]
-    )).rows;
-    res.json({ ok: true, user, top_docs: prefs });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// -----------------------------------------------------------------------------
-// SEARCH + ASK (+ /find-docs) — synonymes + fallback filename, ASK adaptatif
-// -----------------------------------------------------------------------------
-app.get("/api/ask-veeva/find-docs", async (req, res) => {
-  try {
-    const q = String(req.query?.q || "").trim();
-    if (!q) return res.json({ ok: true, items: [] });
-    const { rows } = await pool.query(
-      `SELECT id AS doc_id, filename, mime, bytes
-       FROM askv_documents
-       WHERE filename ILIKE '%' || $1 || '%'
-       ORDER BY created_at DESC
-       LIMIT 25`,
-      [q]
-    );
-    const items = rows.map(r => ({
-      id: r.doc_id,
-      filename: r.filename,
-      mime: r.mime,
-      bytes: Number(r.bytes || 0),
-      isVideo: (r.mime || "").startsWith("video/") || /\.(mp4|mov|m4v|webm)$/i.test(r.filename),
-    }));
-    res.json({ ok: true, items });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/ask-veeva/search", async (req, res) => {
-  const t0 = Date.now();
-  try {
-    let { query, k = 6 } = req.body || {};
-    if (!query || String(query).trim() === "") return res.status(400).json({ error: "query requis" });
-
-    // Expansion via synonymes
-    try { query = await expandQueryWithSynonyms(query); } catch {}
-
-    // 1) Similarité sémantique
-    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
-    let vecMatches = [];
-    if (dc[0]?.n) {
-      const emb = (await embedBatch([query]))[0];
-      const qvec = toVectorLiteral(emb);
-      const { rows } = await pool.query(
-        `
-        SELECT d.id AS doc_id, d.filename, c.content, 1 - (c.embedding <=> $1::vector) AS score
-        FROM askv_chunks c
-        JOIN askv_documents d ON d.id = c.doc_id
-        ORDER BY c.embedding <=> $1::vector
-        LIMIT $2
-        `,
-        [qvec, k]
-      );
-      vecMatches = rows.map((r) => ({
-        meta: { doc_id: r.doc_id, filename: r.filename },
-        snippet: (r.content || "").slice(0, 1000),
-        score: Number(r.score),
-      }));
-    }
-
-    // 2) Fallback par nom de fichier
-    const { rows: fileRows } = await pool.query(
-      `
-      SELECT id AS doc_id, filename, mime
-      FROM askv_documents
-      WHERE filename ILIKE '%' || $1 || '%'
-      ORDER BY created_at DESC
-      LIMIT $2
-      `,
-      [req.body?.query ?? "", Math.max(k, 12)]
-    );
-
-    const fileMatches = fileRows.map((r) => ({
-      meta: { doc_id: r.doc_id, filename: r.filename, mime: r.mime, file_url: `/api/ask-veeva/file/${r.doc_id}` },
-      snippet: r.mime?.startsWith("video/") ? "[vidéo]" : "",
-      score: 0.42,
-    }));
-
-    // 3) Fusion + dédup
-    const byId = new Map();
-    for (const m of [...vecMatches, ...fileMatches]) {
-      const id = m.meta?.doc_id || m.meta?.filename + ":" + m.snippet;
-      if (!byId.has(id)) byId.set(id, m);
-    }
-    const merged = Array.from(byId.values()).slice(0, Math.max(k, 12));
-
-    // log
-    try {
-      await pool.query(
-        `INSERT INTO askv_events(user_email,type,question,latency_ms,meta) VALUES ($1,'search',$2,$3,$4)`,
-        [safeEmail(getRequestEmail(req)), req.body?.query || null, Date.now() - t0, { k }]
-      );
-    } catch {}
-
-    res.json({ ok: true, matches: merged });
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
-
-app.post("/api/ask-veeva/ask", async (req, res) => {
-  const t0 = Date.now();
-  try {
-    let { question, k = 6, docFilter = [], email, contextMode = "auto" } = req.body || {};
-    if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
-
-    // email déduit si manquant
-    const userEmail = safeEmail(email) || safeEmail(getRequestEmail(req));
-    const user = await ensureUser(userEmail);
-
-    // Si pas de profil connu → on déclenche le wizard côté UI
-    if (!user?.role || !user?.sector) {
-      return res.json({
-        ok: true,
-        needProfile: true,
-        text: "Avant de continuer, indique ton poste (Qualité, EHS, Utilités, Packaging) puis ton secteur (SSOL, LIQ, Bulk…).",
-        citations: [],
-        contexts: [],
-      });
-    }
-
-    // mode sans contexte
-    if (contextMode === "none") {
-      try {
-        await pool.query(
-          `INSERT INTO askv_events(user_email,type,question,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4)`,
-          [userEmail, question, Date.now() - t0, { contextMode }]
-        );
-      } catch {}
-      return res.json({
-        ok: true,
-        text: `Mode sans contexte activé. Je réponds de manière générale.\n\nQuestion: ${question}`,
-        citations: [],
-        contexts: [],
-      });
-    }
-
-    // DB vide ?
-    const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM public.askv_chunks`);
-    if (!dc[0]?.n) {
-      return res.json({
-        ok: true,
-        text: "Aucun document n'est indexé pour le moment. Importez des fichiers puis relancez votre question.",
-        citations: [],
-        contexts: [],
-      });
-    }
-
-    // Expansion via synonymes
-    try { question = await expandQueryWithSynonyms(question); } catch {}
-
-    // Embedding de la question
-    const emb = (await embedBatch([question]))[0];
-    const qvec = toVectorLiteral(emb);
-
-    // Filtre doc ids
-    const filterSQL = Array.isArray(docFilter) && docFilter.length ? `WHERE c.doc_id = ANY($3::uuid[])` : ``;
-    const params = Array.isArray(docFilter) && docFilter.length ? [qvec, k, docFilter] : [qvec, k];
-
-    let { rows } = await pool.query(
-      `
-      SELECT 
-        d.id AS doc_id, d.filename, 
-        c.chunk_index, c.content,
-        1 - (c.embedding <=> $1::vector) AS score
-      FROM public.askv_chunks c
-      JOIN public.askv_documents d ON d.id = c.doc_id
-      ${filterSQL}
-      ORDER BY c.embedding <=> $1::vector
-      LIMIT $2
-      `,
-      params
-    );
-
-    // Boost perso + biais rôle/secteur
-    let prefBoost = {};
-    try {
-      const boosts = await pool.query(
-        `SELECT doc_id, COUNT(*)::int AS cnt
-         FROM askv_events
-         WHERE user_email=$1 AND type='doc_opened'
-         GROUP BY doc_id`,
-        [userEmail]
-      );
-      for (const b of boosts.rows) prefBoost[b.doc_id] = 1 + Math.min(0.1 * Number(b.cnt || 0), 0.5);
-    } catch {}
-
-    rows = rows.map(r => {
-      const p = prefBoost[r.doc_id] || 1;
-      const roleBias = softRoleBiasScore(r.filename, user?.role, user?.sector);
-      return { ...r, score: r.score * p + roleBias };
-    }).sort((a,b)=> b.score - a.score);
-
-    // Contexte compact
-    const contextBlocks = rows.map((r, i) => {
-      const snippet = (r.content || "").slice(0, 2000);
-      return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
-    }).join("\n\n---\n\n");
-
-    const prompt = [
-      {
-        role: "system",
-        content: "Tu es Ask Veeva. Réponds en français, concis. Si l'info n'est pas dans le contexte, dis-le. Structure en listes si utile."
-      },
-      {
-        role: "user",
-        content:
-`QUESTION:
-${question}
-
-CONTEXTE (extraits):
-${contextBlocks}
-
-Consignes:
-- Réponds uniquement avec les infos du contexte.
-- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier.pdf].`
-      },
-    ];
-
-    const out = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: prompt,
-      temperature: 0.2,
-    });
-
-    const text = out.choices?.[0]?.message?.content || "";
-
-    // Citations enrichies
-    const citations = rows.map((r) => ({
-      doc_id: r.doc_id,
-      filename: r.filename,
-      chunk_index: r.chunk_index,
-      score: Number(r.score),
-      snippet: (r.content || "").slice(0, 400),
-    }));
-
-    // Contexts groupés
-    const byDoc = new Map();
-    for (const c of citations) {
-      const list = byDoc.get(c.doc_id) || { doc_id: c.doc_id, filename: c.filename, chunks: [] };
-      list.chunks.push({ chunk_index: c.chunk_index, snippet: c.snippet, score: c.score });
-      byDoc.set(c.doc_id, list);
-    }
-    const contexts = Array.from(byDoc.values());
-
-    // Log ask_issued + ask_answered
-    try {
-      await pool.query(
-        `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_issued',$2,$3)`,
-        [userEmail, String(req.body?.question || ""), { k, docFilter, contextMode }]
-      );
-      await pool.query(
-        `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
-        [userEmail, String(req.body?.question || ""), text.length, Date.now() - t0, { citations: citations.length }]
-      );
-    } catch {}
-
-    res.json({ ok: true, text, citations, contexts });
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
-
-// -----------------------------------------------------------------------------
-// ROUTE — servir les originaux conservés en STORE_DIR
+// ROUTE : servir le fichier original
 // -----------------------------------------------------------------------------
 app.get("/api/ask-veeva/file/:id", async (req, res) => {
   try {
