@@ -929,35 +929,119 @@ app.post("/api/ask-veeva/find", async (req, res) => {
   }
 });
 
+// -----------------------------------------------------------------------------
+// ASK — no-context friendly (auto fuzzy → liste de docs), RAG si dispo
+// -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/ask", async (req, res) => {
   try {
-    const { question, k = 0, docFilter = [], history = [], wantVideos = false } = req.body || {};
-    if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
+    const {
+      question,
+      k = 0,
+      docFilter = [],
+      history = [],
+      wantVideos: wantVideosRaw = false,
+    } = req.body || {};
+    const q = String(question || "").trim();
+    if (!q) return res.status(400).json({ error: "question requise" });
 
+    // Heuristiques simples : vidéos / tutos / idr
+    const qLow = q.toLowerCase();
+    const wantVideos =
+      wantVideosRaw ||
+      /\b(video|vidéo|tuto|tutorial|mp4|webm)\b/.test(qLow);
+
+    // Normalisation agressive pour capturer N2000-2, N20002, "idr 20002", etc.
+    const canon = qLow.replace(/[\s\-_/]+/g, "");
+    const isDocBrowsingIntent =
+      /\b(idr|doc|document|fichier|pdf|manuel|procedure|procédure|workinstr|wi)\b/.test(qLow) ||
+      /\d/.test(qLow); // présence de chiffres => souvent une réf machine/dossier
+
+    // 0) Compter les chunks
     const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM public.askv_chunks`);
-    if (!dc[0]?.n) {
+    const hasChunks = !!(dc[0]?.n);
+
+    // Helper — Fuzzy find sur filenames
+    async function fuzzyFindOnFilenames(limit = 120) {
+      const like = `%${qLow.replace(/[%_]/g, "")}%`;
+      const canonLike = `%${canon}%`;
+      const { rows } = await pool.query(
+        `
+        SELECT id, filename, mime, bytes
+        FROM askv_documents
+        WHERE lower(filename) LIKE $1
+           OR similarity(lower(filename), $2) > 0.25
+           OR replace(regexp_replace(lower(filename), '[^a-z0-9]+', '', 'g'), '-', '') LIKE $3
+        ORDER BY GREATEST(
+          similarity(lower(filename), $2),
+          CASE WHEN lower(filename) LIKE $1 THEN 0.9 ELSE 0 END
+        ) DESC
+        LIMIT $4
+        `,
+        [like, qLow, canonLike, Math.max(1, Math.min(500, limit))]
+      );
+      let items = rows.map(r => ({
+        id: r.id,
+        filename: r.filename,
+        mime: r.mime,
+        isVideo: (r.mime || "").startsWith("video/"),
+      }));
+      if (wantVideos) {
+        items = items.sort((a, b) => (b.isVideo ? 1 : 0) - (a.isVideo ? 1 : 0));
+      }
+      return items;
+    }
+
+    // 1) Si l’intention est clairement “je veux voir des docs” → FAST PATH fuzzy,
+    //    sans même tenter un RAG (plus rapide et plus proche de l’intention).
+    if (isDocBrowsingIntent) {
+      const items = await fuzzyFindOnFilenames(150);
+      if (items.length > 0) {
+        // Réponse directe, sans LLM — on renvoie du concret (liste cliquable côté UI).
+        const textLines = [
+          `J’ai trouvé ${items.length} fichier(s) correspondant(s) :`,
+          ...items.slice(0, 20).map(it => `- [${it.filename}] (doc:${it.id})${it.isVideo ? " — (vidéo)" : ""}`),
+          ...(items.length > 20 ? [`… et ${items.length - 20} autre(s).` ] : []),
+        ];
+        return res.json({
+          ok: true,
+          text: textLines.join("\n"),
+          citations: [],      // pas de chunks
+          contexts: [],       // pas de regroupement chunk
+          suggestions: items, // UI : affiche en galerie de fichiers + bouton “Ouvrir”
+        });
+      }
+      // Pas d’items… on continue sur RAG pour tenter des proximités sémantiques.
+    }
+
+    if (!hasChunks) {
+      // Base vide → tenter fuzzy encore (au cas où) sinon message clair
+      const items = await fuzzyFindOnFilenames(150);
+      if (items.length > 0) {
+        const textLines = [
+          `Index texte indisponible, mais j’ai trouvé ${items.length} fichier(s) par nom :`,
+          ...items.slice(0, 20).map(it => `- [${it.filename}] (doc:${it.id})${it.isVideo ? " — (vidéo)" : ""}`),
+          ...(items.length > 20 ? [`… et ${items.length - 20} autre(s).` ] : []),
+        ];
+        return res.json({ ok: true, text: textLines.join("\n"), citations: [], contexts: [], suggestions: items });
+      }
       return res.json({
         ok: true,
-        text: "Aucun document n'est indexé pour le moment. Importez des fichiers puis relancez votre question.",
+        text: "Aucun document n'est indexé pour le moment et aucun fichier n'a été trouvé par nom.",
         citations: [],
         contexts: [],
         suggestions: [],
       });
     }
 
-    // Embedding question
-    const emb = (await embedBatch([question]))[0];
+    // 2) RAG normal (vector search), mais on ne “bloque” plus la réponse s’il n’y a pas d’extraits :
+    //    on propose alors des fichiers par fuzzy.
+    const emb = (await embedBatch([q]))[0];
     const qvec = toVectorLiteral(emb);
+    const limit = (k && k > 0) ? k : Math.max(100, SAFE_WIDE_LIMIT); // élargir un peu par défaut
 
-    // LIMIT smart: 0 or <0 => wide
-    const limit = k && k > 0 ? k : SAFE_WIDE_LIMIT;
-
-    // Filtre par doc_id si demandé
     const filterSQL = Array.isArray(docFilter) && docFilter.length ? `AND c.doc_id = ANY($3::uuid[])` : ``;
-    const params =
-      Array.isArray(docFilter) && docFilter.length ? [qvec, limit, docFilter] : [qvec, limit];
+    const params = Array.isArray(docFilter) && docFilter.length ? [qvec, limit, docFilter] : [qvec, limit];
 
-    // 1) Vector search
     let { rows } = await pool.query(
       `
       SELECT 
@@ -973,7 +1057,6 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       params
     );
 
-    // Boost vidéo si demandé
     if (wantVideos) {
       rows = rows.sort((a, b) => {
         const va = (a.mime || "").startsWith("video/") ? 1 : 0;
@@ -982,71 +1065,78 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       });
     }
 
-    // Fallback fuzzy si peu de chunks
+    // Fallback fuzzy si très peu (ou zéro) d’extraits
     let suggestions = [];
     if (rows.length < 3) {
-      const qLike = `%${question.toLowerCase().replace(/[%_]/g, "")}%`;
-      const qNorm = `%${norm(question)}%`;
-      const { rows: fuzzy } = await pool.query(
-        `
-        SELECT id, filename, mime, bytes
-        FROM askv_documents
-        WHERE lower(filename) LIKE $1
-           OR similarity(lower(filename), $2) > 0.25
-           OR replace(regexp_replace(lower(filename), '[^a-z0-9]+', '', 'g'), '-', '') LIKE $3
-        ORDER BY GREATEST(
-          similarity(lower(filename), $2),
-          CASE WHEN lower(filename) LIKE $1 THEN 0.9 ELSE 0 END
-        ) DESC
-        LIMIT 50
-        `,
-        [qLike, question.toLowerCase(), qNorm]
-      );
-      suggestions = fuzzy.map((r) => ({
-        id: r.id,
-        filename: r.filename,
-        mime: r.mime,
-        isVideo: (r.mime || "").startsWith("video/"),
-      }));
-      if (wantVideos) {
-        suggestions = suggestions.sort((a, b) => (b.isVideo ? 1 : 0) - (a.isVideo ? 1 : 0));
+      suggestions = await fuzzyFindOnFilenames(150);
+      if (rows.length === 0 && suggestions.length > 0) {
+        // Réponse directe, sans LLM : on ne bloque plus “faute de contexte”
+        const lines = [
+          `Je n’ai pas d’extrait texte pertinent, mais j’ai trouvé ${suggestions.length} fichier(s) par nom :`,
+          ...suggestions.slice(0, 20).map(it => `- [${it.filename}] (doc:${it.id})${it.isVideo ? " — (vidéo)" : ""}`),
+          ...(suggestions.length > 20 ? [`… et ${suggestions.length - 20} autre(s).`] : []),
+          `Dites-moi lequel vous voulez ouvrir 👆 (ou précisez la machine / réf).`
+        ];
+        return res.json({
+          ok: true,
+          text: lines.join("\n"),
+          citations: [],
+          contexts: [],
+          suggestions,
+        });
       }
     }
 
-    // 3) Contexte compact
-    const historyBlock =
-      Array.isArray(history) && history.length
-        ? `\n\nHISTORIQUE:\n${history.map((h) => `- ${h.role.toUpperCase()}: ${h.text}`).join("\n")}`
-        : "";
+    // Construire le contexte (si on a au moins quelques extraits)
+    const historyBlock = Array.isArray(history) && history.length
+      ? `\n\nHISTORIQUE:\n${history.map(h => `- ${h.role.toUpperCase()}: ${h.text}`).join("\n")}`
+      : "";
 
-    const contextBlocks = rows
-      .map((r, i) => {
-        const snippet = (r.content || "").slice(0, 2000);
-        return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
-      })
-      .join("\n\n---\n\n");
+    const contextBlocks = rows.map((r, i) => {
+      const snippet = (r.content || "").slice(0, 2000);
+      return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
+    }).join("\n\n---\n\n");
 
+    // Prompt : on n’impose plus “uniquement” le contexte. On autorise
+    // la proposition de documents si le contexte manque.
     const prompt = [
       {
         role: "system",
         content:
-          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'information n'est pas dans le contexte, dis-le clairement. Si des documents connexes existent (suggestions), propose-les. Si l'utilisateur fait une faute de frappe, tente une interprétation (« vouliez-vous dire… ») dans ta réponse.",
+          "Tu es Ask Veeva. Réponds en français, de façon utile et actionnable. " +
+          "Si le contexte texte est insuffisant, propose des fichiers correspondants (noms) et des pistes de recherche ('Vouliez-vous dire ...'). " +
+          "Si l'utilisateur cherche des vidéos, mets en avant les fichiers vidéo."
       },
       {
         role: "user",
-        content: `QUESTION:\n${question}${historyBlock}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier].`,
+        content:
+          `QUESTION:\n${q}${historyBlock}\n\n` +
+          (contextBlocks
+            ? `CONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Utilise le contexte si pertinent.\n- En fin de réponse, cite les fichiers utiles: [NomFichier].`
+            : `Pas d'extraits texte pertinents trouvés. Propose des documents susceptibles d'aider (par nom / répertoire) et oriente l'utilisateur.`),
       },
     ];
 
-    const out = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: prompt,
-      temperature: 0.2,
-    });
+    // LLM seulement si on a au moins un peu de contexte (sinon c’est inutile)
+    let text = "";
+    if (contextBlocks) {
+      const out = await openai.chat.completions.create({
+        model: ANSWER_MODEL,
+        messages: prompt,
+        temperature: 0.2,
+      });
+      text = out.choices?.[0]?.message?.content || "";
+    } else {
+      // File listing fallback (cas rare ici, mais on garde par sécurité)
+      const items = await fuzzyFindOnFilenames(150);
+      text = items.length
+        ? `Je n’ai pas d’extrait texte, mais voici des fichiers qui peuvent vous aider:\n` +
+          items.slice(0,20).map(it => `- [${it.filename}] (doc:${it.id})${it.isVideo ? " — (vidéo)" : ""}`).join("\n")
+        : `Aucun document pertinent trouvé. Essayez une autre écriture (ex: “N2000-2”, “N20002”, “IDR 20002”).`;
+      suggestions = items;
+    }
 
-    const text = out.choices?.[0]?.message?.content || "";
-
-    // Citations enrichies
+    // Citations enrichies + contexts groupés
     const citations = rows.map((r) => ({
       doc_id: r.doc_id,
       filename: r.filename,
@@ -1056,27 +1146,24 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       mime: r.mime,
     }));
 
-    // Contexts groupés par doc
     const byDoc = new Map();
     for (const c of citations) {
-      const list = byDoc.get(c.doc_id) || {
-        doc_id: c.doc_id,
-        filename: c.filename,
-        chunks: [],
-        mime: c.mime,
-      };
+      const list = byDoc.get(c.doc_id) || { doc_id: c.doc_id, filename: c.filename, chunks: [], mime: c.mime };
       list.chunks.push({ chunk_index: c.chunk_index, snippet: c.snippet, score: c.score });
       byDoc.set(c.doc_id, list);
     }
     const contexts = Array.from(byDoc.values());
 
     // Mémoire légère
-    const suggestedIds = [...new Set([...contexts.map((c) => c.doc_id), ...suggestions.map((s) => s.id)])];
+    const suggestedIds = [...new Set([
+      ...contexts.map((c) => c.doc_id),
+      ...suggestions.map((s) => s.id),
+    ])];
     try {
-      await pool.query(`INSERT INTO askv_interactions (question, suggested_doc_ids) VALUES ($1,$2)`, [
-        question,
-        suggestedIds,
-      ]);
+      await pool.query(
+        `INSERT INTO askv_interactions (question, suggested_doc_ids) VALUES ($1,$2)`,
+        [q, suggestedIds]
+      );
     } catch {}
 
     res.json({ ok: true, text, citations, contexts, suggestions });
