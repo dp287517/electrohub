@@ -214,21 +214,68 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_events_user_idx ON askv_events(user_email, ts);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_synonyms_term_idx ON askv_synonyms(term, weight DESC);`);
 
-  // 🔥 Accélère la similarité (pgvector IVFFLAT). Création safe si déjà présent.
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relname = 'askv_chunks_embedding_idx'
-      ) THEN
-        EXECUTE 'CREATE INDEX askv_chunks_embedding_idx ON askv_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 200)';
-      END IF;
-    END $$;
-  `);
+  // -------------------- PATCHWORK INDEX PGVECTOR (robuste & non bloquant) --------------------
+  // - lists configurable (ASK_VEEVA_IVF_LISTS, défaut 100)
+  // - tentative d'augmenter maintenance_work_mem (ASK_VEEVA_MAINT_WORK_MEM, défaut 128MB) si autorisé
+  // - fallback auto vers HNSW si IVFFLAT échoue par manque mémoire (code 54000)
+  // - en cas d'échec, on loggue mais on ne bloque pas le démarrage
+  const IVF_LISTS = Number(process.env.ASK_VEEVA_IVF_LISTS || 100);
+  const MAINT_WORK_MEM = String(process.env.ASK_VEEVA_MAINT_WORK_MEM || "128MB");
 
-  await pool.query(`ANALYZE askv_chunks;`);
+  try {
+    // index déjà présent ?
+    const { rows: idx } = await pool.query(`
+      SELECT 1
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relname = 'askv_chunks_embedding_idx'
+      LIMIT 1
+    `);
+    if (!idx.length) {
+      // Optionnel : essaye d'augmenter la mémoire de maintenance pour la session
+      try {
+        await pool.query(`SET maintenance_work_mem = '${MAINT_WORK_MEM}'`);
+      } catch (e) {
+        console.warn(`[ask-veeva] SET maintenance_work_mem='${MAINT_WORK_MEM}' refusé (${e?.message || e}). On continue.`);
+      }
+
+      // Tentative IVFFLAT
+      try {
+        await pool.query(`
+          CREATE INDEX askv_chunks_embedding_idx
+          ON askv_chunks USING ivfflat (embedding vector_cosine_ops)
+          WITH (lists = ${IVF_LISTS})
+        `);
+        console.log(`[ask-veeva] Index pgvector IVFFLAT créé (lists=${IVF_LISTS}).`);
+      } catch (e) {
+        const msg = String(e?.message || "");
+        const code = e?.code || "";
+        const oom = code === "54000" || /memory required/i.test(msg);
+
+        if (oom) {
+          console.warn("[ask-veeva] IVFFLAT manque de mémoire → fallback HNSW...");
+          await pool.query(`
+            CREATE INDEX askv_chunks_embedding_idx
+            ON askv_chunks USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64)
+          `);
+          console.log("[ask-veeva] Index pgvector HNSW créé (fallback).");
+        } else {
+          // autre erreur : on loggue mais on ne bloque pas le boot
+          console.error("[ask-veeva] Création d'index vectoriel échouée (non bloquant) :", e);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[ask-veeva] Vérification/création d'index vectoriel échouée (non bloquant) :", e);
+  }
+  // ------------------------------------------------------------------------------------------
+
+  try {
+    await pool.query(`ANALYZE askv_chunks;`);
+  } catch (e) {
+    console.warn("[ask-veeva] ANALYZE askv_chunks a échoué (non bloquant) :", e?.message || e);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -940,7 +987,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
 
       const uniq = dedupBy(candidates, x => x.code).sort((a,b)=> b.score - a.score);
       if (uniq.length === 0) {
-        // Pas de code trouvé → réponse courte + 1–2 docs pertinents, sans noyer l’utilisateur
+        // Pas de code trouvé → réponse courte + 1–2 docs pertinents
         const shortDocs = dedupBy(rows, x => x.doc_id).slice(0, 2);
         const text = `Je n’ai pas trouvé de numéro de SOP explicite dans le contexte le plus pertinent.
 Vous pouvez ouvrir ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour vérifier.`;
@@ -978,13 +1025,14 @@ Vous pouvez ouvrir ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour v�
 Autres possibles (à vérifier) : ${extras.map(e => `**${e.code}**`).join(", ")}.`
         : `Le numéro de la SOP est **${best.code}**.`;
 
-      // 1 seule citation principale pour éviter la “panoplie”
+      // 1 seule citation principale
+      const mainRow = rows.find(r => r.doc_id === best.doc_id) || {};
       const citations = [{
         doc_id: best.doc_id,
         filename: best.filename,
-        chunk_index: rows.find(r => r.doc_id === best.doc_id)?.chunk_index ?? best.chunk_index,
+        chunk_index: mainRow.chunk_index ?? best.chunk_index,
         score: Number(best.score),
-        snippet: (rows.find(r => r.doc_id === best.doc_id)?.content || "").slice(0, 400)
+        snippet: (mainRow.content || "").slice(0, 400)
       }];
 
       const contexts = [{
