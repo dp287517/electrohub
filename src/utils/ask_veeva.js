@@ -32,8 +32,14 @@ export async function search(query, k = 6) {
   return post("/api/ask-veeva/search", { query, k });
 }
 
-export async function ask(question, k = 6) {
-  return post("/api/ask-veeva/ask", { question, k });
+/**
+ * ASK avec filtre de documents optionnel.
+ * @param {string} question
+ * @param {number} k - top-K chunks côté backend
+ * @param {string[]} docFilter - liste de doc_id UUID pour focaliser la recherche
+ */
+export async function ask(question, k = 6, docFilter = []) {
+  return post("/api/ask-veeva/ask", { question, k, docFilter });
 }
 
 /** ---- Upload direct (petits fichiers / ZIP <= 300 Mo côté serveur) ---- */
