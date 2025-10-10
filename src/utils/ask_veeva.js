@@ -8,7 +8,6 @@ async function withTimeoutFetch(input, init = {}, ms = 30000) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
   try {
-    // merge signal proprement
     const nextInit = { ...init, signal: ctrl.signal };
     return await fetch(input, nextInit);
   } finally {
@@ -19,7 +18,7 @@ async function withTimeoutFetch(input, init = {}, ms = 30000) {
 async function tryJson(res) {
   const ct = res.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
-    try { return await res.json(); } catch { /* ignore */ }
+    try { return await res.json(); } catch {}
   }
   return null;
 }
@@ -61,7 +60,7 @@ export async function chunkedUpload(file, opts = {}) {
   if (!initRes?.uploadId || !initRes?.partSize) throw new Error("Init chunked échoué");
   const { uploadId, partSize } = initRes;
 
-  // 2) part-by-part (avec retry)
+  // 2) part-by-part avec retry
   const totalParts = Math.ceil(file.size / partSize);
   let uploadedBytes = 0;
   onProgress({ part: 0, totalParts, uploadedBytes, totalBytes: file.size });
@@ -85,8 +84,7 @@ export async function chunkedUpload(file, opts = {}) {
           break;
         } catch (e) {
           lastErr = e;
-          // petit backoff progressif
-          await sleep(400 * (attempt + 1));
+          await sleep(400 * (attempt + 1)); // backoff
         }
       }
       if (lastErr) throw lastErr;
@@ -101,18 +99,17 @@ export async function chunkedUpload(file, opts = {}) {
       totalParts,
       originalName: file.name,
     });
-
     return complete; // { ok, job_id }
   } catch (e) {
-    // Abort propre si une part a échoué
+    // Abort propre si une part échoue
     try {
       await post("/api/ask-veeva/chunked/abort", { uploadId, upto: totalParts });
-    } catch { /* best effort */ }
+    } catch {}
     throw e;
   }
 }
 
-/** ---- Poll job (avec backoff adaptatif + arrêt propre) ---- */
+/** ---- Poll job (backoff adaptatif) ---- */
 export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 } = {}) {
   let stopped = false;
 
@@ -124,10 +121,8 @@ export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 
         onTick(j);
         if (j.status === "done" || j.status === "error") return j;
         await sleep(waitMs);
-        // backoff progressif jusqu'à maxMs
         waitMs = Math.min(Math.round(waitMs * 1.5), maxMs);
       } catch {
-        // en cas d’erreur réseau temporaire, on attend puis on réessaie
         await sleep(Math.min(waitMs * 2, maxMs));
       }
     }
