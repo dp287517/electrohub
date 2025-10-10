@@ -20,9 +20,7 @@ async function withTimeoutFetch(input, init = {}, ms = 30000) {
 async function tryJson(res) {
   const ct = res.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
-    try {
-      return await res.json();
-    } catch {}
+    try { return await res.json(); } catch {}
   }
   return null;
 }
@@ -60,6 +58,8 @@ export async function health() {
 export async function getCurrentUser() {
   return get("/api/ask-veeva/me");
 }
+/** Alias rétro-compatible */
+export const me = getCurrentUser;
 
 /**
  * ASK (RAG) — avec personnalisation.
@@ -67,21 +67,22 @@ export async function getCurrentUser() {
  * @param {number} k
  * @param {string[]} docFilter
  * @param {string} contextMode - "auto" ou "none"
+ * @param {string|null} email - facultatif (sinon cookie)
  */
-export async function ask(question, k = 6, docFilter = [], contextMode = "auto") {
-  return post("/api/ask-veeva/ask", { question, k, docFilter, contextMode });
+export async function ask(question, k = 6, docFilter = [], contextMode = "auto", email = null) {
+  const body = { question, k, docFilter, contextMode };
+  if (email) body.email = email; // le backend lit aussi le cookie si absent
+  return post("/api/ask-veeva/ask", body);
 }
 
-/**
- * Simple vector search (compatibilité)
- */
-export async function search(query, k = 10) {
-  return post("/api/ask-veeva/search", { query, k });
+/** Recherche simple */
+export async function search(query, k = 10, email = null) {
+  const body = { query, k };
+  if (email) body.email = email;
+  return post("/api/ask-veeva/search", body);
 }
 
-/**
- * Fuzzy doc finder — “Vouliez-vous dire…”
- */
+/** (Optionnel) Fuzzy doc finder — “Vouliez-vous dire…” */
 export async function findDocs(q) {
   const qs = new URLSearchParams({ q: q ?? "" }).toString();
   return get(`/api/ask-veeva/find-docs?${qs}`);
@@ -101,9 +102,7 @@ export async function uploadSmall(file) {
   return fetchPathForm("/api/ask-veeva/uploadFile", fd);
 }
 
-/**
- * Chunked upload (ZIP > 300MB)
- */
+/** Chunked upload (ZIP > 300MB) */
 export async function chunkedUpload(file, opts = {}) {
   const { onProgress = () => {}, partTimeoutMs = 60000, maxRetries = 3 } = opts;
 
@@ -151,9 +150,7 @@ export async function chunkedUpload(file, opts = {}) {
     });
     return complete;
   } catch (e) {
-    try {
-      await post("/api/ask-veeva/chunked/abort", { uploadId, upto: totalParts });
-    } catch {}
+    try { await post("/api/ask-veeva/chunked/abort", { uploadId, upto: totalParts }); } catch {}
     throw e;
   }
 }
@@ -176,9 +173,7 @@ export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 
     }
   }
   return {
-    stop: () => {
-      stopped = true;
-    },
+    stop: () => { stopped = true; },
     promise: loop(),
   };
 }
@@ -195,14 +190,18 @@ export async function logEvent(event) {
   return post("/api/ask-veeva/logEvent", event);
 }
 
-/** Envoie un feedback sur une réponse IA */
-export async function sendFeedback({ question, doc_id, useful, note }) {
-  return post("/api/ask-veeva/feedback", { question, doc_id, useful, note });
+/** Envoie un feedback sur une réponse IA (email facultatif) */
+export async function sendFeedback({ question, doc_id, useful, note, email = null }) {
+  const body = { question, doc_id, useful, note };
+  if (email) body.user_email = email;
+  return post("/api/ask-veeva/feedback", body);
 }
 
-/** Récupère la personnalisation (profil + docs favoris, etc.) */
-export async function getPersonalization() {
-  return post("/api/ask-veeva/personalize", {});
+/** Récupère la personnalisation (profil + docs favoris, etc.) — email facultatif */
+export async function getPersonalization(email = null) {
+  const body = {};
+  if (email) body.email = email;
+  return post("/api/ask-veeva/personalize", body);
 }
 
 /** Ajoute ou met à jour un synonyme (admin/auto) */
@@ -220,4 +219,19 @@ export function buildFileURL(docId) {
 /** Optionnel : flux vidéo si plus tard disponible */
 export function buildStreamURL(docId) {
   return `/api/ask-veeva/stream/${docId}`;
+}
+
+/* ------------------------------ Email helpers (client) ------------------------------ */
+
+/** Mémorise l'email côté client (localStorage + cookie lu par le backend) */
+export function setUserEmail(email) {
+  try { localStorage.setItem("askVeeva_email", email); } catch {}
+  try {
+    const days = 365;
+    const expires = new Date(Date.now() + days * 864e5).toUTCString();
+    document.cookie = `veeva_email=${encodeURIComponent(email)}; Expires=${expires}; Path=/; SameSite=Lax`;
+  } catch {}
+}
+export function getUserEmail() {
+  try { return localStorage.getItem("askVeeva_email") || null; } catch { return null; }
 }
