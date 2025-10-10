@@ -38,8 +38,39 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.set("trust proxy", 1);
-app.use(helmet());
-app.use(cors({ origin: true, credentials: true }));
+
+// --- Helmet CSP assouplie pour l'aperçu PDF/vidéo dans <embed>/<iframe> ---
+const SELF = "'self'";
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": [SELF],
+        "script-src": [SELF],
+        "style-src": [SELF, "'unsafe-inline'"], // tailwind inlined ok
+        "img-src": [SELF, "data:", "blob:"],
+        "font-src": [SELF, "data:"],
+        "connect-src": [SELF],
+        "frame-src": [SELF, "blob:", "data:"],
+        "media-src": [SELF, "blob:"],
+        "object-src": [SELF, "blob:", "data:"], // ← autoriser PDF plugin
+        "base-uri": [SELF],
+        "form-action": [SELF],
+        "frame-ancestors": [SELF],
+      },
+    },
+    crossOriginEmbedderPolicy: false, // pour vieux lecteurs PDF
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: "8mb" }));
 
 const PORT = Number(process.env.ASK_VEEVA_PORT || 3015);
@@ -107,9 +138,9 @@ const pool = new Pool({
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`); // pour gen_random_uuid()
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`);   // ← fuzzy
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS pg_trgm;`); // fuzzy
 
-  // Schéma nominal
+  // Schéma
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_documents (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -134,8 +165,8 @@ async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_jobs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      kind TEXT NOT NULL,  -- 'zip','zip-chunked','file'
-      status TEXT NOT NULL DEFAULT 'queued', -- queued|running|done|error
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
       total_files INT DEFAULT 0,
       processed_files INT DEFAULT 0,
       error TEXT,
@@ -144,7 +175,7 @@ async function ensureSchema() {
     );
   `);
 
-  // Mémoire légère (facultatif)
+  // Mémoire légère
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_interactions (
       id BIGSERIAL PRIMARY KEY,
@@ -154,12 +185,13 @@ async function ensureSchema() {
     );
   `);
 
-  // Index & migrations idempotentes
+  // Index
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id, chunk_index);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_documents_fname_idx ON askv_documents(filename);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS askv_documents_fname_trgm ON askv_documents USING gin (lower(filename) gin_trgm_ops);`);
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS askv_documents_fname_trgm ON askv_documents USING gin (lower(filename) gin_trgm_ops);`
+  );
 
-  // (optionnel) analyse pour de meilleurs plans
   await pool.query(`ANALYZE askv_chunks;`);
 }
 
@@ -179,7 +211,7 @@ const uploadDirect = multer({
       cb(null, safe);
     },
   }),
-  limits: { fileSize: 300 * 1024 * 1024 }, // 300 Mo max pour l’upload direct
+  limits: { fileSize: 300 * 1024 * 1024 }, // 300 Mo
 });
 
 // Multer — Upload des parts (chunked)
@@ -188,7 +220,7 @@ const uploadChunk = multer({
     destination: (_req, _file, cb) => cb(null, PARTS_DIR),
     filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`),
   }),
-  limits: { fileSize: Math.min(CHUNK_PART_SIZE * 2, 64 * 1024 * 1024) }, // sécurité
+  limits: { fileSize: Math.min(CHUNK_PART_SIZE * 2, 64 * 1024 * 1024) },
 });
 
 // -----------------------------------------------------------------------------
@@ -222,7 +254,7 @@ async function jobById(id) {
 // -----------------------------------------------------------------------------
 function guessMimeFromExt(ext) {
   const e = (ext || "").toLowerCase();
-  if (VIDEO_EXTS.has(e)) return "video/mp4"; // générique
+  if (VIDEO_EXTS.has(e)) return "video/mp4";
   if (PDF_EXTS.has(e)) return "application/pdf";
   if (TEXTLIKE_EXTS.has(e)) return "text/plain";
   if (e === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -232,7 +264,6 @@ function guessMimeFromExt(ext) {
 }
 
 async function persistOriginal(absPath, originalName) {
-  // copie le fichier dans STORE_DIR et retourne son chemin persistant
   const safeBase = `${nowISO()}_${originalName}`.replace(/[^\w.\-]+/g, "_");
   const finalPath = path.join(STORE_DIR, safeBase);
   await fsp.copyFile(absPath, finalPath);
@@ -288,7 +319,9 @@ async function parsePDF(absPath) {
     }
   }
   await doc.cleanup();
-  try { loadingTask.destroy?.(); } catch {}
+  try {
+    loadingTask.destroy?.();
+  } catch {}
   return out.trim();
 }
 async function parseDOCX(absPath) {
@@ -319,7 +352,7 @@ async function parseTXT(absPath) {
 }
 async function parseMP4(absPath) {
   const stat = await fsp.stat(absPath);
-  return { _noIndex: true, bytes: stat.size }; // pas d’ASR local ici
+  return { _noIndex: true, bytes: stat.size };
 }
 
 // -----------------------------------------------------------------------------
@@ -349,10 +382,16 @@ async function embedBatch(texts) {
   return res.data.map((d) => d.embedding);
 }
 function toVectorLiteral(arr) {
-  return "[" + arr.map((x) => {
-    const v = Number(x);
-    return Number.isFinite(v) ? v.toString() : "0";
-  }).join(",") + "]";
+  return (
+    "[" +
+    arr
+      .map((x) => {
+        const v = Number(x);
+        return Number.isFinite(v) ? v.toString() : "0";
+      })
+      .join(",") +
+    "]"
+  );
 }
 
 // Normalisation pour fuzzy (N2000-2 → n20002)
@@ -368,7 +407,7 @@ function norm(s) {
 // Ingestion d’un fichier concret (stocke PERSISTANT + indexe)
 // -----------------------------------------------------------------------------
 async function ingestConcreteFile(absPath, originalName, ext, bytes) {
-  // 1) Persister l'original (copie dans STORE_DIR) et utiliser ce chemin en DB
+  // 1) Persister l'original
   const { finalPath, bytes: realBytes, mime } = await persistOriginal(absPath, originalName);
   const effectiveBytes = bytes || realBytes;
 
@@ -378,7 +417,6 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
       `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
       [originalName, finalPath, mime, effectiveBytes]
     );
-    // Vidéo: pas de chunks
     return { docId: rows[0].id, chunks: 0, skipped: true, isVideo: true };
   }
 
@@ -389,7 +427,6 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
   else if (ext === ".csv") parsed = await parseCSV(absPath);
   else if (ext === ".txt" || ext === ".md") parsed = await parseTXT(absPath);
   else {
-    // Autres binaires: juste référencer, sans index
     const { rows } = await pool.query(
       `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
       [originalName, finalPath, mime, effectiveBytes]
@@ -397,7 +434,6 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
     return { docId: rows[0].id, chunks: 0, skipped: true };
   }
 
-  // Si pas de texte → référencer quand même
   if (!parsed || parsed.trim().length === 0) {
     const { rows } = await pool.query(
       `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
@@ -422,7 +458,9 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
     let idx = i;
 
     for (let j = 0; j < batch.length; j++) {
-      params.push(`($${values.length + 1}, $${values.length + 2}, $${values.length + 3}, $${values.length + 4}::vector)`);
+      params.push(
+        `($${values.length + 1}, $${values.length + 2}, $${values.length + 3}, $${values.length + 4}::vector)`
+      );
       values.push(docId, idx + j, batch[j], toVectorLiteral(embeds[j]));
     }
 
@@ -533,14 +571,15 @@ app.post("/api/ask-veeva/uploadZip", uploadDirect.single("zip"), async (req, res
   try {
     if (!req.file) return res.status(400).json({ error: "zip manquant" });
     const st = await fsp.stat(req.file.path);
-    // estimation du nombre d’entrées
     let total = 0;
     try {
       const zip = new StreamZip.async({ file: req.file.path, storeEntries: true });
       const entries = await zip.entries();
       total = Object.values(entries).filter((e) => !e.isDirectory).length;
       await zip.close();
-    } catch { total = 0; }
+    } catch {
+      total = 0;
+    }
     const jobId = await createJob("zip", total);
     enqueue(() => runIngestZip(jobId, req.file.path)).catch((e) => console.error("ingest zip fail", e));
     res.json({ ok: true, job_id: jobId, filename: req.file.filename, bytes: st.size });
@@ -631,7 +670,9 @@ app.post("/api/ask-veeva/chunked/complete", async (req, res) => {
       const entries = await zip.entries();
       total = Object.values(entries).filter((e) => !e.isDirectory).length;
       await zip.close();
-    } catch { total = 0; }
+    } catch {
+      total = 0;
+    }
 
     const jobId = await createJob("zip-chunked", total);
     enqueue(() => runIngestZip(jobId, finalZip)).catch((e) => console.error("ingest zip chunked fail", e));
@@ -667,40 +708,72 @@ app.post("/api/ask-veeva/chunked/abort", async (req, res) => {
 // -----------------------------------------------------------------------------
 // VIEW/STREAM ROUTES — fichiers & vidéos
 // -----------------------------------------------------------------------------
+app.get("/api/ask-veeva/doc/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, filename, path, mime, bytes, created_at FROM askv_documents WHERE id = $1`,
+      [req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: "doc not found" });
+    res.json({ ok: true, doc: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 app.get("/api/ask-veeva/file/:id", async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT id, filename, path, mime FROM askv_documents WHERE id = $1`, [req.params.id]);
+    const { rows } = await pool.query(
+      `SELECT id, filename, path, mime, bytes FROM askv_documents WHERE id = $1`,
+      [req.params.id]
+    );
     if (!rows.length) return res.status(404).json({ error: "doc not found" });
     const { id, filename, path: abs, mime } = rows[0];
 
-    // auto-heal minimal: si path cassé mais un fichier de même nom existe dans STORE_DIR
+    // auto-heal minimal
     let st = await fsp.stat(abs).catch(() => null);
     if (!st) {
-      const cand = (await fsp.readdir(STORE_DIR)).find(n => n.endsWith(`_${filename.replace(/[^\w.\-]+/g, "_")}`));
+      const safeName = filename.replace(/[^\w.\-]+/g, "_");
+      const cand = (await fsp.readdir(STORE_DIR)).find((n) => n.endsWith(`_${safeName}`));
       if (cand) {
         const healed = path.join(STORE_DIR, cand);
-        await pool.query(`UPDATE askv_documents SET path = $1 WHERE id = $2`, [healed, id]).catch(()=>{});
+        await pool.query(`UPDATE askv_documents SET path = $1 WHERE id = $2`, [healed, id]).catch(() => {});
         st = await fsp.stat(healed).catch(() => null);
-        if (st) return fs.createReadStream(healed).pipe(res.set({
-          "Content-Type": mime || "application/octet-stream",
-          "Content-Disposition": `inline; filename="${encodeURIComponent(filename)}"`
-        }));
+        if (st) {
+          res.set({
+            "Content-Type": mime || "application/octet-stream",
+            "Content-Disposition": `inline; filename="${encodeURIComponent(filename)}"`,
+            "Cache-Control": "private, max-age=300",
+            "X-Content-Type-Options": "nosniff",
+            "Accept-Ranges": "bytes",
+          });
+          return fs.createReadStream(healed).pipe(res);
+        }
       }
       return res.status(404).json({ error: "file not on disk" });
     }
 
-    res.setHeader("Content-Type", mime || "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(filename)}"`);
+    res.set({
+      "Content-Type": mime || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${encodeURIComponent(filename)}"`,
+      "Cache-Control": "private, max-age=300",
+      "X-Content-Type-Options": "nosniff",
+      "Accept-Ranges": "bytes",
+    });
     fs.createReadStream(abs).pipe(res);
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
 });
+
 app.get("/api/ask-veeva/stream/:id", async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT filename, path, mime, bytes FROM askv_documents WHERE id = $1`, [req.params.id]);
+    const { rows } = await pool.query(
+      `SELECT filename, path, mime, bytes FROM askv_documents WHERE id = $1`,
+      [req.params.id]
+    );
     if (!rows.length) return res.status(404).json({ error: "doc not found" });
-    const { filename, path: abs, mime, bytes } = rows[0];
+    const { filename, path: abs, mime } = rows[0];
     const st = await fsp.stat(abs).catch(() => null);
     if (!st) return res.status(404).json({ error: "file not on disk" });
 
@@ -709,6 +782,9 @@ app.get("/api/ask-veeva/stream/:id", async (req, res) => {
       res.setHeader("Content-Type", mime || "video/mp4");
       res.setHeader("Content-Length", st.size);
       res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(filename)}"`);
+      res.setHeader("Cache-Control", "private, max-age=300");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Accept-Ranges", "bytes");
       return fs.createReadStream(abs).pipe(res);
     }
     const CHUNK = 1 * 1024 * 1024;
@@ -721,6 +797,8 @@ app.get("/api/ask-veeva/stream/:id", async (req, res) => {
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Content-Length", contentLength);
     res.setHeader("Content-Type", mime || "video/mp4");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.setHeader("X-Content-Type-Options", "nosniff");
     fs.createReadStream(abs, { start, end }).pipe(res);
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
@@ -828,7 +906,6 @@ app.post("/api/ask-veeva/find", async (req, res) => {
       [like, q.toLowerCase(), `%${qNorm}%`, Math.max(1, Math.min(500, limit))]
     );
 
-    // petites “suggestions de reformulation”
     const suggestions = [];
     if (/\bn\s?(\d{3,5})(-?\d+)?\b/i.test(q)) {
       const canon = q.toLowerCase().replace(/[\s\-]/g, "");
@@ -873,11 +950,12 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     const qvec = toVectorLiteral(emb);
 
     // LIMIT smart: 0 or <0 => wide
-    const limit = (k && k > 0) ? k : SAFE_WIDE_LIMIT;
+    const limit = k && k > 0 ? k : SAFE_WIDE_LIMIT;
 
     // Filtre par doc_id si demandé
     const filterSQL = Array.isArray(docFilter) && docFilter.length ? `AND c.doc_id = ANY($3::uuid[])` : ``;
-    const params = Array.isArray(docFilter) && docFilter.length ? [qvec, limit, docFilter] : [qvec, limit];
+    const params =
+      Array.isArray(docFilter) && docFilter.length ? [qvec, limit, docFilter] : [qvec, limit];
 
     // 1) Vector search
     let { rows } = await pool.query(
@@ -895,7 +973,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       params
     );
 
-    // 1bis) Si wantVideos → on “booste” les docs vidéo dans les citations proposées
+    // Boost vidéo si demandé
     if (wantVideos) {
       rows = rows.sort((a, b) => {
         const va = (a.mime || "").startsWith("video/") ? 1 : 0;
@@ -904,7 +982,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       });
     }
 
-    // 2) Fallback fuzzy si peu de chunks
+    // Fallback fuzzy si peu de chunks
     let suggestions = [];
     if (rows.length < 3) {
       const qLike = `%${question.toLowerCase().replace(/[%_]/g, "")}%`;
@@ -921,7 +999,8 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
           CASE WHEN lower(filename) LIKE $1 THEN 0.9 ELSE 0 END
         ) DESC
         LIMIT 50
-        `,[qLike, question.toLowerCase(), qNorm]
+        `,
+        [qLike, question.toLowerCase(), qNorm]
       );
       suggestions = fuzzy.map((r) => ({
         id: r.id,
@@ -935,25 +1014,27 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     }
 
     // 3) Contexte compact
-    const historyBlock = Array.isArray(history) && history.length
-      ? `\n\nHISTORIQUE:\n${history.map(h => `- ${h.role.toUpperCase()}: ${h.text}`).join("\n")}`
-      : "";
+    const historyBlock =
+      Array.isArray(history) && history.length
+        ? `\n\nHISTORIQUE:\n${history.map((h) => `- ${h.role.toUpperCase()}: ${h.text}`).join("\n")}`
+        : "";
 
-    const contextBlocks = rows.map((r, i) => {
-      const snippet = (r.content || "").slice(0, 2000);
-      return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
-    }).join("\n\n---\n\n");
+    const contextBlocks = rows
+      .map((r, i) => {
+        const snippet = (r.content || "").slice(0, 2000);
+        return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
+      })
+      .join("\n\n---\n\n");
 
     const prompt = [
       {
         role: "system",
         content:
-          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'information n'est pas dans le contexte, dis-le clairement. Si des documents connexes existent (suggestions), propose-les. Si l'utilisateur fait une faute de frappe, tente une interprétation (« vouliez-vous dire… ») dans ta réponse."
+          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'information n'est pas dans le contexte, dis-le clairement. Si des documents connexes existent (suggestions), propose-les. Si l'utilisateur fait une faute de frappe, tente une interprétation (« vouliez-vous dire… ») dans ta réponse.",
       },
       {
         role: "user",
-        content:
-          `QUESTION:\n${question}${historyBlock}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier].`
+        content: `QUESTION:\n${question}${historyBlock}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier].`,
       },
     ];
 
@@ -978,25 +1059,25 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     // Contexts groupés par doc
     const byDoc = new Map();
     for (const c of citations) {
-      const list = byDoc.get(c.doc_id) || { doc_id: c.doc_id, filename: c.filename, chunks: [], mime: c.mime };
+      const list = byDoc.get(c.doc_id) || {
+        doc_id: c.doc_id,
+        filename: c.filename,
+        chunks: [],
+        mime: c.mime,
+      };
       list.chunks.push({ chunk_index: c.chunk_index, snippet: c.snippet, score: c.score });
       byDoc.set(c.doc_id, list);
     }
     const contexts = Array.from(byDoc.values());
 
-    // Mémoire légère (log question + docs cités + suggestions)
-    const suggestedIds = [
-      ...new Set([
-        ...contexts.map((c) => c.doc_id),
-        ...suggestions.map((s) => s.id),
-      ]),
-    ];
+    // Mémoire légère
+    const suggestedIds = [...new Set([...contexts.map((c) => c.doc_id), ...suggestions.map((s) => s.id)])];
     try {
-      await pool.query(
-        `INSERT INTO askv_interactions (question, suggested_doc_ids) VALUES ($1,$2)`,
-        [question, suggestedIds]
-      );
-    } catch { /* no-op */ }
+      await pool.query(`INSERT INTO askv_interactions (question, suggested_doc_ids) VALUES ($1,$2)`, [
+        question,
+        suggestedIds,
+      ]);
+    } catch {}
 
     res.json({ ok: true, text, citations, contexts, suggestions });
   } catch (e) {
