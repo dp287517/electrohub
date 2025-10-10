@@ -1,14 +1,5 @@
 // src/pages/Comp.jsx
 // External Contractors (Prestataires externes)
-//
-// ✅ Onglets : Vendors | Calendar | Gantt | Analytics | IA
-// ✅ Filtres globaux repliables (disponibles sur tous les onglets)
-// ✅ Vendors : thead sticky intégré + <colgroup> ⇒ ALIGNEMENT PARFAIT
-//    Colonnes (10): Name | Offer | MSRA | Pre-qual | PP | Visits | First date | Owner | Files | Actions
-// ✅ 1 seul bouton "+ New vendor" (dans l’entête, pas dans les filtres)
-// ✅ MSRA partout (plus "JSA"), Pre-qual incluse
-// ✅ Gantt coloré (vert/rouge), "Open vendor" OK
-// ✅ IA : /api/comp-ext/ask
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
@@ -111,7 +102,7 @@ const API = {
 
 // ----------------- UI helpers -----------------
 function Tabs({ value, onChange }) {
-  // Mesure dynamique de la hauteur de la barre d'onglets pour caler le thead
+  // Mesure dynamique de la hauteur de la barre d'onglets pour caler toutes les stickies
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -119,7 +110,6 @@ function Tabs({ value, onChange }) {
     const apply = () =>
       document.documentElement.style.setProperty("--tabs-h", `${el.offsetHeight}px`);
     apply();
-    // re-mesure sur resize (responsive)
     window.addEventListener("resize", apply);
     return () => window.removeEventListener("resize", apply);
   }, []);
@@ -483,7 +473,6 @@ export default function Comp() {
   }, [list, fOffer, fMsra, fPrequal, fAccess, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo, sortBy]);
 
   // Sorting helpers
-  const sortIcon = (field) => sortBy.field !== field ? "↕" : (sortBy.dir === "asc" ? "↑" : "↓");
   const setSort = (field) =>
     setSortBy((s) => (s.field === field ? { field, dir: s.dir === "asc" ? "desc" : "asc" } : { field, dir: "asc" }));
 
@@ -533,7 +522,7 @@ export default function Comp() {
     await reloadAll();
   }
 
-  // Visit modal (calendar & gantt)
+  // Visit modal
   function openVisitModalForDay({ date, events }) {
     setVisitModal({ open: true, date, items: events || [] });
   }
@@ -551,12 +540,7 @@ export default function Comp() {
     };
     setVisitModal({ open: true, date: startISO, items: [item] });
   }
-  const handleGanttSelect = (task, isSelected) => {
-    if (isSelected) openVisitModalForTask(task);
-  };
-
-  // Offsets sticky (laissons si besoin ailleurs)
-  const stickyTop = 118; // non utilisé pour thead; conservé pour compat
+  const handleGanttSelect = (task, isSelected) => { if (isSelected) openVisitModalForTask(task); };
 
   // Filtre actions
   const filtersState = { q, fOffer, fMsra, fPrequal, fAccess, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo };
@@ -601,9 +585,64 @@ export default function Comp() {
 
       {/* VENDORS */}
       {tab === "vendors" && (
-        <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto">
+        <div className="bg-white rounded-2xl border shadow-sm overflow-x-auto relative">
+          {/* ===== Sticky header "miroir" en dehors du tableau ===== */}
+          <div
+            className="sticky z-30"
+            style={{ top: "calc(60px + var(--tabs-h, 44px) + 8px)" }}
+          >
+            <table className="w-full table-fixed border-separate border-spacing-0">
+              {/* même colgroup pour l’alignement */}
+              <colgroup>
+                <col style={{ width: "15.2%" }} />
+                <col style={{ width: "10.2%" }} />
+                <col style={{ width: "10.2%" }} />
+                <col style={{ width: "10.2%" }} />
+                <col style={{ width: "8.9%" }} />
+                <col style={{ width: "7.6%" }} />
+                <col style={{ width: "10.2%" }} />
+                <col style={{ width: "10.2%" }} />
+                <col style={{ width: "7.6%" }} />
+                <col style={{ width: "9.7%" }} />
+              </colgroup>
+              <thead>
+                <tr>
+                  {[
+                    { k:"name", label:"Name" },
+                    { k:"offer_status", label:"Offer" },
+                    { k:"msra_status", label:"MSRA" },
+                    { k:"prequal_status", label:"Pre-qual" },
+                    { k:"pp", label:"PP", noSort:true },
+                    { k:"visits", label:"Visits" },
+                    { k:"first_date", label:"First date" },
+                    { k:"owner", label:"Owner" },
+                    { k:"files_count", label:"Files" },
+                    { k:"actions", label:"Actions", noSort:true },
+                  ].map(col => (
+                    <th
+                      key={col.k}
+                      className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b bg-gray-50/95 backdrop-blur"
+                    >
+                      {!col.noSort ? (
+                        <button
+                          onClick={() => setSort(col.k)}
+                          className="inline-flex items-center gap-1 hover:underline"
+                        >
+                          <span>{col.label}</span>
+                          <span className="text-xs">↕</span>
+                        </button>
+                      ) : (
+                        <span>{col.label}</span>
+                      )}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+            </table>
+          </div>
+
+          {/* ===== Tableau principal (thead caché pour garder la hauteur) ===== */}
           <table className="w-full table-fixed border-separate border-spacing-0">
-            {/* COLGROUP = colonnes synchronisées */}
             <colgroup>
               <col style={{ width: "15.2%" }} />
               <col style={{ width: "10.2%" }} />
@@ -617,45 +656,10 @@ export default function Comp() {
               <col style={{ width: "9.7%" }} />
             </colgroup>
 
-            {/* THEAD sticky (aligné sous les tabs et le header principal) */}
-            <thead>
+            <thead style={{ visibility: "hidden" }}>
               <tr>
-                {[
-                  { k:"name", label:"Name" },
-                  { k:"offer_status", label:"Offer" },
-                  { k:"msra_status", label:"MSRA" },
-                  { k:"prequal_status", label:"Pre-qual" },
-                  { k:"pp", label:"PP", noSort:true },
-                  { k:"visits", label:"Visits" },
-                  { k:"first_date", label:"First date" },
-                  { k:"owner", label:"Owner" },
-                  { k:"files_count", label:"Files" },
-                  { k:"actions", label:"Actions", noSort:true },
-                ].map(col => (
-                  <th
-                    key={col.k}
-                    className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b bg-gray-50/95 backdrop-blur"
-                    style={{
-                      position: "sticky",
-                      // 60px = top des Tabs ; var(--tabs-h) = hauteur mesurée des Tabs ; +8px petite marge
-                      top: "calc(60px + var(--tabs-h, 44px) + 8px)",
-                      zIndex: 30,
-                    }}
-                  >
-                    {!col.noSort ? (
-                      <button
-                        onClick={() => setSort(col.k)}
-                        className="inline-flex items-center gap-1 hover:underline"
-                      >
-                        <span>{col.label}</span>
-                        <span className="text-xs">
-                          {sortBy.field !== col.k ? "↕" : (sortBy.dir === "asc" ? "↑" : "↓")}
-                        </span>
-                      </button>
-                    ) : (
-                      <span>{col.label}</span>
-                    )}
-                  </th>
+                {["Name","Offer","MSRA","Pre-qual","PP","Visits","First date","Owner","Files","Actions"].map((label,i)=>(
+                  <th key={i} className="px-4 py-2 border-b text-sm">{label}</th>
                 ))}
               </tr>
             </thead>
@@ -783,7 +787,7 @@ export default function Comp() {
         </div>
       )}
 
-      {/* IA */}
+      {/* IA (ancienne zone 1Q/1R conservée telle quelle) */}
       {tab === "ai" && (
         <div className="grid grid-cols-1 gap-6">
           <Card title="Assistant IA">
