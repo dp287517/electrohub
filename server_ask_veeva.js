@@ -144,7 +144,7 @@ async function ensureSchema() {
     );
   `);
 
-  // Mémoire légère (facultatif, déjà prêt)
+  // Mémoire légère (facultatif)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS askv_interactions (
       id BIGSERIAL PRIMARY KEY,
@@ -233,11 +233,11 @@ function guessMimeFromExt(ext) {
 
 async function persistOriginal(absPath, originalName) {
   // copie le fichier dans STORE_DIR et retourne son chemin persistant
-  const ext = path.extname(originalName).toLowerCase();
   const safeBase = `${nowISO()}_${originalName}`.replace(/[^\w.\-]+/g, "_");
   const finalPath = path.join(STORE_DIR, safeBase);
   await fsp.copyFile(absPath, finalPath);
   const stat = await fsp.stat(finalPath);
+  const ext = path.extname(originalName).toLowerCase();
   const mime = guessMimeFromExt(ext);
   return { finalPath, bytes: stat.size, mime };
 }
@@ -669,11 +669,26 @@ app.post("/api/ask-veeva/chunked/abort", async (req, res) => {
 // -----------------------------------------------------------------------------
 app.get("/api/ask-veeva/file/:id", async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT filename, path, mime FROM askv_documents WHERE id = $1`, [req.params.id]);
+    const { rows } = await pool.query(`SELECT id, filename, path, mime FROM askv_documents WHERE id = $1`, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: "doc not found" });
-    const { filename, path: abs, mime } = rows[0];
-    const st = await fsp.stat(abs).catch(() => null);
-    if (!st) return res.status(404).json({ error: "file not on disk" });
+    const { id, filename, path: abs, mime } = rows[0];
+
+    // auto-heal minimal: si path cassé mais un fichier de même nom existe dans STORE_DIR
+    let st = await fsp.stat(abs).catch(() => null);
+    if (!st) {
+      const cand = (await fsp.readdir(STORE_DIR)).find(n => n.endsWith(`_${filename.replace(/[^\w.\-]+/g, "_")}`));
+      if (cand) {
+        const healed = path.join(STORE_DIR, cand);
+        await pool.query(`UPDATE askv_documents SET path = $1 WHERE id = $2`, [healed, id]).catch(()=>{});
+        st = await fsp.stat(healed).catch(() => null);
+        if (st) return fs.createReadStream(healed).pipe(res.set({
+          "Content-Type": mime || "application/octet-stream",
+          "Content-Disposition": `inline; filename="${encodeURIComponent(filename)}"`
+        }));
+      }
+      return res.status(404).json({ error: "file not on disk" });
+    }
+
     res.setHeader("Content-Type", mime || "application/octet-stream");
     res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(filename)}"`);
     fs.createReadStream(abs).pipe(res);
@@ -747,7 +762,7 @@ app.post("/api/ask-veeva/search", async (req, res) => {
   }
 });
 
-// Fuzzy doc finder (pour "Vouliez-vous dire…", et pour retrouver des vidéos par nom)
+// Fuzzy doc finder (GET — compat ancien)
 app.get("/api/ask-veeva/find-docs", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
@@ -787,9 +802,59 @@ app.get("/api/ask-veeva/find-docs", async (req, res) => {
   }
 });
 
+// Fuzzy doc finder (POST — aligné avec l'UI)
+app.post("/api/ask-veeva/find", async (req, res) => {
+  try {
+    const { query, limit = 120 } = req.body || {};
+    const q = String(query || "").trim();
+    if (!q) return res.json({ ok: true, items: [], suggestions: [] });
+
+    const qNorm = norm(q);
+    const like = `%${q.replace(/[%_]/g, "").toLowerCase()}%`;
+
+    const { rows } = await pool.query(
+      `
+      SELECT id, filename, mime, bytes
+      FROM askv_documents
+      WHERE lower(filename) LIKE $1
+         OR similarity(lower(filename), $2) > 0.25
+         OR replace(regexp_replace(lower(filename), '[^a-z0-9]+', '', 'g'), '-', '') LIKE $3
+      ORDER BY GREATEST(
+        similarity(lower(filename), $2),
+        CASE WHEN lower(filename) LIKE $1 THEN 0.9 ELSE 0 END
+      ) DESC
+      LIMIT $4
+      `,
+      [like, q.toLowerCase(), `%${qNorm}%`, Math.max(1, Math.min(500, limit))]
+    );
+
+    // petites “suggestions de reformulation”
+    const suggestions = [];
+    if (/\bn\s?(\d{3,5})(-?\d+)?\b/i.test(q)) {
+      const canon = q.toLowerCase().replace(/[\s\-]/g, "");
+      suggestions.push(`Essayer "${canon}"`);
+    }
+    if (q.length >= 3) suggestions.push(q.toUpperCase(), q.toLowerCase());
+
+    res.json({
+      ok: true,
+      items: rows.map((r) => ({
+        id: r.id,
+        filename: r.filename,
+        mime: r.mime,
+        bytes: Number(r.bytes || 0),
+        isVideo: (r.mime || "").startsWith("video/"),
+      })),
+      suggestions,
+    });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
 app.post("/api/ask-veeva/ask", async (req, res) => {
   try {
-    const { question, k = 0, docFilter = [] } = req.body || {};
+    const { question, k = 0, docFilter = [], history = [], wantVideos = false } = req.body || {};
     if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
 
     const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM public.askv_chunks`);
@@ -815,7 +880,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     const params = Array.isArray(docFilter) && docFilter.length ? [qvec, limit, docFilter] : [qvec, limit];
 
     // 1) Vector search
-    const { rows } = await pool.query(
+    let { rows } = await pool.query(
       `
       SELECT 
         d.id AS doc_id, d.filename, d.mime,
@@ -830,7 +895,16 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       params
     );
 
-    // 2) Fallback: si pas (ou très peu) de chunks → fuzzy sur filename
+    // 1bis) Si wantVideos → on “booste” les docs vidéo dans les citations proposées
+    if (wantVideos) {
+      rows = rows.sort((a, b) => {
+        const va = (a.mime || "").startsWith("video/") ? 1 : 0;
+        const vb = (b.mime || "").startsWith("video/") ? 1 : 0;
+        return vb - va || b.score - a.score;
+      });
+    }
+
+    // 2) Fallback fuzzy si peu de chunks
     let suggestions = [];
     if (rows.length < 3) {
       const qLike = `%${question.toLowerCase().replace(/[%_]/g, "")}%`;
@@ -847,8 +921,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
           CASE WHEN lower(filename) LIKE $1 THEN 0.9 ELSE 0 END
         ) DESC
         LIMIT 50
-        `,
-        [qLike, question.toLowerCase(), qNorm]
+        `,[qLike, question.toLowerCase(), qNorm]
       );
       suggestions = fuzzy.map((r) => ({
         id: r.id,
@@ -856,9 +929,16 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
         mime: r.mime,
         isVideo: (r.mime || "").startsWith("video/"),
       }));
+      if (wantVideos) {
+        suggestions = suggestions.sort((a, b) => (b.isVideo ? 1 : 0) - (a.isVideo ? 1 : 0));
+      }
     }
 
     // 3) Contexte compact
+    const historyBlock = Array.isArray(history) && history.length
+      ? `\n\nHISTORIQUE:\n${history.map(h => `- ${h.role.toUpperCase()}: ${h.text}`).join("\n")}`
+      : "";
+
     const contextBlocks = rows.map((r, i) => {
       const snippet = (r.content || "").slice(0, 2000);
       return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
@@ -868,12 +948,12 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       {
         role: "system",
         content:
-          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'information n'est pas dans le contexte, dis-le clairement. Si des documents connexes existent (suggestions), propose-les."
+          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'information n'est pas dans le contexte, dis-le clairement. Si des documents connexes existent (suggestions), propose-les. Si l'utilisateur fait une faute de frappe, tente une interprétation (« vouliez-vous dire… ») dans ta réponse."
       },
       {
         role: "user",
         content:
-          `QUESTION:\n${question}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier].`
+          `QUESTION:\n${question}${historyBlock}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier].`
       },
     ];
 
