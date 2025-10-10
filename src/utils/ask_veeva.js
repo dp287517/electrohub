@@ -55,15 +55,15 @@ export async function health() {
 }
 
 /**
- * ASK (RAG) — wide by default (k=0), optional doc focus (docFilter: uuid[])
- * Mirrors backend: returns { ok, text, citations, contexts, suggestions }
+ * ASK (RAG) — k par défaut = 6 pour garantir du contexte côté serveur.
+ * docFilter: uuid[] optionnel pour cibler des docs.
  */
-export async function ask(question, k = 0, docFilter = []) {
+export async function ask(question, k = 6, docFilter = []) {
   return post("/api/ask-veeva/ask", { question, k, docFilter });
 }
 
 /**
- * Simple vector search (kept for compatibility).
+ * Simple vector search (compat).
  * @param {string} query
  * @param {number} k
  */
@@ -72,8 +72,9 @@ export async function search(query, k = 10) {
 }
 
 /**
- * Fuzzy doc finder — used for “Vouliez-vous dire…”
- * Backend route supports q= (string). Returns { ok, items: [{ id, filename, mime, bytes, isVideo }] }.
+ * (Optionnel / futur) Fuzzy doc finder — “Vouliez-vous dire…”
+ * Le backend n’a pas encore /find-docs. Si tu l’actives plus tard, garde cette API.
+ * Pour l’instant, elle lèvera 404 -> à appeler dans un try/catch côté UI.
  */
 export async function findDocs(q) {
   const qs = new URLSearchParams({ q: q ?? "" }).toString();
@@ -82,7 +83,7 @@ export async function findDocs(q) {
 
 /* ------------------------------ Uploads ------------------------------ */
 
-/** Upload direct (ZIP <= ~300MB server-side, ou fichier simple) */
+/** Upload direct (ZIP <= ~300MB côté serveur, ou fichier simple) */
 export async function uploadSmall(file) {
   const fd = new FormData();
   const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -185,12 +186,12 @@ export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 
 
 /* ------------------------------ Viewer helpers ------------------------------ */
 
-/** Build URL to preview/download a stored file by doc id */
+/** URL pour ouvrir/télécharger l’original conservé côté serveur */
 export function buildFileURL(docId) {
   return `/api/ask-veeva/file/${docId}`;
 }
 
-/** Build URL to stream a video by doc id */
-export function buildStreamURL(docId) {
-  return `/api/ask-veeva/stream/${docId}`;
+/** Pas de route /stream côté backend pour l’instant — retire-la si non utilisée */
+export function buildStreamURL(/* docId */) {
+  throw new Error("Streaming non disponible : pas d'endpoint /api/ask-veeva/stream côté serveur.");
 }
