@@ -111,6 +111,19 @@ const API = {
 
 // ----------------- UI helpers -----------------
 function Tabs({ value, onChange }) {
+  // Mesure dynamique de la hauteur de la barre d'onglets pour caler le thead
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const apply = () =>
+      document.documentElement.style.setProperty("--tabs-h", `${el.offsetHeight}px`);
+    apply();
+    // re-mesure sur resize (responsive)
+    window.addEventListener("resize", apply);
+    return () => window.removeEventListener("resize", apply);
+  }, []);
+
   const T = (id, label, emoji) => (
     <button
       onClick={() => onChange(id)}
@@ -122,7 +135,10 @@ function Tabs({ value, onChange }) {
     </button>
   );
   return (
-    <div className="flex flex-wrap gap-2 sticky top-[60px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2">
+    <div
+      ref={ref}
+      className="flex flex-wrap gap-2 sticky top-[60px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
+    >
       {T("vendors", "Vendors", "📋")}
       {T("calendar", "Calendar", "📅")}
       {T("gantt", "Gantt", "📈")}
@@ -539,8 +555,8 @@ export default function Comp() {
     if (isSelected) openVisitModalForTask(task);
   };
 
-  // Offsets sticky
-  const stickyTop = 118;
+  // Offsets sticky (laissons si besoin ailleurs)
+  const stickyTop = 118; // non utilisé pour thead; conservé pour compat
 
   // Filtre actions
   const filtersState = { q, fOffer, fMsra, fPrequal, fAccess, fPP, fOwner, fHasFiles, fVisitsMin, fVisitsMax, fFrom, fTo };
@@ -621,8 +637,9 @@ export default function Comp() {
                     className="text-left font-medium text-sm text-gray-700 px-4 py-2 border-b bg-gray-50/95 backdrop-blur"
                     style={{
                       position: "sticky",
-                      top: "130px",   // <-- ajustable : hauteur du header + tabs
-                      zIndex: 20,
+                      // 60px = top des Tabs ; var(--tabs-h) = hauteur mesurée des Tabs ; +8px petite marge
+                      top: "calc(60px + var(--tabs-h, 44px) + 8px)",
+                      zIndex: 30,
                     }}
                   >
                     {!col.noSort ? (
