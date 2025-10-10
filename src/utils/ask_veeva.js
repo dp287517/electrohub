@@ -10,7 +10,7 @@ async function withTimeoutFetch(input, init = {}, ms = 30000) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
   try {
-    const nextInit = { ...init, signal: ctrl.signal };
+    const nextInit = { ...init, signal: ctrl.signal, credentials: "include" };
     return await fetch(input, nextInit);
   } finally {
     clearTimeout(id);
@@ -20,7 +20,9 @@ async function withTimeoutFetch(input, init = {}, ms = 30000) {
 async function tryJson(res) {
   const ct = res.headers.get("content-type") || "";
   if (ct.includes("application/json")) {
-    try { return await res.json(); } catch {}
+    try {
+      return await res.json();
+    } catch {}
   }
   return null;
 }
@@ -54,27 +56,31 @@ export async function health() {
   return get("/api/ask-veeva/health");
 }
 
+/** Profil courant (auto via SSO / cookie) */
+export async function getCurrentUser() {
+  return get("/api/ask-veeva/me");
+}
+
 /**
  * ASK (RAG) — avec personnalisation.
  * @param {string} question
- * @param {number} k - nombre de chunks
- * @param {string[]} docFilter - filtrer par docs
- * @param {string} email - utilisateur courant
- * @param {string} contextMode - "auto" (par défaut) ou "none"
+ * @param {number} k
+ * @param {string[]} docFilter
+ * @param {string} contextMode - "auto" ou "none"
  */
-export async function ask(question, k = 6, docFilter = [], email = null, contextMode = "auto") {
-  return post("/api/ask-veeva/ask", { question, k, docFilter, email, contextMode });
+export async function ask(question, k = 6, docFilter = [], contextMode = "auto") {
+  return post("/api/ask-veeva/ask", { question, k, docFilter, contextMode });
 }
 
 /**
  * Simple vector search (compatibilité)
  */
-export async function search(query, k = 10, email = null) {
-  return post("/api/ask-veeva/search", { query, k, email });
+export async function search(query, k = 10) {
+  return post("/api/ask-veeva/search", { query, k });
 }
 
 /**
- * (Optionnel) Fuzzy doc finder — “Vouliez-vous dire…”
+ * Fuzzy doc finder — “Vouliez-vous dire…”
  */
 export async function findDocs(q) {
   const qs = new URLSearchParams({ q: q ?? "" }).toString();
@@ -170,7 +176,9 @@ export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 
     }
   }
   return {
-    stop: () => { stopped = true; },
+    stop: () => {
+      stopped = true;
+    },
     promise: loop(),
   };
 }
@@ -188,13 +196,13 @@ export async function logEvent(event) {
 }
 
 /** Envoie un feedback sur une réponse IA */
-export async function sendFeedback({ email, question, doc_id, useful, note }) {
-  return post("/api/ask-veeva/feedback", { user_email: email, question, doc_id, useful, note });
+export async function sendFeedback({ question, doc_id, useful, note }) {
+  return post("/api/ask-veeva/feedback", { question, doc_id, useful, note });
 }
 
 /** Récupère la personnalisation (profil + docs favoris, etc.) */
-export async function getPersonalization(email) {
-  return post("/api/ask-veeva/personalize", { email });
+export async function getPersonalization() {
+  return post("/api/ask-veeva/personalize", {});
 }
 
 /** Ajoute ou met à jour un synonyme (admin/auto) */
