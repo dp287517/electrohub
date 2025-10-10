@@ -140,20 +140,65 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS path  TEXT,
       ADD COLUMN IF NOT EXISTS mime  TEXT,
       ADD COLUMN IF NOT EXISTS bytes BIGINT,
-      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
+      ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()
   `);
   await pool.query(`
     ALTER TABLE askv_jobs
       ADD COLUMN IF NOT EXISTS error TEXT,
       ADD COLUMN IF NOT EXISTS total_files INT DEFAULT 0,
       ADD COLUMN IF NOT EXISTS processed_files INT DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+      ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()
   `);
   await pool.query(`
     ALTER TABLE askv_chunks
       ADD COLUMN IF NOT EXISTS content TEXT,
       ADD COLUMN IF NOT EXISTS embedding vector(${EMBEDDING_DIMS}),
       ADD COLUMN IF NOT EXISTS chunk_index INT
+  `);
+
+  // --- Compat legacy: bases qui ont "storage_path" au lieu de "path"
+  await pool.query(`
+    ALTER TABLE askv_documents
+      ADD COLUMN IF NOT EXISTS path TEXT
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='askv_documents' AND column_name='storage_path'
+      ) THEN
+        -- Copier storage_path -> path si path est NULL
+        UPDATE askv_documents SET path = storage_path WHERE path IS NULL;
+
+        -- Détendre NOT NULL si présent
+        BEGIN
+          ALTER TABLE askv_documents ALTER COLUMN storage_path DROP NOT NULL;
+        EXCEPTION WHEN others THEN
+          -- ignore
+        END;
+
+        -- Fonction + trigger de synchro bidirectionnelle
+        CREATE OR REPLACE FUNCTION public.askv_sync_paths()
+        RETURNS trigger AS $f$
+        BEGIN
+          IF NEW.path IS NULL AND NEW.storage_path IS NOT NULL THEN
+            NEW.path := NEW.storage_path;
+          ELSIF NEW.storage_path IS NULL AND NEW.path IS NOT NULL THEN
+            NEW.storage_path := NEW.path;
+          END IF;
+          RETURN NEW;
+        END
+        $f$ LANGUAGE plpgsql;
+
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_askv_sync_paths') THEN
+          CREATE TRIGGER trg_askv_sync_paths
+          BEFORE INSERT OR UPDATE ON public.askv_documents
+          FOR EACH ROW EXECUTE FUNCTION public.askv_sync_paths();
+        END IF;
+      END IF;
+    END
+    $$;
   `);
 
   // Index vector (IVFFLAT)
