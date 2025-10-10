@@ -61,28 +61,45 @@ export async function getCurrentUser() {
 /** Alias rétro-compatible */
 export const me = getCurrentUser;
 
+/* ------------------------------ ASK / SEARCH ------------------------------ */
+
+/** Détecte si une chaîne ressemble à un email (léger) */
+const looksLikeEmail = (s) => !!String(s || "").match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/i);
+
 /**
  * ASK (RAG) — avec personnalisation.
+ * Compat paramètres :
+ *   - ancien usage (ce que ton ChatBox envoie) : ask(q, k, docFilter, email, "auto")
+ *   - usage documenté :                           ask(q, k, docFilter, "auto", email)
  * @param {string} question
  * @param {number} k
  * @param {string[]} docFilter
- * @param {string} contextMode - "auto" ou "none"
- * @param {string|null} email - facultatif (sinon cookie)
+ * @param {string|"auto"|"none"|null} contextMode
+ * @param {string|null} email
  */
 export async function ask(question, k = 6, docFilter = [], contextMode = "auto", email = null) {
+  // Normalisation pour accepter les deux signatures
+  // Cas 1: 4e arg est un email => on swap
+  if (looksLikeEmail(contextMode) && (email === null || email === undefined)) {
+    email = contextMode;
+    contextMode = "auto";
+  }
+  // Cas 2: 5e arg est non email mais 4e absent → garde "auto"
+  if (contextMode == null || contextMode === "") contextMode = "auto";
+
   const body = { question, k, docFilter, contextMode };
-  if (email) body.email = email; // le backend lit aussi le cookie si absent
+  if (email && looksLikeEmail(email)) body.email = email; // le backend lit aussi le cookie si absent
   return post("/api/ask-veeva/ask", body);
 }
 
 /** Recherche simple */
 export async function search(query, k = 10, email = null) {
   const body = { query, k };
-  if (email) body.email = email;
+  if (email && looksLikeEmail(email)) body.email = email;
   return post("/api/ask-veeva/search", body);
 }
 
-/** (Optionnel) Fuzzy doc finder — “Vouliez-vous dire…” */
+/** (Optionnel) Fuzzy doc finder — “Vouliez-vous dire…” (endpoint facultatif côté serveur) */
 export async function findDocs(q) {
   const qs = new URLSearchParams({ q: q ?? "" }).toString();
   return get(`/api/ask-veeva/find-docs?${qs}`);
@@ -193,14 +210,14 @@ export async function logEvent(event) {
 /** Envoie un feedback sur une réponse IA (email facultatif) */
 export async function sendFeedback({ question, doc_id, useful, note, email = null }) {
   const body = { question, doc_id, useful, note };
-  if (email) body.user_email = email;
+  if (email && looksLikeEmail(email)) body.user_email = email;
   return post("/api/ask-veeva/feedback", body);
 }
 
 /** Récupère la personnalisation (profil + docs favoris, etc.) — email facultatif */
 export async function getPersonalization(email = null) {
   const body = {};
-  if (email) body.email = email;
+  if (email && looksLikeEmail(email)) body.email = email;
   return post("/api/ask-veeva/personalize", body);
 }
 
@@ -219,6 +236,25 @@ export function buildFileURL(docId) {
 /** Optionnel : flux vidéo si plus tard disponible */
 export function buildStreamURL(docId) {
   return `/api/ask-veeva/stream/${docId}`;
+}
+
+/** Vérifie rapidement si le fichier est accessible et renvoie {ok, error?} */
+export async function checkFile(docId, timeoutMs = 8000) {
+  try {
+    const res = await withTimeoutFetch(buildFileURL(docId), { method: "GET" }, timeoutMs);
+    if (res.ok) return { ok: true };
+    const j = await tryJson(res);
+    return { ok: false, error: j?.error || `HTTP ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+/** Helper pratique pour tracer l’ouverture d’un document côté analytics */
+export async function openDoc(docId, extra = {}) {
+  try {
+    await logEvent({ type: "doc_opened", doc_id: docId, meta: extra });
+  } catch { /* pas bloquant pour l’UX */ }
 }
 
 /* ------------------------------ Email helpers (client) ------------------------------ */
