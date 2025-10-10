@@ -1,175 +1,165 @@
 // src/pages/Ask_veeva.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
-import { health, ask, uploadSmall, chunkedUpload, pollJob } from "../utils/ask_veeva.js";
+import {
+  health,
+  ask,
+  uploadSmall,
+  chunkedUpload,
+  pollJob,
+  findDocs,
+  // si non exporté dans utils, les deux helpers ci-dessous fabriquent les URLs côté client
+  buildFileURL as _buildFileURL,
+  buildStreamURL as _buildStreamURL,
+} from "../utils/ask_veeva.js";
 
-/* ===========================
-   Petits helpers UI & URLs
-   =========================== */
-function cx(...list) {
-  return list.filter(Boolean).join(" ");
-}
-const isVideoFilename = (name = "") => /\.(mp4|mov|m4v|webm)$/i.test(name);
-const isPdfFilename = (name = "") => /\.pdf$/i.test(name);
+// fallbacks si la version de utils ne les expose pas
+const buildFileURL = (id) => (_buildFileURL ? _buildFileURL(id) : `/api/ask-veeva/file/${id}`);
+const buildStreamURL = (id) => (_buildStreamURL ? _buildStreamURL(id) : `/api/ask-veeva/stream/${id}`);
 
-/** Endpoints attendus côté backend pour servir les fichiers.
- *  Adapte les chemins si tu utilises d’autres routes.
- */
-const buildFileUrl = (docId) => `/api/ask-veeva/file/${docId}`;
-const buildStreamUrl = (docId) => `/api/ask-veeva/stream/${docId}`;
-
-/* ===========================
-   Composants UI
-   =========================== */
+/* ---------------- UI primitives ---------------- */
 function TabButton({ active, onClick, children }) {
   return (
     <button
       onClick={onClick}
-      className={cx(
-        "px-4 py-2 rounded-t-lg text-sm font-medium transition-colors",
-        active
+      className={
+        "px-4 py-2 rounded-t-lg text-sm font-medium transition " +
+        (active
           ? "bg-white border-x border-t border-gray-200"
-          : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-      )}
+          : "bg-gray-100 text-gray-700 hover:bg-gray-200")
+      }
     >
       {children}
     </button>
   );
 }
 
-function CitationChips({ citations, onOpen }) {
-  if (!citations?.length) return null;
+function Chip({ children, onClick, title }) {
   return (
-    <div className="flex flex-wrap gap-2 mt-2">
-      {citations.map((c, i) => (
-        <button
-          key={i}
-          onClick={() => onOpen?.(c)}
-          title={`score: ${c.score?.toFixed?.(3) ?? ""}`}
-          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-        >
-          {c.filename}
-        </button>
-      ))}
-    </div>
+    <button
+      onClick={onClick}
+      title={title}
+      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+    >
+      {children}
+    </button>
   );
 }
 
-function Message({ role, text, citations, onOpenCitation }) {
-  const isUser = role === "user";
+/* ---------------- Document Viewer (modal plein écran responsive) ---------------- */
+function DocumentViewer({ open, onClose, doc, mode = "auto" }) {
+  // doc: { id, filename, mime? }
+  if (!open || !doc?.id) return null;
+
+  const isVideo =
+    mode === "video" ||
+    (doc?.mime?.startsWith?.("video/") || /\.(mp4|mov|m4v)$/i.test(doc?.filename || ""));
+
+  const src = isVideo ? buildStreamURL(doc.id) : buildFileURL(doc.id);
+
   return (
-    <div className={cx("flex", isUser ? "justify-end" : "justify-start")}>
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
       <div
-        className={cx(
-          "max-w-[92%] sm:max-w-[78%] md:max-w-[70%] xl:max-w-[62%] rounded-2xl px-4 py-3 shadow",
-          isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-800 rounded-bl-sm border"
-        )}
+        className="w-[96vw] max-w-[1600px] h-[86vh] bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
       >
-        <div className="whitespace-pre-wrap break-words">{text}</div>
-        {!isUser && (
-          <CitationChips citations={citations} onOpen={onOpenCitation} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ===========================
-   Viewer (Document / Vidéo)
-   =========================== */
-function ViewerPanel({ open, onClose, fileMeta }) {
-  // fileMeta: { doc_id, filename, isVideo?, url, streamUrl? }
-  if (!open) return null;
-
-  const { doc_id, filename } = fileMeta || {};
-  const url = fileMeta?.url ?? (doc_id ? buildFileUrl(doc_id) : null);
-  const streamUrl = fileMeta?.streamUrl ?? (doc_id ? buildStreamUrl(doc_id) : null);
-  const isVideo = fileMeta?.isVideo ?? isVideoFilename(filename);
-  const isPdf = fileMeta?.isPdf ?? isPdfFilename(filename);
-
-  return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-2 sm:p-4">
-      <div className="bg-white w-full max-w-[min(1200px,95vw)] h-[min(90vh,900px)] rounded-xl shadow-2xl overflow-hidden flex flex-col">
-        <div className="px-4 py-2 border-b flex items-center justify-between">
-          <div className="font-medium text-sm sm:text-base truncate" title={filename}>
-            {filename || "Aperçu du document"}
-          </div>
+        <div className="px-4 py-2 border-b flex items-center justify-between gap-2">
+          <div className="truncate font-medium">{doc.filename || "Document"}</div>
           <div className="flex items-center gap-2">
-            {url && (
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs sm:text-sm px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 border"
-              >
-                Ouvrir dans un nouvel onglet
-              </a>
-            )}
+            <a
+              href={buildFileURL(doc.id)}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+              title="Ouvrir dans un nouvel onglet"
+            >
+              Ouvrir
+            </a>
             <button
               onClick={onClose}
-              className="text-xs sm:text-sm px-3 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+              className="text-xs px-3 py-1.5 rounded bg-gray-900 text-white hover:bg-black"
             >
               Fermer
             </button>
           </div>
         </div>
-
         <div className="flex-1 bg-gray-50">
-          {/* Vidéo */}
-          {isVideo && streamUrl ? (
-            <div className="w-full h-full flex items-center justify-center bg-black">
-              <video
-                controls
-                className="max-w-full max-h-full"
-                src={streamUrl}
-              />
-            </div>
-          ) : null}
-
-          {/* PDF natif via <iframe> */}
-          {!isVideo && isPdf && url ? (
-            <iframe
-              title="pdf-viewer"
-              src={url}
-              className="w-full h-full"
+          {isVideo ? (
+            <video
+              src={src}
+              controls
+              className="w-full h-full object-contain bg-black"
             />
-          ) : null}
-
-          {/* Fallback générique */}
-          {!isVideo && !isPdf ? (
-            <div className="p-6 text-sm text-gray-600 h-full overflow-auto">
-              <p className="mb-2">
-                Prévisualisation intégrée indisponible pour ce type de fichier.
-              </p>
-              {url ? (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-block px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
-                >
-                  Télécharger / Ouvrir le fichier
-                </a>
-              ) : (
-                <p className="text-red-600">
-                  URL de fichier manquante. Configure l’endpoint <code>/api/ask-veeva/file/:docId</code>.
-                </p>
-              )}
-              <div className="mt-4 text-xs text-gray-500 break-all">
-                <div><span className="font-medium">doc_id:</span> {doc_id || "—"}</div>
-                <div><span className="font-medium">filename:</span> {filename || "—"}</div>
-              </div>
-            </div>
-          ) : null}
+          ) : (
+            <iframe
+              title="preview"
+              src={src}
+              className="w-full h-full"
+              style={{ border: "none" }}
+            />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-/* ===========================
-   Sidebar documents (focus)
-   =========================== */
-function SidebarContexts({ contexts, activeDocId, onFocusDoc, onAskDoc, onPreview }) {
+/* ---------------- Citations cliquables ---------------- */
+function CitationChips({ citations, onFocus, onPreview }) {
+  if (!citations?.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2 mt-2">
+      {citations.slice(0, 8).map((c, i) => (
+        <div key={i} className="flex items-center gap-1">
+          <Chip
+            title={`score: ${c.score?.toFixed?.(3)} • chunk #${c.chunk_index ?? "?"}`}
+            onClick={() => onFocus?.(c.doc_id)}
+          >
+            {c.filename}
+          </Chip>
+          <button
+            className="text-[10px] px-1 py-0.5 rounded bg-gray-100 hover:bg-gray-200"
+            onClick={() => onPreview?.(c)}
+            title="Prévisualiser"
+          >
+            👁
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------- Message bubble ---------------- */
+function Message({ role, text, citations, onFocus, onPreview }) {
+  const isUser = role === "user";
+  return (
+    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
+      <div
+        className={
+          "max-w-[95%] sm:max-w-[80%] xl:max-w-[70%] 2xl:max-w-[60%] rounded-2xl px-4 py-3 shadow " +
+          (isUser
+            ? "bg-blue-600 text-white rounded-br-sm"
+            : "bg-white text-gray-800 rounded-bl-sm border")
+        }
+      >
+        <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
+        {!isUser && (
+          <CitationChips
+            citations={citations}
+            onFocus={onFocus}
+            onPreview={onPreview}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Sidebar des documents / focus ---------------- */
+function SidebarContexts({ contexts, activeDocId, onFocusDoc, onPreviewDoc }) {
   if (!contexts?.length)
     return <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>;
 
@@ -177,53 +167,35 @@ function SidebarContexts({ contexts, activeDocId, onFocusDoc, onAskDoc, onPrevie
     <div className="space-y-3">
       {contexts.map((d) => {
         const active = d.doc_id === activeDocId;
-        const filename = d.filename || "";
-        const hasVideo = isVideoFilename(filename);
-        const isPdf = isPdfFilename(filename);
-
         return (
           <div
             key={d.doc_id}
-            className={cx(
-              "border rounded-xl p-3 transition-colors",
-              active ? "border-indigo-400 bg-indigo-50" : "bg-white"
-            )}
+            className={"border rounded-lg p-3 " + (active ? "border-indigo-400 bg-indigo-50" : "bg-white")}
           >
             <div className="flex items-center justify-between gap-2">
-              <div className="font-medium text-sm truncate" title={filename}>
-                {filename}
+              <div className="font-medium text-sm truncate" title={d.filename}>
+                {d.filename}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-1">
                 <button
-                  onClick={() => onPreview?.({ doc_id: d.doc_id, filename, isVideo: hasVideo, isPdf })}
-                  className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 border"
+                  onClick={() => onPreviewDoc?.(d)}
+                  className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+                  title="Prévisualiser"
                 >
-                  Prévisualiser
+                  👁
                 </button>
                 <button
                   onClick={() => onFocusDoc(d.doc_id)}
-                  className={cx(
-                    "text-xs px-2 py-1 rounded",
-                    active ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200"
-                  )}
+                  className={
+                    "text-xs px-2 py-1 rounded " +
+                    (active ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200")
+                  }
                 >
                   {active ? "Focalisé" : "Focus"}
                 </button>
-                <button
-                  onClick={() => onAskDoc(d.doc_id)}
-                  className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700"
-                >
-                  Re-poser sur ce doc
-                </button>
               </div>
             </div>
-
-            <div className="mt-2 text-[11px] text-gray-500">
-              {hasVideo && <span className="mr-2 inline-block px-2 py-0.5 bg-black text-white rounded">VIDÉO</span>}
-              {isPdf && <span className="inline-block px-2 py-0.5 bg-gray-200 rounded">PDF</span>}
-            </div>
-
-            <div className="mt-2 text-xs text-gray-700">
+            <div className="mt-2 text-xs text-gray-600">
               {d.chunks?.slice(0, 3).map((c, i) => (
                 <div key={i} className="mb-1">
                   <span className="inline-block min-w-10 text-gray-400">#{c.chunk_index}</span>
@@ -241,21 +213,41 @@ function SidebarContexts({ contexts, activeDocId, onFocusDoc, onAskDoc, onPrevie
   );
 }
 
-/* ===========================
-   Chat + Sidebar + Viewer
-   =========================== */
+/* ---------------- Suggestions "Vouliez-vous dire..." ---------------- */
+function SuggestionsBar({ suggestions, onPreview, onFocusAndAsk }) {
+  if (!suggestions?.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-2">
+      <span className="text-xs text-gray-500">Vouliez-vous dire&nbsp;:</span>
+      {suggestions.slice(0, 8).map((s) => (
+        <div key={s.id} className="flex items-center gap-1">
+          <Chip onClick={() => onFocusAndAsk?.(s)} title={s.filename}>
+            {s.filename}
+          </Chip>
+          <button
+            className="text-[10px] px-1 py-0.5 rounded bg-gray-100 hover:bg-gray-200"
+            title="Prévisualiser"
+            onClick={() => onPreview?.(s)}
+          >
+            👁
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------- Chat principal ---------------- */
 function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [k, setK] = useState(6);
-  const [contexts, setContexts] = useState([]);          // données pour la sidebar
-  const [activeDocId, setActiveDocId] = useState(null);  // doc focalisé
-  const listRef = useRef(null);
+  const [contexts, setContexts] = useState([]);
+  const [activeDocId, setActiveDocId] = useState(null);
+  const [suggestions, setSuggestions] = useState([]);
+  const [viewer, setViewer] = useState({ open: false, doc: null, mode: "auto" });
 
-  // Viewer
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const [viewerMeta, setViewerMeta] = useState(null);
+  const listRef = useRef(null);
 
   const [messages, setMessages] = useState(() => {
     try {
@@ -280,30 +272,36 @@ function ChatBox() {
         setReady(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   useEffect(() => {
-    // auto-scroll messages
+    // auto-scroll
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
   async function runAsk(q, docFilter = []) {
     setSending(true);
     try {
-      const resp = await ask(q, k, docFilter);
+      // k=0 => étendue large côté backend
+      const resp = await ask(q, 0, docFilter);
       const text = resp?.text || "Désolé, aucune réponse.";
       const citations = (resp?.citations || []).map((c) => ({
-        filename: c.filename,
-        score: c.score,
-        doc_id: c.doc_id,          // on garde doc_id si présent
-        chunk_index: c.chunk_index // utile pour navigation future
+        ...c,
+        // fallback mime detection basique si besoin pour viewer
+        mime: c.mime,
       }));
       setMessages((m) => [...m, { role: "assistant", text, citations }]);
       setContexts(resp?.contexts || []);
+      setSuggestions(resp?.suggestions || []);
       if (docFilter?.length) setActiveDocId(docFilter[0]);
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
+      setMessages((m) => [
+        ...m,
+        { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` },
+      ]);
     } finally {
       setSending(false);
     }
@@ -323,53 +321,48 @@ function ChatBox() {
   }
 
   function onClearChat() {
-    try { sessionStorage.removeItem("askVeeva_chat"); } catch {}
+    try {
+      sessionStorage.removeItem("askVeeva_chat");
+    } catch {}
     setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
     setContexts([]);
     setActiveDocId(null);
+    setSuggestions([]);
   }
 
-  function openViewerFromDoc({ doc_id, filename, isVideo, isPdf }) {
-    setViewerMeta({
-      doc_id,
-      filename,
-      isVideo,
-      isPdf,
-      url: buildFileUrl(doc_id),
-      streamUrl: buildStreamUrl(doc_id),
-    });
-    setViewerOpen(true);
-  }
+  const handlePreview = (item) => {
+    // item peut être une citation, un context, ou une suggestion { id, filename, mime? }
+    const doc = {
+      id: item.doc_id || item.id,
+      filename: item.filename,
+      mime: item.mime,
+    };
+    setViewer({ open: true, doc, mode: (item.mime?.startsWith?.("video/") ? "video" : "auto") });
+  };
 
-  function openViewerFromCitation(c) {
-    // On tente de retrouver un context qui matche le filename ou doc_id
-    const match =
-      contexts.find((d) => d.doc_id === c.doc_id) ||
-      contexts.find((d) => d.filename === c.filename) ||
-      null;
-
-    openViewerFromDoc({
-      doc_id: match?.doc_id || c.doc_id,
-      filename: match?.filename || c.filename,
-      isVideo: isVideoFilename(match?.filename || c.filename),
-      isPdf: isPdfFilename(match?.filename || c.filename),
-    });
-  }
+  const handleSuggestionFocusAndAsk = (s) => {
+    const lastQ =
+      [...messages].reverse().find((m) => m.role === "user")?.text ||
+      input ||
+      "Peux-tu détailler ?";
+    setMessages((m) => [
+      ...m,
+      { role: "user", text: `${lastQ} (focus: ${s.filename})` },
+    ]);
+    runAsk(lastQ, [s.id]);
+    setActiveDocId(s.id);
+  };
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header flexible (paddings compacts sur mobile) */}
+      {/* Bandeau haut */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <div className="text-sm text-gray-600 flex items-center gap-2">
-          <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
-          <span>Top-K</span>
-          <select
-            className="border rounded px-1 py-0.5 text-sm"
-            value={k}
-            onChange={(e) => setK(Number(e.target.value))}
-          >
-            {[3, 6, 8, 10, 12].map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
+          <span className={ready ? "text-emerald-600" : "text-rose-600"}>
+            {ready ? "Connecté" : "Hors-ligne"}
+          </span>
+          <span className="text-gray-400">•</span>
+          <span className="text-gray-600">Étendue&nbsp;: large</span>
         </div>
         <div className="flex gap-2">
           <button
@@ -378,33 +371,38 @@ function ChatBox() {
           >
             Supprimer la conversation
           </button>
-          <div className="hidden sm:flex gap-2">
-            {["Montre-moi les SOP PPE", "Quelles sont les étapes de validation ?", "Où est la dernière version ?"].map(
-              (s, i) => (
-                <button
-                  key={i}
-                  onClick={() => quickAsk(s)}
-                  className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
-                >
-                  {s}
-                </button>
-              )
-            )}
+          <div className="hidden md:flex gap-2">
+            {[
+              "Montre-moi les SOP PPE",
+              "Quelles sont les étapes de validation ?",
+              "Où est la dernière version ?",
+            ].map((s, i) => (
+              <button
+                key={i}
+                onClick={() => quickAsk(s)}
+                className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
+              >
+                {s}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* Grille responsive full-height :
-         - mobile : 1 colonne (chat)
-         - md : 2 colonnes (chat + sidebar)
-         - xl : 3 colonnes (chat 2/3, sidebar 1/3)
-      */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {/* Chat (prend 2 colonnes en xl) */}
+      {/* Suggestions globales (fuzzy) */}
+      <SuggestionsBar
+        suggestions={suggestions}
+        onPreview={handlePreview}
+        onFocusAndAsk={handleSuggestionFocusAndAsk}
+      />
+
+      {/* 2 colonnes responsive : chat + sidebar */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-2">
+        {/* Chat (2/3) */}
         <div className="xl:col-span-2">
           <div
             ref={listRef}
-            className="h-[60vh] sm:h-[65vh] lg:h-[70vh] 2xl:h-[74vh] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
+            className="h-[52vh] sm:h-[60vh] xl:h-[66vh] 2xl:h-[72vh] overflow-auto space-y-3 p-3 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
           >
             {messages.map((m, i) => (
               <Message
@@ -412,10 +410,15 @@ function ChatBox() {
                 role={m.role}
                 text={m.text}
                 citations={m.citations}
-                onOpenCitation={openViewerFromCitation}
+                onFocus={(docId) => setActiveDocId(docId)}
+                onPreview={handlePreview}
               />
             ))}
-            {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
+            {sending && (
+              <div className="text-xs text-gray-500 animate-pulse px-2">
+                Ask Veeva rédige…
+              </div>
+            )}
           </div>
 
           {/* Saisie */}
@@ -423,7 +426,9 @@ function ChatBox() {
             <textarea
               rows={2}
               className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              placeholder={activeDocId ? "Votre question (focus doc sélectionné)..." : "Posez votre question…"}
+              placeholder={
+                activeDocId ? "Votre question (focus doc sélectionné)..." : "Posez votre question…"
+              }
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -444,13 +449,16 @@ function ChatBox() {
           </div>
         </div>
 
-        {/* Sidebar */}
+        {/* Sidebar (1/3) */}
         <aside className="xl:col-span-1">
-          <div className="border rounded-lg p-3 bg-white h-[60vh] sm:h-[65vh] lg:h-[70vh] 2xl:h-[74vh] overflow-auto">
+          <div className="border rounded-lg p-3 bg-white h-[52vh] sm:h-[60vh] xl:h-[66vh] 2xl:h-[72vh] overflow-auto">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-semibold">Documents du contexte</h3>
               {activeDocId && (
-                <button className="text-xs text-indigo-700 underline" onClick={() => setActiveDocId(null)}>
+                <button
+                  className="text-xs text-indigo-700 underline"
+                  onClick={() => setActiveDocId(null)}
+                >
                   Retirer le focus
                 </button>
               )}
@@ -459,33 +467,26 @@ function ChatBox() {
               contexts={contexts}
               activeDocId={activeDocId}
               onFocusDoc={(docId) => setActiveDocId(docId)}
-              onAskDoc={(docId) => {
-                const lastQ =
-                  [...messages].reverse().find((m) => m.role === "user")?.text ||
-                  input ||
-                  "Peux-tu détailler ?";
-                setMessages((m) => [...m, { role: "user", text: `${lastQ} (focus: ${docId})` }]);
-                runAsk(lastQ, [docId]);
-              }}
-              onPreview={openViewerFromDoc}
+              onPreviewDoc={(d) =>
+                handlePreview({ id: d.doc_id, filename: d.filename })
+              }
             />
           </div>
         </aside>
       </div>
 
-      {/* Viewer modal */}
-      <ViewerPanel
-        open={viewerOpen}
-        onClose={() => setViewerOpen(false)}
-        fileMeta={viewerMeta}
+      {/* Viewer */}
+      <DocumentViewer
+        open={viewer.open}
+        onClose={() => setViewer({ open: false, doc: null, mode: "auto" })}
+        doc={viewer.doc}
+        mode={viewer.mode}
       />
     </div>
   );
 }
 
-/* ===========================
-   Import Box (inchangé + responsive)
-   =========================== */
+/* ---------------- Import ---------------- */
 function ImportBox() {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -507,6 +508,7 @@ function ImportBox() {
     setLog([]);
 
     try {
+      // stratégie : si ZIP > 280 Mo → chunked; sinon upload direct
       const isZip = /\.zip$/i.test(file.name);
       if (isZip && file.size > 280 * 1024 * 1024) {
         appendLog("Gros ZIP détecté : envoi fractionné…");
@@ -548,6 +550,7 @@ function ImportBox() {
 
   return (
     <div className="space-y-4">
+      {/* Dropzone + input */}
       <div
         className="border-2 border-dashed rounded-xl p-6 text-center bg-white"
         onDragOver={(e) => e.preventDefault()}
@@ -574,7 +577,9 @@ function ImportBox() {
         {file && (
           <div className="mt-3 text-sm text-gray-700">
             Fichier : <span className="font-medium">{file.name}</span>{" "}
-            <span className="text-gray-500">({(file.size / (1024 * 1024)).toFixed(1)} Mo)</span>
+            <span className="text-gray-500">
+              ({(file.size / (1024 * 1024)).toFixed(1)} Mo)
+            </span>
           </div>
         )}
         <div className="mt-4">
@@ -589,13 +594,17 @@ function ImportBox() {
         {progress !== null && (
           <div className="mt-4">
             <div className="w-full h-2 bg-gray-200 rounded">
-              <div className="h-2 bg-blue-600 rounded" style={{ width: `${progress}%` }} />
+              <div
+                className="h-2 bg-blue-600 rounded"
+                style={{ width: `${progress}%` }}
+              />
             </div>
             <div className="text-xs text-gray-600 mt-1">{progress}%</div>
           </div>
         )}
       </div>
 
+      {/* Job status */}
       {job && (
         <div className="p-4 border rounded-lg bg-white">
           <div className="text-sm text-gray-600">Job</div>
@@ -621,6 +630,7 @@ function ImportBox() {
         </div>
       )}
 
+      {/* Logs */}
       {!!log.length && (
         <div className="p-3 border rounded-lg bg-gray-50 text-xs font-mono space-y-1 max-h-48 overflow-auto">
           {log.map((l, i) => (
@@ -632,14 +642,12 @@ function ImportBox() {
   );
 }
 
-/* ===========================
-   Page
-   =========================== */
+/* ---------------- Page ---------------- */
 export default function AskVeevaPage() {
   const [tab, setTab] = useState("chat"); // 'chat' | 'import'
 
   return (
-    <section className="max-w-[min(1600px,100vw-16px)] mx-auto px-3 sm:px-4">
+    <section className="mx-auto px-3 sm:px-4 lg:px-6 max-w-[2000px]">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva</h1>
       </div>
@@ -654,7 +662,7 @@ export default function AskVeevaPage() {
         </TabButton>
       </div>
 
-      <div className="border border-t-0 rounded-b-lg rounded-tr-lg bg-white p-4">
+      <div className="border border-t-0 rounded-b-lg rounded-tr-lg bg-white p-4 md:p-5">
         {tab === "chat" ? <ChatBox /> : <ImportBox />}
       </div>
     </section>
