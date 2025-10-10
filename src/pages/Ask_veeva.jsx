@@ -3,29 +3,33 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   health,
   ask,
-  // search as apiSearch, // (optionnel) encore dispo si tu veux un onglet "Recherche"
   uploadSmall,
   chunkedUpload,
   pollJob,
   buildFileURL,
-  // buildStreamURL, // pas d'endpoint /stream côté serveur
-  findDocs, // garde en try/catch (endpoint pas encore implémenté côté serveur)
+  findDocs,
   initUser,
   sendFeedback,
   getPersonalization,
   logEvent,
 } from "../utils/ask_veeva.js";
 
-/* ------------------------- Petits utilitaires UI ------------------------- */
-function clsx(...xs) {
-  return xs.filter(Boolean).join(" ");
-}
-const copy = async (s) => {
-  try { await navigator.clipboard.writeText(s); return true; } catch { return false; }
-};
+/* ------------------------- Utils ------------------------- */
+function clsx(...xs) { return xs.filter(Boolean).join(" "); }
+const copy = async (s) => { try { await navigator.clipboard.writeText(s); return true; } catch { return false; } };
 const isVideoFilename = (name = "") => /\.(mp4|mov|m4v|webm)$/i.test(name);
 
-/* --------------------------------- UI bits -------------------------------- */
+const ROLES = ["Qualité", "EHS", "Utilités", "Packaging"];
+const SECTORS = ["SSOL", "LIQ", "Bulk", "Autre"];
+
+// fuzzy contains, insensitive
+const matchOne = (text, options) => {
+  const t = (text || "").toLowerCase();
+  for (const opt of options) if (t.includes(opt.toLowerCase())) return opt;
+  return null;
+};
+
+/* ------------------------- UI bits ------------------------- */
 function TabButton({ active, onClick, children }) {
   return (
     <button
@@ -58,26 +62,18 @@ function CitationChips({ citations, onPeek }) {
   );
 }
 
-/** Boutons de feedback sous une réponse assistant */
-function FeedbackBar({ email, question, citations }) {
-  const firstDocId = citations?.[0]?.doc_id || null;
-
-  async function rate(useful) {
-    try {
-      await sendFeedback({ email, question, doc_id: firstDocId, useful, note: null });
-    } catch {}
-  }
+function FeedbackBar({ onVote }) {
   return (
-    <div className="flex items-center gap-2 mt-2">
+    <div className="flex items-center gap-2 mt-2 opacity-80">
       <button
-        onClick={() => rate(true)}
+        onClick={() => onVote?.(true)}
         className="text-xs px-2 py-1 rounded bg-green-50 text-green-700 border border-green-200 hover:bg-green-100"
         title="Réponse utile"
       >
         👍 Utile
       </button>
       <button
-        onClick={() => rate(false)}
+        onClick={() => onVote?.(false)}
         className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
         title="Réponse pas utile"
       >
@@ -87,7 +83,7 @@ function FeedbackBar({ email, question, citations }) {
   );
 }
 
-function Message({ role, text, citations, onPeek, email, questionOfMsg }) {
+function Message({ role, text, citations, onPeek, onFeedback, isAnswer }) {
   const isUser = role === "user";
   return (
     <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
@@ -99,47 +95,7 @@ function Message({ role, text, citations, onPeek, email, questionOfMsg }) {
       >
         <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
         {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
-        {!isUser && <FeedbackBar email={email} question={questionOfMsg} citations={citations} />}
-      </div>
-    </div>
-  );
-}
-
-/* ---------- Prompt d'identification rapide (poste/secteur) ---------- */
-function UserProfilePrompt({ defaultRole = "", defaultSector = "", onSubmit, onCancel }) {
-  const [role, setRole] = useState(defaultRole);
-  const [sector, setSector] = useState(defaultSector);
-
-  return (
-    <div className="p-4 bg-white border rounded-lg shadow-sm space-y-2">
-      <p className="text-sm">Pour mieux te répondre, précise ton domaine :</p>
-      <select value={role} onChange={e => setRole(e.target.value)} className="border rounded px-2 py-1 w-full">
-        <option value="">-- Sélectionne ton poste --</option>
-        <option>Qualité</option>
-        <option>EHS</option>
-        <option>Utilités</option>
-        <option>Packaging</option>
-      </select>
-      {role && (
-        <select value={sector} onChange={e => setSector(e.target.value)} className="border rounded px-2 py-1 w-full">
-          <option value="">-- Secteur --</option>
-          <option>SSOL</option>
-          <option>LIQ</option>
-          <option>Bulk</option>
-          <option>Autre</option>
-        </select>
-      )}
-      <div className="flex gap-2">
-        <button
-          disabled={!role}
-          onClick={() => onSubmit({ role, sector })}
-          className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-        >
-          Valider
-        </button>
-        <button onClick={onCancel} className="px-3 py-1.5 bg-gray-100 rounded text-sm">
-          plus tard
-        </button>
+        {!isUser && isAnswer && <FeedbackBar onVote={onFeedback} />}
       </div>
     </div>
   );
@@ -247,16 +203,15 @@ function SidebarContexts({
 }
 
 /* ------------------------------- Viewer pane ------------------------------- */
-function Viewer({ file, onClose, email }) {
+function Viewer({ file, onClose }) {
   if (!file) return null;
 
   const fileURL = buildFileURL(file.doc_id);
   const looksVideo = isVideoFilename(file.filename);
 
   useEffect(() => {
-    // log doc_opened
     (async () => {
-      try { await logEvent({ user_email: email, type: "doc_opened", doc_id: file.doc_id, meta: { filename: file.filename } }); } catch {}
+      try { await logEvent({ type: "doc_opened", doc_id: file.doc_id, meta: { filename: file.filename } }); } catch {}
     })();
   }, [file?.doc_id]);
 
@@ -300,12 +255,7 @@ function Viewer({ file, onClose, email }) {
               <video src={fileURL} controls className="w-full h-[70vh] max-h-full" />
             </div>
           ) : (
-            <iframe
-              title="preview"
-              src={fileURL}
-              className="w-full h-[80vh]"
-              loading="eager"
-            />
+            <iframe title="preview" src={fileURL} className="w-full h-[80vh]" loading="eager" />
           )}
         </div>
       </div>
@@ -318,18 +268,19 @@ function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [k, setK] = useState(6); // aligné backend
+  const [k, setK] = useState(6);
   const [contextMode, setContextMode] = useState("auto"); // "auto" | "none"
-  const [contexts, setContexts] = useState([]); // [{doc_id, filename, chunks:[]}]
+  const [contexts, setContexts] = useState([]);
   const [selectedDocs, setSelectedDocs] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
 
-  const [email, setEmail] = useState(() => {
-    try { return localStorage.getItem("askV.email") || ""; } catch { return ""; }
-  });
-  const [profileNeeded, setProfileNeeded] = useState(false);
-  const [lastAsked, setLastAsked] = useState(null); // pour relancer après profil
+  // inline profile wizard states
+  const [needProfile, setNeedProfile] = useState(false);
+  const [awaitingRole, setAwaitingRole] = useState(false);
+  const [awaitingSector, setAwaitingSector] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({ role: "", sector: "" });
+  const [lastAsked, setLastAsked] = useState(null);
 
   const [personalization, setPersonalization] = useState(null);
 
@@ -343,9 +294,7 @@ function ChatBox() {
     }
   });
 
-  useEffect(() => {
-    sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
-  }, [messages]);
+  useEffect(() => { sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages)); }, [messages]);
 
   useEffect(() => {
     let alive = true;
@@ -353,9 +302,7 @@ function ChatBox() {
       try {
         const h = await health();
         if (alive) setReady(!!h?.ok);
-      } catch {
-        setReady(false);
-      }
+      } catch { setReady(false); }
     })();
     return () => { alive = false; };
   }, []);
@@ -364,62 +311,130 @@ function ChatBox() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
+  // try to hydrate personalization silently (server should infer user from session)
   useEffect(() => {
-    // Charger la personnalisation si email présent
     (async () => {
-      if (!email) return;
       try {
-        const pers = await getPersonalization(email);
-        setPersonalization(pers?.user ? pers : null);
+        const pers = await getPersonalization(null); // email null -> serveur déduit
+        if (pers?.user) setPersonalization(pers);
       } catch {}
     })();
-  }, [email]);
+  }, []);
 
-  function saveEmailLocally(next) {
-    setEmail(next);
-    try { localStorage.setItem("askV.email", next || ""); } catch {}
+  function pushAssistant(text, opts = {}) {
+    setMessages((m) => [...m, { role: "assistant", text, ...opts }]);
   }
 
   function toggleSelect(docId) {
     setSelectedDocs((prev) => {
       const n = new Set(prev);
-      if (n.has(docId)) n.delete(docId);
-      else n.add(docId);
+      if (n.has(docId)) n.delete(docId); else n.add(docId);
       return n;
     });
   }
-  function selectOnly(docId) {
-    setSelectedDocs(new Set([docId]));
-  }
-  function clearSelection() {
-    setSelectedDocs(new Set());
+  function selectOnly(docId) { setSelectedDocs(new Set([docId])); }
+  function clearSelection() { setSelectedDocs(new Set()); }
+
+  // ---------- Profile inline flow ----------
+  async function promptForProfileOnce() {
+    // empêchons les doublons
+    if (awaitingRole || awaitingSector) return;
+    setNeedProfile(true);
+    setAwaitingRole(true);
+    setAwaitingSector(false);
+    setProfileDraft({ role: "", sector: "" });
+    pushAssistant(
+      "Avant de continuer, indique ton **poste** (Qualité, EHS, Utilités, Packaging).",
+      { isAnswer: false }
+    );
+    pushAssistant(
+      "Tu peux simplement écrire: *« Packaging »*.",
+      { isAnswer: false }
+    );
   }
 
+  async function tryConsumeProfileFromInput(raw) {
+    let role = profileDraft.role || matchOne(raw, ROLES) || "";
+    let sector = profileDraft.sector || matchOne(raw, SECTORS) || "";
+
+    // si l'utilisateur a écrit "Packaging Bulk" d'un coup, on prend les deux
+    if (!role || !sector) {
+      // rien de plus à deviner
+    }
+
+    if (awaitingRole && role) {
+      setAwaitingRole(false);
+      setProfileDraft((p) => ({ ...p, role }));
+      setAwaitingSector(true);
+      pushAssistant(
+        "Merci ! Et ton **secteur** ? (SSOL, LIQ, Bulk, Autre)",
+        { isAnswer: false }
+      );
+      return true; // input consommé par le wizard
+    }
+
+    if (awaitingSector && sector) {
+      const final = { role: profileDraft.role || role, sector };
+      try {
+        await initUser({ role: final.role, sector: final.sector }); // serveur associe via session
+      } catch {}
+      setNeedProfile(false);
+      setAwaitingRole(false);
+      setAwaitingSector(false);
+      setProfileDraft({ role: "", sector: "" });
+      pushAssistant(`Parfait, noté : **${final.role}** / **${final.sector}**.`, { isAnswer: false });
+
+      // relancer la dernière question si on en avait une
+      if (lastAsked) {
+        await runAsk(lastAsked, selectedDocs.size ? Array.from(selectedDocs) : []);
+      }
+      return true;
+    }
+
+    // cas où l’utilisateur écrit d’un coup "Packaging Bulk"
+    if (awaitingRole && awaitingSector && role && sector) {
+      try { await initUser({ role, sector }); } catch {}
+      setNeedProfile(false);
+      setAwaitingRole(false);
+      setAwaitingSector(false);
+      setProfileDraft({ role: "", sector: "" });
+      pushAssistant(`Parfait, noté : **${role}** / **${sector}**.`, { isAnswer: false });
+      if (lastAsked) {
+        await runAsk(lastAsked, selectedDocs.size ? Array.from(selectedDocs) : []);
+      }
+      return true;
+    }
+
+    // si on attend le secteur mais l'utilisateur répète le poste, on ne boucle pas
+    return awaitingRole || awaitingSector;
+  }
+
+  // ---------- Core ASK ----------
   async function runAsk(q, docFilter = []) {
     setSending(true);
     setLastAsked(q);
     try {
-      const resp = await ask(q, k, docFilter, email || null, contextMode);
+      const resp = await ask(q, k, docFilter, /* email */ null, contextMode);
 
-      // Si le backend demande le profil (poste/secteur)
-      if (resp && resp.needProfile) {
-        setProfileNeeded(true);
-        setMessages((m) => [...m, { role: "assistant", text: resp.question || "Pour continuer, j’ai besoin de ton domaine (poste/secteur)." }]);
+      if (resp?.needProfile) {
+        await promptForProfileOnce();
         return;
       }
 
       const text = resp?.text || "Désolé, aucune réponse.";
       const citations = (resp?.citations || []).map((c) => ({
-        filename: c.filename,
-        score: c.score,
-        doc_id: c.doc_id,
+        filename: c.filename, score: c.score, doc_id: c.doc_id,
       }));
-      setMessages((m) => [...m, { role: "assistant", text, citations, questionOfMsg: q }]);
+      setMessages((m) => [...m, {
+        role: "assistant",
+        text,
+        citations,
+        isAnswer: true,
+      }]);
       setContexts(resp?.contexts || []);
       setSuggestions(resp?.suggestions || []);
-
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
+      pushAssistant(`Une erreur est survenue : ${e?.message || e}`, { isAnswer: false });
     } finally {
       setSending(false);
     }
@@ -430,14 +445,19 @@ function ChatBox() {
     if (!q || sending) return;
     setInput("");
     setMessages((m) => [...m, { role: "user", text: q }]);
+
+    // si on est dans le wizard profil, on tente d'absorber ce message
+    if (needProfile && (awaitingRole || awaitingSector)) {
+      const consumed = await tryConsumeProfileFromInput(q);
+      if (consumed) return;
+      // sinon on continue quand même vers runAsk (backend peut gérer)
+    }
+
     const docFilter = selectedDocs.size ? Array.from(selectedDocs) : [];
     await runAsk(q, docFilter);
   }
 
-  function quickAsk(s) {
-    setInput(s);
-    setTimeout(onSend, 10);
-  }
+  function quickAsk(s) { setInput(s); setTimeout(onSend, 10); }
 
   async function onAskSelected() {
     const lastQ =
@@ -449,49 +469,26 @@ function ChatBox() {
     await runAsk(lastQ, Array.from(selectedDocs));
   }
 
-  async function handlePeek(c) {
-    setViewerFile({ doc_id: c.doc_id, filename: c.filename });
-  }
-  function handleOpen(c) {
-    window.open(buildFileURL(c.doc_id), "_blank", "noopener");
-  }
+  async function handlePeek(c) { setViewerFile({ doc_id: c.doc_id, filename: c.filename }); }
+  function handleOpen(c) { window.open(buildFileURL(c.doc_id), "_blank", "noopener"); }
 
   async function tryDidYouMean(q) {
     if (!q || q.length < 3) return;
     try {
       const ret = await findDocs(q);
-      if (ret?.items?.length) {
-        setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
-      }
-    } catch {
-      // endpoint pas dispo
-    }
+      if (ret?.items?.length) setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
+    } catch { /* endpoint peut ne pas exister */ }
   }
 
   function onClearChat() {
     try { sessionStorage.removeItem("askVeeva_chat"); } catch {}
     setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
-    setContexts([]);
-    setSelectedDocs(new Set());
-    setSuggestions([]);
+    setContexts([]); setSelectedDocs(new Set()); setSuggestions([]);
+    setNeedProfile(false); setAwaitingRole(false); setAwaitingSector(false); setProfileDraft({ role: "", sector: "" });
   }
 
-  async function handleProfileSubmit({ role, sector }) {
-    if (!email) {
-      setMessages((m) => [...m, { role: "assistant", text: "Renseigne d’abord ton email en haut à droite pour associer ton profil." }]);
-      return;
-    }
-    try {
-      await initUser({ email, role, sector });
-      setProfileNeeded(false);
-      // Relancer la dernière question automatiquement
-      if (lastAsked) {
-        setMessages((m) => [...m, { role: "assistant", text: "Merci ! Je relance ta dernière question avec ton profil." }]);
-        await runAsk(lastAsked, selectedDocs.size ? Array.from(selectedDocs) : []);
-      }
-    } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", text: `Erreur profil: ${e?.message || e}` }]);
-    }
+  async function handleFeedback(useful, questionText, firstDocId) {
+    try { await sendFeedback({ question: questionText || "", doc_id: firstDocId || null, useful, note: null }); } catch {}
   }
 
   return (
@@ -500,7 +497,6 @@ function ChatBox() {
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <div className="text-sm text-gray-600 flex items-center gap-3 flex-wrap">
           <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
-
           <label className="flex items-center gap-1">
             <span>Top-K</span>
             <select
@@ -509,12 +505,9 @@ function ChatBox() {
               onChange={(e) => setK(Number(e.target.value))}
               title="Nombre de passages contextuels"
             >
-              {[6, 10, 20, 40].map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
+              {[6, 10, 20, 40].map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
-
           <label className="flex items-center gap-1">
             <input
               type="checkbox"
@@ -524,15 +517,7 @@ function ChatBox() {
             <span>Sans contexte</span>
           </label>
         </div>
-
-        <div className="flex items-center gap-2 flex-wrap">
-          <input
-            value={email}
-            onChange={(e) => saveEmailLocally(e.target.value)}
-            placeholder="email@entreprise.com"
-            className="text-xs border rounded px-2 py-1"
-            title="Utilisé pour personnaliser et enregistrer ton profil"
-          />
+        <div className="flex items-center gap-2">
           <button
             onClick={onClearChat}
             className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
@@ -540,34 +525,22 @@ function ChatBox() {
             Supprimer la conversation
           </button>
           <div className="hidden sm:flex gap-2">
-            {[
-              "Montre-moi les SOP PPE",
-              "Quelles sont les étapes de validation ?",
-              "Où est la dernière version ?",
-            ].map((s, i) => (
-              <button
-                key={i}
-                onClick={() => quickAsk(s)}
-                className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
-              >
-                {s}
-              </button>
-            ))}
+            {["Montre-moi les SOP PPE", "Quelles sont les étapes de validation ?", "Où est la dernière version ?"]
+              .map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => quickAsk(s)}
+                  className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
+                >
+                  {s}
+                </button>
+              ))
+            }
           </div>
         </div>
       </div>
 
-      {/* Si le backend réclame le profil : mini-form */}
-      {profileNeeded && (
-        <div className="mb-3">
-          <UserProfilePrompt
-            onSubmit={handleProfileSubmit}
-            onCancel={() => setProfileNeeded(false)}
-          />
-        </div>
-      )}
-
-      {/* Layout 2 colonnes : Chat (2fr) | Sidebar (1fr) */}
+      {/* Layout 2 colonnes */}
       <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-4">
         {/* Chat */}
         <div className="flex flex-col">
@@ -582,14 +555,17 @@ function ChatBox() {
                 text={m.text}
                 citations={m.citations}
                 onPeek={handlePeek}
-                email={email}
-                questionOfMsg={m.questionOfMsg}
+                isAnswer={m.isAnswer}
+                onFeedback={(useful) => {
+                  const firstDoc = m.citations?.[0]?.doc_id;
+                  handleFeedback(useful, /* question */ null, firstDoc);
+                }}
               />
             ))}
             {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
           </div>
 
-          {/* Saisie + suggestions */}
+          {/* suggestions */}
           {!!suggestions.length && (
             <div className="mt-2 flex items-start gap-2 flex-wrap">
               <div className="text-xs text-gray-600 mt-1">Vouliez-vous dire :</div>
@@ -606,11 +582,16 @@ function ChatBox() {
             </div>
           )}
 
+          {/* input */}
           <div className="mt-3 flex items-end gap-2">
             <textarea
               rows={2}
               className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              placeholder={selectedDocs.size ? "Votre question (focus multi activé)..." : "Posez votre question…"}
+              placeholder={
+                needProfile
+                  ? (awaitingRole ? "Ton poste ? (Qualité, EHS, Utilités, Packaging)" : "Ton secteur ? (SSOL, LIQ, Bulk, Autre)")
+                  : (selectedDocs.size ? "Votre question (focus multi activé)..." : "Posez votre question…")
+              }
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -630,6 +611,22 @@ function ChatBox() {
               Envoyer
             </button>
           </div>
+
+          {/* quick chips pendant profil */}
+          {needProfile && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {awaitingRole && ROLES.map((r) => (
+                <button key={r} onClick={() => setInput(r)} className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200">
+                  {r}
+                </button>
+              ))}
+              {awaitingSector && SECTORS.map((s) => (
+                <button key={s} onClick={() => setInput(s)} className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200">
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -647,11 +644,9 @@ function ChatBox() {
             />
           </div>
 
-          {/* Bloc “perso” simple si dispo */}
           {personalization?.user && (
             <div className="mt-3 p-3 border rounded-lg bg-white text-xs">
               <div className="font-semibold text-sm mb-1">Profil</div>
-              <div>Email : {personalization.user.email}</div>
               <div>Poste : {personalization.user.role || "—"}</div>
               <div>Secteur : {personalization.user.sector || "—"}</div>
             </div>
@@ -659,8 +654,8 @@ function ChatBox() {
         </aside>
       </div>
 
-      {/* Viewer modal */}
-      <Viewer file={viewerFile} onClose={() => setViewerFile(null)} email={email} />
+      {/* Viewer */}
+      <Viewer file={viewerFile} onClose={() => setViewerFile(null)} />
     </div>
   );
 }
@@ -674,26 +669,17 @@ function ImportBox() {
   const [log, setLog] = useState([]);
 
   const canUpload = useMemo(() => !!file && !busy, [file, busy]);
-
-  function appendLog(s) {
-    setLog((l) => [...l, `${new Date().toLocaleTimeString()} — ${s}`]);
-  }
+  function appendLog(s) { setLog((l) => [...l, `${new Date().toLocaleTimeString()} — ${s}`]); }
 
   async function onUpload() {
     if (!file) return;
-    setBusy(true);
-    setProgress(null);
-    setJob(null);
-    setLog([]);
-
+    setBusy(true); setProgress(null); setJob(null); setLog([]);
     try {
       const isZip = /\.zip$/i.test(file.name);
       if (isZip && file.size > 280 * 1024 * 1024) {
         appendLog("Gros ZIP détecté : envoi fractionné…");
         const ret = await chunkedUpload(file, {
-          onProgress: ({ uploadedBytes, totalBytes }) => {
-            setProgress(Math.round((uploadedBytes / totalBytes) * 100));
-          },
+          onProgress: ({ uploadedBytes, totalBytes }) => setProgress(Math.round((uploadedBytes / totalBytes) * 100)),
         });
         if (!ret?.job_id) throw new Error("Chunked terminé mais job_id vide");
         appendLog(`Job créé : ${ret.job_id}`);
@@ -708,8 +694,7 @@ function ImportBox() {
     } catch (e) {
       appendLog(`ERREUR: ${e?.message || e}`);
     } finally {
-      setBusy(false);
-      setProgress(null);
+      setBusy(false); setProgress(null);
     }
   }
 
@@ -726,11 +711,7 @@ function ImportBox() {
       <div
         className="border-2 border-dashed rounded-xl p-6 text-center bg-white"
         onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          const f = e.dataTransfer.files?.[0];
-          if (f) setFile(f);
-        }}
+        onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) setFile(f); }}
       >
         <div className="text-lg font-medium">Importer des documents</div>
         <div className="text-sm text-gray-500 mt-1">
@@ -773,30 +754,18 @@ function ImportBox() {
           <div className="font-mono text-xs break-all">{job.id}</div>
           <div className="mt-1 text-sm">
             Statut:{" "}
-            <span
-              className={
-                job.status === "done"
-                  ? "text-green-700"
-                  : job.status === "error"
-                  ? "text-red-700"
-                  : "text-gray-700"
-              }
-            >
+            <span className={job.status === "done" ? "text-green-700" : job.status === "error" ? "text-red-700" : "text-gray-700"}>
               {job.status}
             </span>
           </div>
-          <div className="text-sm text-gray-600">
-            Fichiers : {job.processed_files}/{job.total_files}
-          </div>
+          <div className="text-sm text-gray-600">Fichiers : {job.processed_files}/{job.total_files}</div>
           {job.error && <div className="text-sm text-red-700 mt-1">{job.error}</div>}
         </div>
       )}
 
       {!!log.length && (
         <div className="p-3 border rounded-lg bg-gray-50 text-xs font-mono space-y-1 max-h-48 overflow-auto">
-          {log.map((l, i) => (
-            <div key={i}>{l}</div>
-          ))}
+          {log.map((l, i) => (<div key={i}>{l}</div>))}
         </div>
       )}
     </div>
@@ -806,7 +775,6 @@ function ImportBox() {
 /* ---------------------------------- Page ---------------------------------- */
 export default function AskVeevaPage() {
   const [tab, setTab] = useState("chat"); // 'chat' | 'import'
-
   return (
     <section className="max-w-[1400px] 2xl:max-w-[1600px] mx-auto px-3 sm:px-4">
       <div className="flex items-center justify-between mb-4">
@@ -814,12 +782,8 @@ export default function AskVeevaPage() {
       </div>
 
       <div className="flex gap-2">
-        <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>
-          Recherche IA
-        </TabButton>
-        <TabButton active={tab === "import"} onClick={() => setTab("import")}>
-          Import
-        </TabButton>
+        <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>Recherche IA</TabButton>
+        <TabButton active={tab === "import"} onClick={() => setTab("import")}>Import</TabButton>
       </div>
 
       <div className="border border-t-0 rounded-b-lg rounded-tr-lg bg-white p-4">
