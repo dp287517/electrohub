@@ -1,6 +1,29 @@
 // src/utils/ask_veeva.js
 import { get, post } from "../lib/api.js";
 
+/** ---- helpers communs ---- */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function withTimeoutFetch(input, init = {}, ms = 30000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    // merge signal proprement
+    const nextInit = { ...init, signal: ctrl.signal };
+    return await fetch(input, nextInit);
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function tryJson(res) {
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    try { return await res.json(); } catch { /* ignore */ }
+  }
+  return null;
+}
+
 /** ---- API simple ---- */
 export async function health() {
   return get("/api/ask-veeva/health");
@@ -28,77 +51,107 @@ export async function uploadSmall(file) {
 
 /** ---- Upload fractionné (gros ZIP) ---- */
 export async function chunkedUpload(file, opts = {}) {
-  const { onProgress = () => {} } = opts;
+  const { onProgress = () => {}, partTimeoutMs = 60000, maxRetries = 3 } = opts;
 
   // 1) init
   const initRes = await post("/api/ask-veeva/chunked/init", {
     filename: file.name,
     size: file.size,
   });
-  if (!initRes?.uploadId) throw new Error("Init chunked échoué");
+  if (!initRes?.uploadId || !initRes?.partSize) throw new Error("Init chunked échoué");
   const { uploadId, partSize } = initRes;
 
-  // 2) part-by-part
+  // 2) part-by-part (avec retry)
   const totalParts = Math.ceil(file.size / partSize);
   let uploadedBytes = 0;
+  onProgress({ part: 0, totalParts, uploadedBytes, totalBytes: file.size });
 
-  for (let part = 1; part <= totalParts; part++) {
-    const start = (part - 1) * partSize;
-    const end = Math.min(start + partSize, file.size);
-    const blob = file.slice(start, end);
+  try {
+    for (let part = 1; part <= totalParts; part++) {
+      const start = (part - 1) * partSize;
+      const end = Math.min(start + partSize, file.size);
+      const blob = file.slice(start, end);
 
-    const fd = new FormData();
-    fd.append("chunk", blob, `${file.name}.part${part}`);
+      const fd = new FormData();
+      fd.append("chunk", blob, `${file.name}.part${part}`);
 
-    const qs = new URLSearchParams({ uploadId, partNumber: String(part) });
-    await fetchPathForm(`/api/ask-veeva/chunked/part?${qs.toString()}`, fd);
+      const qs = new URLSearchParams({ uploadId, partNumber: String(part) });
+      let lastErr = null;
 
-    uploadedBytes += blob.size;
-    onProgress({ part, totalParts, uploadedBytes, totalBytes: file.size });
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          await fetchPathForm(`/api/ask-veeva/chunked/part?${qs.toString()}`, fd, partTimeoutMs);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          // petit backoff progressif
+          await sleep(400 * (attempt + 1));
+        }
+      }
+      if (lastErr) throw lastErr;
+
+      uploadedBytes += blob.size;
+      onProgress({ part, totalParts, uploadedBytes, totalBytes: file.size });
+    }
+
+    // 3) complete
+    const complete = await post("/api/ask-veeva/chunked/complete", {
+      uploadId,
+      totalParts,
+      originalName: file.name,
+    });
+
+    return complete; // { ok, job_id }
+  } catch (e) {
+    // Abort propre si une part a échoué
+    try {
+      await post("/api/ask-veeva/chunked/abort", { uploadId, upto: totalParts });
+    } catch { /* best effort */ }
+    throw e;
   }
-
-  // 3) complete
-  const complete = await post("/api/ask-veeva/chunked/complete", {
-    uploadId,
-    totalParts,
-    originalName: file.name,
-  });
-
-  return complete; // { ok, job_id }
 }
 
-/** ---- Poll job ---- */
-export function pollJob(jobId, { onTick = () => {} } = {}) {
+/** ---- Poll job (avec backoff adaptatif + arrêt propre) ---- */
+export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 } = {}) {
   let stopped = false;
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
   async function loop() {
+    let waitMs = minMs;
     while (!stopped) {
-      const j = await get(`/api/ask-veeva/jobs/${jobId}`);
-      onTick(j);
-      if (j.status === "done" || j.status === "error") return j;
-      await wait(1200);
+      try {
+        const j = await get(`/api/ask-veeva/jobs/${jobId}`);
+        onTick(j);
+        if (j.status === "done" || j.status === "error") return j;
+        await sleep(waitMs);
+        // backoff progressif jusqu'à maxMs
+        waitMs = Math.min(Math.round(waitMs * 1.5), maxMs);
+      } catch {
+        // en cas d’erreur réseau temporaire, on attend puis on réessaie
+        await sleep(Math.min(waitMs * 2, maxMs));
+      }
     }
   }
 
   return {
-    stop: () => (stopped = true),
+    stop: () => { stopped = true; },
     promise: loop(),
   };
 }
 
 /** ---- util interne pour multipart ---- */
-async function fetchPathForm(path, formData) {
-  // on ne passe pas par upload() pour contrôler le path + params
-  const res = await fetch(path, {
+async function fetchPathForm(path, formData, timeoutMs = 30000) {
+  const res = await withTimeoutFetch(path, {
     method: "POST",
     body: formData,
     credentials: "include",
-  });
+  }, timeoutMs);
+
   if (!res.ok) {
+    const maybeJson = await tryJson(res);
+    if (maybeJson?.error) throw new Error(maybeJson.error);
     const text = await res.text().catch(() => "");
     throw new Error(text || `HTTP ${res.status}`);
   }
-  const ct = res.headers.get("content-type") || "";
-  return ct.includes("application/json") ? res.json() : null;
+  return (await tryJson(res)) ?? null;
 }
