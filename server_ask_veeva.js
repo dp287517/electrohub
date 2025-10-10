@@ -1,4 +1,4 @@
-// server_ask_veeva.js — Ask Veeva (sans S3, upload fractionné, RAG) — version PDF.js .mjs robust
+// server_ask_veeva.js — Ask Veeva (sans S3, upload fractionné, RAG) — version PDF.js .mjs robust + Personalization
 // ESM + Node
 
 import express from "express";
@@ -99,6 +99,22 @@ const pool = new Pool({
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
 
+// -----------------------------------------------------------------------------
+// Helpers génériques
+// -----------------------------------------------------------------------------
+function nowISO() {
+  const d = new Date();
+  return d.toISOString().slice(0, 16).replace("T", "_").replace(/:/g, "");
+}
+function safeEmail(x) {
+  if (!x) return null;
+  const s = String(x).trim();
+  return s && /\S+@\S+\.\S+/.test(s) ? s.toLowerCase() : null;
+}
+
+// -----------------------------------------------------------------------------
+// Schéma (incluant Perso/Feedback/Synonymes)
+// -----------------------------------------------------------------------------
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`); // pour gen_random_uuid()
@@ -135,6 +151,47 @@ async function ensureSchema() {
       error TEXT,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  // Nouvelles tables : personnalisation
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS askv_users (
+      id SERIAL PRIMARY KEY,
+      email TEXT UNIQUE,
+      name TEXT,
+      role TEXT,        -- Qualité / EHS / Utilités / Packaging
+      sector TEXT,      -- SSOL / LIQ / Bulk / Autre
+      preferences JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS askv_events (
+      id BIGSERIAL PRIMARY KEY,
+      user_email TEXT,
+      type TEXT,          -- ask_issued, ask_answered, doc_opened, feedback, search, etc.
+      question TEXT,
+      answer_len INT,
+      latency_ms INT,
+      doc_id UUID,
+      useful BOOLEAN,
+      note TEXT,
+      meta JSONB,
+      ts TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS askv_synonyms (
+      id SERIAL PRIMARY KEY,
+      term TEXT,
+      alt_term TEXT,
+      weight REAL DEFAULT 1.0,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(term, alt_term)
     );
   `);
 
@@ -220,14 +277,11 @@ async function ensureSchema() {
 
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id, chunk_index);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_documents_fname_idx ON askv_documents(filename);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS askv_events_user_idx ON askv_events(user_email, ts);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS askv_synonyms_term_idx ON askv_synonyms(term, weight DESC);`);
 
   // (optionnel) analyse pour de meilleurs plans
   await pool.query(`ANALYZE askv_chunks;`);
-}
-
-function nowISO() {
-  const d = new Date();
-  return d.toISOString().slice(0, 16).replace("T", "_").replace(/:/g, "");
 }
 
 // -----------------------------------------------------------------------------
@@ -534,6 +588,38 @@ async function pump() {
 }
 
 // -----------------------------------------------------------------------------
+// Utilities Perso
+// -----------------------------------------------------------------------------
+async function getUserByEmail(email) {
+  if (!email) return null;
+  const { rows } = await pool.query(`SELECT * FROM askv_users WHERE email=$1`, [email]);
+  return rows[0] || null;
+}
+
+async function expandQueryWithSynonyms(q) {
+  const { rows } = await pool.query(
+    `SELECT alt_term FROM askv_synonyms WHERE LOWER(term)=LOWER($1) ORDER BY weight DESC LIMIT 10`,
+    [q]
+  );
+  if (!rows.length) return q;
+  const extra = rows.map(r => r.alt_term).join(" ");
+  return `${q} ${extra}`;
+}
+
+function softRoleBiasScore(filename = "", role = "", sector = "") {
+  // Petit boost si le nom du fichier contient des mots du rôle/secteur
+  const f = filename.toLowerCase();
+  let bonus = 0;
+  if (role) {
+    if (f.includes(role.toLowerCase())) bonus += 0.05;
+  }
+  if (sector) {
+    if (f.includes(sector.toLowerCase())) bonus += 0.05;
+  }
+  return bonus;
+}
+
+// -----------------------------------------------------------------------------
 // ROUTES — Health / Jobs
 // -----------------------------------------------------------------------------
 app.get("/api/ask-veeva/health", async (_req, res) => {
@@ -716,12 +802,99 @@ app.post("/api/ask-veeva/chunked/abort", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// SEARCH + ASK (SEARCH modifié pour fallback par nom, ASK corrigé)
+// ROUTES — Personnalisation & Feedback
+// -----------------------------------------------------------------------------
+app.post("/api/ask-veeva/initUser", async (req, res) => {
+  try {
+    const { email, name, role, sector } = req.body || {};
+    const { rows } = await pool.query(
+      `INSERT INTO askv_users (email, name, role, sector)
+       VALUES ($1,$2,$3,$4)
+       ON CONFLICT (email)
+       DO UPDATE SET name=EXCLUDED.name, role=EXCLUDED.role, sector=EXCLUDED.sector, updated_at=now()
+       RETURNING *`,
+      [safeEmail(email), name || null, role || null, sector || null]
+    );
+    res.json({ ok: true, user: rows[0] });
+  } catch (e) {
+    console.error("initUser:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/logEvent", async (req, res) => {
+  try {
+    const { user_email, type, question, doc_id, useful, note, meta } = req.body || {};
+    await pool.query(
+      `INSERT INTO askv_events(user_email,type,question,doc_id,useful,note,meta)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [safeEmail(user_email), type || null, question || null, doc_id || null, useful ?? null, note || null, meta || {}]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("logEvent:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/feedback", async (req, res) => {
+  try {
+    const { user_email, question, doc_id, useful, note } = req.body || {};
+    await pool.query(
+      `INSERT INTO askv_events(user_email,type,question,doc_id,useful,note)
+       VALUES ($1,'feedback',$2,$3,$4,$5)`,
+      [safeEmail(user_email), question || null, doc_id || null, useful ?? null, note || null]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("feedback:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/synonyms/update", async (req, res) => {
+  try {
+    const { term, alt_term, weight } = req.body || {};
+    if (!term || !alt_term) return res.status(400).json({ error: "term/alt_term requis" });
+    await pool.query(
+      `INSERT INTO askv_synonyms(term, alt_term, weight)
+       VALUES ($1,$2,$3)
+       ON CONFLICT(term, alt_term) DO UPDATE SET weight = EXCLUDED.weight`,
+      [term, alt_term, Number(weight ?? 1.0)]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/ask-veeva/personalize", async (req, res) => {
+  try {
+    const email = safeEmail(req.body?.email);
+    const user = await getUserByEmail(email);
+    const prefs = (await pool.query(
+      `SELECT doc_id, COUNT(*)::int AS uses
+         FROM askv_events WHERE user_email=$1 AND type='doc_opened'
+         GROUP BY doc_id ORDER BY uses DESC LIMIT 10`,
+      [email]
+    )).rows;
+    res.json({ ok: true, user, top_docs: prefs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// -----------------------------------------------------------------------------
+// SEARCH + ASK (SEARCH modifié pour fallback par nom + synonymes, ASK adaptatif)
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/search", async (req, res) => {
+  const t0 = Date.now();
   try {
-    const { query, k = 6 } = req.body || {};
+    let { query, k = 6 } = req.body || {};
     if (!query || String(query).trim() === "") return res.status(400).json({ error: "query requis" });
+
+    // Expansion via synonymes
+    try { query = await expandQueryWithSynonyms(query); } catch {}
 
     // 1) Similarité sémantique (champs textuels)
     const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
@@ -755,7 +928,7 @@ app.post("/api/ask-veeva/search", async (req, res) => {
       ORDER BY created_at DESC
       LIMIT $2
       `,
-      [query, Math.max(k, 12)]
+      [req.body?.query ?? "", Math.max(k, 12)] // NB: fallback sur la requête brute pour le LIKE
     );
 
     const fileMatches = fileRows.map((r) => ({
@@ -772,6 +945,14 @@ app.post("/api/ask-veeva/search", async (req, res) => {
     }
     const merged = Array.from(byId.values()).slice(0, Math.max(k, 12));
 
+    // log event
+    try {
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,latency_ms,meta) VALUES ($1,'search',$2,$3,$4)`,
+        [safeEmail(req.body?.email), req.body?.query || null, Date.now() - t0, { k }]
+      );
+    } catch {}
+
     res.json({ ok: true, matches: merged });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
@@ -779,9 +960,37 @@ app.post("/api/ask-veeva/search", async (req, res) => {
 });
 
 app.post("/api/ask-veeva/ask", async (req, res) => {
+  const t0 = Date.now();
   try {
-    const { question, k = 6, docFilter = [] } = req.body || {};
+    let { question, k = 6, docFilter = [], email, contextMode = "auto" } = req.body || {};
     if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
+
+    const userEmail = safeEmail(email);
+    const user = await getUserByEmail(userEmail);
+
+    // Si pas de profil connu → on demande poliment le rôle/secteur
+    if (!user?.role || !user?.sector) {
+      return res.json({
+        ok: false,
+        needProfile: true,
+        question: "Avant de continuer, peux-tu me dire ton domaine ? (Qualité, EHS, Utilités, Packaging) puis ton secteur (SSOL, LIQ, Bulk…).",
+      });
+    }
+
+    // Mode sans contexte ? (sur demande)
+    if (contextMode === "none") {
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4)`,
+        [userEmail, question, Date.now() - t0, { contextMode }]
+      );
+      // On répond sans RAG (garde-fou simple)
+      return res.json({
+        ok: true,
+        text: `Mode sans contexte activé. Je peux répondre de manière générale, mais pour des infos précises, active le contexte.\n\nQuestion: ${question}`,
+        citations: [],
+        contexts: [],
+      });
+    }
 
     // DB vide ?
     const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM public.askv_chunks`);
@@ -794,6 +1003,9 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       });
     }
 
+    // Expansion via synonymes
+    try { question = await expandQueryWithSynonyms(question); } catch {}
+
     // Embedding de la question
     const emb = (await embedBatch([question]))[0];
     const qvec = toVectorLiteral(emb);
@@ -805,7 +1017,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
 
     const params = Array.isArray(docFilter) && docFilter.length ? [qvec, k, docFilter] : [qvec, k];
 
-    const { rows } = await pool.query(
+    let { rows } = await pool.query(
       `
       SELECT 
         d.id AS doc_id, d.filename, 
@@ -819,6 +1031,25 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       `,
       params
     );
+
+    // Boost personnalisé (préférences utilisateur) + léger biais role/sector
+    let prefBoost = {};
+    try {
+      const boosts = await pool.query(
+        `SELECT doc_id, COUNT(*)::int AS cnt
+         FROM askv_events
+         WHERE user_email=$1 AND type='doc_opened'
+         GROUP BY doc_id`,
+        [userEmail]
+      );
+      for (const b of boosts.rows) prefBoost[b.doc_id] = 1 + Math.min(0.1 * Number(b.cnt || 0), 0.5);
+    } catch {}
+
+    rows = rows.map(r => {
+      const p = prefBoost[r.doc_id] || 1;
+      const roleBias = softRoleBiasScore(r.filename, user?.role, user?.sector);
+      return { ...r, score: r.score * p + roleBias };
+    }).sort((a,b)=> b.score - a.score);
 
     // Contexte compact (≤ ~2k chars par chunk)
     const contextBlocks = rows.map((r, i) => {
@@ -864,6 +1095,18 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       byDoc.set(c.doc_id, list);
     }
     const contexts = Array.from(byDoc.values());
+
+    // Log ask_issued + ask_answered
+    try {
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_issued',$2,$3)`,
+        [userEmail, String(req.body?.question || ""), { k, docFilter, contextMode }]
+      );
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
+        [userEmail, String(req.body?.question || ""), text.length, Date.now() - t0, { citations: citations.length }]
+      );
+    } catch {}
 
     res.json({ ok: true, text, citations, contexts });
   } catch (e) {
