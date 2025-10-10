@@ -3,166 +3,195 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   health,
   ask,
+  find,            // <= utils/ask_veeva.js doit exposer find(query, limit)
   uploadSmall,
   chunkedUpload,
   pollJob,
-  findDocs,
-  // si non exporté dans utils, les deux helpers ci-dessous fabriquent les URLs côté client
-  buildFileURL as _buildFileURL,
-  buildStreamURL as _buildStreamURL,
 } from "../utils/ask_veeva.js";
 
-// fallbacks si la version de utils ne les expose pas
-const buildFileURL = (id) => (_buildFileURL ? _buildFileURL(id) : `/api/ask-veeva/file/${id}`);
-const buildStreamURL = (id) => (_buildStreamURL ? _buildStreamURL(id) : `/api/ask-veeva/stream/${id}`);
+/* ------------------------------ helpers UI ------------------------------ */
 
-/* ---------------- UI primitives ---------------- */
+function clsx(...xs) {
+  return xs.filter(Boolean).join(" ");
+}
+
+function guessKindFromFilename(name = "") {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (["mp4", "mov", "m4v", "webm"].includes(ext)) return "video";
+  if (["pdf"].includes(ext)) return "pdf";
+  if (["doc", "docx", "xls", "xlsx", "ppt", "pptx", "csv", "txt", "md"].includes(ext)) return "doc";
+  return "other";
+}
+
+/* ------------------------------ UI atoms ------------------------------ */
+
 function TabButton({ active, onClick, children }) {
   return (
     <button
       onClick={onClick}
-      className={
-        "px-4 py-2 rounded-t-lg text-sm font-medium transition " +
-        (active
+      className={clsx(
+        "px-3 sm:px-4 py-2 rounded-t-lg text-sm font-medium transition",
+        active
           ? "bg-white border-x border-t border-gray-200"
-          : "bg-gray-100 text-gray-700 hover:bg-gray-200")
-      }
+          : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+      )}
     >
       {children}
     </button>
   );
 }
 
-function Chip({ children, onClick, title }) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-    >
-      {children}
-    </button>
-  );
-}
-
-/* ---------------- Document Viewer (modal plein écran responsive) ---------------- */
-function DocumentViewer({ open, onClose, doc, mode = "auto" }) {
-  // doc: { id, filename, mime? }
-  if (!open || !doc?.id) return null;
-
-  const isVideo =
-    mode === "video" ||
-    (doc?.mime?.startsWith?.("video/") || /\.(mp4|mov|m4v)$/i.test(doc?.filename || ""));
-
-  const src = isVideo ? buildStreamURL(doc.id) : buildFileURL(doc.id);
-
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
-      onClick={onClose}
-    >
-      <div
-        className="w-[96vw] max-w-[1600px] h-[86vh] bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-4 py-2 border-b flex items-center justify-between gap-2">
-          <div className="truncate font-medium">{doc.filename || "Document"}</div>
-          <div className="flex items-center gap-2">
-            <a
-              href={buildFileURL(doc.id)}
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-              title="Ouvrir dans un nouvel onglet"
-            >
-              Ouvrir
-            </a>
-            <button
-              onClick={onClose}
-              className="text-xs px-3 py-1.5 rounded bg-gray-900 text-white hover:bg-black"
-            >
-              Fermer
-            </button>
-          </div>
-        </div>
-        <div className="flex-1 bg-gray-50">
-          {isVideo ? (
-            <video
-              src={src}
-              controls
-              className="w-full h-full object-contain bg-black"
-            />
-          ) : (
-            <iframe
-              title="preview"
-              src={src}
-              className="w-full h-full"
-              style={{ border: "none" }}
-            />
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------- Citations cliquables ---------------- */
-function CitationChips({ citations, onFocus, onPreview }) {
+function CitationChips({ citations, onOpenDoc }) {
   if (!citations?.length) return null;
   return (
     <div className="flex flex-wrap gap-2 mt-2">
-      {citations.slice(0, 8).map((c, i) => (
-        <div key={i} className="flex items-center gap-1">
-          <Chip
-            title={`score: ${c.score?.toFixed?.(3)} • chunk #${c.chunk_index ?? "?"}`}
-            onClick={() => onFocus?.(c.doc_id)}
-          >
-            {c.filename}
-          </Chip>
-          <button
-            className="text-[10px] px-1 py-0.5 rounded bg-gray-100 hover:bg-gray-200"
-            onClick={() => onPreview?.(c)}
-            title="Prévisualiser"
-          >
-            👁
-          </button>
-        </div>
+      {citations.map((c, i) => (
+        <button
+          key={i}
+          type="button"
+          onClick={() => onOpenDoc?.(c)}
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+          title={`score: ${c.score?.toFixed?.(3) ?? "-"}`}
+        >
+          <span className="i-mdi-eye text-[13px]" aria-hidden>👁</span>
+          <span className="truncate max-w-[14rem]" title={c.filename}>{c.filename}</span>
+        </button>
       ))}
     </div>
   );
 }
 
-/* ---------------- Message bubble ---------------- */
-function Message({ role, text, citations, onFocus, onPreview }) {
+function Message({ role, text, citations, onOpenDoc }) {
   const isUser = role === "user";
   return (
-    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
+    <div className={clsx("flex", isUser ? "justify-end" : "justify-start")}>
       <div
-        className={
-          "max-w-[95%] sm:max-w-[80%] xl:max-w-[70%] 2xl:max-w-[60%] rounded-2xl px-4 py-3 shadow " +
-          (isUser
+        className={clsx(
+          "max-w-[92%] sm:max-w-[78%] lg:max-w-[70%] rounded-2xl px-4 py-3 shadow leading-relaxed",
+          isUser
             ? "bg-blue-600 text-white rounded-br-sm"
-            : "bg-white text-gray-800 rounded-bl-sm border")
-        }
+            : "bg-white text-gray-900 rounded-bl-sm border"
+        )}
       >
-        <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
+        <div className="whitespace-pre-wrap break-words">{text}</div>
         {!isUser && (
-          <CitationChips
-            citations={citations}
-            onFocus={onFocus}
-            onPreview={onPreview}
-          />
+          <CitationChips citations={citations} onOpenDoc={onOpenDoc} />
         )}
       </div>
     </div>
   );
 }
 
-/* ---------------- Sidebar des documents / focus ---------------- */
-function SidebarContexts({ contexts, activeDocId, onFocusDoc, onPreviewDoc }) {
-  if (!contexts?.length)
-    return <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>;
+/* --------------------------- Recherche globale -------------------------- */
 
+function GlobalSearch({ onPickDoc }) {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [items, setItems] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
+
+  async function onSearch(e) {
+    e?.preventDefault?.();
+    const query = q.trim();
+    if (!query || busy) return;
+    setBusy(true);
+    setItems([]);
+    setSuggestions([]);
+    try {
+      const res = await find(query, 120); // backend: hybride (filename fuzzy + trgm)
+      setItems(res?.items || []);
+      setSuggestions(res?.suggestions || []);
+    } catch (e) {
+      setItems([]);
+      setSuggestions([]);
+      console.error(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <form onSubmit={onSearch} className="flex gap-2">
+        <input
+          className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          placeholder="Rechercher un document ou une vidéo… (ex: N2000-2, vignette TnT, 'vignetteuse')"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button
+          className="px-3 sm:px-4 py-2 rounded-lg bg-gray-900 text-white text-sm hover:bg-black disabled:opacity-50"
+          disabled={!q.trim() || busy}
+        >
+          Rechercher
+        </button>
+      </form>
+
+      {suggestions?.length > 0 && (
+        <div className="text-xs text-gray-700">
+          Vouliez-vous dire&nbsp;:
+          <div className="mt-1 flex flex-wrap gap-2">
+            {suggestions.map((s, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  setQ(s);
+                  setTimeout(onSearch, 0);
+                }}
+                className="px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-800 border border-yellow-200 hover:bg-yellow-100"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!!items.length && (
+        <div className="space-y-2 max-h-64 overflow-auto pr-1">
+          {items.map((it) => {
+            const kind = guessKindFromFilename(it.filename);
+            return (
+              <div
+                key={it.doc_id}
+                className="flex items-center justify-between gap-2 border rounded-lg p-2 hover:bg-gray-50"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-medium truncate" title={it.filename}>
+                    {it.filename}
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    {kind === "video" ? "Vidéo" : kind === "pdf" ? "PDF" : "Document"}
+                    {typeof it.score === "number" && (
+                      <> • score ~ {it.score.toFixed(2)}</>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => onPickDoc?.(it)}
+                  className="shrink-0 text-xs px-2 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                >
+                  Ouvrir
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ----------------------------- Sidebar contexte ----------------------------- */
+
+function SidebarContexts({ contexts, activeDocId, onFocusDoc, onOpenDoc }) {
+  if (!contexts?.length) {
+    return (
+      <div className="text-sm text-gray-500">
+        Aucun document dans le contexte. Utilisez la recherche ci-dessous pour ouvrir un fichier/vidéo.
+      </div>
+    );
+  }
   return (
     <div className="space-y-3">
       {contexts.map((d) => {
@@ -170,26 +199,26 @@ function SidebarContexts({ contexts, activeDocId, onFocusDoc, onPreviewDoc }) {
         return (
           <div
             key={d.doc_id}
-            className={"border rounded-lg p-3 " + (active ? "border-indigo-400 bg-indigo-50" : "bg-white")}
+            className={clsx("border rounded-lg p-3", active ? "border-indigo-400 bg-indigo-50" : "bg-white")}
           >
             <div className="flex items-center justify-between gap-2">
               <div className="font-medium text-sm truncate" title={d.filename}>
                 {d.filename}
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-2">
                 <button
-                  onClick={() => onPreviewDoc?.(d)}
+                  onClick={() => onOpenDoc?.({ doc_id: d.doc_id, filename: d.filename })}
                   className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-                  title="Prévisualiser"
+                  title="Ouvrir dans le viewer"
                 >
-                  👁
+                  👁 Ouvrir
                 </button>
                 <button
-                  onClick={() => onFocusDoc(d.doc_id)}
-                  className={
-                    "text-xs px-2 py-1 rounded " +
-                    (active ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200")
-                  }
+                  onClick={() => onFocusDoc?.(d.doc_id)}
+                  className={clsx(
+                    "text-xs px-2 py-1 rounded",
+                    active ? "bg-indigo-600 text-white" : "bg-gray-100 hover:bg-gray-200"
+                  )}
                 >
                   {active ? "Focalisé" : "Focus"}
                 </button>
@@ -198,7 +227,7 @@ function SidebarContexts({ contexts, activeDocId, onFocusDoc, onPreviewDoc }) {
             <div className="mt-2 text-xs text-gray-600">
               {d.chunks?.slice(0, 3).map((c, i) => (
                 <div key={i} className="mb-1">
-                  <span className="inline-block min-w-10 text-gray-400">#{c.chunk_index}</span>
+                  <span className="inline-block min-w-10 text-gray-400">#{c.chunk_index ?? "–"}</span>
                   <span className="opacity-80">{c.snippet}</span>
                 </div>
               ))}
@@ -213,40 +242,87 @@ function SidebarContexts({ contexts, activeDocId, onFocusDoc, onPreviewDoc }) {
   );
 }
 
-/* ---------------- Suggestions "Vouliez-vous dire..." ---------------- */
-function SuggestionsBar({ suggestions, onPreview, onFocusAndAsk }) {
-  if (!suggestions?.length) return null;
+/* ------------------------------- Viewer panel ------------------------------- */
+
+function Viewer({ doc, onClose }) {
+  if (!doc) {
+    return (
+      <div className="h-full border rounded-lg bg-white flex items-center justify-center text-sm text-gray-500">
+        Sélectionnez un document ou une vidéo à droite/ci-dessous.
+      </div>
+    );
+  }
+  const { doc_id, filename } = doc;
+  const kind = guessKindFromFilename(filename || "");
+  const fileUrl = `/api/ask-veeva/file/${doc_id}`;
+  const streamUrl = `/api/ask-veeva/stream/${doc_id}`;
+
   return (
-    <div className="mt-2 flex flex-wrap gap-2">
-      <span className="text-xs text-gray-500">Vouliez-vous dire&nbsp;:</span>
-      {suggestions.slice(0, 8).map((s) => (
-        <div key={s.id} className="flex items-center gap-1">
-          <Chip onClick={() => onFocusAndAsk?.(s)} title={s.filename}>
-            {s.filename}
-          </Chip>
-          <button
-            className="text-[10px] px-1 py-0.5 rounded bg-gray-100 hover:bg-gray-200"
-            title="Prévisualiser"
-            onClick={() => onPreview?.(s)}
+    <div className="h-full border rounded-lg bg-white flex flex-col">
+      <div className="px-3 py-2 border-b flex items-center justify-between gap-2">
+        <div className="truncate font-medium text-sm" title={filename}>{filename}</div>
+        <div className="flex items-center gap-2">
+          <a
+            href={fileUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            title="Ouvrir dans un nouvel onglet"
           >
-            👁
+            ↗ Ouvrir
+          </a>
+          <button
+            onClick={onClose}
+            className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+          >
+            Fermer
           </button>
         </div>
-      ))}
+      </div>
+
+      <div className="flex-1 min-h-0">
+        {kind === "video" ? (
+          <video
+            controls
+            src={streamUrl}
+            className="w-full h-full rounded-b-lg"
+            style={{ height: "calc(100% - 0px)" }}
+          />
+        ) : kind === "pdf" ? (
+          <object
+            data={fileUrl}
+            type="application/pdf"
+            className="w-full h-full"
+          >
+            <div className="p-4 text-sm">
+              Le PDF ne peut pas être affiché.{" "}
+              <a className="text-blue-600 underline" href={fileUrl} target="_blank" rel="noreferrer">
+                Ouvrir le fichier
+              </a>
+            </div>
+          </object>
+        ) : (
+          <iframe
+            title="document"
+            src={fileUrl}
+            className="w-full h-full"
+          />
+        )}
+      </div>
     </div>
   );
 }
 
-/* ---------------- Chat principal ---------------- */
+/* --------------------------------- Chat box -------------------------------- */
+
 function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [contexts, setContexts] = useState([]);
-  const [activeDocId, setActiveDocId] = useState(null);
-  const [suggestions, setSuggestions] = useState([]);
-  const [viewer, setViewer] = useState({ open: false, doc: null, mode: "auto" });
-
+  const [contexts, setContexts] = useState([]);          // pour la sidebar
+  const [activeDocId, setActiveDocId] = useState(null);  // doc focalisé
+  const [viewerDoc, setViewerDoc] = useState(null);      // doc ouvert dans le viewer
+  const [askSuggestions, setAskSuggestions] = useState([]); // “Vouliez-vous dire…?”
   const listRef = useRef(null);
 
   const [messages, setMessages] = useState(() => {
@@ -258,10 +334,14 @@ function ChatBox() {
     }
   });
 
+  // persist chat
   useEffect(() => {
-    sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
+    try {
+      sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
+    } catch {}
   }, [messages]);
 
+  // health
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -272,36 +352,37 @@ function ChatBox() {
         setReady(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
+  // auto-scroll
   useEffect(() => {
-    // auto-scroll
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, sending]);
 
   async function runAsk(q, docFilter = []) {
     setSending(true);
+    setAskSuggestions([]);
     try {
-      // k=0 => étendue large côté backend
-      const resp = await ask(q, 0, docFilter);
+      // on envoie un historique court (mémoire de la conversation, 12 derniers)
+      const history = messages.slice(-12).map(m => ({
+        role: m.role,
+        text: m.text,
+      }));
+      const resp = await ask(q, /*k*/ 12, docFilter, history);
+
       const text = resp?.text || "Désolé, aucune réponse.";
       const citations = (resp?.citations || []).map((c) => ({
-        ...c,
-        // fallback mime detection basique si besoin pour viewer
-        mime: c.mime,
+        doc_id: c.doc_id,
+        filename: c.filename,
+        score: c.score,
       }));
       setMessages((m) => [...m, { role: "assistant", text, citations }]);
       setContexts(resp?.contexts || []);
-      setSuggestions(resp?.suggestions || []);
       if (docFilter?.length) setActiveDocId(docFilter[0]);
+      setAskSuggestions(resp?.suggestions || []);
     } catch (e) {
-      setMessages((m) => [
-        ...m,
-        { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` },
-      ]);
+      setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
     } finally {
       setSending(false);
     }
@@ -327,42 +408,20 @@ function ChatBox() {
     setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
     setContexts([]);
     setActiveDocId(null);
-    setSuggestions([]);
+    setAskSuggestions([]);
   }
 
-  const handlePreview = (item) => {
-    // item peut être une citation, un context, ou une suggestion { id, filename, mime? }
-    const doc = {
-      id: item.doc_id || item.id,
-      filename: item.filename,
-      mime: item.mime,
-    };
-    setViewer({ open: true, doc, mode: (item.mime?.startsWith?.("video/") ? "video" : "auto") });
-  };
-
-  const handleSuggestionFocusAndAsk = (s) => {
-    const lastQ =
-      [...messages].reverse().find((m) => m.role === "user")?.text ||
-      input ||
-      "Peux-tu détailler ?";
-    setMessages((m) => [
-      ...m,
-      { role: "user", text: `${lastQ} (focus: ${s.filename})` },
-    ]);
-    runAsk(lastQ, [s.id]);
-    setActiveDocId(s.id);
-  };
+  function openDoc(c) {
+    if (!c?.doc_id) return;
+    setViewerDoc({ doc_id: c.doc_id, filename: c.filename });
+  }
 
   return (
     <div className="flex flex-col h-full">
       {/* Bandeau haut */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <div className="text-sm text-gray-600 flex items-center gap-2">
-          <span className={ready ? "text-emerald-600" : "text-rose-600"}>
-            {ready ? "Connecté" : "Hors-ligne"}
-          </span>
-          <span className="text-gray-400">•</span>
-          <span className="text-gray-600">Étendue&nbsp;: large</span>
+        <div className="text-sm text-gray-700">
+          {ready ? "Connecté" : "Hors-ligne"}
         </div>
         <div className="flex gap-2">
           <button
@@ -371,38 +430,29 @@ function ChatBox() {
           >
             Supprimer la conversation
           </button>
-          <div className="hidden md:flex gap-2">
-            {[
-              "Montre-moi les SOP PPE",
-              "Quelles sont les étapes de validation ?",
-              "Où est la dernière version ?",
-            ].map((s, i) => (
-              <button
-                key={i}
-                onClick={() => quickAsk(s)}
-                className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
-              >
-                {s}
-              </button>
-            ))}
+          <div className="hidden sm:flex gap-2">
+            {["Montre-moi les SOP PPE", "Quelles sont les étapes de validation ?", "Où est la dernière version ?"].map(
+              (s, i) => (
+                <button
+                  key={i}
+                  onClick={() => quickAsk(s)}
+                  className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
+                >
+                  {s}
+                </button>
+              )
+            )}
           </div>
         </div>
       </div>
 
-      {/* Suggestions globales (fuzzy) */}
-      <SuggestionsBar
-        suggestions={suggestions}
-        onPreview={handlePreview}
-        onFocusAndAsk={handleSuggestionFocusAndAsk}
-      />
-
-      {/* 2 colonnes responsive : chat + sidebar */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mt-2">
-        {/* Chat (2/3) */}
+      {/* 3 colonnes responsive : Chat (2) • Sidebar (1) • Viewer (2) */}
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
+        {/* Chat */}
         <div className="xl:col-span-2">
           <div
             ref={listRef}
-            className="h-[52vh] sm:h-[60vh] xl:h-[66vh] 2xl:h-[72vh] overflow-auto space-y-3 p-3 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
+            className="min-h-[48vh] md:min-h-[54vh] xl:h-[calc(100vh-260px)] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
           >
             {messages.map((m, i) => (
               <Message
@@ -410,25 +460,39 @@ function ChatBox() {
                 role={m.role}
                 text={m.text}
                 citations={m.citations}
-                onFocus={(docId) => setActiveDocId(docId)}
-                onPreview={handlePreview}
+                onOpenDoc={openDoc}
               />
             ))}
-            {sending && (
-              <div className="text-xs text-gray-500 animate-pulse px-2">
-                Ask Veeva rédige…
-              </div>
-            )}
+            {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
           </div>
+
+          {/* Suggestions “vouliez-vous dire” */}
+          {!!askSuggestions.length && (
+            <div className="mt-2 text-xs text-gray-700">
+              Vouliez-vous dire&nbsp;:
+              <div className="mt-1 flex flex-wrap gap-2">
+                {askSuggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setInput(s);
+                      setTimeout(onSend, 20);
+                    }}
+                    className="px-2 py-0.5 rounded-full bg-yellow-50 text-yellow-800 border border-yellow-200 hover:bg-yellow-100"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Saisie */}
           <div className="mt-3 flex items-end gap-2">
             <textarea
               rows={2}
               className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
-              placeholder={
-                activeDocId ? "Votre question (focus doc sélectionné)..." : "Posez votre question…"
-              }
+              placeholder={activeDocId ? "Votre question (focus sur le doc sélectionné)..." : "Posez votre question…"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
@@ -449,16 +513,13 @@ function ChatBox() {
           </div>
         </div>
 
-        {/* Sidebar (1/3) */}
+        {/* Sidebar Contexte + Recherche */}
         <aside className="xl:col-span-1">
-          <div className="border rounded-lg p-3 bg-white h-[52vh] sm:h-[60vh] xl:h-[66vh] 2xl:h-[72vh] overflow-auto">
-            <div className="flex items-center justify-between mb-2">
+          <div className="border rounded-lg p-3 bg-white xl:h-[calc(100vh-260px)] min-h-[48vh] overflow-auto space-y-4">
+            <div className="flex items-center justify-between">
               <h3 className="font-semibold">Documents du contexte</h3>
               {activeDocId && (
-                <button
-                  className="text-xs text-indigo-700 underline"
-                  onClick={() => setActiveDocId(null)}
-                >
+                <button className="text-xs text-indigo-700 underline" onClick={() => setActiveDocId(null)}>
                   Retirer le focus
                 </button>
               )}
@@ -467,26 +528,31 @@ function ChatBox() {
               contexts={contexts}
               activeDocId={activeDocId}
               onFocusDoc={(docId) => setActiveDocId(docId)}
-              onPreviewDoc={(d) =>
-                handlePreview({ id: d.doc_id, filename: d.filename })
-              }
+              onOpenDoc={(doc) => setViewerDoc({ doc_id: doc.doc_id, filename: doc.filename })}
+            />
+            <div className="pt-2 border-t" />
+            <GlobalSearch
+              onPickDoc={(it) => setViewerDoc({ doc_id: it.doc_id, filename: it.filename })}
             />
           </div>
         </aside>
-      </div>
 
-      {/* Viewer */}
-      <DocumentViewer
-        open={viewer.open}
-        onClose={() => setViewer({ open: false, doc: null, mode: "auto" })}
-        doc={viewer.doc}
-        mode={viewer.mode}
-      />
+        {/* Viewer */}
+        <div className="xl:col-span-2">
+          <div className="xl:h-[calc(100vh-260px)] min-h-[48vh]">
+            <Viewer
+              doc={viewerDoc}
+              onClose={() => setViewerDoc(null)}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-/* ---------------- Import ---------------- */
+/* -------------------------------- Import box ------------------------------- */
+
 function ImportBox() {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -508,7 +574,6 @@ function ImportBox() {
     setLog([]);
 
     try {
-      // stratégie : si ZIP > 280 Mo → chunked; sinon upload direct
       const isZip = /\.zip$/i.test(file.name);
       if (isZip && file.size > 280 * 1024 * 1024) {
         appendLog("Gros ZIP détecté : envoi fractionné…");
@@ -577,9 +642,7 @@ function ImportBox() {
         {file && (
           <div className="mt-3 text-sm text-gray-700">
             Fichier : <span className="font-medium">{file.name}</span>{" "}
-            <span className="text-gray-500">
-              ({(file.size / (1024 * 1024)).toFixed(1)} Mo)
-            </span>
+            <span className="text-gray-500">({(file.size / (1024 * 1024)).toFixed(1)} Mo)</span>
           </div>
         )}
         <div className="mt-4">
@@ -594,10 +657,7 @@ function ImportBox() {
         {progress !== null && (
           <div className="mt-4">
             <div className="w-full h-2 bg-gray-200 rounded">
-              <div
-                className="h-2 bg-blue-600 rounded"
-                style={{ width: `${progress}%` }}
-              />
+              <div className="h-2 bg-blue-600 rounded" style={{ width: `${progress}%` }} />
             </div>
             <div className="text-xs text-gray-600 mt-1">{progress}%</div>
           </div>
@@ -642,17 +702,18 @@ function ImportBox() {
   );
 }
 
-/* ---------------- Page ---------------- */
+/* ----------------------------------- Page ---------------------------------- */
+
 export default function AskVeevaPage() {
   const [tab, setTab] = useState("chat"); // 'chat' | 'import'
 
   return (
-    <section className="mx-auto px-3 sm:px-4 lg:px-6 max-w-[2000px]">
+    <section className="mx-auto w-full max-w-[1760px] px-3 sm:px-4">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva</h1>
       </div>
 
-      {/* onglets */}
+      {/* Onglets */}
       <div className="flex gap-2">
         <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>
           Recherche IA
@@ -662,7 +723,7 @@ export default function AskVeevaPage() {
         </TabButton>
       </div>
 
-      <div className="border border-t-0 rounded-b-lg rounded-tr-lg bg-white p-4 md:p-5">
+      <div className="border border-t-0 rounded-b-lg rounded-tr-lg bg-white p-4">
         {tab === "chat" ? <ChatBox /> : <ImportBox />}
       </div>
     </section>
