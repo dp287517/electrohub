@@ -55,15 +55,28 @@ export async function health() {
 }
 
 /**
- * ASK (RAG) — wide by default (k=0), optional doc focus (docFilter: uuid[])
- * Mirrors backend: returns { ok, text, citations, contexts, suggestions }
+ * ASK (RAG) — "wide" par défaut (k=0), support du focus doc, historique et options.
+ * Le backend accepte: { question, k, docFilter, history, wantVideos, debug }
+ * @param {string} question
+ * @param {number} k - 0 = pas de limite côté requête (le backend gère)
+ * @param {string[]} docFilter - liste d'UUID pour focaliser la recherche
+ * @param {{role:'user'|'assistant', text:string}[]} history - derniers tours pour le contexte de chat
+ * @param {{wantVideos?: boolean, debug?: boolean}} opts
  */
-export async function ask(question, k = 0, docFilter = []) {
-  return post("/api/ask-veeva/ask", { question, k, docFilter });
+export async function ask(question, k = 0, docFilter = [], history = [], opts = {}) {
+  const payload = {
+    question,
+    k: Number.isFinite(k) ? k : 0,
+    docFilter: Array.isArray(docFilter) ? docFilter : [],
+    history: Array.isArray(history) ? history : [],
+    ...(opts?.wantVideos ? { wantVideos: true } : {}),
+    ...(opts?.debug ? { debug: true } : {}),
+  };
+  return post("/api/ask-veeva/ask", payload);
 }
 
 /**
- * Simple vector search (kept for compatibility, but you can ignore it if you rely only on ask()).
+ * Simple vector search (compat). Tu peux l’ignorer si tu n’utilises que ask().
  * @param {string} query
  * @param {number} k
  */
@@ -72,17 +85,17 @@ export async function search(query, k = 10) {
 }
 
 /**
- * Fuzzy doc finder — used for “Vouliez-vous dire…”
- * Backend route supports q= (string). Returns array of { id, filename, mime? }.
+ * Fuzzy/hybride finder pour fichiers & vidéos.
+ * Backend: POST /api/ask-veeva/find  { query, limit }
+ * Retourne { items: [{doc_id, filename, mime?, score?}], suggestions: string[] }
  */
-export async function findDocs(q) {
-  const qs = new URLSearchParams({ q: q ?? "" }).toString();
-  return get(`/api/ask-veeva/find-docs?${qs}`);
+export async function find(query, limit = 120) {
+  return post("/api/ask-veeva/find", { query, limit });
 }
 
 /* ------------------------------ Uploads ------------------------------ */
 
-/** Upload direct (ZIP <= ~300MB server-side, or any small file) */
+/** Upload direct (ZIP <= ~300MB server-side, ou fichier "petit") */
 export async function uploadSmall(file) {
   const fd = new FormData();
   const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -95,8 +108,8 @@ export async function uploadSmall(file) {
 }
 
 /**
- * Chunked upload for very large ZIP files.
- * onProgress receives { uploadedBytes, totalBytes } (and you can compute %).
+ * Upload fractionné pour gros ZIP.
+ * onProgress reçoit { uploadedBytes, totalBytes }.
  */
 export async function chunkedUpload(file, opts = {}) {
   const { onProgress = () => {}, partTimeoutMs = 60000, maxRetries = 3 } = opts;
