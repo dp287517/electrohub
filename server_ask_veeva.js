@@ -216,6 +216,9 @@ async function ensureSchema() {
 
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_chunks_doc_idx ON askv_chunks(doc_id, chunk_index);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_documents_fname_idx ON askv_documents(filename);`);
+
+  // (optionnel) analyse pour de meilleurs plans
+  await pool.query(`ANALYZE askv_chunks;`);
 }
 
 function nowISO() {
@@ -370,7 +373,7 @@ function windows(text, size = PDF_CHUNK_SIZE, overlap = PDF_CHUNK_OVERLAP) {
 }
 
 // -----------------------------------------------------------------------------
-// Embeddings
+// Embeddings + util pgvector
 // -----------------------------------------------------------------------------
 async function embedBatch(texts) {
   const res = await openai.embeddings.create({
@@ -378,6 +381,14 @@ async function embedBatch(texts) {
     input: texts,
   });
   return res.data.map((d) => d.embedding);
+}
+
+// Convertit un Array<number> en littéral pgvector: "[0.1,0.2,...]"
+function toVectorLiteral(arr) {
+  return "[" + arr.map((x) => {
+    const v = Number(x);
+    return Number.isFinite(v) ? v.toString() : "0";
+  }).join(",") + "]";
 }
 
 // -----------------------------------------------------------------------------
@@ -428,18 +439,23 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
   for (let i = 0; i < segs.length; i += EMBED_BATCH) {
     const batch = segs.slice(i, i + EMBED_BATCH);
     const embeds = await embedBatch(batch);
+
     const params = [];
     const values = [];
     let idx = i;
+
     for (let j = 0; j < batch.length; j++) {
-      params.push(`($${values.length + 1}, $${values.length + 2}, $${values.length + 3}, $${values.length + 4})`);
-      values.push(docId, idx + j, batch[j], embeds[j]);
+      // on passe le littéral texte et on caste en ::vector côté SQL
+      params.push(`($${values.length + 1}, $${values.length + 2}, $${values.length + 3}, $${values.length + 4}::vector)`);
+      values.push(docId, idx + j, batch[j], toVectorLiteral(embeds[j]));
     }
+
     await pool.query(
       `INSERT INTO askv_chunks (doc_id, chunk_index, content, embedding) VALUES ${params.join(", ")}`,
       values
     );
   }
+
   return { docId, chunks: segs.length, skipped: false };
 }
 
@@ -511,6 +527,7 @@ async function pump() {
 app.get("/api/ask-veeva/health", async (_req, res) => {
   try {
     const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
+    const mu = process.memoryUsage?.() || {};
     res.json({
       ok: true,
       service: "ask-veeva",
@@ -518,6 +535,9 @@ app.get("/api/ask-veeva/health", async (_req, res) => {
       embeddings: EMBEDDING_MODEL,
       dims: EMBEDDING_DIMS,
       docCount: dc[0]?.n ?? 0,
+      memory: {
+        rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external
+      },
       s3Configured: false,
       limits: {
         EMBED_BATCH,
@@ -696,6 +716,8 @@ app.post("/api/ask-veeva/search", async (req, res) => {
     if (!dc[0]?.n) return res.json({ ok: true, matches: [] });
 
     const emb = (await embedBatch([query]))[0];
+    const qvec = toVectorLiteral(emb);
+
     const { rows } = await pool.query(
       `
       SELECT d.filename, c.content, 1 - (c.embedding <=> $1::vector) AS score
@@ -704,7 +726,7 @@ app.post("/api/ask-veeva/search", async (req, res) => {
       ORDER BY c.embedding <=> $1::vector
       LIMIT $2
       `,
-      [emb, k]
+      [qvec, k]
     );
     const matches = rows.map((r) => ({
       meta: { filename: r.filename },
@@ -733,6 +755,8 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     }
 
     const emb = (await embedBatch([question]))[0];
+    const qvec = toVectorLiteral(emb);
+
     const { rows } = await pool.query(
       `
       SELECT d.filename, c.content, 1 - (c.embedding <=> $1::vector) AS score
@@ -741,7 +765,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       ORDER BY c.embedding <=> $1::vector
       LIMIT $2
       `,
-      [emb, k]
+      [qvec, k]
     );
 
     const context = rows
