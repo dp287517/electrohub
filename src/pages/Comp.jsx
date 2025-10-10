@@ -127,7 +127,7 @@ function Tabs({ value, onChange }) {
   return (
     <div
       ref={ref}
-      className="flex flex-wrap gap-2 sticky top=[60px] md:top-[60px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
+      className="flex flex-wrap gap-2 sticky top-[60px] z-30 bg-gray-50/80 backdrop-blur supports-[backdrop-filter]:bg-gray-50/60 py-2"
     >
       {T("vendors", "Vendors", "📋")}
       {T("calendar", "Calendar", "📅")}
