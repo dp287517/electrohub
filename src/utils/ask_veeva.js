@@ -23,26 +23,37 @@ async function tryJson(res) {
   return null;
 }
 
-/** ---- API simple ---- */
+/** ---------------------------------------------------------------------------
+ *  API: Health
+ * ------------------------------------------------------------------------- */
 export async function health() {
   return get("/api/ask-veeva/health");
 }
 
+/** ---------------------------------------------------------------------------
+ *  API: Search (top-k chunks)
+ * ------------------------------------------------------------------------- */
 export async function search(query, k = 6) {
   return post("/api/ask-veeva/search", { query, k });
 }
 
-/**
- * ASK avec filtre de documents optionnel.
- * @param {string} question
- * @param {number} k
- * @param {string[]} docFilter - UUID des documents à focaliser
+/** ---------------------------------------------------------------------------
+ *  API: Ask (RAG) avec filtre optionnel sur des documents
+ * ---------------------------------------------------------------------------
+ * @param {string} question - La question utilisateur
+ * @param {number} [k=6] - Nombre d'extraits à fournir au modèle
+ * @param {string[]} [docFilter=[]] - Tableau d'UUID (documents ciblés)
+ * @returns {Promise<{ok:boolean,text:string,citations:any[],contexts:any[]}>}
  */
 export async function ask(question, k = 6, docFilter = []) {
-  return post("/api/ask-veeva/ask", { question, k, docFilter });
+  // garde-fous: unique + UUID-like simples (facultatif, mais évite du bruit)
+  const list = Array.isArray(docFilter) ? [...new Set(docFilter.filter(Boolean))] : [];
+  return post("/api/ask-veeva/ask", { question, k, docFilter: list });
 }
 
-/** ---- Upload direct (petits fichiers / ZIP <= 300 Mo côté serveur) ---- */
+/** ---------------------------------------------------------------------------
+ *  API: Upload direct (petits fichiers / ZIP <= ~300 Mo côté serveur)
+ * ------------------------------------------------------------------------- */
 export async function uploadSmall(file) {
   const fd = new FormData();
   const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -54,7 +65,12 @@ export async function uploadSmall(file) {
   return fetchPathForm("/api/ask-veeva/uploadFile", fd);
 }
 
-/** ---- Upload fractionné (gros ZIP) ---- */
+/** ---------------------------------------------------------------------------
+ *  API: Upload fractionné (gros ZIP)
+ * ---------------------------------------------------------------------------
+ * @param {File} file
+ * @param {{onProgress?:Function, partTimeoutMs?:number, maxRetries?:number}} opts
+ */
 export async function chunkedUpload(file, opts = {}) {
   const { onProgress = () => {}, partTimeoutMs = 60000, maxRetries = 3 } = opts;
 
@@ -90,7 +106,7 @@ export async function chunkedUpload(file, opts = {}) {
           break;
         } catch (e) {
           lastErr = e;
-          await sleep(400 * (attempt + 1)); // backoff
+          await sleep(400 * (attempt + 1)); // backoff simple
         }
       }
       if (lastErr) throw lastErr;
@@ -115,7 +131,12 @@ export async function chunkedUpload(file, opts = {}) {
   }
 }
 
-/** ---- Poll job (backoff adaptatif) ---- */
+/** ---------------------------------------------------------------------------
+ *  API: Poll job (backoff adaptatif)
+ * ---------------------------------------------------------------------------
+ * @param {string} jobId
+ * @param {{onTick?:(j:any)=>void,minMs?:number,maxMs?:number}} opts
+ */
 export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 } = {}) {
   let stopped = false;
 
@@ -140,7 +161,30 @@ export function pollJob(jobId, { onTick = () => {}, minMs = 1200, maxMs = 10000 
   };
 }
 
-/** ---- util interne pour multipart ---- */
+/** ---------------------------------------------------------------------------
+ *  Helpers d’URL pour viewer/streaming (backend file & stream routes)
+ * ------------------------------------------------------------------------- */
+/**
+ * URL d’accès direct au fichier (PDF inline, doc, etc.)
+ * @param {string} docId
+ * @returns {string}
+ */
+export function fileUrl(docId) {
+  return `/api/ask-veeva/file/${encodeURIComponent(docId)}`;
+}
+
+/**
+ * URL de streaming vidéo (gère les Range requests côté serveur)
+ * @param {string} docId
+ * @returns {string}
+ */
+export function streamUrl(docId) {
+  return `/api/ask-veeva/stream/${encodeURIComponent(docId)}`;
+}
+
+/** ---------------------------------------------------------------------------
+ *  util interne pour multipart
+ * ------------------------------------------------------------------------- */
 async function fetchPathForm(path, formData, timeoutMs = 30000) {
   const res = await withTimeoutFetch(path, {
     method: "POST",
