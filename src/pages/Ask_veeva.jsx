@@ -231,14 +231,13 @@ function Viewer({ file, onClose }) {
     (async () => {
       if (!file) return;
       setErr(null);
-      // Pré-check coté serveur (si l’endpoint /check n’existe pas, utils fait fallback propre)
       const res = await checkFile(file.doc_id);
       if (cancel) return;
       if (res.ok) {
         setPreviewUrl(res.url || buildFileURL(file.doc_id));
       } else {
         setErr(res.error || "indisponible");
-        setPreviewUrl(buildFileURL(file.doc_id)); // on laisse quand même l’iframe/lien tenter
+        setPreviewUrl(buildFileURL(file.doc_id));
       }
     })();
     return () => { cancel = true; };
@@ -488,18 +487,19 @@ function ChatBox() {
 
   async function handlePeek(c) {
     setViewerFile({ doc_id: c.doc_id, filename: c.filename });
-    // best-effort pour la perso : “peek”
     try { await openDoc(c.doc_id, { from: "peek" }); } catch {}
   }
 
   async function handleOpen(c) {
+    // 🔑 Utilise l’URL résolue par le backend (original ou preview)
     const res = await checkFile(c.doc_id);
     if (!res.ok) {
       alert(`Impossible d’ouvrir le fichier : ${res.error || "inconnu"}`);
       return;
     }
     try { await openDoc(c.doc_id, { from: "sidebar_open" }); } catch {}
-    window.open(buildFileURL(c.doc_id), "_blank", "noopener");
+    // Respecte la meilleure URL retournée (peut être /preview/:id si l’original a bougé)
+    window.open(res.url || buildFileURL(c.doc_id), "_blank", "noopener");
   }
 
   async function tryDidYouMean(q) {
