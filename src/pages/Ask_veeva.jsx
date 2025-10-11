@@ -224,10 +224,30 @@ function SidebarContexts({
 /* ------------------------------- Viewer pane ------------------------------- */
 function Viewer({ file, onClose }) {
   const [err, setErr] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      if (!file) return;
+      setErr(null);
+      // Pré-check coté serveur (si l’endpoint /check n’existe pas, utils fait fallback propre)
+      const res = await checkFile(file.doc_id);
+      if (cancel) return;
+      if (res.ok) {
+        setPreviewUrl(res.url || buildFileURL(file.doc_id));
+      } else {
+        setErr(res.error || "indisponible");
+        setPreviewUrl(buildFileURL(file.doc_id)); // on laisse quand même l’iframe/lien tenter
+      }
+    })();
+    return () => { cancel = true; };
+  }, [file]);
+
   if (!file) return null;
 
-  const fileURL = buildFileURL(file.doc_id);
   const looksVideo = isVideoFilename(file.filename);
+  const fileURL = previewUrl || buildFileURL(file.doc_id);
 
   return (
     <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4">
@@ -249,6 +269,7 @@ function Viewer({ file, onClose }) {
               rel="noreferrer"
               className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
               title="Ouvrir dans un nouvel onglet"
+              onClick={() => openDoc(file.doc_id, { from: "viewer_open_original" })}
             >
               Ouvrir l’original
             </a>
@@ -298,14 +319,14 @@ function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [k, setK] = useState(6); // valeur par défaut alignée backend
-  const [contexts, setContexts] = useState([]); // [{doc_id, filename, chunks:[]}]
+  const [k, setK] = useState(6);
+  const [contexts, setContexts] = useState([]);
   const [selectedDocs, setSelectedDocs] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
 
   // Profil courant
-  const [user, setUser] = useState(null);   // {email, role, sector...}
+  const [user, setUser] = useState(null);
   const [email, setEmail] = useState(getUserEmail());
   const [waitingProfile, setWaitingProfile] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState(null);
@@ -324,7 +345,7 @@ function ChatBox() {
     sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
   }, [messages]);
 
-  // Boot: health + /me (auto-crée profil si email connu via cookie/localStorage)
+  // Boot
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -340,7 +361,7 @@ function ChatBox() {
           setUser(r.user || null);
           if (r?.user?.email) {
             setEmail(r.user.email);
-            setUserEmail(r.user.email); // garde en cookie/localStorage
+            setUserEmail(r.user.email);
           }
         }
       } catch {}
@@ -363,14 +384,12 @@ function ChatBox() {
   function selectOnly(docId) { setSelectedDocs(new Set([docId])); }
   function clearSelection() { setSelectedDocs(new Set()); }
 
-  // -- cœur: appel ask et gestion needProfile
+  // cœur: ask + needProfile
   async function runAsk(q, docFilter = []) {
     setSending(true);
     try {
-      // Utilise la signature claire (mais la lib tolère aussi l'ancien ordre)
       const resp = await ask(q, k, docFilter, "auto", email);
 
-      // Profil manquant -> le backend le dit une seule fois; on affiche et on attend la réponse user
       if (resp?.needProfile) {
         setPendingQuestion(q);
         setWaitingProfile(true);
@@ -386,7 +405,7 @@ function ChatBox() {
       }));
       setMessages((m) => [...m, { role: "assistant", text, citations }]);
       setContexts(resp?.contexts || []);
-      setSuggestions(resp?.suggestions || []);
+      setSuggestions((resp?.suggestions || []).slice(0, 8));
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
     } finally {
@@ -394,7 +413,7 @@ function ChatBox() {
     }
   }
 
-  // Quand l'IA attend le profil: on essaie de le déduire et on enregistre, puis on rejoue la question initiale
+  // Profil via saisie
   async function tryCompleteProfileFrom(text) {
     const emailInline = detectEmailInline(text);
     let role = detectRole(text);
@@ -438,14 +457,12 @@ function ChatBox() {
     setInput("");
     setMessages((m) => [...m, { role: "user", text: q }]);
 
-    // 1) si on attend le profil, tenter de le déduire/enregistrer à partir de ce message
     if (waitingProfile) {
       const updated = await tryCompleteProfileFrom(q);
       if (updated) return;
       return;
     }
 
-    // 2) email inline ? (ex: "mon mail = x@y.com")
     const emailInline = detectEmailInline(q);
     if (emailInline && emailInline !== email) {
       setEmail(emailInline);
@@ -469,16 +486,19 @@ function ChatBox() {
     await runAsk(lastQ, Array.from(selectedDocs));
   }
 
-  async function handlePeek(c) { setViewerFile({ doc_id: c.doc_id, filename: c.filename }); }
+  async function handlePeek(c) {
+    setViewerFile({ doc_id: c.doc_id, filename: c.filename });
+    // best-effort pour la perso : “peek”
+    try { await openDoc(c.doc_id, { from: "peek" }); } catch {}
+  }
 
   async function handleOpen(c) {
-    // Vérifier la dispo côté serveur avant d’ouvrir
     const res = await checkFile(c.doc_id);
     if (!res.ok) {
       alert(`Impossible d’ouvrir le fichier : ${res.error || "inconnu"}`);
       return;
     }
-    try { await openDoc(c.doc_id, { from: "sidebar" }); } catch {}
+    try { await openDoc(c.doc_id, { from: "sidebar_open" }); } catch {}
     window.open(buildFileURL(c.doc_id), "_blank", "noopener");
   }
 
