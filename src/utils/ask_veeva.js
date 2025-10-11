@@ -69,8 +69,8 @@ const looksLikeEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(s || "")
 /**
  * ASK (RAG) — avec personnalisation.
  * Compat paramètres :
- *   - ancien usage (ce que certains appels front font) : ask(q, k, docFilter, email, "auto")
- *   - usage documenté :                                   ask(q, k, docFilter, "auto", email)
+ *   - ancien usage : ask(q, k, docFilter, email, "auto")
+ *   - usage documenté : ask(q, k, docFilter, "auto", email)
  * @param {string} question
  * @param {number} k
  * @param {string[]} docFilter
@@ -226,7 +226,7 @@ export async function addSynonym(term, alt_term, weight = 1.0) {
 
 /* ------------------------------ Viewer helpers ------------------------------ */
 
-/** URL pour ouvrir/télécharger l’original */
+/** URL brute (original) — utile si tu connais déjà l’ID et veux tenter l’original directement */
 export function buildFileURL(docId) {
   return `/api/ask-veeva/file/${docId}`;
 }
@@ -237,15 +237,31 @@ export function buildStreamURL(docId) {
 }
 
 /**
- * Vérifie rapidement si le fichier est accessible via l’endpoint dédié.
- * Retourne { ok, url?, mime?, filename?, error? }
+ * Vérifie la meilleure URL exploitable pour un doc (original ou preview).
+ * Retourne { ok, url?, mime?, existsOriginal?, canPreview?, error? }.
  */
 export async function checkFile(docId, timeoutMs = 8000) {
   try {
-    const res = await withTimeoutFetch(`/api/ask-veeva/file/${encodeURIComponent(docId)}/check`, { method: "GET" }, timeoutMs);
+    const res = await withTimeoutFetch(
+      `/api/ask-veeva/filemeta/${encodeURIComponent(docId)}`,
+      { method: "GET" },
+      timeoutMs
+    );
     const j = await tryJson(res);
-    if (res.ok && j?.ok) return { ok: true, url: j.url, mime: j.mime, filename: j.filename };
-    return { ok: false, error: j?.error || `HTTP ${res.status}` };
+    if (!res.ok || !j) {
+      return { ok: false, error: j?.error || `HTTP ${res.status}` };
+    }
+    if (j.ok) {
+      // url pointe soit vers /file/:id (original dispo), soit /preview/:id (fallback index)
+      return {
+        ok: true,
+        url: j.url || buildFileURL(docId),
+        mime: j.mime || null,
+        existsOriginal: !!j.existsOriginal,
+        canPreview: !!j.canPreview,
+      };
+    }
+    return { ok: false, error: j.error || "inconnu" };
   } catch (e) {
     return { ok: false, error: e?.message || String(e) };
   }
@@ -257,8 +273,10 @@ export async function checkFile(docId, timeoutMs = 8000) {
  */
 export async function openDoc(docId, extra = {}) {
   try {
-    await post("/api/ask-veeva/file/open", { doc_id: docId, from: extra?.from || "viewer" });
-  } catch { /* best-effort */ }
+    await logEvent({ type: "doc_opened", doc_id: docId, meta: extra || {} });
+  } catch {
+    // best-effort
+  }
 }
 
 /* ------------------------------ Email helpers (client) ------------------------------ */
