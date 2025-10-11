@@ -1,7 +1,5 @@
 // server_ask_veeva.js — Ask Veeva (sans S3, upload fractionné, RAG)
 // + Personalization + Auto-profile (poste/secteur) + /me
-// + SOP lookup strict + viewer fallback + file check + doc_opened
-// + anti-répétition même sujet (cache RAM TTL) + réponse plus directe
 // ESM + Node
 
 import express from "express";
@@ -131,7 +129,7 @@ app.use((req, _res, next) => {
 });
 
 // -----------------------------------------------------------------------------
-// Schéma (incluant Perso/Feedback/Synonymes) + index pgvector robustes
+// Schéma (incluant Perso/Feedback/Synonymes)
 // -----------------------------------------------------------------------------
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
@@ -216,7 +214,7 @@ async function ensureSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_events_user_idx ON askv_events(user_email, ts);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS askv_synonyms_term_idx ON askv_synonyms(term, weight DESC);`);
 
-  // Index vectoriel robuste (IVFFLAT -> fallback HNSW)
+  // ---- Index vectoriel robuste (IVFFLAT -> fallback HNSW) ----
   const IVF_LISTS = Number(process.env.ASK_VEEVA_IVF_LISTS || 100);
   const MAINT_WORK_MEM = String(process.env.ASK_VEEVA_MAINT_WORK_MEM || "128MB");
   try {
@@ -228,31 +226,40 @@ async function ensureSchema() {
       LIMIT 1
     `);
     if (!idx.length) {
-      try { await pool.query(`SET maintenance_work_mem = '${MAINT_WORK_MEM}'`); } catch {}
+      try { await pool.query(`SET maintenance_work_mem = '${MAINT_WORK_MEM}'`); } catch(e) {
+        console.warn(`[ask-veeva] SET maintenance_work_mem refusé: ${e?.message || e}`);
+      }
       try {
         await pool.query(`
           CREATE INDEX askv_chunks_embedding_idx
           ON askv_chunks USING ivfflat (embedding vector_cosine_ops)
           WITH (lists = ${IVF_LISTS})
         `);
+        console.log(`[ask-veeva] Index IVFFLAT créé (lists=${IVF_LISTS}).`);
       } catch (e) {
+        const code = e?.code || "";
         const msg = String(e?.message || "");
-        if (e?.code === "54000" || /memory required/i.test(msg)) {
+        const oom = code === "54000" || /memory required/i.test(msg);
+        if (oom) {
+          console.warn("[ask-veeva] IVFFLAT OOM → fallback HNSW");
           await pool.query(`
             CREATE INDEX askv_chunks_embedding_idx
             ON askv_chunks USING hnsw (embedding vector_cosine_ops)
             WITH (m = 16, ef_construction = 64)
           `);
+          console.log("[ask-veeva] Index HNSW créé (fallback).");
         } else {
-          console.error("[ask-veeva] index vectoriel échoué (non bloquant):", e);
+          console.error("[ask-veeva] Création index vectoriel échouée:", e);
         }
       }
     }
   } catch (e) {
-    console.error("[ask-veeva] check index vectoriel:", e);
+    console.error("[ask-veeva] Vérif/Création index vectoriel échouée:", e);
   }
 
-  try { await pool.query(`ANALYZE askv_chunks;`); } catch {}
+  try { await pool.query(`ANALYZE askv_chunks;`); } catch(e) {
+    console.warn("[ask-veeva] ANALYZE askv_chunks a échoué:", e?.message || e);
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -470,11 +477,6 @@ function toVectorLiteral(arr) {
     return Number.isFinite(v) ? v.toString() : "0";
   }).join(",") + "]";
 }
-function cosine(a, b) {
-  let dot = 0, na = 0, nb = 0;
-  for (let i = 0; i < a.length; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
-  return dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
-}
 
 // -----------------------------------------------------------------------------
 // Ingestion fichier
@@ -507,7 +509,7 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
     return { docId: rows[0].id, chunks: 0, skipped: true };
   }
 
-  // Si PDF scanné => parsed vide (TODO: OCR)
+  // ⚠️ si PDF scanné => parsed vide (TODO: OCR éventuel)
   if (!parsed || parsed.trim().length === 0) {
     const { rows } = await pool.query(
       `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
@@ -736,7 +738,7 @@ app.post("/api/ask-veeva/personalize", async (_req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// SEARCH
+// SEARCH + ASK
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/search", async (req, res) => {
   const t0 = Date.now();
@@ -814,6 +816,7 @@ const SOP_CODE_REGEXES = [
   /\bSOP[-\s]?(\d{5,7})\b/ig,
   /\bSOP[-\s]?([A-Z0-9][A-Z0-9-]{2,})\b/ig
 ];
+
 function extractSOPCodesFromText(text = "") {
   const found = [];
   for (const re of SOP_CODE_REGEXES) {
@@ -825,6 +828,7 @@ function extractSOPCodesFromText(text = "") {
   }
   return found;
 }
+
 function dedupBy(arr, keyFn) {
   const seen = new Set();
   const out = [];
@@ -833,22 +837,6 @@ function dedupBy(arr, keyFn) {
     if (!seen.has(k)) { seen.add(k); out.push(it); }
   }
   return out;
-}
-
-// --------- Anti-répétition (cache RAM par email + question) ------------------
-const ANSWER_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const LAST_CACHE = new Map(); // key: email|noemail + md5(question) -> { text, citations, contexts, ts, emb }
-function md5(s) { return crypto.createHash("md5").update(String(s)).digest("hex"); }
-function setCache(email, q, payload) {
-  const key = `${email || "noemail"}|${md5(q)}`;
-  LAST_CACHE.set(key, { ...payload, ts: Date.now() });
-}
-function getCache(email, q) {
-  const key = `${email || "noemail"}|${md5(q)}`;
-  const v = LAST_CACHE.get(key);
-  if (v && Date.now() - v.ts <= ANSWER_TTL_MS) return v;
-  LAST_CACHE.delete(key);
-  return null;
 }
 
 // -----------------------------------------------------------------------------
@@ -864,7 +852,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     const userEmail = safeEmail(req.userEmail);
     let user = userEmail ? await ensureUser(userEmail) : null;
 
-    // Auto-profil (sans bloquer la réponse)
+    // Auto-profil
     if (user && (!user.role || !user.sector)) {
       const candRole = detectRole(originalQuestion);
       const candSector = detectSector(originalQuestion);
@@ -879,7 +867,16 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
         );
         user = await getUserByEmail(userEmail);
       }
-      // ⚠️ on NE bloque plus : si manquant, on continue en “générique”
+      if (!user.role || !user.sector) {
+        const missing = !user.role && !user.sector
+          ? "ton poste (Qualité, EHS, Utilités, Packaging) puis ton secteur (SSOL, LIQ, Bulk, Autre)"
+          : (!user.role ? "ton poste (Qualité, EHS, Utilités, Packaging)" : "ton secteur (SSOL, LIQ, Bulk, Autre)");
+        return res.json({
+          ok: false,
+          needProfile: true,
+          question: `Avant de continuer, indique ${missing}. Tu peux répondre par exemple : « Packaging » puis « SSOL ».`
+        });
+      }
     }
 
     if (contextMode === "none") {
@@ -889,7 +886,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       );
       return res.json({
         ok: true,
-        text: `Mode sans contexte activé.\n\n${originalQuestion}`,
+        text: `Mode sans contexte activé. Je peux répondre de manière générale, mais pour des infos précises, active le contexte.\n\nQuestion: ${originalQuestion}`,
         citations: [],
         contexts: [],
       });
@@ -907,22 +904,11 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
 
     try { question = await expandQueryWithSynonyms(originalQuestion); } catch {}
 
-    // EMBEDDING de la question
-    const qEmb = (await embedBatch([question]))[0];
-    const qvec = toVectorLiteral(qEmb);
-
-    // Cache: même question par le même user dans 10 min -> renvoyer direct
-    const cached = getCache(userEmail, originalQuestion);
-    if (cached) {
-      await pool.query(
-        `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_cached',$2,$3)`,
-        [userEmail, originalQuestion, { ttl_ms: ANSWER_TTL_MS }]
-      ).catch(()=>{});
-      return res.json({ ok: true, ...cached });
-    }
-
     const isSOPLookup = SOP_LOOKUP_INTENT.test(originalQuestion) || GENERIC_SOP_TOKEN.test(originalQuestion);
     const kForQuery = isSOPLookup ? Math.min(k ?? 6, 6) : k;
+
+    const emb = (await embedBatch([question]))[0];
+    const qvec = toVectorLiteral(emb);
 
     const filterSQL = Array.isArray(docFilter) && docFilter.length
       ? `WHERE c.doc_id = ANY($3::uuid[])`
@@ -933,7 +919,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       `
       SELECT 
         d.id AS doc_id, d.filename, 
-        c.chunk_index, c.content, c.embedding,
+        c.chunk_index, c.content,
         1 - (c.embedding <=> $1::vector) AS score
       FROM public.askv_chunks c
       JOIN public.askv_documents d ON d.id = c.doc_id
@@ -963,19 +949,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       return { ...r, score: r.score * p + roleBias };
     }).sort((a,b)=> b.score - a.score);
 
-    // ---------- "Même sujet" : si très proche d'une Q précédente, on réduit le bruit
-    let sameTopic = false;
-    try {
-      const recentKey = `${userEmail || "noemail"}|last-emb`;
-      const prev = LAST_CACHE.get(recentKey);
-      if (prev && prev.emb && prev.ts && Date.now() - prev.ts < 10*60*1000) {
-        const sim = cosine(prev.emb, qEmb);
-        if (sim >= 0.94) sameTopic = true;
-      }
-      LAST_CACHE.set(recentKey, { emb: qEmb, ts: Date.now() });
-    } catch {}
-
-    // ------------------ BRANCHE LOOKUP STRICT (SOP) -------------------------
+    // Branche lookup SOP
     if (isSOPLookup) {
       const candidates = [];
       for (const r of rows.slice(0, Math.max(3, Math.min(10, kForQuery)))) {
@@ -996,8 +970,8 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       const uniq = dedupBy(candidates, x => x.code).sort((a,b)=> b.score - a.score);
       if (uniq.length === 0) {
         const shortDocs = dedupBy(rows, x => x.doc_id).slice(0, 2);
-        const text = `Je n’ai pas trouvé de numéro de SOP explicite dans les extraits les plus pertinents.
-Ouvrez ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour vérifier.`;
+        const text = `Je n’ai pas trouvé de numéro de SOP explicite dans le contexte le plus pertinent.
+Vous pouvez ouvrir ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour vérifier.`;
         const citations = shortDocs.map(d => ({
           doc_id: d.doc_id,
           filename: d.filename,
@@ -1011,21 +985,25 @@ Ouvrez ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour vérifier.`;
           chunks: [{ chunk_index: d.chunk_index, snippet: (d.content || "").slice(0, 400), score: Number(d.score) }]
         }));
 
-        const payload = { text, citations, contexts };
-        setCache(userEmail, originalQuestion, payload);
+        try {
+          await pool.query(
+            `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_issued',$2,$3)`,
+            [userEmail, originalQuestion, { k: kForQuery, docFilter, contextMode, intent: "lookup_sop", found: 0 }]
+          );
+          await pool.query(
+            `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
+            [userEmail, originalQuestion, text.length, Date.now() - t0, { citations: citations.length, intent: "lookup_sop" }]
+          );
+        } catch {}
 
-        await pool.query(
-          `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
-          [userEmail, originalQuestion, text.length, Date.now() - t0, { intent: "lookup_sop", found: 0 }]
-        ).catch(()=>{});
-
-        return res.json({ ok: true, ...payload });
+        return res.json({ ok: true, text, citations, contexts });
       }
 
       const best = uniq[0];
-      const extras = uniq.slice(1, sameTopic ? 1 : 3);
+      const extras = uniq.slice(1, 3);
       const text = extras.length
-        ? `Le numéro de la SOP est **${best.code}**.\nAutres possibles (à vérifier) : ${extras.map(e => `**${e.code}**`).join(", ")}.`
+        ? `Le numéro de la SOP est **${best.code}**.
+Autres possibles (à vérifier) : ${extras.map(e => `**${e.code}**`).join(", ")}.`
         : `Le numéro de la SOP est **${best.code}**.`;
 
       const mainRow = rows.find(r => r.doc_id === best.doc_id) || {};
@@ -1047,19 +1025,21 @@ Ouvrez ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour vérifier.`;
         }]
       }];
 
-      const payload = { text, citations, contexts };
-      setCache(userEmail, originalQuestion, payload);
+      try {
+        await pool.query(
+          `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_issued',$2,$3)`,
+          [userEmail, originalQuestion, { k: kForQuery, docFilter, contextMode, intent: "lookup_sop", found: uniq.length }]
+        );
+        await pool.query(
+          `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
+          [userEmail, originalQuestion, text.length, Date.now() - t0, { citations: citations.length, intent: "lookup_sop" }]
+        );
+      } catch {}
 
-      await pool.query(
-        `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
-        [userEmail, originalQuestion, text.length, Date.now() - t0, { intent: "lookup_sop", found: uniq.length }]
-      ).catch(()=>{});
-
-      return res.json({ ok: true, ...payload });
+      return res.json({ ok: true, text, citations, contexts });
     }
-    // ------------------ FIN BRANCHE LOOKUP STRICT ---------------------------
 
-    // Chemin RAG “explicatif” standard — prompt agressif “full info”
+    // RAG standard
     const contextBlocks = rows.map((r, i) => {
       const snippet = (r.content || "").slice(0, 2000);
       return `#${i + 1} — ${r.filename} (doc:${r.doc_id}, chunk:${r.chunk_index})\n${snippet}`;
@@ -1068,33 +1048,27 @@ Ouvrez ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour vérifier.`;
     const prompt = [
       { role: "system",
         content:
-          "Tu es Ask Veeva. Donne la réponse DIRECTE, EXHAUSTIVE et ACTIONNABLE en français. Pas de blabla. Structure en étapes numérotées si utile, ajoute des listes de contrôles, mesures, valeurs, prérequis et risques. Si l'info n'est pas dans le contexte, dis-le clairement et propose une voie de contournement. Ne repose pas de questions si tu peux déduire. Termine par les références entre crochets [NomFichier]." },
+          "Tu es Ask Veeva. Réponds de façon concise en français. Si l'info n'est pas dans le contexte, dis-le clairement. Structure si utile (listes courtes)." },
       { role: "user",
         content:
-          `QUESTION:\n${originalQuestion}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Utilise uniquement les informations du CONTEXTE.\n- Réponds de façon compacte mais complète.\n- N'ajoute PAS de nouveaux fichiers de référence si la même personne pose une question du même sujet dans la même session.\n- Références en fin de réponse : [NomFichier.pdf].` },
+          `QUESTION:\n${originalQuestion}\n\nCONTEXTE (extraits):\n${contextBlocks}\n\nConsignes:\n- Réponds uniquement avec les informations du contexte.\n- Cite les fichiers pertinents en fin de réponse sous la forme: [NomFichier.pdf].` },
     ];
 
     const out = await openai.chat.completions.create({
       model: ANSWER_MODEL,
       messages: prompt,
-      temperature: 0.15,
+      temperature: 0.2,
     });
 
-    let text = out.choices?.[0]?.message?.content || "";
+    const text = out.choices?.[0]?.message?.content || "";
 
-    // citations/contexts
-    let citations = rows.map((r) => ({
+    const citations = rows.map((r) => ({
       doc_id: r.doc_id,
       filename: r.filename,
       chunk_index: r.chunk_index,
       score: Number(r.score),
       snippet: (r.content || "").slice(0, 400),
     }));
-
-    if (sameTopic) {
-      // Si c'est la même thématique → eviter le spam : 1–2 citations max
-      citations = citations.slice(0, 2);
-    }
 
     const byDoc = new Map();
     for (const c of citations) {
@@ -1104,15 +1078,18 @@ Ouvrez ${shortDocs.map(d => `[${d.filename}]`).join(" et ")} pour vérifier.`;
     }
     const contexts = Array.from(byDoc.values());
 
-    const payload = { text, citations, contexts };
-    setCache(userEmail, originalQuestion, payload);
+    try {
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_issued',$2,$3)`,
+        [userEmail, originalQuestion, { k: kForQuery, docFilter, contextMode }]
+      );
+      await pool.query(
+        `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
+        [userEmail, originalQuestion, text.length, Date.now() - t0, { citations: citations.length }]
+      );
+    } catch {}
 
-    await pool.query(
-      `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
-      [userEmail, originalQuestion, text.length, Date.now() - t0, { k: kForQuery, sameTopic }]
-    ).catch(()=>{});
-
-    res.json({ ok: true, ...payload });
+    res.json({ ok: true, text, citations, contexts });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
@@ -1257,64 +1234,173 @@ app.post("/api/ask-veeva/chunked/abort", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// ROUTES fichier : open/check + servir l'original avec fallback STORE_DIR
+// ROUTES — FICHIERS : helpers + metadata + original + preview
 // -----------------------------------------------------------------------------
-app.post("/api/ask-veeva/file/open", async (req, res) => {
-  try {
-    const { doc_id, from } = req.body || {};
-    if (!doc_id) return res.status(400).json({ error: "doc_id requis" });
-    await pool.query(
-      `INSERT INTO askv_events(user_email,type,doc_id,meta) VALUES ($1,'doc_opened',$2,$3)`,
-      [safeEmail(req.userEmail), doc_id, { from: from || "unknown" }]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get("/api/ask-veeva/file/:id/check", async (req, res) => {
-  try {
-    const { rows } = await pool.query(`SELECT id, filename, path, mime FROM askv_documents WHERE id = $1`, [req.params.id]);
-    const doc = rows[0];
-    if (!doc) return res.status(404).json({ ok: false, error: "doc not found" });
-
-    let abs = doc.path;
-    if (!abs || !fs.existsSync(abs)) {
-      const alt = path.join(STORE_DIR, path.basename(doc.path || doc.filename || ""));
-      if (alt && fs.existsSync(alt)) abs = alt;
-      else return res.status(404).json({ ok: false, error: "file not on disk" });
+function sanitizeNameForStore(name = "") {
+  return String(name).replace(/[^\w.\-]+/g, "_");
+}
+async function tryFindInStoreDirByPattern(originalName) {
+  const targetSuffix = "_" + sanitizeNameForStore(originalName);
+  const files = await fsp.readdir(STORE_DIR).catch(() => []);
+  const candidates = files.filter(fn => fn.endsWith(targetSuffix));
+  if (!candidates.length) return null;
+  let best = null;
+  let bestTime = -1;
+  for (const fn of candidates) {
+    const p = path.join(STORE_DIR, fn);
+    const st = await fsp.stat(p).catch(() => null);
+    if (st && st.isFile() && st.mtimeMs > bestTime) {
+      best = p; bestTime = st.mtimeMs;
     }
-    res.json({ ok: true, url: `/api/ask-veeva/file/${doc.id}`, mime: doc.mime || null, filename: doc.filename });
+  }
+  return best;
+}
+
+// Métadonnées accès/preview
+app.get("/api/ask-veeva/filemeta/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, filename, path, mime FROM askv_documents WHERE id = $1`,
+      [req.params.id]
+    );
+    const doc = rows[0];
+    if (!doc) return res.status(404).json({ ok:false, error: "doc not found" });
+
+    // 1) chemin absolu
+    if (doc.path && fs.existsSync(doc.path)) {
+      return res.json({ ok: true, existsOriginal: true, canPreview: true, url: `/api/ask-veeva/file/${doc.id}`, mime: doc.mime || null });
+    }
+    // 2) STORE_DIR + basename
+    const base = path.basename(doc.path || "");
+    if (base) {
+      const alt = path.join(STORE_DIR, base);
+      if (fs.existsSync(alt)) {
+        return res.json({ ok: true, existsOriginal: true, canPreview: true, url: `/api/ask-veeva/file/${doc.id}`, mime: doc.mime || null });
+      }
+    }
+    // 3) pattern *_<filename_sanitized>
+    const guess = await tryFindInStoreDirByPattern(doc.filename);
+    if (guess && fs.existsSync(guess)) {
+      return res.json({ ok: true, existsOriginal: true, canPreview: true, url: `/api/ask-veeva/file/${doc.id}`, mime: doc.mime || null });
+    }
+    // 4) sinon preview à partir des chunks ?
+    const { rows: chunks } = await pool.query(
+      `SELECT 1 FROM askv_chunks WHERE doc_id = $1 LIMIT 1`,
+      [req.params.id]
+    );
+    if (chunks.length) {
+      return res.json({ ok: true, existsOriginal: false, canPreview: true, url: `/api/ask-veeva/preview/${doc.id}`, mime: "text/html" });
+    }
+    return res.json({ ok: false, existsOriginal: false, canPreview: false, error: "file not on disk" });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok:false, error: e.message });
   }
 });
 
+// Servir l'original avec fallbacks, sinon preview depuis les chunks
 app.get("/api/ask-veeva/file/:id", async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT id, filename, path, mime FROM askv_documents WHERE id = $1`, [req.params.id]);
+    const { rows } = await pool.query(
+      `SELECT id, filename, path, mime FROM askv_documents WHERE id = $1`,
+      [req.params.id]
+    );
     const doc = rows[0];
     if (!doc) return res.status(404).json({ error: "doc not found" });
 
-    let abs = doc.path;
-    const exists = abs && fs.existsSync(abs);
-    if (!exists) {
-      // Fallback si chemin obsolète
-      const alt = path.join(STORE_DIR, path.basename(doc.path || doc.filename || ""));
-      if (alt && fs.existsSync(alt)) {
-        abs = alt;
-      } else {
-        return res.status(404).json({ error: "file not on disk" });
+    const sendOriginal = (absPath) => {
+      if (doc.mime) res.type(doc.mime);
+      res.sendFile(path.resolve(absPath));
+    };
+
+    if (doc.path && fs.existsSync(doc.path)) {
+      return sendOriginal(doc.path);
+    }
+    const base = path.basename(doc.path || "");
+    if (base) {
+      const alt = path.join(STORE_DIR, base);
+      if (fs.existsSync(alt)) return sendOriginal(alt);
+    }
+    const guess = await tryFindInStoreDirByPattern(doc.filename);
+    if (guess && fs.existsSync(guess)) return sendOriginal(guess);
+
+    // preview fallback
+    const { rows: segs } = await pool.query(
+      `SELECT chunk_index, content FROM askv_chunks WHERE doc_id = $1 ORDER BY chunk_index ASC`,
+      [req.params.id]
+    );
+    if (segs.length) {
+      const html = [
+        "<!doctype html><html><head><meta charset='utf-8'>",
+        "<meta name='viewport' content='width=device-width, initial-scale=1'/>",
+        "<title>Preview – ", (doc.filename || "document"), "</title>",
+        "<style>",
+        "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;line-height:1.45;padding:16px;color:#111}",
+        "h1{font-size:18px;margin:0 0 12px} .chunk{margin:16px 0;padding:12px;border-left:4px solid #e5e7eb;background:#fafafa;white-space:pre-wrap;word-break:break-word}",
+        "</style></head><body>",
+        "<h1>Prévisualisation (texte indexé)</h1>",
+        "<div style='color:#6b7280;font-size:12px;margin-bottom:8px'>Original introuvable sur le disque. Ceci est une reconstruction textuelle à partir de l’index.</div>",
+        "<div style='color:#374151;font-size:13px;margin-bottom:8px'><strong>Fichier:</strong> ",
+        (doc.filename || doc.id),
+        "</div>"
+      ];
+      const esc = s => String(s || "").replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+      for (const s of segs) {
+        html.push("<div class='chunk'><div style='color:#9ca3af;font-size:12px'>#",
+                  String(s.chunk_index),
+                  "</div>", esc(s.content), "</div>");
       }
+      html.push("</body></html>");
+      res.setHeader("X-AskVeeva-Preview", "1");
+      res.type("html").send(html.join(""));
+      return;
     }
 
-    // inline pour faciliter la preview
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(doc.filename || path.basename(abs))}"`);
-    if (doc.mime) res.type(doc.mime);
-    res.sendFile(path.resolve(abs));
+    res.status(404).json({ error: "file not on disk" });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Page preview dédiée
+app.get("/api/ask-veeva/preview/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, filename FROM askv_documents WHERE id = $1`,
+      [req.params.id]
+    );
+    const doc = rows[0];
+    if (!doc) return res.status(404).send("Document inconnu.");
+
+    const { rows: segs } = await pool.query(
+      `SELECT chunk_index, content FROM askv_chunks WHERE doc_id = $1 ORDER BY chunk_index ASC`,
+      [req.params.id]
+    );
+    if (!segs.length) {
+      return res.status(404).send("Aucune donnée indexée disponible pour la prévisualisation.");
+    }
+
+    const esc = s => String(s || "").replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+    const html = [
+      "<!doctype html><html><head><meta charset='utf-8'>",
+      "<meta name='viewport' content='width=device-width, initial-scale=1'/>",
+      "<title>Preview – ", esc(doc.filename || doc.id), "</title>",
+      "<style>",
+      "body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Helvetica,Arial,sans-serif;line-height:1.45;padding:16px;color:#111}",
+      "h1{font-size:18px;margin:0 0 12px} .chunk{margin:16px 0;padding:12px;border-left:4px solid #e5e7eb;background:#fafafa;white-space:pre-wrap;word-break:break-word}",
+      "</style></head><body>",
+      "<h1>Prévisualisation (texte indexé)</h1>",
+      "<div style='color:#374151;font-size:13px;margin-bottom:8px'><strong>Fichier:</strong> ", esc(doc.filename || doc.id), "</div>"
+    ];
+    for (const s of segs) {
+      html.push("<div class='chunk'><div style='color:#9ca3af;font-size:12px'>#",
+                String(s.chunk_index),
+                "</div>", esc(s.content), "</div>");
+    }
+    html.push("</body></html>");
+    res.setHeader("X-AskVeeva-Preview", "1");
+    res.type("html").send(html.join(""));
+  } catch (e) {
+    res.status(500).send("Erreur preview: " + (e?.message || e));
   }
 });
 
