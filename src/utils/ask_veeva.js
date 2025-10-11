@@ -64,27 +64,25 @@ export const me = getCurrentUser;
 /* ------------------------------ ASK / SEARCH ------------------------------ */
 
 /** Détecte si une chaîne ressemble à un email (léger) */
-const looksLikeEmail = (s) => !!String(s || "").match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/i);
+const looksLikeEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(s || "").trim());
 
 /**
  * ASK (RAG) — avec personnalisation.
  * Compat paramètres :
- *   - ancien usage (ce que ton ChatBox envoie) : ask(q, k, docFilter, email, "auto")
- *   - usage documenté :                           ask(q, k, docFilter, "auto", email)
+ *   - ancien usage (ce que certains appels front font) : ask(q, k, docFilter, email, "auto")
+ *   - usage documenté :                                   ask(q, k, docFilter, "auto", email)
  * @param {string} question
  * @param {number} k
  * @param {string[]} docFilter
- * @param {string|"auto"|"none"|null} contextMode
+ * @param {"auto"|"none"|string|null} contextMode
  * @param {string|null} email
  */
 export async function ask(question, k = 6, docFilter = [], contextMode = "auto", email = null) {
   // Normalisation pour accepter les deux signatures
-  // Cas 1: 4e arg est un email => on swap
   if (looksLikeEmail(contextMode) && (email === null || email === undefined)) {
     email = contextMode;
     contextMode = "auto";
   }
-  // Cas 2: 5e arg est non email mais 4e absent → garde "auto"
   if (contextMode == null || contextMode === "") contextMode = "auto";
 
   const body = { question, k, docFilter, contextMode };
@@ -202,7 +200,7 @@ export async function initUser({ email, name, role, sector }) {
   return post("/api/ask-veeva/initUser", { email, name, role, sector });
 }
 
-/** Journalisation d'événement (doc ouvert, etc.) */
+/** Journalisation d'événement (générique) */
 export async function logEvent(event) {
   return post("/api/ask-veeva/logEvent", event);
 }
@@ -238,23 +236,29 @@ export function buildStreamURL(docId) {
   return `/api/ask-veeva/stream/${docId}`;
 }
 
-/** Vérifie rapidement si le fichier est accessible et renvoie {ok, error?} */
+/**
+ * Vérifie rapidement si le fichier est accessible via l’endpoint dédié.
+ * Retourne { ok, url?, mime?, filename?, error? }
+ */
 export async function checkFile(docId, timeoutMs = 8000) {
   try {
-    const res = await withTimeoutFetch(buildFileURL(docId), { method: "GET" }, timeoutMs);
-    if (res.ok) return { ok: true };
+    const res = await withTimeoutFetch(`/api/ask-veeva/file/${encodeURIComponent(docId)}/check`, { method: "GET" }, timeoutMs);
     const j = await tryJson(res);
+    if (res.ok && j?.ok) return { ok: true, url: j.url, mime: j.mime, filename: j.filename };
     return { ok: false, error: j?.error || `HTTP ${res.status}` };
   } catch (e) {
     return { ok: false, error: e?.message || String(e) };
   }
 }
 
-/** Helper pratique pour tracer l’ouverture d’un document côté analytics */
+/**
+ * Trace l’ouverture d’un document côté serveur (pour le boost perso).
+ * Non bloquant pour l’UX.
+ */
 export async function openDoc(docId, extra = {}) {
   try {
-    await logEvent({ type: "doc_opened", doc_id: docId, meta: extra });
-  } catch { /* pas bloquant pour l’UX */ }
+    await post("/api/ask-veeva/file/open", { doc_id: docId, from: extra?.from || "viewer" });
+  } catch { /* best-effort */ }
 }
 
 /* ------------------------------ Email helpers (client) ------------------------------ */
