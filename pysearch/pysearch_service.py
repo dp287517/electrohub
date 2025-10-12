@@ -1,8 +1,10 @@
 # pysearch/pysearch_service.py
-# FastAPI micro-service: Hybrid retrieval for Ask Veeva (v2)
+# FastAPI micro-service: Hybrid retrieval for Ask Veeva (v3)
 # - BM25 + TF-IDF over askv_chunks (content + filename)
-# - Strong normalization (N2000-2 / N20002 / 2000 2 -> N2000-2, SOP variants, etc.)
-# - Rules & fuzzy for codes (SOP / N2000 / IDR) + filename boosts (IDR, Vignetteuse, etc.)
+# - Strong normalization (N2000-2 / N20002 / 2000 2 -> N2000-2, SOP variants, IDR)
+# - Global vs Specific intent: query hints + filename heuristics
+# - SOP intent boost when asking for procedures
+# - Domain keyword boosts (IDR, Vignetteuse, Déchets, etc.)
 # - Optional Cross-Encoder reranking (Sentence-Transformers)
 # - Read-only Postgres (NEON_DATABASE_URL / DATABASE_URL)
 #
@@ -11,10 +13,10 @@
 #   POST /reindex
 #   POST /search {query,k,role,sector,rerank}
 #
-# Place this file at: pysearch/pysearch_service.py
 # Launch:
 #   uvicorn pysearch_service:app --host 0.0.0.0 --port 8088
-# Or via: python pysearch_service.py
+# Or:
+#   python pysearch_service.py
 
 import os, re, json, time
 from typing import List, Dict, Any, Optional
@@ -44,16 +46,22 @@ TOPK_DEFAULT = int(os.getenv("PYSEARCH_TOPK", "60"))
 
 # Small keyword boosts (domain words frequently tied to "good hits")
 KEYWORD_BOOSTS = {
-    "idr": 0.50,
+    "idr": 0.55,
     "format": 0.25,
-    "vignetteuse": 0.35,
+    "vignetteuse": 0.40,
     "neri": 0.20,
-    "notice": 0.15,
-    "réglages": 0.20,
-    "reglages": 0.20,
+    "notice": 0.18,
+    "réglages": 0.22,
+    "reglages": 0.22,
     "ssol": 0.20,
     "liq": 0.20,
-    "otri": 0.10,   # racine Otrivin (au cas où)
+    "otri": 0.12,     # racine Otrivin
+    "déchet": 0.45,   # déchet / déchets / dechets
+    "dechet": 0.45,
+    "waste": 0.35,
+    "procédure": 0.25,
+    "procedure": 0.25,
+    "sop": 0.30,
 }
 
 # ------------ Cross-Encoder (optional) ------------
@@ -80,11 +88,11 @@ if not PG_URL:
 RE_SOP_NUM = re.compile(r"\b(?:QD-?)?SOP[-\s]?(\d{4,7})\b", re.I)
 RE_SOP_FULL = re.compile(r"\b(?:QD-?)?SOP[-\s]?[A-Z0-9\-]{3,}\b", re.I)
 
-# N2000-2 family: capture many variants
-#   "N2000-2", "N 2000-2", "N20002", "2000 2", "20002", "N-2000 2", etc.
-RE_N2K_FLEX = re.compile(
-    r"\b(?:N\s*)?(?P<n1>[12]\d{3})\s*(?:-|_|\s)?\s*(?P<n2>[12])\b", re.I
-)
+# N2000-2 family: capture many variants  ("N2000-2", "N 2000-2", "N20002", "2000 2", "N-2000 2"...)
+RE_N2K_FLEX = re.compile(r"\b(?:N\s*)?(?P<n1>[12]\d{3})\s*(?:-|_|\s)?\s*(?P<n2>[12])\b", re.I)
+
+# Generic N####-# family (e.g., N1700-1) for broader normalization
+RE_NLINE = re.compile(r"\bN?\s*(?P<base>[12]\d{3})\s*(?:-|_|\s)?\s*(?P<suf>\d)\b", re.I)
 
 # IDR token presence (variants: "IDR", "I.D.R", "id r")
 RE_IDR = re.compile(r"\bI\.?D\.?R\.?\b", re.I)
@@ -100,10 +108,10 @@ def normalize_codes(s: str) -> str:
         return f"QD-SOP-{num}"
     t = RE_SOP_NUM.sub(_sop_pad, t)
 
-    # N2000-2: fold flexible forms to "N2000-2"
-    def _n2k(m):
-        return f"N{m.group('n1')}-{m.group('n2')}"
-    t = RE_N2K_FLEX.sub(_n2k, t)
+    # N####-# (inclut N2000-2) : fold flexible forms to "N####-#"
+    def _nline(m):
+        return f"N{m.group('base')}-{m.group('suf')}"
+    t = RE_NLINE.sub(_nline, t)
 
     # Normalize standalone "IDR" variants to "IDR"
     t = RE_IDR.sub("IDR", t)
@@ -132,15 +140,34 @@ def extract_codes(text: str) -> List[str]:
     for m in RE_SOP_FULL.findall(s):
         out.add(m)
 
-    # N2000-2 flex → canonical
-    for m in RE_N2K_FLEX.finditer(s):
-        out.add(f"N{m.group('n1')}-{m.group('n2')}")
+    # N####-# flex → canonical
+    for m in RE_NLINE.finditer(s):
+        out.add(f"N{m.group('base')}-{m.group('suf')}")
 
     # IDR presence
     if RE_IDR.search(s):
         out.add("IDR")
 
     return list(out)
+
+# Heuristique généralité/specificité des fichiers
+def is_general_filename(fn: str) -> bool:
+    f = norm(fn)
+    has_line_no = bool(re.search(r"\b(91\d{2}|n[12]\d{3}-\d|ligne|line|micro)\b", f))
+    is_sop = bool(re.search(r"\b(sop|qd-sop)\b", f))
+    has_global = bool(re.search(r"\b(proc(edure|e)|dechet|dechets|waste|global|site|usine|policy|policies)\b", f))
+    return (is_sop or has_global) and not has_line_no
+
+def is_specific_filename(fn: str) -> bool:
+    f = norm(fn)
+    return bool(re.search(r"\b(91\d{2}|n[12]\d{3}-\d|ligne|line|micro|neri|vignetteuse)\b", f))
+
+# Détecte l'intent global / SOP à partir de la requête
+def intent_from_query(q: str):
+    n = norm(q)
+    prefer_global = any(w in n for w in ["global", "generale", "générale", "procedure", "procédure", "site", "usine", "policy", "policies"])
+    prefer_sop = any(w in n for w in ["sop", "procédure", "procedure", "qd-sop"])
+    return prefer_global, prefer_sop
 
 # ------------ Data holders ------------
 DOCS: List[Dict[str, Any]] = []
@@ -187,10 +214,9 @@ def build_index():
 
     BM25 = BM25Okapi(TOKS) if len(DOCS) else None
 
-    # TF-IDF on content + filename; char-ngrams help with OCR/fuzzy
+    # TF-IDF on content + filename; word 1..3-grams
     corpus = [norm((r["content"] or "") + " " + (r["filename"] or "")) for r in DOCS]
     if corpus:
-        # 1..3 word-ngrams + char-ngrams improve robustness to hyphens/spaces
         VECT = TfidfVectorizer(
             analyzer="word",
             ngram_range=(1, 3),
@@ -216,9 +242,11 @@ def score_hybrid(q: str, k: int, role: Optional[str], sector: Optional[str]):
     if not DOCS:
         return []
 
+    # Normalize incoming query strongly before vectorization/scoring
     qn = norm(q)
     q_tokens = tokenize(q)
     q_codes = extract_codes(q)
+    prefer_global, prefer_sop = intent_from_query(q)
 
     # 1) BM25
     bm = np.zeros(len(DOCS))
@@ -240,7 +268,6 @@ def score_hybrid(q: str, k: int, role: Optional[str], sector: Optional[str]):
         inter = qset.intersection(ft)
         if inter:
             fname[i] += min(0.5, 0.12 * len(inter))
-        # domain words present in filename give bonus
         lowfname = " ".join(ft)
         for kw, b in KEYWORD_BOOSTS.items():
             if kw in lowfname:
@@ -253,7 +280,7 @@ def score_hybrid(q: str, k: int, role: Optional[str], sector: Optional[str]):
             continue
         for qc in q_codes:
             if qc in codes:
-                code_boost[i] += 1.2
+                code_boost[i] += 1.25
             else:
                 if any(fuzz.ratio(qc.lower(), c.lower()) >= 90 for c in codes):
                     code_boost[i] += 0.7
@@ -285,6 +312,22 @@ def score_hybrid(q: str, k: int, role: Optional[str], sector: Optional[str]):
             if slow and slow in fn:
                 rs[i] += 0.06
 
+    # 7) global/specific & SOP intent boosts based on filename heuristics
+    intent = np.zeros(len(DOCS))
+    for i, r in enumerate(DOCS):
+        fn = r["filename"] or ""
+        if prefer_global:
+            if is_general_filename(fn):
+                intent[i] += 0.35
+            if is_specific_filename(fn):
+                intent[i] -= 0.15
+        else:
+            # question semble spécifique: petit avantage aux spécifiques
+            if is_specific_filename(fn):
+                intent[i] += 0.12
+        if prefer_sop and re.search(r"\b(sop|qd-sop)\b", fn, re.I):
+            intent[i] += 0.25
+
     # z-normalize and combine
     def z(x):
         if x.size == 0:
@@ -293,7 +336,7 @@ def score_hybrid(q: str, k: int, role: Optional[str], sector: Optional[str]):
         s = np.std(x) or 1.0
         return (x - m) / s
 
-    S = 0.60 * z(bm) + 0.58 * z(tf) + fname + code_boost + 0.5 * fuzzy + rs
+    S = 0.60 * z(bm) + 0.58 * z(tf) + fname + code_boost + 0.5 * fuzzy + rs + intent
 
     kprime = min(max(k, 1), len(S))
     idx = np.argpartition(-S, kprime - 1)[:kprime]
@@ -367,7 +410,7 @@ def reindex():
 @app.post("/search")
 def search(req: SearchReq):
     ensure_index()
-    # Normalize *incoming* query strongly before vectorization
+    # Normalize *incoming* query strongly before retrieval
     q = req.query or ""
     q = normalize_codes(q)
 
