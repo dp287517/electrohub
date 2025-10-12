@@ -1,4 +1,4 @@
-// server_ask_veeva.js — Ask Veeva (hybrid retriever + topic memory + global/specific intent + SOP/IDR resolver)
+// server_ask_veeva.js — Ask Veeva (DeepSearch ready, hybrid retriever + topic memory + global/specific intent)
 // Node ESM
 
 import express from "express";
@@ -99,9 +99,13 @@ const PDF_CHUNK_SIZE = Math.max(600, Number(process.env.ASK_VEEVA_PDF_CHUNK_SIZE
 const PDF_CHUNK_OVERLAP = Math.max(0, Number(process.env.ASK_VEEVA_PDF_CHUNK_OVERLAP || 200));
 const CHUNK_PART_SIZE = Math.max(2, Number(process.env.ASK_VEEVA_CHUNK_MB || 10)) * 1024 * 1024;
 
-// Pysearch (FastAPI) — voir pysearch_service.py
+// Pysearch (FastAPI) — DeepSearch v4
 const PYSEARCH_URL = process.env.PYSEARCH_URL || "http://127.0.0.1:8088/search";
 const PYSEARCH_ON = process.env.PYSEARCH_OFF ? false : true;
+
+// Deep toggles and prompt behavior
+const DEEP_CLIENT_FORCE = (process.env.ASK_VEEVA_DEEP_FORCE || "1").toLowerCase() !== "0";
+const MMR_CLIENT_ON = (process.env.ASK_VEEVA_MMR_ON || "1").toLowerCase() !== "0";
 
 // -----------------------------------------------------------------------------
 // DB (Neon / Postgres)
@@ -157,12 +161,22 @@ function hasAny(s = "", kws = []) {
   return kws.some(k => n.includes(norm(k)));
 }
 
-// Variantes N2000-2 etc.
-function expandN2000(q) {
-  let out = q;
-  out = out.replace(/\bN\s?2000[-\s_]?2\b/gi, "N2000-2 N20002 N2000 2 N-2000-2");
-  out = out.replace(/\bN\s?1700[-\s_]?1\b/gi, "N1700-1 N17001 N1700 1 N-1700-1");
-  return out;
+// Language guess (light)
+const FR_HINTS = [" le ", " la ", " les ", " des ", " du ", " de ", " procédure", " déchets", " sécurité", " variateur"];
+const EN_HINTS = [" the ", " and ", " or ", " procedure", " checklist", " safety", " waste", " validation"];
+function guessLang(q) {
+  const n = ` ${norm(q)} `;
+  const fr = FR_HINTS.reduce((a, h) => a + (n.includes(h) ? 1 : 0), 0) + (/[éèàùâêîôûç]/i.test(q) ? 2 : 0);
+  const en = EN_HINTS.reduce((a, h) => a + (n.includes(h) ? 1 : 0), 0);
+  if (fr - en >= 2) return "fr";
+  if (en - fr >= 2) return "en";
+  return "fr";
+}
+
+// Variantes N####-#
+function expandNline(q) {
+  return q
+    .replace(/\bN?\s*([12]\d{3})\s*[-\s_]*([0-9])\b/gi, (_, a, b) => `N${a}-${b}`);
 }
 
 // -----------------------------------------------------------------------------
@@ -557,7 +571,7 @@ async function ingestConcreteFile(absPath, originalName, ext, bytes) {
       `INSERT INTO askv_documents (filename, path, mime, bytes) VALUES ($1,$2,$3,$4) RETURNING id`,
       [originalName, finalAbs, "text/plain", bytes || 0]
     );
-    return { docId: rows[0].id, chunks: 0, skipped: true };
+    return { docId: rows[0].id, chunks: 0, skipped: false };
   }
 
   const { rows } = await pool.query(
@@ -656,6 +670,12 @@ app.get("/api/ask-veeva/health", async (_req, res) => {
   try {
     const { rows: dc } = await pool.query(`SELECT COUNT(*)::int AS n FROM askv_chunks`);
     const mu = process.memoryUsage?.() || {};
+    // pysearch health (best-effort)
+    let pysearch = { url: PYSEARCH_URL, on: !!PYSEARCH_ON };
+    try {
+      const h = await fetch(PYSEARCH_URL.replace("/search","/health")).then(r=>r.json());
+      pysearch = { ...pysearch, ...h };
+    } catch {}
     res.json({
       ok: true,
       service: "ask-veeva",
@@ -665,8 +685,10 @@ app.get("/api/ask-veeva/health", async (_req, res) => {
       docCount: dc[0]?.n ?? 0,
       memory: { rss: mu.rss, heapTotal: mu.heapTotal, heapUsed: mu.heapUsed, external: mu.external },
       s3Configured: false,
+      deepClientForce: !!DEEP_CLIENT_FORCE,
+      mmrClientOn: !!MMR_CLIENT_ON,
       limits: { EMBED_BATCH, MAX_CONCURRENT_JOBS, PDF_CHUNK_SIZE, PDF_CHUNK_OVERLAP, CHUNK_PART_SIZE },
-      pysearch: { url: PYSEARCH_URL, on: !!PYSEARCH_ON }
+      pysearch
     });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -776,7 +798,7 @@ app.post("/api/ask-veeva/personalize", async (_req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// SEARCH (léger)
+// SEARCH (léger) — inchangé (titre + vec), utile pour autocomplete/fallback
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/search", async (req, res) => {
   const t0 = Date.now();
@@ -846,15 +868,35 @@ app.post("/api/ask-veeva/search", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
+// FIND-DOCS (nouveau) — “Vouliez-vous dire … ?” par filename/fuzzy
+// -----------------------------------------------------------------------------
+app.get("/api/ask-veeva/find-docs", async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.json({ ok: true, items: [] });
+    const n = `%${q.replace(/[%_]/g, "")}%`;
+    const { rows } = await pool.query(
+      `SELECT id AS doc_id, filename, mime FROM askv_documents
+       WHERE filename ILIKE $1
+       ORDER BY created_at DESC LIMIT 25`,
+      [n]
+    );
+    res.json({ ok: true, items: rows.map(r => ({ doc_id: r.doc_id, filename: r.filename, mime: r.mime })) });
+  } catch (e) {
+    res.status(500).json({ ok:false, error: e.message });
+  }
+});
+
+// -----------------------------------------------------------------------------
 // INTENT & TOPIC MEMORY
 // -----------------------------------------------------------------------------
 const THREADS = new Map();
 /*
   THREADS[threadId] = {
     lastTerms: string[],
-    topicHint: string,
-    preferGlobal: boolean,
-    preferSOP: boolean,
+    topicHint: string,           // e.g., "elimination des déchets"
+    preferGlobal: boolean,       // true => SOP/procédure cadre
+    preferSOP: boolean,          // true => SOP before WI/IDR
     lastAt: number
   }
 */
@@ -870,7 +912,7 @@ function updateThreadFromQuestion(t, q) {
   if (hasAny(n, ["global", "globale", "général", "generale", "générale", "overall", "corporate", "site", "usine"])) {
     t.preferGlobal = true;
   }
-  if (hasAny(n, ["microdoseur", "micro2", "9142", "n2000-2", "n20002", "9143", "ligne", "machine", "éri", "neri"])) {
+  if (hasAny(n, ["microdoseur", "micro2", "9142", "n2000-2", "n20002", "9143", "ligne", "machine", "éri", "neri", "vfd", "variable frequency drive"])) {
     t.preferGlobal = false;
   }
   // SOP / IDR hints
@@ -886,14 +928,14 @@ function updateThreadFromQuestion(t, q) {
     t.preferSOP = false;
   }
 
-  // Update topic hint (si vide)
+  // Update hints
   const kw = ts.filter(w => w.length >= 3).slice(0, 8).join(" ");
   if (!t.topicHint && kw) t.topicHint = kw;
   t.lastTerms = ts;
   t.lastAt = Date.now();
 }
 
-// Heuristiques généralité de fichier
+// Heuristique généralité de fichier
 function isGeneralFilename(fn = "") {
   const f = norm(fn);
   const hasLineNo = /\b(91\d{2}|N\d{3,4}[-\s_]*\d)\b/.test(f) || /\b(ligne|line|micro)\b/.test(f);
@@ -903,21 +945,10 @@ function isGeneralFilename(fn = "") {
 }
 function isSpecificFilename(fn = "") {
   const f = norm(fn);
-  return /\b(91\d{2}|N\d{3,4}[-\s_]*\d|ligne|micro)\b/.test(f);
-}
-function filenameScopePenalty(filename = "", preferGlobal = false) {
-  if (!filename) return 0;
-  const specificHints = ["microdoseur", "fenipic", "vignetteuse", "neri", "sirop", "otrivin", "lin_", "9142", "9136", "9135"];
-  const f = filename.toLowerCase();
-  const isSpecific = specificHints.some(k => f.includes(k));
-  if (preferGlobal && isSpecific) return -0.35;
-  if (!preferGlobal && !isSpecific) return -0.10; // léger
-  return 0;
+  return /\b(91\d{2}|N\d{3,4}[-\s_]*\d|ligne|line|micro)\b/.test(f);
 }
 
-// -----------------------------------------------------------------------------
-// SOP/IDR extraction + resolvers
-// -----------------------------------------------------------------------------
+// SOP/IDR extraction helpers
 const RE_SOP = /\b(?:QD-?)?SOP[-\s]?([A-Z0-9-]{3,})\b/ig;
 const RE_IDR = /\bIDR[-\s]?[A-Z0-9\-]{2,}\b/ig;
 function extractCodes(text = "", filename = "") {
@@ -930,76 +961,18 @@ function extractCodes(text = "", filename = "") {
   return [...set];
 }
 
-async function extractCodesFromDoc(docId, firstNChunks = 6) {
-  const { rows } = await pool.query(
-    `SELECT content FROM askv_chunks WHERE doc_id=$1 ORDER BY chunk_index ASC LIMIT $2`,
-    [docId, Math.max(3, firstNChunks)]
-  );
-  const found = new Set();
-  for (const r of rows) {
-    for (const c of extractCodes(r.content || "", "")) found.add(c);
-  }
-  return [...found];
-}
-
-async function resolveCodesWithTopic({ question, thread, type = "any" }) {
-  // 1) si la question contient déjà un code, renvoyer direct
-  const inline = extractCodes(question || "", "");
-  if (inline.length) return { codes: inline, from: "inline", file: null };
-
-  // 2) requête pysearch basée sur le topic
-  const topicQ = thread?.topicHint || "";
-  const base = type === "sop" ? "SOP" : type === "idr" ? "IDR" : "SOP IDR";
-  const q = [base, topicQ].filter(Boolean).join(" ").trim() || base;
-
-  let items = [];
-  try {
-    if (PYSEARCH_ON) {
-      const r = await fetch(PYSEARCH_URL, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ query: q, k: 60, role: null, sector: null, rerank: true })
-      }).then(x => x.ok ? x.json() : null).catch(()=>null);
-      if (r?.ok && Array.isArray(r.items)) items = r.items;
-    }
-  } catch {}
-
-  // 3) rescorer selon global/specific
-  const rescored = items.map(it => {
-    const adj = (it.score_final ?? it.score ?? 0) + filenameScopePenalty(it.filename || "", !!thread?.preferGlobal);
-    return { ...it, _score2: adj };
-  }).sort((a,b)=> b._score2 - a._score2);
-
-  // 4) extraire codes des top docs
-  for (const it of rescored.slice(0, 12)) {
-    const codes = await extractCodesFromDoc(it.doc_id, 6);
-    const filtered = type === "sop"
-      ? codes.filter(c => /^QD-?SOP/i.test(c))
-      : type === "idr"
-      ? codes.filter(c => /^IDR/i.test(c))
-      : codes;
-    if (filtered.length) {
-      return {
-        codes: filtered,
-        from: "doc",
-        file: { doc_id: it.doc_id, filename: it.filename }
-      };
-    }
-  }
-  return { codes: [], from: "none", file: null };
-}
-
 // -----------------------------------------------------------------------------
-// ASK (amélioré)
+// ASK (DeepSearch integration + language bridging)
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/ask", async (req, res) => {
   const t0 = Date.now();
   try {
-    let { question, k = undefined, docFilter = [], contextMode = "auto" } = req.body || {};
+    let { question, k = undefined, docFilter = [], contextMode = "auto", intent_hint, normalized_query } = req.body || {};
     if (!question || String(question).trim() === "") return res.status(400).json({ error: "question requise" });
 
     const originalQuestion = String(question);
-    const normalizedQ = expandN2000(originalQuestion);
+    const qLang = guessLang(originalQuestion);
+    const normalizedQ = expandNline(normalized_query || originalQuestion);
     const userEmail = safeEmail(req.userEmail);
     let user = userEmail ? await ensureUser(userEmail) : null;
 
@@ -1024,9 +997,12 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     const thread = getThread(req.threadId);
     updateThreadFromQuestion(thread, originalQuestion);
 
-    // Mode sans contexte (répond générique, on ne bloque pas)
+    // Mode sans contexte => réponse générique courte
     if (contextMode === "none") {
-      const text = `Mode sans contexte activé.\n\nQuestion: ${originalQuestion}\n\nJe peux répondre de manière générale, mais précise-moi si tu veux que je base la réponse sur les documents.`;
+      const text = (qLang === "en" ? 
+        `Contextless mode.\n\nQuestion: ${originalQuestion}\n\nI can answer generally; tell me if you want me to use indexed documents.` :
+        `Mode sans contexte activé.\n\nQuestion : ${originalQuestion}\n\nJe peux répondre de manière générale ; dis-moi si tu veux que je m’appuie sur les documents indexés.`
+      );
       await pool.query(
         `INSERT INTO askv_events(user_email,type,question,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4)`,
         [userEmail, originalQuestion, Date.now() - t0, { contextMode }]
@@ -1038,53 +1014,15 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
     if (!dc[0]?.n) {
       return res.json({
         ok: true,
-        text: "Aucun document n'est indexé pour le moment. Importez des fichiers puis relancez votre question.",
+        text: qLang === "en"
+          ? "No documents are indexed yet. Import files, then ask your question again."
+          : "Aucun document n'est indexé pour le moment. Importez des fichiers puis relancez votre question.",
         citations: [],
         contexts: [],
       });
     }
 
-    // -------- Detect “code” follow-up (SOP/IDR) et résoudre via topic --------
-    const askNumFollow = /\b(num(é|e)ro|ref(é|e)rence|code)\b/i.test(originalQuestion) &&
-                         /\b(sop|qd-sop|idr)\b/i.test(originalQuestion);
-    if (askNumFollow) {
-      const wantSOP = /\bsop|qd-sop\b/i.test(originalQuestion);
-      const type = wantSOP ? "sop" : "any";
-      const { codes, file, from } = await resolveCodesWithTopic({ question: originalQuestion, thread, type });
-      if (codes && codes.length) {
-        const main = codes[0];
-        const extras = codes.slice(1, 4);
-        const extraTxt = extras.length ? `\nAutres possibles : ${extras.map(c=>`**${c}**`).join(", ")}.` : "";
-
-        const citations = file ? [{
-          doc_id: file.doc_id,
-          filename: file.filename,
-          chunk_index: 0,
-          score: 1.0,
-          snippet: ""
-        }] : [];
-
-        const contexts = file ? [{
-          doc_id: file.doc_id,
-          filename: file.filename,
-          chunks: []
-        }] : [];
-
-        await pool.query(
-          `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
-          [userEmail, originalQuestion, (main+extraTxt).length, Date.now() - t0, { mode: "code_lookup_topic", from, codes: codes.slice(0,4) }]
-        ).catch(()=>{});
-
-        return res.json({
-          ok: true,
-          text: `Numéro de ${wantSOP ? "SOP" : "référence"} : **${main}**.${extraTxt}`,
-          citations,
-          contexts
-        });
-      }
-    }
-
-    // -------- Hybrid candidates from pysearch (best-effort) --------
+    // -------- Hybrid candidates from pysearch (DeepSearch v4) --------
     let hybrid = [];
     if (PYSEARCH_ON) {
       try {
@@ -1093,7 +1031,8 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
           k: 80,
           role: user?.role || null,
           sector: user?.sector || null,
-          rerank: true
+          rerank: true,
+          deep: DEEP_CLIENT_FORCE, // force deep pass from server unless client overrides
         };
         const r = await fetch(PYSEARCH_URL, {
           method: "POST",
@@ -1109,7 +1048,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
             score_h: it.score_final ?? it.score ?? 0
           }));
         }
-      } catch { /* fallback vector only */ }
+      } catch { /* fallback vector below */ }
     }
 
     // -------- Vector (pgvector) baseline --------
@@ -1199,7 +1138,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       merged = [...generics, ...specifics];
     }
 
-    // -------- If direct “numéro SOP/IDR” sans topic utilisable, plan B (extraction brute) --------
+    // -------- If question is about "numero SOP / IDR", answer with code(s) --------
     const askNum = /\b(num(é|e)ro|ref(é|e)rence|code)\b/i.test(originalQuestion) &&
                    /\b(sop|qd-sop|idr)\b/i.test(originalQuestion);
     if (askNum) {
@@ -1209,6 +1148,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
         const codes = extractCodes(m.snippet || "", m.filename || "");
         for (const c of codes) cand.push({ code: c, doc_id: m.doc_id, filename: m.filename, chunk_index: m.chunk_index, score: m.score });
       }
+      // distinct by code
       const seen = new Set();
       const uniq = cand.filter(c => (seen.has(c.code) ? false : (seen.add(c.code), true)))
                        .sort((a,b)=> b.score - a.score)
@@ -1218,8 +1158,12 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
         const best = uniq[0];
         const extras = uniq.slice(1);
         const text = extras.length
-          ? `Numéro probable : **${best.code}**.\nAutres possibles : ${extras.map(e => `**${e.code}**`).join(", ")}.`
-          : `Numéro probable : **${best.code}**.`;
+          ? (qLang === "en"
+              ? `Likely number: **${best.code}**.\nOther candidates: ${extras.map(e => `**${e.code}**`).join(", ")}.`
+              : `Numéro probable : **${best.code}**.\nAutres possibles : ${extras.map(e => `**${e.code}**`).join(", ")}.`)
+          : (qLang === "en"
+              ? `Likely number: **${best.code}**.`
+              : `Numéro probable : **${best.code}**.`);
 
         const citations = [{
           doc_id: best.doc_id,
@@ -1237,15 +1181,14 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
 
         await pool.query(
           `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
-          [userEmail, originalQuestion, text.length, Date.now() - t0, { mode: "code_lookup_fallback", codes: uniq.map(u=>u.code) }]
+          [userEmail, originalQuestion, text.length, Date.now() - t0, { mode: "code_lookup", codes: uniq.map(u=>u.code) }]
         ).catch(()=>{});
 
         return res.json({ ok: true, text, citations, contexts });
       }
     }
 
-    // -------- Build contexts & prompt for OpenAI --------
-    // Regroup by doc with top chunks
+    // -------- Build contexts & prompt --------
     const byDoc = new Map();
     for (const m of merged.slice(0, 24)) {
       const entry = byDoc.get(m.doc_id) || { doc_id: m.doc_id, filename: m.filename, chunks: [] };
@@ -1263,46 +1206,46 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       return `【${i+1}】 ${d.filename} (doc:${d.doc_id})\n${parts}`;
     }).join("\n\n================\n\n");
 
-    // Answer guardrails
     const scopeHint = thread.preferGlobal
-      ? "Ta réponse DOIT couvrir la procédure GENERALE (SOP cadre) et non un cas de ligne/machine. Si le contexte ne contient que des cas spécifiques, dis-le et propose le document cadre le plus proche."
-      : "Si la question est spécifique (ligne/machine), réponds avec ces détails. Sinon réponds avec la procédure générale si elle est présente.";
+      ? (qLang === "en"
+          ? "Your answer MUST cover the GENERAL procedure (site-wide SOP/policy) and not a per-line case. If context only has specific cases, say so and propose the closest overarching SOP/policy."
+          : "Ta réponse DOIT couvrir la procédure GÉNÉRALE (SOP/politiques de site) et non un cas de ligne/machine. Si le contexte ne contient que des cas spécifiques, dis-le et propose le document cadre le plus proche.")
+      : (qLang === "en"
+          ? "If the question is specific (line/machine), answer with those details. Otherwise prefer the general procedure when present."
+          : "Si la question est spécifique (ligne/machine), réponds avec ces détails. Sinon préfère la procédure générale si elle est présente.");
 
     const followHint = thread.topicHint
-      ? `Garde le même sujet tant qu’un changement explicite n’est pas détecté. Sujet courant: « ${thread.topicHint} »`
-      : "S’il n’y a pas de sujet courant, reste fidèle à la question.";
+      ? (qLang === "en"
+          ? `Stay on the same topic unless a clear switch is detected. Current topic: “${thread.topicHint}”.`
+          : `Garde le même sujet tant qu’un changement explicite n’est pas détecté. Sujet courant : « ${thread.topicHint} ».`)
+      : (qLang === "en"
+          ? "If there is no clear current topic, stick strictly to the question."
+          : "S’il n’y a pas de sujet courant, reste fidèle à la question.");
 
-    const prompt = [
-      { role: "system",
-        content:
-`Tu es Ask Veeva. Tu réponds en français, de manière concise et structurée.
-Règles:
-- NE réponds que depuis le CONTEXTE fourni; si l’info manque, dis-le clairement.
-- Priorité: ${thread.preferGlobal ? "procédure générale/SOP" : "procédure la plus pertinente"}.
-- Ne mélange PAS des thèmes sans lien (évite les glissements de sujet).
-- Termine par une courte liste de documents utilisés entre [crochets].`
-      },
-      { role: "user",
-        content:
-`QUESTION:
-${originalQuestion}
+    const langRule = (qLang === "en")
+      ? "Answer in ENGLISH even if documents are in French; keep original codes/titles as-is."
+      : "Réponds en FRANÇAIS même si les documents sont en anglais ; conserve les codes/titres originaux tels quels.";
 
-Contexte (extraits):
-${contextBlocks}
+    const systemPrompt = (qLang === "en")
+      ? `You are Ask Veeva. You answer concisely and structurally.\nRules:\n- ONLY use the given CONTEXT; if missing, say so explicitly.\n- ${langRule}\n- Priority: ${thread.preferGlobal ? "general SOP/policy" : "most relevant procedure"}.\n- Do NOT drift topics.\n- End with a short list of used documents in [brackets].`
+      : `Tu es Ask Veeva. Tu réponds en français, de manière concise et structurée.\nRègles :\n- NE réponds que depuis le CONTEXTE fourni ; si l’info manque, dis-le clairement.\n- ${langRule}\n- Priorité : ${thread.preferGlobal ? "procédure générale/SOP" : "procédure la plus pertinente"}.\n- Ne dérive pas de sujet.\n- Termine par une courte liste de documents utilisés entre [crochets].`;
 
-Contraintes:
-- ${scopeHint}
-- ${followHint}
-- Si plusieurs documents se contredisent, signale les incohérences et cite les passages concernés.` }
-    ];
+    const userPrompt = (qLang === "en")
+      ? `QUESTION:\n${originalQuestion}\n\nContext (snippets):\n${contextBlocks}\n\nConstraints:\n- ${scopeHint}\n- ${followHint}\n- If documents disagree, flag inconsistencies and cite the relevant snippets.`
+      : `QUESTION :\n${originalQuestion}\n\nContexte (extraits) :\n${contextBlocks}\n\nContraintes :\n- ${scopeHint}\n- ${followHint}\n- Si plusieurs documents se contredisent, signale les incohérences et cite les passages concernés.`;
 
     const out = await openai.chat.completions.create({
       model: ANSWER_MODEL,
-      messages: prompt,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
       temperature: 0.2,
     });
 
-    const text = out.choices?.[0]?.message?.content || "Désolé, je ne trouve pas l’information dans le contexte fourni.";
+    const text = out.choices?.[0]?.message?.content || (qLang === "en"
+      ? "Sorry, I can't find this information in the provided context."
+      : "Désolé, je ne trouve pas cette information dans le contexte fourni.");
 
     // Citations simplifiées
     const citations = merged.slice(0, 8).map((r) => ({
@@ -1315,7 +1258,7 @@ Contraintes:
 
     await pool.query(
       `INSERT INTO askv_events(user_email,type,question,meta) VALUES ($1,'ask_issued',$2,$3)`,
-      [userEmail, originalQuestion, { preferGlobal: thread.preferGlobal, preferSOP: thread.preferSOP }]
+      [userEmail, originalQuestion, { preferGlobal: thread.preferGlobal, preferSOP: thread.preferSOP, lang: qLang }]
     ).catch(()=>{});
     await pool.query(
       `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
