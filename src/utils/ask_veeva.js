@@ -5,7 +5,7 @@ import { get, post } from "../lib/api.js";
  * Small fetch helpers
  * ------------------------------------------------------------------ */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const UI_VERSION = "fe-2025-10-12.2"; // bump pour DeepSearch + lang hints
+const UI_VERSION = "fe-2025-10-12.3"; // bump pour DeepSearch++ (align 'deep')
 
 async function withTimeoutFetch(input, init = {}, ms = 30000) {
   const ctrl = new AbortController();
@@ -112,8 +112,8 @@ export const me = getCurrentUser;
  * Signatures compatibles:
  *   - historique: ask(q, k, docFilter, email, "auto")
  *   - actuelle:   ask(q, k, docFilter, "auto", email)
- *   - étendue:    ask(q, k, docFilter, "auto", email, { forceDeep, rerank, mmr, language })
- *   - étendue bis:ask(q, k, docFilter, "auto", { forceDeep, ... })  // email omis
+ *   - étendue:    ask(q, k, docFilter, "auto", email, { deep, rerank, mmr, language })
+ *   - étendue bis:ask(q, k, docFilter, "auto", { deep, ... })  // email omis
  *
  * Les champs "extra" sont des HINTS: le backend fonctionne même s'ils sont ignorés.
  */
@@ -145,15 +145,15 @@ export async function ask(
     k,
     docFilter,
     contextMode,
-    // hints côté client (le backend les ignore si non gérés)
+    // hints côté client (le backend les ignore s'il n'en a pas besoin)
     ui_version: UI_VERSION,
     intent_hint: guessIntent(question),
-    preferred_language: lang,        // NEW: pont FR↔EN côté serveur
+    preferred_language: lang,               // hint FR↔EN côté serveur
     normalized_query: normalized !== question ? normalized : undefined,
-    // DeepSearch hints (non bloquants)
-    force_deep: extra.forceDeep ?? true,
+    // DeepSearch hints (doivent correspondre à ce que lit le backend)
+    deep: extra.deep ?? true,               // IMPORTANT: aligné avec le backend
     rerank: extra.rerank ?? true,
-    mmr: extra.mmr ?? true
+    mmr: extra.mmr ?? true                  // le backend peut l'ignorer, hint seulement
   };
   if (email && looksLikeEmail(email)) body.email = email;
 
@@ -169,7 +169,7 @@ export async function askDescribe(target, opts = {}) {
     ? `Décris-moi précisément les éléments principaux, étapes, IPC et tolérances de: ${target}`
     : `Décris-moi précisément le document demandé.`;
   return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null, {
-    forceDeep: opts.forceDeep ?? true,
+    deep: opts.deep ?? true,
     rerank: opts.rerank ?? true,
     mmr: opts.mmr ?? true,
     language: opts.language
@@ -179,7 +179,7 @@ export async function askDescribe(target, opts = {}) {
 export async function askAnalyze(topic, opts = {}) {
   const q = `Compare et détecte les incohérences/contradictions sur: ${topic}. Donne recommandations actionnables.`;
   return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null, {
-    forceDeep: opts.forceDeep ?? true,
+    deep: opts.deep ?? true,
     rerank: opts.rerank ?? true,
     mmr: opts.mmr ?? true,
     language: opts.language
@@ -304,7 +304,7 @@ export async function logEvent(event) {
 /** Envoie un feedback sur une réponse IA (email facultatif) */
 export async function sendFeedback({ question, doc_id, useful, note, email = null }) {
   const body = { question, doc_id, useful, note };
-  if (email && looksLikeEmail(email)) body.user_email = email;
+  if (email && looksLikeEmail(email)) body.user_email = email; // toléré côté serveur (best-effort)
   return post("/api/ask-veeva/feedback", body);
 }
 
