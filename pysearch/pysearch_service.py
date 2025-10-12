@@ -1,35 +1,22 @@
-# pysearch_service.py
 # pysearch/pysearch_service.py
-# FastAPI micro-service: Hybrid retrieval for Ask Veeva
-# - BM25 + TF-IDF over askv_chunks (joined to askv_documents.filename)
-# - Rules for codes (SOP / N2000-2 / IDR) + fuzzy on filenames
-# - Optional cross-encoder reranking (Sentence-Transformers)
-# - Read-only Postgres access (NEON_DATABASE_URL / DATABASE_URL)
+# FastAPI micro-service: Hybrid retrieval for Ask Veeva (v2)
+# - BM25 + TF-IDF over askv_chunks (content + filename)
+# - Strong normalization (N2000-2 / N20002 / 2000 2 -> N2000-2, SOP variants, etc.)
+# - Rules & fuzzy for codes (SOP / N2000 / IDR) + filename boosts (IDR, Vignetteuse, etc.)
+# - Optional Cross-Encoder reranking (Sentence-Transformers)
+# - Read-only Postgres (NEON_DATABASE_URL / DATABASE_URL)
 #
 # Endpoints:
-#   GET  /health              -> status + stats
-#   POST /reindex             -> rebuild in-memory indices
-#   POST /search {query,k}    -> hybrid search (+ optional rerank)
+#   GET  /health
+#   POST /reindex
+#   POST /search {query,k,role,sector,rerank}
 #
-# Env vars:
-#   NEON_DATABASE_URL or DATABASE_URL    : Postgres URL
-#   PYSEARCH_PORT (default 8088)
-#   PYSEARCH_HOST (default 0.0.0.0)
-#   PYSEARCH_TOPK (default 60)           : how many items to return by default
-#   PYSEARCH_RERANK (default 1)          : 1 = enable cross-encoder rerank, 0 = disabled
-#   PYSEARCH_RERANK_MODEL                : cross-encoder model name
-#       (default "cross-encoder/ms-marco-MiniLM-L-6-v2")
-#   PYSEARCH_RERANK_CAND (default 120)   : first N candidates to rerank
-#   PYSEARCH_RERANK_KEEP (default 60)    : keep top K after rerank
-#   PYSEARCH_DEVICE (cpu|cuda)           : default auto
-#
+# Place this file at: pysearch/pysearch_service.py
 # Launch:
-#   export NEON_DATABASE_URL="postgres://user:pass@host/db?sslmode=require"
 #   uvicorn pysearch_service:app --host 0.0.0.0 --port 8088
-#
-# First run: POST /reindex (or enable auto at service start below)
+# Or via: python pysearch_service.py
 
-import os, re, json, time, math
+import os, re, json, time
 from typing import List, Dict, Any, Optional
 
 from fastapi import FastAPI
@@ -46,22 +33,38 @@ from rank_bm25 import BM25Okapi
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 
-# --- Cross-encoder (optional) ---
+# ------------ Config / env ------------
 RERANK_ENABLED = os.getenv("PYSEARCH_RERANK", "1").strip() not in ("0","false","False","no")
 RERANK_MODEL_NAME = os.getenv("PYSEARCH_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 RERANK_CAND = int(os.getenv("PYSEARCH_RERANK_CAND", "120"))
 RERANK_KEEP = int(os.getenv("PYSEARCH_RERANK_KEEP", "60"))
 
+PG_URL = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
+TOPK_DEFAULT = int(os.getenv("PYSEARCH_TOPK", "60"))
+
+# Small keyword boosts (domain words frequently tied to "good hits")
+KEYWORD_BOOSTS = {
+    "idr": 0.50,
+    "format": 0.25,
+    "vignetteuse": 0.35,
+    "neri": 0.20,
+    "notice": 0.15,
+    "réglages": 0.20,
+    "reglages": 0.20,
+    "ssol": 0.20,
+    "liq": 0.20,
+    "otri": 0.10,   # racine Otrivin (au cas où)
+}
+
+# ------------ Cross-Encoder (optional) ------------
 ce_model = None
-ce_device = None
 if RERANK_ENABLED:
     try:
         import torch
         from sentence_transformers import CrossEncoder
         dev = os.getenv("PYSEARCH_DEVICE")
-        if dev not in ("cpu","cuda"):
+        if dev not in ("cpu", "cuda"):
             dev = "cuda" if torch.cuda.is_available() else "cpu"
-        ce_device = dev
         ce_model = CrossEncoder(RERANK_MODEL_NAME, device=dev)
         print(f"[pysearch] Cross-encoder loaded: {RERANK_MODEL_NAME} on {dev}")
     except Exception as e:
@@ -69,55 +72,87 @@ if RERANK_ENABLED:
         ce_model = None
         RERANK_ENABLED = False
 
-PG_URL = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
 if not PG_URL:
     print("[pysearch] WARN: no Postgres URL in NEON_DATABASE_URL/DATABASE_URL")
 
-TOPK_DEFAULT = int(os.getenv("PYSEARCH_TOPK", "60"))
+# ------------ Patterns / Normalization ------------
+# SOP: QD-SOP-038904 / SOP-038904 / SOP 38904 …
+RE_SOP_NUM = re.compile(r"\b(?:QD-?)?SOP[-\s]?(\d{4,7})\b", re.I)
+RE_SOP_FULL = re.compile(r"\b(?:QD-?)?SOP[-\s]?[A-Z0-9\-]{3,}\b", re.I)
 
-# ---------- Code extractors ----------
-RE_SOP = re.compile(r"\b(?:QD-?)?SOP[-\s]?([A-Z0-9-]{3,})\b", re.I)
-RE_N2000 = re.compile(r"\bN\s?2000[\-_ ]?[-_ ]?2[\-_ ]?[A-Z0-9\-]{2,}\b", re.I)
-RE_IDR = re.compile(r"\bIDR[-_ ]?[A-Z0-9\-]{2,}\b", re.I)
+# N2000-2 family: capture many variants
+#   "N2000-2", "N 2000-2", "N20002", "2000 2", "20002", "N-2000 2", etc.
+RE_N2K_FLEX = re.compile(
+    r"\b(?:N\s*)?(?P<n1>[12]\d{3})\s*(?:-|_|\s)?\s*(?P<n2>[12])\b", re.I
+)
 
-def extract_codes(text: str) -> List[str]:
-    s = text or ""
-    out = set()
-    for r in (RE_SOP, RE_N2000, RE_IDR):
-        for m in r.findall(s):
-            if isinstance(m, tuple):
-                for x in m:
-                    if x: out.add(str(x))
-            else:
-                out.add(str(m))
-    # full matches (with prefixes)
-    for r in (RE_SOP, RE_N2000, RE_IDR):
-        for m in r.finditer(s):
-            out.add(m.group(0))
-    return list(out)
+# IDR token presence (variants: "IDR", "I.D.R", "id r")
+RE_IDR = re.compile(r"\bI\.?D\.?R\.?\b", re.I)
 
-# ---------- Normalization / tokenization ----------
+def normalize_codes(s: str) -> str:
+    """Map common variants to canonical forms."""
+    t = s
+
+    # SOP: ensure canonical QD-SOP-XXXXXX when a pure number is seen with SOP
+    def _sop_pad(m):
+        num = m.group(1)
+        num = num.zfill(6) if len(num) <= 6 else num
+        return f"QD-SOP-{num}"
+    t = RE_SOP_NUM.sub(_sop_pad, t)
+
+    # N2000-2: fold flexible forms to "N2000-2"
+    def _n2k(m):
+        return f"N{m.group('n1')}-{m.group('n2')}"
+    t = RE_N2K_FLEX.sub(_n2k, t)
+
+    # Normalize standalone "IDR" variants to "IDR"
+    t = RE_IDR.sub("IDR", t)
+
+    return t
+
 def norm(s: str) -> str:
     s = s or ""
     s = s.replace("\u00A0", " ")
+    s = normalize_codes(s)
     s = unidecode(s.lower())
-    return re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 def tokenize(s: str) -> List[str]:
     return re.findall(r"[a-z0-9\-_/\.]+", norm(s))
 
-# ---------- Data holders ----------
-DOCS: List[Dict[str, Any]] = []       # each: {chunk_id, doc_id, filename, chunk_index, content}
-TOKS: List[List[str]] = []            # tokenized content
-FILEN_TOKS: List[List[str]] = []      # filename tokens
-CODES: List[List[str]] = []           # extracted codes per doc
+# Extract codes from text+filename for boosting
+def extract_codes(text: str) -> List[str]:
+    s = text or ""
+    out = set()
+
+    # SOP numbers & full
+    for m in RE_SOP_NUM.findall(s):
+        out.add(f"QD-SOP-{str(m).zfill(6)}")
+    for m in RE_SOP_FULL.findall(s):
+        out.add(m)
+
+    # N2000-2 flex → canonical
+    for m in RE_N2K_FLEX.finditer(s):
+        out.add(f"N{m.group('n1')}-{m.group('n2')}")
+
+    # IDR presence
+    if RE_IDR.search(s):
+        out.add("IDR")
+
+    return list(out)
+
+# ------------ Data holders ------------
+DOCS: List[Dict[str, Any]] = []
+TOKS: List[List[str]] = []
+FILEN_TOKS: List[List[str]] = []
+CODES: List[List[str]] = []
 
 BM25: Optional[BM25Okapi] = None
 VECT: Optional[TfidfVectorizer] = None
 TFIDF = None
-IDMAP: Dict[int, int] = {}            # chunk_id -> row index
 
-# ---------- DB helpers ----------
+# ------------ DB helpers ------------
 def db_query(sql: str, params=()):
     conn = psycopg2.connect(PG_URL)
     try:
@@ -136,22 +171,32 @@ def load_chunks():
     """)
     return rows
 
-# ---------- Indexing ----------
+# ------------ Indexing ------------
 def build_index():
-    global DOCS, TOKS, FILEN_TOKS, CODES, BM25, VECT, TFIDF, IDMAP
+    global DOCS, TOKS, FILEN_TOKS, CODES, BM25, VECT, TFIDF
     t0 = time.time()
+
     rows = load_chunks()
     DOCS = rows
-    IDMAP = {r["chunk_id"]: i for i, r in enumerate(DOCS)}
+
     TOKS = [tokenize(r["content"] or "") for r in DOCS]
     FILEN_TOKS = [tokenize(r["filename"] or "") for r in DOCS]
+
+    # Extract codes on (content + filename) at once
     CODES = [extract_codes((r["content"] or "") + " " + (r["filename"] or "")) for r in DOCS]
+
     BM25 = BM25Okapi(TOKS) if len(DOCS) else None
 
-    # TF-IDF over content + filename (1..3-grams)
+    # TF-IDF on content + filename; char-ngrams help with OCR/fuzzy
     corpus = [norm((r["content"] or "") + " " + (r["filename"] or "")) for r in DOCS]
     if corpus:
-        VECT = TfidfVectorizer(ngram_range=(1,3), min_df=2, max_df=0.95)
+        # 1..3 word-ngrams + char-ngrams improve robustness to hyphens/spaces
+        VECT = TfidfVectorizer(
+            analyzer="word",
+            ngram_range=(1, 3),
+            min_df=2,
+            max_df=0.95,
+        )
         TFIDF = VECT.fit_transform(corpus)
     else:
         VECT = None
@@ -166,8 +211,8 @@ def ensure_index():
         return build_index()
     return {"docs": len(DOCS), "secs": 0.0}
 
-# ---------- Scoring ----------
-def score_hybrid(q: str, k: int, role: str|None, sector: str|None):
+# ------------ Scoring ------------
+def score_hybrid(q: str, k: int, role: Optional[str], sector: Optional[str]):
     if not DOCS:
         return []
 
@@ -180,64 +225,78 @@ def score_hybrid(q: str, k: int, role: str|None, sector: str|None):
     if BM25:
         bm = np.array(BM25.get_scores(q_tokens))
 
-    # 2) TF-IDF dot (approx cosine)
+    # 2) TF-IDF dot
     tf = np.zeros(len(DOCS))
     if TFIDF is not None and VECT is not None:
         qvec = VECT.transform([qn])
         tf = (TFIDF @ qvec.T).toarray().ravel()
 
-    # 3) filename token overlap
+    # 3) filename token overlap + domain keyword boosts
     fname = np.zeros(len(DOCS))
     qset = set(q_tokens)
     for i, ft in enumerate(FILEN_TOKS):
-        if not ft: continue
+        if not ft:
+            continue
         inter = qset.intersection(ft)
         if inter:
-            fname[i] = min(0.4, 0.1 * len(inter))
+            fname[i] += min(0.5, 0.12 * len(inter))
+        # domain words present in filename give bonus
+        lowfname = " ".join(ft)
+        for kw, b in KEYWORD_BOOSTS.items():
+            if kw in lowfname:
+                fname[i] += b
 
     # 4) code boosts (exact/fuzzy)
     code_boost = np.zeros(len(DOCS))
     for i, codes in enumerate(CODES):
-        if not codes: continue
+        if not codes:
+            continue
         for qc in q_codes:
             if qc in codes:
-                code_boost[i] += 1.0
+                code_boost[i] += 1.2
             else:
                 if any(fuzz.ratio(qc.lower(), c.lower()) >= 90 for c in codes):
-                    code_boost[i] += 0.6
+                    code_boost[i] += 0.7
 
-    # 5) fuzzy query vs filename
+    # 5) fuzzy query vs filename (partial ratio)
     fuzzy = np.zeros(len(DOCS))
-    if len(qn) >= 6:
+    if len(qn) >= 5:
         for i, r in enumerate(DOCS):
             f = r["filename"] or ""
-            if not f: continue
+            if not f:
+                continue
             sc = fuzz.partial_ratio(qn, norm(f))
-            if sc >= 90:
-                fuzzy[i] = 0.35
-            elif sc >= 80:
-                fuzzy[i] = 0.2
+            if sc >= 92:
+                fuzzy[i] = 0.45
+            elif sc >= 84:
+                fuzzy[i] = 0.25
+            elif sc >= 78:
+                fuzzy[i] = 0.12
 
-    # 6) role/sector bias
+    # 6) role/sector bias (soft)
     rs = np.zeros(len(DOCS))
     rlow = (role or "").lower()
     slow = (sector or "").lower()
     if rlow or slow:
         for i, r in enumerate(DOCS):
             fn = (r["filename"] or "").lower()
-            if rlow and rlow in fn: rs[i] += 0.05
-            if slow and slow in fn: rs[i] += 0.05
+            if rlow and rlow in fn:
+                rs[i] += 0.06
+            if slow and slow in fn:
+                rs[i] += 0.06
 
-    # weighted sum with z-normalization
+    # z-normalize and combine
     def z(x):
-        if x.size == 0: return x
-        m = np.mean(x); s = np.std(x) or 1.0
+        if x.size == 0:
+            return x
+        m = np.mean(x)
+        s = np.std(x) or 1.0
         return (x - m) / s
-    S = 0.60*z(bm) + 0.55*z(tf) + fname + code_boost + 0.5*fuzzy + rs
 
-    # top-k indices by score
+    S = 0.60 * z(bm) + 0.58 * z(tf) + fname + code_boost + 0.5 * fuzzy + rs
+
     kprime = min(max(k, 1), len(S))
-    idx = np.argpartition(-S, kprime-1)[:kprime]
+    idx = np.argpartition(-S, kprime - 1)[:kprime]
     idx = idx[np.argsort(-S[idx])]
 
     out = []
@@ -251,44 +310,36 @@ def score_hybrid(q: str, k: int, role: str|None, sector: str|None):
             "chunk_index": r["chunk_index"],
             "score": float(S[i]),
             "codes": CODES[i],
-            "snippet": content[:550]
+            "snippet": content[:700]
         })
     return out
 
-# ---------- Cross-encoder reranking (optional) ----------
-def rerank_with_cross_encoder(query: str, items: List[Dict[str,Any]], keep: int) -> List[Dict[str,Any]]:
+# ------------ Cross-Encoder rerank ------------
+def rerank_with_cross_encoder(query: str, items: List[Dict[str, Any]], keep: int) -> List[Dict[str, Any]]:
     if not RERANK_ENABLED or ce_model is None or not items:
         return items[:keep]
 
-    # We rerank over the best RERANK_CAND by current score (hybrid)
     pool = items[:min(len(items), RERANK_CAND)]
     pairs = [(query, f"{it['filename']} — {it.get('snippet','')}") for it in pool]
 
-    # batch predict (Cross-Encoder returns relevance score)
     scores = ce_model.predict(pairs, convert_to_numpy=True, show_progress_bar=False)
-    # attach score_ce
     for it, sc in zip(pool, scores):
         it["_score_ce"] = float(sc)
 
-    # sort by cross-encoder score desc
-    pool.sort(key=lambda x: x.get("_score_ce", 0.0), reverse=True)
-
-    # optionally blend with previous score (lightly)
-    # final_score = alpha*ce + (1-alpha)*hybrid; alpha near 0.8 works well
+    # Blend CE score with hybrid a bit (alpha high to favor CE)
     alpha = 0.8
     for it in pool:
         it["score_final"] = alpha * it.get("_score_ce", 0.0) + (1 - alpha) * float(it.get("score", 0.0))
     pool.sort(key=lambda x: x["score_final"], reverse=True)
-
     return pool[:keep]
 
-# ---------- FastAPI ----------
+# ------------ FastAPI ------------
 class SearchReq(BaseModel):
     query: str
     k: Optional[int] = None
     role: Optional[str] = None
     sector: Optional[str] = None
-    rerank: Optional[bool] = None   # override env
+    rerank: Optional[bool] = None
 
 app = FastAPI()
 app.add_middleware(
@@ -316,22 +367,24 @@ def reindex():
 @app.post("/search")
 def search(req: SearchReq):
     ensure_index()
+    # Normalize *incoming* query strongly before vectorization
+    q = req.query or ""
+    q = normalize_codes(q)
+
     k = req.k or TOPK_DEFAULT
     k = max(10, min(200, k))
 
-    # 1) hybrid candidates (k * ~2 to allow rerank top-k to shrink)
     baseK = max(k, RERANK_KEEP) if RERANK_ENABLED else k
-    items = score_hybrid(req.query, baseK, req.role, req.sector)
+    items = score_hybrid(q, baseK, req.role, req.sector)
 
-    # 2) optional reranking
     do_rerank = RERANK_ENABLED if (req.rerank is None) else bool(req.rerank)
     if do_rerank:
-        items = rerank_with_cross_encoder(req.query, items, keep=max(k, RERANK_KEEP))
+        items = rerank_with_cross_encoder(q, items, keep=max(k, RERANK_KEEP))
 
     return {"ok": True, "items": items[:k]}
 
-# ---------- Auto reindex at startup (best-effort) ----------
-if os.getenv("PYSEARCH_AUTOINDEX", "1") not in ("0","false","False","no"):
+# ------------ Autostart indexing ------------
+if os.getenv("PYSEARCH_AUTOINDEX", "1").lower() not in ("0", "false", "no"):
     try:
         build_index()
     except Exception as e:
