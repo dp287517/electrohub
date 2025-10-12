@@ -339,7 +339,6 @@ function Viewer({ file, onClose }) {
               />
             </div>
           ) : looksPdf ? (
-            // 🧩 Rendu PDF natif du navigateur (bien meilleur que l’iframe texte)
             <object
               data={`${url}#view=FitH`}
               type="application/pdf"
@@ -470,7 +469,8 @@ function ChatBox() {
   async function runAsk(q, docFilter = []) {
     setSending(true);
     try {
-      const resp = await ask(q, 6 /* ignoré par le backend si auto */, docFilter, "auto", email);
+      // Appel sans forcer k (laisse le backend/pysearch décider)
+      const resp = await ask(q, undefined, docFilter, "auto", email);
 
       if (resp?.needProfile) {
         setPendingQuestion(q);
