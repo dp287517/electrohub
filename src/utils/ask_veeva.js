@@ -160,7 +160,7 @@ export async function uploadSmall(file) {
   if (ext === "zip") {
     fd.append("zip", file);
     return fetchPathForm("/api/ask-veeva/uploadZip", fd);
-    }
+  }
   fd.append("file", file);
   return fetchPathForm("/api/ask-veeva/uploadFile", fd);
 }
