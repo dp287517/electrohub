@@ -4,6 +4,7 @@ import {
   health,
   me,
   ask,
+  // search, // si besoin
   uploadSmall,
   chunkedUpload,
   pollJob,
@@ -18,8 +19,12 @@ import {
 } from "../utils/ask_veeva.js";
 
 /* ------------------------- Petits utilitaires UI ------------------------- */
-function clsx(...xs) { return xs.filter(Boolean).join(" "); }
-const copy = async (s) => { try { await navigator.clipboard.writeText(s); return true; } catch { return false; } };
+function clsx(...xs) {
+  return xs.filter(Boolean).join(" ");
+}
+const copy = async (s) => {
+  try { await navigator.clipboard.writeText(s); return true; } catch { return false; }
+};
 const isVideoFilename = (name = "") => /\.(mp4|mov|m4v|webm)$/i.test(name);
 
 /* NLU ultra légère pour poste/secteur (alignée au backend) */
@@ -37,8 +42,12 @@ const SECTOR_CANON = [
 ];
 function detectFromList(text, lists) {
   const s = (text || "").toLowerCase();
-  for (const group of lists) if (group.some(alias => s.includes(alias))) return group[0];
-  for (const group of lists) if (group.some(alias => s.trim() === alias)) return group[0];
+  for (const group of lists) {
+    if (group.some(alias => s.includes(alias))) return group[0];
+  }
+  for (const group of lists) {
+    if (group.some(alias => s.trim() === alias)) return group[0];
+  }
   return null;
 }
 const detectRole = (t)=> detectFromList(t, ROLE_CANON);
@@ -63,6 +72,38 @@ function TabButton({ active, onClick, children }) {
   );
 }
 
+function CitationChips({ citations, onPeek, max = 3 }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!citations?.length) return null;
+
+  const shown = expanded ? citations : citations.slice(0, max);
+  const remaining = Math.max(0, citations.length - shown.length);
+
+  return (
+    <div className="flex flex-wrap gap-2 mt-2">
+      {shown.map((c, i) => (
+        <button
+          key={i}
+          onClick={() => onPeek?.(c)}
+          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+          title={`${c.filename} • score: ${c.score?.toFixed?.(3)}`}
+        >
+          {c.filename}
+        </button>
+      ))}
+      {remaining > 0 && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-gray-50 text-gray-700 border hover:bg-gray-100"
+          title="Afficher toutes les citations"
+        >
+          +{remaining} de plus
+        </button>
+      )}
+    </div>
+  );
+}
+
 function FeedbackBar({ onVote, state }) {
   // state: 'idle' | 'up' | 'down' | 'sent'
   return (
@@ -71,108 +112,138 @@ function FeedbackBar({ onVote, state }) {
         onClick={() => onVote("up")}
         disabled={state === "sent"}
         className={clsx(
-          "text-xs px-2 py-1 rounded border",
+          "text-xs px-2 py-1 rounded border transition-colors",
           state === "up" ? "bg-green-50 text-green-700 border-green-200"
                          : "bg-gray-50 text-gray-700 hover:bg-gray-100"
         )}
         title="Utile"
-      >👍 Utile</button>
+      >
+        👍 Utile
+      </button>
       <button
         onClick={() => onVote("down")}
         disabled={state === "sent"}
         className={clsx(
-          "text-xs px-2 py-1 rounded border",
+          "text-xs px-2 py-1 rounded border transition-colors",
           state === "down" ? "bg-red-50 text-red-700 border-red-200"
                            : "bg-gray-50 text-gray-700 hover:bg-gray-100"
         )}
         title="Pas utile"
-      >👎 Pas utile</button>
+      >
+        👎 Pas utile
+      </button>
       {state === "sent" && <span className="text-xs text-gray-500">Merci pour le feedback.</span>}
     </div>
   );
 }
 
-/* -------------------------- DecisionViz (animée) -------------------------- */
-function Bar({ label, value, hint }) {
-  // value en [-1..+1] ~ influence normalisée
-  const pct = Math.max(0, Math.min(100, Math.round((Math.abs(value) || 0) * 100)));
-  const sign = value >= 0 ? "+" : "−";
+/* ----------------------- DECISION GAUGES & FLOW VIZ ----------------------- */
+function Bar({ label, value = 0, hint, accent = "indigo" }) {
+  const pct = Math.max(0, Math.min(100, Math.round(value)));
+  const barCls = {
+    indigo: "bg-indigo-500",
+    sky: "bg-sky-500",
+    emerald: "bg-emerald-500",
+    amber: "bg-amber-500",
+    rose: "bg-rose-500",
+  }[accent] || "bg-indigo-500";
   return (
-    <div className="mb-2">
-      <div className="flex items-center justify-between text-[12px] text-gray-600">
+    <div className="w-full">
+      <div className="flex justify-between items-end text-[11px] text-gray-600">
         <span className="font-medium">{label}</span>
-        <span className={value >= 0 ? "text-green-700" : "text-red-700"}>{sign}{pct}%</span>
+        <span className="tabular-nums">{pct}%</span>
       </div>
-      <div className="h-2 bg-gray-200 rounded overflow-hidden">
+      <div className="h-2 mt-1 rounded bg-gray-200 overflow-hidden">
         <div
-          className={clsx("h-2 transition-all duration-700", value >= 0 ? "bg-green-500" : "bg-red-500")}
+          className={clsx("h-2 transition-all duration-700 ease-out", barCls)}
           style={{ width: `${pct}%` }}
-          title={hint || ""}
         />
       </div>
+      {hint && <div className="text-[11px] text-gray-400 mt-1">{hint}</div>}
     </div>
   );
 }
 
-function DecisionViz({ trace }) {
-  if (!trace) return null;
-  const items = [
-    { key: "hybrid", label: "Hybrid (BM25+TF-IDF)", hint: "Score combiné pysearch" },
-    { key: "vector", label: "Vector (pgvector)", hint: "Similarité embeddings" },
-    { key: "intent", label: "Intent (global/specific/SOP)", hint: "Boost intent" },
-    { key: "persona", label: "Persona (role/sector)", hint: "Biais rôle/secteur" },
-    { key: "ce", label: "Cross-Encoder", hint: "Rerank CE" },
-    { key: "mmr", label: "MMR Diversification", hint: "Anti-redondance" },
-  ];
-  return (
-    <div className="border rounded-lg p-3 bg-white">
-      <div className="text-sm font-semibold mb-2">Décision de l’IA (poids relatifs)</div>
-      {items.map((it) => (
-        <Bar key={it.key} label={it.label} value={Number(trace[it.key] ?? 0)} hint={it.hint} />
-      ))}
-      {"final" in trace && (
-        <div className="mt-2 text-[12px] text-gray-600">
-          Score final agrégé : <span className="font-mono">{Number(trace.final).toFixed(3)}</span>
-        </div>
-      )}
-    </div>
-  );
+/** Extrait des poids à partir de decision_trace renvoyé par le backend */
+function extractDecisionWeights(trace) {
+  // Valeurs par défaut si le backend ne renvoie rien
+  const def = { hybrid: 40, vector: 30, rerank: 20, mmr: 10, answer: 80 };
+  if (!trace || typeof trace !== "object") return def;
+
+  const hybrid = Math.round((trace.hybrid_weight ?? 0.6) * 100);
+  const vector = Math.round((trace.vector_weight ?? 0.7) * 100);
+  const rerank = Math.round((trace.rerank_weight ?? 0.8) * 100);
+  const mmr = Math.round((trace.mmr_lambda ?? 0.7) * 100);
+  const answer = Math.round((trace.answer_confidence ?? 0.8) * 100);
+
+  return {
+    hybrid: Math.max(0, Math.min(100, hybrid)),
+    vector: Math.max(0, Math.min(100, vector)),
+    rerank: Math.max(0, Math.min(100, rerank)),
+    mmr: Math.max(0, Math.min(100, mmr)),
+    answer: Math.max(0, Math.min(100, answer)),
+  };
 }
 
-/* ----------------------- Messages (assistant / user) ----------------------- */
-function Message({ role, text, citations, onPeek, feedback, onVote }) {
-  const isUser = role === "user";
+/** Mini visu de flux (question → PySearch → Vector → Rerank → MMR → OpenAI) */
+function FlowMini({ playing = true }) {
+  // Simple animation CSS via keyframes (balle qui circule)
   return (
-    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={clsx(
-          "max-w-[95%] sm:max-w-[75%] md:max-w-[65%] rounded-2xl px-4 py-3 shadow",
-          isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-800 rounded-bl-sm border"
-        )}
-      >
-        <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
-        {!isUser && !!citations?.length && (
-          <div className="flex flex-wrap gap-2 mt-2">
-            {citations.slice(0, 6).map((c, i) => (
-              <button
-                key={i}
-                onClick={() => onPeek?.(c)}
-                className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-                title={`${c.filename} • score: ${c.score?.toFixed?.(3)}`}
-              >
-                {c.filename}
-              </button>
-            ))}
+    <div className="relative w-full h-24 sm:h-20">
+      <style>{`
+        @keyframes hop {
+          0%   { transform: translateX(0);   opacity: .9; }
+          25%  { transform: translateX(20%); opacity: 1;  }
+          50%  { transform: translateX(45%); opacity: 1;  }
+          75%  { transform: translateX(75%); opacity: 1;  }
+          100% { transform: translateX(100%);opacity: .9; }
+        }
+        .hop { animation: hop 2.6s ${playing ? "infinite" : "none"} linear; }
+      `}</style>
+      <div className="absolute inset-0 flex items-center justify-between px-2 sm:px-3">
+        {["Question", "PySearch", "PgVector", "Rerank (OpenAI CE)", "MMR", "OpenAI Answer"].map((t, i) => (
+          <div key={i} className="text-[10px] sm:text-[11px] text-center">
+            <div className="px-2 py-1 rounded bg-white border shadow-sm whitespace-nowrap">{t}</div>
           </div>
-        )}
-        {!isUser && onVote && <FeedbackBar onVote={onVote} state={feedback?.state || "idle"} />}
+        ))}
+      </div>
+      <div className="absolute left-2 right-2 top-1/2 -translate-y-1/2 h-0.5 bg-gray-200" />
+      <div className="absolute left-2 right-2 top-1/2 -translate-y-1/2 h-3">
+        <div className="hop w-3 h-3 rounded-full bg-blue-500 shadow" />
       </div>
     </div>
   );
 }
 
-/* --------------------------- Sidebar (titres only) -------------------------- */
-function SidebarContextsTitles({ contexts, selected, toggleSelect, selectOnly, clearSelection, onAskSelected, onPeek, onOpen }) {
+function DecisionGauges({ decisionTrace }) {
+  const w = extractDecisionWeights(decisionTrace);
+  const ceModel = decisionTrace?.ce_model || decisionTrace?.model_ce || "cross-encoder";
+  const ansModel = decisionTrace?.answer_model || decisionTrace?.answerModel || "OpenAI";
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <Bar label="PySearch (hybrid)" value={w.hybrid} hint="BM25 + TF-IDF + heuristiques" accent="indigo" />
+      <Bar label="PgVector (baseline)" value={w.vector} hint="Embedding match" accent="sky" />
+      <Bar label={`Rerank (${ceModel})`} value={w.rerank} hint="Cross-Encoder" accent="emerald" />
+      <Bar label="Diversification (MMR)" value={w.mmr} hint="λ équilibre rel./diversité" accent="amber" />
+      <div className="sm:col-span-2">
+        <Bar label={`OpenAI Answer (${ansModel})`} value={w.answer} hint="Synthèse contrôlée par contexte" accent="rose" />
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------- Sidebar (multi-focus) --------------------------- */
+/** Version “titres uniquement” comme demandé */
+function SidebarContexts({
+  contexts,
+  selected,
+  toggleSelect,
+  selectOnly,
+  clearSelection,
+  onAskSelected,
+  onPeek,
+  onOpen,
+}) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between gap-2 mb-2">
@@ -183,28 +254,59 @@ function SidebarContextsTitles({ contexts, selected, toggleSelect, selectOnly, c
             onClick={onAskSelected}
             disabled={!selected.size}
             className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-          >Re-poser (focus)</button>
+          >
+            Re-poser (focus)
+          </button>
           {!!selected.size && (
-            <button onClick={clearSelection} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Vider</button>
+            <button
+              onClick={clearSelection}
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            >
+              Vider
+            </button>
           )}
         </div>
       </div>
+
       <div className="space-y-2 overflow-auto pr-1">
-        {!contexts?.length && <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>}
+        {!contexts?.length && (
+          <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>
+        )}
         {contexts?.map((d) => {
           const checked = selected.has(d.doc_id);
           return (
-            <div key={d.doc_id} className="border rounded-lg p-2 bg-white">
-              <div className="flex items-start gap-2">
-                <input type="checkbox" className="mt-1" checked={checked} onChange={() => toggleSelect(d.doc_id)} />
-                <div className="min-w-0 flex-1">
-                  <div className="font-medium text-[13px] break-words whitespace-break-spaces leading-snug">{d.filename}</div>
+            <div key={d.doc_id} className="border rounded-lg p-2 bg-white flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={checked}
+                onChange={() => toggleSelect(d.doc_id)}
+                title="Ajouter/retirer du focus multiple"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-[13px] break-words whitespace-break-spaces leading-snug">
+                  {d.filename}
                 </div>
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button onClick={() => selectOnly(d.doc_id)} className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100">Focus seul</button>
-                <button onClick={() => onPeek?.({ doc_id: d.doc_id, filename: d.filename })} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Aperçu</button>
-                <button onClick={() => onOpen?.({ doc_id: d.doc_id, filename: d.filename })} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Ouvrir</button>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => selectOnly(d.doc_id)}
+                    className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                  >
+                    Focus seul
+                  </button>
+                  <button
+                    onClick={() => onPeek?.({ doc_id: d.doc_id, filename: d.filename })}
+                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+                  >
+                    Aperçu
+                  </button>
+                  <button
+                    onClick={() => onOpen?.({ doc_id: d.doc_id, filename: d.filename })}
+                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+                  >
+                    Ouvrir
+                  </button>
+                </div>
               </div>
             </div>
           );
@@ -251,25 +353,72 @@ function Viewer({ file, onClose }) {
           <div className="min-w-0 pr-2">
             <div className="text-sm text-gray-500">Prévisualisation</div>
             <div className="font-medium text-[13px] break-words whitespace-break-spaces">{file.filename}</div>
-            {err && <div className="mt-1 text-xs text-red-700">Impossible d’afficher le document ({err}).</div>}
+            {err && (
+              <div className="mt-1 text-xs text-red-700">
+                Impossible d’afficher le document ({err}). Utilisez “Ouvrir l’original”.
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            <a href={url} target="_blank" rel="noreferrer" className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200" onClick={() => openDoc(file.doc_id, { from: "viewer_open_original" })}>Ouvrir l’original</a>
-            <button onClick={() => copy(url)} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Copier l’URL</button>
-            <button onClick={onClose} className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100">Fermer</button>
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+              title="Ouvrir dans un nouvel onglet"
+              onClick={() => openDoc(file.doc_id, { from: "viewer_open_original" })}
+            >
+              Ouvrir l’original
+            </a>
+            <button
+              onClick={() => copy(url)}
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+              title="Copier l’URL"
+            >
+              Copier l’URL
+            </button>
+            <button
+              onClick={onClose}
+              className="text-xs px-2 py-1 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+            >
+              Fermer
+            </button>
           </div>
         </div>
+
         <div className="flex-1 overflow-hidden">
           {looksVideo ? (
             <div className="w-full h-full p-2">
-              <video src={url} controls className="w-full h-[70vh] max-h-full" onError={() => setErr("erreur vidéo")} />
+              <video
+                src={url}
+                controls
+                className="w-full h-[70vh] max-h-full"
+                onError={() => setErr("erreur de lecture vidéo")}
+              />
             </div>
           ) : looksPdf ? (
-            <object data={`${url}#view=FitH`} type="application/pdf" className="w-full h-[80vh]" onError={() => setErr("erreur PDF")}>
-              <iframe title="preview-pdf-fallback" src={url} className="w-full h-[80vh]" loading="eager" onError={() => setErr("erreur iframe")} />
+            <object
+              data={`${url}#view=FitH`}
+              type="application/pdf"
+              className="w-full h-[80vh]"
+              onError={() => setErr("erreur de rendu PDF")}
+            >
+              <iframe
+                title="preview-pdf-fallback"
+                src={url}
+                className="w-full h-[80vh]"
+                loading="eager"
+                onError={() => setErr("erreur de chargement iframe")}
+              />
             </object>
           ) : (
-            <iframe title="preview" src={url} className="w-full h-[80vh]" loading="eager" onError={() => setErr("erreur iframe")} />
+            <iframe
+              title="preview"
+              src={url}
+              className="w-full h-[80vh]"
+              loading="eager"
+              onError={() => setErr("erreur de chargement iframe")}
+            />
           )}
         </div>
       </div>
@@ -277,45 +426,95 @@ function Viewer({ file, onClose }) {
   );
 }
 
-/* ----------------------------- Historique (UX) ----------------------------- */
-function HistoryDrawer({ open, onClose, items, onSelect, onClear }) {
+/* ------------------------------ Flow Modal ------------------------------ */
+function FlowModal({ open, onClose, lastDecision }) {
+  if (!open) return null;
+  const w = extractDecisionWeights(lastDecision);
+  const ceModel = lastDecision?.ce_model || "Cross-Encoder";
+  const ansModel = lastDecision?.answer_model || "OpenAI";
+
   return (
-    <div className={clsx("fixed inset-y-0 right-0 z-30 w-80 bg-white border-l shadow-xl transform transition-transform", open ? "translate-x-0" : "translate-x-full")}>
-      <div className="p-3 border-b flex items-center justify-between">
-        <div className="font-semibold">Historique</div>
-        <div className="flex items-center gap-2">
-          <button onClick={onClear} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Vider</button>
-          <button onClick={onClose} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Fermer</button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-auto shadow-2xl border">
+        <div className="flex items-center justify-between p-3 border-b">
+          <div className="font-semibold">Comment ça marche (visu)</div>
+          <div className="flex items-center gap-2">
+            <a
+              href="/ask-veeva-viz.html"
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+              title="Ouvrir la page de présentation (plein écran)"
+            >
+              Ouvrir en plein écran
+            </a>
+            <button onClick={onClose} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Fermer</button>
+          </div>
         </div>
-      </div>
-      <div className="p-3 space-y-2 overflow-auto h-[calc(100%-48px)]">
-        {!items?.length && <div className="text-sm text-gray-500">Aucune conversation.</div>}
-        {items.map((h, i) => (
-          <button
-            key={i}
-            onClick={() => onSelect(h)}
-            className="w-full text-left p-2 rounded border hover:bg-gray-50"
-            title={h.title}
-          >
-            <div className="text-sm font-medium line-clamp-2">{h.title}</div>
-            <div className="text-[11px] text-gray-500 mt-1">{new Date(h.ts).toLocaleString()}</div>
-          </button>
-        ))}
+
+        <div className="p-4 space-y-4">
+          <FlowMini playing />
+          <DecisionGauges decisionTrace={lastDecision} />
+          <div className="grid sm:grid-cols-2 gap-3 text-[13px] text-gray-700">
+            <div className="p-3 rounded-lg bg-gray-50 border">
+              <div className="font-medium mb-1">Rerank</div>
+              <div>Modèle : <span className="font-mono">{ceModel}</span></div>
+              <div className="text-xs text-gray-500 mt-1">
+                Re-score des candidats (PySearch + Vector) par similarité sémantique.
+              </div>
+            </div>
+            <div className="p-3 rounded-lg bg-gray-50 border">
+              <div className="font-medium mb-1">Réponse OpenAI</div>
+              <div>Modèle : <span className="font-mono">{ansModel}</span></div>
+              <div className="text-xs text-gray-500 mt-1">
+                Synthèse stricte basée sur le contexte (citations incluses).
+              </div>
+            </div>
+          </div>
+
+          <div className="text-xs text-gray-500">
+            Astuce : Les jauges reflètent les poids utilisés dans la décision pour <em>cette</em> réponse.
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-/* ------------------------------- Ask Panel -------------------------------- */
-function AskPanel() {
+/* --------------------------------- Chat Box -------------------------------- */
+function Message({ role, text, citations, onPeek, feedback, onVote }) {
+  const isUser = role === "user";
+  return (
+    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
+      <div
+        className={clsx(
+          "max-w-[95%] sm:max-w-[75%] md:max-w-[65%] rounded-2xl px-4 py-3 shadow",
+          isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-800 rounded-bl-sm border"
+        )}
+      >
+        <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
+        {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
+        {!isUser && onVote && (
+          <FeedbackBar onVote={onVote} state={feedback?.state || "idle"} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
   const [contexts, setContexts] = useState([]);
-  const [decisionTrace, setDecisionTrace] = useState(null);
   const [selectedDocs, setSelectedDocs] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
+
+  // NEW: decision trace & flow modal
+  const [lastDecision, setLastDecision] = useState(null);
+  const [showViz, setShowViz] = useState(false);
 
   // Profil courant
   const [user, setUser] = useState(null);
@@ -332,31 +531,9 @@ function AskPanel() {
       return [{ role: "assistant", text: "Bonjour 👋 — Posez votre question." }];
     }
   });
-  const [feedbackState, setFeedbackState] = useState({});
 
-  // Historique local (multi-device prêt pour backend)
-  const [histOpen, setHistOpen] = useState(false);
-  const [history, setHistory] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("askVeeva_history") || "[]"); } catch { return []; }
-  });
-  function pushHistory(title) {
-    const item = { title: title.slice(0, 180), ts: Date.now(), snapshot: messages };
-    const next = [item, ...history].slice(0, 50);
-    setHistory(next);
-    try { localStorage.setItem("askVeeva_history", JSON.stringify(next)); } catch {}
-  }
-  function loadHistoryItem(h) {
-    if (!h?.snapshot) return;
-    setMessages(h.snapshot);
-    setContexts([]);
-    setDecisionTrace(null);
-    setSelectedDocs(new Set());
-    setSuggestions([]);
-  }
-  function clearHistory() {
-    setHistory([]);
-    try { localStorage.removeItem("askVeeva_history"); } catch {}
-  }
+  // Feedback local par message assistant: { [index]: 'idle'|'up'|'down'|'sent' }
+  const [feedbackState, setFeedbackState] = useState({});
 
   useEffect(() => {
     sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
@@ -366,12 +543,20 @@ function AskPanel() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      try { const h = await health(); if (alive) setReady(!!h?.ok); } catch { setReady(false); }
+      try {
+        const h = await health();
+        if (alive) setReady(!!h?.ok);
+      } catch {
+        setReady(false);
+      }
       try {
         const r = await me();
         if (alive && r?.ok) {
           setUser(r.user || null);
-          if (r?.user?.email) { setEmail(r.user.email); setUserEmail(r.user.email); }
+          if (r?.user?.email) {
+            setEmail(r.user.email);
+            setUserEmail(r.user.email);
+          }
         }
       } catch {}
     })();
@@ -385,26 +570,39 @@ function AskPanel() {
   function toggleSelect(docId) {
     setSelectedDocs((prev) => {
       const n = new Set(prev);
-      if (n.has(docId)) n.delete(docId); else n.add(docId);
+      if (n.has(docId)) n.delete(docId);
+      else n.add(docId);
       return n;
     });
   }
   function selectOnly(docId) { setSelectedDocs(new Set([docId])); }
   function clearSelection() { setSelectedDocs(new Set()); }
 
-  function setMsgFeedback(idx, next) { setFeedbackState((s) => ({ ...s, [idx]: next })); }
+  function setMsgFeedback(idx, next) {
+    setFeedbackState((s) => ({ ...s, [idx]: next }));
+  }
 
   async function submitFeedbackFor(index, vote) {
     const assistantMsg = messages[index];
     const lastUserBefore = [...messages.slice(0, index)].reverse().find((m) => m.role === "user")?.text || "";
     const primaryCitation = assistantMsg?.citations?.[0]?.doc_id || null;
+
     try {
       setMsgFeedback(index, vote);
-      await sendFeedback({ question: lastUserBefore || "(feedback)", doc_id: primaryCitation, useful: vote === "up", note: null, email: email || null });
+      await sendFeedback({
+        question: lastUserBefore || "(question inconnue - feedback inline)",
+        doc_id: primaryCitation,
+        useful: vote === "up",
+        note: null,
+        email: email || null,
+      });
       setMsgFeedback(index, "sent");
-    } catch {}
+    } catch {
+      // best-effort
+    }
   }
 
+  // cœur: ask + needProfile
   async function runAsk(q, docFilter = []) {
     setSending(true);
     try {
@@ -418,14 +616,17 @@ function AskPanel() {
       }
 
       const text = resp?.text || "Désolé, aucune réponse.";
-      const citations = (resp?.citations || []).map((c) => ({ filename: c.filename, score: c.score, doc_id: c.doc_id }));
+      const citations = (resp?.citations || []).map((c) => ({
+        filename: c.filename,
+        score: c.score,
+        doc_id: c.doc_id,
+      }));
       setMessages((m) => [...m, { role: "assistant", text, citations }]);
       setContexts(resp?.contexts || []);
-      setDecisionTrace(resp?.decision_trace || null);
       setSuggestions((resp?.suggestions || []).slice(0, 8));
 
-      // push history snapshot
-      pushHistory(q);
+      // NEW: decision trace (affiché en dessous + modal)
+      setLastDecision(resp?.decision_trace || null);
     } catch (e) {
       setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
     } finally {
@@ -433,18 +634,30 @@ function AskPanel() {
     }
   }
 
+  // Profil via saisie
   async function tryCompleteProfileFrom(text) {
     const emailInline = detectEmailInline(text);
     let role = detectRole(text);
     let sector = detectSector(text);
+
     if (!emailInline && !role && !sector) return false;
 
-    const payload = { email: emailInline || email || undefined, role: role || undefined, sector: sector || undefined };
-    if (payload.email && payload.email !== email) { setEmail(payload.email); setUserEmail(payload.email); }
+    const payload = {
+      email: emailInline || email || undefined,
+      role: role || undefined,
+      sector: sector || undefined,
+    };
+
+    if (payload.email && payload.email !== email) {
+      setEmail(payload.email);
+      setUserEmail(payload.email);
+    }
 
     try {
       const ret = await initUser(payload);
-      if (ret?.ok && ret?.user) setUser(ret.user);
+      if (ret?.ok && ret?.user) {
+        setUser(ret.user);
+      }
       if (role || sector) {
         setWaitingProfile(false);
         const q = pendingQuestion || "Merci. Quelle est votre question ?";
@@ -458,25 +671,37 @@ function AskPanel() {
     return false;
   }
 
-  async function onSend(inputText) {
-    const q = (inputText ?? input).trim();
+  async function onSend() {
+    const q = input.trim();
     if (!q || sending) return;
 
     setInput("");
     setMessages((m) => [...m, { role: "user", text: q }]);
 
-    if (waitingProfile) { const updated = await tryCompleteProfileFrom(q); if (updated) return; return; }
+    if (waitingProfile) {
+      const updated = await tryCompleteProfileFrom(q);
+      if (updated) return;
+      return;
+    }
+
     const emailInline = detectEmailInline(q);
-    if (emailInline && emailInline !== email) { setEmail(emailInline); setUserEmail(emailInline); try { await initUser({ email: emailInline }); } catch {} }
+    if (emailInline && emailInline !== email) {
+      setEmail(emailInline);
+      setUserEmail(emailInline);
+      try { await initUser({ email: emailInline }); } catch {}
+    }
 
     const docFilter = selectedDocs.size ? Array.from(selectedDocs) : [];
     await runAsk(q, docFilter);
   }
 
-  function quickAsk(s) { setInput(s); setTimeout(() => onSend(s), 10); }
+  function quickAsk(s) { setInput(s); setTimeout(onSend, 10); }
 
   async function onAskSelected() {
-    const lastQ = [...messages].reverse().find((m) => m.role === "user")?.text || input || "Peux-tu détailler ?";
+    const lastQ =
+      [...messages].reverse().find((m) => m.role === "user")?.text ||
+      input ||
+      "Peux-tu détailler ?";
     if (!selectedDocs.size) return;
     setMessages((m) => [...m, { role: "user", text: `${lastQ} (focus multi)` }]);
     await runAsk(lastQ, Array.from(selectedDocs));
@@ -489,7 +714,10 @@ function AskPanel() {
 
   async function handleOpen(c) {
     const res = await checkFile(c.doc_id);
-    if (!res.ok) { alert(`Impossible d’ouvrir le fichier : ${res.error || "inconnu"}`); return; }
+    if (!res.ok) {
+      alert(`Impossible d’ouvrir le fichier : ${res.error || "inconnu"}`);
+      return;
+    }
     try { await openDoc(c.doc_id, { from: "sidebar_open" }); } catch {}
     window.open(res.url || buildFileURL(c.doc_id), "_blank", "noopener");
   }
@@ -498,33 +726,60 @@ function AskPanel() {
     if (!q || q.length < 3) return;
     try {
       const ret = await findDocs(q);
-      if (ret?.items?.length) setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
-    } catch {}
+      if (ret?.items?.length) {
+        setSuggestions(ret.items.slice(0, 8).map((it) => it.filename));
+      }
+    } catch { /* endpoint optionnel */ }
   }
 
   function onClearChat() {
     try { sessionStorage.removeItem("askVeeva_chat"); } catch {}
     setMessages([{ role: "assistant", text: "Conversation réinitialisée. Posez votre question." }]);
-    setContexts([]); setDecisionTrace(null);
-    setSelectedDocs(new Set()); setSuggestions([]);
-    setWaitingProfile(false); setPendingQuestion(null); setFeedbackState({});
+    setContexts([]);
+    setSelectedDocs(new Set());
+    setSuggestions([]);
+    setWaitingProfile(false);
+    setPendingQuestion(null);
+    setFeedbackState({});
+    setLastDecision(null);
   }
+
+  const weights = extractDecisionWeights(lastDecision);
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
+      {/* En-tête */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <div className="text-sm text-gray-900 font-medium">
-          Recherche IA {ready ? <span className="ml-1 text-green-700">(prête)</span> : <span className="ml-1 text-red-700">(hors-ligne)</span>}
-          {selectedDocs.size > 0 && (
-            <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-              Focus multi: {selectedDocs.size}
-            </span>
-          )}
-        </div>
+        <div className="text-sm text-gray-900 font-medium">Recherche IA</div>
         <div className="flex items-center gap-2">
-          <button onClick={() => setHistOpen(true)} className="text-xs px-3 py-1.5 rounded bg-gray-100 hover:bg-gray-200">Historique</button>
-          <button onClick={onClearChat} className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100">Supprimer la conversation</button>
+          <button
+            onClick={() => setShowViz(true)}
+            className="text-xs px-3 py-1.5 rounded bg-purple-600 text-white hover:bg-purple-700"
+            title="Voir la visualisation du fonctionnement (modale)"
+          >
+            Voir la visualisation
+          </button>
+          <button
+            onClick={onClearChat}
+            className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+          >
+            Supprimer la conversation
+          </button>
+        </div>
+      </div>
+
+      {/* Bandeau décision (mini flow + gauges compactes) */}
+      <div className="grid lg:grid-cols-[1.2fr_1fr] gap-3 mb-3">
+        <div className="rounded-lg border bg-white p-2">
+          <FlowMini playing />
+        </div>
+        <div className="rounded-lg border bg-white p-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Bar label="PySearch" value={weights.hybrid} accent="indigo" />
+            <Bar label="PgVector" value={weights.vector} accent="sky" />
+            <Bar label="Rerank" value={weights.rerank} accent="emerald" />
+            <Bar label="MMR" value={weights.mmr} accent="amber" />
+          </div>
         </div>
       </div>
 
@@ -532,37 +787,48 @@ function AskPanel() {
       <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-4">
         {/* Chat */}
         <div className="flex flex-col">
-          <div ref={listRef} className="h-[46vh] sm:h-[54vh] xl:h-[60vh] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border">
+          <div
+            ref={listRef}
+            className="h-[52vh] sm:h-[60vh] xl:h-[66vh] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
+          >
             {messages.map((m, i) => (
               <Message
                 key={i}
                 role={m.role}
                 text={m.text}
                 citations={m.citations}
-                onPeek={(c) => { setViewerFile({ doc_id: c.doc_id, filename: c.filename }); try { openDoc(c.doc_id, { from: "chip_peek" }); } catch {} }}
+                onPeek={(c) => {
+                  setViewerFile({ doc_id: c.doc_id, filename: c.filename });
+                  try { openDoc(c.doc_id, { from: "chip_peek" }); } catch {}
+                }}
                 feedback={m.role === "assistant" ? { state: feedbackState[i] || "idle" } : null}
-                onVote={m.role === "assistant" ? async (vote) => submitFeedbackFor(i, vote) : null}
+                onVote={
+                  m.role === "assistant"
+                    ? async (vote) => submitFeedbackFor(i, vote)
+                    : null
+                }
               />
             ))}
             {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
           </div>
 
-          {/* Decision Viz */}
-          <div className="mt-3">
-            <DecisionViz trace={decisionTrace} />
-          </div>
-
-          {/* Suggestions */}
+          {/* Saisie + suggestions */}
           {!!suggestions.length && (
             <div className="mt-2 flex items-start gap-2 flex-wrap">
               <div className="text-xs text-gray-600 mt-1">Vouliez-vous dire :</div>
               {suggestions.map((s, i) => (
-                <button key={i} onClick={() => quickAsk(s)} className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100" title="Lancer une recherche avec ce terme">{s}</button>
+                <button
+                  key={i}
+                  onClick={() => quickAsk(s)}
+                  className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+                  title="Lancer une recherche avec ce terme"
+                >
+                  {s}
+                </button>
               ))}
             </div>
           )}
 
-          {/* Input */}
           <div className="mt-3 flex items-end gap-2">
             <textarea
               rows={2}
@@ -570,25 +836,39 @@ function AskPanel() {
               placeholder={selectedDocs.size ? "Votre question (focus multi activé)..." : "Posez votre question…"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  onSend();
+                }
+              }}
               onBlur={() => tryDidYouMean(input)}
               disabled={!ready || sending}
             />
-            <button onClick={() => onSend()} disabled={!ready || sending || !input.trim()} className="h-10 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50">Envoyer</button>
+            <button
+              onClick={onSend}
+              disabled={!ready || sending || !input.trim()}
+              className="h-10 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
+            >
+              Envoyer
+            </button>
           </div>
         </div>
 
-        {/* Sidebar titres only */}
+        {/* Sidebar */}
         <aside className="min-h-0">
-          <div className="border rounded-lg p-3 bg-white h-[46vh] sm:h-[54vh] xl:h-[60vh] overflow-hidden">
-            <SidebarContextsTitles
+          <div className="border rounded-lg p-3 bg-white h-[52vh] sm:h-[60vh] xl:h-[66vh] overflow-hidden">
+            <SidebarContexts
               contexts={contexts}
               selected={selectedDocs}
               toggleSelect={toggleSelect}
               selectOnly={selectOnly}
               clearSelection={clearSelection}
               onAskSelected={onAskSelected}
-              onPeek={(c) => { setViewerFile({ doc_id: c.doc_id, filename: c.filename }); try { openDoc(c.doc_id, { from: "sidebar_peek" }); } catch {} }}
+              onPeek={(c) => {
+                setViewerFile({ doc_id: c.doc_id, filename: c.filename });
+                try { openDoc(c.doc_id, { from: "sidebar_peek" }); } catch {}
+              }}
               onOpen={handleOpen}
             />
           </div>
@@ -597,14 +877,9 @@ function AskPanel() {
 
       {/* Viewer modal */}
       <Viewer file={viewerFile} onClose={() => setViewerFile(null)} />
-      {/* Historique */}
-      <HistoryDrawer
-        open={histOpen}
-        onClose={() => setHistOpen(false)}
-        items={history}
-        onSelect={(h) => { loadHistoryItem(h); setHistOpen(false); }}
-        onClear={clearHistory}
-      />
+
+      {/* Flow modal */}
+      <FlowModal open={showViz} onClose={() => setShowViz(false)} lastDecision={lastDecision} />
     </div>
   );
 }
@@ -718,18 +993,30 @@ function ImportBox() {
           <div className="font-mono text-xs break-all">{job.id}</div>
           <div className="mt-1 text-sm">
             Statut:{" "}
-            <span className={job.status === "done" ? "text-green-700" : job.status === "error" ? "text-red-700" : "text-gray-700"}>
+            <span
+              className={
+                job.status === "done"
+                  ? "text-green-700"
+                  : job.status === "error"
+                  ? "text-red-700"
+                  : "text-gray-700"
+              }
+            >
               {job.status}
             </span>
           </div>
-          <div className="text-sm text-gray-600">Fichiers : {job.processed_files}/{job.total_files}</div>
+          <div className="text-sm text-gray-600">
+            Fichiers : {job.processed_files}/{job.total_files}
+          </div>
           {job.error && <div className="text-sm text-red-700 mt-1">{job.error}</div>}
         </div>
       )}
 
       {!!log.length && (
         <div className="p-3 border rounded-lg bg-gray-50 text-xs font-mono space-y-1 max-h-48 overflow-auto">
-          {log.map((l, i) => (<div key={i}>{l}</div>))}
+          {log.map((l, i) => (
+            <div key={i}>{l}</div>
+          ))}
         </div>
       )}
     </div>
@@ -739,19 +1026,33 @@ function ImportBox() {
 /* ---------------------------------- Page ---------------------------------- */
 export default function AskVeevaPage() {
   const [tab, setTab] = useState("chat"); // 'chat' | 'import'
+
   return (
     <section className="max-w-[1400px] 2xl:max-w-[1600px] mx-auto px-3 sm:px-4">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva</h1>
+        <a
+          href="/ask-veeva-viz.html"
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs px-3 py-1.5 rounded bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+          title="Voir la page de présentation (plein écran)"
+        >
+          Page de présentation
+        </a>
       </div>
 
       <div className="flex gap-2">
-        <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>Recherche IA</TabButton>
-        <TabButton active={tab === "import"} onClick={() => setTab("import")}>Import</TabButton>
+        <TabButton active={tab === "chat"} onClick={() => setTab("chat")}>
+          Recherche IA
+        </TabButton>
+        <TabButton active={tab === "import"} onClick={() => setTab("import")}>
+          Import
+        </TabButton>
       </div>
 
       <div className="border border-t-0 rounded-b-lg rounded-tr-lg bg-white p-4">
-        {tab === "chat" ? <AskPanel /> : <ImportBox />}
+        {tab === "chat" ? <ChatBox /> : <ImportBox />}
       </div>
     </section>
   );
