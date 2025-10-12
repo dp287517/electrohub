@@ -5,6 +5,7 @@ import { get, post } from "../lib/api.js";
  * Small fetch helpers
  * ------------------------------------------------------------------ */
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const UI_VERSION = "fe-2025-10-12.2"; // bump pour DeepSearch + lang hints
 
 async function withTimeoutFetch(input, init = {}, ms = 30000) {
   const ctrl = new AbortController();
@@ -52,6 +53,17 @@ async function fetchPathForm(path, formData, timeoutMs = 30000) {
 /** Détecte si une chaîne ressemble à un email (léger) */
 const looksLikeEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(s || "").trim());
 
+/** Détection FR/EN extrêmement légère (sert de hint ; le backend reconfirme) */
+function detectLanguage(q = "") {
+  const s = ` ${String(q || "").toLowerCase()} `;
+  const hasAcc = /[éèàùâêîôûç]/i.test(q);
+  const frHits = [" le ", " la ", " les ", " des ", " du ", " de ", " procédure", " procédures", " déchets", " variateur"].reduce((a, w) => a + (s.includes(w) ? 1 : 0), 0);
+  const enHits = [" the ", " and ", " or ", " procedure", " procedures", " checklist", " waste", " drive", " vfd"].reduce((a, w) => a + (s.includes(w) ? 1 : 0), 0);
+  if (hasAcc || frHits - enHits >= 2) return "fr";
+  if (enHits - frHits >= 2) return "en";
+  return "fr";
+}
+
 /** Normalise quelques patterns fréquents (SOP & N2000-2 variantes) */
 export function normalizeQuery(q = "") {
   let s = String(q || "");
@@ -64,9 +76,9 @@ export function normalizeQuery(q = "") {
   return s;
 }
 
-const RE_DESCRIBE = /\b(d[ée]cris|r[ée]sume|[ée]léments? principaux|contenu|points? cl[ée]s|proc[ée]dure|[ée]tapes|qu'est-ce|quels sont)\b/i;
-const RE_ANALYZE  = /\b(incoh[ée]rences?|contradictions?|divergences?|compare(r|z)?|coh[ée]rence|conflits?)\b/i;
-const RE_SOP      = /\bSOP\b/i;
+const RE_DESCRIBE = /\b(d[ée]cris|r[ée]sume|[ée]léments? principaux|contenu|points? cl[ée]s|proc[ée]dure|[ée]tapes|qu'est-ce|quels sont|what is|describe)\b/i;
+const RE_ANALYZE  = /\b(incoh[ée]rences?|contradictions?|divergences?|compare(r|z|)|coh[ée]rence|conflits?|gap analysis|differences?)\b/i;
+const RE_SOP      = /\b(QD-?\s*)?SOP\b/i;
 
 export function guessIntent(q = "") {
   const s = String(q || "");
@@ -95,57 +107,93 @@ export const me = getCurrentUser;
 /* ------------------------------ ASK / SEARCH ------------------------------ */
 
 /**
- * ASK (RAG+intents) — avec personnalisation.
- * Compat signature:
- *   - ancien: ask(q, k, docFilter, email, "auto")
- *   - nouveau: ask(q, k, docFilter, "auto", email)
- * Hints client envoyés: ui_version, intent_hint, normalized_query (ignorés si backend ancien).
+ * ASK (RAG+intents) — avec personnalisation et DeepSearch hints.
+ *
+ * Signatures compatibles:
+ *   - historique: ask(q, k, docFilter, email, "auto")
+ *   - actuelle:   ask(q, k, docFilter, "auto", email)
+ *   - étendue:    ask(q, k, docFilter, "auto", email, { forceDeep, rerank, mmr, language })
+ *   - étendue bis:ask(q, k, docFilter, "auto", { forceDeep, ... })  // email omis
+ *
+ * Les champs "extra" sont des HINTS: le backend fonctionne même s'ils sont ignorés.
  */
-export async function ask(question, k = 6, docFilter = [], contextMode = "auto", email = null) {
-  // Normalisation ancienne signature
+export async function ask(
+  question,
+  k = 6,
+  docFilter = [],
+  contextMode = "auto",
+  email = null,
+  extra = {}
+) {
+  // Compat: si contextMode est un email
   if (looksLikeEmail(contextMode) && (email === null || email === undefined)) {
     email = contextMode;
     contextMode = "auto";
   }
+  // Compat: si "email" est en fait l'objet options
+  if (email && typeof email === "object" && extra && Object.keys(extra).length === 0) {
+    extra = email;
+    email = null;
+  }
   if (contextMode == null || contextMode === "") contextMode = "auto";
 
   const normalized = normalizeQuery(question);
+  const lang = extra.language || detectLanguage(question);
+
   const body = {
     question,
     k,
     docFilter,
     contextMode,
     // hints côté client (le backend les ignore si non gérés)
-    ui_version: "fe-2025-10-12",
+    ui_version: UI_VERSION,
     intent_hint: guessIntent(question),
+    preferred_language: lang,        // NEW: pont FR↔EN côté serveur
     normalized_query: normalized !== question ? normalized : undefined,
+    // DeepSearch hints (non bloquants)
+    force_deep: extra.forceDeep ?? true,
+    rerank: extra.rerank ?? true,
+    mmr: extra.mmr ?? true
   };
   if (email && looksLikeEmail(email)) body.email = email;
+
+  // Nettoyage des champs undefined pour garder un payload propre
+  Object.keys(body).forEach((k) => body[k] === undefined && delete body[k]);
 
   return post("/api/ask-veeva/ask", body);
 }
 
-/** Aides explicites (wrappers) — facultatif : force le wording côté user */
+/** Aides explicites (wrappers) — force wording côté user, garde Deep hints */
 export async function askDescribe(target, opts = {}) {
   const q = typeof target === "string"
     ? `Décris-moi précisément les éléments principaux, étapes, IPC et tolérances de: ${target}`
     : `Décris-moi précisément le document demandé.`;
-  return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null);
+  return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null, {
+    forceDeep: opts.forceDeep ?? true,
+    rerank: opts.rerank ?? true,
+    mmr: opts.mmr ?? true,
+    language: opts.language
+  });
 }
 
 export async function askAnalyze(topic, opts = {}) {
   const q = `Compare et détecte les incohérences/contradictions sur: ${topic}. Donne recommandations actionnables.`;
-  return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null);
+  return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null, {
+    forceDeep: opts.forceDeep ?? true,
+    rerank: opts.rerank ?? true,
+    mmr: opts.mmr ?? true,
+    language: opts.language
+  });
 }
 
-/** Recherche simple */
+/** Recherche simple (autocomplete / fallback). DeepSearch est côté /ask. */
 export async function search(query, k = 10, email = null) {
   const body = { query: normalizeQuery(query), k };
   if (email && looksLikeEmail(email)) body.email = email;
   return post("/api/ask-veeva/search", body);
 }
 
-/** (Optionnel) Fuzzy doc finder — “Vouliez-vous dire…” (endpoint facultatif côté serveur) */
+/** “Vouliez-vous dire…” – filename/fuzzy léger (backend find-docs) */
 export async function findDocs(q) {
   const qs = new URLSearchParams({ q: normalizeQuery(q) ?? "" }).toString();
   return get(`/api/ask-veeva/find-docs?${qs}`);
