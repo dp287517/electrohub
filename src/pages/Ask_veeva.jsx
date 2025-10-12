@@ -15,6 +15,7 @@ import {
   getUserEmail,
   openDoc,
   checkFile,
+  sendFeedback,
 } from "../utils/ask_veeva.js";
 
 /* ------------------------- Petits utilitaires UI ------------------------- */
@@ -103,7 +104,40 @@ function CitationChips({ citations, onPeek, max = 3 }) {
   );
 }
 
-function Message({ role, text, citations, onPeek }) {
+function FeedbackBar({ onVote, state }) {
+  // state: 'idle' | 'up' | 'down' | 'sent'
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <button
+        onClick={() => onVote("up")}
+        disabled={state === "sent"}
+        className={clsx(
+          "text-xs px-2 py-1 rounded border",
+          state === "up" ? "bg-green-50 text-green-700 border-green-200"
+                         : "bg-gray-50 text-gray-700 hover:bg-gray-100"
+        )}
+        title="Utile"
+      >
+        👍 Utile
+      </button>
+      <button
+        onClick={() => onVote("down")}
+        disabled={state === "sent"}
+        className={clsx(
+          "text-xs px-2 py-1 rounded border",
+          state === "down" ? "bg-red-50 text-red-700 border-red-200"
+                           : "bg-gray-50 text-gray-700 hover:bg-gray-100"
+        )}
+        title="Pas utile"
+      >
+        👎 Pas utile
+      </button>
+      {state === "sent" && <span className="text-xs text-gray-500">Merci pour le feedback.</span>}
+    </div>
+  );
+}
+
+function Message({ role, text, citations, onPeek, feedback, onVote }) {
   const isUser = role === "user";
   return (
     <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
@@ -115,6 +149,9 @@ function Message({ role, text, citations, onPeek }) {
       >
         <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
         {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
+        {!isUser && onVote && (
+          <FeedbackBar onVote={onVote} state={feedback?.state || "idle"} />
+        )}
       </div>
     </div>
   );
@@ -225,6 +262,7 @@ function SidebarContexts({
 function Viewer({ file, onClose }) {
   const [err, setErr] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [mime, setMime] = useState(null);
 
   useEffect(() => {
     let cancel = false;
@@ -235,6 +273,7 @@ function Viewer({ file, onClose }) {
       if (cancel) return;
       if (res.ok) {
         setPreviewUrl(res.url || buildFileURL(file.doc_id));
+        setMime(res.mime || null);
       } else {
         setErr(res.error || "indisponible");
         setPreviewUrl(buildFileURL(file.doc_id));
@@ -245,8 +284,9 @@ function Viewer({ file, onClose }) {
 
   if (!file) return null;
 
+  const url = previewUrl || buildFileURL(file.doc_id);
   const looksVideo = isVideoFilename(file.filename);
-  const fileURL = previewUrl || buildFileURL(file.doc_id);
+  const looksPdf = (mime && mime.includes("pdf")) || /\.pdf$/i.test(file.filename);
 
   return (
     <div className="fixed inset-0 bg-black/50 z-40 flex items-center justify-center p-4">
@@ -263,7 +303,7 @@ function Viewer({ file, onClose }) {
           </div>
           <div className="flex items-center gap-2">
             <a
-              href={fileURL}
+              href={url}
               target="_blank"
               rel="noreferrer"
               className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
@@ -273,7 +313,7 @@ function Viewer({ file, onClose }) {
               Ouvrir l’original
             </a>
             <button
-              onClick={() => copy(fileURL)}
+              onClick={() => copy(url)}
               className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
               title="Copier l’URL"
             >
@@ -292,16 +332,32 @@ function Viewer({ file, onClose }) {
           {looksVideo ? (
             <div className="w-full h-full p-2">
               <video
-                src={fileURL}
+                src={url}
                 controls
                 className="w-full h-[70vh] max-h-full"
                 onError={() => setErr("erreur de lecture vidéo")}
               />
             </div>
+          ) : looksPdf ? (
+            // 🧩 Rendu PDF natif du navigateur (bien meilleur que l’iframe texte)
+            <object
+              data={`${url}#view=FitH`}
+              type="application/pdf"
+              className="w-full h-[80vh]"
+              onError={() => setErr("erreur de rendu PDF")}
+            >
+              <iframe
+                title="preview-pdf-fallback"
+                src={url}
+                className="w-full h-[80vh]"
+                loading="eager"
+                onError={() => setErr("erreur de chargement iframe")}
+              />
+            </object>
           ) : (
             <iframe
               title="preview"
-              src={fileURL}
+              src={url}
               className="w-full h-[80vh]"
               loading="eager"
               onError={() => setErr("erreur de chargement iframe")}
@@ -318,7 +374,6 @@ function ChatBox() {
   const [ready, setReady] = useState(false);
   const [sending, setSending] = useState(false);
   const [input, setInput] = useState("");
-  const [k, setK] = useState(6);
   const [contexts, setContexts] = useState([]);
   const [selectedDocs, setSelectedDocs] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState([]);
@@ -339,6 +394,9 @@ function ChatBox() {
       return [{ role: "assistant", text: "Bonjour 👋 — Posez votre question." }];
     }
   });
+
+  // Feedback local par message assistant: { [index]: 'idle'|'up'|'down'|'sent' }
+  const [feedbackState, setFeedbackState] = useState({});
 
   useEffect(() => {
     sessionStorage.setItem("askVeeva_chat", JSON.stringify(messages));
@@ -383,11 +441,36 @@ function ChatBox() {
   function selectOnly(docId) { setSelectedDocs(new Set([docId])); }
   function clearSelection() { setSelectedDocs(new Set()); }
 
+  function setMsgFeedback(idx, next) {
+    setFeedbackState((s) => ({ ...s, [idx]: next }));
+  }
+
+  async function submitFeedbackFor(index, vote) {
+    // Cherche la dernière question utilisateur avant ce message assistant
+    const assistantMsg = messages[index];
+    const lastUserBefore = [...messages.slice(0, index)].reverse().find((m) => m.role === "user")?.text || "";
+    const primaryCitation = assistantMsg?.citations?.[0]?.doc_id || null;
+
+    try {
+      setMsgFeedback(index, vote);
+      await sendFeedback({
+        question: lastUserBefore || "(question inconnue - feedback inline)",
+        doc_id: primaryCitation,
+        useful: vote === "up",
+        note: null,
+        email: email || null,
+      });
+      setMsgFeedback(index, "sent");
+    } catch {
+      // en cas d'erreur on reste sur 'up'/'down'
+    }
+  }
+
   // cœur: ask + needProfile
   async function runAsk(q, docFilter = []) {
     setSending(true);
     try {
-      const resp = await ask(q, k, docFilter, "auto", email);
+      const resp = await ask(q, 6 /* ignoré par le backend si auto */, docFilter, "auto", email);
 
       if (resp?.needProfile) {
         setPendingQuestion(q);
@@ -491,14 +574,12 @@ function ChatBox() {
   }
 
   async function handleOpen(c) {
-    // 🔑 Utilise l’URL résolue par le backend (original ou preview)
     const res = await checkFile(c.doc_id);
     if (!res.ok) {
       alert(`Impossible d’ouvrir le fichier : ${res.error || "inconnu"}`);
       return;
     }
     try { await openDoc(c.doc_id, { from: "sidebar_open" }); } catch {}
-    // Respecte la meilleure URL retournée (peut être /preview/:id si l’original a bougé)
     window.open(res.url || buildFileURL(c.doc_id), "_blank", "noopener");
   }
 
@@ -520,65 +601,21 @@ function ChatBox() {
     setSuggestions([]);
     setWaitingProfile(false);
     setPendingQuestion(null);
+    setFeedbackState({});
   }
-
-  const userBadge =
-    user?.email
-      ? `${user.email}${user?.role || user?.sector ? " — " : ""}${user?.role ? user.role : ""}${user?.role && user?.sector ? " / " : ""}${user?.sector ? user.sector : ""}`
-      : (email ? `${email} (local)` : "invité");
 
   return (
     <div className="flex flex-col h-full">
-      {/* Bandeau */}
+      {/* En-tête minimal (plus de Connecté/invité, plus de Top-K) */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <div className="text-sm text-gray-600 flex items-center gap-2">
-          <span>{ready ? "Connecté" : "Hors-ligne"} •</span>
-          <span className="text-xs px-2 py-0.5 rounded bg-gray-100">{userBadge}</span>
-          <label className="flex items-center gap-1">
-            <span title="Top-K = nombre d’extraits de documents passés au modèle">Top-K</span>
-            <select
-              className="border rounded px-1 py-0.5 text-sm"
-              value={k}
-              onChange={(e) => setK(Number(e.target.value))}
-              title="Nombre de passages contextuels récupérés pour répondre"
-            >
-              {[6, 10, 20, 40].map((n) => (
-                <option key={n} value={n}>{n}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onClearChat}
-            className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
-          >
-            Supprimer la conversation
-          </button>
-          <div className="hidden sm:flex gap-2">
-            {[
-              "Montre-moi les SOP PPE",
-              "Quelles sont les étapes de validation ?",
-              "Où est la dernière version ?",
-            ].map((s, i) => (
-              <button
-                key={i}
-                onClick={() => quickAsk(s)}
-                className="text-xs px-2 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-700"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
+        <div className="text-sm text-gray-900 font-medium">Recherche IA</div>
+        <button
+          onClick={onClearChat}
+          className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
+        >
+          Supprimer la conversation
+        </button>
       </div>
-
-      {/* Info subtile si aucun profil */}
-      {!user?.role || !user?.sector ? (
-        <div className="mb-2 text-xs text-gray-600">
-          Astuce : tu peux écrire directement ici <span className="font-medium">« Packaging »</span> puis <span className="font-medium">« SSOL »</span> (ou ton email : <em>prenom.nom@site.com</em>) — je mémorise et je n’irai plus te le redemander.
-        </div>
-      ) : null}
 
       {/* Layout 2 colonnes : Chat (2fr) | Sidebar (1fr) */}
       <div className="grid grid-cols-1 xl:grid-cols-[2fr_1fr] gap-4">
@@ -589,7 +626,22 @@ function ChatBox() {
             className="h-[52vh] sm:h-[60vh] xl:h-[66vh] overflow-auto space-y-3 p-2 bg-gradient-to-b from-gray-50 to-gray-100 rounded-lg border"
           >
             {messages.map((m, i) => (
-              <Message key={i} role={m.role} text={m.text} citations={m.citations} onPeek={handlePeek} />
+              <Message
+                key={i}
+                role={m.role}
+                text={m.text}
+                citations={m.citations}
+                onPeek={(c) => {
+                  setViewerFile({ doc_id: c.doc_id, filename: c.filename });
+                  try { openDoc(c.doc_id, { from: "chip_peek" }); } catch {}
+                }}
+                feedback={m.role === "assistant" ? { state: feedbackState[i] || "idle" } : null}
+                onVote={
+                  m.role === "assistant"
+                    ? async (vote) => submitFeedbackFor(i, vote)
+                    : null
+                }
+              />
             ))}
             {sending && <div className="text-xs text-gray-500 animate-pulse px-2">Ask Veeva rédige…</div>}
           </div>
@@ -647,7 +699,10 @@ function ChatBox() {
               selectOnly={selectOnly}
               clearSelection={clearSelection}
               onAskSelected={onAskSelected}
-              onPeek={handlePeek}
+              onPeek={(c) => {
+                setViewerFile({ doc_id: c.doc_id, filename: c.filename });
+                try { openDoc(c.doc_id, { from: "sidebar_peek" }); } catch {}
+              }}
               onOpen={handleOpen}
             />
           </div>
@@ -661,6 +716,7 @@ function ChatBox() {
 }
 
 /* -------------------------------- Import box ------------------------------- */
+/* ⚠️ NE PAS MODIFIER CETTE PARTIE (demandé) */
 function ImportBox() {
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
