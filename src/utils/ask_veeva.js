@@ -46,6 +46,37 @@ async function fetchPathForm(path, formData, timeoutMs = 30000) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Intent & normalization helpers (client-side hints)
+ * ------------------------------------------------------------------ */
+
+/** Détecte si une chaîne ressemble à un email (léger) */
+const looksLikeEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(s || "").trim());
+
+/** Normalise quelques patterns fréquents (SOP & N2000-2 variantes) */
+export function normalizeQuery(q = "") {
+  let s = String(q || "");
+  // N2000-2 / 20002 / 2000 2 → N2000-2
+  s = s.replace(/\bN?\s*([12]\d{3})\s*[- ]?\s*([12])\b/gi, (_m, a, b) => `N${a}-${b}`);
+  // variantes N20002 → N2000-2
+  s = s.replace(/\bN?(\d{4})0?[- ]?([12])\b/gi, (_m, a, b) => `N${a}-${b}`);
+  // SOP → QD-SOP-XXXXXX (si 5-7 digits)
+  s = s.replace(/\b(QD-?\s*)?SOP[-\s]?(\d{5,7})\b/gi, (_m, _q, num) => `QD-SOP-${String(num).padStart(6, "0")}`);
+  return s;
+}
+
+const RE_DESCRIBE = /\b(d[ée]cris|r[ée]sume|[ée]léments? principaux|contenu|points? cl[ée]s|proc[ée]dure|[ée]tapes|qu'est-ce|quels sont)\b/i;
+const RE_ANALYZE  = /\b(incoh[ée]rences?|contradictions?|divergences?|compare(r|z)?|coh[ée]rence|conflits?)\b/i;
+const RE_SOP      = /\bSOP\b/i;
+
+export function guessIntent(q = "") {
+  const s = String(q || "");
+  if (RE_ANALYZE.test(s)) return "analyze";
+  if (RE_DESCRIBE.test(s)) return "describe";
+  if (RE_SOP.test(s)) return "sop_lookup";
+  return "rag";
+}
+
+/* ------------------------------------------------------------------ *
  * Public API wrappers
  * ------------------------------------------------------------------ */
 
@@ -63,43 +94,60 @@ export const me = getCurrentUser;
 
 /* ------------------------------ ASK / SEARCH ------------------------------ */
 
-/** Détecte si une chaîne ressemble à un email (léger) */
-const looksLikeEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(s || "").trim());
-
 /**
- * ASK (RAG) — avec personnalisation.
- * Compat paramètres :
- *   - ancien usage : ask(q, k, docFilter, email, "auto")
- *   - usage documenté : ask(q, k, docFilter, "auto", email)
- * @param {string} question
- * @param {number} k
- * @param {string[]} docFilter
- * @param {"auto"|"none"|string|null} contextMode
- * @param {string|null} email
+ * ASK (RAG+intents) — avec personnalisation.
+ * Compat signature:
+ *   - ancien: ask(q, k, docFilter, email, "auto")
+ *   - nouveau: ask(q, k, docFilter, "auto", email)
+ * Hints client envoyés: ui_version, intent_hint, normalized_query (ignorés si backend ancien).
  */
 export async function ask(question, k = 6, docFilter = [], contextMode = "auto", email = null) {
-  // Normalisation pour accepter les deux signatures
+  // Normalisation ancienne signature
   if (looksLikeEmail(contextMode) && (email === null || email === undefined)) {
     email = contextMode;
     contextMode = "auto";
   }
   if (contextMode == null || contextMode === "") contextMode = "auto";
 
-  const body = { question, k, docFilter, contextMode };
-  if (email && looksLikeEmail(email)) body.email = email; // le backend lit aussi le cookie si absent
+  const normalized = normalizeQuery(question);
+  const body = {
+    question,
+    k,
+    docFilter,
+    contextMode,
+    // hints côté client (le backend les ignore si non gérés)
+    ui_version: "fe-2025-10-12",
+    intent_hint: guessIntent(question),
+    normalized_query: normalized !== question ? normalized : undefined,
+  };
+  if (email && looksLikeEmail(email)) body.email = email;
+
   return post("/api/ask-veeva/ask", body);
+}
+
+/** Aides explicites (wrappers) — facultatif : force le wording côté user */
+export async function askDescribe(target, opts = {}) {
+  const q = typeof target === "string"
+    ? `Décris-moi précisément les éléments principaux, étapes, IPC et tolérances de: ${target}`
+    : `Décris-moi précisément le document demandé.`;
+  return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null);
+}
+
+export async function askAnalyze(topic, opts = {}) {
+  const q = `Compare et détecte les incohérences/contradictions sur: ${topic}. Donne recommandations actionnables.`;
+  return ask(q, opts.k ?? 6, opts.docFilter ?? [], opts.contextMode ?? "auto", opts.email ?? null);
 }
 
 /** Recherche simple */
 export async function search(query, k = 10, email = null) {
-  const body = { query, k };
+  const body = { query: normalizeQuery(query), k };
   if (email && looksLikeEmail(email)) body.email = email;
   return post("/api/ask-veeva/search", body);
 }
 
 /** (Optionnel) Fuzzy doc finder — “Vouliez-vous dire…” (endpoint facultatif côté serveur) */
 export async function findDocs(q) {
-  const qs = new URLSearchParams({ q: q ?? "" }).toString();
+  const qs = new URLSearchParams({ q: normalizeQuery(q) ?? "" }).toString();
   return get(`/api/ask-veeva/find-docs?${qs}`);
 }
 
@@ -112,7 +160,7 @@ export async function uploadSmall(file) {
   if (ext === "zip") {
     fd.append("zip", file);
     return fetchPathForm("/api/ask-veeva/uploadZip", fd);
-  }
+    }
   fd.append("file", file);
   return fetchPathForm("/api/ask-veeva/uploadFile", fd);
 }
@@ -252,7 +300,6 @@ export async function checkFile(docId, timeoutMs = 8000) {
       return { ok: false, error: j?.error || `HTTP ${res.status}` };
     }
     if (j.ok) {
-      // url pointe soit vers /file/:id (original dispo), soit /preview/:id (fallback index)
       return {
         ok: true,
         url: j.url || buildFileURL(docId),
@@ -292,4 +339,11 @@ export function setUserEmail(email) {
 }
 export function getUserEmail() {
   try { return localStorage.getItem("askVeeva_email") || null; } catch { return null; }
+}
+
+/* ------------------------------ UI helpers (facultatif) ------------------------------ */
+
+/** Envoie un vote “👍/👎” minimaliste (utile pour les boutons pouce) */
+export async function voteUseful({ question, doc_id = null, useful = true, note = "" }) {
+  return sendFeedback({ question, doc_id, useful, note });
 }
