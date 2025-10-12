@@ -1,4 +1,4 @@
-// server_ask_veeva.js — Ask Veeva (hybrid retriever + topic memory + global/specific intent)
+// server_ask_veeva.js — Ask Veeva (hybrid retriever + topic memory + global/specific intent + SOP/IDR resolver)
 // Node ESM
 
 import express from "express";
@@ -188,7 +188,7 @@ app.use((req, res, next) => {
 });
 
 // -----------------------------------------------------------------------------
-// Schéma (inchangé hors index vectoriel déjà prévu)
+// Schéma
 // -----------------------------------------------------------------------------
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS vector;`);
@@ -426,7 +426,7 @@ async function jobById(id) {
 }
 
 // -----------------------------------------------------------------------------
-// ZIP streaming & parsers (identique à avant)
+// ZIP streaming & parsers
 // -----------------------------------------------------------------------------
 async function streamIngestZip(absZipPath, onFile) {
   const zip = new StreamZip.async({ file: absZipPath, storeEntries: true });
@@ -776,7 +776,7 @@ app.post("/api/ask-veeva/personalize", async (_req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// SEARCH (léger) — inchangé
+// SEARCH (léger)
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/search", async (req, res) => {
   const t0 = Date.now();
@@ -852,9 +852,9 @@ const THREADS = new Map();
 /*
   THREADS[threadId] = {
     lastTerms: string[],
-    topicHint: string,           // e.g., "elimination des déchets"
-    preferGlobal: boolean,       // true => SOP/procédure cadre
-    preferSOP: boolean,          // true => SOP before WI/IDR
+    topicHint: string,
+    preferGlobal: boolean,
+    preferSOP: boolean,
     lastAt: number
   }
 */
@@ -886,14 +886,14 @@ function updateThreadFromQuestion(t, q) {
     t.preferSOP = false;
   }
 
-  // Update hints (if no explicit hint, infer head words)
+  // Update topic hint (si vide)
   const kw = ts.filter(w => w.length >= 3).slice(0, 8).join(" ");
   if (!t.topicHint && kw) t.topicHint = kw;
   t.lastTerms = ts;
   t.lastAt = Date.now();
 }
 
-// Heuristique généralité de fichier
+// Heuristiques généralité de fichier
 function isGeneralFilename(fn = "") {
   const f = norm(fn);
   const hasLineNo = /\b(91\d{2}|N\d{3,4}[-\s_]*\d)\b/.test(f) || /\b(ligne|line|micro)\b/.test(f);
@@ -905,9 +905,18 @@ function isSpecificFilename(fn = "") {
   const f = norm(fn);
   return /\b(91\d{2}|N\d{3,4}[-\s_]*\d|ligne|micro)\b/.test(f);
 }
+function filenameScopePenalty(filename = "", preferGlobal = false) {
+  if (!filename) return 0;
+  const specificHints = ["microdoseur", "fenipic", "vignetteuse", "neri", "sirop", "otrivin", "lin_", "9142", "9136", "9135"];
+  const f = filename.toLowerCase();
+  const isSpecific = specificHints.some(k => f.includes(k));
+  if (preferGlobal && isSpecific) return -0.35;
+  if (!preferGlobal && !isSpecific) return -0.10; // léger
+  return 0;
+}
 
 // -----------------------------------------------------------------------------
-// SOP/IDR extraction helpers
+// SOP/IDR extraction + resolvers
 // -----------------------------------------------------------------------------
 const RE_SOP = /\b(?:QD-?)?SOP[-\s]?([A-Z0-9-]{3,})\b/ig;
 const RE_IDR = /\bIDR[-\s]?[A-Z0-9\-]{2,}\b/ig;
@@ -919,6 +928,65 @@ function extractCodes(text = "", filename = "") {
     while ((m = re.exec(filename)) !== null) set.add(m[0].replace(/\s+/g, ""));
   }
   return [...set];
+}
+
+async function extractCodesFromDoc(docId, firstNChunks = 6) {
+  const { rows } = await pool.query(
+    `SELECT content FROM askv_chunks WHERE doc_id=$1 ORDER BY chunk_index ASC LIMIT $2`,
+    [docId, Math.max(3, firstNChunks)]
+  );
+  const found = new Set();
+  for (const r of rows) {
+    for (const c of extractCodes(r.content || "", "")) found.add(c);
+  }
+  return [...found];
+}
+
+async function resolveCodesWithTopic({ question, thread, type = "any" }) {
+  // 1) si la question contient déjà un code, renvoyer direct
+  const inline = extractCodes(question || "", "");
+  if (inline.length) return { codes: inline, from: "inline", file: null };
+
+  // 2) requête pysearch basée sur le topic
+  const topicQ = thread?.topicHint || "";
+  const base = type === "sop" ? "SOP" : type === "idr" ? "IDR" : "SOP IDR";
+  const q = [base, topicQ].filter(Boolean).join(" ").trim() || base;
+
+  let items = [];
+  try {
+    if (PYSEARCH_ON) {
+      const r = await fetch(PYSEARCH_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query: q, k: 60, role: null, sector: null, rerank: true })
+      }).then(x => x.ok ? x.json() : null).catch(()=>null);
+      if (r?.ok && Array.isArray(r.items)) items = r.items;
+    }
+  } catch {}
+
+  // 3) rescorer selon global/specific
+  const rescored = items.map(it => {
+    const adj = (it.score_final ?? it.score ?? 0) + filenameScopePenalty(it.filename || "", !!thread?.preferGlobal);
+    return { ...it, _score2: adj };
+  }).sort((a,b)=> b._score2 - a._score2);
+
+  // 4) extraire codes des top docs
+  for (const it of rescored.slice(0, 12)) {
+    const codes = await extractCodesFromDoc(it.doc_id, 6);
+    const filtered = type === "sop"
+      ? codes.filter(c => /^QD-?SOP/i.test(c))
+      : type === "idr"
+      ? codes.filter(c => /^IDR/i.test(c))
+      : codes;
+    if (filtered.length) {
+      return {
+        codes: filtered,
+        from: "doc",
+        file: { doc_id: it.doc_id, filename: it.filename }
+      };
+    }
+  }
+  return { codes: [], from: "none", file: null };
 }
 
 // -----------------------------------------------------------------------------
@@ -950,17 +1018,13 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
         );
         user = await getUserByEmail(userEmail);
       }
-      if (!user.role || !user.sector) {
-        // On ne bloque plus : on répond mais on propose de préciser (UX)
-        // (si tu veux re-bloquer, renvoie needProfile comme avant)
-      }
     }
 
     // Thread memory
     const thread = getThread(req.threadId);
     updateThreadFromQuestion(thread, originalQuestion);
 
-    // Si l’utilisateur dit “sans contexte”
+    // Mode sans contexte (répond générique, on ne bloque pas)
     if (contextMode === "none") {
       const text = `Mode sans contexte activé.\n\nQuestion: ${originalQuestion}\n\nJe peux répondre de manière générale, mais précise-moi si tu veux que je base la réponse sur les documents.`;
       await pool.query(
@@ -978,6 +1042,46 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
         citations: [],
         contexts: [],
       });
+    }
+
+    // -------- Detect “code” follow-up (SOP/IDR) et résoudre via topic --------
+    const askNumFollow = /\b(num(é|e)ro|ref(é|e)rence|code)\b/i.test(originalQuestion) &&
+                         /\b(sop|qd-sop|idr)\b/i.test(originalQuestion);
+    if (askNumFollow) {
+      const wantSOP = /\bsop|qd-sop\b/i.test(originalQuestion);
+      const type = wantSOP ? "sop" : "any";
+      const { codes, file, from } = await resolveCodesWithTopic({ question: originalQuestion, thread, type });
+      if (codes && codes.length) {
+        const main = codes[0];
+        const extras = codes.slice(1, 4);
+        const extraTxt = extras.length ? `\nAutres possibles : ${extras.map(c=>`**${c}**`).join(", ")}.` : "";
+
+        const citations = file ? [{
+          doc_id: file.doc_id,
+          filename: file.filename,
+          chunk_index: 0,
+          score: 1.0,
+          snippet: ""
+        }] : [];
+
+        const contexts = file ? [{
+          doc_id: file.doc_id,
+          filename: file.filename,
+          chunks: []
+        }] : [];
+
+        await pool.query(
+          `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
+          [userEmail, originalQuestion, (main+extraTxt).length, Date.now() - t0, { mode: "code_lookup_topic", from, codes: codes.slice(0,4) }]
+        ).catch(()=>{});
+
+        return res.json({
+          ok: true,
+          text: `Numéro de ${wantSOP ? "SOP" : "référence"} : **${main}**.${extraTxt}`,
+          citations,
+          contexts
+        });
+      }
     }
 
     // -------- Hybrid candidates from pysearch (best-effort) --------
@@ -1095,7 +1199,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
       merged = [...generics, ...specifics];
     }
 
-    // -------- If question is about "numero SOP / IDR", answer with code(s) --------
+    // -------- If direct “numéro SOP/IDR” sans topic utilisable, plan B (extraction brute) --------
     const askNum = /\b(num(é|e)ro|ref(é|e)rence|code)\b/i.test(originalQuestion) &&
                    /\b(sop|qd-sop|idr)\b/i.test(originalQuestion);
     if (askNum) {
@@ -1105,7 +1209,6 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
         const codes = extractCodes(m.snippet || "", m.filename || "");
         for (const c of codes) cand.push({ code: c, doc_id: m.doc_id, filename: m.filename, chunk_index: m.chunk_index, score: m.score });
       }
-      // distinct by code
       const seen = new Set();
       const uniq = cand.filter(c => (seen.has(c.code) ? false : (seen.add(c.code), true)))
                        .sort((a,b)=> b.score - a.score)
@@ -1134,7 +1237,7 @@ app.post("/api/ask-veeva/ask", async (req, res) => {
 
         await pool.query(
           `INSERT INTO askv_events(user_email,type,question,answer_len,latency_ms,meta) VALUES ($1,'ask_answered',$2,$3,$4,$5)`,
-          [userEmail, originalQuestion, text.length, Date.now() - t0, { mode: "code_lookup", codes: uniq.map(u=>u.code) }]
+          [userEmail, originalQuestion, text.length, Date.now() - t0, { mode: "code_lookup_fallback", codes: uniq.map(u=>u.code) }]
         ).catch(()=>{});
 
         return res.json({ ok: true, text, citations, contexts });
@@ -1226,7 +1329,7 @@ Contraintes:
 });
 
 // -----------------------------------------------------------------------------
-// Upload routes (identiques)
+// Upload routes
 // -----------------------------------------------------------------------------
 app.post("/api/ask-veeva/uploadZip", uploadDirect.single("zip"), async (req, res) => {
   try {
@@ -1364,7 +1467,7 @@ app.post("/api/ask-veeva/chunked/abort", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// FICHIERS : metadata + original + preview (identique hors micro-ajustements)
+// FICHIERS : metadata + original + preview
 // -----------------------------------------------------------------------------
 function sanitizeNameForStore(name = "") { return String(name).replace(/[^\w.\-]+/g, "_"); }
 async function tryFindInStoreDirByPattern(originalName) {
