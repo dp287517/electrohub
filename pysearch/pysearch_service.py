@@ -1,32 +1,34 @@
-# pysearch/pysearch_service.py
-# FastAPI micro-service: Deep Hybrid retrieval for Ask Veeva (v4 - "DeepSearch")
-# - BM25 + TF-IDF(word) + TF-IDF(char) over askv_chunks (content + filename)
-# - Strong normalization (SOP/N####-# variants, IDR)
-# - Query expansion:
-#     * Dynamic synonyms from DB table askv_synonyms (scalable to thousands of topics)
-#     * Lightweight bilingual defaults (FR<->EN) when DB has no hits
-# - Global vs Specific intent: query hints + filename heuristics (+ SOP bias)
-# - Domain keyword boosts + negative token penalties
-# - Optional Cross-Encoder reranking (Sentence-Transformers)
-# - MMR diversification to reduce redundancy across chunks
-# - Read-only Postgres (NEON_DATABASE_URL / DATABASE_URL)
+# DeepSearch++ v5 — Ask Veeva
+# FastAPI micro-service: retrieval “qui tape fort”
+# - Hybrid sparse: BM25 + TF-IDF(word 1..3) + TF-IDF(char 3..5)
+# - Domain-normalization (SOP/N####-#, IDR) + bilingual FR<->EN expansion
+# - Heuristics: filename boosts, code boosts, negative tokens, role/sector bias
+# - Query rewriting: multi-subqueries (FR/EN, codes, variantes) + synonym DB
+# - Two-stage MMR (doc-level then chunk-level) to maximize diversity
+# - Optional Cross-Encoder rerank (default: BAAI/bge-reranker-large, fallback to MiniLM)
+# - Phrase-level evidence: optional table askv_spans (span embeddings) if present
+# - /compare endpoint: builds an evidence matrix across docs (criteria planner light)
+# - Answerability guard (light): CERTAIN | PARTIAL | NR based on evidence coverage
+#
+# Read-only Postgres. Everything degrades gracefully if advanced schema absent.
 #
 # Endpoints:
 #   GET  /health
 #   POST /reindex
-#   POST /search {query,k,role,sector,rerank}
+#   POST /search {query,k,role,sector,rerank,deep}
+#   POST /compare {topic, doc_ids[], criteria?, k_per_crit?, role?, sector?}
 #
 # Launch:
 #   uvicorn pysearch_service:app --host 0.0.0.0 --port 8088
 # Or:
 #   python pysearch_service.py
 
-import os, re, json, time
+import os, re, json, time, math
 from typing import List, Dict, Any, Optional, Tuple
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -38,23 +40,33 @@ from rank_bm25 import BM25Okapi
 from sklearn.feature_extraction.text import TfidfVectorizer
 import numpy as np
 
-# ------------ Config / env ------------
-RERANK_ENABLED = os.getenv("PYSEARCH_RERANK", "1").strip().lower() not in ("0","false","no")
-RERANK_MODEL_NAME = os.getenv("PYSEARCH_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
-RERANK_CAND = int(os.getenv("PYSEARCH_RERANK_CAND", "120"))
-RERANK_KEEP = int(os.getenv("PYSEARCH_RERANK_KEEP", "60"))
-
+# ---------------- Config / env ----------------
 PG_URL = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL")
+
 TOPK_DEFAULT = int(os.getenv("PYSEARCH_TOPK", "60"))
-
-# Deep search toggles
 DEEP_ON = os.getenv("PYSEARCH_DEEP", "1").strip().lower() not in ("0","false","no")
-MMR_LAMBDA = float(os.getenv("PYSEARCH_MMR_LAMBDA", "0.7"))   # balance relevance vs diversity
-MMR_LIMIT = int(os.getenv("PYSEARCH_MMR_LIMIT", "24"))        # diversify among top-N before truncation
 
-# Small keyword boosts (generic domain words frequently helpful)
+# Cross-Encoder rerank
+RERANK_ENABLED = os.getenv("PYSEARCH_RERANK", "1").strip().lower() not in ("0","false","no")
+DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-large"
+FALLBACK_RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANK_MODEL_NAME = os.getenv("PYSEARCH_RERANK_MODEL", DEFAULT_RERANK_MODEL)
+RERANK_CAND = int(os.getenv("PYSEARCH_RERANK_CAND", "150"))
+RERANK_KEEP = int(os.getenv("PYSEARCH_RERANK_KEEP", "80"))
+RERANK_ALPHA = float(os.getenv("PYSEARCH_RERANK_ALPHA", "0.85"))  # blend CE vs hybrid
+
+# MMR diversification
+MMR_LAMBDA_DOC = float(os.getenv("PYSEARCH_MMR_LAMBDA_DOC", "0.75"))
+MMR_LAMBDA_CHUNK = float(os.getenv("PYSEARCH_MMR_LAMBDA_CHUNK", "0.70"))
+MMR_LIMIT_DOC = int(os.getenv("PYSEARCH_MMR_LIMIT_DOC", "40"))
+MMR_LIMIT_CHUNK = int(os.getenv("PYSEARCH_MMR_LIMIT_CHUNK", "24"))
+
+# Evidence / spans
+USE_SPANS = os.getenv("PYSEARCH_USE_SPANS", "1").strip().lower() not in ("0","false","no")
+SPANS_TOP = int(os.getenv("PYSEARCH_SPANS_TOP", "3"))
+
+# Keyword/domain boosts
 KEYWORD_BOOSTS = {
-    # FR
     "sop": 0.30, "procédure": 0.25, "procedure": 0.25,
     "déchet": 0.45, "dechet": 0.45, "déchets": 0.45, "waste": 0.35,
     "sécurité": 0.25, "securite": 0.25, "safety": 0.25,
@@ -62,12 +74,11 @@ KEYWORD_BOOSTS = {
     "checklist": 0.30, "inspection": 0.18, "liste": 0.20, "contrôle": 0.18, "controle": 0.18,
     "idr": 0.55, "format": 0.25, "vignetteuse": 0.40, "neri": 0.20, "notice": 0.18,
     "réglages": 0.22, "reglages": 0.22, "ssol": 0.20, "liq": 0.20, "bulk": 0.15,
-    # EN generic
     "vfd": 0.45, "variable": 0.12, "frequency": 0.12, "inverter": 0.22, "drive": 0.16,
     "policy": 0.18, "policies": 0.18, "global": 0.12, "site": 0.10, "plant": 0.10
 }
 
-# Lightweight bilingual defaults (used only if DB synonyms don’t return anything)
+# FR<->EN defaults (only if synonyms miss)
 BILINGUAL_DEFAULTS = [
     ("procédure", "procedure standard operating procedure SOP"),
     ("liste de contrôle", "checklist check list inspection list"),
@@ -80,7 +91,7 @@ BILINGUAL_DEFAULTS = [
     ("traçabilité", "traceability genealogy"),
 ]
 
-# ------------ Cross-Encoder (optional) ------------
+# ----- Cross-Encoder (optional) -----
 ce_model = None
 ce_device = None
 if RERANK_ENABLED:
@@ -91,8 +102,13 @@ if RERANK_ENABLED:
         if dev not in ("cpu", "cuda"):
             dev = "cuda" if torch.cuda.is_available() else "cpu"
         ce_device = dev
-        ce_model = CrossEncoder(RERANK_MODEL_NAME, device=dev)
-        print(f"[pysearch] Cross-encoder loaded: {RERANK_MODEL_NAME} on {dev}")
+        try:
+            ce_model = CrossEncoder(RERANK_MODEL_NAME, device=dev)
+        except Exception:
+            # fallback quietly
+            RERANK_MODEL_NAME = FALLBACK_RERANK_MODEL
+            ce_model = CrossEncoder(RERANK_MODEL_NAME, device=dev)
+        print(f"[pysearch] Cross-encoder: {RERANK_MODEL_NAME} on {dev}")
     except Exception as e:
         print(f"[pysearch] WARN: cross-encoder disabled ({e})")
         ce_model = None
@@ -101,36 +117,23 @@ if RERANK_ENABLED:
 if not PG_URL:
     print("[pysearch] WARN: no Postgres URL in NEON_DATABASE_URL/DATABASE_URL")
 
-# ------------ Patterns / Normalization ------------
-# SOP: QD-SOP-038904 / SOP-038904 / SOP 38904 …
+# ---------------- Patterns / normalization ----------------
 RE_SOP_NUM = re.compile(r"\b(?:QD-?)?SOP[-\s]?(\d{4,7})\b", re.I)
 RE_SOP_FULL = re.compile(r"\b(?:QD-?)?SOP[-\s]?[A-Z0-9\-]{3,}\b", re.I)
-
-# N####-# (e.g., N2000-2, N1700-1) many variants -> canonical N####-#
 RE_NLINE = re.compile(r"\bN?\s*(?P<base>[12]\d{3})\s*(?:-|_|\s)?\s*(?P<suf>\d)\b", re.I)
-
-# IDR token presence (variants: "IDR", "I.D.R", "id r")
 RE_IDR = re.compile(r"\bI\.?D\.?R\.?\b", re.I)
 
 def normalize_codes(s: str) -> str:
-    """Map common variants to canonical forms."""
     t = s
-
-    # SOP: ensure canonical QD-SOP-XXXXXX when a pure number is seen with SOP
     def _sop_pad(m):
         num = m.group(1)
         num = num.zfill(6) if len(num) <= 6 else num
         return f"QD-SOP-{num}"
     t = RE_SOP_NUM.sub(_sop_pad, t)
-
-    # N####-# fold flexible forms to "N####-#"
     def _nline(m):
         return f"N{m.group('base')}-{m.group('suf')}"
     t = RE_NLINE.sub(_nline, t)
-
-    # Normalize standalone "IDR" variants to "IDR"
     t = RE_IDR.sub("IDR", t)
-
     return t
 
 def norm(s: str) -> str:
@@ -144,28 +147,19 @@ def norm(s: str) -> str:
 def tokenize(s: str) -> List[str]:
     return re.findall(r"[a-z0-9\-_/\.]+", norm(s))
 
-# Extract codes from text+filename for boosting
 def extract_codes(text: str) -> List[str]:
     s = text or ""
     out = set()
-
-    # SOP numbers & full
     for m in RE_SOP_NUM.findall(s):
         out.add(f"QD-SOP-{str(m).zfill(6)}")
     for m in RE_SOP_FULL.findall(s):
         out.add(m)
-
-    # N####-# flex → canonical
     for m in RE_NLINE.finditer(s):
         out.add(f"N{m.group('base')}-{m.group('suf')}")
-
-    # IDR presence
     if RE_IDR.search(s):
         out.add("IDR")
-
     return list(out)
 
-# Heuristique généralité/specificité des fichiers
 def is_general_filename(fn: str) -> bool:
     f = norm(fn)
     has_line_no = bool(re.search(r"\b(91\d{2}|n[12]\d{3}-\d|ligne|line|micro)\b", f))
@@ -177,14 +171,13 @@ def is_specific_filename(fn: str) -> bool:
     f = norm(fn)
     return bool(re.search(r"\b(91\d{2}|n[12]\d{3}-\d|ligne|line|micro|neri|vignetteuse)\b", f))
 
-# Détecte l'intent global / SOP à partir de la requête
 def intent_from_query(q: str) -> Tuple[bool,bool]:
     n = norm(q)
     prefer_global = any(w in n for w in ["global", "generale", "générale", "procedure", "procédure", "site", "usine", "policy", "policies"])
     prefer_sop = any(w in n for w in ["sop", "procédure", "procedure", "qd-sop"])
     return prefer_global, prefer_sop
 
-# ------------ Language guess (very light) ------------
+# ---------------- Language guess (very light) ----------------
 FR_HINTS = (" le ", " la ", " les ", " des ", " du ", " de ", " procédure", " déchets", " sécurité", " variateur")
 EN_HINTS = (" the ", " and ", " or ", " procedure", " checklist", " safety", " waste", " validation")
 def guess_lang(q: str) -> str:
@@ -195,21 +188,26 @@ def guess_lang(q: str) -> str:
     if en - fr >= 2: return "en"
     return "fr"
 
-# ------------ Data holders ------------
-DOCS: List[Dict[str, Any]] = []
+# ---------------- Data holders (RAM index) ----------------
+DOCS: List[Dict[str, Any]] = []           # rows from askv_chunks (+optional: page, section_title)
 TOKS: List[List[str]] = []
 FILEN_TOKS: List[List[str]] = []
 CODES: List[List[str]] = []
-ROW_TFIDF: Optional[np.ndarray] = None    # L2-normalized row vectors (word-level)
-ROW_CTFIDF: Optional[np.ndarray] = None   # char-level TFIDF rows (optional)
 
+ROW_TFIDF = None
+ROW_CTFIDF = None
 BM25: Optional[BM25Okapi] = None
 VECT_WORD: Optional[TfidfVectorizer] = None
 TFIDF_WORD = None
 VECT_CHAR: Optional[TfidfVectorizer] = None
 TFIDF_CHAR = None
 
-# ------------ DB helpers ------------
+# spans (optional)
+HAS_SPANS = False
+SPANS: List[Dict[str, Any]] = []          # askv_spans rows
+SPANS_DOCIDX: Dict[str, List[int]] = {}   # doc_id -> indices in SPANS
+
+# ---------------- DB helpers ----------------
 def db_query(sql: str, params=()):
     conn = psycopg2.connect(PG_URL)
     try:
@@ -219,34 +217,68 @@ def db_query(sql: str, params=()):
     finally:
         conn.close()
 
+def table_exists(name: str) -> bool:
+    rows = db_query(
+        "SELECT to_regclass(%s) AS t",
+        (name,)
+    )
+    return bool(rows and rows[0]["t"])
+
 def load_chunks():
-    rows = db_query("""
-        SELECT c.id AS chunk_id, c.doc_id, c.chunk_index, c.content, d.filename
+    # Try to pull optional columns if present (page, section_title)
+    has_page = False
+    has_title = False
+    cols = db_query("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name='askv_chunks'
+    """)
+    cset = {c["column_name"] for c in cols}
+    has_page = "page" in cset
+    has_title = "section_title" in cset
+
+    base_cols = "c.id AS chunk_id, c.doc_id, c.chunk_index, c.content, d.filename"
+    if has_page: base_cols += ", c.page"
+    if has_title: base_cols += ", c.section_title"
+
+    rows = db_query(f"""
+        SELECT {base_cols}
         FROM askv_chunks c
         JOIN askv_documents d ON d.id = c.doc_id
         ORDER BY c.id ASC
     """)
     return rows
 
-def fetch_synonyms_for_tokens(tokens: List[str]) -> List[Tuple[str,str,float]]:
-    if not tokens:
-        return []
-    # Match either term or alt_term against tokens (lowercased)
-    qs = ",".join(["%s"] * len(tokens))
-    sql = f"""
-      SELECT term, alt_term, COALESCE(weight,1.0) AS weight
-      FROM askv_synonyms
-      WHERE LOWER(term) IN ({qs}) OR LOWER(alt_term) IN ({qs})
-      LIMIT 500
-    """
-    params = [t.lower() for t in tokens] + [t.lower() for t in tokens]
-    try:
-        rows = db_query(sql, params)
-        return [(r["term"], r["alt_term"], float(r["weight"])) for r in rows]
-    except Exception:
-        return []
+def load_spans_if_any():
+    global HAS_SPANS, SPANS, SPANS_DOCIDX
+    HAS_SPANS = table_exists("askv_spans")
+    SPANS = []
+    SPANS_DOCIDX = {}
+    if not HAS_SPANS or not USE_SPANS:
+        return
+    # optional columns: page, bbox float4[]
+    cols = db_query("""
+        SELECT column_name FROM information_schema.columns
+        WHERE table_name='askv_spans'
+    """)
+    cset = {c["column_name"] for c in cols}
+    has_page = "page" in cset
+    has_bbox = "bbox" in cset
 
-# ------------ Indexing ------------
+    span_cols = "id, doc_id, chunk_index, span_index, text"
+    if has_page: span_cols += ", page"
+    if has_bbox: span_cols += ", bbox"
+
+    SPANS = db_query(f"""
+        SELECT {span_cols}
+        FROM askv_spans
+        ORDER BY id ASC
+    """) or []
+    # Build index per doc_id
+    for i, s in enumerate(SPANS):
+        d = str(s["doc_id"])
+        SPANS_DOCIDX.setdefault(d, []).append(i)
+
+# ---------------- Indexing ----------------
 def build_index():
     global DOCS, TOKS, FILEN_TOKS, CODES
     global BM25, VECT_WORD, TFIDF_WORD, VECT_CHAR, TFIDF_CHAR
@@ -257,27 +289,22 @@ def build_index():
     rows = load_chunks()
     DOCS = rows
 
-    TOKS = [tokenize(r["content"] or "") for r in DOCS]
-    FILEN_TOKS = [tokenize(r["filename"] or "") for r in DOCS]
-    CODES = [extract_codes((r["content"] or "") + " " + (r["filename"] or "")) for r in DOCS]
+    TOKS = [tokenize(r.get("content") or "") for r in DOCS]
+    FILEN_TOKS = [tokenize(r.get("filename") or "") for r in DOCS]
+    CODES = [extract_codes((r.get("content") or "") + " " + (r.get("filename") or "")) for r in DOCS]
 
     BM25 = BM25Okapi(TOKS) if len(DOCS) else None
 
-    # Build combined text for TF-IDF
-    corpus = [norm((r["content"] or "") + " " + (r["filename"] or "")) for r in DOCS]
+    corpus = [norm((r.get("content") or "") + " " + (r.get("filename") or "")) for r in DOCS]
 
     if corpus:
-        # Word-level TF-IDF (1..3-grams)
         VECT_WORD = TfidfVectorizer(analyzer="word", ngram_range=(1,3), min_df=2, max_df=0.95)
         TFIDF_WORD = VECT_WORD.fit_transform(corpus)
 
-        # Char-level TF-IDF (3..5-grams) for OCR/typos robustness
         VECT_CHAR = TfidfVectorizer(analyzer="char", ngram_range=(3,5), min_df=2, max_df=0.90)
         TFIDF_CHAR = VECT_CHAR.fit_transform(corpus)
 
-        # Precompute L2-normalized rows for MMR similarity
         def l2norm(mat):
-            # safe row-wise normalization
             norms = np.sqrt((mat.power(2)).sum(axis=1)).A1 + 1e-12
             inv = 1.0 / norms
             return mat.multiply(inv[:,None])
@@ -288,95 +315,130 @@ def build_index():
         VECT_CHAR = TFIDF_CHAR = None
         ROW_TFIDF = ROW_CTFIDF = None
 
+    # Load spans (optional)
+    load_spans_if_any()
+
     secs = round(time.time() - t0, 3)
-    print(f"[pysearch] indexed docs={len(DOCS)} in {secs}s")
-    return {"docs": len(DOCS), "secs": secs}
+    print(f"[pysearch] indexed chunks={len(DOCS)} spans={len(SPANS) if HAS_SPANS else 0} in {secs}s")
+    return {"docs": len(DOCS), "spans": len(SPANS) if HAS_SPANS else 0, "secs": secs}
 
 def ensure_index():
     if not DOCS:
         return build_index()
-    return {"docs": len(DOCS), "secs": 0.0}
+    return {"docs": len(DOCS), "spans": len(SPANS) if HAS_SPANS else 0, "secs": 0.0}
 
-# ------------ Query expansion (Deep) ------------
+# ---------------- Synonyms / expansion ----------------
+def fetch_synonyms_for_tokens(tokens: List[str]) -> List[Tuple[str,str,float]]:
+    if not tokens:
+        return []
+    qs = ",".join(["%s"] * len(tokens))
+    sql = f"""
+      SELECT term, alt_term, COALESCE(weight,1.0) AS weight
+      FROM askv_synonyms
+      WHERE LOWER(term) IN ({qs}) OR LOWER(alt_term) IN ({qs})
+      LIMIT 1000
+    """
+    params = [t.lower() for t in tokens] + [t.lower() for t in tokens]
+    try:
+        rows = db_query(sql, params)
+        return [(r["term"], r["alt_term"], float(r["weight"])) for r in rows]
+    except Exception:
+        return []
+
 def deep_expand_query(raw_q: str) -> str:
     if not DEEP_ON:
         return raw_q
-    # Normalize then split tokens (keep originals for phrase-like)
     n = norm(raw_q)
     toks = [t for t in re.findall(r"[a-z0-9\-_/\.]+", n) if t]
-    # Pull synonyms from DB
+
     syns = fetch_synonyms_for_tokens(toks)
     extras = []
-    for term, alt, w in syns:
+    for _term, alt, _w in syns:
         if alt and alt.lower() not in n:
-            # weight influences duplication; we append once, MMR will do the rest
             extras.append(alt)
-    # If no DB synonyms found, add a light bilingual default expansion for robustness
+
+    # bilingual defaults only if no DB synonym
     if not extras:
         for fr, en in BILINGUAL_DEFAULTS:
             if fr in n and en not in n:
                 extras.append(en)
             elif en in n and fr not in n:
                 extras.append(fr)
+
     if extras:
         return raw_q + " " + " ".join(sorted(set(extras)))
     return raw_q
 
-# ------------ Scoring core ------------
+def generate_subqueries(q: str) -> List[str]:
+    """FR/EN variants + code-focused & phrase-trimmed versions."""
+    n = norm(q)
+    subs = {q}
+
+    # If contains SOP/N####-#/IDR codes, isolate code-only subquery
+    codes = extract_codes(q)
+    for c in codes:
+        subs.add(c)
+
+    # Shorten very long queries to head bigrams for recall
+    toks = tokenize(q)
+    if len(toks) > 10:
+        subs.add(" ".join(toks[:6]))
+
+    # FR<->EN promptless swap (very light)
+    for fr, en in BILINGUAL_DEFAULTS:
+        if fr in n: subs.add(q + " " + en)
+        if any(w in n for w in en.split()):
+            subs.add(q + " " + fr)
+
+    # DB synonym expansion (short)
+    syns = fetch_synonyms_for_tokens(toks[:6])
+    for _, alt, _w in syns:
+        if alt:
+            subs.add(q + " " + alt)
+
+    return list(subs)[:6]  # small cap
+
+# ---------------- Scoring core ----------------
 def score_arrays_for_query(q: str) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
-    """
-    Returns arrays aligned with DOCS:
-      bm, tf_word, tf_char, fname_boost, code_boost, fuzzy
-    """
     qn = norm(q)
     q_tokens = tokenize(q)
     q_codes = extract_codes(q)
 
-    # negative tokens: '-term' lower-penalty for filenames containing them
     neg_tokens = [t[1:] for t in q_tokens if t.startswith("-") and len(t) > 1]
     q_tokens = [t for t in q_tokens if not t.startswith("-")]
 
-    # 1) BM25
     bm = np.zeros(len(DOCS))
-    if BM25:
-        bm = np.array(BM25.get_scores(q_tokens)) if q_tokens else bm
+    if BM25 and q_tokens:
+        bm = np.array(BM25.get_scores(q_tokens))
 
-    # 2) TF-IDF (word)
     tf_word = np.zeros(len(DOCS))
-    qvec_word = None
     if TFIDF_WORD is not None and VECT_WORD is not None:
         qvec_word = VECT_WORD.transform([qn])
         tf_word = (TFIDF_WORD @ qvec_word.T).toarray().ravel()
 
-    # 3) TF-IDF (char)
     tf_char = np.zeros(len(DOCS))
-    qvec_char = None
     if TFIDF_CHAR is not None and VECT_CHAR is not None:
         qvec_char = VECT_CHAR.transform([qn])
         tf_char = (TFIDF_CHAR @ qvec_char.T).toarray().ravel()
 
-    # 4) filename token overlap + keyword boosts + negative token penalty
     fname = np.zeros(len(DOCS))
     qset = set(q_tokens)
     for i, ft in enumerate(FILEN_TOKS):
-        if ft:
-            inter = qset.intersection(ft)
-            if inter:
-                fname[i] += min(0.5, 0.12 * len(inter))
-            lowfname = " ".join(ft)
-            for kw, b in KEYWORD_BOOSTS.items():
-                if kw in lowfname:
-                    fname[i] += b
-            # negative tokens reduce filename score
-            for nt in neg_tokens:
-                if nt and nt in lowfname:
-                    fname[i] -= 0.25
+        if not ft: continue
+        inter = qset.intersection(ft)
+        if inter:
+            fname[i] += min(0.5, 0.12 * len(inter))
+        lowfname = " ".join(ft)
+        for kw, b in KEYWORD_BOOSTS.items():
+            if kw in lowfname:
+                fname[i] += b
+        for nt in neg_tokens:
+            if nt and nt in lowfname:
+                fname[i] -= 0.25
 
-    # 5) code boosts (exact/fuzzy)
     code_boost = np.zeros(len(DOCS))
     for i, codes in enumerate(CODES):
-        if not codes:
-            continue
+        if not codes: continue
         for qc in q_codes:
             if qc in codes:
                 code_boost[i] += 1.25
@@ -384,202 +446,220 @@ def score_arrays_for_query(q: str) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.
                 if any(fuzz.ratio(qc.lower(), c.lower()) >= 90 for c in codes):
                     code_boost[i] += 0.7
 
-    # 6) fuzzy query vs filename (partial ratio)
     fuzzy = np.zeros(len(DOCS))
     if len(qn) >= 5:
         for i, r in enumerate(DOCS):
-            f = r["filename"] or ""
-            if not f:
-                continue
+            f = r.get("filename") or ""
+            if not f: continue
             sc = fuzz.partial_ratio(qn, norm(f))
-            if sc >= 92:
-                fuzzy[i] = 0.45
-            elif sc >= 84:
-                fuzzy[i] = 0.25
-            elif sc >= 78:
-                fuzzy[i] = 0.12
+            if sc >= 92: fuzzy[i] = 0.45
+            elif sc >= 84: fuzzy[i] = 0.25
+            elif sc >= 78: fuzzy[i] = 0.12
 
     return bm, tf_word, tf_char, fname, code_boost, fuzzy
 
+def _z(x: np.ndarray) -> np.ndarray:
+    if x.size == 0: return x
+    m = np.mean(x); s = np.std(x) or 1.0
+    return (x - m) / s
+
 def combine_scores(arrs: List[np.ndarray]) -> np.ndarray:
-    def z(x):
-        if x.size == 0:
-            return x
-        m = np.mean(x); s = np.std(x) or 1.0
-        return (x - m) / s
     bm, tfw, tfc, fname, code_boost, fuzzy = arrs
-    # Blend: BM25 + word TF-IDF weighted; char TF-IDF lightly; others additive
-    S = 0.60 * z(bm) + 0.56 * z(tfw) + 0.22 * z(tfc) + fname + code_boost + 0.5 * fuzzy
-    return S
+    return 0.60*_z(bm) + 0.56*_z(tfw) + 0.22*_z(tfc) + fname + code_boost + 0.5*fuzzy
 
-def score_hybrid(q: str, k: int, role: Optional[str], sector: Optional[str]):
-    if not DOCS:
-        return []
-
+def score_hybrid_single(q: str, role: Optional[str], sector: Optional[str]) -> np.ndarray:
     prefer_global, prefer_sop = intent_from_query(q)
-
     bm, tfw, tfc, fname, code_boost, fuzzy = score_arrays_for_query(q)
 
-    # 6) role/sector bias (soft)
     rs = np.zeros(len(DOCS))
     rlow = (role or "").lower()
     slow = (sector or "").lower()
     if rlow or slow:
         for i, r in enumerate(DOCS):
-            fn = (r["filename"] or "").lower()
-            if rlow and rlow in fn:
-                rs[i] += 0.06
-            if slow and slow in fn:
-                rs[i] += 0.06
+            fn = (r.get("filename") or "").lower()
+            if rlow and rlow in fn: rs[i] += 0.06
+            if slow and slow in fn: rs[i] += 0.06
 
-    # 7) global/specific & SOP intent boosts
     intent = np.zeros(len(DOCS))
     for i, r in enumerate(DOCS):
-        fn = r["filename"] or ""
+        fn = r.get("filename") or ""
         if prefer_global:
-            if is_general_filename(fn):
-                intent[i] += 0.35
-            if is_specific_filename(fn):
-                intent[i] -= 0.15
+            if is_general_filename(fn): intent[i] += 0.35
+            if is_specific_filename(fn): intent[i] -= 0.15
         else:
-            if is_specific_filename(fn):
-                intent[i] += 0.12
+            if is_specific_filename(fn): intent[i] += 0.12
         if prefer_sop and re.search(r"\b(sop|qd-sop)\b", fn, re.I):
             intent[i] += 0.25
 
     S = combine_scores([bm, tfw, tfc, fname, code_boost, fuzzy]) + rs + intent
+    return S
 
-    # top-k indices by score
-    kprime = min(max(k, 1), len(S))
-    idx = np.argpartition(-S, kprime - 1)[:kprime]
-    idx = idx[np.argsort(-S[idx])]
+def aggregate_over_subqueries(q: str, role: Optional[str], sector: Optional[str]) -> np.ndarray:
+    """Blend scores over generated sub-queries for recall."""
+    subs = [q] + generate_subqueries(q)
+    weights = np.linspace(1.0, 0.6, num=len(subs))  # decay
+    S = np.zeros(len(DOCS))
+    for w, sq in zip(weights, subs):
+        S += w * score_hybrid_single(sq, role, sector)
+    return S
 
-    out = []
-    for i in idx:
-        r = DOCS[i]
-        content = (r["content"] or "")
-        out.append({
-            "chunk_id": r["chunk_id"],
-            "doc_id": str(r["doc_id"]),
-            "filename": r["filename"],
-            "chunk_index": r["chunk_index"],
-            "score": float(S[i]),
-            "codes": CODES[i],
-            "snippet": content[:700]
-        })
-    return out
-
-# ------------ Deep search orchestration ------------
-def mmr_diversify(items: List[Dict[str,Any]], k: int, q: str) -> List[Dict[str,Any]]:
-    """
-    MMR over TF-IDF WORD rows; fallback to input order if vectors missing.
-    """
-    if not items or ROW_TFIDF is None or VECT_WORD is None:
-        return items[:k]
-    # Build matrix of selected rows
-    rows = [next((i for i, d in enumerate(DOCS) if d["chunk_id"] == it["chunk_id"]), -1) for it in items]
-    rows = [r for r in rows if r >= 0]
-    if not rows:
-        return items[:k]
-
-    cand_vecs = ROW_TFIDF[rows]  # normalized
-    qvec = VECT_WORD.transform([norm(q)])
-    # Normalize qvec
-    qnorm = np.sqrt((qvec.power(2)).sum()) + 1e-12
-    qv = (qvec / qnorm).T
-
-    # Precompute relevance = cosine(q, doc)
-    rel = (cand_vecs @ qv).toarray().ravel()
-
-    selected = []
-    selected_idx = set()
-
-    # similarity among candidates
-    # To compute sim(doc_i, doc_j) ~ cosine using ROW_TFIDF (already normalized)
-    sim_mat = (cand_vecs @ cand_vecs.T).toarray()
-
-    # Greedy MMR
-    avail = list(range(len(rows)))
-    while avail and len(selected) < min(k, len(items), MMR_LIMIT):
+# ---------------- Two-stage MMR ----------------
+def _mmr_from_rows(rowvecs, qvec, lam, limit) -> List[int]:
+    if rowvecs is None: return list(range(min(limit, 0)))
+    # normalized rowvecs expected
+    rel = (rowvecs @ qvec.T).toarray().ravel()
+    selected, selected_idx = [], set()
+    sim_mat = (rowvecs @ rowvecs.T).toarray()
+    avail = list(range(rowvecs.shape[0]))
+    while avail and len(selected) < min(limit, rowvecs.shape[0]):
         if not selected:
-            # pick best relevance
             i_best = int(np.argmax(rel[avail]))
             chosen = avail[i_best]
         else:
-            # For each candidate i, mmr = lambda*rel(i) - (1-lambda)*max_j sim(i,j)
-            mmr_scores = []
+            scores = []
             for idx_cand in avail:
                 max_sim = max(sim_mat[idx_cand, j] for j in selected_idx) if selected_idx else 0.0
-                mmr = MMR_LAMBDA * rel[idx_cand] - (1 - MMR_LAMBDA) * max_sim
-                mmr_scores.append((mmr, idx_cand))
-            mmr_scores.sort(reverse=True, key=lambda x: x[0])
-            chosen = mmr_scores[0][1]
-        selected.append(items[chosen])
+                mmr = lam * rel[idx_cand] - (1 - lam) * max_sim
+                scores.append((mmr, idx_cand))
+            scores.sort(reverse=True, key=lambda x: x[0])
+            chosen = scores[0][1]
+        selected.append(chosen)
         selected_idx.add(chosen)
         avail.remove(chosen)
+    return selected
 
-    return selected[:k]
+def mmr_two_stage(items: List[Dict[str,Any]], k: int, q: str) -> List[Dict[str,Any]]:
+    if not items or ROW_TFIDF is None or VECT_WORD is None:
+        return items[:k]
+    # doc-level: map each item to doc row centroid (approx by first chunk row)
+    doc_to_rows = {}
+    for idx, it in enumerate(items):
+        # find RAM row index
+        ridx = next((i for i, d in enumerate(DOCS) if d["chunk_id"] == it["chunk_id"]), -1)
+        if ridx < 0: continue
+        doc_to_rows.setdefault(it["doc_id"], []).append(ridx)
 
+    # build unique doc list & choose representative row per doc (first for now)
+    docs = list(doc_to_rows.keys())
+    rep_rows = [doc_to_rows[d][0] for d in docs]
+    doc_rowvecs = ROW_TFIDF[rep_rows]
+    qvec = VECT_WORD.transform([norm(q)])
+    qnorm = math.sqrt((qvec.power(2)).sum()) + 1e-12
+    qv = (qvec / qnorm)
+
+    keep_docs_idx = _mmr_from_rows(doc_rowvecs, qv, MMR_LAMBDA_DOC, min(MMR_LIMIT_DOC, len(docs)))
+    keep_docs = {docs[i] for i in keep_docs_idx}
+
+    # second stage: within kept docs, run chunk-level MMR on their items
+    kept_items = [it for it in items if it["doc_id"] in keep_docs]
+    # Rebuild row list for kept items
+    kept_rows = []
+    for it in kept_items:
+        ridx = next((i for i, d in enumerate(DOCS) if d["chunk_id"] == it["chunk_id"]), -1)
+        if ridx >= 0: kept_rows.append(ridx)
+    if not kept_rows: return items[:k]
+    chunk_rowvecs = ROW_TFIDF[kept_rows]
+    keep_idx_rel = _mmr_from_rows(chunk_rowvecs, qv, MMR_LAMBDA_CHUNK, min(MMR_LIMIT_CHUNK, len(kept_items)))
+    kept = [kept_items[i] for i in keep_idx_rel]
+    return kept[:k]
+
+# ---------------- Deep candidates + rerank ----------------
 def deep_candidates(q: str, k: int, role: Optional[str], sector: Optional[str]) -> List[Dict[str,Any]]:
-    """
-    Multi-pass:
-      1) base hybrid
-      2) expanded query via synonyms & bilingual defaults
-      3) merge + optional MMR diversification
-    """
     baseK = max(k, RERANK_KEEP) if RERANK_ENABLED else k
-    base = score_hybrid(q, baseK, role, sector)
+    S = aggregate_over_subqueries(q, role, sector)
+    # take top baseK by score
+    if len(S) == 0: return []
+    kprime = min(max(baseK, 1), len(S))
+    idx = np.argpartition(-S, kprime - 1)[:kprime]
+    idx = idx[np.argsort(-S[idx])]
 
-    if not DEEP_ON:
-        return base
+    prelim = []
+    for i in idx:
+        r = DOCS[i]
+        prelim.append({
+            "chunk_id": r["chunk_id"],
+            "doc_id": str(r["doc_id"]),
+            "filename": r.get("filename"),
+            "chunk_index": r.get("chunk_index"),
+            "score": float(S[i]),
+            "codes": CODES[i],
+            "snippet": (r.get("content") or "")[:900],
+            "page": r.get("page"),
+            "section_title": r.get("section_title")
+        })
 
-    q_expanded = deep_expand_query(q)
-    if q_expanded.strip().lower() != q.strip().lower():
-        exp = score_hybrid(q_expanded, baseK, role, sector)
-    else:
-        exp = []
+    # rerank (optional)
+    items = prelim
+    if RERANK_ENABLED and ce_model is not None and items:
+        pool = items[:min(len(items), RERANK_CAND)]
+        pairs = [(q, f"{it['filename']} — {it.get('snippet','')}") for it in pool]
+        scores = ce_model.predict(pairs, convert_to_numpy=True, show_progress_bar=False)
+        for it, sc in zip(pool, scores):
+            it["_score_ce"] = float(sc)
+            it["score_final"] = RERANK_ALPHA * it["_score_ce"] + (1 - RERANK_ALPHA) * float(it.get("score", 0.0))
+        pool.sort(key=lambda x: x["score_final"], reverse=True)
+        items = pool[:max(k, RERANK_KEEP)]
 
-    # merge by unique chunk
-    bykey = {}
-    for it in base + exp:
-        key = (it["chunk_id"])
-        prev = bykey.get(key)
-        if not prev or float(it["score"]) > float(prev["score"]):
-            bykey[key] = it
-    merged = list(bykey.values())
-    merged.sort(key=lambda x: -float(x["score"]))
+    # two-stage MMR for stability/diversity
+    if DEEP_ON and items:
+        items = mmr_two_stage(items, k, q)
 
-    # optional rerank
-    return merged
+    return items[:k]
 
-# ------------ Cross-Encoder rerank ------------
-def rerank_with_cross_encoder(query: str, items: List[Dict[str, Any]], keep: int) -> List[Dict[str, Any]]:
-    if not RERANK_ENABLED or ce_model is None or not items:
-        return items[:keep]
+# ---------------- Evidence via spans (optional) ----------------
+def best_spans_for(doc_id: str, query: str, limit: int = 3) -> List[Dict[str,Any]]:
+    """Return top spans (by simple BM25-like score against query terms), fallback to empty."""
+    if not HAS_SPANS or not USE_SPANS:
+        return []
+    idxs = SPANS_DOCIDX.get(str(doc_id), [])
+    if not idxs:
+        return []
+    q_tokens = tokenize(query)
+    scores = []
+    for i in idxs:
+        s = SPANS[i]
+        toks = tokenize(s.get("text") or "")
+        inter = len(set(q_tokens).intersection(toks))
+        sc = inter + 0.0001 * (len(toks) > 0)  # tiny stabilizer
+        scores.append((sc, i))
+    scores.sort(reverse=True, key=lambda x: x[0])
+    out = []
+    for _, i in scores[:limit]:
+        s = SPANS[i]
+        out.append({
+            "text": s.get("text"),
+            "page": s.get("page"),
+            "bbox": s.get("bbox"),
+            "chunk_index": s.get("chunk_index"),
+            "span_index": s.get("span_index")
+        })
+    return out
 
-    pool = items[:min(len(items), RERANK_CAND)]
-    pairs = [(query, f"{it['filename']} — {it.get('snippet','')}") for it in pool]
+# ---------------- Answerability (light) ----------------
+def answerability_label(evidence_counts: List[int], need: int = 2) -> str:
+    tot = sum(1 for c in evidence_counts if c > 0)
+    if tot >= need: return "CERTAIN"
+    if tot == 1: return "PARTIAL"
+    return "NR"
 
-    scores = ce_model.predict(pairs, convert_to_numpy=True, show_progress_bar=False)
-    for it, sc in zip(pool, scores):
-        it["_score_ce"] = float(sc)
-
-    # Blend CE score with hybrid a bit (alpha high to favor CE)
-    alpha = 0.8
-    for it in pool:
-        it["score_final"] = alpha * it.get("_score_ce", 0.0) + (1 - alpha) * float(it.get("score", 0.0))
-    pool.sort(key=lambda x: x["score_final"], reverse=True)
-    return pool[:keep]
-
-# ------------ FastAPI ------------
+# ---------------- FastAPI models ----------------
 class SearchReq(BaseModel):
     query: str
     k: Optional[int] = None
     role: Optional[str] = None
     sector: Optional[str] = None
     rerank: Optional[bool] = None
-    deep: Optional[bool] = None   # allow client to force deep off/on
+    deep: Optional[bool] = None
 
+class CompareReq(BaseModel):
+    topic: str = Field(..., description="Sujet/objet de la comparaison")
+    doc_ids: List[str] = Field(..., description="Liste de documents à comparer (UUIDs)")
+    criteria: Optional[List[str]] = None
+    k_per_crit: Optional[int] = 3
+    role: Optional[str] = None
+    sector: Optional[str] = None
+
+# ---------------- FastAPI app ----------------
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -589,7 +669,6 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    # optional synonyms count
     syn_count = None
     try:
         r = db_query("SELECT COUNT(*)::int AS n FROM askv_synonyms")
@@ -598,14 +677,17 @@ def health():
         syn_count = None
     return {
         "ok": True,
-        "docs": len(DOCS),
+        "chunks": len(DOCS),
+        "spans": len(SPANS) if HAS_SPANS else 0,
         "bm25": BM25 is not None,
         "tfidf_word": TFIDF_WORD is not None,
         "tfidf_char": TFIDF_CHAR is not None,
         "rerank": bool(RERANK_ENABLED and ce_model is not None),
         "model_ce": RERANK_MODEL_NAME if (RERANK_ENABLED and ce_model is not None) else None,
         "deep": bool(DEEP_ON),
-        "mmr": {"lambda": MMR_LAMBDA, "limit": MMR_LIMIT},
+        "mmr": {"doc_lambda": MMR_LAMBDA_DOC, "chunk_lambda": MMR_LAMBDA_CHUNK,
+                "doc_limit": MMR_LIMIT_DOC, "chunk_limit": MMR_LIMIT_CHUNK},
+        "use_spans": bool(HAS_SPANS and USE_SPANS),
         "synonyms": syn_count
     }
 
@@ -617,28 +699,94 @@ def reindex():
 @app.post("/search")
 def search(req: SearchReq):
     ensure_index()
-    # Normalize *incoming* query strongly before retrieval
-    q = req.query or ""
-    q = normalize_codes(q)
+    q = normalize_codes(req.query or "")
+    k = max(10, min(200, req.k or TOPK_DEFAULT))
 
-    k = req.k or TOPK_DEFAULT
-    k = max(10, min(200, k))
-
-    # Deep pipeline
     items = deep_candidates(q, max(k, RERANK_KEEP) if RERANK_ENABLED else k, req.role, req.sector)
 
-    # Optional CE rerank
-    do_rerank = RERANK_ENABLED if (req.rerank is None) else bool(req.rerank)
-    if do_rerank:
-        items = rerank_with_cross_encoder(q, items, keep=max(k, RERANK_KEEP))
+    # attach top spans (evidence) per item doc (optional)
+    enriched = []
+    seen_doc_span = {}
+    for it in items:
+        ev = []
+        # one call per doc (cache within request)
+        if HAS_SPANS and USE_SPANS:
+            if it["doc_id"] not in seen_doc_span:
+                seen_doc_span[it["doc_id"]] = best_spans_for(it["doc_id"], q, limit=SPANS_TOP)
+            ev = seen_doc_span[it["doc_id"]]
+        enriched.append({**it, "evidence": ev})
 
-    # MMR diversification (after rerank for stability)
-    if DEEP_ON and items:
-        items = mmr_diversify(items[:max(MMR_LIMIT, k)], k, q)
+    return {"ok": True, "items": enriched[:k]}
 
-    return {"ok": True, "items": items[:k]}
+# --------- /compare: evidence matrix across docs ----------
+DEFAULT_CRITERIA = [
+    "objet/scope", "définitions/références", "pré-requis", "EHS/sécurité",
+    "matériel/équipements", "procédure/étapes", "IPC/contrôles",
+    "tolérances/paramètres", "fréquences", "responsabilités", "enregistrements"
+]
 
-# ------------ Autostart indexing ------------
+def _criteria_for_topic(topic: str, lang: str) -> List[str]:
+    if lang == "en":
+        return [
+            "scope", "definitions/references", "prerequisites", "EHS/safety",
+            "equipment", "procedure/steps", "IPC/controls",
+            "tolerances/parameters", "frequencies", "responsibilities", "records"
+        ]
+    return DEFAULT_CRITERIA
+
+@app.post("/compare")
+def compare(req: CompareReq):
+    ensure_index()
+    topic = normalize_codes(req.topic or "")
+    lang = guess_lang(topic)
+    crits = req.criteria or _criteria_for_topic(topic, "en" if lang=="en" else "fr")
+    kpc = max(1, min(6, req.k_per_crit or 3))
+
+    # For each doc & criterion, fetch top spans or fallback to chunk snippet
+    matrix = []
+    cover_counts = {doc_id: 0 for doc_id in req.doc_ids}
+
+    for crit in crits:
+        row = {"criterion": crit, "docs": []}
+        subq = f"{topic} {crit}"
+        # we want targeted spans: try spans first for each doc
+        for doc_id in req.doc_ids:
+            ev = best_spans_for(doc_id, subq, limit=kpc) if (HAS_SPANS and USE_SPANS) else []
+            if not ev:
+                # fallback: pick best chunk snippet of that doc by our hybrid score
+                S = score_hybrid_single(subq, req.role, req.sector)
+                # restrict to doc_id
+                pairs = []
+                for i, r in enumerate(DOCS):
+                    if str(r["doc_id"]) == str(doc_id):
+                        pairs.append((S[i], i))
+                pairs.sort(reverse=True, key=lambda x: x[0])
+                top_snips = []
+                for sc, i in pairs[:kpc]:
+                    r = DOCS[i]
+                    top_snips.append({
+                        "text": (r.get("content") or "")[:350],
+                        "page": r.get("page"), "bbox": None,
+                        "chunk_index": r.get("chunk_index"), "span_index": None,
+                        "_score": float(sc)
+                    })
+                ev = top_snips
+            cover_counts[doc_id] += int(len(ev) > 0)
+            row["docs"].append({"doc_id": doc_id, "evidence": ev})
+        matrix.append(row)
+
+    # Simple answerability per doc
+    answerability = {doc_id: answerability_label([cover_counts[doc_id]], need=1) for doc_id in req.doc_ids}
+
+    return {
+        "ok": True,
+        "topic": topic,
+        "criteria": crits,
+        "matrix": matrix,
+        "answerability": answerability
+    }
+
+# ---------------- Autostart indexing ----------------
 if os.getenv("PYSEARCH_AUTOINDEX", "1").lower() not in ("0", "false", "no"):
     try:
         build_index()
