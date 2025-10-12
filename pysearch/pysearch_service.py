@@ -1,4 +1,5 @@
 # pysearch_service.py
+# pysearch/pysearch_service.py
 # FastAPI micro-service: Hybrid retrieval for Ask Veeva
 # - BM25 + TF-IDF over askv_chunks (joined to askv_documents.filename)
 # - Rules for codes (SOP / N2000-2 / IDR) + fuzzy on filenames
