@@ -63,9 +63,26 @@ function TabButton({ active, onClick, children }) {
     <button
       onClick={onClick}
       className={clsx(
-        "px-4 py-2 rounded-t-lg text-sm font-medium",
-        active ? "bg-white border-x border-t border-gray-200" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+        "px-4 py-2 rounded-t-lg text-sm font-medium transition",
+        active ? "bg-white border-x border-t border-gray-200" : "bg-gray-100 text-gray-700 hover:bg-gray-200"
       )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Chip({ children, title, onClick, kind = "indigo" }) {
+  const map = {
+    indigo: "bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100",
+    gray: "bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100",
+    amber: "bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100",
+  };
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={clsx("inline-flex items-center px-2 py-1 text-xs rounded-full border transition", map[kind] || map.gray)}
     >
       {children}
     </button>
@@ -82,23 +99,19 @@ function CitationChips({ citations, onPeek, max = 3 }) {
   return (
     <div className="flex flex-wrap gap-2 mt-2">
       {shown.map((c, i) => (
-        <button
+        <Chip
           key={i}
-          onClick={() => onPeek?.(c)}
-          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
           title={`${c.filename} • score: ${c.score?.toFixed?.(3)}`}
+          onClick={() => onPeek?.(c)}
+          kind="indigo"
         >
-          {c.filename}
-        </button>
+          📄 {c.filename}
+        </Chip>
       ))}
       {remaining > 0 && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="inline-flex items-center px-2 py-1 text-xs rounded-full bg-gray-50 text-gray-700 border hover:bg-gray-100"
-          title="Afficher toutes les citations"
-        >
+        <Chip onClick={() => setExpanded(true)} kind="gray" title="Afficher toutes les citations">
           +{remaining} de plus
-        </button>
+        </Chip>
       )}
     </div>
   );
@@ -114,7 +127,7 @@ function FeedbackBar({ onVote, state }) {
         className={clsx(
           "text-xs px-2 py-1 rounded border transition-colors",
           state === "up" ? "bg-green-50 text-green-700 border-green-200"
-                         : "bg-gray-50 text-gray-700 hover:bg-gray-100"
+                         : "bg-gray-50 text-gray-800 hover:bg-gray-100"
         )}
         title="Utile"
       >
@@ -126,7 +139,7 @@ function FeedbackBar({ onVote, state }) {
         className={clsx(
           "text-xs px-2 py-1 rounded border transition-colors",
           state === "down" ? "bg-red-50 text-red-700 border-red-200"
-                           : "bg-gray-50 text-gray-700 hover:bg-gray-100"
+                           : "bg-gray-50 text-gray-800 hover:bg-gray-100"
         )}
         title="Pas utile"
       >
@@ -138,7 +151,7 @@ function FeedbackBar({ onVote, state }) {
 }
 
 /* ----------------------- DECISION GAUGES & FLOW VIZ ----------------------- */
-function Bar({ label, value = 0, hint, accent = "indigo" }) {
+function Bar({ label, value = 0, hint, accent = "indigo", crowned = false, icon = "⚙️" }) {
   const pct = Math.max(0, Math.min(100, Math.round(value)));
   const barCls = {
     indigo: "bg-indigo-500",
@@ -146,11 +159,17 @@ function Bar({ label, value = 0, hint, accent = "indigo" }) {
     emerald: "bg-emerald-500",
     amber: "bg-amber-500",
     rose: "bg-rose-500",
+    violet: "bg-violet-500",
   }[accent] || "bg-indigo-500";
+
   return (
     <div className="w-full">
-      <div className="flex justify-between items-end text-[11px] text-gray-600">
-        <span className="font-medium">{label}</span>
+      <div className="flex justify-between items-end text-[11px] text-gray-700">
+        <span className="font-medium flex items-center gap-1">
+          <span className="text-base leading-none">{icon}</span>
+          {label}
+          {crowned && <span title="A pris le dessus" className="ml-1">👑</span>}
+        </span>
         <span className="tabular-nums">{pct}%</span>
       </div>
       <div className="h-2 mt-1 rounded bg-gray-200 overflow-hidden">
@@ -159,7 +178,7 @@ function Bar({ label, value = 0, hint, accent = "indigo" }) {
           style={{ width: `${pct}%` }}
         />
       </div>
-      {hint && <div className="text-[11px] text-gray-400 mt-1">{hint}</div>}
+      {hint && <div className="text-[11px] text-gray-500 mt-1">{hint}</div>}
     </div>
   );
 }
@@ -167,49 +186,82 @@ function Bar({ label, value = 0, hint, accent = "indigo" }) {
 /** Extrait des poids à partir de decision_trace renvoyé par le backend */
 function extractDecisionWeights(trace) {
   // Valeurs par défaut si le backend ne renvoie rien
-  const def = { hybrid: 40, vector: 30, rerank: 20, mmr: 10, answer: 80 };
+  const def = { ether: 40, naoris: 30, bunk: 20, maket: 10, answer: 80 };
   if (!trace || typeof trace !== "object") return def;
 
-  const hybrid = Math.round((trace.hybrid_weight ?? 0.6) * 100);
-  const vector = Math.round((trace.vector_weight ?? 0.7) * 100);
-  const rerank = Math.round((trace.rerank_weight ?? 0.8) * 100);
-  const mmr = Math.round((trace.mmr_lambda ?? 0.7) * 100);
-  const answer = Math.round((trace.answer_confidence ?? 0.8) * 100);
+  const ether = Math.round((trace.hybrid_weight ?? 0.6) * 100);       // PySearch → Ether
+  const naoris = Math.round((trace.vector_weight ?? 0.7) * 100);      // PgVector → Naoris
+  const bunk = Math.round((trace.rerank_weight ?? 0.8) * 100);        // Rerank  → Bunk
+  const maket = Math.round((trace.mmr_lambda ?? 0.7) * 100);          // MMR     → Maket
+  const answer = Math.round((trace.answer_confidence ?? 0.85) * 100); // Answer
 
   return {
-    hybrid: Math.max(0, Math.min(100, hybrid)),
-    vector: Math.max(0, Math.min(100, vector)),
-    rerank: Math.max(0, Math.min(100, rerank)),
-    mmr: Math.max(0, Math.min(100, mmr)),
-    answer: Math.max(0, Math.min(100, answer)),
+    ether: clamp01(ether),
+    naoris: clamp01(naoris),
+    bunk: clamp01(bunk),
+    maket: clamp01(maket),
+    answer: clamp01(answer),
   };
 }
+function clamp01(v) { return Math.max(0, Math.min(100, v)); }
 
-/** Mini visu de flux (question → PySearch → Vector → Rerank → MMR → OpenAI) */
-function FlowMini({ playing = true }) {
-  // Simple animation CSS via keyframes (balle qui circule)
+/** Nouvelle visu de flux (Question → Ether → Naoris → Bunk → Maket → OpenAI) */
+function FlowRail({ playing = true, speed = 2800 }) {
+  // Steps + emojis
+  const steps = [
+    { key: "q", label: "Question", icon: "❓" },
+    { key: "ether", label: "Ether", icon: "⚡" },
+    { key: "naoris", label: "Naoris", icon: "🧠" },
+    { key: "bunk", label: "Bunk", icon: "🧮" },
+    { key: "maket", label: "Maket", icon: "🎛️" },
+    { key: "answer", label: "OpenAI Answer", icon: "🤖" },
+  ];
+  const pct = (i) => (i / (steps.length - 1)) * 100;
+
   return (
-    <div className="relative w-full h-24 sm:h-20">
+    <div className="relative w-full">
       <style>{`
-        @keyframes hop {
-          0%   { transform: translateX(0);   opacity: .9; }
-          25%  { transform: translateX(20%); opacity: 1;  }
-          50%  { transform: translateX(45%); opacity: 1;  }
-          75%  { transform: translateX(75%); opacity: 1;  }
-          100% { transform: translateX(100%);opacity: .9; }
+        @keyframes rail-progress {
+          0%   { left: 0%; opacity: .9; }
+          20%  { left: ${pct(1)}%; }
+          40%  { left: ${pct(2)}%; }
+          60%  { left: ${pct(3)}%; }
+          80%  { left: ${pct(4)}%; }
+          100% { left: ${pct(5)}%; opacity: 1; }
         }
-        .hop { animation: hop 2.6s ${playing ? "infinite" : "none"} linear; }
+        .dot {
+          animation: rail-progress ${speed}ms ${playing ? "infinite" : "paused"} linear;
+        }
+        .pulse {
+          animation: pulseScale 1.6s infinite ease-in-out;
+        }
+        @keyframes pulseScale {
+          0%, 100% { transform: scale(1); }
+          50%      { transform: scale(1.08); }
+        }
       `}</style>
-      <div className="absolute inset-0 flex items-center justify-between px-2 sm:px-3">
-        {["Question", "PySearch", "PgVector", "Rerank (OpenAI CE)", "MMR", "OpenAI Answer"].map((t, i) => (
-          <div key={i} className="text-[10px] sm:text-[11px] text-center">
-            <div className="px-2 py-1 rounded bg-white border shadow-sm whitespace-nowrap">{t}</div>
+
+      {/* labels */}
+      <div className="flex items-center justify-between px-1 sm:px-2">
+        {steps.map((s, i) => (
+          <div key={s.key} className="text-[10px] sm:text-[11px] text-center select-none">
+            <div className="px-2 py-1 rounded bg-white border shadow-sm whitespace-nowrap flex items-center gap-1">
+              <span className="text-sm">{s.icon}</span>
+              {s.label}
+            </div>
           </div>
         ))}
       </div>
-      <div className="absolute left-2 right-2 top-1/2 -translate-y-1/2 h-0.5 bg-gray-200" />
-      <div className="absolute left-2 right-2 top-1/2 -translate-y-1/2 h-3">
-        <div className="hop w-3 h-3 rounded-full bg-blue-500 shadow" />
+
+      {/* rail */}
+      <div className="relative mx-2 sm:mx-3 mt-2 h-2 rounded bg-gradient-to-r from-indigo-200 via-sky-200 to-violet-200 overflow-hidden">
+        <div className="absolute inset-0 opacity-60">
+          <div className="w-full h-full bg-[linear-gradient(90deg,rgba(255,255,255,.25)_0,rgba(255,255,255,0)_20%,rgba(255,255,255,0)_80%,rgba(255,255,255,.25)_100%)] animate-[ping_3s_infinite]" />
+        </div>
+        {/* moving dot */}
+        <div className="absolute top-1/2 -translate-y-1/2">
+          <div className="dot w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full bg-blue-600 shadow-md pulse" />
+        </div>
       </div>
     </div>
   );
@@ -219,21 +271,31 @@ function DecisionGauges({ decisionTrace }) {
   const w = extractDecisionWeights(decisionTrace);
   const ceModel = decisionTrace?.ce_model || decisionTrace?.model_ce || "cross-encoder";
   const ansModel = decisionTrace?.answer_model || decisionTrace?.answerModel || "OpenAI";
+
+  // Qui “prend le dessus” parmi Ether/Naoris/Bunk/Maket ?
+  const base = [
+    { k: "ether", v: w.ether },
+    { k: "naoris", v: w.naoris },
+    { k: "bunk", v: w.bunk },
+    { k: "maket", v: w.maket },
+  ];
+  const top = base.reduce((a, b) => (b.v > a.v ? b : a), base[0])?.k;
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <Bar label="PySearch (hybrid)" value={w.hybrid} hint="BM25 + TF-IDF + heuristiques" accent="indigo" />
-      <Bar label="PgVector (baseline)" value={w.vector} hint="Embedding match" accent="sky" />
-      <Bar label={`Rerank (${ceModel})`} value={w.rerank} hint="Cross-Encoder" accent="emerald" />
-      <Bar label="Diversification (MMR)" value={w.mmr} hint="λ équilibre rel./diversité" accent="amber" />
+      <Bar label="⚡ Ether" value={w.ether} hint="BM25/TF-IDF + heuristiques" accent="indigo" crowned={top==="ether"} icon="⚡" />
+      <Bar label="🧠 Naoris" value={w.naoris} hint="Matching vecteur (embeddings)" accent="sky" crowned={top==="naoris"} icon="🧠" />
+      <Bar label={`🧮 Bunk (${ceModel})`} value={w.bunk} hint="Cross-encoder de reranking" accent="emerald" crowned={top==="bunk"} icon="🧮" />
+      <Bar label="🎛️ Maket" value={w.maket} hint="Diversification MMR (λ)" accent="amber" crowned={top==="maket"} icon="🎛️" />
       <div className="sm:col-span-2">
-        <Bar label={`OpenAI Answer (${ansModel})`} value={w.answer} hint="Synthèse contrôlée par contexte" accent="rose" />
+        <Bar label={`🤖 OpenAI Answer (${ansModel})`} value={w.answer} hint="Synthèse contrôlée par contexte" accent="rose" icon="🤖" />
       </div>
     </div>
   );
 }
 
 /* --------------------------- Sidebar (multi-focus) --------------------------- */
-/** Version “titres uniquement” comme demandé */
+/** Version “titres uniquement” */
 function SidebarContexts({
   contexts,
   selected,
@@ -278,14 +340,14 @@ function SidebarContexts({
             <div key={d.doc_id} className="border rounded-lg p-2 bg-white flex items-start gap-2">
               <input
                 type="checkbox"
-                className="mt-1"
+                className="mt-1 accent-blue-600"
                 checked={checked}
                 onChange={() => toggleSelect(d.doc_id)}
                 title="Ajouter/retirer du focus multiple"
               />
               <div className="min-w-0 flex-1">
                 <div className="font-medium text-[13px] break-words whitespace-break-spaces leading-snug">
-                  {d.filename}
+                  📄 {d.filename}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
@@ -429,9 +491,6 @@ function Viewer({ file, onClose }) {
 /* ------------------------------ Flow Modal ------------------------------ */
 function FlowModal({ open, onClose, lastDecision }) {
   if (!open) return null;
-  const w = extractDecisionWeights(lastDecision);
-  const ceModel = lastDecision?.ce_model || "Cross-Encoder";
-  const ansModel = lastDecision?.answer_model || "OpenAI";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -454,19 +513,17 @@ function FlowModal({ open, onClose, lastDecision }) {
         </div>
 
         <div className="p-4 space-y-4">
-          <FlowMini playing />
+          <FlowRail playing />
           <DecisionGauges decisionTrace={lastDecision} />
           <div className="grid sm:grid-cols-2 gap-3 text-[13px] text-gray-700">
             <div className="p-3 rounded-lg bg-gray-50 border">
-              <div className="font-medium mb-1">Rerank</div>
-              <div>Modèle : <span className="font-mono">{ceModel}</span></div>
+              <div className="font-medium mb-1">🧮 Bunk (ReRank)</div>
               <div className="text-xs text-gray-500 mt-1">
-                Re-score des candidats (PySearch + Vector) par similarité sémantique.
+                Re-score des candidats (Ether + Naoris) par similarité sémantique.
               </div>
             </div>
             <div className="p-3 rounded-lg bg-gray-50 border">
-              <div className="font-medium mb-1">Réponse OpenAI</div>
-              <div>Modèle : <span className="font-mono">{ansModel}</span></div>
+              <div className="font-medium mb-1">🤖 Réponse OpenAI</div>
               <div className="text-xs text-gray-500 mt-1">
                 Synthèse stricte basée sur le contexte (citations incluses).
               </div>
@@ -490,7 +547,7 @@ function Message({ role, text, citations, onPeek, feedback, onVote }) {
       <div
         className={clsx(
           "max-w-[95%] sm:max-w-[75%] md:max-w-[65%] rounded-2xl px-4 py-3 shadow",
-          isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-800 rounded-bl-sm border"
+          isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-900 rounded-bl-sm border"
         )}
       >
         <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
@@ -750,35 +807,37 @@ function ChatBox() {
     <div className="flex flex-col h-full">
       {/* En-tête */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <div className="text-sm text-gray-900 font-medium">Recherche IA</div>
+        <div className="text-sm text-gray-900 font-medium flex items-center gap-2">
+          🔎 Recherche IA
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowViz(true)}
             className="text-xs px-3 py-1.5 rounded bg-purple-600 text-white hover:bg-purple-700"
             title="Voir la visualisation du fonctionnement (modale)"
           >
-            Voir la visualisation
+            🎬 Voir la visualisation
           </button>
           <button
             onClick={onClearChat}
             className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
           >
-            Supprimer la conversation
+            🗑️ Supprimer la conversation
           </button>
         </div>
       </div>
 
-      {/* Bandeau décision (mini flow + gauges compactes) */}
+      {/* Bandeau décision (flow + gauges compactes) */}
       <div className="grid lg:grid-cols-[1.2fr_1fr] gap-3 mb-3">
-        <div className="rounded-lg border bg-white p-2">
-          <FlowMini playing />
+        <div className="rounded-lg border bg-white p-3">
+          <FlowRail playing={!sending} />
         </div>
         <div className="rounded-lg border bg-white p-3">
           <div className="grid grid-cols-2 gap-2">
-            <Bar label="PySearch" value={weights.hybrid} accent="indigo" />
-            <Bar label="PgVector" value={weights.vector} accent="sky" />
-            <Bar label="Rerank" value={weights.rerank} accent="emerald" />
-            <Bar label="MMR" value={weights.mmr} accent="amber" />
+            <Bar label="⚡ Ether" value={weights.ether} accent="indigo" icon="⚡" />
+            <Bar label="🧠 Naoris" value={weights.naoris} accent="sky" icon="🧠" />
+            <Bar label="🧮 Bunk" value={weights.bunk} accent="emerald" icon="🧮" />
+            <Bar label="🎛️ Maket" value={weights.maket} accent="amber" icon="🎛️" />
           </div>
         </div>
       </div>
@@ -817,14 +876,14 @@ function ChatBox() {
             <div className="mt-2 flex items-start gap-2 flex-wrap">
               <div className="text-xs text-gray-600 mt-1">Vouliez-vous dire :</div>
               {suggestions.map((s, i) => (
-                <button
+                <Chip
                   key={i}
                   onClick={() => quickAsk(s)}
-                  className="text-xs px-2 py-1 rounded-full bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+                  kind="amber"
                   title="Lancer une recherche avec ce terme"
                 >
-                  {s}
-                </button>
+                  💡 {s}
+                </Chip>
               ))}
             </div>
           )}
@@ -832,7 +891,7 @@ function ChatBox() {
           <div className="mt-3 flex items-end gap-2">
             <textarea
               rows={2}
-              className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400"
+              className="flex-1 border rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-400 bg-white text-black placeholder-gray-500"
               placeholder={selectedDocs.size ? "Votre question (focus multi activé)..." : "Posez votre question…"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -850,7 +909,7 @@ function ChatBox() {
               disabled={!ready || sending || !input.trim()}
               className="h-10 px-4 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50"
             >
-              Envoyer
+              Envoyer 🚀
             </button>
           </div>
         </div>
@@ -953,7 +1012,7 @@ function ImportBox() {
         }}
       >
         <div className="text-lg font-medium">Importer des documents</div>
-        <div className="text-sm text-gray-500 mt-1">
+        <div className="text-sm text-gray-600 mt-1">
           Formats pris en charge : ZIP, PDF, DOCX, XLSX/XLS, CSV, TXT, MP4/WEBM/MOV.
         </div>
         <div className="mt-4">
@@ -963,7 +1022,7 @@ function ImportBox() {
           </label>
         </div>
         {file && (
-          <div className="mt-3 text-sm text-gray-700 break-all">
+          <div className="mt-3 text-sm text-gray-800 break-all">
             Fichier : <span className="font-medium">{file.name}</span>{" "}
             <span className="text-gray-500">({(file.size / (1024 * 1024)).toFixed(1)} Mo)</span>
           </div>
@@ -999,7 +1058,7 @@ function ImportBox() {
                   ? "text-green-700"
                   : job.status === "error"
                   ? "text-red-700"
-                  : "text-gray-700"
+                  : "text-gray-800"
               }
             >
               {job.status}
@@ -1038,7 +1097,7 @@ export default function AskVeevaPage() {
           className="text-xs px-3 py-1.5 rounded bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
           title="Voir la page de présentation (plein écran)"
         >
-          Page de présentation
+          🎥 Page de présentation
         </a>
       </div>
 
