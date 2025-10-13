@@ -185,13 +185,12 @@ function Bar({ label, value = 0, hint, accent = "indigo", crowned = false, icon 
 
 /** Extrait des poids à partir de decision_trace renvoyé par le backend */
 function extractDecisionWeights(trace) {
-  // Valeurs par défaut si le backend ne renvoie rien
   const def = { ether: 40, naoris: 30, bunk: 20, maket: 10, answer: 80 };
   if (!trace || typeof trace !== "object") return def;
 
   const ether = Math.round((trace.hybrid_weight ?? 0.6) * 100);       // PySearch → Ether
   const naoris = Math.round((trace.vector_weight ?? 0.7) * 100);      // PgVector → Naoris
-  const bunk = Math.round((trace.rerank_weight ?? 0.8) * 100);        // Rerank  → Bunk
+  const bunk = Math.round((trace.rerank_weight ?? 0.8) * 100);        // ReRank  → Bunk
   const maket = Math.round((trace.mmr_lambda ?? 0.7) * 100);          // MMR     → Maket
   const answer = Math.round((trace.answer_confidence ?? 0.85) * 100); // Answer
 
@@ -205,63 +204,63 @@ function extractDecisionWeights(trace) {
 }
 function clamp01(v) { return Math.max(0, Math.min(100, v)); }
 
-/** Nouvelle visu de flux (Question → Ether → Naoris → Bunk → Maket → OpenAI) */
-function FlowRail({ playing = true, speed = 2800 }) {
-  // Steps + emojis
+/** Flow animé piloté par JS — fiable & synchrone avec l'état */
+function FlowRail({ playing = true, stepDuration = 650 }) {
   const steps = [
-    { key: "q", label: "Question", icon: "❓" },
-    { key: "ether", label: "Ether", icon: "⚡" },
-    { key: "naoris", label: "Naoris", icon: "🧠" },
-    { key: "bunk", label: "Bunk", icon: "🧮" },
-    { key: "maket", label: "Maket", icon: "🎛️" },
-    { key: "answer", label: "OpenAI Answer", icon: "🤖" },
+    { key: "q", label: "Question", short: "?", icon: "❓" },
+    { key: "ether", label: "Ether", short: "Eth", icon: "⚡" },
+    { key: "naoris", label: "Naoris", short: "Nao", icon: "🧠" },
+    { key: "bunk", label: "Bunk", short: "Bnk", icon: "🧮" },
+    { key: "maket", label: "Maket", short: "Mkt", icon: "🎛️" },
+    { key: "answer", label: "OpenAI Answer", short: "Ans", icon: "🤖" },
   ];
-  const pct = (i) => (i / (steps.length - 1)) * 100;
+  const [idx, setIdx] = useState(0);
+  const timer = useRef(null);
+
+  useEffect(() => {
+    if (!playing) {
+      setIdx(0);
+      if (timer.current) { clearInterval(timer.current); timer.current = null; }
+      return;
+    }
+    // boucle
+    timer.current = setInterval(() => {
+      setIdx((i) => (i + 1) % steps.length);
+    }, stepDuration);
+    return () => { if (timer.current) clearInterval(timer.current); };
+  }, [playing, stepDuration]);
+
+  const leftPct = (idx / (steps.length - 1)) * 100;
 
   return (
-    <div className="relative w-full">
-      <style>{`
-        @keyframes rail-progress {
-          0%   { left: 0%; opacity: .9; }
-          20%  { left: ${pct(1)}%; }
-          40%  { left: ${pct(2)}%; }
-          60%  { left: ${pct(3)}%; }
-          80%  { left: ${pct(4)}%; }
-          100% { left: ${pct(5)}%; opacity: 1; }
-        }
-        .dot {
-          animation: rail-progress ${speed}ms ${playing ? "infinite" : "paused"} linear;
-        }
-        .pulse {
-          animation: pulseScale 1.6s infinite ease-in-out;
-        }
-        @keyframes pulseScale {
-          0%, 100% { transform: scale(1); }
-          50%      { transform: scale(1.08); }
-        }
-      `}</style>
-
-      {/* labels */}
-      <div className="flex items-center justify-between px-1 sm:px-2">
+    <div className="w-full">
+      {/* bande labels — compacte & scrollable sur mobile */}
+      <div className="flex overflow-x-auto no-scrollbar gap-2 sm:gap-3 px-1 sm:px-2">
         {steps.map((s, i) => (
-          <div key={s.key} className="text-[10px] sm:text-[11px] text-center select-none">
-            <div className="px-2 py-1 rounded bg-white border shadow-sm whitespace-nowrap flex items-center gap-1">
+          <div key={s.key} className="shrink-0 text-[11px] sm:text-[12px]">
+            <div className={clsx(
+              "px-2 py-1 rounded border bg-white shadow-sm flex items-center gap-1 whitespace-nowrap",
+              i === idx ? "border-blue-300 ring-1 ring-blue-200" : "border-gray-200"
+            )}>
               <span className="text-sm">{s.icon}</span>
-              {s.label}
+              {/* Sur mobile, n'afficher que l’abrégé; sur sm+ le nom complet */}
+              <span className="sm:hidden">{s.short}</span>
+              <span className="hidden sm:inline">{s.label}</span>
             </div>
           </div>
         ))}
       </div>
 
       {/* rail */}
-      <div className="relative mx-2 sm:mx-3 mt-2 h-2 rounded bg-gradient-to-r from-indigo-200 via-sky-200 to-violet-200 overflow-hidden">
-        <div className="absolute inset-0 opacity-60">
+      <div className="relative mx-2 sm:mx-3 mt-3 h-2 rounded bg-gradient-to-r from-indigo-200 via-sky-200 to-violet-200 overflow-hidden">
+        <div className="absolute inset-0 opacity-50">
           <div className="w-full h-full bg-[linear-gradient(90deg,rgba(255,255,255,.25)_0,rgba(255,255,255,0)_20%,rgba(255,255,255,0)_80%,rgba(255,255,255,.25)_100%)] animate-[ping_3s_infinite]" />
         </div>
-        {/* moving dot */}
-        <div className="absolute top-1/2 -translate-y-1/2">
-          <div className="dot w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full bg-blue-600 shadow-md pulse" />
-        </div>
+        {/* dot animée : pilotée par left% + transition */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full bg-blue-600 shadow-md transition-all duration-500"
+          style={{ left: `calc(${leftPct}% - 6px)` }}
+        />
       </div>
     </div>
   );
@@ -269,10 +268,6 @@ function FlowRail({ playing = true, speed = 2800 }) {
 
 function DecisionGauges({ decisionTrace }) {
   const w = extractDecisionWeights(decisionTrace);
-  const ceModel = decisionTrace?.ce_model || decisionTrace?.model_ce || "cross-encoder";
-  const ansModel = decisionTrace?.answer_model || decisionTrace?.answerModel || "OpenAI";
-
-  // Qui “prend le dessus” parmi Ether/Naoris/Bunk/Maket ?
   const base = [
     { k: "ether", v: w.ether },
     { k: "naoris", v: w.naoris },
@@ -284,18 +279,17 @@ function DecisionGauges({ decisionTrace }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       <Bar label="⚡ Ether" value={w.ether} hint="BM25/TF-IDF + heuristiques" accent="indigo" crowned={top==="ether"} icon="⚡" />
-      <Bar label="🧠 Naoris" value={w.naoris} hint="Matching vecteur (embeddings)" accent="sky" crowned={top==="naoris"} icon="🧠" />
-      <Bar label={`🧮 Bunk (${ceModel})`} value={w.bunk} hint="Cross-encoder de reranking" accent="emerald" crowned={top==="bunk"} icon="🧮" />
+      <Bar label="🧠 Naoris" value={w.naoris} hint="Matching vecteur" accent="sky" crowned={top==="naoris"} icon="🧠" />
+      <Bar label="🧮 Bunk" value={w.bunk} hint="Rerank cross-encoder" accent="emerald" crowned={top==="bunk"} icon="🧮" />
       <Bar label="🎛️ Maket" value={w.maket} hint="Diversification MMR (λ)" accent="amber" crowned={top==="maket"} icon="🎛️" />
       <div className="sm:col-span-2">
-        <Bar label={`🤖 OpenAI Answer (${ansModel})`} value={w.answer} hint="Synthèse contrôlée par contexte" accent="rose" icon="🤖" />
+        <Bar label="🤖 OpenAI Answer" value={w.answer} hint="Synthèse contrôlée par contexte" accent="rose" icon="🤖" />
       </div>
     </div>
   );
 }
 
 /* --------------------------- Sidebar (multi-focus) --------------------------- */
-/** Version “titres uniquement” */
 function SidebarContexts({
   contexts,
   selected,
@@ -540,10 +534,10 @@ function FlowModal({ open, onClose, lastDecision }) {
 }
 
 /* --------------------------------- Chat Box -------------------------------- */
-function Message({ role, text, citations, onPeek, feedback, onVote }) {
+function Message({ role, text, citations, onPeek, feedback, onVote, msgRef }) {
   const isUser = role === "user";
   return (
-    <div className={"flex " + (isUser ? "justify-end" : "justify-start")}>
+    <div ref={msgRef} className={"flex " + (isUser ? "justify-end" : "justify-start")}>
       <div
         className={clsx(
           "max-w-[95%] sm:max-w-[75%] md:max-w-[65%] rounded-2xl px-4 py-3 shadow",
@@ -569,7 +563,7 @@ function ChatBox() {
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
 
-  // NEW: decision trace & flow modal
+  // decision trace & flow modal
   const [lastDecision, setLastDecision] = useState(null);
   const [showViz, setShowViz] = useState(false);
 
@@ -579,7 +573,9 @@ function ChatBox() {
   const [waitingProfile, setWaitingProfile] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState(null);
 
+  // messages + refs (pour scroller sur le haut d'une réponse)
   const listRef = useRef(null);
+  const msgRefs = useRef([]);
   const [messages, setMessages] = useState(() => {
     try {
       const raw = sessionStorage.getItem("askVeeva_chat");
@@ -589,7 +585,7 @@ function ChatBox() {
     }
   });
 
-  // Feedback local par message assistant: { [index]: 'idle'|'up'|'down'|'sent' }
+  // Feedback local
   const [feedbackState, setFeedbackState] = useState({});
 
   useEffect(() => {
@@ -620,9 +616,18 @@ function ChatBox() {
     return () => { alive = false; };
   }, []);
 
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, sending]);
+  // scroll helper : uniquement sur envoi user, on va en bas
+  function scrollToBottom() {
+    if (!listRef.current) return;
+    listRef.current.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+  }
+  // scroll sur le haut de la dernière réponse assistant
+  function scrollToAssistantTop(index) {
+    const el = msgRefs.current[index];
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }
 
   function toggleSelect(docId) {
     setSelectedDocs((prev) => {
@@ -678,14 +683,23 @@ function ChatBox() {
         score: c.score,
         doc_id: c.doc_id,
       }));
-      setMessages((m) => [...m, { role: "assistant", text, citations }]);
+
+      // append assistant message + scroll sur le haut de CETTE réponse
+      setMessages((m) => {
+        const next = [...m, { role: "assistant", text, citations }];
+        setTimeout(() => scrollToAssistantTop(next.length - 1), 50);
+        return next;
+      });
+
       setContexts(resp?.contexts || []);
       setSuggestions((resp?.suggestions || []).slice(0, 8));
-
-      // NEW: decision trace (affiché en dessous + modal)
       setLastDecision(resp?.decision_trace || null);
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }]);
+      setMessages((m) => {
+        const next = [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }];
+        setTimeout(() => scrollToAssistantTop(next.length - 1), 50);
+        return next;
+      });
     } finally {
       setSending(false);
     }
@@ -723,7 +737,11 @@ function ChatBox() {
         return true;
       }
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", text: `Impossible d'enregistrer le profil : ${e?.message || e}` }]);
+      setMessages((m) => {
+        const next = [...m, { role: "assistant", text: `Impossible d'enregistrer le profil : ${e?.message || e}` }];
+        setTimeout(() => scrollToAssistantTop(next.length - 1), 50);
+        return next;
+      });
     }
     return false;
   }
@@ -733,7 +751,12 @@ function ChatBox() {
     if (!q || sending) return;
 
     setInput("");
-    setMessages((m) => [...m, { role: "user", text: q }]);
+    setMessages((m) => {
+      const next = [...m, { role: "user", text: q }];
+      // sur envoi user: on descend en bas pour voir sa question envoyée
+      setTimeout(() => scrollToBottom(), 30);
+      return next;
+    });
 
     if (waitingProfile) {
       const updated = await tryCompleteProfileFrom(q);
@@ -760,7 +783,11 @@ function ChatBox() {
       input ||
       "Peux-tu détailler ?";
     if (!selectedDocs.size) return;
-    setMessages((m) => [...m, { role: "user", text: `${lastQ} (focus multi)` }]);
+    setMessages((m) => {
+      const next = [...m, { role: "user", text: `${lastQ} (focus multi)` }];
+      setTimeout(() => scrollToBottom(), 30);
+      return next;
+    });
     await runAsk(lastQ, Array.from(selectedDocs));
   }
 
@@ -799,6 +826,8 @@ function ChatBox() {
     setPendingQuestion(null);
     setFeedbackState({});
     setLastDecision(null);
+    // Revenir en haut de la zone liste
+    if (listRef.current) listRef.current.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   const weights = extractDecisionWeights(lastDecision);
@@ -830,6 +859,7 @@ function ChatBox() {
       {/* Bandeau décision (flow + gauges compactes) */}
       <div className="grid lg:grid-cols-[1.2fr_1fr] gap-3 mb-3">
         <div className="rounded-lg border bg-white p-3">
+          {/* playing = !sending : s'arrête quand la réponse est finie */}
           <FlowRail playing={!sending} />
         </div>
         <div className="rounded-lg border bg-white p-3">
@@ -853,6 +883,7 @@ function ChatBox() {
             {messages.map((m, i) => (
               <Message
                 key={i}
+                msgRef={(el) => (msgRefs.current[i] = el)}
                 role={m.role}
                 text={m.text}
                 citations={m.citations}
