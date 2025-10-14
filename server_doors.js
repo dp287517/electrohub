@@ -259,11 +259,16 @@ async function currentUser(req) {
     req.headers["x-auth-email"] ||
     req.headers["x-forwarded-user"] || // ex. reverse proxy / SSO
     readCookie(req, "email") ||
+    // >>> fallback: champs envoyés dans le body (JSON OU multipart)
+    (req.body && (req.body.user_email || req.body.email || (req.body._user && req.body._user.email))) ||
     null;
+
   const rawName =
     req.headers["x-user-name"] ||
     req.headers["x-auth-name"] ||
     req.headers["x-forwarded-user"] || // peut contenir un nom côté proxy
+    // >>> fallback: champs envoyés dans le body (JSON OU multipart)
+    (req.body && (req.body.user_name || req.body.name || (req.body._user && req.body._user.name))) ||
     null;
 
   const email = safeEmail(rawEmail); // peut être null si invalide
