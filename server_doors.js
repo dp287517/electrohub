@@ -27,20 +27,30 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.set("trust proxy", 1);
 app.use(helmet());
-app.use(cors({ origin: true, credentials: true }));
+
+// CORS élargi (headers identité)
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    allowedHeaders: ["Content-Type", "X-User-Email", "X-User-Name"],
+    exposedHeaders: [],
+  })
+);
+
 app.use(express.json({ limit: "16mb" }));
 
 const PORT = Number(process.env.FIRE_DOORS_PORT || 3016);
-const HOST = process.env.FIRE_DOORS_HOST || "127.0.0.1";
+const HOST = process.env.FIRE_DOORS_HOST || "0.0.0.0";
 
-// Storage layout (ephemeral FS OK : on garde une copie en DB également)
+// Storage layout (disque éphémère -> on garde une copie DB en fallback)
 const DATA_ROOT = path.join(process.cwd(), "uploads", "fire-doors");
 const FILES_DIR = path.join(DATA_ROOT, "files");
 const QRCODES_DIR = path.join(DATA_ROOT, "qrcodes");
 await fsp.mkdir(FILES_DIR, { recursive: true });
 await fsp.mkdir(QRCODES_DIR, { recursive: true });
 
-// Multer (JSON ou multipart — même route)
+// Multer
 const uploadAny = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, FILES_DIR),
@@ -92,11 +102,13 @@ async function ensureSchema() {
       floor TEXT,
       location TEXT,
       photo_path TEXT,
+      photo_file_id UUID,          -- lien vers fd_files.id (photo courante)
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     );
   `);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS photo_path TEXT;`);
+  await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS photo_file_id UUID;`);
 
   // Checks
   await pool.query(`
@@ -119,7 +131,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_email TEXT;`);
   await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_name TEXT;`);
 
-  // Files (door-level & check-level)
+  // Files (door-level & check-level) + contenu DB (fallback)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fd_files (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -130,13 +142,13 @@ async function ensureSchema() {
       path TEXT,
       mime TEXT,
       size_bytes BIGINT,
-      data_bytea BYTEA,                             -- copie persistée en DB
+      content BYTEA,                                -- FALBACK : contenu binaire
       uploaded_at TIMESTAMPTZ DEFAULT now()
     );
   `);
   await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS inspection_id UUID;`);
   await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS kind TEXT;`);
-  await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS data_bytea BYTEA;`);
+  await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS content BYTEA;`);
 
   // Indexes
   await pool.query(`
@@ -200,18 +212,39 @@ async function getSettings() {
   return rows[0] || { checklist_template: [], frequency: "1_an" };
 }
 
-// ------------------------------
-// User detection (en-têtes ou cookie "email")
-// ------------------------------
+// URL publique (Render / proxy)
+function publicOrigin(req) {
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0] || "https";
+  const host = (req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0];
+  if (!host) return "https://autonomix-elec.onrender.com";
+  return `${proto}://${host}`;
+}
+const DEFAULT_APP_PATH = process.env.FIRE_DOORS_QR_APP_PATH || "/app/doors";
+function qrDeepLink(req, doorId) {
+  // Si PUBLIC_BASE est défini, on l’utilise (avec ou sans /app/doors)
+  const envBase = process.env.PUBLIC_BASE;
+  if (envBase) {
+    try {
+      const u = new URL(envBase);
+      let base = u.href.replace(/\/+$/, "");
+      if (base.endsWith("/app/doors")) {
+        return `${base}?door=${doorId}`;
+      }
+      return `${base}${DEFAULT_APP_PATH}?door=${doorId}`;
+    } catch {
+      // PUBLIC_BASE n'est pas une URL valide -> on ignore
+    }
+  }
+  // Sinon, on se base sur le domaine public courant
+  const origin = publicOrigin(req);
+  return `${origin}${DEFAULT_APP_PATH}?door=${doorId}`;
+}
+
+// Lecture cookie
 function readCookie(req, name) {
   const raw = req.headers?.cookie || "";
   const m = raw.match(new RegExp(`(?:^|; )${name}=([^;]+)`));
   return m ? decodeURIComponent(m[1]) : null;
-}
-function safeText(s) {
-  if (!s) return null;
-  const x = String(s).trim();
-  return x || null;
 }
 function safeEmail(s) {
   if (!s) return null;
@@ -219,37 +252,29 @@ function safeEmail(s) {
   return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
 async function currentUser(req) {
-  const email =
-    safeEmail(req.headers["x-user-email"]) ||
-    safeEmail(req.headers["x-auth-email"]) ||
-    safeEmail(readCookie(req, "email")) ||
+  const rawEmail =
+    req.headers["x-user-email"] ||
+    req.headers["x-auth-email"] ||
+    readCookie(req, "email") ||
     null;
+  const rawName = req.headers["x-user-name"] || null;
 
-  const suppliedName =
-    safeText(req.headers["x-user-name"]) ||
-    safeText(req.headers["x-auth-name"]) ||
-    null;
+  const email = safeEmail(rawEmail); // peut être null si invalide
+  let name = rawName ? String(rawName).trim() : null;
 
-  // On n’impose plus la présence d’une table users : on renvoie ce qu’on a.
-  // Si une table users existe et qu’on veut surcharger le nom, on peut tenter le lookup.
-  let name = suppliedName;
-  if (email && !name) {
+  if (!name && email) {
     try {
       const { rows } = await pool.query(
         `SELECT name FROM users WHERE lower(email)=lower($1) LIMIT 1`,
         [email]
       );
       name = rows[0]?.name || null;
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
   return { email, name };
 }
 
-// ------------------------------
-// Planification du pending check
-// ------------------------------
+// Planifie un "pending" si aucun : J+30 la toute première fois, sinon +fréquence
 async function ensureNextPendingCheck(door_id) {
   const { rows: pend } = await pool.query(
     `SELECT id FROM fd_checks WHERE door_id=$1 AND closed_at IS NULL ORDER BY due_date ASC LIMIT 1`,
@@ -274,22 +299,16 @@ async function ensureNextPendingCheck(door_id) {
   return r.rows[0];
 }
 
-// ------------------------------
-// QR codes (URL absolue + force regen)
-// ------------------------------
-async function ensureDoorQRCode(doorId, name, size = 512, baseUrl) {
-  const safeBase = String(baseUrl || "").replace(/\/$/, "");
+// QRCode: génère sur disque (pour perf), mais URL calculée dynamiquement (domaine correct)
+async function ensureDoorQRCode(req, doorId, name, size = 512, force = false) {
   const file = path.join(QRCODES_DIR, `${doorId}_${size}.png`);
-  if (!fs.existsSync(file)) {
-    const url = `${safeBase}/#/app/doors?door=${doorId}`;
+  if (force || !fs.existsSync(file)) {
+    const url = qrDeepLink(req, doorId);
     await QRCode.toFile(file, url, { width: size, margin: 1 });
   }
   return file;
 }
 
-// ------------------------------
-// PDF NC
-// ------------------------------
 async function createNcPdf(outPath, door, check, inspectorName = null) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margin: 36 });
@@ -312,12 +331,12 @@ async function createNcPdf(outPath, door, check, inspectorName = null) {
     } else {
       nc.forEach((it, i) => {
         doc.fontSize(14).text(`${i + 1}. ${it.label || "-"}`);
+        doc.moveDown(0.25).fontSize(11).fillColor("#333")
+          .text(`Résultat : Non conforme`);
         if (it.comment) {
-          doc.moveDown(0.25).fontSize(11).fillColor("#333")
-             .text(`Commentaire : ${it.comment}`)
-             .fillColor("black");
+          doc.moveDown(0.15).text(`Commentaire : ${it.comment}`);
         }
-        doc.moveDown(0.5);
+        doc.fillColor("black").moveDown(0.6);
       });
     }
     doc.end();
@@ -563,24 +582,26 @@ app.delete("/api/doors/doors/:id", async (req, res) => {
 });
 
 // ------------------------------
-// Photo (vignette) — on stocke aussi en DB pour persistance
+// Photo (vignette) — stock disque + copie DB + fallback
 // ------------------------------
 app.post("/api/doors/doors/:id/photo", uploadAny.single("photo"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "photo requise" });
+    const buf = await fsp.readFile(req.file.path);
 
-    // Copie DB persistante
-    let buf = null;
-    try { buf = await fsp.readFile(req.file.path); } catch { /* ignore */ }
-
-    await pool.query(
-      `UPDATE fd_doors SET photo_path=$1, updated_at=now() WHERE id=$2`,
-      [req.file.path, req.params.id]
-    );
-    await pool.query(
-      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, data_bytea)
-       VALUES($1, NULL, 'photo', $2, $3, $4, $5, $6)`,
+    // fd_files avec contenu DB
+    const { rows: ins } = await pool.query(
+      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
+       VALUES($1, NULL, 'photo', $2, $3, $4, $5, $6)
+       RETURNING id`,
       [req.params.id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]
+    );
+    const fileId = ins[0].id;
+
+    // lien "courant" sur fd_doors
+    await pool.query(
+      `UPDATE fd_doors SET photo_path=$1, photo_file_id=$2, updated_at=now() WHERE id=$3`,
+      [req.file.path, fileId, req.params.id]
     );
     res.json({ ok: true });
   } catch (e) {
@@ -588,32 +609,36 @@ app.post("/api/doors/doors/:id/photo", uploadAny.single("photo"), async (req, re
   }
 });
 
-// Sert la photo : disque si dispo, sinon la dernière photo en DB
 app.get("/api/doors/doors/:id/photo", async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT photo_path FROM fd_doors WHERE id=$1`, [req.params.id]);
-    const p = rows[0]?.photo_path;
-
-    if (p && fs.existsSync(p)) {
-      res.setHeader("Content-Type", "image/*");
-      return res.sendFile(path.resolve(p));
-    }
-
-    // Fallback DB
-    const { rows: ph } = await pool.query(
-      `SELECT mime, data_bytea
-         FROM fd_files
-        WHERE door_id=$1 AND kind='photo' AND data_bytea IS NOT NULL
-        ORDER BY uploaded_at DESC
-        LIMIT 1`,
+    const { rows } = await pool.query(
+      `SELECT photo_path, photo_file_id FROM fd_doors WHERE id=$1`,
       [req.params.id]
     );
-    const r = ph[0];
-    if (!r?.data_bytea) return res.status(404).send("no_photo");
-    res.setHeader("Content-Type", r.mime || "image/*");
-    return res.end(r.data_bytea);
+    const row = rows[0];
+    if (!row) return res.status(404).send("no_door");
+
+    // 1) disque
+    if (row.photo_path && fs.existsSync(row.photo_path)) {
+      res.setHeader("Content-Type", "image/*");
+      return res.sendFile(path.resolve(row.photo_path));
+    }
+    // 2) fallback DB
+    if (row.photo_file_id) {
+      const { rows: frows } = await pool.query(
+        `SELECT mime, content FROM fd_files WHERE id=$1`,
+        [row.photo_file_id]
+      );
+      const f = frows[0];
+      if (f?.content) {
+        res.setHeader("Content-Type", f.mime || "image/*");
+        return res.end(f.content, "binary");
+      }
+    }
+
+    return res.status(404).send("no_photo");
   } catch (e) {
-    return res.status(500).send("err");
+    res.status(500).send("err");
   }
 });
 
@@ -634,7 +659,9 @@ app.post("/api/doors/doors/:id/checks", async (req, res) => {
     let check = checkR[0];
     if ((check.items || []).length === 0) {
       const s = await getSettings();
-      const items = (s.checklist_template || []).slice(0, 5).map((label, i) => ({ index: i, label, value: null }));
+      const items = (s.checklist_template || [])
+        .slice(0, 5)
+        .map((label, i) => ({ index: i, label, value: null }));
       const { rows: upd } = await pool.query(
         `UPDATE fd_checks SET items=$1, updated_at=now() WHERE id=$2 RETURNING *`,
         [JSON.stringify(items), check.id]
@@ -648,7 +675,7 @@ app.post("/api/doors/doors/:id/checks", async (req, res) => {
   }
 });
 
-// PUT (JSON ou multipart sur la même route)
+// PUT (JSON ou multipart sur la même route) — fichiers avec copie DB
 app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), async (req, res) => {
   try {
     const doorId = req.params.id;
@@ -660,7 +687,7 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
 
     const settings = await getSettings();
 
-    // items
+    // items (merge)
     let incomingItems = [];
     if (req.is("multipart/form-data")) {
       if (req.body?.items) { try { incomingItems = JSON.parse(req.body.items); } catch { incomingItems = []; } }
@@ -688,18 +715,17 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
       const vals = [];
       let i = 1;
       for (const f of files) {
-        let buf = null;
-        try { buf = await fsp.readFile(f.path); } catch { /* ignore */ }
+        const buf = await fsp.readFile(f.path);
         params.push(`($${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`);
         vals.push(doorId, checkId, "check", f.originalname, f.path, f.mimetype, f.size, buf);
       }
       await pool.query(
-        `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, data_bytea)
+        `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
          VALUES ${params.join(",")}`, vals
       );
     }
 
-    // Clôture si demandé OU si les 5 valeurs sont renseignées (Conforme/Non conforme/N.A.)
+    // Clôture si demandé OU si les 5 valeurs sont renseignées
     const bodyClose = !!(req.body && req.body.close);
     const close = bodyClose || allFiveFilled(merged);
 
@@ -822,24 +848,23 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
     const settings = await getSettings();
     const checks = rows.map((r) => {
       const items = normalizeItemsWithLabels(r.items || [], settings.checklist_template);
-      // Historique : statut d'une ligne clôturée = FAIT (quelle que soit la conformité)
-      const statusHist = STATUS.FAIT;
       const username = r.closed_by_name || r.closed_by_email || "—";
-      // Résultat global
-      const result = r.status === "ok" ? "conforme" : r.status === "nc" ? "non_conforme" : null;
-
-      // Lien PDF : s'il n'y a pas de NC, la route génère un PDF "vide" à la volée
-      const nc_pdf_url = `/api/doors/doors/${req.params.id}/nonconformities.pdf`;
+      const result = r.status === "ok" ? "conforme" : "non_conforme";
+      const statusHist = STATUS.FAIT; // un contrôle clos = Fait (affichage)
+      const ncPdf =
+        r.status === "nc" && r.pdf_nc_path
+          ? `/api/doors/doors/${req.params.id}/nonconformities.pdf`
+          : null;
 
       return {
         id: r.id,
         date: r.closed_at,
         status: statusHist,
-        result,                 // conforme | non_conforme | null
+        result,
         counts: r.result_counts || {},
         items,
         files: filesByCheck[r.id] || [],
-        nc_pdf_url,
+        nc_pdf_url: ncPdf,
         user: username,
       };
     });
@@ -872,13 +897,9 @@ app.get("/api/doors/doors/:id/files", async (req, res) => {
 app.post("/api/doors/doors/:id/files", uploadAny.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "file requis" });
-
-    // Copie persistante en DB
-    let buf = null;
-    try { buf = await fsp.readFile(req.file.path); } catch { /* ignore */ }
-
+    const buf = await fsp.readFile(req.file.path);
     await pool.query(
-      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, data_bytea)
+      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
        VALUES($1, NULL, 'door', $2, $3, $4, $5, $6)`,
       [req.params.id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]
     );
@@ -888,28 +909,31 @@ app.post("/api/doors/doors/:id/files", uploadAny.single("file"), async (req, res
   }
 });
 
-// Téléchargement : disque si dispo, sinon DB
 app.get("/api/doors/files/:fileId/download", async (req, res) => {
-  const { rows } = await pool.query(
-    `SELECT path, filename, mime, data_bytea FROM fd_files WHERE id=$1`,
-    [req.params.fileId]
-  );
-  const f = rows[0];
-  if (!f) return res.status(404).send("file");
+  try {
+    const { rows } = await pool.query(
+      `SELECT path, filename, mime, content FROM fd_files WHERE id=$1`,
+      [req.params.fileId]
+    );
+    const f = rows[0];
+    if (!f) return res.status(404).send("file");
 
-  if (f.path && fs.existsSync(f.path)) {
-    res.setHeader("Content-Type", f.mime || "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
-    return res.sendFile(path.resolve(f.path));
+    // 1) disque
+    if (f.path && fs.existsSync(f.path)) {
+      res.setHeader("Content-Type", f.mime || "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
+      return res.sendFile(path.resolve(f.path));
+    }
+    // 2) fallback DB
+    if (f.content) {
+      res.setHeader("Content-Type", f.mime || "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
+      return res.end(f.content, "binary");
+    }
+    return res.status(404).send("file");
+  } catch (e) {
+    res.status(500).send("err");
   }
-
-  if (f.data_bytea) {
-    res.setHeader("Content-Type", f.mime || "application/octet-stream");
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
-    return res.end(f.data_bytea);
-  }
-
-  return res.status(404).send("file_missing");
 });
 
 app.delete("/api/doors/files/:fileId", async (req, res) => {
@@ -930,21 +954,12 @@ app.get("/api/doors/doors/:id/qrcode", async (req, res) => {
   try {
     const size = Math.max(64, Math.min(1024, Number(req.query.size || 256)));
     const force = String(req.query.force || "") === "1";
-
     const { rows } = await pool.query(`SELECT id, name FROM fd_doors WHERE id=$1`, [req.params.id]);
     const d = rows[0];
     if (!d) return res.status(404).send("door");
-
-    // Base publique : ENV > X-Forwarded-* > Host
-    const envBase = (process.env.PUBLIC_BASE || "").replace(/\/$/, "");
-    const inferredBase = `${(req.headers["x-forwarded-proto"] || "https")}://${(req.headers["x-forwarded-host"] || req.headers.host)}`;
-    const base = envBase || inferredBase;
-
-    const target = path.join(QRCODES_DIR, `${d.id}_${size}.png`);
-    if (force && fs.existsSync(target)) fs.unlinkSync(target);
-
-    const file = await ensureDoorQRCode(d.id, d.name, size, base);
+    const file = await ensureDoorQRCode(req, d.id, d.name, size, force);
     res.setHeader("Content-Type", "image/png");
+    res.setHeader("Cache-Control", "no-store, max-age=0");
     res.sendFile(path.resolve(file));
   } catch (e) {
     res.status(500).send("err");
@@ -967,6 +982,7 @@ app.get("/api/doors/doors/:id/nonconformities.pdf", async (req, res) => {
     if (!row) return res.status(404).send("no_history");
 
     if (row.status === "ok") {
+      // Génère un PDF "zéro NC" (utile pour export SAP)
       const tmp = path.join(DATA_ROOT, `NC_${row.name.replace(/[^\w.-]+/g, "_")}_${Date.now()}.pdf`);
       await createNcPdf(tmp, row, { items: [] });
       res.setHeader("Content-Type", "application/pdf");
@@ -1033,10 +1049,10 @@ app.get("/api/doors/alerts", async (_req, res) => {
          ORDER BY door_id, closed_at DESC
       )
       SELECT
-        COUNT(*) FILTER (WHERE p.due_date < $1)                       AS overdue,
+        COUNT(*) FILTER (WHERE p.due_date < $1)                      AS overdue,
         COUNT(*) FILTER (WHERE p.due_date >= $1 AND p.due_date <= $2) AS due_30,
-        COUNT(*)                                                       AS pending,
-        COUNT(*) FILTER (WHERE lc.status = 'nc')                       AS last_nc
+        COUNT(*)                                                      AS pending,
+        COUNT(*) FILTER (WHERE lc.status = 'nc')                      AS last_nc
       FROM pending p
       LEFT JOIN last_closed lc ON lc.door_id = p.door_id
       `,
@@ -1074,4 +1090,5 @@ app.get("/api/doors/alerts", async (_req, res) => {
 await ensureSchema();
 app.listen(PORT, HOST, () => {
   console.log(`[fire-doors] listening on ${HOST}:${PORT}`);
+  console.log(`QR base default: ${process.env.PUBLIC_BASE || "(dynamic from host)"} + ${DEFAULT_APP_PATH}`);
 });
