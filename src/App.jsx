@@ -31,6 +31,9 @@ import Comp from './pages/Comp.jsx';
 // 👇 NEW: Ask Veeva (Lecture & Q/R Documents)
 import AskVeeva from './pages/Ask_veeva.jsx';
 
+// 👇 NEW: Fire Doors (Portes coupe-feu)
+import Doors from './pages/Doors.jsx';
+
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
@@ -76,6 +79,9 @@ export default function App() {
 
           {/* 👇 NEW: Ask Veeva */}
           <Route path="/app/ask-veeva" element={<ProtectedRoute><AskVeeva /></ProtectedRoute>} />
+
+          {/* 👇 NEW: Fire Doors */}
+          <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
