@@ -3,7 +3,7 @@
 # - Hybrid sparse: BM25 + TF-IDF(word 1..3) + TF-IDF(char 3..5)
 # - Domain-normalization (SOP/N####-#, IDR) + bilingual FR<->EN expansion
 # - Heuristics: filename boosts, code boosts, negative tokens, role/sector bias
-# - Query rewriting: multi-subqueries (FR/EN, codes, variantes) + synonym DB
+# - Query rewriting: multi-subqueries (FR/EN, codes, variantes) + synonym DB + next_terms
 # - Two-stage MMR (doc-level then chunk-level) to maximize diversity
 # - Optional Cross-Encoder rerank (default: BAAI/bge-reranker-large, fallback to MiniLM)
 # - Phrase-level evidence: optional table askv_spans (span embeddings) if present
@@ -15,7 +15,7 @@
 # Endpoints:
 #   GET  /health
 #   POST /reindex
-#   POST /search {query,k,role,sector,rerank,deep}
+#   POST /search {query,k,role,sector,rerank,deep,next_terms?}
 #   POST /compare {topic, doc_ids[], criteria?, k_per_crit?, role?, sector?}
 #
 # Launch:
@@ -65,6 +65,9 @@ MMR_LIMIT_CHUNK = int(os.getenv("PYSEARCH_MMR_LIMIT_CHUNK", "24"))
 USE_SPANS = os.getenv("PYSEARCH_USE_SPANS", "1").strip().lower() not in ("0","false","no")
 SPANS_TOP = int(os.getenv("PYSEARCH_SPANS_TOP", "3"))
 
+# Anticipation (+1 tour light) – can be disabled
+PREDICT_NEXT_ON = os.getenv("PYSEARCH_PREDICT_NEXT", "1").strip().lower() not in ("0","false","no")
+
 # Keyword/domain boosts
 KEYWORD_BOOSTS = {
     "sop": 0.30, "procédure": 0.25, "procedure": 0.25,
@@ -89,6 +92,23 @@ BILINGUAL_DEFAULTS = [
     ("validation", "validation IQ OQ PQ"),
     ("format", "setup changeover format settings"),
     ("traçabilité", "traceability genealogy"),
+]
+
+# Anticipation "en pouvoir": liste large de termes interprétables (FR/EN)
+NEXT_SEED_TERMS = [
+    # aide / intention d'action
+    "que faire", "quoi faire", "je suis perdu", "j'ai besoin d'aide", "help", "how to",
+    "procedure/steps", "procédure/étapes", "responsabilités", "responsibilities",
+    "enregistrements", "records", "définitions", "definitions", "références", "references",
+    # qualité / NC / CAPA
+    "non conformité", "non-conformité", "nc", "déviation", "deviation", "capa", "action corrective",
+    # EHS / IPC / paramètres
+    "EHS", "HSE", "sécurité", "safety", "IPC", "contrôles", "controls",
+    "tolérances", "parameters", "fréquences", "frequencies",
+    # Validation / changeover / traçabilité
+    "validation", "IQ", "OQ", "PQ", "format", "changeover", "traçabilité", "traceability",
+    # équipements / nettoyage
+    "matériel", "équipements", "equipment", "nettoyage", "cleaning",
 ]
 
 # ----- Cross-Encoder (optional) -----
@@ -369,8 +389,23 @@ def deep_expand_query(raw_q: str) -> str:
         return raw_q + " " + " ".join(sorted(set(extras)))
     return raw_q
 
-def generate_subqueries(q: str) -> List[str]:
-    """FR/EN variants + code-focused & phrase-trimmed versions."""
+def predict_next_terms(question: str, last_answer: Optional[str] = None, limit: int = 5) -> List[str]:
+    """Ultra-light local 'anticipation': renvoie quelques seeds interprétables."""
+    if not PREDICT_NEXT_ON:
+        return []
+    base = (question or "") + " " + (last_answer or "")
+    n = norm(base)
+    # filtre grossier: ne répète pas un terme déjà présent
+    out = []
+    for w in NEXT_SEED_TERMS:
+        if norm(w) not in n:
+            out.append(w)
+        if len(out) >= limit:
+            break
+    return out
+
+def generate_subqueries(q: str, next_terms: Optional[List[str]] = None) -> List[str]:
+    """FR/EN variants + code-focused & phrase-trimmed versions + next_terms injection."""
     n = norm(q)
     subs = {q}
 
@@ -396,7 +431,12 @@ def generate_subqueries(q: str) -> List[str]:
         if alt:
             subs.add(q + " " + alt)
 
-    return list(subs)[:6]  # small cap
+    # Inject next_terms (poids faible — on ajoute des sous-queries étendues)
+    if next_terms:
+        for t in next_terms[:5]:
+            subs.add(q + " " + str(t))
+
+    return list(subs)[:10]  # petit cap
 
 # ---------------- Scoring core ----------------
 def score_arrays_for_query(q: str) -> Tuple[np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray,np.ndarray]:
@@ -494,10 +534,11 @@ def score_hybrid_single(q: str, role: Optional[str], sector: Optional[str]) -> n
     S = combine_scores([bm, tfw, tfc, fname, code_boost, fuzzy]) + rs + intent
     return S
 
-def aggregate_over_subqueries(q: str, role: Optional[str], sector: Optional[str]) -> np.ndarray:
+def aggregate_over_subqueries(q: str, role: Optional[str], sector: Optional[str], next_terms: Optional[List[str]] = None) -> np.ndarray:
     """Blend scores over generated sub-queries for recall."""
-    subs = [q] + generate_subqueries(q)
-    weights = np.linspace(1.0, 0.6, num=len(subs))  # decay
+    subs = [q] + generate_subqueries(q, next_terms=next_terms)
+    # poids décroissants ; next_terms étant dans subs, ils héritent d'un poids bas
+    weights = np.linspace(1.0, 0.6, num=len(subs))
     S = np.zeros(len(DOCS))
     for w, sq in zip(weights, subs):
         S += w * score_hybrid_single(sq, role, sector)
@@ -563,49 +604,6 @@ def mmr_two_stage(items: List[Dict[str,Any]], k: int, q: str) -> List[Dict[str,A
     kept = [kept_items[i] for i in keep_idx_rel]
     return kept[:k]
 
-# ---------------- Deep candidates + rerank ----------------
-def deep_candidates(q: str, k: int, role: Optional[str], sector: Optional[str]) -> List[Dict[str,Any]]:
-    baseK = max(k, RERANK_KEEP) if RERANK_ENABLED else k
-    S = aggregate_over_subqueries(q, role, sector)
-    # take top baseK by score
-    if len(S) == 0: return []
-    kprime = min(max(baseK, 1), len(S))
-    idx = np.argpartition(-S, kprime - 1)[:kprime]
-    idx = idx[np.argsort(-S[idx])]
-
-    prelim = []
-    for i in idx:
-        r = DOCS[i]
-        prelim.append({
-            "chunk_id": r["chunk_id"],
-            "doc_id": str(r["doc_id"]),
-            "filename": r.get("filename"),
-            "chunk_index": r.get("chunk_index"),
-            "score": float(S[i]),
-            "codes": CODES[i],
-            "snippet": (r.get("content") or "")[:900],
-            "page": r.get("page"),
-            "section_title": r.get("section_title")
-        })
-
-    # rerank (optional)
-    items = prelim
-    if RERANK_ENABLED and ce_model is not None and items:
-        pool = items[:min(len(items), RERANK_CAND)]
-        pairs = [(q, f"{it['filename']} — {it.get('snippet','')}") for it in pool]
-        scores = ce_model.predict(pairs, convert_to_numpy=True, show_progress_bar=False)
-        for it, sc in zip(pool, scores):
-            it["_score_ce"] = float(sc)
-            it["score_final"] = RERANK_ALPHA * it["_score_ce"] + (1 - RERANK_ALPHA) * float(it.get("score", 0.0))
-        pool.sort(key=lambda x: x["score_final"], reverse=True)
-        items = pool[:max(k, RERANK_KEEP)]
-
-    # two-stage MMR for stability/diversity
-    if DEEP_ON and items:
-        items = mmr_two_stage(items, k, q)
-
-    return items[:k]
-
 # ---------------- Evidence via spans (optional) ----------------
 def best_spans_for(doc_id: str, query: str, limit: int = 3) -> List[Dict[str,Any]]:
     """Return top spans (by simple BM25-like score against query terms), fallback to empty."""
@@ -650,6 +648,7 @@ class SearchReq(BaseModel):
     sector: Optional[str] = None
     rerank: Optional[bool] = None
     deep: Optional[bool] = None
+    next_terms: Optional[List[str]] = None  # <<< NEW
 
 class CompareReq(BaseModel):
     topic: str = Field(..., description="Sujet/objet de la comparaison")
@@ -688,6 +687,7 @@ def health():
         "mmr": {"doc_lambda": MMR_LAMBDA_DOC, "chunk_lambda": MMR_LAMBDA_CHUNK,
                 "doc_limit": MMR_LIMIT_DOC, "chunk_limit": MMR_LIMIT_CHUNK},
         "use_spans": bool(HAS_SPANS and USE_SPANS),
+        "predict_next": bool(PREDICT_NEXT_ON),
         "synonyms": syn_count
     }
 
@@ -696,13 +696,94 @@ def reindex():
     info = build_index()
     return {"ok": True, **info}
 
+# ---------------- Deep candidates + rerank (multi-objectif) ----------------
+def deep_candidates(q: str, k: int, role: Optional[str], sector: Optional[str], next_terms: Optional[List[str]] = None) -> List[Dict[str,Any]]:
+    baseK = max(k, RERANK_KEEP) if RERANK_ENABLED else k
+    S = aggregate_over_subqueries(q, role, sector, next_terms=next_terms)
+    # take top baseK by score
+    if len(S) == 0: return []
+    kprime = min(max(baseK, 1), len(S))
+    idx = np.argpartition(-S, kprime - 1)[:kprime]
+    idx = idx[np.argsort(-S[idx])]
+
+    prelim = []
+    for i in idx:
+        r = DOCS[i]
+        prelim.append({
+            "chunk_id": r["chunk_id"],
+            "doc_id": str(r["doc_id"]),
+            "filename": r.get("filename"),
+            "chunk_index": r.get("chunk_index"),
+            "score": float(S[i]),
+            "codes": CODES[i],
+            "snippet": (r.get("content") or "")[:900],
+            "page": r.get("page"),
+            "section_title": r.get("section_title")
+        })
+
+    # coverage par doc (contrat de preuve light, basé sur spans)
+    for it in prelim:
+        cov = 0.0
+        if HAS_SPANS and USE_SPANS:
+            spans = best_spans_for(it["doc_id"], q, limit=SPANS_TOP)
+            cov = min(len(spans) / float(max(1, SPANS_TOP)), 1.0)
+        it["_coverage"] = float(cov)
+
+    # rerank (optional) + multi-objectif
+    items = prelim
+    if RERANK_ENABLED and ce_model is not None and items:
+        pool = items[:min(len(items), RERANK_CAND)]
+        pairs = [(q, f"{it['filename']} — {it.get('snippet','')}") for it in pool]
+        scores = ce_model.predict(pairs, convert_to_numpy=True, show_progress_bar=False)
+        # Blend multi-objectif
+        n_has_code = re.search(r"\b(sop|qd-sop|n[12]\d{3}-\d|idr)\b", norm(q)) is not None
+        for it, sc in zip(pool, scores):
+            ce = float(sc)
+            it["_score_ce"] = ce
+            cov = float(it.get("_coverage", 0.0))
+            codeb = 1.0 if any(c for c in (it.get("codes") or []) if str(c).startswith("QD-SOP-") or str(c) == "IDR") else 0.0
+            # léger biais rôle/secteur déjà injecté en hybrid, on le garde minimal ici
+            roleb = 0.06
+            # pondérations adaptatives
+            α = 0.70
+            β = 0.10 if n_has_code else 0.25  # coverage pèse plus quand on n'a pas de code explicite
+            γ = 0.30 if n_has_code else 0.10  # code boost pèse plus quand la requête contient des codes
+            δ = 0.05
+            it["score_final"] = α*ce + β*cov + γ*codeb + δ*roleb + (1 - RERANK_ALPHA) * float(it.get("score", 0.0)) * 0.10
+        pool.sort(key=lambda x: x["score_final"], reverse=True)
+        items = pool[:max(k, RERANK_KEEP)]
+    else:
+        # Pas de CE : on mélange hybrid normalisé + coverage + codeb
+        for it in items:
+            base = float(it.get("score", 0.0))
+            cov = float(it.get("_coverage", 0.0))
+            codeb = 1.0 if any(c for c in (it.get("codes") or []) if str(c).startswith("QD-SOP-") or str(c) == "IDR") else 0.0
+            it["score_final"] = 0.80*base + 0.15*cov + 0.05*codeb
+        items.sort(key=lambda x: x["score_final"], reverse=True)
+
+    # two-stage MMR pour stabilité/diversité
+    if DEEP_ON and items:
+        items = mmr_two_stage(items, k, q)
+
+    return items[:k]
+
 @app.post("/search")
 def search(req: SearchReq):
     ensure_index()
     q = normalize_codes(req.query or "")
     k = max(10, min(200, req.k or TOPK_DEFAULT))
 
-    items = deep_candidates(q, max(k, RERANK_KEEP) if RERANK_ENABLED else k, req.role, req.sector)
+    # next_terms: priorité à celles du client, sinon petite anticipation locale
+    next_terms = (req.next_terms or [])[:5]
+    if not next_terms:
+        next_terms = predict_next_terms(q, None, limit=5)
+
+    items = deep_candidates(
+        q,
+        max(k, RERANK_KEEP) if RERANK_ENABLED else k,
+        req.role, req.sector,
+        next_terms=next_terms
+    )
 
     # attach top spans (evidence) per item doc (optional)
     enriched = []
@@ -716,7 +797,7 @@ def search(req: SearchReq):
             ev = seen_doc_span[it["doc_id"]]
         enriched.append({**it, "evidence": ev})
 
-    return {"ok": True, "items": enriched[:k]}
+    return {"ok": True, "anticipated_terms": next_terms, "items": enriched[:k]}
 
 # --------- /compare: evidence matrix across docs ----------
 DEFAULT_CRITERIA = [
