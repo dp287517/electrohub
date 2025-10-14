@@ -209,6 +209,11 @@ function statusLabel(s) {
   if (s === STATUS.FAIT) return "Fait";
   return s || "—";
 }
+function doorStateBadge(state) {
+  if (state === "conforme") return <Badge color="green">Conforme</Badge>;
+  if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
+  return <Badge>—</Badge>;
+}
 
 /* ----------------------------- Toast ----------------------------- */
 function Toast({ text, onClose }) {
@@ -333,6 +338,7 @@ export default function Doors() {
   const [status, setStatus] = useState(""); // a_faire | en_cours_30 | en_retard | fait
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
+  const [doorState, setDoorState] = useState(""); // conforme | non_conforme
 
   /* ---- drawer (edit / inspect) ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -361,7 +367,7 @@ export default function Doors() {
   async function reload() {
     setLoading(true);
     try {
-      const data = await API.list({ q, status, building, floor });
+      const data = await API.list({ q, status, building, floor, door_state: doorState });
       setDoors(Array.isArray(data.items) ? data.items : []);
     } finally {
       setLoading(false);
@@ -404,6 +410,7 @@ export default function Doors() {
       next_check_date: null,
       photo_url: null,
       current_check: null,
+      door_state: null,
     });
     setDrawerOpen(true);
   }
@@ -465,9 +472,10 @@ export default function Doors() {
     }
   }
 
-  function allFiveConforme(items = []) {
-    const values = (items || []).map((i) => i.value);
-    return values.length >= 5 && values.every((v) => v === "conforme");
+  function allFiveAnswered(items = []) {
+    const values = (items || []).slice(0, 5).map((i) => i?.value);
+    if (values.length < 5) return false;
+    return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
   }
 
   async function saveChecklistItem(idx, value) {
@@ -475,7 +483,7 @@ export default function Doors() {
     const items = [...(editing.current_check.items || [])];
     items[idx] = { ...(items[idx] || {}), index: idx, value };
     const payload = { items };
-    const closed = allFiveConforme(items) && items.length >= 5;
+    const closed = allFiveAnswered(items);
     if (closed) payload.close = true;
 
     const res = await API.saveCheck(editing.id, editing.current_check.id, payload);
@@ -568,7 +576,7 @@ export default function Doors() {
       {/* Filtres (toggle) */}
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
-          <div className="grid md:grid-cols-4 gap-3">
+          <div className="grid md:grid-cols-5 gap-3">
             <Input value={q} onChange={setQ} placeholder="Recherche (nom / lieu…)" />
             <Select
               value={status}
@@ -583,6 +591,15 @@ export default function Doors() {
             />
             <Input value={building} onChange={setBuilding} placeholder="Bâtiment" />
             <Input value={floor} onChange={setFloor} placeholder="Étage / Zone" />
+            <Select
+              value={doorState}
+              onChange={setDoorState}
+              options={[
+                { value: "", label: "Tous états (dernier contrôle)" },
+                { value: "conforme", label: "Conforme" },
+                { value: "non_conforme", label: "Non conforme" },
+              ]}
+            />
           </div>
           <div className="flex gap-2">
             <Btn
@@ -592,6 +609,7 @@ export default function Doors() {
                 setStatus("");
                 setBuilding("");
                 setFloor("");
+                setDoorState("");
                 reload();
               }}
             >
@@ -628,8 +646,11 @@ export default function Doors() {
                       <div className="text-xs text-gray-500 mt-0.5">
                         {d.building || "—"} • {d.floor || "—"} {d.location ? `• ${d.location}` : ""}
                       </div>
-                      <div className="mt-1 text-sm text-gray-600">
-                        Prochain contrôle: {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
+                      <div className="flex items-center gap-2 mt-1">
+                        {doorStateBadge(d.door_state)}
+                        <span className="text-xs text-gray-500">
+                          Prochain contrôle: {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -653,6 +674,7 @@ export default function Doors() {
                 <tr className="text-left border-b">
                   <th className="px-4 py-3 font-semibold text-gray-700">Porte</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Localisation</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">État (dernier contrôle)</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Statut</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Prochain contrôle</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Actions</th>
@@ -661,12 +683,12 @@ export default function Doors() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-4 text-gray-500">Chargement…</td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td>
                   </tr>
                 )}
                 {!loading && filtered.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-4 text-gray-500">Aucune porte.</td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td>
                   </tr>
                 )}
                 {!loading &&
@@ -688,6 +710,9 @@ export default function Doors() {
                       </td>
                       <td className="px-4 py-3">
                         {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
+                      </td>
+                      <td className="px-4 py-3">
+                        {doorStateBadge(d.door_state)}
                       </td>
                       <td className="px-4 py-3">
                         <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
@@ -804,6 +829,8 @@ export default function Doors() {
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Statut</span>
                 <Badge color={statusColor(editing.status)}>{statusLabel(editing.status)}</Badge>
+                <span className="text-sm text-gray-600">• État</span>
+                {doorStateBadge(editing.door_state)}
               </div>
               <div className="text-sm text-gray-600">
                 Prochain contrôle : {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
@@ -916,6 +943,8 @@ export default function Doors() {
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="font-semibold mb-2">QR code</div>
+                {/* Nom de la porte juste au-dessus des QR */}
+                <div className="text-sm text-gray-700 font-medium mb-1">{editing.name || "—"}</div>
                 <div className="grid grid-cols-3 gap-3 items-start">
                   {[128, 256, 512].map((s) => (
                     <div key={s} className="border rounded-xl p-2 text-center">
@@ -1047,6 +1076,7 @@ function DoorHistory({ doorId }) {
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2">Statut</th>
                 <th className="px-3 py-2">Points (C / NC / N/A)</th>
+                <th className="px-3 py-2">Effectué par</th>
                 <th className="px-3 py-2">Pièces jointes</th>
                 <th className="px-3 py-2">PDF NC</th>
               </tr>
@@ -1076,6 +1106,7 @@ function DoorHistory({ doorId }) {
                       </ul>
                     </details>
                   </td>
+                  <td className="px-3 py-2">{h.user || "—"}</td>
                   <td className="px-3 py-2">
                     {!h.files?.length && <span className="text-xs text-gray-500">—</span>}
                     {!!h.files?.length && (
