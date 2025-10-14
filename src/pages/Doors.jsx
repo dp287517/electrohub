@@ -1,687 +1,978 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { get, post, del } from "../lib/api.js"; // réutilise tes helpers existants
+// src/pages/Doors.jsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import dayjs from "dayjs";
 
-/**
- * Doors.jsx — UI complète pour la maintenance des portes coupe-feu
- * Onglets: Contrôles | Calendrier | Paramètres
- *
- * Dépend des endpoints fournis par server_ddors.js / server_doors.js
- * - /api/doors (GET, POST)
- * - /api/doors/:id (DELETE)
- * - /api/doors/:id/start (POST)
- * - /api/doors/:id/next (GET)
- * - /api/doors/:id/complete (POST)
- * - /api/doors/:id/photo (POST, formData)
- * - /api/doors/:id/upload (POST, formData)
- * - /api/doors/:id/qrcodes.pdf (GET)
- * - /api/doors/inspections/:id/nc.pdf (GET)
- * - /api/doors/templates (GET, POST)
- * - /api/doors/templates/:id (PATCH)
- * - /api/doors/calendar (GET)
- * - /api/doors/alerts (GET)
- */
-
-// -----------------------------
-// Petits composants utilitaires
-// -----------------------------
-const cx = (...c) => c.filter(Boolean).join(" ");
-const Spinner = () => (
-  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-    <circle className="opacity-25" cx="12" cy="12" r="10" strokeWidth="4"></circle>
-    <path className="opacity-75" d="M4 12a8 8 0 018-8" strokeWidth="4" strokeLinecap="round"></path>
-  </svg>
-);
-const Badge = ({ children, tone = "gray" }) => (
-  <span className={cx(
-    "inline-flex items-center px-2 py-0.5 rounded text-xs border",
-    tone === "green" && "bg-green-50 border-green-200 text-green-700",
-    tone === "red" && "bg-red-50 border-red-200 text-red-700",
-    tone === "amber" && "bg-amber-50 border-amber-200 text-amber-700",
-    tone === "blue" && "bg-blue-50 border-blue-200 text-blue-700",
-    tone === "gray" && "bg-gray-50 border-gray-200 text-gray-700"
-  )}>{children}</span>
-);
-
-// -----------------------------
-// Vue principale
-// -----------------------------
-export default function Doors() {
-  const [tab, setTab] = useState("control");
-  const [doors, setDoors] = useState([]);
-  const [templates, setTemplates] = useState([]);
-  const [calendar, setCalendar] = useState([]);
-  const [alerts, setAlerts] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("ALL");
-
-  const [creating, setCreating] = useState({ name: "", location: "" });
-
-  const fetchAll = async () => {
-    setLoading(true);
-    try {
-      const [d, t, c, a] = await Promise.all([
-        get("/api/doors"),
-        get("/api/doors/templates"),
-        get("/api/doors/calendar"),
-        get("/api/doors/alerts"),
-      ]);
-      setDoors(d.items || []);
-      setTemplates(t.items || []);
-      setCalendar(c.events || []);
-      setAlerts(a.alerts || []);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchAll();
-  }, []);
-
-  const filteredDoors = useMemo(() => {
-    const s = search.trim().toLowerCase();
-    return (doors || [])
-      .filter((d) => {
-        if (statusFilter !== "ALL" && d.status !== statusFilter) return false;
-        if (!s) return true;
-        return (
-          String(d.name || "").toLowerCase().includes(s) ||
-          String(d.location || "").toLowerCase().includes(s)
-        );
+/* ----------------------------- API (Doors) ----------------------------- */
+const API = {
+  // Doors CRUD + listing + filters
+  list: async (params = {}) => {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
+    ).toString();
+    const r = await fetch(`/api/doors/doors${qs ? `?${qs}` : ""}`, { credentials: "include" });
+    return r.json();
+  },
+  get: async (id) => (await fetch(`/api/doors/doors/${id}`, { credentials: "include" })).json(),
+  create: async (payload) =>
+    (
+      await fetch(`/api/doors/doors`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
       })
-      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }, [doors, search, statusFilter]);
+    ).json(),
+  update: async (id, payload) =>
+    (
+      await fetch(`/api/doors/doors/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      })
+    ).json(),
+  remove: async (id) => (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", credentials: "include" })).json(),
 
-  async function createDoor() {
-    if (!creating.name.trim()) return alert("Nom requis");
-    await post("/api/doors", creating);
-    setCreating({ name: "", location: "" });
-    await fetchAll();
-  }
+  // Checklist (create/close) + history
+  startCheck: async (doorId) =>
+    (
+      await fetch(`/api/doors/doors/${doorId}/checks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({}),
+      })
+    ).json(),
+  saveCheck: async (doorId, checkId, payload) =>
+    (
+      await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      })
+    ).json(),
+  listHistory: async (doorId) =>
+    (await fetch(`/api/doors/doors/${doorId}/history`, { credentials: "include" })).json(),
 
-  return (
-    <div className="p-4 max-w-6xl mx-auto">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">Portes coupe-feu – Maintenance</h1>
-        <a
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            fetchAll();
-          }}
-          className="text-sm text-gray-600 hover:text-black"
-          title="Rafraîchir"
-        >
-          {loading ? <Spinner /> : "↻"}
-        </a>
-      </div>
+  // Attachments (photo + drag & drop)
+  listFiles: async (doorId) =>
+    (await fetch(`/api/doors/doors/${doorId}/files`, { credentials: "include" })).json(),
+  uploadFile: async (doorId, file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    const r = await fetch(`/api/doors/doors/${doorId}/files`, {
+      method: "POST",
+      body: fd,
+      credentials: "include",
+    });
+    return r.json();
+  },
+  deleteFile: async (fileId) =>
+    (await fetch(`/api/doors/files/${fileId}`, { method: "DELETE", credentials: "include" })).json(),
 
-      {/* Tabs */}
-      <div className="flex gap-2 mb-4">
-        <TabBtn id="control" tab={tab} setTab={setTab}>
-          Contrôles
-        </TabBtn>
-        <TabBtn id="calendar" tab={tab} setTab={setTab}>
-          Calendrier
-        </TabBtn>
-        <TabBtn id="params" tab={tab} setTab={setTab}>
-          Paramètres
-        </TabBtn>
-      </div>
+  // QR code (PNG stream)
+  qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
 
-      {tab === "control" && (
-        <div className="space-y-6">
-          {/* Create */}
-          <div className="bg-white rounded-xl p-4 shadow">
-            <div className="text-lg font-semibold mb-2">Créer une porte</div>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-              <input
-                className="border rounded p-2"
-                placeholder="Nom de la porte"
-                value={creating.name}
-                onChange={(e) => setCreating((v) => ({ ...v, name: e.target.value }))}
-              />
-              <input
-                className="border rounded p-2"
-                placeholder="Localisation (optionnel)"
-                value={creating.location}
-                onChange={(e) => setCreating((v) => ({ ...v, location: e.target.value }))}
-              />
-              <button className="bg-black text-white rounded p-2" onClick={createDoor}>
-                Ajouter
-              </button>
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <Badge tone="blue">Fréquence: {templates?.[0]?.months_interval ?? 12} mois</Badge>
-                <a
-                  className="underline"
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    setTab("params");
-                  }}
-                >
-                  changer
-                </a>
-              </div>
-            </div>
-          </div>
+  // Calendar (next checks, overdue, etc.)
+  calendar: async () => (await fetch(`/api/doors/calendar`, { credentials: "include" })).json(),
 
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              className="border rounded p-2 flex-1 min-w-[200px]"
-              placeholder="Rechercher par nom ou localisation…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <select
-              className="border rounded p-2"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-            >
-              <option value="ALL">Tous statuts</option>
-              <option value="OK">OK</option>
-              <option value="NC">NC</option>
-              <option value="N/A">N/A</option>
-            </select>
-            {!!alerts.length && (
-              <div className="ml-auto flex flex-wrap gap-2">
-                {alerts.map((a) => (
-                  <Badge key={a.inspection_id} tone={a.level === "overdue" ? "red" : a.level === "today" ? "amber" : "blue"}>
-                    {a.name} • {a.due} {a.level === "overdue" ? "(retard)" : a.level === "today" ? "(aujourd'hui)" : a.level === "7d" ? "(≤7j)" : "(≤30j)"}
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </div>
+  // Settings (template & frequency)
+  settingsGet: async () => (await fetch(`/api/doors/settings`, { credentials: "include" })).json(),
+  settingsSet: async (payload) =>
+    (
+      await fetch(`/api/doors/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(payload),
+      })
+    ).json(),
 
-          {/* Doors grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredDoors.map((d) => (
-              <DoorCard key={d.id} door={d} onChanged={fetchAll} />
-            ))}
-            {!filteredDoors.length && (
-              <div className="text-sm text-gray-500">Aucune porte trouvée…</div>
-            )}
-          </div>
-        </div>
-      )}
+  // PDF non-conformités (pour SAP)
+  nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
+};
 
-      {tab === "calendar" && <CalendarPanel events={calendar} />}
-
-      {tab === "params" && (
-        <ParamsPanel templates={templates} onChanged={fetchAll} />
-      )}
-    </div>
-  );
-}
-
-function TabBtn({ id, tab, setTab, children }) {
-  const active = tab === id;
+/* ----------------------------- UI helpers ----------------------------- */
+function Btn({ children, variant = "primary", className = "", ...p }) {
+  const map = {
+    primary:
+      "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
+    ghost: "bg-white text-gray-700 border hover:bg-gray-50",
+    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700",
+    warn: "bg-amber-500 text-white hover:bg-amber-600",
+  };
   return (
     <button
-      onClick={() => setTab(id)}
-      className={cx(
-        "px-3 py-1.5 rounded-full border",
-        active
-          ? "bg-black text-white border-black"
-          : "bg-white text-black border-gray-300 hover:border-black"
-      )}
+      className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`}
+      {...p}
     >
       {children}
     </button>
   );
 }
+function Input({ value, onChange, className = "", ...p }) {
+  return (
+    <input
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      {...p}
+    />
+  );
+}
+function Select({ value, onChange, options = [], className = "", placeholder }) {
+  return (
+    <select
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {placeholder != null && <option value="">{placeholder}</option>}
+      {options.map((o) =>
+        typeof o === "string" ? (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ) : (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        )
+      )}
+    </select>
+  );
+}
+function Badge({ color = "gray", children, className = "" }) {
+  const map = {
+    gray: "bg-gray-100 text-gray-700",
+    green: "bg-emerald-100 text-emerald-700",
+    orange: "bg-amber-100 text-amber-700",
+    red: "bg-rose-100 text-rose-700",
+    blue: "bg-blue-100 text-blue-700",
+  };
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>
+      {children}
+    </span>
+  );
+}
+const STATUS = {
+  A_FAIRE: "a_faire",
+  EN_COURS: "en_cours_30",
+  EN_RETARD: "en_retard",
+  FAIT: "fait",
+};
+function statusColor(s) {
+  if (s === STATUS.A_FAIRE) return "green";
+  if (s === STATUS.EN_COURS) return "orange";
+  if (s === STATUS.EN_RETARD) return "red";
+  if (s === STATUS.FAIT) return "blue";
+  return "gray";
+}
+function statusLabel(s) {
+  if (s === STATUS.A_FAIRE) return "À faire";
+  if (s === STATUS.EN_COURS) return "En cours (<30j)";
+  if (s === STATUS.EN_RETARD) return "En retard";
+  if (s === STATUS.FAIT) return "Fait";
+  return s || "—";
+}
 
-// -----------------------------
-// Door card + actions
-// -----------------------------
-function DoorCard({ door, onChanged }) {
-  const [next, setNext] = useState(null);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const cardRef = useRef(null);
+/* ----------------------------- Calendrier (mois) ----------------------------- */
+function MonthCalendar({ events = [], onDayClick }) {
+  const [month, setMonth] = useState(dayjs());
 
-  useEffect(() => {
-    (async () => {
-      const r = await get(`/api/doors/${door.id}/next`);
-      setNext(r.inspection || null);
-    })();
-  }, [door.id]);
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    for (const e of events) {
+      const key = e.date || e.next_check_date || e.due_date;
+      if (!key) continue;
+      const iso = dayjs(key).format("YYYY-MM-DD");
+      (map[iso] ||= []).push(e);
+    }
+    return map;
+  }, [events]);
 
-  async function startControl() {
-    setOpen(true); // la modale déclenchera le /start et chargera la checklist
-  }
-
-  async function deleteDoor() {
-    const phrase = `DELETE ${door.name}`;
-    const typed = prompt(`Suppression définitive. Tapez: ${phrase}`);
-    if (typed !== phrase) return;
-    setBusy(true);
-    await del(`/api/doors/${door.id}?confirm=${encodeURIComponent(phrase)}`);
-    setBusy(false);
-    await onChanged();
+  const startOfMonth = month.startOf("month").toDate();
+  const endOfMonth = month.endOf("month").toDate();
+  const startDow = (startOfMonth.getDay() + 6) % 7; // lundi=0
+  const gridStart = new Date(startOfMonth);
+  gridStart.setDate(gridStart.getDate() - startDow);
+  const days = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    const iso = dayjs(d).format("YYYY-MM-DD");
+    days.push({ d, iso, inMonth: d >= startOfMonth && d <= endOfMonth });
   }
 
   return (
-    <div ref={cardRef} id={`door-${door.id}`} className="bg-white rounded-xl p-4 shadow space-y-2">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-lg font-semibold truncate">{door.name}</div>
-          <div className="text-sm text-gray-600 truncate">{door.location || "—"}</div>
-          <div className="text-sm mt-1 flex items-center gap-2">
-            Statut:
-            {door.status === "OK" && <Badge tone="green">OK</Badge>}
-            {door.status === "NC" && <Badge tone="red">NC</Badge>}
-            {door.status === "N/A" && <Badge>NA</Badge>}
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={() => setMonth((m) => m.subtract(1, "month"))}>← Préc.</Btn>
+          <Btn variant="ghost" onClick={() => setMonth(dayjs())}>Aujourd'hui</Btn>
+          <Btn variant="ghost" onClick={() => setMonth((m) => m.add(1, "month"))}>Suiv. →</Btn>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-7 text-xs font-medium text-gray-500">
+        {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
+          <div key={l} className="px-2 py-2">
+            {l}
           </div>
-          <div className="text-sm text-gray-700 mt-1">
-            Prochain contrôle: <b>{next?.due_date || "non planifié"}</b>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 border rounded-2xl overflow-hidden">
+        {days.map(({ d, iso, inMonth }) => {
+          const list = eventsByDate[iso] || [];
+          const clickable = list.length > 0;
+          return (
+            <button
+              key={iso}
+              onClick={() => clickable && onDayClick && onDayClick({ date: iso, events: list })}
+              className={`min-h-[96px] p-2 border-t border-l last:border-r text-left transition
+                ${inMonth ? "bg-white" : "bg-gray-50"} ${clickable ? "hover:bg-blue-50" : ""}`}
+            >
+              <div className="flex items-center justify-between">
+                <div className={`text-xs ${inMonth ? "text-gray-700" : "text-gray-400"}`}>{dayjs(d).format("D")}</div>
+                {!!list.length && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                    {list.length}
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 space-y-1">
+                {list.slice(0, 3).map((e, i) => (
+                  <div
+                    key={i}
+                    className={`truncate text-[11px] px-1.5 py-0.5 rounded ${
+                      e.status === STATUS.EN_RETARD
+                        ? "bg-rose-50 text-rose-700"
+                        : e.status === STATUS.EN_COURS
+                        ? "bg-amber-50 text-amber-700"
+                        : e.status === STATUS.A_FAIRE
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-blue-50 text-blue-700"
+                    }`}
+                  >
+                    {e.door_name}
+                  </div>
+                ))}
+                {list.length > 3 && (
+                  <div className="text-[11px] text-gray-500">+{list.length - 3} de plus…</div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Page principale ----------------------------- */
+export default function Doors() {
+  const [tab, setTab] = useState("controls"); // controls | calendar | settings
+
+  /* ---- listing + filters ---- */
+  const [doors, setDoors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState(""); // a_faire | en_cours_30 | en_retard | fait
+  const [building, setBuilding] = useState("");
+  const [floor, setFloor] = useState("");
+
+  /* ---- drawer (edit / inspect) ---- */
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState(null); // door object with details
+
+  /* ---- calendar ---- */
+  const [calendar, setCalendar] = useState({ events: [] });
+
+  /* ---- settings ---- */
+  const defaultTemplate = [
+    "La porte est-elle en parfait état (fermeture correcte, non voilée) ?",
+    "Joint de porte en bon état (propre, non abîmé) ?",
+    "Aucune modification non tracée (perçages, changement nécessitant vérification) ?",
+    "Plaquette d’identification (portes ≥ 2005) visible ?",
+    "Porte à double battant bien synchronisée (un battant après l’autre, fermeture OK) ?",
+  ];
+  const [settings, setSettings] = useState({
+    checklist_template: defaultTemplate,
+    frequency: "1_an", // 1_an, 1_mois, 2_an, 3_mois, 2_ans
+  });
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  async function reload() {
+    setLoading(true);
+    try {
+      const data = await API.list({ q, status, building, floor });
+      setDoors(Array.isArray(data.items) ? data.items : []);
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function reloadCalendar() {
+    const data = await API.calendar();
+    const events = (data?.events || []).map((e) => ({
+      date: dayjs(e.date || e.next_check_date || e.due_date).format("YYYY-MM-DD"),
+      door_id: e.door_id,
+      door_name: e.door_name,
+      status: e.status,
+    }));
+    setCalendar({ events });
+  }
+  async function loadSettings() {
+    const s = await API.settingsGet().catch(() => null);
+    if (s?.checklist_template?.length) setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
+    if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
+  }
+
+  useEffect(() => {
+    reload();
+    reloadCalendar();
+    loadSettings();
+  }, []);
+
+  const filtered = doors; // (server already filters; keep placeholder if client-side filters needed)
+
+  /* ------------------ actions door ------------------ */
+  function openCreate() {
+    setEditing({
+      id: null,
+      name: "",
+      building: "",
+      floor: "",
+      location: "",
+      status: STATUS.A_FAIRE,
+      next_check_date: null,
+      files: [],
+      current_check: null,
+      history: [],
+    });
+    setDrawerOpen(true);
+  }
+  async function openEdit(door) {
+    const full = await API.get(door.id);
+    setEditing(full?.door || door);
+    setDrawerOpen(true);
+  }
+  async function saveDoorBase() {
+    if (!editing) return;
+    const payload = {
+      name: editing.name,
+      building: editing.building || "",
+      floor: editing.floor || "",
+      location: editing.location || "",
+    };
+    if (editing.id) await API.update(editing.id, payload);
+    else {
+      const created = await API.create(payload);
+      if (created?.door?.id) {
+        const full = await API.get(created.door.id);
+        setEditing(full?.door || created.door);
+      }
+    }
+    await reload();
+  }
+  async function deleteDoor() {
+    if (!editing?.id) return;
+    const ok = window.confirm(
+      "Supprimer définitivement cette porte ? Cette action est irréversible."
+    );
+    if (!ok) return;
+    await API.remove(editing.id);
+    setDrawerOpen(false);
+    setEditing(null);
+    await reload();
+  }
+
+  /* ------------------ checklist workflow ------------------ */
+  const baseOptions = [
+    { value: "conforme", label: "Conforme" },
+    { value: "non_conforme", label: "Non conforme" },
+    { value: "na", label: "N/A" },
+  ];
+
+  async function ensureCurrentCheck() {
+    if (!editing?.id) return;
+    let check = editing.current_check;
+    if (!check) {
+      const s = await API.startCheck(editing.id);
+      check = s?.check || null;
+    }
+    if (check) {
+      const full = await API.get(editing.id);
+      setEditing(full?.door);
+    }
+  }
+
+  function allFiveConforme(items = []) {
+    const values = (items || []).map((i) => i.value);
+    return values.length >= 5 && values.every((v) => v === "conforme");
+  }
+
+  async function saveChecklistItem(idx, value) {
+    if (!editing?.id || !editing?.current_check) return;
+    const items = [...(editing.current_check.items || [])];
+    items[idx] = { ...(items[idx] || {}), index: idx, value };
+    const payload = { items };
+    const closed =
+      allFiveConforme(items) && // 5/5 conformes
+      items.length >= 5;
+
+    if (closed) payload.close = true; // côté serveur : passe statut → fait + planifie prochaine date
+
+    const res = await API.saveCheck(editing.id, editing.current_check.id, payload);
+    if (res?.door) {
+      setEditing(res.door);
+      await reload();
+      await reloadCalendar();
+    } else {
+      const full = await API.get(editing.id);
+      setEditing(full?.door);
+    }
+  }
+
+  /* ------------------ files ------------------ */
+  const [uploading, setUploading] = useState(false);
+  function onDropFiles(e) {
+    e.preventDefault();
+    const files = e.dataTransfer?.files;
+    if (files?.length) handleUpload(Array.from(files));
+  }
+  async function handleUpload(files) {
+    if (!editing?.id || !files?.length) return;
+    setUploading(true);
+    try {
+      for (const f of files) await API.uploadFile(editing.id, f);
+      const full = await API.get(editing.id);
+      setEditing(full?.door);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  /* ------------------ settings save ------------------ */
+  async function saveSettings() {
+    setSavingSettings(true);
+    try {
+      const cleaned = (settings.checklist_template || []).map((s) => (s || "").trim()).filter(Boolean);
+      await API.settingsSet({ checklist_template: cleaned, frequency: settings.frequency });
+    } finally {
+      setSavingSettings(false);
+    }
+  }
+
+  /* ------------------ render helpers ------------------ */
+  const StickyTabs = () => (
+    <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
+      <div className="flex flex-wrap gap-2">
+        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>
+          📋 Contrôles
+        </Btn>
+        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
+          📅 Calendrier
+        </Btn>
+        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>
+          ⚙️ Paramètres
+        </Btn>
+      </div>
+    </div>
+  );
+
+  return (
+    <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
+      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Portes coupe-feu</h1>
+          <p className="text-gray-500 text-sm">
+            Contrôles annuels, QR codes, historique, pièces jointes & alertes.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
+            {filtersOpen ? "Masquer les filtres" : "Filtres"}
+          </Btn>
+          <Btn onClick={openCreate}>+ Nouvelle porte</Btn>
+        </div>
+      </header>
+
+      <StickyTabs />
+
+      {/* Filtres (toggle) */}
+      {filtersOpen && (
+        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
+          <div className="grid md:grid-cols-4 gap-3">
+            <Input value={q} onChange={setQ} placeholder="Recherche (nom / lieu…)" />
+            <Select
+              value={status}
+              onChange={setStatus}
+              options={[
+                { value: "", label: "Tous statuts" },
+                { value: STATUS.A_FAIRE, label: "À faire (vert)" },
+                { value: STATUS.EN_COURS, label: "En cours <30j (orange)" },
+                { value: STATUS.EN_RETARD, label: "En retard (rouge)" },
+                { value: STATUS.FAIT, label: "Fait" },
+              ]}
+            />
+            <Input value={building} onChange={setBuilding} placeholder="Bâtiment" />
+            <Input value={floor} onChange={setFloor} placeholder="Étage / Zone" />
+          </div>
+          <div className="flex gap-2">
+            <Btn variant="ghost" onClick={() => { setQ(""); setStatus(""); setBuilding(""); setFloor(""); reload(); }}>
+              Réinitialiser
+            </Btn>
+            <Btn onClick={reload}>Rechercher</Btn>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2 shrink-0">
-          <a
-            className="px-2 py-1 border rounded"
-            href={`/api/doors/${door.id}/qrcodes.pdf?sizes=80,120,200`}
-            target="_blank"
-          >
-            QR codes
-          </a>
-          <FileUploadButton
-            label="+ pièce jointe"
-            accept="*/*"
-            onUpload={async (file) => {
-              const fd = new FormData();
-              fd.append("file", file);
-              await fetch(`/api/doors/${door.id}/upload`, {
-                method: "POST",
-                body: fd,
-                credentials: "include",
-              });
-              alert("Pièce jointe ajoutée");
+      )}
+
+      {/* Onglet Contrôles : liste des portes */}
+      {tab === "controls" && (
+        <div className="bg-white rounded-2xl border shadow-sm">
+          {/* Mobile cards */}
+          <div className="sm:hidden divide-y">
+            {loading && <div className="p-4 text-gray-500">Chargement…</div>}
+            {!loading && filtered.length === 0 && <div className="p-4 text-gray-500">Aucune porte.</div>}
+            {filtered.map((d) => (
+              <div key={d.id} className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(d)}>
+                      {d.name}
+                    </button>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {d.building || "—"} • {d.floor || "—"} {d.location ? `• ${d.location}` : ""}
+                    </div>
+                  </div>
+                  <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
+                </div>
+                <div className="mt-2 text-sm text-gray-600">
+                  Prochain contrôle:{" "}
+                  {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <Btn variant="ghost" onClick={() => openEdit(d)}>
+                    Ouvrir
+                  </Btn>
+                  <a className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                     href={API.qrUrl(d.id, 256)} target="_blank" rel="noreferrer">
+                    QR
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden sm:block overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-[12px] z-20 bg-gray-50/90 backdrop-blur supports-[backdrop-filter]:bg-gray-50/70">
+                <tr className="text-left border-b">
+                  <th className="px-4 py-3 font-semibold text-gray-700">Nom</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Localisation</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Statut</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Prochain contrôle</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-4 text-gray-500">Chargement…</td>
+                  </tr>
+                )}
+                {!loading && filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-4 text-gray-500">Aucune porte.</td>
+                  </tr>
+                )}
+                {!loading &&
+                  filtered.map((d, idx) => (
+                    <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
+                      <td className="px-4 py-3 min-w-[220px]">
+                        <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>
+                          {d.name}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3">
+                        {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
+                          <a
+                            className="px-2 py-1 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                            href={API.qrUrl(d.id, 256)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            QR
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Onglet Calendrier */}
+      {tab === "calendar" && (
+        <div className="bg-white rounded-2xl border shadow-sm p-4">
+          <MonthCalendar
+            events={calendar.events}
+            onDayClick={({ events }) => {
+              // ouvre la première porte de la journée
+              const first = events?.[0];
+              if (!first?.door_id) return;
+              openEdit({ id: first.door_id, name: first.door_name });
             }}
           />
-          <button className="px-2 py-1 border rounded" onClick={startControl}>
-            Contrôler
-          </button>
-          <button
-            className="px-2 py-1 border rounded text-red-600"
-            onClick={deleteDoor}
-            disabled={busy}
-            title="Supprimer définitivement"
-          >
-            {busy ? <Spinner /> : "Supprimer"}
-          </button>
         </div>
-      </div>
-
-      <Dropzone
-        onFiles={async (files) => {
-          for (const f of files) {
-            const fd = new FormData();
-            fd.append("file", f);
-            await fetch(`/api/doors/${door.id}/upload`, {
-              method: "POST",
-              body: fd,
-              credentials: "include",
-            });
-          }
-          alert(`${files.length} fichier(s) attaché(s)`);
-        }}
-      />
-
-      {open && (
-        <ChecklistModal
-          door={door}
-          onClose={() => setOpen(false)}
-          onChanged={onChanged}
-        />
       )}
-    </div>
-  );
-}
 
-function FileUploadButton({ label = "Choisir un fichier", accept = "*/*", onUpload }) {
-  const inpRef = useRef();
-  return (
-    <button
-      className="px-2 py-1 border rounded relative overflow-hidden"
-      onClick={() => inpRef.current?.click()}
-    >
-      {label}
-      <input
-        ref={inpRef}
-        type="file"
-        accept={accept}
-        className="hidden"
-        onChange={async (e) => {
-          const f = e.target.files?.[0];
-          if (f) await onUpload(f);
-          e.target.value = "";
-        }}
-      />
-    </button>
-  );
-}
-
-function Dropzone({ onFiles }) {
-  const [over, setOver] = useState(false);
-  const ref = useRef();
-  return (
-    <div
-      ref={ref}
-      className={cx(
-        "mt-2 border rounded p-3 text-sm text-gray-600",
-        over ? "border-black bg-gray-50" : "border-dashed"
-      )}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={async (e) => {
-        e.preventDefault();
-        setOver(false);
-        const files = Array.from(e.dataTransfer.files || []);
-        if (files.length) await onFiles(files);
-      }}
-    >
-      Glissez-déposez des fichiers ici pour les attacher à la porte.
-    </div>
-  );
-}
-
-// -----------------------------
-// Checklist modal
-// -----------------------------
-function ChecklistModal({ door, onClose, onChanged }) {
-  const [insp, setInsp] = useState(null);
-  const [items, setItems] = useState([]); // {item_id,label,status,comment}
-  const [saving, setSaving] = useState(false);
-  const [photo, setPhoto] = useState(null);
-
-  useEffect(() => {
-    (async () => {
-      const s = await post(`/api/doors/${door.id}/start`, {});
-      const templateItems = s.items || [];
-      setInsp(s.inspection);
-      setItems(
-        templateItems.map((it) => ({
-          item_id: it.id,
-          label: it.label,
-          status: "conforme",
-          comment: "",
-        }))
-      );
-    })();
-  }, [door.id]);
-
-  async function submit() {
-    if (!insp) return;
-    setSaving(true);
-    const r = await post(`/api/doors/${door.id}/complete`, {
-      inspection_id: insp.id,
-      results: items,
-    });
-
-    // Si NC: ouvrir le PDF et créer un follow-up SAP
-    if (r.inspection?.status === "nc") {
-      window.open(`/api/doors/inspections/${insp.id}/nc.pdf`, "_blank");
-      try {
-        await post(`/api/doors/${door.id}/followup`, {
-          note: `NC générée pour inspection ${insp.id}`,
-        });
-      } catch {}
-    }
-
-    // Photo optionnelle
-    if (photo) {
-      const fd = new FormData();
-      fd.append("photo", photo);
-      await fetch(`/api/doors/${door.id}/photo`, {
-        method: "POST",
-        body: fd,
-        credentials: "include",
-      });
-    }
-
-    setSaving(false);
-    onClose();
-    await onChanged();
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center">
-      <div className="bg-white rounded-xl shadow max-w-2xl w-full p-4">
-        <div className="flex items-center justify-between mb-2">
-          <div className="text-lg font-semibold">Contrôle — {door.name}</div>
-          <button onClick={onClose} className="text-gray-600">✕</button>
-        </div>
-
-        {!insp ? (
-          <div className="py-12 text-center text-gray-600">
-            <Spinner />
-          </div>
-        ) : (
-          <div className="space-y-3 max-h-[60vh] overflow-auto pr-1">
-            {items.map((it, idx) => (
-              <div key={idx} className="border rounded p-2">
-                <div className="font-medium">{it.label}</div>
-                <div className="flex flex-wrap items-center gap-4 mt-1 text-sm">
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="radio"
-                      name={`s${idx}`}
-                      checked={it.status === "conforme"}
-                      onChange={() =>
-                        setItems((f) => f.map((x, i) => (i === idx ? { ...x, status: "conforme" } : x)))
-                      }
-                    />
-                    Conforme
-                  </label>
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="radio"
-                      name={`s${idx}`}
-                      checked={it.status === "non_conforme"}
-                      onChange={() =>
-                        setItems((f) => f.map((x, i) => (i === idx ? { ...x, status: "non_conforme" } : x)))
-                      }
-                    />
-                    Non conforme
-                  </label>
-                  <label className="flex items-center gap-1">
-                    <input
-                      type="radio"
-                      name={`s${idx}`}
-                      checked={it.status === "na"}
-                      onChange={() =>
-                        setItems((f) => f.map((x, i) => (i === idx ? { ...x, status: "na" } : x)))
-                      }
-                    />
-                    N/A
-                  </label>
-                </div>
-                <textarea
-                  className="mt-2 w-full border rounded p-2"
-                  placeholder="Commentaire (optionnel)"
-                  value={it.comment}
-                  onChange={(e) =>
-                    setItems((f) => f.map((x, i) => (i === idx ? { ...x, comment: e.target.value } : x)))
-                  }
-                />
+      {/* Onglet Paramètres */}
+      {tab === "settings" && (
+        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <div className="font-semibold mb-2">Modèle de checklist (futur)</div>
+              <div className="text-sm text-gray-500 mb-2">
+                Les inspections déjà effectuées restent figées. Modifie ici les intitulés pour les **prochaines** checklists.
               </div>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <label className="text-sm flex items-center gap-2">
-            Photo de la porte (optionnel)
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => setPhoto(e.target.files?.[0] || null)}
-            />
-          </label>
-          <div className="flex gap-2">
-            <button className="px-3 py-2 rounded border" onClick={onClose} disabled={saving}>
-              Annuler
-            </button>
-            <button
-              className="px-3 py-2 rounded bg-black text-white"
-              onClick={submit}
-              disabled={saving || !insp}
-            >
-              {saving ? <Spinner /> : "Enregistrer"}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// -----------------------------
-// Calendrier
-// -----------------------------
-function CalendarPanel({ events }) {
-  return (
-    <div className="bg-white rounded-xl p-4 shadow">
-      <div className="text-lg font-semibold mb-3">Calendrier des contrôles</div>
-      {!events?.length ? (
-        <div className="text-sm text-gray-500">Aucun événement planifié.</div>
-      ) : (
-        <ul className="divide-y">
-          {events.map((ev) => (
-            <li key={ev.id} className="py-2 flex items-center justify-between">
-              <div>
-                <div className="font-medium">{ev.title}</div>
-                <div className="text-sm text-gray-600">{ev.date}</div>
+              <div className="space-y-2">
+                {(settings.checklist_template || []).map((txt, i) => (
+                  <div key={i} className="flex gap-2">
+                    <span className="text-sm text-gray-500 mt-2">{i + 1}.</span>
+                    <Input
+                      value={txt}
+                      onChange={(v) => {
+                        const arr = [...settings.checklist_template];
+                        arr[i] = v;
+                        setSettings({ ...settings, checklist_template: arr });
+                      }}
+                    />
+                  </div>
+                ))}
               </div>
-              <a href={`#door-${ev.door_id}`} className="text-blue-600">
-                Ouvrir la porte
-              </a>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-// -----------------------------
-// Paramètres (templates & fréquence)
-// -----------------------------
-function ParamsPanel({ templates, onChanged }) {
-  const [name, setName] = useState(`Checklist standard ${new Date().getFullYear()}`);
-  const [items, setItems] = useState([
-    { id: "1", label: "La porte se referme automatiquement", order: 1 },
-    { id: "2", label: "Joints intacts sans déchirure", order: 2 },
-    { id: "3", label: "Zone dégagée / pas d'obstacle", order: 3 },
-  ]);
-  const [interval, setInterval] = useState(12);
-  const [saving, setSaving] = useState(false);
-
-  async function addTemplate() {
-    setSaving(true);
-    await post("/api/doors/templates", {
-      name,
-      items,
-      months_interval: interval,
-      active: true,
-    });
-    setSaving(false);
-    setName(`Checklist ${Date.now()}`);
-    await onChanged();
-  }
-
-  return (
-    <div className="grid md:grid-cols-2 gap-4">
-      <div className="bg-white rounded-xl p-4 shadow">
-        <div className="text-lg font-semibold mb-2">Créer / modifier checklist</div>
-        <label className="text-sm">Nom</label>
-        <input
-          className="border rounded p-2 w-full mb-2"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <div className="space-y-2">
-          {items.map((it, idx) => (
-            <div key={it.id} className="flex gap-2 items-center">
-              <input
-                className="border rounded p-2 flex-1"
-                value={it.label}
-                onChange={(e) =>
-                  setItems((arr) =>
-                    arr.map((x, i) => (i === idx ? { ...x, label: e.target.value } : x))
-                  )
-                }
-              />
-              <button
-                className="px-2 py-1 border rounded"
-                onClick={() => setItems((arr) => arr.filter((_, i) => i !== idx))}
-              >
-                —
-              </button>
             </div>
-          ))}
-          <button
-            className="px-2 py-1 border rounded"
-            onClick={() =>
-              setItems((arr) => [
-                ...arr,
-                { id: String(arr.length + 1), label: "Nouvel item", order: arr.length + 1 },
-              ])
-            }
-          >
-            + item
-          </button>
+            <div>
+              <div className="font-semibold mb-2">Fréquence</div>
+              <Select
+                value={settings.frequency}
+                onChange={(v) => setSettings({ ...settings, frequency: v })}
+                options={[
+                  { value: "1_an", label: "1× par an" },
+                  { value: "1_mois", label: "1× par mois" },
+                  { value: "2_an", label: "2× par an (tous les 6 mois)" },
+                  { value: "3_mois", label: "Tous les 3 mois" },
+                  { value: "2_ans", label: "1× tous les 2 ans" },
+                ]}
+              />
+              <div className="text-xs text-gray-500 mt-2">
+                La date de prochain contrôle s’affiche **sans heure**.
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Btn variant="ghost" onClick={loadSettings}>Annuler</Btn>
+            <Btn onClick={saveSettings} disabled={savingSettings}>
+              {savingSettings ? "Enregistrement…" : "Enregistrer les paramètres"}
+            </Btn>
+          </div>
         </div>
-        <div className="mt-3">
-          <label className="text-sm">Fréquence des contrôles</label>
-          <select
-            className="border rounded p-2 w-full"
-            value={interval}
-            onChange={(e) => setInterval(Number(e.target.value))}
-          >
-            <option value={1}>1× / mois</option>
-            <option value={3}>Tous les 3 mois</option>
-            <option value={6}>2× / an</option>
-            <option value={12}>1× / an</option>
-            <option value={24}>1× / 2 ans</option>
-          </select>
-        </div>
-        <div className="mt-3 flex justify-end">
-          <button
-            className="px-3 py-2 rounded bg-black text-white"
-            onClick={addTemplate}
-            disabled={saving}
-          >
-            {saving ? <Spinner /> : "Sauvegarder la checklist"}
-          </button>
-        </div>
-      </div>
+      )}
 
-      <div className="bg-white rounded-xl p-4 shadow">
-        <div className="text-lg font-semibold mb-2">Templates actifs</div>
-        {!templates?.length ? (
-          <div className="text-sm text-gray-500">Aucun template actif.</div>
-        ) : (
-          <ul className="divide-y">
-            {templates.map((t) => (
-              <li key={t.id} className="py-2">
-                <div className="font-medium">{t.name}</div>
-                <div className="text-sm text-gray-600">
-                  {t.items?.length || 0} items • fréquence: {t.months_interval} mois
+      {/* Drawer: fiche porte + checklist + fichiers + QR */}
+      {drawerOpen && editing && (
+        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={() => { setDrawerOpen(false); setEditing(null); }}>
+          <div className="space-y-4">
+            {/* Base info */}
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Labeled label="Nom de la porte">
+                <Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} />
+              </Labeled>
+              <Labeled label="Bâtiment">
+                <Input value={editing.building || ""} onChange={(v) => setEditing({ ...editing, building: v })} />
+              </Labeled>
+              <Labeled label="Étage / Zone">
+                <Input value={editing.floor || ""} onChange={(v) => setEditing({ ...editing, floor: v })} />
+              </Labeled>
+              <Labeled label="Localisation (complément)">
+                <Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} />
+              </Labeled>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Statut</span>
+                <Badge color={statusColor(editing.status)}>{statusLabel(editing.status)}</Badge>
+              </div>
+              <div className="text-sm text-gray-600">
+                Prochain contrôle :{" "}
+                {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
+              {editing?.id && (
+                <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>
+              )}
+            </div>
+
+            {/* Checklist */}
+            <div className="border rounded-2xl p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="font-semibold">Checklist</div>
+                {!editing.current_check && (
+                  <Btn onClick={ensureCurrentCheck}>Démarrer un contrôle</Btn>
+                )}
+              </div>
+
+              {!editing.current_check && (
+                <div className="text-sm text-gray-500">
+                  Lance un contrôle pour remplir les 5 points ci-dessous.
                 </div>
-              </li>
-            ))}
-          </ul>
-        )}
+              )}
+
+              {!!editing.current_check && (
+                <div className="space-y-2">
+                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate).slice(0, 5).map((label, i) => {
+                    const val = editing.current_check.items?.[i]?.value || "";
+                    return (
+                      <div key={i} className="grid md:grid-cols-[1fr,220px] gap-2 items-center">
+                        <div className="text-sm">{label}</div>
+                        <Select
+                          value={val}
+                          onChange={(v) => saveChecklistItem(i, v)}
+                          options={baseOptions}
+                          placeholder="Sélectionner…"
+                        />
+                      </div>
+                    );
+                  })}
+
+                  {/* PDF non-conformités */}
+                  <div className="pt-2">
+                    <a
+                      href={API.nonConformPDF(editing.id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
+                    >
+                      Export PDF des non-conformités (SAP)
+                    </a>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Fichiers / Photos */}
+            {editing?.id && (
+              <div className="border rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-semibold">Pièces jointes & photos</div>
+                  <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => e.target.files?.length && handleUpload(Array.from(e.target.files))}
+                    />
+                    Ajouter
+                  </label>
+                </div>
+
+                <div
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={onDropFiles}
+                  className={`w-full border-2 border-dashed rounded-xl p-6 text-center transition ${
+                    uploading ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"
+                  }`}
+                >
+                  <div className="text-sm text-gray-600">
+                    Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.
+                  </div>
+                </div>
+
+                <DoorFiles doorId={editing.id} />
+              </div>
+            )}
+
+            {/* QR Codes */}
+            {editing?.id && (
+              <div className="border rounded-2xl p-3">
+                <div className="font-semibold mb-2">QR code</div>
+                <div className="grid grid-cols-3 gap-3 items-start">
+                  {[128, 256, 512].map((s) => (
+                    <div key={s} className="border rounded-xl p-2 text-center">
+                      <div className="text-xs text-gray-500 mb-1">{s}px</div>
+                      <img
+                        src={API.qrUrl(editing.id, s)}
+                        alt={`QR ${s}`}
+                        className="mx-auto"
+                      />
+                      <a
+                        href={API.qrUrl(editing.id, s)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 inline-block px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
+                      >
+                        Ouvrir / Imprimer
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Historique */}
+            <DoorHistory doorId={editing.id} />
+          </div>
+        </Drawer>
+      )}
+    </section>
+  );
+}
+
+/* ----------------------------- Sous-composants ----------------------------- */
+function Labeled({ label, children }) {
+  return (
+    <label className="text-sm space-y-1">
+      <div className="text-gray-600">{label}</div>
+      {children}
+    </label>
+  );
+}
+function Drawer({ title, children, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-40" ref={ref}>
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[640px] bg-white shadow-2xl p-4 overflow-y-auto">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">{title}</h3>
+          <Btn variant="ghost" onClick={onClose}>Fermer</Btn>
+        </div>
+        {children}
       </div>
+    </div>
+  );
+}
+
+function DoorFiles({ doorId }) {
+  const [files, setFiles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await API.listFiles(doorId);
+      setFiles(r?.files || []);
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => { if (doorId) load(); }, [doorId]);
+
+  return (
+    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {loading && <div className="text-gray-500">Chargement…</div>}
+      {!loading && files.length === 0 && <div className="text-gray-500">Aucun fichier.</div>}
+      {files.map((f) => (
+        <FileCard key={f.id} f={f} onDelete={async () => { await API.deleteFile(f.id); await load(); }} />
+      ))}
+    </div>
+  );
+}
+function FileCard({ f, onDelete }) {
+  const isImage = (f.mime || "").startsWith("image/");
+  const url = f.download_url || f.inline_url || f.url;
+  return (
+    <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
+      <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
+        {isImage ? <img src={url} alt={f.original_name} className="w-full h-full object-cover" /> : <div className="text-4xl">📄</div>}
+      </div>
+      <div className="p-3">
+        <div className="text-sm font-medium truncate" title={f.original_name}>{f.original_name}</div>
+        <div className="text-xs text-gray-500 mt-0.5">{f.mime || "file"}</div>
+        <div className="flex items-center gap-2 mt-2">
+          <a href={url} className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition text-xs" download>
+            Télécharger
+          </a>
+          <button onClick={onDelete} className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition text-xs">
+            Supprimer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DoorHistory({ doorId }) {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    if (!doorId) return;
+    (async () => {
+      const r = await API.listHistory(doorId);
+      setItems(r?.checks || []);
+    })();
+  }, [doorId]);
+
+  if (!doorId) return null;
+  return (
+    <div className="border rounded-2xl p-3">
+      <div className="font-semibold mb-2">Historique des contrôles</div>
+      {!items?.length && <div className="text-sm text-gray-500">Aucun contrôle pour le moment.</div>}
+      {!!items?.length && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left border-b">
+                <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2">Statut</th>
+                <th className="px-3 py-2">Effectué par</th>
+                <th className="px-3 py-2">Commentaires</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((h) => (
+                <tr key={h.id} className="border-b">
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {h.date ? dayjs(h.date).format("DD/MM/YYYY") : "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <Badge color={statusColor(h.status)}>{statusLabel(h.status)}</Badge>
+                  </td>
+                  <td className="px-3 py-2">{h.user || "—"}</td>
+                  <td className="px-3 py-2">{h.comment || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
