@@ -33,7 +33,7 @@ app.use(
   cors({
     origin: true,
     credentials: true,
-    allowedHeaders: ["Content-Type", "X-User-Email", "X-User-Name", "X-Site"],
+    allowedHeaders: ["Content-Type", "X-User-Email", "X-User-Name", "X-Site", "Authorization"],
     exposedHeaders: [],
   })
 );
@@ -43,7 +43,7 @@ app.use(express.json({ limit: "16mb" }));
 const PORT = Number(process.env.FIRE_DOORS_PORT || 3016);
 const HOST = process.env.FIRE_DOORS_HOST || "0.0.0.0";
 
-// Storage layout (disque éphémère -> on garde une copie DB en fallback)
+// Storage layout
 const DATA_ROOT = path.join(process.cwd(), "uploads", "fire-doors");
 const FILES_DIR = path.join(DATA_ROOT, "files");
 const QRCODES_DIR = path.join(DATA_ROOT, "qrcodes");
@@ -102,7 +102,7 @@ async function ensureSchema() {
       floor TEXT,
       location TEXT,
       photo_path TEXT,
-      photo_file_id UUID,          -- lien vers fd_files.id (photo courante)
+      photo_file_id UUID,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     );
@@ -118,9 +118,9 @@ async function ensureSchema() {
       started_at TIMESTAMPTZ,
       closed_at TIMESTAMPTZ,
       due_date DATE NOT NULL,
-      items JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{index,label,value,comment?}]
-      status TEXT,                                 -- ok | nc
-      result_counts JSONB DEFAULT '{}'::jsonb,     -- {conforme, nc, na}
+      items JSONB NOT NULL DEFAULT '[]'::jsonb,
+      status TEXT,
+      result_counts JSONB DEFAULT '{}'::jsonb,
       pdf_nc_path TEXT,
       closed_by_email TEXT,
       closed_by_name TEXT,
@@ -131,18 +131,18 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_email TEXT;`);
   await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_name TEXT;`);
 
-  // Files (door-level & check-level) + contenu DB (fallback)
+  // Files
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fd_files (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       door_id UUID REFERENCES fd_doors(id) ON DELETE CASCADE,
-      inspection_id UUID,                           -- lié à fd_checks.id si set
-      kind TEXT,                                    -- 'door' | 'check' | 'photo'
+      inspection_id UUID,
+      kind TEXT,
       filename TEXT,
       path TEXT,
       mime TEXT,
       size_bytes BIGINT,
-      content BYTEA,                                -- FALBACK : contenu binaire
+      content BYTEA,
       uploaded_at TIMESTAMPTZ DEFAULT now()
     );
   `);
@@ -248,7 +248,7 @@ function safeEmail(s) {
   return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
 
-// ==== PATCH identité : headers → cookies → body/json → multipart → users → fallback
+// ==== Identité: headers → cookies → body/json → multipart → users → fallback
 async function currentUser(req) {
   // 1) HEADERS / COOKIES
   const rawEmail =
@@ -270,11 +270,11 @@ async function currentUser(req) {
   try {
     if (req.body) {
       if (req.body._user && typeof req.body._user === "object") {
-        bodyEmail = req.body._user.email || null;
-        bodyName  = req.body._user.name  || null;
+        bodyEmail = (req.body._user.email || "").trim();
+        bodyName  = (req.body._user.name  || "").trim();
       }
-      if (req.body.user_email) bodyEmail = req.body.user_email;
-      if (req.body.user_name)  bodyName  = req.body.user_name;
+      if (req.body.user_email) bodyEmail = String(req.body.user_email || "").trim();
+      if (req.body.user_name)  bodyName  = String(req.body.user_name  || "").trim();
     }
   } catch {}
 
@@ -330,7 +330,7 @@ async function ensureNextPendingCheck(door_id) {
   return r.rows[0];
 }
 
-// PATCH: QRCode — cache par base publique (évite 127.0.0.1 en prod)
+// QRCode — cache par base publique
 async function ensureDoorQRCode(req, doorId, name, size = 512, force = false) {
   const targetUrl = qrDeepLink(req, doorId);
   let baseKey = "default";
@@ -366,8 +366,7 @@ async function createNcPdf(outPath, door, check, inspectorName = null) {
     } else {
       nc.forEach((it, i) => {
         doc.fontSize(14).text(`${i + 1}. ${it.label || "-"}`);
-        doc.moveDown(0.25).fontSize(11).fillColor("#333")
-          .text(`Résultat : Non conforme`);
+        doc.moveDown(0.25).fontSize(11).fillColor("#333").text(`Résultat : Non conforme`);
         if (it.comment) {
           doc.moveDown(0.15).text(`Commentaire : ${it.comment}`);
         }
@@ -425,7 +424,7 @@ app.get("/api/doors/health", async (_req, res) => {
 });
 
 // ------------------------------
-// Debug identité (utile pour vérifier headers/body/cookies)
+// Debug identité
 // ------------------------------
 app.get("/api/doors/_debug_identity", (req, res) => {
   res.json({
@@ -436,6 +435,11 @@ app.get("/api/doors/_debug_identity", (req, res) => {
     },
     body: req.body || null,
   });
+});
+
+app.get("/api/doors/_whoami", async (req, res) => {
+  const u = await currentUser(req);
+  res.json({ ok: true, resolved: u });
 });
 
 // ------------------------------
@@ -522,7 +526,7 @@ app.get("/api/doors/doors", async (req, res) => {
           status: st,
           next_check_date: r.next_due || null,
           photo_url: r.photo_path ? `/api/doors/doors/${r.id}/photo` : null,
-          door_state: r.door_state, // conforme | non_conforme | null
+          door_state: r.door_state,
         };
       })
       .filter((it) => !status || it.status === status);
@@ -630,7 +634,7 @@ app.delete("/api/doors/doors/:id", async (req, res) => {
 });
 
 // ------------------------------
-// Photo (vignette) — stock disque + copie DB + fallback
+// Photo (vignette)
 // ------------------------------
 app.post("/api/doors/doors/:id/photo", uploadAny.single("photo"), async (req, res) => {
   try {
@@ -655,7 +659,6 @@ app.post("/api/doors/doors/:id/photo", uploadAny.single("photo"), async (req, re
   }
 });
 
-// PATCH: servir depuis la DB d'abord (puis disque) pour survivre aux redeploys
 app.get("/api/doors/doors/:id/photo", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -692,8 +695,6 @@ app.get("/api/doors/doors/:id/photo", async (req, res) => {
 // ------------------------------
 // Files  • /api/doors/doors/:id/files
 // ------------------------------
-
-// NEW: upload door-level file (copie binaire en DB)
 app.post("/api/doors/doors/:id/files", uploadAny.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: "file_required" });
@@ -725,7 +726,6 @@ app.get("/api/doors/doors/:id/files", async (req, res) => {
   }
 });
 
-// PATCH: servir depuis la DB d'abord (puis disque)
 app.get("/api/doors/files/:fileId/download", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -795,7 +795,7 @@ app.post("/api/doors/doors/:id/checks", async (req, res) => {
   }
 });
 
-// PUT (JSON ou multipart sur la même route) — fichiers avec copie DB
+// PUT (JSON ou multipart) — fichiers avec copie DB
 app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), async (req, res) => {
   try {
     const doorId = req.params.id;
@@ -845,8 +845,11 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
       );
     }
 
-    // Clôture si demandé OU si les 5 valeurs sont renseignées
-    const bodyClose = !!(req.body && req.body.close);
+    // Clôture?
+    const wantsCloseRaw = req.body && req.body.close;
+    const bodyClose = typeof wantsCloseRaw === "string"
+      ? ["1","true","yes","on"].includes(wantsCloseRaw.toLowerCase())
+      : !!wantsCloseRaw;
     const close = bodyClose || allFiveFilled(merged);
 
     // identité (headers/cookies/body/multipart/users)
