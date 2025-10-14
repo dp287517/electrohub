@@ -33,14 +33,14 @@ app.use(express.json({ limit: "16mb" }));
 const PORT = Number(process.env.FIRE_DOORS_PORT || 3016);
 const HOST = process.env.FIRE_DOORS_HOST || "127.0.0.1";
 
-// Storage layout
+// Storage layout (⚠️ éphémère en PaaS)
 const DATA_ROOT = path.join(process.cwd(), "uploads", "fire-doors");
 const FILES_DIR = path.join(DATA_ROOT, "files");
 const QRCODES_DIR = path.join(DATA_ROOT, "qrcodes");
 await fsp.mkdir(FILES_DIR, { recursive: true });
 await fsp.mkdir(QRCODES_DIR, { recursive: true });
 
-// Multer (JSON ou multipart — même route)
+// Multer
 const uploadAny = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, FILES_DIR),
@@ -119,7 +119,7 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_email TEXT;`);
   await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_name TEXT;`);
 
-  // Files (door-level & check-level)
+  // Files
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fd_files (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -133,14 +133,8 @@ async function ensureSchema() {
       uploaded_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS inspection_id UUID;`);
-  await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS kind TEXT;`);
-
-  // Indexes
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_fd_checks_door_due
-      ON fd_checks(door_id, due_date) WHERE closed_at IS NULL;
-  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fd_checks_door_due
+      ON fd_checks(door_id, due_date) WHERE closed_at IS NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fd_files_door ON fd_files(door_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fd_files_insp ON fd_files(inspection_id);`);
   await pool.query(`
@@ -198,7 +192,7 @@ async function getSettings() {
   return rows[0] || { checklist_template: [], frequency: "1_an" };
 }
 
-// User detection (via header ou cookie "email")
+// --- User detection (headers/cookies élargis)
 function readCookie(req, name) {
   const raw = req.headers?.cookie || "";
   const m = raw.match(new RegExp(`(?:^|; )${name}=([^;]+)`));
@@ -210,24 +204,42 @@ function safeEmail(s) {
   return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
 async function currentUser(req) {
-  const email =
-    safeEmail(req.headers["x-user-email"]) ||
-    safeEmail(req.headers["x-auth-email"]) ||
-    safeEmail(readCookie(req, "email")) ||
+  const rawEmail =
+    req.headers["x-user-email"] ||
+    req.headers["x-auth-email"] ||
+    req.headers["x-forwarded-user"] ||
+    req.headers["x-vercel-user-email"] ||
+    req.headers["x-github-user-email"] ||
+    req.headers["x-goog-authenticated-user-email"] || // parfois "mailto:..."
+    readCookie(req, "email") ||
+    readCookie(req, "userEmail") ||
     null;
-  if (!email) return { email: null, name: null };
+
+  let email = safeEmail(
+    rawEmail && String(rawEmail).startsWith("mailto:")
+      ? String(rawEmail).replace(/^mailto:/, "")
+      : rawEmail
+  );
+
+  const nameHeader =
+    (req.headers["x-user-name"] && String(req.headers["x-user-name"])) ||
+    (req.headers["x-auth-name"] && String(req.headers["x-auth-name"])) ||
+    (readCookie(req, "name") && String(readCookie(req, "name"))) ||
+    null;
+
+  if (!email) return { email: null, name: nameHeader || null };
   try {
     const { rows } = await pool.query(
       `SELECT name FROM users WHERE lower(email)=lower($1) LIMIT 1`,
       [email]
     );
-    return { email, name: rows[0]?.name || null };
+    return { email, name: rows[0]?.name || nameHeader || null };
   } catch {
-    return { email, name: null };
+    return { email, name: nameHeader || null };
   }
 }
 
-// Planifie un "pending" si aucun : J+30 la toute première fois, sinon +fréquence
+// Planifie un "pending" si aucun
 async function ensureNextPendingCheck(door_id) {
   const { rows: pend } = await pool.query(
     `SELECT id FROM fd_checks WHERE door_id=$1 AND closed_at IS NULL ORDER BY due_date ASC LIMIT 1`,
@@ -252,14 +264,12 @@ async function ensureNextPendingCheck(door_id) {
   return r.rows[0];
 }
 
-async function ensureDoorQRCode(doorId, name, size = 512) {
-  const file = path.join(QRCODES_DIR, `${doorId}_${size}.png`);
-  if (!fs.existsSync(file)) {
-    const base = process.env.PUBLIC_BASE || "";
-    const url = `${base}/#/app/doors?door=${doorId}`;
-    await QRCode.toFile(file, url, { width: size, margin: 1 });
+// Génère un PNG si absent pour une URL donnée
+async function ensureQRCodePng(filePath, url, size = 512) {
+  if (!fs.existsSync(filePath)) {
+    await QRCode.toFile(filePath, url, { width: size, margin: 1 });
   }
-  return file;
+  return filePath;
 }
 
 async function createNcPdf(outPath, door, check, inspectorName = null) {
@@ -284,7 +294,9 @@ async function createNcPdf(outPath, door, check, inspectorName = null) {
     } else {
       nc.forEach((it, i) => {
         doc.fontSize(14).text(`${i + 1}. ${it.label || "-"}`);
-        if (it.comment) doc.moveDown(0.25).fontSize(11).fillColor("#333").text(`Commentaire : ${it.comment}`).fillColor("black");
+        if (it.comment) {
+          doc.moveDown(0.25).fontSize(11).fillColor("#333").text(`Commentaire : ${it.comment}`).fillColor("black");
+        }
         doc.moveDown(0.5);
       });
     }
@@ -307,7 +319,6 @@ function fileRowToClient(f) {
 function normalizeItemsWithLabels(items, template) {
   const tpl = Array.isArray(template) ? template : [];
   const map = new Map((items || []).map((it) => [Number(it.index), it]));
-  // garantit 5 labels
   for (let i = 0; i < 5; i++) {
     const prev = map.get(i) || { index: i };
     const label = prev.label || tpl[i] || `Point ${i + 1}`;
@@ -445,7 +456,6 @@ app.post("/api/doors/doors", async (req, res) => {
     );
     const door = rows[0];
 
-    // Premier contrôle "pending" à J+30
     const due = addDaysISO(todayISO(), 30);
     await pool.query(`INSERT INTO fd_checks(door_id, due_date) VALUES($1,$2)`, [door.id, due]);
 
@@ -560,7 +570,7 @@ app.get("/api/doors/doors/:id/photo", async (req, res) => {
 });
 
 // ------------------------------
-// Checks workflow  • /api/doors/doors/:id/checks
+// Checks workflow
 // ------------------------------
 app.post("/api/doors/doors/:id/checks", async (req, res) => {
   try {
@@ -590,7 +600,6 @@ app.post("/api/doors/doors/:id/checks", async (req, res) => {
   }
 });
 
-// PUT (JSON ou multipart sur la même route)
 app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), async (req, res) => {
   try {
     const doorId = req.params.id;
@@ -623,7 +632,7 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
     let merged = Array.from(map.values()).sort((a, b) => a.index - b.index);
     merged = normalizeItemsWithLabels(merged, settings.checklist_template);
 
-    // fichiers liés au contrôle
+    // fichiers liés
     const files = req.files || [];
     if (files.length) {
       const params = [];
@@ -639,7 +648,6 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
       );
     }
 
-    // Clôture si demandé OU si les 5 valeurs sont renseignées (Conforme/Non conforme/N.A.)
     const bodyClose = !!(req.body && req.body.close);
     const close = bodyClose || allFiveFilled(merged);
 
@@ -762,16 +770,18 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
     const settings = await getSettings();
     const checks = rows.map((r) => {
       const items = normalizeItemsWithLabels(r.items || [], settings.checklist_template);
-      const statusHist = r.status === "ok" ? STATUS.FAIT : STATUS.EN_RETARD;
+      const statusHist = STATUS.FAIT; // toujours FAIT pour un contrôle clos
+      const result = r.status === "ok" ? "conforme" : r.status === "nc" ? "non_conforme" : null;
       const username = r.closed_by_name || r.closed_by_email || "—";
       return {
         id: r.id,
         date: r.closed_at,
         status: statusHist,
+        result,                                 // conforme | non_conforme
         counts: r.result_counts || {},
         items,
         files: filesByCheck[r.id] || [],
-        nc_pdf_url: `/api/doors/doors/${req.params.id}/nonconformities.pdf`,
+        nc_pdf_url: r.pdf_nc_path ? `/api/doors/doors/${req.params.id}/nonconformities.pdf` : null,
         user: username,
       };
     });
@@ -783,7 +793,7 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
 });
 
 // ------------------------------
-// Files  • /api/doors/doors/:id/files
+// Files
 // ------------------------------
 app.get("/api/doors/doors/:id/files", async (req, res) => {
   try {
@@ -836,15 +846,36 @@ app.delete("/api/doors/files/:fileId", async (req, res) => {
 });
 
 // ------------------------------
-// QR & PDF NC (dernière clôture)
+// QR: redirection + PNG absolu
 // ------------------------------
+
+// Route de redirection publique (scannée par le QR)
+app.get("/go/door/:id", (req, res) => {
+  const id = req.params.id;
+  // Permet de forcer un domaine d'app si API et SPA sont séparées
+  const appBase = process.env.PUBLIC_APP_BASE || "";
+  const target = appBase
+    ? `${appBase}/#/app/doors?door=${id}`
+    : `/#/app/doors?door=${id}`;
+  return res.redirect(302, target);
+});
+
+// Génération du PNG qui encode une URL ABSOLUE vers /go/door/:id
 app.get("/api/doors/doors/:id/qrcode", async (req, res) => {
   try {
     const size = Math.max(64, Math.min(1024, Number(req.query.size || 256)));
     const { rows } = await pool.query(`SELECT id, name FROM fd_doors WHERE id=$1`, [req.params.id]);
     const d = rows[0];
     if (!d) return res.status(404).send("door");
-    const file = await ensureDoorQRCode(d.id, d.name, size);
+
+    const proto = (req.headers["x-forwarded-proto"] || req.protocol);
+    const host = req.get("host");
+    const origin = `${proto}://${host}`;
+    const absoluteUrl = `${origin}/go/door/${d.id}`;
+
+    const file = path.join(QRCODES_DIR, `${d.id}_${size}.png`);
+    await ensureQRCodePng(file, absoluteUrl, size);
+
     res.setHeader("Content-Type", "image/png");
     res.sendFile(path.resolve(file));
   } catch (e) {
@@ -852,7 +883,9 @@ app.get("/api/doors/doors/:id/qrcode", async (req, res) => {
   }
 });
 
-// PDF des non-conformités du DERNIER contrôle clos
+// ------------------------------
+// PDF NC (dernière clôture)
+// ------------------------------
 app.get("/api/doors/doors/:id/nonconformities.pdf", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -961,7 +994,7 @@ app.get("/api/doors/alerts", async (_req, res) => {
         overdue: Number(c.overdue || 0),
         due_30: Number(c.due_30 || 0),
         pending: Number(c.pending || 0),
-        last_nc: Number(c.last_nc || 0),  // portes dont le dernier contrôle est NC
+        last_nc: Number(c.last_nc || 0),
       },
     });
   } catch (e) {
