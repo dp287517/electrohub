@@ -251,13 +251,20 @@ function safeEmail(s) {
   const x = String(s).trim().toLowerCase();
   return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
+
+// PATCH: enrichir la détection d'utilisateur pour renseigner "Effectué par"
 async function currentUser(req) {
   const rawEmail =
     req.headers["x-user-email"] ||
     req.headers["x-auth-email"] ||
+    req.headers["x-forwarded-user"] || // ex. reverse proxy / SSO
     readCookie(req, "email") ||
     null;
-  const rawName = req.headers["x-user-name"] || null;
+  const rawName =
+    req.headers["x-user-name"] ||
+    req.headers["x-auth-name"] ||
+    req.headers["x-forwarded-user"] || // peut contenir un nom côté proxy
+    null;
 
   const email = safeEmail(rawEmail); // peut être null si invalide
   let name = rawName ? String(rawName).trim() : null;
@@ -299,12 +306,16 @@ async function ensureNextPendingCheck(door_id) {
   return r.rows[0];
 }
 
-// QRCode: génère sur disque (pour perf), mais URL calculée dynamiquement (domaine correct)
+// PATCH: QRCode — cache par base publique (évite 127.0.0.1 en prod)
 async function ensureDoorQRCode(req, doorId, name, size = 512, force = false) {
-  const file = path.join(QRCODES_DIR, `${doorId}_${size}.png`);
+  const targetUrl = qrDeepLink(req, doorId);
+  let baseKey = "default";
+  try {
+    baseKey = Buffer.from(new URL(targetUrl).origin).toString("hex").slice(0, 8);
+  } catch {}
+  const file = path.join(QRCODES_DIR, `${doorId}_${size}_${baseKey}.png`);
   if (force || !fs.existsSync(file)) {
-    const url = qrDeepLink(req, doorId);
-    await QRCode.toFile(file, url, { width: size, margin: 1 });
+    await QRCode.toFile(file, targetUrl, { width: size, margin: 1 });
   }
   return file;
 }
@@ -609,6 +620,7 @@ app.post("/api/doors/doors/:id/photo", uploadAny.single("photo"), async (req, re
   }
 });
 
+// PATCH: servir depuis la DB d'abord (puis disque) pour survivre aux redeploys
 app.get("/api/doors/doors/:id/photo", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -618,12 +630,7 @@ app.get("/api/doors/doors/:id/photo", async (req, res) => {
     const row = rows[0];
     if (!row) return res.status(404).send("no_door");
 
-    // 1) disque
-    if (row.photo_path && fs.existsSync(row.photo_path)) {
-      res.setHeader("Content-Type", "image/*");
-      return res.sendFile(path.resolve(row.photo_path));
-    }
-    // 2) fallback DB
+    // 1) DB d'abord
     if (row.photo_file_id) {
       const { rows: frows } = await pool.query(
         `SELECT mime, content FROM fd_files WHERE id=$1`,
@@ -634,6 +641,11 @@ app.get("/api/doors/doors/:id/photo", async (req, res) => {
         res.setHeader("Content-Type", f.mime || "image/*");
         return res.end(f.content, "binary");
       }
+    }
+    // 2) disque (fallback)
+    if (row.photo_path && fs.existsSync(row.photo_path)) {
+      res.setHeader("Content-Type", "image/*");
+      return res.sendFile(path.resolve(row.photo_path));
     }
 
     return res.status(404).send("no_photo");
@@ -894,21 +906,7 @@ app.get("/api/doors/doors/:id/files", async (req, res) => {
   }
 });
 
-app.post("/api/doors/doors/:id/files", uploadAny.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "file requis" });
-    const buf = await fsp.readFile(req.file.path);
-    await pool.query(
-      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
-       VALUES($1, NULL, 'door', $2, $3, $4, $5, $6)`,
-      [req.params.id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
+// PATCH: servir depuis la DB d'abord (puis disque)
 app.get("/api/doors/files/:fileId/download", async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -918,17 +916,17 @@ app.get("/api/doors/files/:fileId/download", async (req, res) => {
     const f = rows[0];
     if (!f) return res.status(404).send("file");
 
-    // 1) disque
-    if (f.path && fs.existsSync(f.path)) {
-      res.setHeader("Content-Type", f.mime || "application/octet-stream");
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
-      return res.sendFile(path.resolve(f.path));
-    }
-    // 2) fallback DB
+    // 1) DB d'abord
     if (f.content) {
       res.setHeader("Content-Type", f.mime || "application/octet-stream");
       res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
       return res.end(f.content, "binary");
+    }
+    // 2) disque (fallback)
+    if (f.path && fs.existsSync(f.path)) {
+      res.setHeader("Content-Type", f.mime || "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
+      return res.sendFile(path.resolve(f.path));
     }
     return res.status(404).send("file");
   } catch (e) {
