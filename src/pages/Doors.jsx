@@ -7,9 +7,44 @@ function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
 }
+function firstNonEmpty(...vals) {
+  for (const v of vals) {
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return null;
+}
+function getFromStorage(...keys) {
+  try {
+    for (const k of keys) {
+      const v = window.localStorage.getItem(k);
+      if (v && String(v).trim() !== "") return String(v).trim();
+    }
+  } catch {}
+  return null;
+}
 function userHeaders() {
-  const email = getCookie("email");
-  const name = getCookie("name");
+  // Email : on tente plusieurs clés (cookies & localStorage)
+  const email = firstNonEmpty(
+    getCookie("email"),
+    getCookie("user_email"),
+    getCookie("auth_email"),
+    getCookie("cf_access_email"),
+    getFromStorage("email", "user_email", "userEmail")
+  );
+
+  // Name : idem, puis fallback à la partie locale de l'email
+  let name = firstNonEmpty(
+    getCookie("name"),
+    getCookie("user_name"),
+    getCookie("display_name"),
+    getFromStorage("name", "user_name", "display_name", "userName")
+  );
+
+  if (!name && email) {
+    // local-part propre comme nom (ex: "jean.dupont" -> "jean dupont")
+    name = email.split("@")[0].replace(/[._-]+/g, " ").trim();
+  }
+
   const h = {};
   if (email) h["X-User-Email"] = email;
   if (name) h["X-User-Name"] = name;
