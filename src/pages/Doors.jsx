@@ -7,44 +7,51 @@ function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
 }
-function firstNonEmpty(...vals) {
-  for (const v of vals) {
-    if (v != null && String(v).trim() !== "") return String(v).trim();
-  }
-  return null;
-}
-function getFromStorage(...keys) {
+
+// NEW: identité robuste (cookies -> localStorage -> fallback depuis l'email)
+function getIdentity() {
+  // 1) cookies (prioritaires si présents)
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+
+  // 2) localStorage (si cookies absents ou vides)
   try {
-    for (const k of keys) {
-      const v = window.localStorage.getItem(k);
-      if (v && String(v).trim() !== "") return String(v).trim();
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name) {
+      name =
+        localStorage.getItem("name") ||
+        localStorage.getItem("user.name") ||
+        null;
+    }
+    // Parfois on stocke un JSON "user"
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
     }
   } catch {}
-  return null;
-}
-function userHeaders() {
-  // Email : on tente plusieurs clés (cookies & localStorage)
-  const email = firstNonEmpty(
-    getCookie("email"),
-    getCookie("user_email"),
-    getCookie("auth_email"),
-    getCookie("cf_access_email"),
-    getFromStorage("email", "user_email", "userEmail")
-  );
 
-  // Name : idem, puis fallback à la partie locale de l'email
-  let name = firstNonEmpty(
-    getCookie("name"),
-    getCookie("user_name"),
-    getCookie("display_name"),
-    getFromStorage("name", "user_name", "display_name", "userName")
-  );
-
+  // 3) fallback: dérive un nom lisible depuis l'email si pas de name
   if (!name && email) {
-    // local-part propre comme nom (ex: "jean.dupont" -> "jean dupont")
-    name = email.split("@")[0].replace(/[._-]+/g, " ").trim();
+    const base = String(email).split("@")[0] || "";
+    if (base) {
+      name = base
+        .replace(/[._-]+/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim();
+    }
   }
+  // 4) nettoyage
+  email = email ? String(email).trim() : null;
+  name = name ? String(name).trim() : null;
 
+  return { email, name };
+}
+
+function userHeaders() {
+  const { email, name } = getIdentity();
   const h = {};
   if (email) h["X-User-Email"] = email;
   if (name) h["X-User-Name"] = name;
@@ -1249,7 +1256,7 @@ function DoorHistory({ doorId }) {
                       </ul>
                     </details>
                   </td>
-                  <td className="px-3 py-2">{h.user || "—"}</td>
+                  <td className="px-3 py-2">{(h.user || "").trim() || "—"}</td>
                   <td className="px-3 py-2">
                     {!h.files?.length && <span className="text-xs text-gray-500">—</span>}
                     {!!h.files?.length && (
