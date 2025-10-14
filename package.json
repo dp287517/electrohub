@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "concurrently -k \"node server_atex.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server_diagram.js\" \"node server_controls.js\" \"node server_oibt.js\" \"node server_project.js\" \"node server_comp_ext.js\" \"node server_ask_veeva.js\" \"node server.js\""
+    "start": "concurrently -k \"node server_atex.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server_diagram.js\" \"node server_controls.js\" \"node server_oibt.js\" \"node server_project.js\" \"node server_comp_ext.js\" \"node server_ask_veeva.js\" \"node server_doors.js\" \"node server.js\""
   },
   "dependencies": {
     "@projectstorm/react-diagrams": "^7.0.4",
@@ -55,7 +55,8 @@
     "unzipper": "^0.11.2",
     "pdf-parse": "^1.1.1",
     "node-fetch": "^3.3.2",
-    "mammoth": "^1.8.0"
+    "mammoth": "^1.8.0",
+    "qrcode": "^1.5.3"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
