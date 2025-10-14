@@ -2,6 +2,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
+/* ----------------------------- helpers (headers + debounce) ----------------------------- */
+function getIdentityHeaders() {
+  const email = localStorage.getItem("fd_user_email") || "";
+  const name = localStorage.getItem("fd_user_name") || "";
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
+}
+
+async function apiFetch(path, init = {}) {
+  const headers = {
+    ...(init.headers || {}),
+    ...getIdentityHeaders(),
+  };
+  const r = await fetch(path, { credentials: "include", ...init, headers });
+  return r;
+}
+
+function useDebouncedEffect(effect, deps, delay = 400) {
+  useEffect(() => {
+    const h = setTimeout(() => effect(), delay);
+    return () => clearTimeout(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
   // Doors CRUD + listing + filters
@@ -9,38 +36,34 @@ const API = {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
     ).toString();
-    const r = await fetch(`/api/doors/doors${qs ? `?${qs}` : ""}`, { credentials: "include" });
+    const r = await apiFetch(`/api/doors/doors${qs ? `?${qs}` : ""}`);
     return r.json();
   },
-  get: async (id) => (await fetch(`/api/doors/doors/${id}`, { credentials: "include" })).json(),
+  get: async (id) => (await apiFetch(`/api/doors/doors/${id}`)).json(),
   create: async (payload) =>
     (
-      await fetch(`/api/doors/doors`, {
+      await apiFetch(`/api/doors/doors`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(payload),
       })
     ).json(),
   update: async (id, payload) =>
     (
-      await fetch(`/api/doors/doors/${id}`, {
+      await apiFetch(`/api/doors/doors/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(payload),
       })
     ).json(),
-  remove: async (id) =>
-    (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", credentials: "include" })).json(),
+  remove: async (id) => (await apiFetch(`/api/doors/doors/${id}`, { method: "DELETE" })).json(),
 
   // Checklist (create/close) + history
   startCheck: async (doorId) =>
     (
-      await fetch(`/api/doors/doors/${doorId}/checks`, {
+      await apiFetch(`/api/doors/doors/${doorId}/checks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({}),
       })
     ).json(),
@@ -52,69 +75,63 @@ const API = {
       fd.append("items", JSON.stringify(payload.items || []));
       if (payload.close) fd.append("close", "true");
       for (const f of payload.files) fd.append("files", f);
-      const r = await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
+      const r = await apiFetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
         body: fd,
-        credentials: "include",
       });
       return r.json();
     }
     return (
-      await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
+      await apiFetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(payload),
       })
     ).json();
   },
 
-  listHistory: async (doorId) =>
-    (await fetch(`/api/doors/doors/${doorId}/history`, { credentials: "include" })).json(),
+  listHistory: async (doorId) => (await apiFetch(`/api/doors/doors/${doorId}/history`)).json(),
 
   // Attachments (door-level)
-  listFiles: async (doorId) =>
-    (await fetch(`/api/doors/doors/${doorId}/files`, { credentials: "include" })).json(),
+  listFiles: async (doorId) => (await apiFetch(`/api/doors/doors/${doorId}/files`)).json(),
   uploadFile: async (doorId, file) => {
     const fd = new FormData();
     fd.append("file", file);
-    const r = await fetch(`/api/doors/doors/${doorId}/files`, {
+    const r = await apiFetch(`/api/doors/doors/${doorId}/files`, {
       method: "POST",
       body: fd,
-      credentials: "include",
     });
     return r.json();
   },
   deleteFile: async (fileId) =>
-    (await fetch(`/api/doors/files/${fileId}`, { method: "DELETE", credentials: "include" })).json(),
+    (await apiFetch(`/api/doors/files/${fileId}`, { method: "DELETE" })).json(),
 
   // Photo vignette
   uploadPhoto: async (doorId, file) => {
     const fd = new FormData();
     fd.append("photo", file);
-    const r = await fetch(`/api/doors/doors/${doorId}/photo`, {
+    const r = await apiFetch(`/api/doors/doors/${doorId}/photo`, {
       method: "POST",
       body: fd,
-      credentials: "include",
     });
     return r.json();
   },
   photoUrl: (doorId) => `/api/doors/doors/${doorId}/photo`,
 
   // QR code (PNG stream)
-  qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
+  qrUrl: (doorId, size = 256, force = false) =>
+    `/api/doors/doors/${doorId}/qrcode?size=${size}${force ? "&force=1" : ""}`,
 
   // Calendar (next checks, overdue, etc.)
-  calendar: async () => (await fetch(`/api/doors/calendar`, { credentials: "include" })).json(),
+  calendar: async () => (await apiFetch(`/api/doors/calendar`)).json(),
 
   // Settings (template & frequency)
-  settingsGet: async () => (await fetch(`/api/doors/settings`, { credentials: "include" })).json(),
+  settingsGet: async () => (await apiFetch(`/api/doors/settings`)).json(),
   settingsSet: async (payload) =>
     (
-      await fetch(`/api/doors/settings`, {
+      await apiFetch(`/api/doors/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify(payload),
       })
     ).json(),
@@ -123,7 +140,7 @@ const API = {
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 
   // Alerts banner
-  alertsGet: async () => (await fetch(`/api/doors/alerts`, { credentials: "include" })).json(),
+  alertsGet: async () => (await apiFetch(`/api/doors/alerts`)).json(),
 };
 
 /* ----------------------------- UI helpers ----------------------------- */
@@ -156,13 +173,13 @@ function Input({ value, onChange, className = "", ...p }) {
     />
   );
 }
-function Textarea({ value, onChange, className = "", ...p }) {
+function Textarea({ value, onChange, className = "", rows = 2, ...p }) {
   return (
     <textarea
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 ${className}`}
       value={value ?? ""}
+      rows={rows}
       onChange={(e) => onChange(e.target.value)}
-      rows={2}
       {...p}
     />
   );
@@ -238,9 +255,28 @@ function Toast({ text, onClose }) {
   if (!text) return null;
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
-      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
-        {text}
+      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>
+    </div>
+  );
+}
+
+/* ----------------------------- Identité utilisateur (headers) ----------------------------- */
+function IdentityBox({ onChange }) {
+  const [email, setEmail] = useState(localStorage.getItem("fd_user_email") || "");
+  const [name, setName] = useState(localStorage.getItem("fd_user_name") || "");
+  useEffect(() => {
+    localStorage.setItem("fd_user_email", email || "");
+    localStorage.setItem("fd_user_name", name || "");
+    onChange && onChange({ email, name });
+  }, [email, name]); // eslint-disable-line
+  return (
+    <div className="rounded-xl border bg-white p-3 flex flex-wrap gap-2 items-end">
+      <div className="text-sm font-medium text-gray-700 mr-2">Mon identité</div>
+      <div className="grid sm:grid-cols-2 gap-2 flex-1 min-w-[260px]">
+        <Input value={name} onChange={setName} placeholder="Nom (facultatif)" />
+        <Input value={email} onChange={setEmail} placeholder="Email (pour 'Effectué par')" />
       </div>
+      <div className="text-xs text-gray-500 sm:ml-auto">Utilisé pour signer les contrôles</div>
     </div>
   );
 }
@@ -267,6 +303,7 @@ function AlertsBar({ data }) {
           <Badge color="red">Dernier NC: {data?.counts?.last_nc ?? 0}</Badge>
         </div>
       </div>
+      {/* plus de bouton Rafraîchir : on recharge automatiquement */}
     </div>
   );
 }
@@ -304,7 +341,9 @@ function MonthCalendar({ events = [], onDayClick }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={() => setMonth((m) => m.subtract(1, "month"))}>← Préc.</Btn>
+          <Btn variant="ghost" onClick={() => setMonth((m) => m.subtract(1, "month"))}>
+            ← Préc.
+          </Btn>
           <Btn variant="ghost" onClick={() => setMonth(dayjs())}>Aujourd'hui</Btn>
           <Btn variant="ghost" onClick={() => setMonth((m) => m.add(1, "month"))}>Suiv. →</Btn>
         </div>
@@ -376,12 +415,6 @@ export default function Doors() {
     const a = await API.alertsGet().catch(() => null);
     setAlerts(a);
   }
-  // Poll auto toutes les 60s
-  useEffect(() => {
-    reloadAlerts();
-    const t = setInterval(reloadAlerts, 60000);
-    return () => clearInterval(t);
-  }, []);
 
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
@@ -392,21 +425,6 @@ export default function Doors() {
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [doorState, setDoorState] = useState(""); // conforme | non_conforme
-
-  // Debounce pour les filtres (300ms)
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    const t = setTimeout(async () => {
-      try {
-        const data = await API.list({ q, status, building, floor, door_state: doorState });
-        if (alive) setDoors(Array.isArray(data.items) ? data.items : []);
-      } finally {
-        if (alive) setLoading(false);
-      }
-    }, 300);
-    return () => { alive = false; clearTimeout(t); };
-  }, [q, status, building, floor, doorState]);
 
   /* ---- drawer (edit / inspect) ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -432,50 +450,52 @@ export default function Doors() {
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // Calendar initial
-  useEffect(() => {
-    (async () => {
-      const data = await API.calendar().catch(() => ({ events: [] }));
-      const events = (data?.events || []).map((e) => ({
-        date: dayjs(e.date || e.next_check_date || e.due_date).format("YYYY-MM-DD"),
-        door_id: e.door_id,
-        door_name: e.door_name,
-        status: e.status,
-      }));
-      setCalendar({ events });
-    })();
-  }, []);
-
-  // Settings initial
-  useEffect(() => {
-    (async () => {
-      const s = await API.settingsGet().catch(() => null);
-      if (s?.checklist_template?.length)
-        setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
-      if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
-    })();
-  }, []);
-
-  // Ouverture automatique via QR (?door=ID) — lit le hash et la query
-  useEffect(() => {
-    const readDoorParam = () => {
-      const hash = window.location.hash || "";
-      // ex: "#/app/doors?door=xxxxx"
-      const qIndex = hash.indexOf("?");
-      const qs = new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : window.location.search.slice(1));
-      return qs.get("door");
-    };
-    const id = readDoorParam();
-    if (id) {
-      (async () => {
-        const full = await API.get(id).catch(() => null);
-        if (full?.door?.id) {
-          setEditing(full.door);
-          setDrawerOpen(true);
-        }
-      })();
+  async function reload() {
+    setLoading(true);
+    try {
+      const data = await API.list({ q, status, building, floor, door_state: doorState });
+      setDoors(Array.isArray(data.items) ? data.items : []);
+    } finally {
+      setLoading(false);
     }
+  }
+  async function reloadCalendar() {
+    const data = await API.calendar();
+    const events = (data?.events || []).map((e) => ({
+      date: dayjs(e.date || e.next_check_date || e.due_date).format("YYYY-MM-DD"),
+      door_id: e.door_id,
+      door_name: e.door_name,
+      status: e.status,
+    }));
+    setCalendar({ events });
+  }
+  async function loadSettings() {
+    const s = await API.settingsGet().catch(() => null);
+    if (s?.checklist_template?.length)
+      setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
+    if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
+  }
+
+  // initial load
+  useEffect(() => {
+    reload();
+    reloadCalendar();
+    loadSettings();
+    reloadAlerts();
   }, []);
+
+  // auto-reload alerts every 30s
+  useEffect(() => {
+    const t = setInterval(() => reloadAlerts(), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  // auto search (no "Rechercher" button)
+  useDebouncedEffect(() => {
+    reload();
+  }, [q, status, building, floor, doorState]);
+
+  const filtered = doors; // serveur filtre déjà
 
   /* ------------------ actions door ------------------ */
   function openCreate() {
@@ -510,13 +530,22 @@ export default function Doors() {
       await API.update(editing.id, payload);
       const full = await API.get(editing.id);
       setEditing(full?.door || editing);
+      // merge immediately in list
+      setDoors((list) =>
+        list.map((d) => (d.id === editing.id ? { ...d, ...payload } : d))
+      );
     } else {
       const created = await API.create(payload);
       if (created?.door?.id) {
         const full = await API.get(created.door.id);
         setEditing(full?.door || created.door);
+        // optimistic insert at top
+        setDoors((list) => [{ ...created.door }, ...list]);
       }
     }
+    // also refresh background data (alerts, calendar)
+    reloadAlerts();
+    reloadCalendar();
   }
   async function deleteDoor() {
     if (!editing?.id) return;
@@ -527,6 +556,9 @@ export default function Doors() {
     await API.remove(editing.id);
     setDrawerOpen(false);
     setEditing(null);
+    await reload();
+    await reloadCalendar();
+    await reloadAlerts();
   }
 
   /* ------------------ checklist workflow ------------------ */
@@ -555,11 +587,10 @@ export default function Doors() {
     return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
   }
 
-  // Sauvegarde d'une valeur
-  async function saveChecklistItem(idx, value) {
+  async function saveChecklistItem(idx, value, comment) {
     if (!editing?.id || !editing?.current_check) return;
     const items = [...(editing.current_check.items || [])];
-    items[idx] = { ...(items[idx] || {}), index: idx, value };
+    items[idx] = { ...(items[idx] || {}), index: idx, value, comment };
     const payload = { items };
     const closed = allFiveAnswered(items);
     if (closed) payload.close = true;
@@ -568,20 +599,12 @@ export default function Doors() {
     if (res?.door) {
       setEditing(res.door);
       if (res?.notice) setToast(res.notice);
+      await reload();
+      await reloadCalendar();
+      await reloadAlerts();
     } else {
       const full = await API.get(editing.id);
       setEditing(full?.door);
-    }
-  }
-  // Sauvegarde d'un commentaire
-  async function saveChecklistComment(idx, comment) {
-    if (!editing?.id || !editing?.current_check) return;
-    const items = [...(editing.current_check.items || [])];
-    items[idx] = { ...(items[idx] || {}), index: idx, comment };
-    const payload = { items };
-    const res = await API.saveCheck(editing.id, editing.current_check.id, payload);
-    if (res?.door) {
-      setEditing(res.door);
     }
   }
 
@@ -609,6 +632,8 @@ export default function Doors() {
     await API.uploadPhoto(editing.id, f);
     const full = await API.get(editing.id);
     setEditing(full?.door);
+    await reload();
+    await reloadAlerts();
   }
 
   /* ------------------ settings save ------------------ */
@@ -645,7 +670,10 @@ export default function Doors() {
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
 
-      {/* Bandeau d’alerte global (sans bouton refresh) */}
+      {/* Identité */}
+      <IdentityBox onChange={() => { /* headers mis à jour pour les prochains fetch */ }} />
+
+      {/* Bandeau d’alerte global */}
       <AlertsBar data={alerts} />
 
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -690,9 +718,7 @@ export default function Doors() {
               ]}
             />
           </div>
-          <div className="text-xs text-gray-500">
-            Les résultats se mettent à jour automatiquement.
-          </div>
+          <div className="text-xs text-gray-500">La recherche se lance automatiquement.</div>
         </div>
       )}
 
@@ -702,8 +728,8 @@ export default function Doors() {
           {/* Mobile cards */}
           <div className="sm:hidden divide-y">
             {loading && <div className="p-4 text-gray-500">Chargement…</div>}
-            {!loading && doors.length === 0 && <div className="p-4 text-gray-500">Aucune porte.</div>}
-            {doors.map((d) => (
+            {!loading && filtered.length === 0 && <div className="p-4 text-gray-500">Aucune porte.</div>}
+            {filtered.map((d) => (
               <div key={d.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
@@ -734,8 +760,12 @@ export default function Doors() {
                 </div>
                 <div className="mt-3 flex gap-2">
                   <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                  <a className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                     href={API.qrUrl(d.id, 256)} target="_blank" rel="noreferrer">
+                  <a
+                    className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                    href={API.qrUrl(d.id, 256)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     QR
                   </a>
                 </div>
@@ -759,17 +789,24 @@ export default function Doors() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">
+                      Chargement…
+                    </td>
                   </tr>
                 )}
-                {!loading && doors.length === 0 && (
+                {!loading && filtered.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">
+                      Aucune porte.
+                    </td>
                   </tr>
                 )}
                 {!loading &&
-                  doors.map((d, idx) => (
-                    <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
+                  filtered.map((d, idx) => (
+                    <tr
+                      key={d.id}
+                      className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}
+                    >
                       <td className="px-4 py-3 min-w-[260px]">
                         <div className="flex items-center gap-3">
                           <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
@@ -787,9 +824,7 @@ export default function Doors() {
                       <td className="px-4 py-3">
                         {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
                       </td>
-                      <td className="px-4 py-3">
-                        {doorStateBadge(d.door_state)}
-                      </td>
+                      <td className="px-4 py-3">{doorStateBadge(d.door_state)}</td>
                       <td className="px-4 py-3">
                         <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
                       </td>
@@ -798,7 +833,9 @@ export default function Doors() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
-                          <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
+                          <Btn variant="ghost" onClick={() => openEdit(d)}>
+                            Ouvrir
+                          </Btn>
                           <a
                             className="px-2 py-1 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                             href={API.qrUrl(d.id, 256)}
@@ -869,16 +906,15 @@ export default function Doors() {
                   { value: "2_ans", label: "1× tous les 2 ans" },
                 ]}
               />
-              <div className="text-xs text-gray-500 mt-2">La date de prochain contrôle s’affiche <b>sans heure</b>.</div>
+              <div className="text-xs text-gray-500 mt-2">
+                La date de prochain contrôle s’affiche <b>sans heure</b>.
+              </div>
             </div>
           </div>
           <div className="flex gap-2">
-            <Btn variant="ghost" onClick={async () => {
-              const s = await API.settingsGet().catch(() => null);
-              if (s?.checklist_template?.length)
-                setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
-              if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
-            }}>Annuler</Btn>
+            <Btn variant="ghost" onClick={loadSettings}>
+              Annuler
+            </Btn>
             <Btn onClick={saveSettings} disabled={savingSettings}>
               {savingSettings ? "Enregistrement…" : "Enregistrer les paramètres"}
             </Btn>
@@ -888,7 +924,16 @@ export default function Doors() {
 
       {/* Drawer: fiche porte + checklist + fichiers + QR */}
       {drawerOpen && editing && (
-        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={() => { setDrawerOpen(false); setEditing(null); }}>
+        <Drawer
+          title={`Porte • ${editing.name || "nouvelle"}`}
+          onClose={() => {
+            setDrawerOpen(false);
+            setEditing(null);
+            // petite synchro arrière-plan
+            reload();
+            reloadAlerts();
+          }}
+        >
           <div className="space-y-4">
             {/* Base info */}
             <div className="grid sm:grid-cols-2 gap-3">
@@ -914,15 +959,16 @@ export default function Doors() {
                 {doorStateBadge(editing.door_state)}
               </div>
               <div className="text-sm text-gray-600">
-                Prochain contrôle : {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
+                Prochain contrôle :{" "}
+                {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
               </div>
             </div>
 
             <div className="flex items-center gap-3">
-              <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
-              {editing?.id && (
-                <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>
-              )}
+              <Btn variant="ghost" onClick={saveDoorBase}>
+                Enregistrer la fiche
+              </Btn>
+              {editing?.id && <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>}
             </div>
 
             {/* Photo */}
@@ -953,36 +999,37 @@ export default function Doors() {
               </div>
 
               {!editing.current_check && (
-                <div className="text-sm text-gray-500">
-                  Lance un contrôle pour remplir les 5 points ci-dessous.
-                </div>
+                <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>
               )}
 
               {!!editing.current_check && (
                 <div className="space-y-3">
-                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate).slice(0, 5).map((label, i) => {
-                    const val = editing.current_check.items?.[i]?.value || "";
-                    const comment = editing.current_check.items?.[i]?.comment || "";
-                    return (
-                      <div key={i} className="grid md:grid-cols-[1fr,220px] gap-2 items-start">
-                        <div>
-                          <div className="text-sm mb-1">{label}</div>
-                          <Textarea
-                            placeholder="Commentaire (optionnel)…"
-                            value={comment}
-                            onChange={(v) => saveChecklistComment(i, v)}
-                            className="mt-1"
-                          />
+                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate)
+                    .slice(0, 5)
+                    .map((label, i) => {
+                      const val = editing.current_check.items?.[i]?.value || "";
+                      const cmt = editing.current_check.items?.[i]?.comment || "";
+                      return (
+                        <div key={i} className="grid md:grid-cols-[1fr,220px] gap-2 items-start">
+                          <div className="text-sm">{label}</div>
+                          <div className="flex flex-col gap-2">
+                            <Select
+                              value={val}
+                              onChange={(v) => saveChecklistItem(i, v, cmt)}
+                              options={baseOptions}
+                              placeholder="Sélectionner…"
+                            />
+                            {/* commentaire dédié */}
+                            <Textarea
+                              rows={2}
+                              placeholder="Commentaire (obligatoire conseillé si Non conforme)"
+                              value={cmt}
+                              onChange={(v) => saveChecklistItem(i, val, v)}
+                            />
+                          </div>
                         </div>
-                        <Select
-                          value={val}
-                          onChange={(v) => saveChecklistItem(i, v)}
-                          options={baseOptions}
-                          placeholder="Sélectionner…"
-                        />
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
                   <div className="pt-2">
                     <a
                       href={API.nonConformPDF(editing.id)}
@@ -1020,9 +1067,7 @@ export default function Doors() {
                     uploading ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"
                   }`}
                 >
-                  <div className="text-sm text-gray-600">
-                    Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.
-                  </div>
+                  <div className="text-sm text-gray-600">Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.</div>
                 </div>
 
                 <DoorFiles doorId={editing.id} />
@@ -1040,14 +1085,25 @@ export default function Doors() {
                     <div key={s} className="border rounded-xl p-2 text-center">
                       <div className="text-xs text-gray-500 mb-1">{s}px</div>
                       <img src={API.qrUrl(editing.id, s)} alt={`QR ${s}`} className="mx-auto" />
-                      <a
-                        href={API.qrUrl(editing.id, s)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-2 inline-block px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
-                      >
-                        Ouvrir / Imprimer
-                      </a>
+                      <div className="mt-2 flex gap-2 justify-center">
+                        <a
+                          href={API.qrUrl(editing.id, s)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
+                        >
+                          Ouvrir / Imprimer
+                        </a>
+                        <a
+                          href={API.qrUrl(editing.id, s, true)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-2 py-1 rounded bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 text-xs"
+                          title="Régénérer l'image avec l'URL publique actuelle"
+                        >
+                          Regénérer
+                        </a>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1077,7 +1133,9 @@ function Drawer({ title, children, onClose }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    const handler = (e) => {
+      if (e.key === "Escape") onClose();
+    };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
@@ -1087,7 +1145,9 @@ function Drawer({ title, children, onClose }) {
       <div className="absolute right-0 top-0 h-full w-full sm:w-[640px] bg-white shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold">{title}</h3>
-          <Btn variant="ghost" onClick={onClose}>Fermer</Btn>
+          <Btn variant="ghost" onClick={onClose}>
+            Fermer
+          </Btn>
         </div>
         {children}
       </div>
@@ -1107,7 +1167,9 @@ function DoorFiles({ doorId }) {
       setLoading(false);
     }
   }
-  useEffect(() => { if (doorId) load(); }, [doorId]);
+  useEffect(() => {
+    if (doorId) load();
+  }, [doorId]);
 
   return (
     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1125,16 +1187,29 @@ function FileCard({ f, onDelete }) {
   return (
     <div className="border rounded-xl overflow-hidden bg-white shadow-sm hover:shadow transition">
       <div className="aspect-video bg-gray-50 flex items-center justify-center overflow-hidden">
-        {isImage ? <img src={url} alt={f.original_name} className="w-full h-full object-cover" /> : <div className="text-4xl">📄</div>}
+        {isImage ? (
+          <img src={url} alt={f.original_name} className="w-full h-full object-cover" />
+        ) : (
+          <div className="text-4xl">📄</div>
+        )}
       </div>
       <div className="p-3">
-        <div className="text-sm font-medium truncate" title={f.original_name}>{f.original_name}</div>
+        <div className="text-sm font-medium truncate" title={f.original_name}>
+          {f.original_name}
+        </div>
         <div className="text-xs text-gray-500 mt-0.5">{f.mime || "file"}</div>
         <div className="flex items-center gap-2 mt-2">
-          <a href={url} className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition text-xs" download>
+          <a
+            href={url}
+            className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition text-xs"
+            download
+          >
             Télécharger
           </a>
-          <button onClick={onDelete} className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition text-xs">
+          <button
+            onClick={onDelete}
+            className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition text-xs"
+          >
             Supprimer
           </button>
         </div>
@@ -1175,16 +1250,25 @@ function DoorHistory({ doorId }) {
             <tbody>
               {items.map((h) => (
                 <tr key={h.id} className="border-b align-top">
-                  <td className="px-3 py-2 whitespace-nowrap">{h.date ? dayjs(h.date).format("DD/MM/YYYY") : "—"}</td>
-                  <td className="px-3 py-2"><Badge color={statusColor(h.status)}>{statusLabel(h.status)}</Badge></td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    {h.date ? dayjs(h.date).format("DD/MM/YYYY") : "—"}
+                  </td>
                   <td className="px-3 py-2">
-                    {h.result === "conforme" ? <Badge color="green">Conforme</Badge> :
-                     h.result === "non_conforme" ? <Badge color="red">Non conforme</Badge> :
-                     <span className="text-xs text-gray-500">—</span>}
+                    <Badge color={statusColor(h.status)}>{statusLabel(h.status)}</Badge>
+                  </td>
+                  <td className="px-3 py-2">
+                    {h.result === "conforme" ? (
+                      <Badge color="green">Conforme</Badge>
+                    ) : h.result === "non_conforme" ? (
+                      <Badge color="red">Non conforme</Badge>
+                    ) : (
+                      <span className="text-xs text-gray-500">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2">
                     <div className="text-xs text-gray-600">
-                      {Number(h.counts?.conforme || 0)} / {Number(h.counts?.nc || 0)} / {Number(h.counts?.na || 0)}
+                      {Number(h.counts?.conforme || 0)} / {Number(h.counts?.nc || 0)} /{" "}
+                      {Number(h.counts?.na || 0)}
                     </div>
                     {/* snapshot items (condensé) */}
                     <details className="text-xs mt-1">
@@ -1194,9 +1278,15 @@ function DoorHistory({ doorId }) {
                           <li key={i}>
                             {it.label} —{" "}
                             <span className="font-medium">
-                              {it.value === "conforme" ? "Conforme" : it.value === "non_conforme" ? "Non conforme" : "N/A"}
+                              {it.value === "conforme"
+                                ? "Conforme"
+                                : it.value === "non_conforme"
+                                ? "Non conforme"
+                                : "N/A"}
                             </span>
-                            {it.comment ? <span className="text-gray-500"> — {it.comment}</span> : null}
+                            {it.comment ? (
+                              <span className="text-gray-500"> — {it.comment}</span>
+                            ) : null}
                           </li>
                         ))}
                       </ul>
@@ -1208,8 +1298,13 @@ function DoorHistory({ doorId }) {
                     {!!h.files?.length && (
                       <div className="flex flex-wrap gap-2">
                         {h.files.map((f) => (
-                          <a key={f.id} href={f.url} target="_blank" rel="noreferrer"
-                             className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs">
+                          <a
+                            key={f.id}
+                            href={f.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
+                          >
                             {f.name}
                           </a>
                         ))}
@@ -1218,8 +1313,12 @@ function DoorHistory({ doorId }) {
                   </td>
                   <td className="px-3 py-2">
                     {h.nc_pdf_url ? (
-                      <a href={h.nc_pdf_url} target="_blank" rel="noreferrer"
-                         className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs">
+                      <a
+                        href={h.nc_pdf_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
+                      >
                         Ouvrir
                       </a>
                     ) : (
