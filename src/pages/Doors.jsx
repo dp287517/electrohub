@@ -121,6 +121,9 @@ const API = {
 
   // PDF non-conformités (pour SAP)
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
+
+  // Alerts banner
+  alertsGet: async () => (await fetch(`/api/doors/alerts`, { credentials: "include" })).json(),
 };
 
 /* ----------------------------- UI helpers ----------------------------- */
@@ -231,6 +234,33 @@ function Toast({ text, onClose }) {
   );
 }
 
+/* ----------------------------- Bandeau alertes ----------------------------- */
+function AlertsBar({ data, onRefresh }) {
+  if (!data?.ok) return null;
+  const level = data.level || "ok";
+  const palette =
+    level === "danger"
+      ? "bg-rose-50 border-rose-200 text-rose-800"
+      : level === "warn"
+      ? "bg-amber-50 border-amber-200 text-amber-800"
+      : "bg-emerald-50 border-emerald-200 text-emerald-800";
+
+  return (
+    <div className={`rounded-xl border px-3 py-2 text-sm flex items-center justify-between ${palette}`}>
+      <div className="flex items-center gap-3">
+        <span>{data.message || "Aucune alerte."}</span>
+        <div className="flex items-center gap-2 text-xs">
+          <Badge color="red">Retard: {data?.counts?.overdue ?? 0}</Badge>
+          <Badge color="orange">&lt;30j: {data?.counts?.due_30 ?? 0}</Badge>
+          <Badge color="blue">En cours: {data?.counts?.pending ?? 0}</Badge>
+          <Badge color="red">Dernier NC: {data?.counts?.last_nc ?? 0}</Badge>
+        </div>
+      </div>
+      <Btn variant="ghost" onClick={onRefresh}>Rafraîchir</Btn>
+    </div>
+  );
+}
+
 /* ----------------------------- Calendrier (mois) ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
@@ -330,6 +360,13 @@ function MonthCalendar({ events = [], onDayClick }) {
 export default function Doors() {
   const [tab, setTab] = useState("controls"); // controls | calendar | settings
 
+  /* ---- alerts ---- */
+  const [alerts, setAlerts] = useState(null);
+  async function reloadAlerts() {
+    const a = await API.alertsGet().catch(() => null);
+    setAlerts(a);
+  }
+
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -394,6 +431,7 @@ export default function Doors() {
     reload();
     reloadCalendar();
     loadSettings();
+    reloadAlerts();
   }, []);
 
   const filtered = doors; // serveur filtre déjà
@@ -439,6 +477,7 @@ export default function Doors() {
       }
     }
     await reload();
+    await reloadAlerts();
   }
   async function deleteDoor() {
     if (!editing?.id) return;
@@ -450,6 +489,8 @@ export default function Doors() {
     setDrawerOpen(false);
     setEditing(null);
     await reload();
+    await reloadCalendar();
+    await reloadAlerts();
   }
 
   /* ------------------ checklist workflow ------------------ */
@@ -492,6 +533,7 @@ export default function Doors() {
       if (res?.notice) setToast(res.notice);
       await reload();
       await reloadCalendar();
+      await reloadAlerts();
     } else {
       const full = await API.get(editing.id);
       setEditing(full?.door);
@@ -523,6 +565,7 @@ export default function Doors() {
     const full = await API.get(editing.id);
     setEditing(full?.door);
     await reload();
+    await reloadAlerts();
   }
 
   /* ------------------ settings save ------------------ */
@@ -558,6 +601,9 @@ export default function Doors() {
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
+
+      {/* Bandeau d’alerte global */}
+      <AlertsBar data={alerts} onRefresh={reloadAlerts} />
 
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
@@ -943,7 +989,7 @@ export default function Doors() {
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="font-semibold mb-2">QR code</div>
-                {/* Nom de la porte juste au-dessus des QR */}
+                {/* Nom de la porte au-dessus des QR */}
                 <div className="text-sm text-gray-700 font-medium mb-1">{editing.name || "—"}</div>
                 <div className="grid grid-cols-3 gap-3 items-start">
                   {[128, 256, 512].map((s) => (
