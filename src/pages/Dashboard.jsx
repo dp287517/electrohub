@@ -32,6 +32,13 @@ const apps = [
     description: 'Upload documents or ZIP files, index them, and ask any question across your library with AI.',
     icon: '💬'
   },
+  // 👉 Nouveau : Fire Doors (portes coupe-feu)
+  {
+    label: 'Fire Doors',
+    to: '/app/doors',
+    description: 'Annual checks, QR codes, nonconformities & SAP follow-ups',
+    icon: '🚪'
+  },
 ];
 
 export default function Dashboard() {
@@ -54,7 +61,7 @@ export default function Dashboard() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Dashboard</h1>
-          <p className="text-gray-600">
+        <p className="text-gray-600">
             Welcome{user?.name ? `, ${user.name}` : ''}! Access your tools below.
           </p>
         </div>
