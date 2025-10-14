@@ -129,7 +129,8 @@ const API = {
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
-    primary: "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
+    primary:
+      "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
     ghost: "bg-white text-gray-700 border hover:bg-gray-50",
     danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
     success: "bg-emerald-600 text-white hover:bg-emerald-700",
@@ -237,7 +238,9 @@ function Toast({ text, onClose }) {
   if (!text) return null;
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
-      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>
+      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
+        {text}
+      </div>
     </div>
   );
 }
@@ -264,8 +267,6 @@ function AlertsBar({ data }) {
           <Badge color="red">Dernier NC: {data?.counts?.last_nc ?? 0}</Badge>
         </div>
       </div>
-      {/* bouton Rafraîchir supprimé */}
-      <div className="text-xs opacity-70">Auto-maj lors des actions</div>
     </div>
   );
 }
@@ -303,9 +304,7 @@ function MonthCalendar({ events = [], onDayClick }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={() => setMonth((m) => m.subtract(1, "month"))}>
-            ← Préc.
-          </Btn>
+          <Btn variant="ghost" onClick={() => setMonth((m) => m.subtract(1, "month"))}>← Préc.</Btn>
           <Btn variant="ghost" onClick={() => setMonth(dayjs())}>Aujourd'hui</Btn>
           <Btn variant="ghost" onClick={() => setMonth((m) => m.add(1, "month"))}>Suiv. →</Btn>
         </div>
@@ -355,7 +354,9 @@ function MonthCalendar({ events = [], onDayClick }) {
                     {e.door_name}
                   </div>
                 ))}
-                {list.length > 3 && <div className="text-[11px] text-gray-500">+{list.length - 3} de plus…</div>}
+                {list.length > 3 && (
+                  <div className="text-[11px] text-gray-500">+{list.length - 3} de plus…</div>
+                )}
               </div>
             </button>
           );
@@ -375,6 +376,12 @@ export default function Doors() {
     const a = await API.alertsGet().catch(() => null);
     setAlerts(a);
   }
+  // Poll auto toutes les 60s
+  useEffect(() => {
+    reloadAlerts();
+    const t = setInterval(reloadAlerts, 60000);
+    return () => clearInterval(t);
+  }, []);
 
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
@@ -385,6 +392,21 @@ export default function Doors() {
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [doorState, setDoorState] = useState(""); // conforme | non_conforme
+
+  // Debounce pour les filtres (300ms)
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const data = await API.list({ q, status, building, floor, door_state: doorState });
+        if (alive) setDoors(Array.isArray(data.items) ? data.items : []);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [q, status, building, floor, doorState]);
 
   /* ---- drawer (edit / inspect) ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -410,40 +432,50 @@ export default function Doors() {
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
-  async function reload() {
-    setLoading(true);
-    try {
-      const data = await API.list({ q, status, building, floor, door_state: doorState });
-      setDoors(Array.isArray(data.items) ? data.items : []);
-    } finally {
-      setLoading(false);
-    }
-  }
-  async function reloadCalendar() {
-    const data = await API.calendar();
-    const events = (data?.events || []).map((e) => ({
-      date: dayjs(e.date || e.next_check_date || e.due_date).format("YYYY-MM-DD"),
-      door_id: e.door_id,
-      door_name: e.door_name,
-      status: e.status,
-    }));
-    setCalendar({ events });
-  }
-  async function loadSettings() {
-    const s = await API.settingsGet().catch(() => null);
-    if (s?.checklist_template?.length)
-      setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
-    if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
-  }
-
+  // Calendar initial
   useEffect(() => {
-    reload();
-    reloadCalendar();
-    loadSettings();
-    reloadAlerts();
+    (async () => {
+      const data = await API.calendar().catch(() => ({ events: [] }));
+      const events = (data?.events || []).map((e) => ({
+        date: dayjs(e.date || e.next_check_date || e.due_date).format("YYYY-MM-DD"),
+        door_id: e.door_id,
+        door_name: e.door_name,
+        status: e.status,
+      }));
+      setCalendar({ events });
+    })();
   }, []);
 
-  const filtered = doors; // serveur filtre déjà
+  // Settings initial
+  useEffect(() => {
+    (async () => {
+      const s = await API.settingsGet().catch(() => null);
+      if (s?.checklist_template?.length)
+        setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
+      if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
+    })();
+  }, []);
+
+  // Ouverture automatique via QR (?door=ID) — lit le hash et la query
+  useEffect(() => {
+    const readDoorParam = () => {
+      const hash = window.location.hash || "";
+      // ex: "#/app/doors?door=xxxxx"
+      const qIndex = hash.indexOf("?");
+      const qs = new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : window.location.search.slice(1));
+      return qs.get("door");
+    };
+    const id = readDoorParam();
+    if (id) {
+      (async () => {
+        const full = await API.get(id).catch(() => null);
+        if (full?.door?.id) {
+          setEditing(full.door);
+          setDrawerOpen(true);
+        }
+      })();
+    }
+  }, []);
 
   /* ------------------ actions door ------------------ */
   function openCreate() {
@@ -485,19 +517,16 @@ export default function Doors() {
         setEditing(full?.door || created.door);
       }
     }
-    await reload();
-    await reloadAlerts();
   }
   async function deleteDoor() {
     if (!editing?.id) return;
-    const ok = window.confirm("Supprimer définitivement cette porte ? Cette action est irréversible.");
+    const ok = window.confirm(
+      "Supprimer définitivement cette porte ? Cette action est irréversible."
+    );
     if (!ok) return;
     await API.remove(editing.id);
     setDrawerOpen(false);
     setEditing(null);
-    await reload();
-    await reloadCalendar();
-    await reloadAlerts();
   }
 
   /* ------------------ checklist workflow ------------------ */
@@ -526,33 +555,34 @@ export default function Doors() {
     return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
   }
 
-  async function saveChecklistItems(nextItems) {
+  // Sauvegarde d'une valeur
+  async function saveChecklistItem(idx, value) {
     if (!editing?.id || !editing?.current_check) return;
-    const payload = { items: nextItems };
-    if (allFiveAnswered(nextItems)) payload.close = true;
+    const items = [...(editing.current_check.items || [])];
+    items[idx] = { ...(items[idx] || {}), index: idx, value };
+    const payload = { items };
+    const closed = allFiveAnswered(items);
+    if (closed) payload.close = true;
 
     const res = await API.saveCheck(editing.id, editing.current_check.id, payload);
     if (res?.door) {
       setEditing(res.door);
       if (res?.notice) setToast(res.notice);
-      await reload();
-      await reloadCalendar();
-      await reloadAlerts();
     } else {
       const full = await API.get(editing.id);
       setEditing(full?.door);
     }
   }
-
-  function updateChecklistValue(idx, value) {
-    const items = [...(editing.current_check.items || [])];
-    items[idx] = { ...(items[idx] || {}), index: idx, value };
-    saveChecklistItems(items);
-  }
-  function updateChecklistComment(idx, comment) {
+  // Sauvegarde d'un commentaire
+  async function saveChecklistComment(idx, comment) {
+    if (!editing?.id || !editing?.current_check) return;
     const items = [...(editing.current_check.items || [])];
     items[idx] = { ...(items[idx] || {}), index: idx, comment };
-    saveChecklistItems(items);
+    const payload = { items };
+    const res = await API.saveCheck(editing.id, editing.current_check.id, payload);
+    if (res?.door) {
+      setEditing(res.door);
+    }
   }
 
   /* ------------------ files ------------------ */
@@ -579,8 +609,6 @@ export default function Doors() {
     await API.uploadPhoto(editing.id, f);
     const full = await API.get(editing.id);
     setEditing(full?.door);
-    await reload();
-    await reloadAlerts();
   }
 
   /* ------------------ settings save ------------------ */
@@ -617,7 +645,7 @@ export default function Doors() {
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
 
-      {/* Bandeau d’alerte global (sans bouton) */}
+      {/* Bandeau d’alerte global (sans bouton refresh) */}
       <AlertsBar data={alerts} />
 
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -662,21 +690,8 @@ export default function Doors() {
               ]}
             />
           </div>
-          <div className="flex gap-2">
-            <Btn
-              variant="ghost"
-              onClick={() => {
-                setQ("");
-                setStatus("");
-                setBuilding("");
-                setFloor("");
-                setDoorState("");
-                reload();
-              }}
-            >
-              Réinitialiser
-            </Btn>
-            <Btn onClick={reload}>Rechercher</Btn>
+          <div className="text-xs text-gray-500">
+            Les résultats se mettent à jour automatiquement.
           </div>
         </div>
       )}
@@ -687,8 +702,8 @@ export default function Doors() {
           {/* Mobile cards */}
           <div className="sm:hidden divide-y">
             {loading && <div className="p-4 text-gray-500">Chargement…</div>}
-            {!loading && filtered.length === 0 && <div className="p-4 text-gray-500">Aucune porte.</div>}
-            {filtered.map((d) => (
+            {!loading && doors.length === 0 && <div className="p-4 text-gray-500">Aucune porte.</div>}
+            {doors.map((d) => (
               <div key={d.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
@@ -697,11 +712,7 @@ export default function Doors() {
                       {d.photo_url ? (
                         <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
                       ) : (
-                        <span className="text-[11px] text-gray-500 p-1 text-center">
-                          Photo à
-                          <br />
-                          prendre
-                        </span>
+                        <span className="text-[11px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
                       )}
                     </div>
                     <div>
@@ -722,15 +733,9 @@ export default function Doors() {
                   <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
                 </div>
                 <div className="mt-3 flex gap-2">
-                  <Btn variant="ghost" onClick={() => openEdit(d)}>
-                    Ouvrir
-                  </Btn>
-                  <a
-                    className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                    href={API.qrUrl(d.id, 256)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                  <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
+                  <a className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                     href={API.qrUrl(d.id, 256)} target="_blank" rel="noreferrer">
                     QR
                   </a>
                 </div>
@@ -754,20 +759,16 @@ export default function Doors() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">
-                      Chargement…
-                    </td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td>
                   </tr>
                 )}
-                {!loading && filtered.length === 0 && (
+                {!loading && doors.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">
-                      Aucune porte.
-                    </td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td>
                   </tr>
                 )}
                 {!loading &&
-                  filtered.map((d, idx) => (
+                  doors.map((d, idx) => (
                     <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
                       <td className="px-4 py-3 min-w-[260px]">
                         <div className="flex items-center gap-3">
@@ -775,11 +776,7 @@ export default function Doors() {
                             {d.photo_url ? (
                               <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
                             ) : (
-                              <span className="text-[10px] text-gray-500 p-1 text-center">
-                                Photo à
-                                <br />
-                                prendre
-                              </span>
+                              <span className="text-[10px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
                             )}
                           </div>
                           <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>
@@ -790,7 +787,9 @@ export default function Doors() {
                       <td className="px-4 py-3">
                         {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
                       </td>
-                      <td className="px-4 py-3">{doorStateBadge(d.door_state)}</td>
+                      <td className="px-4 py-3">
+                        {doorStateBadge(d.door_state)}
+                      </td>
                       <td className="px-4 py-3">
                         <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
                       </td>
@@ -799,9 +798,7 @@ export default function Doors() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
-                          <Btn variant="ghost" onClick={() => openEdit(d)}>
-                            Ouvrir
-                          </Btn>
+                          <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
                           <a
                             className="px-2 py-1 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                             href={API.qrUrl(d.id, 256)}
@@ -872,15 +869,16 @@ export default function Doors() {
                   { value: "2_ans", label: "1× tous les 2 ans" },
                 ]}
               />
-              <div className="text-xs text-gray-500 mt-2">
-                La date de prochain contrôle s’affiche <b>sans heure</b>.
-              </div>
+              <div className="text-xs text-gray-500 mt-2">La date de prochain contrôle s’affiche <b>sans heure</b>.</div>
             </div>
           </div>
           <div className="flex gap-2">
-            <Btn variant="ghost" onClick={loadSettings}>
-              Annuler
-            </Btn>
+            <Btn variant="ghost" onClick={async () => {
+              const s = await API.settingsGet().catch(() => null);
+              if (s?.checklist_template?.length)
+                setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
+              if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
+            }}>Annuler</Btn>
             <Btn onClick={saveSettings} disabled={savingSettings}>
               {savingSettings ? "Enregistrement…" : "Enregistrer les paramètres"}
             </Btn>
@@ -890,13 +888,7 @@ export default function Doors() {
 
       {/* Drawer: fiche porte + checklist + fichiers + QR */}
       {drawerOpen && editing && (
-        <Drawer
-          title={`Porte • ${editing.name || "nouvelle"}`}
-          onClose={() => {
-            setDrawerOpen(false);
-            setEditing(null);
-          }}
-        >
+        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={() => { setDrawerOpen(false); setEditing(null); }}>
           <div className="space-y-4">
             {/* Base info */}
             <div className="grid sm:grid-cols-2 gap-3">
@@ -927,10 +919,10 @@ export default function Doors() {
             </div>
 
             <div className="flex items-center gap-3">
-              <Btn variant="ghost" onClick={saveDoorBase}>
-                Enregistrer la fiche
-              </Btn>
-              {editing?.id && <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>}
+              <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
+              {editing?.id && (
+                <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>
+              )}
             </div>
 
             {/* Photo */}
@@ -961,38 +953,36 @@ export default function Doors() {
               </div>
 
               {!editing.current_check && (
-                <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>
+                <div className="text-sm text-gray-500">
+                  Lance un contrôle pour remplir les 5 points ci-dessous.
+                </div>
               )}
 
               {!!editing.current_check && (
                 <div className="space-y-3">
-                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate)
-                    .slice(0, 5)
-                    .map((label, i) => {
-                      const it = editing.current_check.items?.[i] || {};
-                      const val = it.value || "";
-                      const comment = it.comment || "";
-                      return (
-                        <div key={i} className="grid gap-2 md:grid-cols-[1fr,210px]">
-                          <div className="space-y-2">
-                            <div className="text-sm">{label}</div>
-                            <Textarea
-                              value={comment}
-                              onChange={(v) => updateChecklistComment(i, v)}
-                              placeholder="Commentaire (facultatif)"
-                            />
-                          </div>
-                          <div className="flex items-start">
-                            <Select
-                              value={val}
-                              onChange={(v) => updateChecklistValue(i, v)}
-                              options={baseOptions}
-                              placeholder="Sélectionner…"
-                            />
-                          </div>
+                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate).slice(0, 5).map((label, i) => {
+                    const val = editing.current_check.items?.[i]?.value || "";
+                    const comment = editing.current_check.items?.[i]?.comment || "";
+                    return (
+                      <div key={i} className="grid md:grid-cols-[1fr,220px] gap-2 items-start">
+                        <div>
+                          <div className="text-sm mb-1">{label}</div>
+                          <Textarea
+                            placeholder="Commentaire (optionnel)…"
+                            value={comment}
+                            onChange={(v) => saveChecklistComment(i, v)}
+                            className="mt-1"
+                          />
                         </div>
-                      );
-                    })}
+                        <Select
+                          value={val}
+                          onChange={(v) => saveChecklistItem(i, v)}
+                          options={baseOptions}
+                          placeholder="Sélectionner…"
+                        />
+                      </div>
+                    );
+                  })}
                   <div className="pt-2">
                     <a
                       href={API.nonConformPDF(editing.id)}
@@ -1087,9 +1077,7 @@ function Drawer({ title, children, onClose }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const handler = (e) => {
-      if (e.key === "Escape") onClose();
-    };
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
@@ -1099,9 +1087,7 @@ function Drawer({ title, children, onClose }) {
       <div className="absolute right-0 top-0 h-full w-full sm:w-[640px] bg-white shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold">{title}</h3>
-          <Btn variant="ghost" onClick={onClose}>
-            Fermer
-          </Btn>
+          <Btn variant="ghost" onClick={onClose}>Fermer</Btn>
         </div>
         {children}
       </div>
@@ -1121,23 +1107,14 @@ function DoorFiles({ doorId }) {
       setLoading(false);
     }
   }
-  useEffect(() => {
-    if (doorId) load();
-  }, [doorId]);
+  useEffect(() => { if (doorId) load(); }, [doorId]);
 
   return (
     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {loading && <div className="text-gray-500">Chargement…</div>}
       {!loading && files.length === 0 && <div className="text-gray-500">Aucun fichier.</div>}
       {files.map((f) => (
-        <FileCard
-          key={f.id}
-          f={f}
-          onDelete={async () => {
-            await API.deleteFile(f.id);
-            await load();
-          }}
-        />
+        <FileCard key={f.id} f={f} onDelete={async () => { await API.deleteFile(f.id); await load(); }} />
       ))}
     </div>
   );
@@ -1151,22 +1128,13 @@ function FileCard({ f, onDelete }) {
         {isImage ? <img src={url} alt={f.original_name} className="w-full h-full object-cover" /> : <div className="text-4xl">📄</div>}
       </div>
       <div className="p-3">
-        <div className="text-sm font-medium truncate" title={f.original_name}>
-          {f.original_name}
-        </div>
+        <div className="text-sm font-medium truncate" title={f.original_name}>{f.original_name}</div>
         <div className="text-xs text-gray-500 mt-0.5">{f.mime || "file"}</div>
         <div className="flex items-center gap-2 mt-2">
-          <a
-            href={url}
-            className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition text-xs"
-            download
-          >
+          <a href={url} className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition text-xs" download>
             Télécharger
           </a>
-          <button
-            onClick={onDelete}
-            className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition text-xs"
-          >
+          <button onClick={onDelete} className="px-2 py-1 rounded bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition text-xs">
             Supprimer
           </button>
         </div>
@@ -1207,20 +1175,12 @@ function DoorHistory({ doorId }) {
             <tbody>
               {items.map((h) => (
                 <tr key={h.id} className="border-b align-top">
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    {h.date ? dayjs(h.date).format("DD/MM/YYYY") : "—"}
-                  </td>
+                  <td className="px-3 py-2 whitespace-nowrap">{h.date ? dayjs(h.date).format("DD/MM/YYYY") : "—"}</td>
+                  <td className="px-3 py-2"><Badge color={statusColor(h.status)}>{statusLabel(h.status)}</Badge></td>
                   <td className="px-3 py-2">
-                    <Badge color={statusColor(h.status)}>{statusLabel(h.status)}</Badge>
-                  </td>
-                  <td className="px-3 py-2">
-                    {h.result === "non_conforme" ? (
-                      <Badge color="red">Non conforme</Badge>
-                    ) : h.result === "conforme" ? (
-                      <Badge color="green">Conforme</Badge>
-                    ) : (
-                      <Badge>—</Badge>
-                    )}
+                    {h.result === "conforme" ? <Badge color="green">Conforme</Badge> :
+                     h.result === "non_conforme" ? <Badge color="red">Non conforme</Badge> :
+                     <span className="text-xs text-gray-500">—</span>}
                   </td>
                   <td className="px-3 py-2">
                     <div className="text-xs text-gray-600">
@@ -1234,11 +1194,7 @@ function DoorHistory({ doorId }) {
                           <li key={i}>
                             {it.label} —{" "}
                             <span className="font-medium">
-                              {it.value === "conforme"
-                                ? "Conforme"
-                                : it.value === "non_conforme"
-                                ? "Non conforme"
-                                : "N/A"}
+                              {it.value === "conforme" ? "Conforme" : it.value === "non_conforme" ? "Non conforme" : "N/A"}
                             </span>
                             {it.comment ? <span className="text-gray-500"> — {it.comment}</span> : null}
                           </li>
@@ -1252,13 +1208,8 @@ function DoorHistory({ doorId }) {
                     {!!h.files?.length && (
                       <div className="flex flex-wrap gap-2">
                         {h.files.map((f) => (
-                          <a
-                            key={f.id}
-                            href={f.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
-                          >
+                          <a key={f.id} href={f.url} target="_blank" rel="noreferrer"
+                             className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs">
                             {f.name}
                           </a>
                         ))}
@@ -1267,12 +1218,8 @@ function DoorHistory({ doorId }) {
                   </td>
                   <td className="px-3 py-2">
                     {h.nc_pdf_url ? (
-                      <a
-                        href={h.nc_pdf_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
-                      >
+                      <a href={h.nc_pdf_url} target="_blank" rel="noreferrer"
+                         className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs">
                         Ouvrir
                       </a>
                     ) : (
