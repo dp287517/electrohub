@@ -1,6 +1,58 @@
-/** src/lib/api.js
+/** src/lib/api.js */
+
 /** Base API */
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
+
+/* ---------------- Identity helpers (cookies/localStorage) ---------------- */
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function getIdentity() {
+  // 1) cookies
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+
+  // 2) localStorage keys & JSON
+  try {
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name)  name  = localStorage.getItem("name")  || localStorage.getItem("user.name")  || null;
+
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
+    }
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        const x = eu?.user || eu?.profile || eu;
+        if (!email && x?.email) email = String(x.email);
+        if (!name && (x?.name || x?.displayName)) name = String(x.name || x.displayName);
+      } catch {}
+    }
+  } catch {}
+
+  // 3) fallback: dérive un nom depuis l’email
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) {
+      name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+    }
+  }
+
+  email = email ? String(email).trim() : null;
+  name  = name  ? String(name).trim()  : null;
+  return { email, name };
+}
+function identityHeaders(h = new Headers()) {
+  const { email, name } = getIdentity();
+  if (email && !h.has("X-User-Email")) h.set("X-User-Email", email);
+  if (name  && !h.has("X-User-Name"))  h.set("X-User-Name",  name);
+  return h;
+}
 
 /** Get current site from client-side stored profile (fallback to "Default") */
 function currentSite() {
@@ -12,11 +64,11 @@ function currentSite() {
   }
 }
 
-/** Fetch JSON with automatic X-Site header */
+/** Fetch JSON with automatic X-Site + Identity headers */
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
   const finalUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
-  const headers = new Headers(options.headers || {});
+  const headers = identityHeaders(new Headers(options.headers || {})); // <-- inject identity
   headers.set("X-Site", site);
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -39,7 +91,7 @@ async function jsonFetch(url, options = {}) {
 /** 🔹 Utilitaire bas niveau pour appels JSON "bruts" (multipart S3, etc.) */
 export async function apiBaseFetchJSON(path, options = {}) {
   const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
-  const headers = new Headers(options.headers || {});
+  const headers = identityHeaders(new Headers(options.headers || {})); // <-- inject identity
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const res = await fetch(finalUrl, {
     credentials: "include",
@@ -75,7 +127,8 @@ export async function upload(path, formData /* FormData */) {
   // ne pas fixer Content-Type: le browser s’en charge (multipart boundary)
   const site = currentSite();
   const url = `${API_BASE}${path}`;
-  const res = await fetch(url, { method: "POST", body: formData, credentials: "include", headers: { "X-Site": site } });
+  const headers = identityHeaders(new Headers({ "X-Site": site })); // <-- inject identity pour multipart
+  const res = await fetch(url, { method: "POST", body: formData, credentials: "include", headers });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `HTTP ${res.status}`);
@@ -113,29 +166,24 @@ export const api = {
 
   /** --- PROJECTS (NOUVEAU) --- */
   projects: {
-    // Projets
     list: (params) => get("/api/projects/projects", params),
     create: (payload) => post("/api/projects/projects", payload),
     update: (id, payload) => put(`/api/projects/projects/${id}`, payload),
     remove: (id) => del(`/api/projects/projects/${id}`),
 
-    // Statut (étapes)
     status: (id) => get(`/api/projects/projects/${id}/status`),
     setStatus: (id, payload) => put(`/api/projects/projects/${id}/status`, payload),
 
-    // Upload multi-fichiers historisés par catégorie
     upload: (id, category, formData) =>
       upload(`/api/projects/projects/${id}/upload?category=${encodeURIComponent(category)}`, formData),
     listFiles: (id, category) => get(`/api/projects/projects/${id}/files`, { category }),
-    downloadFile: (file_id) => get(`/api/projects/download`, { file_id }), // renvoie le flux; pour télécharger directement utiliser window.location
+    downloadFile: (file_id) => get(`/api/projects/download`, { file_id }),
 
-    // Lignes financières
     addOffer: (id, payload) => post(`/api/projects/projects/${id}/offer`, payload),
     addOrder: (id, payload) => post(`/api/projects/projects/${id}/order`, payload),
     addInvoice: (id, payload) => post(`/api/projects/projects/${id}/invoice`, payload),
     lines: (id) => get(`/api/projects/projects/${id}/lines`),
 
-    // Analyse & IA
     analysis: (id) => get(`/api/projects/projects/${id}/analysis`),
     assistant: (id, question) => post(`/api/projects/projects/${id}/assistant`, { question }),
     health: () => get(`/api/projects/health`),
@@ -143,49 +191,27 @@ export const api = {
 
   /** --- CONTROLS (MIS À NIVEAU) --- */
   controls: {
-    // ---- Hiérarchie & TSD ----
-    // Nouvelle arborescence (site -> HV / Switchboards / Devices / ATEX -> tâches)
-    hierarchyTree: (params) =>
-      get("/api/controls/hierarchy/tree", { ...(params || {}) }),
-
-    // Debug de détection colonnes (utile en cas d'équipements vides)
+    hierarchyTree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
     hierarchyDebug: () => get("/api/controls/hierarchy/debug"),
-
-    // Métadonnées TSD (catégories/contrôles)
     tsdMeta: () => get("/api/controls/tsd"),
 
-    // ---- Bootstrap / Auto-link ----
-    // Relie entités ↔ équipements et seed (create=1/0, seed=1/0)
     autoLink: ({ create = 1, seed = 1 } = {}) =>
       get("/api/controls/bootstrap/auto-link", { create, seed }),
 
-    // ---- Tâches ----
-    // Liste paginée/filtrée
-    listTasks: (params) =>
-      get("/api/controls/tasks", { ...(params || {}) }),
-
-    // Tâches d'une entité spécifique
-    tasksByEntity: (entity_id, q = "") =>
-      get("/api/controls/tasks", { entity_id, q }),
-
-    // Schéma détaillé de la tâche (checklist, obs, procédure, etc.)
+    listTasks: (params) => get("/api/controls/tasks", { ...(params || {}) }),
+    tasksByEntity: (entity_id, q = "") => get("/api/controls/tasks", { entity_id, q }),
     taskSchema: (id) => get(`/api/controls/tasks/${id}/schema`),
-
-    // Clôture + replanification d'une tâche
     closeTask: (id, payload) => put(`/api/controls/tasks/${id}/close`, payload),
 
-    // Pièce jointe sur une tâche
-    attachToTask: (taskId, file /* File */) => {
+    attachToTask: (taskId, file) => {
       const fd = new FormData();
       fd.append("file", file);
       return upload(`/api/controls/tasks/${taskId}/attachments`, fd);
     },
 
-    // ---- Health ----
     health: () => get(`/api/controls/health`),
 
-    // ---- ALIAS RÉTRO-COMPAT (ne change rien ailleurs) ----
-    // (Si des écrans plus anciens appellent encore ces fonctions)
+    // alias rétro-compat
     tree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
     catalog: (params) => get("/api/controls/tsd", { ...(params || {}) }),
     sync: ({ create = 1, seed = 1 } = {}) =>
@@ -195,26 +221,24 @@ export const api = {
     uploadAttachments: (taskId, files, label) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("file", f));
-      if (label) fd.append("label", label); // ignoré côté backend actuel (sans impact)
+      if (label) fd.append("label", label);
       return upload(`/api/controls/tasks/${taskId}/attachments`, fd);
     },
-    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),   // laissé tel quel si déjà utilisé
-    assistant: (taskId, question) => post(`/api/controls/tasks/${taskId}/assistant`, { question }), // idem
-    history: (params) => get("/api/controls/history", params), // si route absente => 404 contrôlé au runtime
-    records: (params) => get("/api/controls/records", params), // idem
+    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),
+    assistant: (taskId, question) => post(`/api/controls/tasks/${taskId}/assistant`, { question }),
+    history: (params) => get("/api/controls/history", params),
+    records: (params) => get("/api/controls/records", params),
   },
 
   /** --- COMP-EXT (Prestataires externes) — NOUVEAU --- */
   compExt: {
-    // Prestataires (vendors)
-    list: (params) => get("/api/comp-ext/vendors", params),                 // params: { q? }
-    create: (payload) => post("/api/comp-ext/vendors", payload),            // { name, offer_status, jsa_status, pp_applicable, pp_link, access_status, sap_wo, visits[], owner }
-    update: (id, payload) => put(`/api/comp-ext/vendors/${id}`, payload),   // mêmes champs qu'au create (visites remplacées si fourni)
+    list: (params) => get("/api/comp-ext/vendors", params),
+    create: (payload) => post("/api/comp-ext/vendors", payload),
+    update: (id, payload) => put(`/api/comp-ext/vendors/${id}`, payload),
     remove: (id) => del(`/api/comp-ext/vendors/${id}`),
 
-    // Planning
-    calendar: () => get("/api/comp-ext/calendar"),                          // { tasks[], events[] }
-    stats: () => get("/api/comp-ext/stats"),                                // agrégats pour graphes
+    calendar: () => get("/api/comp-ext/calendar"),
+    stats: () => get("/api/comp-ext/stats"),
   },
 
   /** --- ASK VEEVA (upload + search/ask) --- */
@@ -227,41 +251,37 @@ export const api = {
 
   /** --- DOORS (Portes coupe-feu) — NOUVEAU --- */
   doors: {
-    // Portes
     list: (params) => get("/api/doors", params),
     create: (payload) => post("/api/doors", payload),
-    remove: (id, confirmPhrase) => del(`/api/doors/${id}${confirmPhrase ? `?confirm=${encodeURIComponent(confirmPhrase)}` : ""}`),
+    remove: (id, confirmPhrase) =>
+      del(`/api/doors/${id}${confirmPhrase ? `?confirm=${encodeURIComponent(confirmPhrase)}` : ""}`),
 
-    // Cycle d’inspection
     next: (id) => get(`/api/doors/${id}/next`),
     start: (id) => post(`/api/doors/${id}/start`, {}),
     complete: (id, payload) => post(`/api/doors/${id}/complete`, payload),
-    followup: (id, payload) => post(`/api/doors/${id}/followup`, payload), // création action SAP (suivi)
+    followup: (id, payload) => post(`/api/doors/${id}/followup`, payload),
 
-    // Uploads
-    uploadFile: (id, file /* File */) => {
+    uploadFile: (id, file) => {
       const fd = new FormData();
       fd.append("file", file);
       return upload(`/api/doors/${id}/upload`, fd);
     },
-    uploadPhoto: (id, file /* File */) => {
+    uploadPhoto: (id, file) => {
       const fd = new FormData();
       fd.append("photo", file);
       return upload(`/api/doors/${id}/photo`, fd);
     },
 
-    // Templates & fréquence
     templates: () => get("/api/doors/templates"),
     createTemplate: (payload) => post("/api/doors/templates", payload),
     updateTemplate: (id, payload) =>
       jsonFetch(`/api/doors/templates/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
 
-    // Calendrier & alertes
     calendar: () => get("/api/doors/calendar"),
     alerts: () => get("/api/doors/alerts"),
 
-    // Génération/accès PDF (URL helpers)
-    qrcodesUrl: (id, sizes = "80,120,200") => `${API_BASE}/api/doors/${id}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}`,
+    qrcodesUrl: (id, sizes = "80,120,200") =>
+      `${API_BASE}/api/doors/${id}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}`,
     ncReportUrl: (inspectionId) => `${API_BASE}/api/doors/inspections/${inspectionId}/nc.pdf`,
   },
 };
