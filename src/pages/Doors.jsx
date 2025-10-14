@@ -8,7 +8,7 @@ function getCookie(name) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-// NEW: identité robuste (cookies -> localStorage -> JSON "user"/"eh_user" -> fallback depuis l'email)
+// NEW: identité robuste (cookies -> localStorage -> fallback depuis l'email)
 function getIdentity() {
   // 1) cookies (prioritaires si présents)
   let email = getCookie("email") || null;
@@ -29,15 +29,6 @@ function getIdentity() {
         const u = JSON.parse(localStorage.getItem("user"));
         if (!email && u?.email) email = String(u.email);
         if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
-      } catch {}
-    }
-    // 🔹 JSON "eh_user" — manquait avant
-    if ((!email || !name) && localStorage.getItem("eh_user")) {
-      try {
-        const eu = JSON.parse(localStorage.getItem("eh_user"));
-        const euUser = eu?.user || eu?.profile || eu;
-        if (!email && euUser?.email) email = String(euUser.email);
-        if (!name && (euUser?.name || euUser?.displayName)) name = String(euUser.name || euUser.displayName);
       } catch {}
     }
   } catch {}
@@ -456,6 +447,9 @@ export default function Doors() {
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
+  /* ---- versionnement fichiers pour refresh instantané ---- */
+  const [filesVersion, setFilesVersion] = useState(0);
+
   /* ---------- Deep-link helpers (QR) ---------- */
   function getDoorParam() {
     try {
@@ -510,17 +504,6 @@ export default function Doors() {
     reload();
     reloadCalendar();
     loadSettings();
-  }, []);
-
-  // 🔹 Synchronise l’identité vers des cookies si absents (pour compat backend)
-  useEffect(() => {
-    const id = getIdentity();
-    if (id.email && !getCookie("email")) {
-      document.cookie = `email=${encodeURIComponent(id.email)}; path=/`;
-    }
-    if (id.name && !getCookie("name")) {
-      document.cookie = `name=${encodeURIComponent(id.name)}; path=/`;
-    }
   }, []);
 
   // Auto-open door from ?door=<id> (QR deep link)
@@ -678,8 +661,13 @@ export default function Doors() {
     setUploading(true);
     try {
       for (const f of files) await API.uploadFile(editing.id, f);
+      // rafraîchir la fiche (si besoin)
       const full = await API.get(editing.id);
       setEditing(full?.door);
+      // force DoorFiles à recharger immédiatement
+      setFilesVersion((v) => v + 1);
+      // feedback utilisateur
+      setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } finally {
       setUploading(false);
     }
@@ -691,6 +679,7 @@ export default function Doors() {
     const full = await API.get(editing.id);
     setEditing(full?.door);
     await reload();
+    setToast("Photo mise à jour ✅");
   }
 
   /* ------------------ settings save ------------------ */
@@ -1116,7 +1105,7 @@ export default function Doors() {
                   </div>
                 </div>
 
-                <DoorFiles doorId={editing.id} />
+                <DoorFiles doorId={editing.id} version={filesVersion} />
               </div>
             )}
 
@@ -1186,7 +1175,7 @@ function Drawer({ title, children, onClose }) {
   );
 }
 
-function DoorFiles({ doorId }) {
+function DoorFiles({ doorId, version = 0 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   async function load() {
@@ -1198,7 +1187,7 @@ function DoorFiles({ doorId }) {
       setLoading(false);
     }
   }
-  useEffect(() => { if (doorId) load(); }, [doorId]);
+  useEffect(() => { if (doorId) load(); }, [doorId, version]);
 
   return (
     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
