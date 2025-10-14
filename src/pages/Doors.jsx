@@ -92,21 +92,28 @@ const API = {
     (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", ...withHeaders() })).json(),
 
   // Checklist (create/close) + history
-  startCheck: async (doorId) =>
-    (
+  startCheck: async (doorId) => {
+    const id = getIdentity();
+    return (
       await fetch(`/api/doors/doors/${doorId}/checks`, {
         method: "POST",
         ...withHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({}),
+        // >>> ajoute _user pour fallback backend
+        body: JSON.stringify({ _user: id }),
       })
-    ).json(),
+    ).json();
+  },
 
   saveCheck: async (doorId, checkId, payload) => {
+    const id = getIdentity();
     // Backend accepte JSON ou multipart sur la même route.
     if (payload?.files?.length) {
       const fd = new FormData();
       fd.append("items", JSON.stringify(payload.items || []));
       if (payload.close) fd.append("close", "true");
+      // >>> identité en multipart (fallback)
+      if (id.email) fd.append("user_email", id.email);
+      if (id.name) fd.append("user_name", id.name);
       for (const f of payload.files) fd.append("files", f);
       const r = await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
@@ -116,11 +123,12 @@ const API = {
       });
       return r.json();
     }
+    // JSON: ajoute aussi _user pour fallback
     return (
       await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
         ...withHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, _user: id }),
       })
     ).json();
   },
@@ -132,8 +140,12 @@ const API = {
   listFiles: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/files`, withHeaders())).json(),
   uploadFile: async (doorId, file) => {
+    const id = getIdentity();
     const fd = new FormData();
     fd.append("file", file);
+    // >>> identité en multipart (au cas où)
+    if (id.email) fd.append("user_email", id.email);
+    if (id.name) fd.append("user_name", id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/files`, {
       method: "POST",
       credentials: "include",
@@ -147,8 +159,12 @@ const API = {
 
   // Photo vignette
   uploadPhoto: async (doorId, file) => {
+    const id = getIdentity();
     const fd = new FormData();
     fd.append("photo", file);
+    // >>> identité en multipart (au cas où)
+    if (id.email) fd.append("user_email", id.email);
+    if (id.name) fd.append("user_name", id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/photo`, {
       method: "POST",
       credentials: "include",
