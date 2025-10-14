@@ -40,7 +40,7 @@ const QRCODES_DIR = path.join(DATA_ROOT, "qrcodes");
 await fsp.mkdir(FILES_DIR, { recursive: true });
 await fsp.mkdir(QRCODES_DIR, { recursive: true });
 
-// Multer (fichiers & photos partagent le même répertoire)
+// Multer
 const uploadAny = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, FILES_DIR),
@@ -105,22 +105,26 @@ async function ensureSchema() {
       started_at TIMESTAMPTZ,
       closed_at TIMESTAMPTZ,
       due_date DATE NOT NULL,
-      items JSONB NOT NULL DEFAULT '[]'::jsonb,      -- [{index,label,value,comment?}]
-      status TEXT,                                    -- ok | nc
-      result_counts JSONB DEFAULT '{}'::jsonb,        -- {conforme, nc, na}
+      items JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{index,label,value,comment?}]
+      status TEXT,                                 -- ok | nc
+      result_counts JSONB DEFAULT '{}'::jsonb,     -- {conforme, nc, na}
       pdf_nc_path TEXT,
+      closed_by_email TEXT,
+      closed_by_name TEXT,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_email TEXT;`);
+  await pool.query(`ALTER TABLE fd_checks ADD COLUMN IF NOT EXISTS closed_by_name TEXT;`);
 
   // Files (door-level & check-level)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fd_files (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       door_id UUID REFERENCES fd_doors(id) ON DELETE CASCADE,
-      inspection_id UUID,                             -- nullable, lié à fd_checks.id
-      kind TEXT,                                      -- 'door' | 'check' | 'photo'
+      inspection_id UUID,
+      kind TEXT,                                   -- 'door' | 'check' | 'photo'
       filename TEXT,
       path TEXT,
       mime TEXT,
@@ -128,18 +132,22 @@ async function ensureSchema() {
       uploaded_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  // Migrations idempotentes
   await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS inspection_id UUID;`);
   await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS kind TEXT;`);
   await pool.query(`ALTER TABLE fd_doors ADD COLUMN IF NOT EXISTS photo_path TEXT;`);
 
-  // Indexes utiles (idempotents)
+  // Indexes
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_fd_checks_door_due
       ON fd_checks(door_id, due_date) WHERE closed_at IS NULL;
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fd_files_door ON fd_files(door_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fd_files_insp ON fd_files(inspection_id);`);
+
+  // Petit index utile pour lookuper le dernier contrôle clos
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_fd_checks_door_closed ON fd_checks(door_id, closed_at DESC) WHERE closed_at IS NOT NULL;
+  `);
 }
 
 // ------------------------------
@@ -191,6 +199,35 @@ async function getSettings() {
   return rows[0] || { checklist_template: [], frequency: "1_an" };
 }
 
+// User detection
+function readCookie(req, name) {
+  const raw = req.headers?.cookie || "";
+  const m = raw.match(new RegExp(`(?:^|; )${name}=([^;]+)`));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function safeEmail(s) {
+  if (!s) return null;
+  const x = String(s).trim().toLowerCase();
+  return /\S+@\S+\.\S+/.test(x) ? x : null;
+}
+async function currentUser(req) {
+  const email =
+    safeEmail(req.headers["x-user-email"]) ||
+    safeEmail(req.headers["x-auth-email"]) ||
+    safeEmail(readCookie(req, "email")) ||
+    null;
+  if (!email) return { email: null, name: null };
+  try {
+    const { rows } = await pool.query(
+      `SELECT name FROM users WHERE lower(email)=lower($1) LIMIT 1`,
+      [email]
+    );
+    return { email, name: rows[0]?.name || null };
+  } catch {
+    return { email, name: null };
+  }
+}
+
 // Planifie un "pending" si aucun :
 // - si AUCUN check n'existe pour la porte → due J+30
 // - sinon (déjà un historique mais pas de pending) → due + fréquence
@@ -228,7 +265,7 @@ async function ensureDoorQRCode(doorId, name, size = 512) {
   return file;
 }
 
-async function createNcPdf(outPath, door, check) {
+async function createNcPdf(outPath, door, check, inspectorName = null) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: "A4", margin: 36 });
     const ws = fs.createWriteStream(outPath);
@@ -241,6 +278,7 @@ async function createNcPdf(outPath, door, check) {
     const loc = [door.building, door.floor, door.location].filter(Boolean).join(" • ");
     doc.text(`Localisation : ${loc || "-"}`);
     doc.text(`Date : ${new Date().toLocaleDateString()}`);
+    if (inspectorName) doc.text(`Inspecteur : ${inspectorName}`);
     doc.moveDown();
 
     const nc = (check.items || []).filter((it) => it.value === "non_conforme");
@@ -248,7 +286,7 @@ async function createNcPdf(outPath, door, check) {
       doc.fontSize(12).text("Aucune non-conformité.");
     } else {
       nc.forEach((it, i) => {
-        doc.fontSize(14).text(`${i + 1}. ${it.label}`);
+        doc.fontSize(14).text(`${i + 1}. ${it.label || "-"}`);
         if (it.comment) doc.moveDown(0.25).fontSize(11).fillColor("#333").text(`Commentaire : ${it.comment}`).fillColor("black");
         doc.moveDown(0.5);
       });
@@ -267,6 +305,31 @@ function fileRowToClient(f) {
     download_url: `/api/doors/files/${f.id}/download`,
     inline_url: `/api/doors/files/${f.id}/download`,
   };
+}
+
+function normalizeItemsWithLabels(items, template) {
+  const tpl = Array.isArray(template) ? template : [];
+  const map = new Map((items || []).map((it) => [Number(it.index), it]));
+  // S’assure que 5 premières questions existent avec label
+  for (let i = 0; i < 5; i++) {
+    const prev = map.get(i) || { index: i };
+    const label = prev.label || tpl[i] || `Point ${i + 1}`;
+    map.set(i, { ...prev, label });
+  }
+  // Nettoie et ordonne
+  const merged = Array.from(map.values()).sort((a, b) => a.index - b.index);
+  return merged.map((it) => ({
+    index: Number(it.index),
+    label: String(it.label || ""),
+    value: it.value ?? null,
+    comment: it.comment ?? undefined,
+  }));
+}
+
+function allFiveFilled(items) {
+  const vals = (items || []).slice(0, 5).map((i) => i?.value);
+  if (vals.length < 5) return false;
+  return vals.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
 }
 
 // ------------------------------
@@ -331,20 +394,32 @@ app.put("/api/doors/settings", async (req, res) => {
 // ------------------------------
 app.get("/api/doors/doors", async (req, res) => {
   try {
-    const { q = "", status = "", building = "", floor = "" } = req.query || {};
+    const { q = "", status = "", building = "", floor = "", door_state = "" } = req.query || {};
 
     const { rows } = await pool.query(
       `
+      WITH last_closed AS (
+        SELECT DISTINCT ON (door_id)
+               door_id, status
+          FROM fd_checks
+         WHERE closed_at IS NOT NULL
+         ORDER BY door_id, closed_at DESC
+      )
       SELECT d.id, d.name, d.building, d.floor, d.location, d.photo_path,
              (SELECT started_at IS NOT NULL AND closed_at IS NULL FROM fd_checks c WHERE c.door_id=d.id ORDER BY due_date ASC LIMIT 1) AS has_started,
-             (SELECT due_date FROM fd_checks c WHERE c.door_id=d.id AND c.closed_at IS NULL ORDER BY due_date ASC LIMIT 1) AS next_due
+             (SELECT due_date FROM fd_checks c WHERE c.door_id=d.id AND c.closed_at IS NULL ORDER BY due_date ASC LIMIT 1) AS next_due,
+             CASE WHEN lc.status = 'nc' THEN 'non_conforme'
+                  WHEN lc.status = 'ok' THEN 'conforme'
+                  ELSE NULL END AS door_state
       FROM fd_doors d
+      LEFT JOIN last_closed lc ON lc.door_id = d.id
       WHERE ($1 = '' OR d.name ILIKE '%'||$1||'%' OR d.location ILIKE '%'||$1||'%' OR d.building ILIKE '%'||$1||'%' OR d.floor ILIKE '%'||$1||'%')
         AND ($2 = '' OR d.building ILIKE '%'||$2||'%')
         AND ($3 = '' OR d.floor ILIKE '%'||$3||'%')
+        AND ($4 = '' OR (CASE WHEN lc.status='nc' THEN 'non_conforme' WHEN lc.status='ok' THEN 'conforme' ELSE '' END) = $4)
       ORDER BY d.name ASC
     `,
-      [q, building, floor]
+      [q, building, floor, door_state]
     );
 
     const items = rows
@@ -359,6 +434,7 @@ app.get("/api/doors/doors", async (req, res) => {
           status: st,
           next_check_date: r.next_due || null,
           photo_url: r.photo_path ? `/api/doors/doors/${r.id}/photo` : null,
+          door_state: r.door_state, // conforme | non_conforme | null
         };
       })
       .filter((it) => !status || it.status === status);
@@ -393,6 +469,7 @@ app.post("/api/doors/doors", async (req, res) => {
         ...door,
         next_check_date: due,
         photo_url: null,
+        door_state: null,
       },
     });
   } catch (e) {
@@ -408,6 +485,7 @@ app.get("/api/doors/doors/:id", async (req, res) => {
     const door = rows[0];
     if (!door) return res.status(404).json({ ok: false, error: "not_found" });
 
+    // pending
     const { rows: cur } = await pool.query(
       `SELECT id, started_at, closed_at, due_date, items
          FROM fd_checks
@@ -418,6 +496,14 @@ app.get("/api/doors/doors/:id", async (req, res) => {
     const check = cur[0] || null;
     const hasStarted = !!(check && check.started_at && !check.closed_at);
     const status = computeDoorStatus(check?.due_date || null, hasStarted);
+
+    // last closed → door_state
+    const { rows: last } = await pool.query(
+      `SELECT status FROM fd_checks WHERE door_id=$1 AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 1`,
+      [door.id]
+    );
+    const door_state =
+      last[0]?.status === "ok" ? "conforme" : last[0]?.status === "nc" ? "non_conforme" : null;
 
     res.json({
       ok: true,
@@ -430,6 +516,7 @@ app.get("/api/doors/doors/:id", async (req, res) => {
         status,
         next_check_date: check?.due_date || null,
         photo_url: door.photo_path ? `/api/doors/doors/${door.id}/photo` : null,
+        door_state,
         current_check: check
           ? {
               id: check.id,
@@ -499,7 +586,6 @@ app.post(
         `UPDATE fd_doors SET photo_path=$1, updated_at=now() WHERE id=$2`,
         [req.file.path, req.params.id]
       );
-      // trace aussi dans fd_files
       await pool.query(
         `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes)
          VALUES($1, NULL, 'photo', $2, $3, $4, $5)`,
@@ -587,36 +673,33 @@ async function handlePutCheck(req, res) {
     if (!current)
       return res.status(404).json({ ok: false, error: "check_not_found" });
 
+    // Récup template (pour labels)
+    const settings = await getSettings();
+
     // Fusion des items
     let incomingItems = [];
     if (req.is("multipart/form-data")) {
-      // items dans champ "items" (JSON)
       if (req.body?.items) {
-        try {
-          incomingItems = JSON.parse(req.body.items);
-        } catch {
-          incomingItems = [];
-        }
+        try { incomingItems = JSON.parse(req.body.items); } catch { incomingItems = []; }
       }
     } else {
       incomingItems = Array.isArray(req.body?.items) ? req.body.items : [];
     }
 
-    const map = new Map(
-      (current.items || []).map((it) => [Number(it.index), it])
-    );
+    // normalisation + labels
+    const mergedMap = new Map((current.items || []).map((it) => [Number(it.index), it]));
     (incomingItems || []).forEach((it) => {
       const idx = Number(it.index);
-      const prev =
-        map.get(idx) || { index: idx, label: it.label || (map.get(idx)?.label ?? "") };
-      map.set(idx, {
-        ...prev,
-        value: it.value ?? prev.value,
-        comment: it.comment ?? prev.comment,
-        label: prev.label || it.label || "",
+      const prev = mergedMap.get(idx) || { index: idx };
+      mergedMap.set(idx, {
+        index: idx,
+        label: prev.label || it.label || settings.checklist_template?.[idx] || `Point ${idx + 1}`,
+        value: it.value ?? prev.value ?? null,
+        comment: it.comment ?? prev.comment ?? undefined,
       });
     });
-    const merged = Array.from(map.values()).sort((a, b) => a.index - b.index);
+    let merged = Array.from(mergedMap.values()).sort((a, b) => a.index - b.index);
+    merged = normalizeItemsWithLabels(merged, settings.checklist_template);
 
     // Upload éventuel de fichiers liés au contrôle
     const files = req.files || [];
@@ -643,10 +726,11 @@ async function handlePutCheck(req, res) {
       );
     }
 
-    // Clôture ?
-    const close =
-      (req.body && req.body.close) ||
-      merged.length >= 5 && merged.every((it) => it.value === "conforme");
+    // Clôture : *dès que les 5 items ont une valeur* (Conforme / Non conforme / N/A)
+    const bodyClose = !!(req.body && req.body.close);
+    const close = bodyClose || allFiveFilled(merged);
+
+    const { email: userEmail, name: userName } = await currentUser(req);
 
     let closedRow = null;
     let notice = null;
@@ -654,7 +738,7 @@ async function handlePutCheck(req, res) {
     if (close) {
       // Comptage
       const counts = { conforme: 0, nc: 0, na: 0 };
-      for (const it of merged) {
+      for (const it of merged.slice(0, 5)) {
         if (it.value === "conforme") counts.conforme++;
         else if (it.value === "non_conforme") counts.nc++;
         else counts.na++;
@@ -674,22 +758,22 @@ async function handlePutCheck(req, res) {
           DATA_ROOT,
           `NC_${door.name.replace(/[^\w.-]+/g, "_")}_${Date.now()}.pdf`
         );
-        await createNcPdf(out, door, { items: merged });
+        await createNcPdf(out, door, { items: merged }, userName || userEmail || undefined);
         pdfPath = out;
       }
 
       const { rows: upd } = await pool.query(
         `UPDATE fd_checks
-           SET items=$1, closed_at=now(), status=$2, result_counts=$3, pdf_nc_path=$4, updated_at=now()
-         WHERE id=$5
+           SET items=$1, closed_at=now(), status=$2, result_counts=$3, pdf_nc_path=$4,
+               closed_by_email=$5, closed_by_name=$6, updated_at=now()
+         WHERE id=$7
          RETURNING *`,
-        [JSON.stringify(merged), status, counts, pdfPath, checkId]
+        [JSON.stringify(merged), status, counts, pdfPath, userEmail, userName, checkId]
       );
       closedRow = upd[0];
 
       // Prochain contrôle selon fréquence
-      const s = await getSettings();
-      const months = FREQ_TO_MONTHS[s.frequency] || 12;
+      const months = FREQ_TO_MONTHS[settings.frequency] || 12;
       const nextDue = addMonthsISO(todayISO(), months);
       await pool.query(
         `INSERT INTO fd_checks(door_id, due_date) VALUES($1,$2)`,
@@ -706,11 +790,8 @@ async function handlePutCheck(req, res) {
       );
     }
 
-    // Renvoie la fiche mise à jour
-    const { rows: dR } = await pool.query(
-      `SELECT * FROM fd_doors WHERE id=$1`,
-      [doorId]
-    );
+    // Renvoie la fiche mise à jour + door_state (dernier clos)
+    const { rows: dR } = await pool.query(`SELECT * FROM fd_doors WHERE id=$1`, [doorId]);
     const door = dR[0];
 
     const { rows: pend } = await pool.query(
@@ -724,6 +805,13 @@ async function handlePutCheck(req, res) {
     const hasStarted = !!(c && c.started_at && !c.closed_at);
     const statusDoor = computeDoorStatus(c?.due_date || null, hasStarted);
 
+    const { rows: last } = await pool.query(
+      `SELECT status FROM fd_checks WHERE door_id=$1 AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 1`,
+      [doorId]
+    );
+    const door_state =
+      last[0]?.status === "ok" ? "conforme" : last[0]?.status === "nc" ? "non_conforme" : null;
+
     res.json({
       ok: true,
       notice,
@@ -736,11 +824,12 @@ async function handlePutCheck(req, res) {
         status: statusDoor,
         next_check_date: c?.due_date || null,
         photo_url: door.photo_path ? `/api/doors/doors/${door.id}/photo` : null,
+        door_state,
         current_check: c
           ? {
               id: c.id,
               items: c.items,
-              itemsView: (await getSettings()).checklist_template,
+              itemsView: settings.checklist_template,
             }
           : null,
       },
@@ -753,14 +842,13 @@ async function handlePutCheck(req, res) {
 
 // JSON
 app.put("/api/doors/doors/:id/checks/:checkId", handlePutCheck);
-// multipart (items + files[])
+// multipart (items + files[]), route alternative
 app.put(
   "/api/doors/doors/:id/checks/:checkId/multipart",
   uploadAny.array("files", 20),
   handlePutCheck
 );
-
-// Pour compatibilité avec le front qui envoie multipart sur la même URL :
+// Compat : multipart sur même URL
 app.put(
   "/api/doors/doors/:id/checks/:checkId",
   uploadAny.array("files", 20),
@@ -771,7 +859,7 @@ app.put(
 app.get("/api/doors/doors/:id/history", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT c.id, c.closed_at, c.status, c.result_counts, c.items, c.pdf_nc_path
+      `SELECT c.id, c.closed_at, c.status, c.result_counts, c.items, c.pdf_nc_path, c.closed_by_email, c.closed_by_name
          FROM fd_checks c
         WHERE c.door_id=$1 AND c.closed_at IS NOT NULL
         ORDER BY c.closed_at DESC`,
@@ -792,15 +880,24 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
       return acc;
     }, {});
 
-    const checks = rows.map((r) => ({
-      id: r.id,
-      date: r.closed_at,
-      status: r.status === "ok" ? STATUS.FAIT : STATUS.EN_RETARD,
-      counts: r.result_counts || {},
-      items: r.items || [],
-      files: filesByCheck[r.id] || [],
-      nc_pdf_url: r.pdf_nc_path ? `/api/doors/doors/${req.params.id}/nonconformities.pdf` : null,
-    }));
+    // Normalise labels pour l’historique (sécurité si anciens enregistrements manquants)
+    const settings = await getSettings();
+    const checks = rows.map((r) => {
+      const items = normalizeItemsWithLabels(r.items || [], settings.checklist_template);
+      const statusHist = r.status === "ok" ? STATUS.FAIT : STATUS.EN_RETARD;
+      const username = r.closed_by_name || r.closed_by_email || "-";
+      return {
+        id: r.id,
+        date: r.closed_at,
+        status: statusHist,
+        counts: r.result_counts || {},
+        items,
+        files: filesByCheck[r.id] || [],
+        nc_pdf_url: r.pdf_nc_path ? `/api/doors/doors/${req.params.id}/nonconformities.pdf` : null,
+        user: username,
+      };
+    });
+
     res.json({ ok: true, checks });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -813,7 +910,10 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
 app.get("/api/doors/doors/:id/files", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, filename, path, mime, size_bytes FROM fd_files WHERE door_id=$1 AND (inspection_id IS NULL OR kind='door') ORDER BY uploaded_at DESC`,
+      `SELECT id, filename, path, mime, size_bytes
+         FROM fd_files
+        WHERE door_id=$1 AND (inspection_id IS NULL OR kind='door')
+        ORDER BY uploaded_at DESC`,
       [req.params.id]
     );
     const files = rows.map(fileRowToClient);
