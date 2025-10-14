@@ -28,17 +28,11 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(helmet());
 
-// CORS élargi (headers identité)
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-    allowedHeaders: ["Content-Type", "X-User-Email", "X-User-Name"],
-    exposedHeaders: [],
-  })
-);
+// CORS large (laisse passer les headers demandés par le client)
+app.use(cors({ origin: true, credentials: true }));
 
 app.use(express.json({ limit: "16mb" }));
+app.use(express.urlencoded({ extended: true })); // au cas où (form-encoded)
 
 const PORT = Number(process.env.FIRE_DOORS_PORT || 3016);
 const HOST = process.env.FIRE_DOORS_HOST || "0.0.0.0";
@@ -252,28 +246,48 @@ function safeEmail(s) {
   return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
 
-// PATCH: enrichir la détection d'utilisateur pour renseigner "Effectué par"
+// ----------- IDENTITÉ UTILISATEUR (PATCH COMPLET) -----------
 async function currentUser(req) {
-  const rawEmail =
+  // 1) Headers explicites
+  let rawEmail =
     req.headers["x-user-email"] ||
     req.headers["x-auth-email"] ||
-    req.headers["x-forwarded-user"] || // ex. reverse proxy / SSO
-    readCookie(req, "email") ||
-    // >>> fallback: champs envoyés dans le body (JSON OU multipart)
-    (req.body && (req.body.user_email || req.body.email || (req.body._user && req.body._user.email))) ||
     null;
 
-  const rawName =
+  let rawName =
     req.headers["x-user-name"] ||
     req.headers["x-auth-name"] ||
-    req.headers["x-forwarded-user"] || // peut contenir un nom côté proxy
-    // >>> fallback: champs envoyés dans le body (JSON OU multipart)
-    (req.body && (req.body.user_name || req.body.name || (req.body._user && req.body._user.name))) ||
     null;
 
-  const email = safeEmail(rawEmail); // peut être null si invalide
+  // proxy SSO parfois dans x-forwarded-user (peut contenir email OU nom)
+  const xfwd = req.headers["x-forwarded-user"] || null;
+
+  // 2) Body JSON (_user) OU champs multipart (user_email / user_name)
+  try {
+    if (req.body && typeof req.body === "object") {
+      if (req.body._user) {
+        if (!rawEmail && req.body._user.email) rawEmail = req.body._user.email;
+        if (!rawName && req.body._user.name) rawName = req.body._user.name;
+      }
+      if (!rawEmail && req.body.user_email) rawEmail = req.body.user_email;
+      if (!rawName && req.body.user_name) rawName = req.body.user_name;
+    }
+  } catch {}
+
+  // 3) Cookies
+  if (!rawEmail) rawEmail = readCookie(req, "email");
+  if (!rawName) rawName = readCookie(req, "name");
+
+  // 4) x-forwarded-user intelligemment
+  if (xfwd) {
+    if (!rawEmail && /\S+@\S+\.\S+/.test(String(xfwd))) rawEmail = xfwd;
+    if (!rawName && !/\S+@\S+\.\S+/.test(String(xfwd))) rawName = xfwd;
+  }
+
+  const email = safeEmail(rawEmail);
   let name = rawName ? String(rawName).trim() : null;
 
+  // 5) Fallback DB users.name via email
   if (!name && email) {
     try {
       const { rows } = await pool.query(
@@ -283,6 +297,18 @@ async function currentUser(req) {
       name = rows[0]?.name || null;
     } catch {}
   }
+
+  // 6) Dernier fallback: dériver depuis l'email
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) {
+      name = base
+        .replace(/[._-]+/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim();
+    }
+  }
+
   return { email, name };
 }
 
@@ -347,8 +373,7 @@ async function createNcPdf(outPath, door, check, inspectorName = null) {
     } else {
       nc.forEach((it, i) => {
         doc.fontSize(14).text(`${i + 1}. ${it.label || "-"}`);
-        doc.moveDown(0.25).fontSize(11).fillColor("#333")
-          .text(`Résultat : Non conforme`);
+        doc.moveDown(0.25).fontSize(11).fillColor("#333").text(`Résultat : Non conforme`);
         if (it.comment) {
           doc.moveDown(0.15).text(`Commentaire : ${it.comment}`);
         }
@@ -865,7 +890,7 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
     const settings = await getSettings();
     const checks = rows.map((r) => {
       const items = normalizeItemsWithLabels(r.items || [], settings.checklist_template);
-      const username = r.closed_by_name || r.closed_by_email || "—";
+      const username = (r.closed_by_name || r.closed_by_email || "—").trim() || "—";
       const result = r.status === "ok" ? "conforme" : "non_conforme";
       const statusHist = STATUS.FAIT; // un contrôle clos = Fait (affichage)
       const ncPdf =
@@ -906,6 +931,22 @@ app.get("/api/doors/doors/:id/files", async (req, res) => {
     );
     const files = rows.map(fileRowToClient);
     res.json({ ok: true, files });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// (optionnel) si tu utilises l’upload door-level côté front:
+app.post("/api/doors/doors/:id/files", uploadAny.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "file_required" });
+    const buf = await fsp.readFile(req.file.path);
+    await pool.query(
+      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
+       VALUES($1, NULL, 'door', $2, $3, $4, $5, $6)`,
+      [req.params.id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]
+    );
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
