@@ -28,11 +28,17 @@ const app = express();
 app.set("trust proxy", 1);
 app.use(helmet());
 
-// CORS large (laisse passer les headers demandés par le client)
-app.use(cors({ origin: true, credentials: true }));
+// CORS élargi (headers identité + X-Site pour compat avec api.js)
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    allowedHeaders: ["Content-Type", "X-User-Email", "X-User-Name", "X-Site"],
+    exposedHeaders: [],
+  })
+);
 
 app.use(express.json({ limit: "16mb" }));
-app.use(express.urlencoded({ extended: true })); // au cas où (form-encoded)
 
 const PORT = Number(process.env.FIRE_DOORS_PORT || 3016);
 const HOST = process.env.FIRE_DOORS_HOST || "0.0.0.0";
@@ -215,7 +221,6 @@ function publicOrigin(req) {
 }
 const DEFAULT_APP_PATH = process.env.FIRE_DOORS_QR_APP_PATH || "/app/doors";
 function qrDeepLink(req, doorId) {
-  // Si PUBLIC_BASE est défini, on l’utilise (avec ou sans /app/doors)
   const envBase = process.env.PUBLIC_BASE;
   if (envBase) {
     try {
@@ -225,11 +230,8 @@ function qrDeepLink(req, doorId) {
         return `${base}?door=${doorId}`;
       }
       return `${base}${DEFAULT_APP_PATH}?door=${doorId}`;
-    } catch {
-      // PUBLIC_BASE n'est pas une URL valide -> on ignore
-    }
+    } catch {}
   }
-  // Sinon, on se base sur le domaine public courant
   const origin = publicOrigin(req);
   return `${origin}${DEFAULT_APP_PATH}?door=${doorId}`;
 }
@@ -246,66 +248,57 @@ function safeEmail(s) {
   return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
 
-// ----------- IDENTITÉ UTILISATEUR (PATCH COMPLET) -----------
+// ==== PATCH identité : headers → cookies → body/json → multipart → users → fallback
 async function currentUser(req) {
-  // 1) Headers explicites
-  let rawEmail =
+  // 1) HEADERS / COOKIES
+  const rawEmail =
     req.headers["x-user-email"] ||
     req.headers["x-auth-email"] ||
+    req.headers["x-forwarded-user"] ||
+    readCookie(req, "email") ||
     null;
 
-  let rawName =
+  const rawName =
     req.headers["x-user-name"] ||
     req.headers["x-auth-name"] ||
+    req.headers["x-forwarded-user"] ||
+    readCookie(req, "name") ||
     null;
 
-  // proxy SSO parfois dans x-forwarded-user (peut contenir email OU nom)
-  const xfwd = req.headers["x-forwarded-user"] || null;
-
-  // 2) Body JSON (_user) OU champs multipart (user_email / user_name)
+  // 2) BODY / MULTIPART
+  let bodyEmail = null, bodyName = null;
   try {
-    if (req.body && typeof req.body === "object") {
-      if (req.body._user) {
-        if (!rawEmail && req.body._user.email) rawEmail = req.body._user.email;
-        if (!rawName && req.body._user.name) rawName = req.body._user.name;
+    if (req.body) {
+      if (req.body._user && typeof req.body._user === "object") {
+        bodyEmail = req.body._user.email || null;
+        bodyName  = req.body._user.name  || null;
       }
-      if (!rawEmail && req.body.user_email) rawEmail = req.body.user_email;
-      if (!rawName && req.body.user_name) rawName = req.body.user_name;
+      if (req.body.user_email) bodyEmail = req.body.user_email;
+      if (req.body.user_name)  bodyName  = req.body.user_name;
     }
   } catch {}
 
-  // 3) Cookies
-  if (!rawEmail) rawEmail = readCookie(req, "email");
-  if (!rawName) rawName = readCookie(req, "name");
+  const email = safeEmail(rawEmail || bodyEmail);
+  let name = (rawName || bodyName) ? String(rawName || bodyName).trim() : null;
 
-  // 4) x-forwarded-user intelligemment
-  if (xfwd) {
-    if (!rawEmail && /\S+@\S+\.\S+/.test(String(xfwd))) rawEmail = xfwd;
-    if (!rawName && !/\S+@\S+\.\S+/.test(String(xfwd))) rawName = xfwd;
-  }
-
-  const email = safeEmail(rawEmail);
-  let name = rawName ? String(rawName).trim() : null;
-
-  // 5) Fallback DB users.name via email
+  // 3) lookup DB users si email connu mais pas de name
   if (!name && email) {
     try {
       const { rows } = await pool.query(
         `SELECT name FROM users WHERE lower(email)=lower($1) LIMIT 1`,
         [email]
       );
-      name = rows[0]?.name || null;
-    } catch {}
+      name = rows?.[0]?.name || null;
+    } catch {
+      // table users absente -> ignore
+    }
   }
 
-  // 6) Dernier fallback: dériver depuis l'email
+  // 4) fallback lisible depuis l'email
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
     if (base) {
-      name = base
-        .replace(/[._-]+/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase())
-        .trim();
+      name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, c => c.toUpperCase()).trim();
     }
   }
 
@@ -373,7 +366,8 @@ async function createNcPdf(outPath, door, check, inspectorName = null) {
     } else {
       nc.forEach((it, i) => {
         doc.fontSize(14).text(`${i + 1}. ${it.label || "-"}`);
-        doc.moveDown(0.25).fontSize(11).fillColor("#333").text(`Résultat : Non conforme`);
+        doc.moveDown(0.25).fontSize(11).fillColor("#333")
+          .text(`Résultat : Non conforme`);
         if (it.comment) {
           doc.moveDown(0.15).text(`Commentaire : ${it.comment}`);
         }
@@ -399,7 +393,6 @@ function fileRowToClient(f) {
 function normalizeItemsWithLabels(items, template) {
   const tpl = Array.isArray(template) ? template : [];
   const map = new Map((items || []).map((it) => [Number(it.index), it]));
-  // garantit 5 labels
   for (let i = 0; i < 5; i++) {
     const prev = map.get(i) || { index: i };
     const label = prev.label || tpl[i] || `Point ${i + 1}`;
@@ -429,6 +422,20 @@ app.get("/api/doors/health", async (_req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ------------------------------
+// Debug identité (utile pour vérifier headers/body/cookies)
+// ------------------------------
+app.get("/api/doors/_debug_identity", (req, res) => {
+  res.json({
+    headers: {
+      "x-user-email": req.headers["x-user-email"] || null,
+      "x-user-name": req.headers["x-user-name"] || null,
+      cookie: req.headers["cookie"] || null,
+    },
+    body: req.body || null,
+  });
 });
 
 // ------------------------------
@@ -630,7 +637,6 @@ app.post("/api/doors/doors/:id/photo", uploadAny.single("photo"), async (req, re
     if (!req.file) return res.status(400).json({ error: "photo requise" });
     const buf = await fsp.readFile(req.file.path);
 
-    // fd_files avec contenu DB
     const { rows: ins } = await pool.query(
       `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
        VALUES($1, NULL, 'photo', $2, $3, $4, $5, $6)
@@ -639,7 +645,6 @@ app.post("/api/doors/doors/:id/photo", uploadAny.single("photo"), async (req, re
     );
     const fileId = ins[0].id;
 
-    // lien "courant" sur fd_doors
     await pool.query(
       `UPDATE fd_doors SET photo_path=$1, photo_file_id=$2, updated_at=now() WHERE id=$3`,
       [req.file.path, fileId, req.params.id]
@@ -672,7 +677,7 @@ app.get("/api/doors/doors/:id/photo", async (req, res) => {
         return res.end(f.content, "binary");
       }
     }
-    // 2) disque (fallback)
+    // 2) disque
     if (row.photo_path && fs.existsSync(row.photo_path)) {
       res.setHeader("Content-Type", "image/*");
       return res.sendFile(path.resolve(row.photo_path));
@@ -681,6 +686,79 @@ app.get("/api/doors/doors/:id/photo", async (req, res) => {
     return res.status(404).send("no_photo");
   } catch (e) {
     res.status(500).send("err");
+  }
+});
+
+// ------------------------------
+// Files  • /api/doors/doors/:id/files
+// ------------------------------
+
+// NEW: upload door-level file (copie binaire en DB)
+app.post("/api/doors/doors/:id/files", uploadAny.single("file"), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: "file_required" });
+    const buf = await fsp.readFile(req.file.path);
+    await pool.query(
+      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
+       VALUES($1, NULL, 'door', $2, $3, $4, $5, $6)`,
+      [req.params.id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get("/api/doors/doors/:id/files", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, filename, path, mime, size_bytes
+         FROM fd_files
+        WHERE door_id=$1 AND (inspection_id IS NULL OR kind='door')
+        ORDER BY uploaded_at DESC`,
+      [req.params.id]
+    );
+    const files = rows.map(fileRowToClient);
+    res.json({ ok: true, files });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// PATCH: servir depuis la DB d'abord (puis disque)
+app.get("/api/doors/files/:fileId/download", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT path, filename, mime, content FROM fd_files WHERE id=$1`,
+      [req.params.fileId]
+    );
+    const f = rows[0];
+    if (!f) return res.status(404).send("file");
+
+    if (f.content) {
+      res.setHeader("Content-Type", f.mime || "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
+      return res.end(f.content, "binary");
+    }
+    if (f.path && fs.existsSync(f.path)) {
+      res.setHeader("Content-Type", f.mime || "application/octet-stream");
+      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
+      return res.sendFile(path.resolve(f.path));
+    }
+    return res.status(404).send("file");
+  } catch (e) {
+    res.status(500).send("err");
+  }
+});
+
+app.delete("/api/doors/files/:fileId", async (req, res) => {
+  try {
+    const { rows } = await pool.query(`DELETE FROM fd_files WHERE id=$1 RETURNING path`, [req.params.fileId]);
+    const p = rows[0]?.path;
+    if (p && fs.existsSync(p)) fs.unlink(p, () => {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -771,6 +849,7 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
     const bodyClose = !!(req.body && req.body.close);
     const close = bodyClose || allFiveFilled(merged);
 
+    // identité (headers/cookies/body/multipart/users)
     const { email: userEmail, name: userName } = await currentUser(req);
 
     let closedRow = null;
@@ -890,9 +969,9 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
     const settings = await getSettings();
     const checks = rows.map((r) => {
       const items = normalizeItemsWithLabels(r.items || [], settings.checklist_template);
-      const username = (r.closed_by_name || r.closed_by_email || "—").trim() || "—";
+      const username = r.closed_by_name || r.closed_by_email || "—";
       const result = r.status === "ok" ? "conforme" : "non_conforme";
-      const statusHist = STATUS.FAIT; // un contrôle clos = Fait (affichage)
+      const statusHist = STATUS.FAIT;
       const ncPdf =
         r.status === "nc" && r.pdf_nc_path
           ? `/api/doors/doors/${req.params.id}/nonconformities.pdf`
@@ -912,80 +991,6 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
     });
 
     res.json({ ok: true, checks });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// ------------------------------
-// Files  • /api/doors/doors/:id/files
-// ------------------------------
-app.get("/api/doors/doors/:id/files", async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, filename, path, mime, size_bytes
-         FROM fd_files
-        WHERE door_id=$1 AND (inspection_id IS NULL OR kind='door')
-        ORDER BY uploaded_at DESC`,
-      [req.params.id]
-    );
-    const files = rows.map(fileRowToClient);
-    res.json({ ok: true, files });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// (optionnel) si tu utilises l’upload door-level côté front:
-app.post("/api/doors/doors/:id/files", uploadAny.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ ok: false, error: "file_required" });
-    const buf = await fsp.readFile(req.file.path);
-    await pool.query(
-      `INSERT INTO fd_files(door_id, inspection_id, kind, filename, path, mime, size_bytes, content)
-       VALUES($1, NULL, 'door', $2, $3, $4, $5, $6)`,
-      [req.params.id, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, buf]
-    );
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// PATCH: servir depuis la DB d'abord (puis disque)
-app.get("/api/doors/files/:fileId/download", async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT path, filename, mime, content FROM fd_files WHERE id=$1`,
-      [req.params.fileId]
-    );
-    const f = rows[0];
-    if (!f) return res.status(404).send("file");
-
-    // 1) DB d'abord
-    if (f.content) {
-      res.setHeader("Content-Type", f.mime || "application/octet-stream");
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
-      return res.end(f.content, "binary");
-    }
-    // 2) disque (fallback)
-    if (f.path && fs.existsSync(f.path)) {
-      res.setHeader("Content-Type", f.mime || "application/octet-stream");
-      res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(f.filename)}"`);
-      return res.sendFile(path.resolve(f.path));
-    }
-    return res.status(404).send("file");
-  } catch (e) {
-    res.status(500).send("err");
-  }
-});
-
-app.delete("/api/doors/files/:fileId", async (req, res) => {
-  try {
-    const { rows } = await pool.query(`DELETE FROM fd_files WHERE id=$1 RETURNING path`, [req.params.fileId]);
-    const p = rows[0]?.path;
-    if (p && fs.existsSync(p)) fs.unlink(p, () => {});
-    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -1026,7 +1031,6 @@ app.get("/api/doors/doors/:id/nonconformities.pdf", async (req, res) => {
     if (!row) return res.status(404).send("no_history");
 
     if (row.status === "ok") {
-      // Génère un PDF "zéro NC" (utile pour export SAP)
       const tmp = path.join(DATA_ROOT, `NC_${row.name.replace(/[^\w.-]+/g, "_")}_${Date.now()}.pdf`);
       await createNcPdf(tmp, row, { items: [] });
       res.setHeader("Content-Type", "application/pdf");
@@ -1120,7 +1124,7 @@ app.get("/api/doors/alerts", async (_req, res) => {
         overdue: Number(c.overdue || 0),
         due_30: Number(c.due_30 || 0),
         pending: Number(c.pending || 0),
-        last_nc: Number(c.last_nc || 0),  // portes dont le dernier contrôle est NC
+        last_nc: Number(c.last_nc || 0),
       },
     });
   } catch (e) {
