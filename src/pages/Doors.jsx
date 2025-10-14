@@ -8,7 +8,7 @@ function getCookie(name) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-// NEW: identité robuste (cookies -> localStorage -> fallback depuis l'email)
+// NEW: identité robuste (cookies -> localStorage -> JSON "user"/"eh_user" -> fallback depuis l'email)
 function getIdentity() {
   // 1) cookies (prioritaires si présents)
   let email = getCookie("email") || null;
@@ -29,6 +29,15 @@ function getIdentity() {
         const u = JSON.parse(localStorage.getItem("user"));
         if (!email && u?.email) email = String(u.email);
         if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
+    }
+    // 🔹 JSON "eh_user" — manquait avant
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        const euUser = eu?.user || eu?.profile || eu;
+        if (!email && euUser?.email) email = String(euUser.email);
+        if (!name && (euUser?.name || euUser?.displayName)) name = String(euUser.name || euUser.displayName);
       } catch {}
     }
   } catch {}
@@ -501,6 +510,17 @@ export default function Doors() {
     reload();
     reloadCalendar();
     loadSettings();
+  }, []);
+
+  // 🔹 Synchronise l’identité vers des cookies si absents (pour compat backend)
+  useEffect(() => {
+    const id = getIdentity();
+    if (id.email && !getCookie("email")) {
+      document.cookie = `email=${encodeURIComponent(id.email)}; path=/`;
+    }
+    if (id.name && !getCookie("name")) {
+      document.cookie = `name=${encodeURIComponent(id.name)}; path=/`;
+    }
   }, []);
 
   // Auto-open door from ?door=<id> (QR deep link)
