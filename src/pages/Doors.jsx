@@ -389,6 +389,28 @@ export default function Doors() {
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
+  /* ---------- Deep-link helpers (QR) ---------- */
+  function getDoorParam() {
+    try {
+      return new URLSearchParams(window.location.search).get("door");
+    } catch {
+      return null;
+    }
+  }
+  function setDoorParam(id) {
+    try {
+      const url = new URL(window.location.href);
+      if (id) url.searchParams.set("door", id);
+      else url.searchParams.delete("door");
+      window.history.replaceState({}, "", url);
+    } catch {}
+  }
+  function closeDrawerAndClearParam() {
+    setDrawerOpen(false);
+    setEditing(null);
+    setDoorParam(null);
+  }
+
   // -------- data loaders
   async function reload() {
     setLoading(true);
@@ -423,6 +445,31 @@ export default function Doors() {
     loadSettings();
   }, []);
 
+  // Auto-open door from ?door=<id> (QR deep link)
+  useEffect(() => {
+    const targetId = getDoorParam();
+    if (!targetId) return;
+
+    (async () => {
+      const full = await API.get(targetId).catch(() => null);
+      if (full?.door?.id) {
+        setEditing(full.door);
+        setDrawerOpen(true);
+      } else {
+        // ID invalide -> on nettoie le paramètre
+        setDoorParam(null);
+      }
+    })();
+
+    // Réagit aux navigations back/forward
+    const onPop = () => {
+      const id = getDoorParam();
+      if (!id) closeDrawerAndClearParam();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
   // Live filter (debounce)
   useEffect(() => {
     const t = setTimeout(() => {
@@ -454,6 +501,7 @@ export default function Doors() {
     const full = await API.get(door.id);
     setEditing(full?.door || door);
     setDrawerOpen(true);
+    setDoorParam(door.id);
   }
   async function saveDoorBase() {
     if (!editing) return;
@@ -848,7 +896,10 @@ export default function Doors() {
 
       {/* Drawer: fiche porte + checklist + fichiers + QR */}
       {drawerOpen && editing && (
-        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={() => { setDrawerOpen(false); setEditing(null); }}>
+        <Drawer
+          title={`Porte • ${editing.name || "nouvelle"}`}
+          onClose={closeDrawerAndClearParam}
+        >
           <div className="space-y-4">
             {/* Base info */}
             <div className="grid sm:grid-cols-2 gap-3">
