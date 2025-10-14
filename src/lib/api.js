@@ -1,3 +1,4 @@
+/** src/lib/api.js
 /** Base API */
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
 
@@ -222,5 +223,45 @@ export const api = {
     job: (id) => get(`/api/ask-veeva/jobs/${id}`),
     search: (payload) => post("/api/ask-veeva/search", payload),
     ask: (payload) => post("/api/ask-veeva/ask", payload),
+  },
+
+  /** --- DOORS (Portes coupe-feu) — NOUVEAU --- */
+  doors: {
+    // Portes
+    list: (params) => get("/api/doors", params),
+    create: (payload) => post("/api/doors", payload),
+    remove: (id, confirmPhrase) => del(`/api/doors/${id}${confirmPhrase ? `?confirm=${encodeURIComponent(confirmPhrase)}` : ""}`),
+
+    // Cycle d’inspection
+    next: (id) => get(`/api/doors/${id}/next`),
+    start: (id) => post(`/api/doors/${id}/start`, {}),
+    complete: (id, payload) => post(`/api/doors/${id}/complete`, payload),
+    followup: (id, payload) => post(`/api/doors/${id}/followup`, payload), // création action SAP (suivi)
+
+    // Uploads
+    uploadFile: (id, file /* File */) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload(`/api/doors/${id}/upload`, fd);
+    },
+    uploadPhoto: (id, file /* File */) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/doors/${id}/photo`, fd);
+    },
+
+    // Templates & fréquence
+    templates: () => get("/api/doors/templates"),
+    createTemplate: (payload) => post("/api/doors/templates", payload),
+    updateTemplate: (id, payload) =>
+      jsonFetch(`/api/doors/templates/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+
+    // Calendrier & alertes
+    calendar: () => get("/api/doors/calendar"),
+    alerts: () => get("/api/doors/alerts"),
+
+    // Génération/accès PDF (URL helpers)
+    qrcodesUrl: (id, sizes = "80,120,200") => `${API_BASE}/api/doors/${id}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}`,
+    ncReportUrl: (inspectionId) => `${API_BASE}/api/doors/inspections/${inspectionId}/nc.pdf`,
   },
 };
