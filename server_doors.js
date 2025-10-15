@@ -44,7 +44,25 @@ const __dirname = path.dirname(__filename);
 // ------------------------------
 const app = express();
 app.set("trust proxy", 1);
-app.use(helmet());
+
+// 🔐 Helmet — CSP assouplie pour PDF/worker/pdf.js
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        "default-src": ["'self'"],
+        "object-src": ["'self'", "blob:"], // <embed> PDF si fallback
+        "img-src": ["'self'", "data:", "blob:"],
+        "worker-src": ["'self'", "blob:"],
+        "script-src": ["'self'", "'unsafe-inline'"], // front Vite/inline handlers
+        "style-src": ["'self'", "'unsafe-inline'"],
+        "connect-src": ["'self'", "*"], // API_BASE éventuel
+      },
+    },
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
 
 // CORS élargi (headers identité + X-Site pour compat avec api.js)
 app.use(
@@ -220,7 +238,6 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  // unicité naturelle : 1 porte = 1 position par (plan,page)
   await pool.query(`
     DO $$
     BEGIN
@@ -233,7 +250,6 @@ async function ensureSchema() {
     END $$;
   `);
 
-  // Indexes
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_fd_checks_door_due
       ON fd_checks(door_id, due_date) WHERE closed_at IS NULL;
@@ -331,9 +347,8 @@ function safeEmail(s) {
   return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
 
-// ==== Identité: headers → cookies → body/json → multipart → users → fallback
+// ==== Identité
 async function currentUser(req) {
-  // 1) HEADERS / COOKIES
   const rawEmail =
     req.headers["x-user-email"] ||
     req.headers["x-auth-email"] ||
@@ -348,7 +363,6 @@ async function currentUser(req) {
     readCookie(req, "name") ||
     null;
 
-  // 2) BODY / MULTIPART
   let bodyEmail = null, bodyName = null;
   try {
     if (req.body) {
@@ -364,7 +378,6 @@ async function currentUser(req) {
   const email = safeEmail(rawEmail || bodyEmail);
   let name = (rawName || bodyName) ? String(rawName || bodyName).trim() : null;
 
-  // 3) lookup DB users si email connu mais pas de name
   if (!name && email) {
     try {
       const { rows } = await pool.query(
@@ -372,12 +385,9 @@ async function currentUser(req) {
         [email]
       );
       name = rows?.[0]?.name || null;
-    } catch {
-      // table users absente -> ignore
-    }
+    } catch {}
   }
 
-  // 4) fallback lisible depuis l'email
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
     if (base) {
@@ -947,14 +957,12 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
       );
     }
 
-    // Clôture?
     const wantsCloseRaw = req.body && req.body.close;
     const bodyClose = typeof wantsCloseRaw === "string"
       ? ["1","true","yes","on"].includes(wantsCloseRaw.toLowerCase())
       : !!wantsCloseRaw;
     const close = bodyClose || allFiveFilled(merged);
 
-    // identité (headers/cookies/body/multipart/users)
     const { email: userEmail, name: userName } = await currentUser(req);
 
     let closedRow = null;
@@ -1001,7 +1009,6 @@ app.put("/api/doors/doors/:id/checks/:checkId", uploadAny.array("files", 20), as
       await pool.query(`UPDATE fd_checks SET items=$1, updated_at=now() WHERE id=$2`, [JSON.stringify(merged), checkId]);
     }
 
-    // Recharger la fiche
     const { rows: dR } = await pool.query(`SELECT * FROM fd_doors WHERE id=$1`, [doorId]);
     const door = dR[0];
 
@@ -1157,8 +1164,8 @@ app.get("/api/doors/doors/:id/nonconformities.pdf", async (req, res) => {
 });
 
 /* ========================================================================
-   💡 AJOUT : PDF QR avec cadre blanc + texte à gauche (auto-fit)
-   Route : GET /api/doors/doors/:id/qrcodes.pdf?sizes=120,200&force=0
+   💡 PDF QR avec cadre blanc + texte à gauche (auto-fit)
+   GET /api/doors/doors/:id/qrcodes.pdf?sizes=120,200&force=0
    ======================================================================== */
 app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
   try {
@@ -1167,7 +1174,6 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
       .map((s) => Math.max(64, Math.min(1024, Number(s) || 120)));
     const force = String(req.query.force || "") === "1";
 
-    // 1) Charger la porte
     const { rows } = await pool.query(
       `SELECT id, name, building, floor, location FROM fd_doors WHERE id=$1`,
       [req.params.id]
@@ -1181,7 +1187,6 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
       [door.building, door.floor, door.location].filter(Boolean).join(" • ") ||
       `Porte ${door.id}`;
 
-    // 2) Préparer PDF
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -1190,14 +1195,11 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
     const doc = new PDFDocument({ autoFirstPage: false });
     doc.pipe(res);
 
-    // Helper: calcul des tailles de polices qui tiennent en largeur et hauteur
     function fitLabelSizes({ boxW, boxH }) {
-      // tailles cibles (seront réduites si nécessaire)
       let sizeBrand = Math.min(32, Math.max(14, Math.floor(boxH * 0.22)));
       let sizeName  = Math.min(18, Math.max(10, Math.floor(boxH * 0.16)));
       const gap = Math.max(6, Math.floor(boxH * 0.08));
 
-      // On réduit jusqu'à ce que ça passe
       for (let i = 0; i < 60; i++) {
         doc.font("Helvetica-Bold").fontSize(sizeBrand);
         const wBrand = doc.widthOfString(brand);
@@ -1225,12 +1227,11 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
       return { sizeBrand: Math.max(12, sizeBrand), sizeName: Math.max(9, sizeName), gap: Math.max(6, gap) };
     }
 
-    // 3) Pour chaque taille demandée, une page
     for (const qrSize of sizes) {
       const margin = 36;
       const colGap = 24;
 
-      const cardPad = Math.max(10, Math.floor(qrSize * 0.10)); // padding visuel
+      const cardPad = Math.max(10, Math.floor(qrSize * 0.10));
       const cardW = qrSize + cardPad * 2;
       const cardH = qrSize + cardPad * 2;
 
@@ -1349,7 +1350,7 @@ app.get("/api/doors/alerts", async (_req, res) => {
 
     res.json({
       ok: true,
-      level,               // ok | warn | danger
+      level,
       message,
       counts: {
         overdue: Number(c.overdue || 0),
@@ -1364,12 +1365,7 @@ app.get("/api/doors/alerts", async (_req, res) => {
 });
 
 /* ========================================================================
-   🔹 AJOUTS Maps — API /api/doors/maps/*
-   - uploadZip : reçoit un ZIP contenant des PDF (arborescence préservée)
-   - plans     : liste les derniers plans par logical_name (+ compte actions)
-   - plan/:id/file : stream le PDF
-   - rename    : met à jour display_name
-   - positions : CRUD léger (set sur /:doorId + list)
+   🔹 MAPS — API /api/doors/maps/*
    ======================================================================== */
 
 /** Upload ZIP de plans */
@@ -1384,7 +1380,6 @@ app.post("/api/doors/maps/uploadZip", uploadZip.single("zip"), async (req, res) 
     const files = Object.values(entries).filter(e => !e.isDirectory && /\.pdf$/i.test(e.name));
 
     for (const entry of files) {
-      // extrait vers un tmp, puis déplace en STORE
       const tmpOut = path.join(MAPS_INCOMING_DIR, crypto.randomUUID() + ".pdf");
       await zip.extract(entry.name, tmpOut);
 
@@ -1397,13 +1392,11 @@ app.post("/api/doors/maps/uploadZip", uploadZip.single("zip"), async (req, res) 
 
       const page_count = await pdfPageCount(dest).catch(() => 1);
 
-      // enregistrement du plan (versionnée)
       await pool.query(
         `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count)
          VALUES ($1,$2,$3,$4,$5)`,
         [logical, version, entry.name, dest, page_count]
       );
-      // nom d'affichage par défaut
       await pool.query(
         `INSERT INTO fd_plan_names (logical_name, display_name)
          VALUES ($1,$2) ON CONFLICT (logical_name) DO NOTHING`,
@@ -1464,14 +1457,32 @@ app.get("/api/doors/maps/plans", async (_req, res) => {
     ORDER BY n.display_name ASC;
     `;
     const { rows } = await pool.query(q);
-    res.json({ ok: true, plans: rows });
+    // Compat frontend (lit r.items)
+    res.json({ ok: true, plans: rows, items: rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-/** Stream d’un plan PDF (par id de fd_plans) */
-app.get("/api/doors/maps/plan/:id/file", async (req, res) => {
+/** Stream d’un plan PDF — par logical_name (dernier) */
+app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
+  try {
+    const logical = String(req.params.logical || "");
+    if (!logical) return res.status(400).send("logical");
+    const { rows } = await pool.query(
+      `SELECT file_path FROM fd_plans WHERE logical_name=$1 ORDER BY created_at DESC LIMIT 1`,
+      [logical]
+    );
+    const p = rows[0]?.file_path;
+    if (!p || !fs.existsSync(p)) return res.status(404).send("not_found");
+    res.type("application/pdf").sendFile(path.resolve(p));
+  } catch (e) {
+    res.status(500).send("err");
+  }
+});
+
+/** (Rétro-compat) Stream d’un plan PDF par id (ancien front) */
+app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
   try {
     const { rows } = await pool.query(`SELECT file_path FROM fd_plans WHERE id=$1`, [req.params.id]);
     const p = rows[0]?.file_path;
@@ -1507,7 +1518,6 @@ app.get("/api/doors/maps/positions", async (req, res) => {
     const pageIndex = Number(req.query.page_index || 0);
     if (!logical) return res.status(400).json({ ok: false, error: "logical_name requis" });
 
-    // on renvoie aussi un statut calculé vite fait à partir du pending check
     const q = `
       WITH pend AS (
         SELECT door_id, due_date
@@ -1526,7 +1536,17 @@ app.get("/api/doors/maps/positions", async (req, res) => {
        WHERE p.plan_logical_name=$1 AND p.page_index=$2
     `;
     const { rows } = await pool.query(q, [logical, pageIndex]);
-    res.json({ ok: true, items: rows });
+
+    // Compat: items + points (x/y au lieu de x_frac/y_frac)
+    const points = rows.map(r => ({
+      door_id: r.door_id,
+      door_name: r.name,
+      x: Number(r.x_frac ?? 0),
+      y: Number(r.y_frac ?? 0),
+      status: r.status,
+    }));
+
+    res.json({ ok: true, items: rows, points });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -1536,18 +1556,19 @@ app.get("/api/doors/maps/positions", async (req, res) => {
 app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
   try {
     const doorId = req.params.doorId;
-    const { logical_name, page_index = 0, page_label = null, x_frac, y_frac } = req.body || {};
-    if (!logical_name || x_frac == null || y_frac == null) {
+    const { logical_name, page_index = 0, page_label = null, x_frac, y_frac, x, y } = req.body || {};
+    const xf = x_frac != null ? x_frac : x;
+    const yf = y_frac != null ? y_frac : y;
+    if (!logical_name || xf == null || yf == null) {
       return res.status(400).json({ ok: false, error: "coords/logical requis" });
     }
 
-    // UPSERT via contrainte d’unicité (door_id, logical_name, page_index)
     await pool.query(
       `INSERT INTO fd_door_positions (door_id, plan_logical_name, page_index, page_label, x_frac, y_frac)
        VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (door_id, plan_logical_name, page_index)
        DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, page_label=EXCLUDED.page_label, updated_at=now()`,
-      [doorId, logical_name, Number(page_index || 0), page_label, Number(x_frac), Number(y_frac)]
+      [doorId, logical_name, Number(page_index || 0), page_label, Number(xf), Number(yf)]
     );
 
     res.json({ ok: true });
