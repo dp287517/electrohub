@@ -241,12 +241,69 @@ export const api = {
     stats: () => get("/api/comp-ext/stats"),
   },
 
-  /** --- ASK VEEVA (upload + search/ask) --- */
+  /** --- ASK VEEVA (upload + search/ask + nouveaux endpoints) --- */
   askVeeva: {
+    // Santé / jobs
     health: () => get("/api/ask-veeva/health"),
     job: (id) => get(`/api/ask-veeva/jobs/${id}`),
+
+    // Profil & personnalisation
+    me: () => get("/api/ask-veeva/me"),
+    initUser: (payload) => post("/api/ask-veeva/initUser", payload), // {name, role, sector, (opt) email}
+    personalize: () => post("/api/ask-veeva/personalize", {}),
+
+    // Journalisation & feedback
+    logEvent: (payload) => post("/api/ask-veeva/logEvent", payload),
+    feedback: (payload) => post("/api/ask-veeva/feedback", payload),
+
+    // Synonymes
+    updateSynonyms: (payload) => post("/api/ask-veeva/synonyms/update", payload),
+
+    // Recherche / suggestion de documents
     search: (payload) => post("/api/ask-veeva/search", payload),
+    findDocs: (q) => get("/api/ask-veeva/find-docs", { q }),
+
+    // Q/R
     ask: (payload) => post("/api/ask-veeva/ask", payload),
+
+    // Pysearch bridge
+    pysearch: {
+      health: () => get("/api/ask-veeva/pysearch/health"),
+      compare: (payload) => post("/api/ask-veeva/pysearch/compare", payload),
+      reindex: (payload = {}) => post("/api/ask-veeva/pysearch/reindex", payload),
+    },
+
+    // Upload simple (ZIP ou fichier)
+    uploadZip: (file) => {
+      const fd = new FormData();
+      fd.append("zip", file);
+      return upload("/api/ask-veeva/uploadZip", fd);
+    },
+    uploadFile: (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload("/api/ask-veeva/uploadFile", fd);
+    },
+
+    // Upload chunké (ZIP splitté côté client)
+    chunked: {
+      init: ({ filename, size }) => post("/api/ask-veeva/chunked/init", { filename, size }),
+      part: (uploadId, partNumber, blob) => {
+        const fd = new FormData();
+        fd.append("chunk", blob);
+        // NB: query params pour partNumber
+        return upload(`/api/ask-veeva/chunked/part?uploadId=${encodeURIComponent(uploadId)}&partNumber=${encodeURIComponent(partNumber)}`, fd);
+      },
+      complete: ({ uploadId, totalParts, originalName }) =>
+        post("/api/ask-veeva/chunked/complete", { uploadId, totalParts, originalName }),
+      abort: ({ uploadId, upto }) =>
+        post("/api/ask-veeva/chunked/abort", { uploadId, upto }),
+    },
+
+    // Fichiers / preview
+    fileMeta: (id) => get(`/api/ask-veeva/filemeta/${id}`),
+    fileUrl: (id) => `${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`,
+    previewUrl: (id) => `${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`,
   },
 
   /** --- DOORS (Portes coupe-feu) — NOUVEAU --- */
