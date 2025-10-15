@@ -238,6 +238,13 @@ const MAPS = {
     return r.json();
   },
 
+  // Nouvelle méthode pour portes non positionnées
+  pendingPositions: async (logical_name, page_index = 0) => {
+    const params = { logical_name, page_index };
+    const r = await fetch(`/api/doors/maps/pending-positions?${new URLSearchParams(params)}`, withHeaders());
+    return r.json();
+  },
+
   // setPosition: on envoie aussi plan_id si dispo (le backend peut l’ignorer si non supporté)
   setPosition: async (doorId, payload) =>
     (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
@@ -767,15 +774,12 @@ export default function Doors() {
   const [plans, setPlans] = useState([]); // {id, logical_name, display_name, page_count, actions_next_30, overdue}
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null); // plan object
-  const [planPage, setPlanPage] = useState(0);
+  const planPage = 0; // Fixé à la première page
   const [positions, setPositions] = useState([]); // [{door_id, x_frac,y_frac,status,name}]
   const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
 
   // NEW: portes non positionnées (dans ce plan/page) + sélection pour placement
-  const unplaced = useMemo(
-    () => (positions || []).filter((p) => p.x_frac == null || p.y_frac == null),
-    [positions]
-  );
+  const [unplacedDoors, setUnplacedDoors] = useState([]); // [{door_id, door_name}]
   const [pendingPlaceDoorId, setPendingPlaceDoorId] = useState(null);
 
   async function loadPlans() {
@@ -801,6 +805,17 @@ export default function Doors() {
     if (selectedPlan) {
       loadPositions(selectedPlan, planPage);
       setPendingPlaceDoorId(null); // reset mode placement à chaque changement
+    }
+  }, [selectedPlan, planPage]);
+
+  // NEW: Chargement des portes non positionnées via la nouvelle API
+  useEffect(() => {
+    if (selectedPlan) {
+      (async () => {
+        const key = selectedPlan.logical_name || "";
+        const r = await MAPS.pendingPositions(key, planPage).catch(() => ({ pending: [] }));
+        setUnplacedDoors(Array.isArray(r?.pending) ? r.pending : []);
+      })();
     }
   }, [selectedPlan, planPage]);
 
@@ -1031,7 +1046,7 @@ export default function Doors() {
             }}
             onPick={(plan) => {
               setSelectedPlan(plan);
-              setPlanPage(0);
+              // planPage est fixe à 0, pas de setPlanPage
               setPdfReady(false);
             }}
           />
@@ -1043,38 +1058,23 @@ export default function Doors() {
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Select
-                    value={String(planPage)}
-                    onChange={(v) => setPlanPage(Number(v))}
-                    options={Array.from(
-                      { length: Number(selectedPlan.page_count || 1) },
-                      (_, i) => ({ value: String(i), label: `Page ${i + 1}` })
-                    )}
-                  />
-                  {/* ✅ lien PDF original par ID/UUID si disponible */}
-                  <a
-                    href={planFileUrlSafe(selectedPlan)}
-                    target="_blank" rel="noreferrer"
-                    className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                  >
-                    Ouvrir le PDF original
-                  </a>
+                  {/* Dropdown pages supprimé, page fixe à 0 */}
                 </div>
               </div>
 
               {/* Bandeau portes en attente de positionnement */}
               <div className="mt-3 p-2 rounded-xl border bg-amber-50/60">
                 <div className="text-sm text-amber-700 font-medium">
-                  Portes en attente de positionnement ({unplaced.length})
+                  Portes en attente de positionnement ({unplacedDoors.length})
                 </div>
-                {!unplaced.length && (
+                {!unplacedDoors.length && (
                   <div className="text-xs text-amber-700/80 mt-1">
                     Aucune porte en attente pour cette page.
                   </div>
                 )}
-                {!!unplaced.length && (
+                {!!unplacedDoors.length && (
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {unplaced.map((p) => (
+                    {unplacedDoors.map((p) => (
                       <button
                         key={p.door_id}
                         className={`px-2 py-1 rounded-md border text-xs transition ${
@@ -1087,7 +1087,7 @@ export default function Doors() {
                         }
                         title="Cliquer puis cliquer sur le plan pour placer"
                       >
-                        Placer • {p.name || p.door_id}
+                        Placer • {p.door_name}
                       </button>
                     ))}
                     {pendingPlaceDoorId && (
@@ -1103,7 +1103,7 @@ export default function Doors() {
                 {!!pendingPlaceDoorId && (
                   <div className="text-xs text-amber-700/90 mt-2">
                     Astuce : cliquez/touchez l’endroit souhaité sur le plan pour déposer « {
-                      unplaced.find(u => u.door_id === pendingPlaceDoorId)?.name || "porte"
+                      unplacedDoors.find(u => u.door_id === pendingPlaceDoorId)?.door_name || "porte"
                     } ».
                   </div>
                 )}
@@ -1978,10 +1978,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         {/* Fallback lisible */}
         {pageSize.w === 0 && (
           <div className="p-3 text-sm text-gray-600">
-            {err || "Aperçu indisponible."}{" "}
-            <a className="text-blue-700 underline" href={fileUrl} target="_blank" rel="noreferrer">
-              Ouvrir le PDF
-            </a>
+            {err || "Aperçu indisponible."}
           </div>
         )}
       </div>
