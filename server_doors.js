@@ -16,6 +16,24 @@ import pg from "pg";
 import QRCode from "qrcode";
 import PDFDocument from "pdfkit";
 
+// 🔹 AJOUTS Maps
+import crypto from "crypto";
+import StreamZip from "node-stream-zip";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+// pdf.js (legacy) pour compter les pages PDF
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+function resolvePdfWorker() {
+  try {
+    return require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  } catch {
+    return require.resolve("pdfjs-dist/build/pdf.worker.mjs");
+  }
+}
+pdfjsLib.GlobalWorkerOptions.workerSrc = resolvePdfWorker();
+const pdfjsPkgDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
+const PDF_STANDARD_FONTS = path.join(pdfjsPkgDir, "standard_fonts/");
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -50,6 +68,13 @@ const QRCODES_DIR = path.join(DATA_ROOT, "qrcodes");
 await fsp.mkdir(FILES_DIR, { recursive: true });
 await fsp.mkdir(QRCODES_DIR, { recursive: true });
 
+// 🔹 AJOUTS Maps — arborescence
+const MAPS_ROOT = path.join(DATA_ROOT, "maps");
+const MAPS_INCOMING_DIR = path.join(MAPS_ROOT, "incoming");
+const MAPS_STORE_DIR = path.join(MAPS_ROOT, "plans"); // stockage final des PDF des plans
+await fsp.mkdir(MAPS_INCOMING_DIR, { recursive: true });
+await fsp.mkdir(MAPS_STORE_DIR, { recursive: true });
+
 // Multer
 const uploadAny = multer({
   storage: multer.diskStorage({
@@ -58,6 +83,16 @@ const uploadAny = multer({
       cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`),
   }),
   limits: { fileSize: 50 * 1024 * 1024 },
+});
+
+// 🔹 AJOUTS Maps — Multer ZIP (300MB)
+const uploadZip = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, MAPS_INCOMING_DIR),
+    filename: (_req, file, cb) =>
+      cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`),
+  }),
+  limits: { fileSize: 300 * 1024 * 1024 },
 });
 
 // ------------------------------
@@ -149,6 +184,54 @@ async function ensureSchema() {
   await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS inspection_id UUID;`);
   await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS kind TEXT;`);
   await pool.query(`ALTER TABLE fd_files ADD COLUMN IF NOT EXISTS content BYTEA;`);
+
+  // 🔹 AJOUTS Maps — tables plans, noms, positions
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fd_plans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      logical_name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      filename TEXT,
+      file_path TEXT,
+      page_count INT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_logical_idx ON fd_plans(logical_name);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_created_idx ON fd_plans(created_at DESC);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fd_plan_names (
+      logical_name TEXT PRIMARY KEY,
+      display_name TEXT
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fd_door_positions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      door_id UUID REFERENCES fd_doors(id) ON DELETE CASCADE,
+      plan_logical_name TEXT NOT NULL,
+      page_index INT NOT NULL DEFAULT 0,
+      page_label TEXT,
+      x_frac NUMERIC,
+      y_frac NUMERIC,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  // unicité naturelle : 1 porte = 1 position par (plan,page)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'fd_door_positions_uniq'
+      ) THEN
+        ALTER TABLE fd_door_positions
+        ADD CONSTRAINT fd_door_positions_uniq UNIQUE (door_id, plan_logical_name, page_index);
+      END IF;
+    END $$;
+  `);
 
   // Indexes
   await pool.query(`
@@ -409,6 +492,25 @@ function allFiveFilled(items) {
   const vals = (items || []).slice(0, 5).map((i) => i?.value);
   if (vals.length < 5) return false;
   return vals.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
+}
+
+// 🔹 AJOUTS Maps — helpers nom et pages
+function nowISOStamp() {
+  const d = new Date();
+  return d.toISOString().slice(0, 16).replace("T", "_").replace(/:/g, "");
+}
+// Nom logique = avant "__", version = après "__" sinon timestamp
+function parsePlanName(fn = "") {
+  const base = path.basename(fn).replace(/\.pdf$/i, "");
+  const m = base.split("__");
+  return { logical: m[0], version: m[1] || nowISOStamp() };
+}
+async function pdfPageCount(abs) {
+  const data = new Uint8Array(await fsp.readFile(abs));
+  const doc = await pdfjsLib.getDocument({ data, standardFontDataUrl: PDF_STANDARD_FONTS }).promise;
+  const n = doc.numPages || 1;
+  await doc.cleanup();
+  return n;
 }
 
 // ------------------------------
@@ -1057,9 +1159,6 @@ app.get("/api/doors/doors/:id/nonconformities.pdf", async (req, res) => {
 /* ========================================================================
    💡 AJOUT : PDF QR avec cadre blanc + texte à gauche (auto-fit)
    Route : GET /api/doors/doors/:id/qrcodes.pdf?sizes=120,200&force=0
-   - Carte blanche avec QR à droite.
-   - À gauche, "HALEON" (gras) puis le nom de la porte.
-   - Le texte est automatiquement réduit pour rester aligné à la hauteur du QR.
    ======================================================================== */
 app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
   try {
@@ -1098,15 +1197,13 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
       let sizeName  = Math.min(18, Math.max(10, Math.floor(boxH * 0.16)));
       const gap = Math.max(6, Math.floor(boxH * 0.08));
 
-      // On réduit jusqu'à ce que ça passe en largeur ET en hauteur
+      // On réduit jusqu'à ce que ça passe
       for (let i = 0; i < 60; i++) {
-        // Largeur
         doc.font("Helvetica-Bold").fontSize(sizeBrand);
         const wBrand = doc.widthOfString(brand);
         doc.font("Helvetica").fontSize(sizeName);
         const wName = doc.widthOfString(doorLabel);
 
-        // Hauteur (avec wrap)
         doc.font("Helvetica-Bold").fontSize(sizeBrand);
         const hBrand = doc.heightOfString(brand, { width: boxW, align: "left" });
         doc.font("Helvetica").fontSize(sizeName);
@@ -1114,13 +1211,12 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
 
         const totalH = hBrand + gap + hName;
 
-        const okWidth = wBrand <= boxW && wName <= boxW * 1.15; // on autorise un léger wrap sur le nom
+        const okWidth = wBrand <= boxW && wName <= boxW * 1.15;
         const okHeight = totalH <= boxH;
 
         if (okWidth && okHeight) {
           return { sizeBrand, sizeName, gap };
         }
-        // réduire progressivement
         if (!okHeight && sizeBrand > 12) sizeBrand -= 1;
         if (!okHeight && sizeName > 9) sizeName -= 1;
         if (!okWidth && sizeBrand > 12 && wBrand > boxW) sizeBrand -= 1;
@@ -1131,16 +1227,14 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
 
     // 3) Pour chaque taille demandée, une page
     for (const qrSize of sizes) {
-      // Colonnes : [texte] | [carte QR]
       const margin = 36;
       const colGap = 24;
 
-      // On aligne la hauteur du bloc texte sur la hauteur du QR (cadre inclus)
-      const cardPad = Math.max(10, Math.floor(qrSize * 0.10)); // 10% padding visuel
+      const cardPad = Math.max(10, Math.floor(qrSize * 0.10)); // padding visuel
       const cardW = qrSize + cardPad * 2;
       const cardH = qrSize + cardPad * 2;
 
-      const textBoxW = Math.max(140, Math.min(420, qrSize)); // colonne texte carrée,  ~taille du QR
+      const textBoxW = Math.max(140, Math.min(420, qrSize));
       const textBoxH = cardH;
 
       const pageW = margin * 2 + textBoxW + colGap + cardW;
@@ -1151,41 +1245,33 @@ app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
         margins: { left: margin, right: margin, top: margin, bottom: margin },
       });
 
-      // 3.a) Dessiner la carte blanche (cadre) pour le QR (à droite)
       const cardX = margin + textBoxW + colGap;
       const cardY = margin;
 
-      // fond blanc + bordure gris clair
       doc.save();
-      doc.rect(cardX, cardY, cardW, cardH)
-        .fillAndStroke("#FFFFFF", "#E5E7EB"); // gray-200 bordure
+      doc.rect(cardX, cardY, cardW, cardH).fillAndStroke("#FFFFFF", "#E5E7EB");
       doc.restore();
 
-      // 3.b) Générer/charger l'image QR
       const qrPath = await ensureDoorQRCode(req, door.id, door.name, qrSize, force);
       const qrX = cardX + cardPad;
       const qrY = cardY + cardPad;
       doc.image(qrPath, qrX, qrY, { width: qrSize, height: qrSize });
 
-      // 3.c) Calcul auto-fit pour le texte
       const { sizeBrand, sizeName, gap } = fitLabelSizes({ boxW: textBoxW, boxH: textBoxH });
 
-      // 3.d) Rendu du texte (verticalement centré dans la colonne gauche)
-      // calcul des hauteurs réelles pour centrer
-      doc.font("Helvetica-Bold").fontSize(sizeBrand);
-      const hBrand = doc.heightOfString(brand, { width: textBoxW });
-      doc.font("Helvetica").fontSize(sizeName);
+      doc.font("Helvetica-Bold").fontSize(sizeBrand).fillColor("#000");
+      const hBrand = doc.heightOfString("HALEON", { width: textBoxW });
+
+      doc.font("Helvetica").fontSize(sizeName).fillColor("#111");
       const hName = doc.heightOfString(doorLabel, { width: textBoxW });
 
       const totalH = hBrand + gap + hName;
       const startY = margin + Math.max(0, (textBoxH - totalH) / 2);
       const textX = margin;
 
-      // HALEON (gras)
       doc.font("Helvetica-Bold").fontSize(sizeBrand).fillColor("#000");
-      doc.text(brand, textX, startY, { width: textBoxW, align: "left" });
+      doc.text("HALEON", textX, startY, { width: textBoxW, align: "left" });
 
-      // Nom de la porte
       doc.font("Helvetica").fontSize(sizeName).fillColor("#111");
       doc.text(doorLabel, textX, startY + hBrand + gap, { width: textBoxW, align: "left" });
     }
@@ -1272,6 +1358,199 @@ app.get("/api/doors/alerts", async (_req, res) => {
         last_nc: Number(c.last_nc || 0),
       },
     });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/* ========================================================================
+   🔹 AJOUTS Maps — API /api/doors/maps/*
+   - uploadZip : reçoit un ZIP contenant des PDF (arborescence préservée)
+   - plans     : liste les derniers plans par logical_name (+ compte actions)
+   - plan/:id/file : stream le PDF
+   - rename    : met à jour display_name
+   - positions : CRUD léger (set sur /:doorId + list)
+   ======================================================================== */
+
+/** Upload ZIP de plans */
+app.post("/api/doors/maps/uploadZip", uploadZip.single("zip"), async (req, res) => {
+  const zipPath = req.file?.path;
+  if (!zipPath) return res.status(400).json({ ok: false, error: "zip manquant" });
+
+  const zip = new StreamZip.async({ file: zipPath, storeEntries: true });
+  const imported = [];
+  try {
+    const entries = await zip.entries();
+    const files = Object.values(entries).filter(e => !e.isDirectory && /\.pdf$/i.test(e.name));
+
+    for (const entry of files) {
+      // extrait vers un tmp, puis déplace en STORE
+      const tmpOut = path.join(MAPS_INCOMING_DIR, crypto.randomUUID() + ".pdf");
+      await zip.extract(entry.name, tmpOut);
+
+      const { logical, version } = parsePlanName(entry.name);
+
+      const safeRel = entry.name.replace(/[^\w.\-\/]+/g, "_");
+      const dest = path.join(MAPS_STORE_DIR, `${Date.now()}_${safeRel}`);
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await fsp.rename(tmpOut, dest);
+
+      const page_count = await pdfPageCount(dest).catch(() => 1);
+
+      // enregistrement du plan (versionnée)
+      await pool.query(
+        `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count)
+         VALUES ($1,$2,$3,$4,$5)`,
+        [logical, version, entry.name, dest, page_count]
+      );
+      // nom d'affichage par défaut
+      await pool.query(
+        `INSERT INTO fd_plan_names (logical_name, display_name)
+         VALUES ($1,$2) ON CONFLICT (logical_name) DO NOTHING`,
+        [logical, logical]
+      );
+
+      imported.push({ logical_name: logical, version, page_count });
+    }
+
+    res.json({ ok: true, imported });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    await zip.close().catch(() => {});
+    fs.rmSync(zipPath, { force: true });
+  }
+});
+
+/** Liste des plans (dernier par logical_name) + compte actions (overdue / next 30j) */
+app.get("/api/doors/maps/plans", async (_req, res) => {
+  try {
+    const q = `
+      WITH latest AS (
+        SELECT DISTINCT ON (logical_name) id, logical_name, version, page_count, created_at
+        FROM fd_plans
+        ORDER BY logical_name, created_at DESC
+      ),
+      names AS (
+        SELECT logical_name, COALESCE(display_name, logical_name) AS display_name
+        FROM fd_plan_names
+      ),
+      pending AS (
+        SELECT c.door_id, c.due_date
+          FROM fd_checks c
+         WHERE c.closed_at IS NULL
+      ),
+      pos AS (
+        SELECT p.plan_logical_name AS logical_name, p.door_id
+          FROM fd_door_positions p
+          GROUP BY p.plan_logical_name, p.door_id
+      ),
+      counts AS (
+        SELECT pos.logical_name,
+               SUM(CASE WHEN pending.due_date < CURRENT_DATE THEN 1 ELSE 0 END) AS overdue,
+               SUM(CASE WHEN pending.due_date >= CURRENT_DATE
+                           AND pending.due_date <= CURRENT_DATE + INTERVAL '30 day'
+                        THEN 1 ELSE 0 END) AS actions_next_30
+          FROM pos
+          JOIN pending ON pending.door_id = pos.door_id
+         GROUP BY pos.logical_name
+      )
+      SELECT l.id, l.logical_name, n.display_name, l.version, l.page_count,
+             COALESCE(c.actions_next_30,0)::int AS actions_next_30,
+             COALESCE(c.overdue,0)::int AS overdue
+        FROM latest l
+   LEFT JOIN names n USING (logical_name)
+   LEFT JOIN counts c ON c.logical_name = l.logical_name
+    ORDER BY n.display_name ASC;
+    `;
+    const { rows } = await pool.query(q);
+    res.json({ ok: true, plans: rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/** Stream d’un plan PDF (par id de fd_plans) */
+app.get("/api/doors/maps/plan/:id/file", async (req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT file_path FROM fd_plans WHERE id=$1`, [req.params.id]);
+    const p = rows[0]?.file_path;
+    if (!p || !fs.existsSync(p)) return res.status(404).send("not_found");
+    res.type("application/pdf").sendFile(path.resolve(p));
+  } catch (e) {
+    res.status(500).send("err");
+  }
+});
+
+/** Renommage du display_name d’un logical_name */
+app.put("/api/doors/maps/plan/:logical/rename", async (req, res) => {
+  try {
+    const logical = String(req.params.logical || "");
+    const { display_name } = req.body || {};
+    if (!logical || !display_name) return res.status(400).json({ ok: false, error: "display_name requis" });
+    await pool.query(
+      `INSERT INTO fd_plan_names(logical_name, display_name)
+       VALUES ($1,$2)
+       ON CONFLICT (logical_name) DO UPDATE SET display_name = EXCLUDED.display_name`,
+      [logical, String(display_name).trim()]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/** Liste des positions pour un plan/page */
+app.get("/api/doors/maps/positions", async (req, res) => {
+  try {
+    const logical = String(req.query.logical_name || "");
+    const pageIndex = Number(req.query.page_index || 0);
+    if (!logical) return res.status(400).json({ ok: false, error: "logical_name requis" });
+
+    // on renvoie aussi un statut calculé vite fait à partir du pending check
+    const q = `
+      WITH pend AS (
+        SELECT door_id, due_date
+          FROM fd_checks
+         WHERE closed_at IS NULL
+      )
+      SELECT p.door_id, d.name, p.x_frac, p.y_frac,
+             CASE
+               WHEN pend.due_date < CURRENT_DATE THEN 'en_retard'
+               WHEN pend.due_date <= CURRENT_DATE + INTERVAL '30 day' THEN 'en_cours_30'
+               ELSE 'a_faire'
+             END AS status
+        FROM fd_door_positions p
+        JOIN fd_doors d ON d.id = p.door_id
+   LEFT JOIN pend ON pend.door_id = p.door_id
+       WHERE p.plan_logical_name=$1 AND p.page_index=$2
+    `;
+    const { rows } = await pool.query(q, [logical, pageIndex]);
+    res.json({ ok: true, items: rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/** Enregistre/Met à jour la position d’une porte sur un plan/page */
+app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
+  try {
+    const doorId = req.params.doorId;
+    const { logical_name, page_index = 0, page_label = null, x_frac, y_frac } = req.body || {};
+    if (!logical_name || x_frac == null || y_frac == null) {
+      return res.status(400).json({ ok: false, error: "coords/logical requis" });
+    }
+
+    // UPSERT via contrainte d’unicité (door_id, logical_name, page_index)
+    await pool.query(
+      `INSERT INTO fd_door_positions (door_id, plan_logical_name, page_index, page_label, x_frac, y_frac)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (door_id, plan_logical_name, page_index)
+       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, page_label=EXCLUDED.page_label, updated_at=now()`,
+      [doorId, logical_name, Number(page_index || 0), page_label, Number(x_frac), Number(y_frac)]
+    );
+
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
