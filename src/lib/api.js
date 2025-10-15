@@ -64,6 +64,13 @@ function currentSite() {
   }
 }
 
+/** Small helper: add cache-busting `v=timestamp` param to a URL */
+function withBust(url, enabled = true) {
+  if (!enabled) return url;
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}v=${Date.now()}`;
+}
+
 /** Fetch JSON with automatic X-Site + Identity headers */
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
@@ -81,10 +88,12 @@ async function jsonFetch(url, options = {}) {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `HTTP ${res.status}`);
+    const msg = text || `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}`;
+    throw new Error(msg);
   }
 
   const ct = res.headers.get("content-type") || "";
+  if (res.status === 204) return null;
   return ct.includes("application/json") ? res.json() : null;
 }
 
@@ -105,6 +114,17 @@ export async function apiBaseFetchJSON(path, options = {}) {
     throw new Error(msg);
   }
   return payload;
+}
+
+/** (Optionnel) Fetch binaire (blob) — pratique pour tester un PDF inline si besoin */
+export async function getBlob(path) {
+  const site = currentSite();
+  const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
+  const headers = identityHeaders(new Headers());
+  headers.set("X-Site", site);
+  const res = await fetch(finalUrl, { credentials: "include", headers });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.blob();
 }
 
 /** Generic helpers */
@@ -302,8 +322,8 @@ export const api = {
 
     // Fichiers / preview
     fileMeta: (id) => get(`/api/ask-veeva/filemeta/${id}`),
-    fileUrl: (id) => `${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`,
-    previewUrl: (id) => `${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`,
+    fileUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`, bust),
+    previewUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`, bust),
   },
 
   /** --- DOORS (Portes coupe-feu) — MIS À JOUR POUR server_doors.js --- */
@@ -321,7 +341,8 @@ export const api = {
       fd.append("photo", file);
       return upload(`/api/doors/doors/${encodeURIComponent(id)}/photo`, fd);
     },
-    photoUrl: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`,
+    photoUrl: (id, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`, bust),
 
     // Fichiers attachés à la porte
     listFiles: (id) => get(`/api/doors/doors/${encodeURIComponent(id)}/files`),
@@ -348,12 +369,14 @@ export const api = {
     listHistory: (doorId) => get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
 
     // QR / PDF
-    qrUrl: (id, size = 256) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`,
-    qrcodesUrl: (id, sizes = "80,120,200", force = false) =>
-      `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
-    // ✅ corrige le placeholder
-    nonConformPDF: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`,
-    nonConformitiesPdfUrl: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`,
+    qrUrl: (id, size = 256, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`, bust),
+    qrcodesUrl: (id, sizes = "80,120,200", force = false, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`, bust),
+    nonConformPDF: (id, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`, bust),
+    nonConformitiesPdfUrl: (id, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`, bust),
 
     // Calendrier / settings / alertes
     calendar: () => get(`/api/doors/calendar`),
@@ -362,7 +385,7 @@ export const api = {
     alerts: () => get(`/api/doors/alerts`),
   },
 
-  /** --- DOORS MAPS (Plans PDF + positions) — AJUSTÉ: logical_name obligatoire --- */
+  /** --- DOORS MAPS (Plans PDF + positions) — logical_name obligatoire + variantes --- */
   doorsMaps: {
     uploadZip: (file) => {
       const fd = new FormData();
@@ -370,10 +393,23 @@ export const api = {
       return upload(`/api/doors/maps/uploadZip`, fd);
     },
     listPlans: () => get(`/api/doors/maps/plans`),
+
     renamePlan: (logical_name, display_name) =>
       put(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, { display_name }),
-    // ⚠️ Ici le backend attend un logical_name (pas un id UUID)
-    planFileUrl: (logical_name) => `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`,
+
+    /** Flux PDF (backend: /plan/:logical/file) */
+    planFileUrl: (logical_name, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
+
+    /** Rétro-compat (si tu as déjà stocké des id/UUID de fd_plans) */
+    planFileUrlById: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(id)}/file`, bust),
+
+    /** Alias si un ancien front s’attendait à /plan/:id/file (UUID) */
+    planFileUrlUuid: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(id)}/file`, bust),
+
+    /** Positions — lecture/écriture */
     positions: (logical_name, page_index = 0) =>
       get(`/api/doors/maps/positions`, { logical_name, page_index }),
     setPosition: (doorId, payload) =>
