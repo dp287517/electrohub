@@ -220,7 +220,8 @@ const MAPS = {
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`,
+  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, // (compat si jamais)
+  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`,      // ✅ UUID route (backend OK)
   positions: async (logical_name, page_index = 0) =>
     (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(),
   setPosition: async (doorId, payload) =>
@@ -1003,8 +1004,9 @@ export default function Doors() {
                     onChange={(v) => setPlanPage(Number(v))}
                     options={Array.from({ length: Number(selectedPlan.page_count || 1) }, (_, i) => ({ value: String(i), label: `Page ${i + 1}` }))}
                   />
+                  {/* ✅ CORRECTIF: lien vers le PDF par ID (UUID) pour éviter les 404 */}
                   <a
-                    href={MAPS.planFileUrl(selectedPlan.logical_name)}
+                    href={MAPS.planFileUrlById(selectedPlan.id)}
                     target="_blank" rel="noreferrer"
                     className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                   >
@@ -1015,7 +1017,7 @@ export default function Doors() {
 
               <PlanViewer
                 key={selectedPlan.id + ":" + planPage}
-                fileUrl={MAPS.planFileUrl(selectedPlan.logical_name)}
+                fileUrl={MAPS.planFileUrlById(selectedPlan.id)}
                 pageIndex={planPage}
                 points={positions}
                 onReady={() => setPdfReady(true)}
@@ -1491,7 +1493,7 @@ function PlanCard({ plan, onRename, onPick }) {
       try {
         setThumbErr("");
 
-        const url = MAPS.planFileUrl(plan.logical_name); // <-- ID
+        const url = MAPS.planFileUrlById(plan.id);
         const loadingTask = pdfjsLib.getDocument({ url });
         const pdf = await loadingTask.promise;
         const page = await pdf.getPage(1);
@@ -1507,7 +1509,7 @@ function PlanCard({ plan, onRename, onPick }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [plan.logical_name]);
+  }, [plan.id]);
 
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
