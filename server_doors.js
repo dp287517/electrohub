@@ -1796,6 +1796,41 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
   }
 });
 
+// ======================================================================
+// Maintenance: backfill fd_plans.content depuis file_path si manquant
+// Appel: POST /api/doors/maps/_rehydrate
+// ======================================================================
+app.post("/api/doors/maps/_rehydrate", async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, file_path, content IS NOT NULL AS has_content
+         FROM fd_plans
+        ORDER BY created_at DESC`
+    );
+    let scanned = 0, updated = 0, missing = 0, nochange = 0, errors = 0;
+
+    for (const r of rows) {
+      scanned++;
+      if (r.has_content) { nochange++; continue; }
+      const p = r.file_path;
+      if (p && fs.existsSync(p)) {
+        try {
+          const buf = await fsp.readFile(p);
+          await pool.query(`UPDATE fd_plans SET content=$1 WHERE id=$2`, [buf, r.id]);
+          updated++;
+        } catch {
+          errors++;
+        }
+      } else {
+        missing++;
+      }
+    }
+    res.json({ ok: true, scanned, updated, missing, nochange, errors });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ------------------------------
 // Boot
 // ------------------------------
