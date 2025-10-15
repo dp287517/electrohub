@@ -1054,6 +1054,148 @@ app.get("/api/doors/doors/:id/nonconformities.pdf", async (req, res) => {
   }
 });
 
+/* ========================================================================
+   💡 AJOUT : PDF QR avec cadre blanc + texte à gauche (auto-fit)
+   Route : GET /api/doors/doors/:id/qrcodes.pdf?sizes=120,200&force=0
+   - Carte blanche avec QR à droite.
+   - À gauche, "HALEON" (gras) puis le nom de la porte.
+   - Le texte est automatiquement réduit pour rester aligné à la hauteur du QR.
+   ======================================================================== */
+app.get("/api/doors/doors/:id/qrcodes.pdf", async (req, res) => {
+  try {
+    const sizes = String(req.query.sizes || "120")
+      .split(",")
+      .map((s) => Math.max(64, Math.min(1024, Number(s) || 120)));
+    const force = String(req.query.force || "") === "1";
+
+    // 1) Charger la porte
+    const { rows } = await pool.query(
+      `SELECT id, name, building, floor, location FROM fd_doors WHERE id=$1`,
+      [req.params.id]
+    );
+    const door = rows[0];
+    if (!door) return res.status(404).send("door_not_found");
+
+    const brand = "HALEON";
+    const doorLabel =
+      (door.name || "").trim() ||
+      [door.building, door.floor, door.location].filter(Boolean).join(" • ") ||
+      `Porte ${door.id}`;
+
+    // 2) Préparer PDF
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="door-${door.id}-qrcodes.pdf"`
+    );
+    const doc = new PDFDocument({ autoFirstPage: false });
+    doc.pipe(res);
+
+    // Helper: calcul des tailles de polices qui tiennent en largeur et hauteur
+    function fitLabelSizes({ boxW, boxH }) {
+      // tailles cibles (seront réduites si nécessaire)
+      let sizeBrand = Math.min(32, Math.max(14, Math.floor(boxH * 0.22)));
+      let sizeName  = Math.min(18, Math.max(10, Math.floor(boxH * 0.16)));
+      const gap = Math.max(6, Math.floor(boxH * 0.08));
+
+      // On réduit jusqu'à ce que ça passe en largeur ET en hauteur
+      for (let i = 0; i < 60; i++) {
+        // Largeur
+        doc.font("Helvetica-Bold").fontSize(sizeBrand);
+        const wBrand = doc.widthOfString(brand);
+        doc.font("Helvetica").fontSize(sizeName);
+        const wName = doc.widthOfString(doorLabel);
+
+        // Hauteur (avec wrap)
+        doc.font("Helvetica-Bold").fontSize(sizeBrand);
+        const hBrand = doc.heightOfString(brand, { width: boxW, align: "left" });
+        doc.font("Helvetica").fontSize(sizeName);
+        const hName = doc.heightOfString(doorLabel, { width: boxW, align: "left" });
+
+        const totalH = hBrand + gap + hName;
+
+        const okWidth = wBrand <= boxW && wName <= boxW * 1.15; // on autorise un léger wrap sur le nom
+        const okHeight = totalH <= boxH;
+
+        if (okWidth && okHeight) {
+          return { sizeBrand, sizeName, gap };
+        }
+        // réduire progressivement
+        if (!okHeight && sizeBrand > 12) sizeBrand -= 1;
+        if (!okHeight && sizeName > 9) sizeName -= 1;
+        if (!okWidth && sizeBrand > 12 && wBrand > boxW) sizeBrand -= 1;
+        if (!okWidth && sizeName > 9 && wName > boxW) sizeName -= 1;
+      }
+      return { sizeBrand: Math.max(12, sizeBrand), sizeName: Math.max(9, sizeName), gap: Math.max(6, gap) };
+    }
+
+    // 3) Pour chaque taille demandée, une page
+    for (const qrSize of sizes) {
+      // Colonnes : [texte] | [carte QR]
+      const margin = 36;
+      const colGap = 24;
+
+      // On aligne la hauteur du bloc texte sur la hauteur du QR (cadre inclus)
+      const cardPad = Math.max(10, Math.floor(qrSize * 0.10)); // 10% padding visuel
+      const cardW = qrSize + cardPad * 2;
+      const cardH = qrSize + cardPad * 2;
+
+      const textBoxW = Math.max(140, Math.min(420, qrSize)); // colonne texte carrée,  ~taille du QR
+      const textBoxH = cardH;
+
+      const pageW = margin * 2 + textBoxW + colGap + cardW;
+      const pageH = margin * 2 + Math.max(cardH, textBoxH);
+
+      doc.addPage({
+        size: [pageW, pageH],
+        margins: { left: margin, right: margin, top: margin, bottom: margin },
+      });
+
+      // 3.a) Dessiner la carte blanche (cadre) pour le QR (à droite)
+      const cardX = margin + textBoxW + colGap;
+      const cardY = margin;
+
+      // fond blanc + bordure gris clair
+      doc.save();
+      doc.rect(cardX, cardY, cardW, cardH)
+        .fillAndStroke("#FFFFFF", "#E5E7EB"); // gray-200 bordure
+      doc.restore();
+
+      // 3.b) Générer/charger l'image QR
+      const qrPath = await ensureDoorQRCode(req, door.id, door.name, qrSize, force);
+      const qrX = cardX + cardPad;
+      const qrY = cardY + cardPad;
+      doc.image(qrPath, qrX, qrY, { width: qrSize, height: qrSize });
+
+      // 3.c) Calcul auto-fit pour le texte
+      const { sizeBrand, sizeName, gap } = fitLabelSizes({ boxW: textBoxW, boxH: textBoxH });
+
+      // 3.d) Rendu du texte (verticalement centré dans la colonne gauche)
+      // calcul des hauteurs réelles pour centrer
+      doc.font("Helvetica-Bold").fontSize(sizeBrand);
+      const hBrand = doc.heightOfString(brand, { width: textBoxW });
+      doc.font("Helvetica").fontSize(sizeName);
+      const hName = doc.heightOfString(doorLabel, { width: textBoxW });
+
+      const totalH = hBrand + gap + hName;
+      const startY = margin + Math.max(0, (textBoxH - totalH) / 2);
+      const textX = margin;
+
+      // HALEON (gras)
+      doc.font("Helvetica-Bold").fontSize(sizeBrand).fillColor("#000");
+      doc.text(brand, textX, startY, { width: textBoxW, align: "left" });
+
+      // Nom de la porte
+      doc.font("Helvetica").fontSize(sizeName).fillColor("#111");
+      doc.text(doorLabel, textX, startY + hBrand + gap, { width: textBoxW, align: "left" });
+    }
+
+    doc.end();
+  } catch (e) {
+    res.status(500).send("err");
+  }
+});
+
 // ------------------------------
 // Calendar  • /api/doors/calendar
 // ------------------------------
