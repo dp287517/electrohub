@@ -178,7 +178,7 @@ const API = {
   // QR code (PNG stream)
   qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
 
-  // ✅ NOUVEAU : PDF d’étiquettes (cadre blanc + HALEON + nom de porte autosize)
+  // ✅ PDF d’étiquettes (cadre blanc + HALEON + nom de porte autosize)
   qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
     `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
 
@@ -818,10 +818,7 @@ export default function Doors() {
                 </div>
                 <div className="mt-3 flex gap-2">
                   <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                  <a className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                     href={API.qrUrl(d.id, 256)} target="_blank" rel="noreferrer">
-                    QR
-                  </a>
+                  {/* QR supprimé en mobile aussi pour cohérence */}
                 </div>
               </div>
             ))}
@@ -883,14 +880,7 @@ export default function Doors() {
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
                           <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                          <a
-                            className="px-2 py-1 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                            href={API.qrUrl(d.id, 256)}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            QR
-                          </a>
+                          {/* Bouton QR supprimé (colonne Actions) */}
                         </div>
                       </td>
                     </tr>
@@ -1117,27 +1107,8 @@ export default function Doors() {
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="font-semibold mb-2">QR code</div>
-                {/* Nom de la porte au-dessus des QR */}
-                <div className="text-sm text-gray-700 font-medium mb-1">{editing.name || "—"}</div>
-                <div className="grid grid-cols-3 gap-3 items-start">
-                  {[128, 256, 512].map((s) => (
-                    <div key={s} className="border rounded-xl p-2 text-center">
-                      <div className="text-xs text-gray-500 mb-1">{s}px</div>
-                      <img src={API.qrUrl(editing.id, s)} alt={`QR ${s}`} className="mx-auto" />
-                      <a
-                        href={API.qrUrl(editing.id, s)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="mt-2 inline-block px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
-                      >
-                        Ouvrir / Imprimer
-                      </a>
-                    </div>
-                  ))}
-                </div>
-
-                {/* ✅ Ajout : PDF d’étiquettes brandées (cadre blanc + HALEON + nom autosize) */}
-                <div className="mt-3 flex flex-wrap gap-2">
+                {/* On garde uniquement le bouton d'étiquettes PDF */}
+                <div className="mt-1 flex flex-wrap gap-2">
                   <a
                     href={API.qrcodesPdf(editing.id, "80,120,200")}
                     target="_blank"
@@ -1145,15 +1116,6 @@ export default function Doors() {
                     className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
                   >
                     Étiquettes PDF (HALEON)
-                  </a>
-                  <a
-                    href={API.qrcodesPdf(editing.id, "80,120,200", true)}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-2 rounded-lg text-sm bg-gray-50 text-gray-700 border hover:bg-gray-100 inline-flex items-center"
-                    title="Force la régénération du PDF"
-                  >
-                    Regénérer
                   </a>
                 </div>
               </div>
