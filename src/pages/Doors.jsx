@@ -178,6 +178,10 @@ const API = {
   // QR code (PNG stream)
   qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
 
+  // ✅ NOUVEAU : PDF d’étiquettes (cadre blanc + HALEON + nom de porte autosize)
+  qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
+    `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
+
   // Calendar (next checks, overdue, etc.)
   calendar: async () => (await fetch(`/api/doors/calendar`, withHeaders())).json(),
 
@@ -1130,6 +1134,27 @@ export default function Doors() {
                       </a>
                     </div>
                   ))}
+                </div>
+
+                {/* ✅ Ajout : PDF d’étiquettes brandées (cadre blanc + HALEON + nom autosize) */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <a
+                    href={API.qrcodesPdf(editing.id, "80,120,200")}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
+                  >
+                    Étiquettes PDF (HALEON)
+                  </a>
+                  <a
+                    href={API.qrcodesPdf(editing.id, "80,120,200", true)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="px-3 py-2 rounded-lg text-sm bg-gray-50 text-gray-700 border hover:bg-gray-100 inline-flex items-center"
+                    title="Force la régénération du PDF"
+                  >
+                    Regénérer
+                  </a>
                 </div>
               </div>
             )}
