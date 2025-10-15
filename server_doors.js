@@ -220,11 +220,12 @@ async function ensureSchema() {
       filename TEXT,
       file_path TEXT,
       page_count INT,
-      content BYTEA,
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  // ➜ correctif B : colonne binaire pour le PDF
   await pool.query(`ALTER TABLE fd_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_logical_idx ON fd_plans(logical_name);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_created_idx ON fd_plans(created_at DESC);`);
 
@@ -1544,15 +1545,28 @@ app.post("/api/doors/maps/uploadZip", uploadZip.single("zip"), async (req, res) 
       await fsp.rename(tmpOut, dest);
 
       const page_count = await pdfPageCount(dest).catch(() => 1);
+      // ➜ correctif B : stocke aussi le PDF en BLOB (content)
+      let buf = null;
+      try {
+        buf = await fsp.readFile(dest);
+      } catch {
+        buf = null;
+      }
 
-      // 🔸 Lire le BLOB pour fallback DB
-      const blob = await fsp.readFile(dest).catch(() => null);
+      if (buf) {
+        await pool.query(
+          `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count, content)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [logical, version, entry.name, dest, page_count, buf]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [logical, version, entry.name, dest, page_count]
+        );
+      }
 
-      await pool.query(
-        `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count, content)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [logical, version, entry.name, dest, page_count, blob]
-      );
       await pool.query(
         `INSERT INTO fd_plan_names (logical_name, display_name)
          VALUES ($1,$2) ON CONFLICT (logical_name) DO NOTHING`,
@@ -1625,19 +1639,19 @@ app.get(
   async (req, res) => {
     try {
       const { rows } = await pool.query(
-        `SELECT file_path, content FROM fd_plans WHERE id=$1 ORDER BY created_at DESC LIMIT 1`,
+        `SELECT file_path, content FROM fd_plans WHERE id=$1`,
         [req.params.id]
       );
       const row = rows[0];
-      if (!row) return res.status(404).send("not_found");
+      const p = row?.file_path;
+      const buf = row?.content;
 
-      const p = row.file_path;
+      if (buf && buf.length) {
+        res.type("application/pdf");
+        return res.end(buf, "binary");
+      }
       if (p && fs.existsSync(p)) {
         return res.type("application/pdf").sendFile(path.resolve(p));
-      }
-      if (row.content) {
-        res.setHeader("Content-Type", "application/pdf");
-        return res.end(row.content, "binary");
       }
       return res.status(404).send("not_found");
     } catch (e) {
@@ -1656,15 +1670,15 @@ app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
       [logical]
     );
     const row = rows[0];
-    if (!row) return res.status(404).send("not_found");
+    const p = row?.file_path;
+    const buf = row?.content;
 
-    const p = row.file_path;
+    if (buf && buf.length) {
+      res.type("application/pdf");
+      return res.end(buf, "binary");
+    }
     if (p && fs.existsSync(p)) {
       return res.type("application/pdf").sendFile(path.resolve(p));
-    }
-    if (row.content) {
-      res.setHeader("Content-Type", "application/pdf");
-      return res.end(row.content, "binary");
     }
     return res.status(404).send("not_found");
   } catch (e) {
@@ -1676,19 +1690,19 @@ app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
 app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT file_path, content FROM fd_plans WHERE id=$1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT file_path, content FROM fd_plans WHERE id=$1`,
       [req.params.id]
     );
     const row = rows[0];
-    if (!row) return res.status(404).send("not_found");
+    const p = row?.file_path;
+    const buf = row?.content;
 
-    const p = row.file_path;
+    if (buf && buf.length) {
+      res.type("application/pdf");
+      return res.end(buf, "binary");
+    }
     if (p && fs.existsSync(p)) {
       return res.type("application/pdf").sendFile(path.resolve(p));
-    }
-    if (row.content) {
-      res.setHeader("Content-Type", "application/pdf");
-      return res.end(row.content, "binary");
     }
     return res.status(404).send("not_found");
   } catch (e) {
@@ -1791,41 +1805,6 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
     );
 
     res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// ======================================================================
-// Maintenance: backfill fd_plans.content depuis file_path si manquant
-// Appel: POST /api/doors/maps/_rehydrate
-// ======================================================================
-app.post("/api/doors/maps/_rehydrate", async (_req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, file_path, content IS NOT NULL AS has_content
-         FROM fd_plans
-        ORDER BY created_at DESC`
-    );
-    let scanned = 0, updated = 0, missing = 0, nochange = 0, errors = 0;
-
-    for (const r of rows) {
-      scanned++;
-      if (r.has_content) { nochange++; continue; }
-      const p = r.file_path;
-      if (p && fs.existsSync(p)) {
-        try {
-          const buf = await fsp.readFile(p);
-          await pool.query(`UPDATE fd_plans SET content=$1 WHERE id=$2`, [buf, r.id]);
-          updated++;
-        } catch {
-          errors++;
-        }
-      } else {
-        missing++;
-      }
-    }
-    res.json({ ok: true, scanned, updated, missing, nochange, errors });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
