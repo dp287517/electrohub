@@ -342,4 +342,21 @@ export const api = {
       `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
     ncReportUrl: (inspectionId) => `${API_BASE}/api/doors/inspections/${inspectionId}/nc.pdf`,
   },
+
+  /** --- DOORS MAPS (Plans PDF + positions) — AJOUT --- */
+  doorsMaps: {
+    uploadZip: (file) => {
+      const fd = new FormData();
+      fd.append("zip", file);
+      return upload(`/api/doors/maps/uploadZip`, fd);
+    },
+    listPlans: () => get(`/api/doors/maps/plans`),
+    renamePlan: (logical_name, display_name) =>
+      put(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, { display_name }),
+    planFileUrl: (planId) => `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(planId)}/file`,
+    positions: (logical_name, page_index = 0) =>
+      get(`/api/doors/maps/positions`, { logical_name, page_index }),
+    setPosition: (doorId, payload) =>
+      put(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, payload),
+  },
 };
