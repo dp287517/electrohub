@@ -71,6 +71,11 @@ function withBust(url, enabled = true) {
   return `${url}${sep}v=${Date.now()}`;
 }
 
+/** UUID checker (pour choisir la bonne route PDF des plans) */
+function isUuid(s) {
+  return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
+}
+
 /** Fetch JSON with automatic X-Site + Identity headers */
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
@@ -335,36 +340,47 @@ export const api = {
     update: (id, payload) => put(`/api/doors/doors/${encodeURIComponent(id)}`, payload),
     remove: (id) => del(`/api/doors/doors/${encodeURIComponent(id)}`),
 
-    // Photo vignette (upload + URL)
+    // Photo vignette (upload + URL) — ajoute identité aussi dans le FormData (fallback backend)
     uploadPhoto: (id, file) => {
+      const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("photo", file);
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
       return upload(`/api/doors/doors/${encodeURIComponent(id)}/photo`, fd);
     },
     photoUrl: (id, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`, bust),
 
-    // Fichiers attachés à la porte
+    // Fichiers attachés à la porte — ajoute identité également (aligné Doors.jsx)
     listFiles: (id) => get(`/api/doors/doors/${encodeURIComponent(id)}/files`),
     uploadFile: (id, file) => {
+      const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("file", file);
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
       return upload(`/api/doors/doors/${encodeURIComponent(id)}/files`, fd);
     },
     deleteFile: (fileId) => del(`/api/doors/files/${encodeURIComponent(fileId)}`),
 
-    // Checklists (workflow)
-    startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, {}),
+    // Checklists (workflow) — injecte _user (JSON) et user_email/name (multipart)
+    startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, { _user: getIdentity() }),
     saveCheck: (doorId, checkId, payload = {}) => {
-      // Si fichiers → multipart; sinon JSON
       if (payload?.files?.length) {
+        const { email, name } = getIdentity();
         const fd = new FormData();
         if (payload.items) fd.append("items", JSON.stringify(payload.items));
         if (payload.close) fd.append("close", "true");
+        if (email) fd.append("user_email", email);
+        if (name)  fd.append("user_name",  name);
         (payload.files || []).forEach((f) => fd.append("files", f));
         return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, fd);
       }
-      return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, payload);
+      return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, {
+        ...payload,
+        _user: getIdentity(),
+      });
     },
     listHistory: (doorId) => get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
 
@@ -385,11 +401,15 @@ export const api = {
     alerts: () => get(`/api/doors/alerts`),
   },
 
-  /** --- DOORS MAPS (Plans PDF + positions) — logical_name obligatoire + variantes --- */
+  /** --- DOORS MAPS (Plans PDF + positions) — logical_name & UUID --- */
   doorsMaps: {
     uploadZip: (file) => {
+      const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("zip", file);
+      // (pas requis par le backend, mais on aligne avec le reste)
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
       return upload(`/api/doors/maps/uploadZip`, fd);
     },
     listPlans: () => get(`/api/doors/maps/plans`),
@@ -401,13 +421,25 @@ export const api = {
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
 
-    /** Rétro-compat (si tu as déjà stocké des id/UUID de fd_plans) */
+    /** Rétro-compat (id/UUID de fd_plans via route compat) */
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(id)}/file`, bust),
 
-    /** Alias si un ancien front s’attendait à /plan/:id/file (UUID) */
+    /** Alias (nouvelle route directe par ID) */
     planFileUrlUuid: (id, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(id)}/file`, bust),
+
+    /**
+     * Helper AUTO: passe par l’ID si c’est un UUID, sinon logical_name.
+     * Accepte un objet `plan` renvoyé par /maps/plans (contient {id, logical_name}).
+     */
+    planFileUrlAuto: (plan, { bust = true } = {}) => {
+      if (plan && isUuid(plan.id)) {
+        return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`, bust);
+      }
+      const logical = plan?.logical_name || "";
+      return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, bust);
+    },
 
     /** Positions — lecture/écriture */
     positions: (logical_name, page_index = 0) =>
