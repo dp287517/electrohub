@@ -210,20 +210,35 @@ const MAPS = {
   uploadZip: async (file) => {
     const fd = new FormData();
     fd.append("zip", file);
-    const r = await fetch(`/api/doors/maps/uploadZip`, { method: "POST", credentials: "include", headers: userHeaders(), body: fd });
+    const r = await fetch(`/api/doors/maps/uploadZip`, {
+      method: "POST", credentials: "include", headers: userHeaders(), body: fd
+    });
     return r.json();
   },
+
   listPlans: async () => (await fetch(`/api/doors/maps/plans`, withHeaders())).json(),
+
   renamePlan: async (logical_name, display_name) =>
     (await fetch(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, {
       method: "PUT",
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, // (compat si jamais)
-  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`,      // ✅ UUID route (backend OK)
-  positions: async (logical_name, page_index = 0) =>
-    (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(),
+
+  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, // compat
+  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`,      // UUID
+
+  // ✅ positions: accepte indifféremment un UUID ou un logical_name
+  positions: async (idOrLogical, page_index = 0) => {
+    const looksUuid = typeof idOrLogical === "string" && /^[0-9a-fA-F-]{36}$/.test(idOrLogical);
+    const params = looksUuid
+      ? { id: idOrLogical, page_index }
+      : { logical_name: idOrLogical, page_index };
+    const r = await fetch(`/api/doors/maps/positions?${new URLSearchParams(params)}`, withHeaders());
+    return r.json();
+  },
+
+  // setPosition: on envoie aussi plan_id si dispo (le backend peut l’ignorer si non supporté)
   setPosition: async (doorId, payload) =>
     (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
       method: "PUT",
@@ -231,6 +246,15 @@ const MAPS = {
       body: JSON.stringify(payload),
     })).json(),
 };
+
+// helper pour charger les PDFs protégés avec cookies + X-User-*
+function pdfDocOpts(url) {
+  return {
+    url,
+    withCredentials: true,      // envoie les cookies (session)
+    httpHeaders: userHeaders(), // en-têtes X-User-Email / X-User-Name
+  };
+}
 
 /* ---------- ✅ Helper d’URL PDF (ID prioritaire, fallback logical) ---------- */
 function planFileUrlSafe(plan) {
@@ -765,12 +789,14 @@ export default function Doors() {
   }
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
-    const r = await MAPS.positions(plan.logical_name, pageIdx).catch(() => ({ items: [] }));
+    const key = plan.id || plan.logical_name || "";
+    const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
     setPositions(Array.isArray(r?.items) ? r.items : []);
   }
   useEffect(() => {
     if (tab === "maps") loadPlans();
   }, [tab]);
+
   useEffect(() => {
     if (selectedPlan) {
       loadPositions(selectedPlan, planPage);
@@ -1020,7 +1046,10 @@ export default function Doors() {
                   <Select
                     value={String(planPage)}
                     onChange={(v) => setPlanPage(Number(v))}
-                    options={Array.from({ length: Number(selectedPlan.page_count || 1) }, (_, i) => ({ value: String(i), label: `Page ${i + 1}` }))}
+                    options={Array.from(
+                      { length: Number(selectedPlan.page_count || 1) },
+                      (_, i) => ({ value: String(i), label: `Page ${i + 1}` })
+                    )}
                   />
                   {/* ✅ lien PDF original par ID/UUID si disponible */}
                   <a
@@ -1039,7 +1068,9 @@ export default function Doors() {
                   Portes en attente de positionnement ({unplaced.length})
                 </div>
                 {!unplaced.length && (
-                  <div className="text-xs text-amber-700/80 mt-1">Aucune porte en attente pour cette page.</div>
+                  <div className="text-xs text-amber-700/80 mt-1">
+                    Aucune porte en attente pour cette page.
+                  </div>
                 )}
                 {!!unplaced.length && (
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1079,14 +1110,15 @@ export default function Doors() {
               </div>
 
               <PlanViewer
-                key={selectedPlan.id + ":" + planPage}
+                key={(selectedPlan.id || selectedPlan.logical_name) + ":" + planPage}
                 fileUrl={planFileUrlSafe(selectedPlan)}
                 pageIndex={planPage}
                 points={positions}
                 onReady={() => setPdfReady(true)}
                 onMovePoint={async (doorId, xy) => {
                   await MAPS.setPosition(doorId, {
-                    logical_name: selectedPlan.logical_name,
+                    logical_name: selectedPlan.logical_name, // fallback
+                    plan_id: selectedPlan.id,                // ✅ prioritaire si géré par le backend
                     page_index: planPage,
                     x_frac: xy.x, y_frac: xy.y,
                   });
@@ -1098,7 +1130,8 @@ export default function Doors() {
                 onPlaceAt={async (xy) => {
                   if (!pendingPlaceDoorId) return;
                   await MAPS.setPosition(pendingPlaceDoorId, {
-                    logical_name: selectedPlan.logical_name,
+                    logical_name: selectedPlan.logical_name, // fallback
+                    plan_id: selectedPlan.id,                // ✅ prioritaire si géré par le backend
                     page_index: planPage,
                     x_frac: xy.x, y_frac: xy.y,
                   });
@@ -1106,6 +1139,7 @@ export default function Doors() {
                   await loadPositions(selectedPlan, planPage);
                 }}
               />
+
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
                   Chargement du plan… (canvas pdf.js)
@@ -1569,7 +1603,7 @@ function PlanCard({ plan, onRename, onPick }) {
         setThumbErr("");
 
         const url = planFileUrlSafe(plan);
-        const loadingTask = pdfjsLib.getDocument({ url });
+        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(url)); // ✅
         const pdf = await loadingTask.promise;
         const page = await pdf.getPage(1);
         const viewport = page.getViewport({ scale: 0.25 });
@@ -1589,7 +1623,7 @@ function PlanCard({ plan, onRename, onPick }) {
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div className="aspect-video bg-gray-50 flex items-center justify-center">
-        <canvas ref={canvasRef} />
+        <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
         {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
       </div>
       <div className="p-3">
@@ -1655,10 +1689,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       try {
         setErr("");
 
-        const loadingTask = pdfjsLib.getDocument({ url: fileUrl });
+        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
         const pdf = await loadingTask.promise;
         const page = await pdf.getPage(Number(pageIndex) + 1);
-        const viewport = page.getViewport({ scale: 1.2 });
+        const viewport = page.getViewport({ scale: 1 });
         const canvas = canvasRef.current;
         if (!canvas || cancelled) return;
         const ctx = canvas.getContext("2d");
