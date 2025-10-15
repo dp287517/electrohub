@@ -421,13 +421,13 @@ export const api = {
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
 
-    /** Rétro-compat (id/UUID de fd_plans via route compat) */
+    /** 🔁 MAJ: par ID/UUID -> nouvelle route native */
     planFileUrlById: (id, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(id)}/file`, bust),
-
-    /** Alias (nouvelle route directe par ID) */
-    planFileUrlUuid: (id, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(id)}/file`, bust),
+
+    /** Compat (ancienne route) au cas où */
+    planFileUrlCompatById: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(id)}/file`, bust),
 
     /**
      * Helper AUTO: passe par l’ID si c’est un UUID, sinon logical_name.
