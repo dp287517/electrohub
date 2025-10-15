@@ -225,6 +225,8 @@ async function ensureSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_logical_idx ON fd_plans(logical_name);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_created_idx ON fd_plans(created_at DESC);`);
+  // ✅ Correctif: stockage binaire facultatif du PDF
+  await pool.query(`ALTER TABLE fd_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fd_plan_names (
@@ -1543,10 +1545,16 @@ app.post("/api/doors/maps/uploadZip", uploadZip.single("zip"), async (req, res) 
 
       const page_count = await pdfPageCount(dest).catch(() => 1);
 
+      // ✅ Correctif: stocker aussi le contenu binaire en DB pour fallback
+      let contentBuf = null;
+      try {
+        contentBuf = await fsp.readFile(dest);
+      } catch {}
+
       await pool.query(
-        `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [logical, version, entry.name, dest, page_count]
+        `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count, content)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [logical, version, entry.name, dest, page_count, contentBuf]
       );
       await pool.query(
         `INSERT INTO fd_plan_names (logical_name, display_name)
@@ -1620,12 +1628,20 @@ app.get(
   async (req, res) => {
     try {
       const { rows } = await pool.query(
-        `SELECT file_path FROM fd_plans WHERE id=$1`,
+        `SELECT file_path, content FROM fd_plans WHERE id=$1`,
         [req.params.id]
       );
-      const p = rows[0]?.file_path;
-      if (!p || !fs.existsSync(p)) return res.status(404).send("not_found");
-      res.type("application/pdf").sendFile(path.resolve(p));
+      const row = rows[0];
+      const p = row?.file_path;
+      if (p && fs.existsSync(p)) {
+        return res.type("application/pdf").sendFile(path.resolve(p));
+      }
+      // ✅ Correctif: fallback DB
+      if (row?.content) {
+        res.setHeader("Content-Type", "application/pdf");
+        return res.end(row.content, "binary");
+      }
+      return res.status(404).send("not_found");
     } catch (e) {
       res.status(500).send("err");
     }
@@ -1638,12 +1654,20 @@ app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
     const logical = String(req.params.logical || "");
     if (!logical) return res.status(400).send("logical");
     const { rows } = await pool.query(
-      `SELECT file_path FROM fd_plans WHERE logical_name=$1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT file_path, content FROM fd_plans WHERE logical_name=$1 ORDER BY created_at DESC LIMIT 1`,
       [logical]
     );
-    const p = rows[0]?.file_path;
-    if (!p || !fs.existsSync(p)) return res.status(404).send("not_found");
-    res.type("application/pdf").sendFile(path.resolve(p));
+    const row = rows[0];
+    const p = row?.file_path;
+    if (p && fs.existsSync(p)) {
+      return res.type("application/pdf").sendFile(path.resolve(p));
+    }
+    // ✅ Correctif: fallback DB
+    if (row?.content) {
+      res.setHeader("Content-Type", "application/pdf");
+      return res.end(row.content, "binary");
+    }
+    return res.status(404).send("not_found");
   } catch (e) {
     res.status(500).send("err");
   }
@@ -1653,12 +1677,20 @@ app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
 app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT file_path FROM fd_plans WHERE id=$1`,
+      `SELECT file_path, content FROM fd_plans WHERE id=$1`,
       [req.params.id]
     );
-    const p = rows[0]?.file_path;
-    if (!p || !fs.existsSync(p)) return res.status(404).send("not_found");
-    res.type("application/pdf").sendFile(path.resolve(p));
+    const row = rows[0];
+    const p = row?.file_path;
+    if (p && fs.existsSync(p)) {
+      return res.type("application/pdf").sendFile(path.resolve(p));
+    }
+    // ✅ Correctif: fallback DB
+    if (row?.content) {
+      res.setHeader("Content-Type", "application/pdf");
+      return res.end(row.content, "binary");
+    }
+    return res.status(404).send("not_found");
   } catch (e) {
     res.status(500).send("err");
   }
