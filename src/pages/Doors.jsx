@@ -747,6 +747,13 @@ export default function Doors() {
   const [positions, setPositions] = useState([]); // [{door_id, x_frac,y_frac,status,name}]
   const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
 
+  // NEW: portes non positionnées (dans ce plan/page) + sélection pour placement
+  const unplaced = useMemo(
+    () => (positions || []).filter((p) => p.x_frac == null || p.y_frac == null),
+    [positions]
+  );
+  const [pendingPlaceDoorId, setPendingPlaceDoorId] = useState(null);
+
   async function loadPlans() {
     setMapsLoading(true);
     try {
@@ -765,7 +772,10 @@ export default function Doors() {
     if (tab === "maps") loadPlans();
   }, [tab]);
   useEffect(() => {
-    if (selectedPlan) loadPositions(selectedPlan, planPage);
+    if (selectedPlan) {
+      loadPositions(selectedPlan, planPage);
+      setPendingPlaceDoorId(null); // reset mode placement à chaque changement
+    }
   }, [selectedPlan, planPage]);
 
   /* ------------------ render helpers ------------------ */
@@ -1012,7 +1022,7 @@ export default function Doors() {
                     onChange={(v) => setPlanPage(Number(v))}
                     options={Array.from({ length: Number(selectedPlan.page_count || 1) }, (_, i) => ({ value: String(i), label: `Page ${i + 1}` }))}
                   />
-                  {/* ✅ CORRECTIF: lien vers le PDF par ID (UUID) pour éviter les 404 */}
+                  {/* ✅ lien PDF original par ID/UUID si disponible */}
                   <a
                     href={planFileUrlSafe(selectedPlan)}
                     target="_blank" rel="noreferrer"
@@ -1021,6 +1031,51 @@ export default function Doors() {
                     Ouvrir le PDF original
                   </a>
                 </div>
+              </div>
+
+              {/* Bandeau portes en attente de positionnement */}
+              <div className="mt-3 p-2 rounded-xl border bg-amber-50/60">
+                <div className="text-sm text-amber-700 font-medium">
+                  Portes en attente de positionnement ({unplaced.length})
+                </div>
+                {!unplaced.length && (
+                  <div className="text-xs text-amber-700/80 mt-1">Aucune porte en attente pour cette page.</div>
+                )}
+                {!!unplaced.length && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {unplaced.map((p) => (
+                      <button
+                        key={p.door_id}
+                        className={`px-2 py-1 rounded-md border text-xs transition ${
+                          pendingPlaceDoorId === p.door_id
+                            ? "bg-amber-600 text-white border-amber-700"
+                            : "bg-white text-amber-800 border-amber-200 hover:bg-amber-100"
+                        }`}
+                        onClick={() =>
+                          setPendingPlaceDoorId((cur) => (cur === p.door_id ? null : p.door_id))
+                        }
+                        title="Cliquer puis cliquer sur le plan pour placer"
+                      >
+                        Placer • {p.name || p.door_id}
+                      </button>
+                    ))}
+                    {pendingPlaceDoorId && (
+                      <button
+                        className="px-2 py-1 rounded-md border text-xs bg-white text-gray-700 hover:bg-gray-50"
+                        onClick={() => setPendingPlaceDoorId(null)}
+                      >
+                        Annuler le placement
+                      </button>
+                    )}
+                  </div>
+                )}
+                {!!pendingPlaceDoorId && (
+                  <div className="text-xs text-amber-700/90 mt-2">
+                    Astuce : cliquez/touchez l’endroit souhaité sur le plan pour déposer « {
+                      unplaced.find(u => u.door_id === pendingPlaceDoorId)?.name || "porte"
+                    } ».
+                  </div>
+                )}
               </div>
 
               <PlanViewer
@@ -1038,6 +1093,18 @@ export default function Doors() {
                   await loadPositions(selectedPlan, planPage);
                 }}
                 onClickPoint={(p) => openEdit({ id: p.door_id, name: p.name })}
+                // NEW: placement d’une porte « en attente »
+                placingDoorId={pendingPlaceDoorId}
+                onPlaceAt={async (xy) => {
+                  if (!pendingPlaceDoorId) return;
+                  await MAPS.setPosition(pendingPlaceDoorId, {
+                    logical_name: selectedPlan.logical_name,
+                    page_index: planPage,
+                    x_frac: xy.x, y_frac: xy.y,
+                  });
+                  setPendingPlaceDoorId(null);
+                  await loadPositions(selectedPlan, planPage);
+                }}
               />
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
@@ -1513,7 +1580,7 @@ function PlanCard({ plan, onRename, onPick }) {
         const ctx = c.getContext("2d");
         await page.render({ canvasContext: ctx, viewport }).promise;
       } catch (e) {
-        if (!cancelled) setThumbErr("Aperçu indisponible");
+        if (!cancelled) setThumbErr("Aperçu indisponible.");
       }
     })();
     return () => { cancelled = true; };
@@ -1561,16 +1628,27 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 
-function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint }) {
+/**
+ * PlanViewer
+ * - Zoom: molette/trackpad (wheel), pinch sur tactile
+ * - Pan: drag (souris) / pan tactile
+ * - Déplacement d’un marqueur: mousedown + drag
+ * - Placement d’une porte en attente: prop placingDoorId + onPlaceAt(xy), clic/touch pour déposer
+ */
+function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, placingDoorId, onPlaceAt }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
   const [loaded, setLoaded] = useState(false);
-  const [scale, setScale] = useState(1);
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+
+  // viewport state (scale + pan)
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 }); // en pixels sur le rendu courant
+
   const [err, setErr] = useState("");
 
-  // pdf.js local (évite la CSP <embed>)
+  // pdf.js render (to canvas)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1591,12 +1669,14 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         await page.render({ canvasContext: ctx, viewport }).promise;
         if (!cancelled) {
           setLoaded(true);
+          setScale(1);
+          setPan({ x: 0, y: 0 });
           onReady?.();
         }
       } catch (e) {
         if (!cancelled) {
           setLoaded(false);
-          setErr("Impossible d’afficher ce PDF (format non supporté). ");
+          setErr("Aperçu indisponible.");
           onReady?.();
         }
       }
@@ -1604,11 +1684,136 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     return () => { cancelled = true; };
   }, [fileUrl, pageIndex, onReady]);
 
-  // Zoom handlers
-  const zoom = (dir) => setScale((s) => Math.max(0.5, Math.min(3, s + (dir > 0 ? 0.2 : -0.2))));
-  const reset = () => setScale(1);
+  // ---------- wheel zoom (avec focus sur le curseur) ----------
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
 
-  // Drag / move a point
+    function onWheel(e) {
+      if (!loaded) return;
+      const delta = e.deltaY;
+      // trackpad pinch envoie deltaY avec ctrlKey === true (Chrome) => traiter comme zoom
+      const isZoom = e.ctrlKey || e.metaKey;
+      if (!isZoom && Math.abs(delta) < 40) return; // scroll léger = pan natif scrollbar
+
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left - pan.x;
+      const cy = e.clientY - rect.top - pan.y;
+
+      const prev = scale;
+      const next = Math.max(0.5, Math.min(3, prev * (delta > 0 ? 0.9 : 1.1)));
+
+      // rester centré autour du curseur
+      const nx = cx - (cx * next) / prev;
+      const ny = cy - (cy * next) / prev;
+      setScale(next);
+      setPan((p) => ({ x: p.x + nx, y: p.y + ny }));
+    }
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [loaded, scale, pan.x, pan.y]);
+
+  // ---------- pan à la souris (drag fond) ----------
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    let dragging = false;
+    let sx = 0, sy = 0;
+    let baseX = 0, baseY = 0;
+
+    function down(e) {
+      // ignorer si l’on démarre sur un marker (le marker gère son propre drag)
+      if ((e.target instanceof HTMLElement) && e.target.dataset?.marker === "1") return;
+      dragging = true;
+      sx = e.clientX;
+      sy = e.clientY;
+      baseX = pan.x;
+      baseY = pan.y;
+      el.style.cursor = "grabbing";
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    }
+    function move(e) {
+      if (!dragging) return;
+      setPan({ x: baseX + (e.clientX - sx), y: baseY + (e.clientY - sy) });
+    }
+    function up() {
+      dragging = false;
+      el.style.cursor = "default";
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    }
+
+    el.addEventListener("mousedown", down);
+    return () => {
+      el.removeEventListener("mousedown", down);
+    };
+  }, [pan.x, pan.y]);
+
+  // ---------- gestures tactiles: pinch + pan à un doigt ----------
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+
+    let pointers = new Map();
+
+    function onPointerDown(e) {
+      pointers.set(e.pointerId, e);
+      el.setPointerCapture(e.pointerId);
+    }
+    function onPointerMove(e) {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, e);
+
+      if (pointers.size === 1) {
+        // pan à un doigt
+        const ev = Array.from(pointers.values())[0];
+        // utiliser movementX/Y n'est pas fiable, calculer diff manuel
+        const prev = ev; // stocké, mais ici nous avons seulement le dernier… on pan via delta vs last pan
+        // simplifier: quand un seul doigt, laisser le navigateur scroller; on force pan via transform si on veut
+        // on fait plutôt rien ici; le drag souris couvre desktop, et mobile peut glisser le conteneur overflow
+      } else if (pointers.size === 2) {
+        // pinch
+        const [p1, p2] = Array.from(pointers.values());
+        const dist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+
+        if (!el._pinchBase) {
+          el._pinchBase = { dist, scale, panX: pan.x, panY: pan.y, cx: (p1.clientX + p2.clientX) / 2, cy: (p1.clientY + p2.clientY) / 2 };
+          return;
+        }
+        const base = el._pinchBase;
+        const factor = Math.max(0.5, Math.min(3, base.scale * (dist / base.dist)));
+
+        const rect = el.getBoundingClientRect();
+        const cx = base.cx - rect.left - base.panX;
+        const cy = base.cy - rect.top - base.panY;
+        const nx = cx - (cx * factor) / base.scale;
+        const ny = cy - (cy * factor) / base.scale;
+
+        setScale(factor);
+        setPan({ x: base.panX + nx, y: base.panY + ny });
+      }
+    }
+    function onPointerUp(e) {
+      pointers.delete(e.pointerId);
+      el.releasePointerCapture(e.pointerId);
+      if (pointers.size < 2) el._pinchBase = null;
+    }
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [scale, pan.x, pan.y]);
+
+  // ---------- drag marker (déplacement d’un point existant) ----------
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
@@ -1621,10 +1826,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       baseY: p.y_frac ?? p.y ?? 0,
       rect,
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("mousemove", onMoveMarker);
+    window.addEventListener("mouseup", onUpMarker);
   }
-  function onMove(e) {
+  function onMoveMarker(e) {
     const info = dragInfo.current;
     if (!info) return;
     const dx = (e.clientX - info.startX) / (info.rect.width);
@@ -1634,10 +1839,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (el) el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
   }
-  function onUp() {
+  function onUpMarker() {
     const info = dragInfo.current;
-    window.removeEventListener("mousemove", onMove);
-    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("mousemove", onMoveMarker);
+    window.removeEventListener("mouseup", onUpMarker);
     if (!info) return;
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (!el) { dragInfo.current = null; return; }
@@ -1657,15 +1862,25 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     return "bg-blue-600 ring-1 ring-blue-300";
   }
 
+  // calcul coordonnées relatives (0..1) pour placement au clic
+  function relativeXY(evt) {
+    const overlay = overlayRef.current;
+    if (!overlay) return { x: 0, y: 0 };
+    const r = overlay.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (evt.clientX - r.left) / r.width));
+    const y = Math.min(1, Math.max(0, (evt.clientY - r.top) / r.height));
+    return { x, y };
+  }
+
+  function onOverlayClick(e) {
+    if (!placingDoorId) return;
+    // déposer la porte en attente
+    const xy = relativeXY(e);
+    onPlaceAt?.(xy);
+  }
+
   return (
     <div className="mt-3">
-      <div className="flex items-center gap-2 mb-2">
-        <Btn variant="ghost" onClick={() => zoom(-1)}>−</Btn>
-        <Btn variant="ghost" onClick={() => zoom(+1)}>+</Btn>
-        <Btn variant="ghost" onClick={reset}>1:1</Btn>
-        <div className="text-xs text-gray-500">Zoom: {(scale * 100).toFixed(0)}%</div>
-      </div>
-
       <div
         ref={wrapRef}
         className="relative w-full overflow-auto border rounded-2xl bg-gray-50"
@@ -1673,11 +1888,18 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       >
         {/* Canvas mode (pdf.js) */}
         {pageSize.w > 0 && (
-          <div className="relative inline-block"
-               style={{ width: pageSize.w * scale, height: pageSize.h * scale }}>
+          <div
+            className="relative inline-block will-change-transform"
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+              transformOrigin: "0 0",
+              width: pageSize.w,
+              height: pageSize.h,
+            }}
+          >
             <canvas
               ref={canvasRef}
-              style={{ width: pageSize.w * scale, height: pageSize.h * scale, display: loaded ? "block" : "none" }}
+              style={{ width: pageSize.w, height: pageSize.h, display: loaded ? "block" : "none" }}
             />
             {!loaded && (
               <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
@@ -1690,31 +1912,36 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
               ref={overlayRef}
               className="absolute inset-0"
               style={{ width: "100%", height: "100%" }}
+              onClick={onOverlayClick}
             >
               {points.map((p) => {
                 const x = p.x_frac ?? p.x ?? 0;
                 const y = p.y_frac ?? p.y ?? 0;
+                const placed = p.x_frac != null && p.y_frac != null;
                 return (
-                  <div
-                    key={p.door_id}
-                    data-id={p.door_id}
-                    className="absolute"
-                    style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
-                  >
-                    <button
-                      title={p.name}
-                      onMouseDown={(e) => onMouseDownPoint(e, p)}
-                      onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
-                      className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                    />
-                  </div>
+                  placed && (
+                    <div
+                      key={p.door_id}
+                      data-id={p.door_id}
+                      className="absolute"
+                      style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
+                    >
+                      <button
+                        title={p.name}
+                        data-marker="1"
+                        onMouseDown={(e) => onMouseDownPoint(e, p)}
+                        onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
+                        className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                      />
+                    </div>
+                  )
                 );
               })}
             </div>
           </div>
         )}
 
-        {/* Fallback lisible (sans <embed> pour éviter CSP) */}
+        {/* Fallback lisible */}
         {pageSize.w === 0 && (
           <div className="p-3 text-sm text-gray-600">
             {err || "Aperçu indisponible."}{" "}
