@@ -465,7 +465,11 @@ export const api = {
       return get(`/api/doors/maps/positions`, { logical_name: key, page_index });
     },
 
+    // 🆕 Portes non positionnées
+    pendingPositions: (logical_name, page_index = 0) =>
+      get(`/api/doors/maps/pending-positions`, { logical_name, page_index }),
+
     setPosition: (doorId, payload) =>
       put(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, payload),
   },
-  };
+};
