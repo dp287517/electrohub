@@ -2,6 +2,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
+/* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
+import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
@@ -1479,15 +1484,12 @@ function PlanCard({ plan, onRename, onPick }) {
   const canvasRef = useRef(null);
   const [thumbErr, setThumbErr] = useState("");
 
-  // Miniature page 1 via pdf.js (CDN)
+  // Miniature page 1 via pdf.js (local, plus de CDN)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setThumbErr("");
-        const pdfjsLib = await import("https://esm.sh/pdfjs-dist@4.7.21");
-        const workerSrc = "https://esm.sh/pdfjs-dist@4.7.21/build/pdf.worker.min.mjs";
-        pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
         const url = MAPS.planFileUrl(plan.id); // <-- ID
         const loadingTask = pdfjsLib.getDocument({ url });
@@ -1558,15 +1560,12 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
   const [err, setErr] = useState("");
 
-  // pdf.js via CDN (évite la CSP <embed>)
+  // pdf.js local (évite la CSP <embed>)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setErr("");
-        const pdfjsLib = await import("https://esm.sh/pdfjs-dist@4.7.21");
-        const workerSrc = "https://esm.sh/pdfjs-dist@4.7.21/build/pdf.worker.min.mjs";
-        pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
         const loadingTask = pdfjsLib.getDocument({ url: fileUrl });
         const pdf = await loadingTask.promise;
