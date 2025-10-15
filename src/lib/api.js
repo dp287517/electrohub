@@ -351,7 +351,8 @@ export const api = {
     qrUrl: (id, size = 256) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`,
     qrcodesUrl: (id, sizes = "80,120,200", force = false) =>
       `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
-    nonConformPDF: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/非`, // placeholder (non utilisé)
+    // ✅ corrige le placeholder
+    nonConformPDF: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`,
     nonConformitiesPdfUrl: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`,
 
     // Calendrier / settings / alertes
@@ -361,7 +362,7 @@ export const api = {
     alerts: () => get(`/api/doors/alerts`),
   },
 
-  /** --- DOORS MAPS (Plans PDF + positions) — AJOUT --- */
+  /** --- DOORS MAPS (Plans PDF + positions) — AJUSTÉ: logical_name obligatoire --- */
   doorsMaps: {
     uploadZip: (file) => {
       const fd = new FormData();
@@ -371,7 +372,8 @@ export const api = {
     listPlans: () => get(`/api/doors/maps/plans`),
     renamePlan: (logical_name, display_name) =>
       put(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, { display_name }),
-    planFileUrl: (planId) => `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(planId)}/file`,
+    // ⚠️ Ici le backend attend un logical_name (pas un id UUID)
+    planFileUrl: (logical_name) => `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`,
     positions: (logical_name, page_index = 0) =>
       get(`/api/doors/maps/positions`, { logical_name, page_index }),
     setPosition: (doorId, payload) =>
