@@ -200,6 +200,32 @@ const API = {
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
 
+/* ----------------------------- API (Doors Maps) ----------------------------- */
+const MAPS = {
+  uploadZip: async (file) => {
+    const fd = new FormData();
+    fd.append("zip", file);
+    const r = await fetch(`/api/doors/maps/uploadZip`, { method: "POST", credentials: "include", headers: userHeaders(), body: fd });
+    return r.json();
+  },
+  listPlans: async () => (await fetch(`/api/doors/maps/plans`, withHeaders())).json(),
+  renamePlan: async (logical_name, display_name) =>
+    (await fetch(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, {
+      method: "PUT",
+      ...withHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ display_name }),
+    })).json(),
+  planFileUrl: (planId) => `/api/doors/maps/plan/${encodeURIComponent(planId)}/file`,
+  positions: async (logical_name, page_index = 0) =>
+    (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(),
+  setPosition: async (doorId, payload) =>
+    (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
+      method: "PUT",
+      ...withHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+    })).json(),
+};
+
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -415,7 +441,7 @@ function MonthCalendar({ events = [], onDayClick }) {
 
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
-  const [tab, setTab] = useState("controls"); // controls | calendar | settings
+  const [tab, setTab] = useState("controls"); // controls | calendar | settings | maps
 
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
@@ -699,6 +725,35 @@ export default function Doors() {
     }
   }
 
+  /* ------------------ MAPS state / loaders ------------------ */
+  const [plans, setPlans] = useState([]); // {logical_name, display_name, pages, counts:{next30, overdue, todo}}
+  const [mapsLoading, setMapsLoading] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState(null); // plan object
+  const [planPage, setPlanPage] = useState(0);
+  const [positions, setPositions] = useState([]); // [{door_id, x,y,status,door_name}]
+  const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
+
+  async function loadPlans() {
+    setMapsLoading(true);
+    try {
+      const r = await MAPS.listPlans().catch(() => ({ items: [] }));
+      setPlans(Array.isArray(r?.items) ? r.items : []);
+    } finally {
+      setMapsLoading(false);
+    }
+  }
+  async function loadPositions(plan, pageIdx = 0) {
+    if (!plan) return;
+    const r = await MAPS.positions(plan.logical_name || plan.id || plan.name, pageIdx).catch(() => ({ points: [] }));
+    setPositions(Array.isArray(r?.points) ? r.points : []);
+  }
+  useEffect(() => {
+    if (tab === "maps") loadPlans();
+  }, [tab]);
+  useEffect(() => {
+    if (selectedPlan) loadPositions(selectedPlan, planPage);
+  }, [selectedPlan, planPage]);
+
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -708,6 +763,9 @@ export default function Doors() {
         </Btn>
         <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
           📅 Calendrier
+        </Btn>
+        <Btn variant={tab === "maps" ? "primary" : "ghost"} onClick={() => setTab("maps")}>
+          🗺️ Plans
         </Btn>
         <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>
           ⚙️ Paramètres
@@ -902,6 +960,78 @@ export default function Doors() {
               openEdit({ id: first.door_id, name: first.door_name });
             }}
           />
+        </div>
+      )}
+
+      {/* Onglet Plans */}
+      {tab === "maps" && (
+        <div className="space-y-4">
+          <PlansHeader
+            mapsLoading={mapsLoading}
+            onUploadZip={async (file) => {
+              const r = await MAPS.uploadZip(file).catch(() => null);
+              if (r?.ok) setToast("Plans importés ✅");
+              await loadPlans();
+            }}
+          />
+
+          <PlanCards
+            plans={plans}
+            onRename={async (plan, name) => {
+              await MAPS.renamePlan(plan.logical_name || plan.id || plan.name, name);
+              await loadPlans();
+            }}
+            onPick={(plan) => {
+              setSelectedPlan(plan);
+              setPlanPage(0);
+            }}
+          />
+
+          {selectedPlan && (
+            <div className="bg-white rounded-2xl border shadow-sm p-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="font-semibold">
+                  {selectedPlan.display_name || selectedPlan.logical_name || selectedPlan.name}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={String(planPage)}
+                    onChange={(v) => setPlanPage(Number(v))}
+                    options={Array.from({ length: Number(selectedPlan.pages || 1) }, (_, i) => ({ value: String(i), label: `Page ${i + 1}` }))}
+                  />
+                  <a
+                    href={MAPS.planFileUrl(selectedPlan.logical_name || selectedPlan.id || selectedPlan.name)}
+                    target="_blank" rel="noreferrer"
+                    className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                  >
+                    Ouvrir le PDF original
+                  </a>
+                </div>
+              </div>
+
+              <PlanViewer
+                key={(selectedPlan.logical_name || selectedPlan.id || selectedPlan.name) + ":" + planPage}
+                fileUrl={MAPS.planFileUrl(selectedPlan.logical_name || selectedPlan.id || selectedPlan.name)}
+                pageIndex={planPage}
+                points={positions}
+                onReady={() => setPdfReady(true)}
+                onMovePoint={async (doorId, xy) => {
+                  await MAPS.setPosition(doorId, {
+                    logical_name: selectedPlan.logical_name || selectedPlan.id || selectedPlan.name,
+                    page_index: planPage,
+                    x: xy.x, y: xy.y,
+                  });
+                  await loadPositions(selectedPlan, planPage);
+                }}
+                onClickPoint={(p) => openEdit({ id: p.door_id, name: p.door_name })}
+              />
+              {!pdfReady && (
+                <div className="text-xs text-gray-500 px-1 pt-2">
+                  Chargement du plan… si l’affichage vectoriel n’est pas supporté par le navigateur, un fallback lecture seule est utilisé.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1298,6 +1428,266 @@ function DoorHistory({ doorId }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ----------------------------- MAPS components ----------------------------- */
+function PlansHeader({ mapsLoading, onUploadZip }) {
+  const inputRef = useRef(null);
+  return (
+    <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
+      <div className="font-semibold">Plans PDF</div>
+      <div className="flex items-center gap-2">
+        <Btn
+          variant="ghost"
+          onClick={() => inputRef.current?.click()}
+          disabled={mapsLoading}
+        >
+          📦 Import ZIP de plans
+        </Btn>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".zip,application/zip"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUploadZip(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function PlanCards({ plans = [], onRename, onPick }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
+      {plans.map((p) => (
+        <PlanCard key={p.logical_name || p.id || p.name} plan={p} onRename={onRename} onPick={onPick} />
+      ))}
+    </div>
+  );
+}
+function PlanCard({ plan, onRename, onPick }) {
+  const [edit, setEdit] = useState(false);
+  const [name, setName] = useState(plan.display_name || plan.logical_name || plan.name || "");
+  const next30 = Number(plan?.counts?.next30 || plan?.next30 || 0);
+  const overdue = Number(plan?.counts?.overdue || plan?.overdue || 0);
+  const todo = Number(plan?.counts?.todo || plan?.todo || 0);
+
+  return (
+    <div className="border rounded-2xl p-3 bg-white shadow-sm hover:shadow transition">
+      <div className="flex items-center justify-between gap-2">
+        {!edit ? (
+          <div className="font-medium truncate" title={name}>{name || "—"}</div>
+        ) : (
+          <Input value={name} onChange={setName} />
+        )}
+        <div className="flex items-center gap-2">
+          {!edit ? (
+            <Btn variant="ghost" onClick={() => setEdit(true)}>Renommer</Btn>
+          ) : (
+            <>
+              <Btn
+                variant="subtle"
+                onClick={async () => {
+                  await onRename(plan, (name || "").trim());
+                  setEdit(false);
+                }}
+              >
+                OK
+              </Btn>
+              <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || plan.name || ""); setEdit(false); }}>
+                Annuler
+              </Btn>
+            </>
+          )}
+          <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
+        </div>
+      </div>
+      <div className="flex items-center gap-2 mt-2 text-xs">
+        <Badge color="orange">≤30j: {next30}</Badge>
+        <Badge color="red">Retard: {overdue}</Badge>
+        <Badge color="green">À faire: {todo}</Badge>
+      </div>
+    </div>
+  );
+}
+
+function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
+  const [loaded, setLoaded] = useState(false);
+  const [scale, setScale] = useState(1);
+  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+
+  // Try to load pdf.js from CDN (no build deps)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const pdfjsLib = await import("https://esm.sh/pdfjs-dist@3.11.174/build/pdf.mjs");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.mjs";
+        const loadingTask = pdfjsLib.getDocument({ url: fileUrl });
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = canvasRef.current;
+        if (!canvas || cancelled) return;
+        const ctx = canvas.getContext("2d");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        setPageSize({ w: canvas.width, h: canvas.height });
+
+        await page.render({ canvasContext: ctx, viewport }).promise;
+        setLoaded(true);
+        onReady?.();
+      } catch {
+        // Fallback: we won't render on canvas; the <embed> below will display PDF read-only
+        setLoaded(false);
+        onReady?.();
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [fileUrl, pageIndex, onReady]);
+
+  // Zoom handlers
+  const zoom = (dir) => setScale((s) => Math.max(0.5, Math.min(3, s + (dir > 0 ? 0.2 : -0.2))));
+  const reset = () => setScale(1);
+
+  // Drag / move a point
+  const dragInfo = useRef(null);
+  function onMouseDownPoint(e, p) {
+    e.stopPropagation();
+    const rect = overlayRef.current.getBoundingClientRect();
+    dragInfo.current = {
+      id: p.door_id,
+      startX: e.clientX,
+      startY: e.clientY,
+      baseX: p.x,
+      baseY: p.y,
+      rect,
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+  function onMove(e) {
+    const info = dragInfo.current;
+    if (!info) return;
+    const dx = (e.clientX - info.startX) / (info.rect.width);
+    const dy = (e.clientY - info.startY) / (info.rect.height);
+    const x = Math.min(1, Math.max(0, info.baseX + dx));
+    const y = Math.min(1, Math.max(0, info.baseY + dy));
+    // apply preview
+    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (el) el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
+  }
+  function onUp() {
+    const info = dragInfo.current;
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    if (!info) return;
+    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (!el) { dragInfo.current = null; return; }
+    // read back final x/y from style
+    const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
+    if (m) {
+      const x = Number(m[1]) / 100;
+      const y = Number(m[2]) / 100;
+      onMovePoint?.(info.id, { x, y });
+    }
+    dragInfo.current = null;
+  }
+
+  // Marker color/blink by status
+  function markerClass(s) {
+    if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
+    if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
+    if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
+    return "bg-blue-600 ring-1 ring-blue-300";
+  }
+
+  return (
+    <div className="mt-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Btn variant="ghost" onClick={() => zoom(-1)}>−</Btn>
+        <Btn variant="ghost" onClick={() => zoom(+1)}>+</Btn>
+        <Btn variant="ghost" onClick={reset}>1:1</Btn>
+        <div className="text-xs text-gray-500">Zoom: {(scale * 100).toFixed(0)}%</div>
+      </div>
+
+      <div
+        ref={wrapRef}
+        className="relative w-full overflow-auto border rounded-2xl bg-gray-50"
+        style={{ height: 520 }}
+      >
+        {/* Canvas mode (if pdf.js OK) */}
+        {pageSize.w > 0 && (
+          <div className="relative inline-block"
+               style={{ width: pageSize.w * scale, height: pageSize.h * scale }}>
+            <canvas
+              ref={canvasRef}
+              style={{ width: pageSize.w * scale, height: pageSize.h * scale, display: loaded ? "block" : "none" }}
+            />
+            {!loaded && (
+              <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+                Rendu en cours…
+              </div>
+            )}
+
+            {/* overlay points (absolute, 0..1 coords) */}
+            <div
+              ref={overlayRef}
+              className="absolute inset-0"
+              style={{ width: "100%", height: "100%" }}
+            >
+              {points.map((p) => (
+                <div
+                  key={p.door_id}
+                  data-id={p.door_id}
+                  className="absolute"
+                  style={{ transform: `translate(${(p.x || 0) * 100}%, ${(p.y || 0) * 100}%) translate(-50%, -50%)` }}
+                >
+                  <button
+                    title={p.door_name}
+                    onMouseDown={(e) => onMouseDownPoint(e, p)}
+                    onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
+                    className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Fallback <embed> if pdf.js failed */}
+        {pageSize.w === 0 && (
+          <div className="relative w-full h-full">
+            <embed src={fileUrl} type="application/pdf" className="w-full h-full" />
+            <div className="absolute bottom-2 left-2 text-xs bg-white/80 backdrop-blur px-2 py-1 rounded border">
+              Mode lecture seule (PDF natif du navigateur).
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
+        </span>
+      </div>
     </div>
   );
 }
