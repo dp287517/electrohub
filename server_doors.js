@@ -220,13 +220,13 @@ async function ensureSchema() {
       filename TEXT,
       file_path TEXT,
       page_count INT,
+      content BYTEA,
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  await pool.query(`ALTER TABLE fd_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_logical_idx ON fd_plans(logical_name);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_created_idx ON fd_plans(created_at DESC);`);
-  // ✅ Correctif: stockage binaire facultatif du PDF
-  await pool.query(`ALTER TABLE fd_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fd_plan_names (
@@ -1545,16 +1545,13 @@ app.post("/api/doors/maps/uploadZip", uploadZip.single("zip"), async (req, res) 
 
       const page_count = await pdfPageCount(dest).catch(() => 1);
 
-      // ✅ Correctif: stocker aussi le contenu binaire en DB pour fallback
-      let contentBuf = null;
-      try {
-        contentBuf = await fsp.readFile(dest);
-      } catch {}
+      // 🔸 Lire le BLOB pour fallback DB
+      const blob = await fsp.readFile(dest).catch(() => null);
 
       await pool.query(
         `INSERT INTO fd_plans (logical_name, version, filename, file_path, page_count, content)
          VALUES ($1,$2,$3,$4,$5,$6)`,
-        [logical, version, entry.name, dest, page_count, contentBuf]
+        [logical, version, entry.name, dest, page_count, blob]
       );
       await pool.query(
         `INSERT INTO fd_plan_names (logical_name, display_name)
@@ -1628,16 +1625,17 @@ app.get(
   async (req, res) => {
     try {
       const { rows } = await pool.query(
-        `SELECT file_path, content FROM fd_plans WHERE id=$1`,
+        `SELECT file_path, content FROM fd_plans WHERE id=$1 ORDER BY created_at DESC LIMIT 1`,
         [req.params.id]
       );
       const row = rows[0];
-      const p = row?.file_path;
+      if (!row) return res.status(404).send("not_found");
+
+      const p = row.file_path;
       if (p && fs.existsSync(p)) {
         return res.type("application/pdf").sendFile(path.resolve(p));
       }
-      // ✅ Correctif: fallback DB
-      if (row?.content) {
+      if (row.content) {
         res.setHeader("Content-Type", "application/pdf");
         return res.end(row.content, "binary");
       }
@@ -1658,12 +1656,13 @@ app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
       [logical]
     );
     const row = rows[0];
-    const p = row?.file_path;
+    if (!row) return res.status(404).send("not_found");
+
+    const p = row.file_path;
     if (p && fs.existsSync(p)) {
       return res.type("application/pdf").sendFile(path.resolve(p));
     }
-    // ✅ Correctif: fallback DB
-    if (row?.content) {
+    if (row.content) {
       res.setHeader("Content-Type", "application/pdf");
       return res.end(row.content, "binary");
     }
@@ -1677,16 +1676,17 @@ app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
 app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT file_path, content FROM fd_plans WHERE id=$1`,
+      `SELECT file_path, content FROM fd_plans WHERE id=$1 ORDER BY created_at DESC LIMIT 1`,
       [req.params.id]
     );
     const row = rows[0];
-    const p = row?.file_path;
+    if (!row) return res.status(404).send("not_found");
+
+    const p = row.file_path;
     if (p && fs.existsSync(p)) {
       return res.type("application/pdf").sendFile(path.resolve(p));
     }
-    // ✅ Correctif: fallback DB
-    if (row?.content) {
+    if (row.content) {
       res.setHeader("Content-Type", "application/pdf");
       return res.end(row.content, "binary");
     }
