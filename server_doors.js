@@ -45,7 +45,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.set("trust proxy", 1);
 
-// 🔐 Helmet — CSP assouplie pour pdf.js (CDN) & worker
+// 🔐 Helmet — CSP locale (pdf.js local, plus de CDN)
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -54,10 +54,8 @@ app.use(
         "default-src": ["'self'"],
         "object-src": ["'self'", "blob:"],
         "img-src": ["'self'", "data:", "blob:"],
-        // autorise pdf.worker chargé depuis CDN
-        "worker-src": ["'self'", "blob:", "https://esm.sh"],
-        // autorise pdfjs-dist@esm.sh
-        "script-src": ["'self'", "'unsafe-inline'", "https://esm.sh"],
+        "worker-src": ["'self'", "blob:"], // worker pdf.js local + blob
+        "script-src": ["'self'", "'unsafe-inline'"], // plus de https://esm.sh
         "style-src": ["'self'", "'unsafe-inline'"],
         "connect-src": ["'self'", "*"],
       },
@@ -223,7 +221,7 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
-  // ➜ correctif B : colonne binaire pour le PDF
+  // ➜ stockage BLOB du PDF pour robustesse
   await pool.query(`ALTER TABLE fd_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS fd_plans_logical_idx ON fd_plans(logical_name);`);
