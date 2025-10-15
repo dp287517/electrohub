@@ -1780,6 +1780,39 @@ app.get("/api/doors/maps/positions", async (req, res) => {
   }
 });
 
+/** Nouvelle route : Liste des portes non positionnées pour un plan/page */
+app.get("/api/doors/maps/pending-positions", async (req, res) => {
+  try {
+    const logical = String(req.query.logical_name || "");
+    const pageIndex = Number(req.query.page_index || 0);
+
+    if (!logical) {
+      return res.status(400).json({ ok: false, error: "logical_name requis" });
+    }
+
+    const q = `
+      SELECT d.id AS door_id, d.name AS door_name
+      FROM fd_doors d
+      LEFT JOIN fd_door_positions p
+        ON p.door_id = d.id
+        AND p.plan_logical_name = $1
+        AND p.page_index = $2
+      WHERE p.door_id IS NULL
+      ORDER BY d.name ASC;
+    `;
+    const { rows } = await pool.query(q, [logical, pageIndex]);
+
+    const pending = rows.map((r) => ({
+      door_id: r.door_id,
+      door_name: r.door_name,
+    }));
+
+    res.json({ ok: true, pending });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 /** Enregistre/Met à jour la position d’une porte sur un plan/page */
 // remplace le handler par :
 app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
