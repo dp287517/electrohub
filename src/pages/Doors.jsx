@@ -232,6 +232,14 @@ const MAPS = {
     })).json(),
 };
 
+/* ---------- ✅ Helper d’URL PDF (ID prioritaire, fallback logical) ---------- */
+function planFileUrlSafe(plan) {
+  const looksLikeUuid = typeof plan?.id === "string" && /^[0-9a-fA-F-]{36}$/.test(plan.id);
+  return looksLikeUuid
+    ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`      // UUID route
+    : `/api/doors/maps/plan/${encodeURIComponent(plan?.logical_name || "")}/file`; // fallback logical
+}
+
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -1006,7 +1014,7 @@ export default function Doors() {
                   />
                   {/* ✅ CORRECTIF: lien vers le PDF par ID (UUID) pour éviter les 404 */}
                   <a
-                    href={MAPS.planFileUrlById(selectedPlan.id)}
+                    href={planFileUrlSafe(selectedPlan)}
                     target="_blank" rel="noreferrer"
                     className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                   >
@@ -1017,7 +1025,7 @@ export default function Doors() {
 
               <PlanViewer
                 key={selectedPlan.id + ":" + planPage}
-                fileUrl={MAPS.planFileUrlById(selectedPlan.id)}
+                fileUrl={planFileUrlSafe(selectedPlan)}
                 pageIndex={planPage}
                 points={positions}
                 onReady={() => setPdfReady(true)}
@@ -1493,7 +1501,7 @@ function PlanCard({ plan, onRename, onPick }) {
       try {
         setThumbErr("");
 
-        const url = MAPS.planFileUrlById(plan.id);
+        const url = planFileUrlSafe(plan);
         const loadingTask = pdfjsLib.getDocument({ url });
         const pdf = await loadingTask.promise;
         const page = await pdf.getPage(1);
