@@ -105,13 +105,13 @@ async function jsonFetch(url, options = {}) {
 /** 🔹 Utilitaire bas niveau pour appels JSON "bruts" (multipart S3, etc.) */
 export async function apiBaseFetchJSON(path, options = {}) {
   const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
-  const headers = identityHeaders(new Headers(options.headers || {})); // <-- inject identity
+  const headers = identityHeaders(new Headers(options.headers || {}));
+  // 🔧 ajouter le site comme dans jsonFetch()
+  const site = currentSite();
+  headers.set("X-Site", site);
+
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  const res = await fetch(finalUrl, {
-    credentials: "include",
-    ...options,
-    headers,
-  });
+  const res = await fetch(finalUrl, { credentials: "include", ...options, headers });
   const ct = res.headers.get("content-type") || "";
   const payload = ct.includes("application/json") ? await res.json() : await res.text();
   if (!res.ok) {
@@ -412,6 +412,7 @@ export const api = {
       if (name)  fd.append("user_name",  name);
       return upload(`/api/doors/maps/uploadZip`, fd);
     },
+
     listPlans: () => get(`/api/doors/maps/plans`),
 
     renamePlan: (logical_name, display_name) =>
@@ -430,10 +431,15 @@ export const api = {
       withBust(`${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(id)}/file`, bust),
 
     /**
-     * Helper AUTO: passe par l’ID si c’est un UUID, sinon logical_name.
-     * Accepte un objet `plan` renvoyé par /maps/plans (contient {id, logical_name}).
+     * Helper AUTO: accepte soit un objet plan {id, logical_name},
+     * soit une simple string (UUID ou logical_name).
      */
     planFileUrlAuto: (plan, { bust = true } = {}) => {
+      if (typeof plan === "string") {
+        return isUuid(plan)
+          ? withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust)
+          : withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust);
+      }
       if (plan && isUuid(plan.id)) {
         return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`, bust);
       }
@@ -444,7 +450,22 @@ export const api = {
     /** Positions — lecture/écriture */
     positions: (logical_name, page_index = 0) =>
       get(`/api/doors/maps/positions`, { logical_name, page_index }),
+
+    // 🆕 Lecture par UUID
+    positionsById: (id, page_index = 0) =>
+      get(`/api/doors/maps/positions`, { id, page_index }),
+
+    // 🆕 Auto: détecte logical_name ou UUID
+    positionsAuto: (planOrKey, page_index = 0) => {
+      const key =
+        typeof planOrKey === "string"
+          ? planOrKey
+          : planOrKey?.id || planOrKey?.logical_name || "";
+      if (isUuid(key)) return get(`/api/doors/maps/positions`, { id: key, page_index });
+      return get(`/api/doors/maps/positions`, { logical_name: key, page_index });
+    },
+
     setPosition: (doorId, payload) =>
       put(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, payload),
   },
-};
+  };
