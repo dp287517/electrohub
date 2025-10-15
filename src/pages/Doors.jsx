@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
-/* ----------------------------- pdf.js (pour les vignettes & viewer) ----------------------------- */
+/* -------- pdf.js (local, pas d’<embed>, pas de CDN) -------- */
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
 import pdfWorker from "pdfjs-dist/build/pdf.worker?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
@@ -13,7 +13,6 @@ function getCookie(name) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-// Identité robuste
 function getIdentity() {
   let email = getCookie("email") || null;
   let name = getCookie("name") || null;
@@ -29,6 +28,14 @@ function getIdentity() {
         if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
       } catch {}
     }
+    if ((!email || !name) && localStorage.getItem("eh_user")) {
+      try {
+        const eu = JSON.parse(localStorage.getItem("eh_user"));
+        const x = eu?.user || eu?.profile || eu;
+        if (!email && x?.email) email = String(x.email);
+        if (!name && (x?.name || x?.displayName)) name = String(x.name || x.displayName);
+      } catch {}
+    }
   } catch {}
 
   if (!name && email) {
@@ -39,7 +46,6 @@ function getIdentity() {
   }
   email = email ? String(email).trim() : null;
   name  = name  ? String(name).trim()  : null;
-
   return { email, name };
 }
 
@@ -54,7 +60,7 @@ function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
 
-/* ----------------------------- API (Doors) ----------------------------- */
+/* ----------------------------- API Doors ----------------------------- */
 const API = {
   list: async (params = {}) => {
     const qs = new URLSearchParams(
@@ -93,7 +99,6 @@ const API = {
       })
     ).json();
   },
-
   saveCheck: async (doorId, checkId, payload) => {
     const id = getIdentity();
     if (payload?.files?.length) {
@@ -103,10 +108,7 @@ const API = {
       if (id.email) fd.append("user_email", id.email);
       if (id.name)  fd.append("user_name",  id.name);
       const r = await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
-        method: "PUT",
-        credentials: "include",
-        headers: userHeaders(),
-        body: fd,
+        method: "PUT", credentials: "include", headers: userHeaders(), body: fd,
       });
       return r.json();
     }
@@ -131,10 +133,7 @@ const API = {
     if (id.email) fd.append("user_email", id.email);
     if (id.name)  fd.append("user_name",  id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/files`, {
-      method: "POST",
-      credentials: "include",
-      headers: userHeaders(),
-      body: fd,
+      method: "POST", credentials: "include", headers: userHeaders(), body: fd,
     });
     return r.json();
   },
@@ -148,15 +147,12 @@ const API = {
     if (id.email) fd.append("user_email", id.email);
     if (id.name)  fd.append("user_name",  id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/photo`, {
-      method: "POST",
-      credentials: "include",
-      headers: userHeaders(),
-      body: fd,
+      method: "POST", credentials: "include", headers: userHeaders(), body: fd,
     });
     return r.json();
   },
+
   photoUrl: (doorId) => `/api/doors/doors/${doorId}/photo`,
-  qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
   qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
     `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
   calendar: async () => (await fetch(`/api/doors/calendar`, withHeaders())).json(),
@@ -172,29 +168,29 @@ const API = {
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
 
-/* ----------------------------- API (Doors Maps) — aligné backend ----------------------------- */
+/* ----------------------------- API Doors Maps (⚠ logique: logical_name) ----------------------------- */
 const MAPS = {
   uploadZip: async (file) => {
     const fd = new FormData();
     fd.append("zip", file);
     const r = await fetch(`/api/doors/maps/uploadZip`, {
-      method: "POST",
-      credentials: "include",
-      headers: userHeaders(),
-      body: fd,
+      method: "POST", credentials: "include", headers: userHeaders(), body: fd,
     });
     return r.json();
   },
-  listPlans: async () => (await fetch(`/api/doors/maps/plans`, withHeaders())).json(), // { ok, plans: [...] }
+  // Backend renvoie { ok, plans: [...] }
+  listPlans: async () => (await fetch(`/api/doors/maps/plans`, withHeaders())).json(),
   renamePlan: async (logical_name, display_name) =>
     (await fetch(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, {
       method: "PUT",
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-  planFileUrl: (planId) => `/api/doors/maps/plan/${encodeURIComponent(planId)}/file`, // ⚠️ param :id
+  // ⚠ ici on passe TOUJOURS logical_name (pas id)
+  planFileUrl: (logical_name) => `/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`,
+  // Backend renvoie { ok, items: [...] } avec x_frac / y_frac
   positions: async (logical_name, page_index = 0) =>
-    (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(), // { ok, items: [...] }
+    (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(),
   setPosition: async (doorId, payload) =>
     (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
       method: "PUT",
@@ -209,8 +205,6 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
     primary: "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
     ghost: "bg-white text-gray-700 border hover:bg-gray-50",
     danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
-    success: "bg-emerald-600 text-white hover:bg-emerald-700",
-    warn: "bg-amber-500 text-white hover:bg-amber-600",
     subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
   };
   return (
@@ -229,16 +223,6 @@ function Input({ value, onChange, className = "", ...p }) {
     />
   );
 }
-function Textarea({ value, onChange, className = "", ...p }) {
-  return (
-    <textarea
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      {...p}
-    />
-  );
-}
 function Select({ value, onChange, options = [], className = "", placeholder }) {
   return (
     <select
@@ -248,11 +232,8 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
     >
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
-        typeof o === "string" ? (
-          <option key={o} value={o}>{o}</option>
-        ) : (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        )
+        typeof o === "string" ? <option key={o} value={o}>{o}</option> :
+        <option key={o.value} value={o.value}>{o.label}</option>
       )}
     </select>
   );
@@ -265,35 +246,17 @@ function Badge({ color = "gray", children, className = "" }) {
     red: "bg-rose-100 text-rose-700",
     blue: "bg-blue-100 text-blue-700",
   };
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>
-  );
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>;
 }
 const STATUS = { A_FAIRE: "a_faire", EN_COURS: "en_cours_30", EN_RETARD: "en_retard", FAIT: "fait" };
-function statusColor(s) {
-  if (s === STATUS.A_FAIRE) return "green";
-  if (s === STATUS.EN_COURS) return "orange";
-  if (s === STATUS.EN_RETARD) return "red";
-  if (s === STATUS.FAIT) return "blue";
-  return "gray";
-}
-function statusLabel(s) {
-  if (s === STATUS.A_FAIRE) return "À faire";
-  if (s === STATUS.EN_COURS) return "En cours (<30j)";
-  if (s === STATUS.EN_RETARD) return "En retard";
-  if (s === STATUS.FAIT) return "Fait";
-  return s || "—";
-}
-function doorStateBadge(state) {
-  if (state === "conforme") return <Badge color="green">Conforme</Badge>;
-  if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
-  return <Badge>—</Badge>;
-}
+const statusColor = (s) => (s === STATUS.A_FAIRE ? "green" : s === STATUS.EN_COURS ? "orange" : s === STATUS.EN_RETARD ? "red" : s === STATUS.FAIT ? "blue" : "gray");
+const statusLabel = (s) => (s === STATUS.A_FAIRE ? "À faire" : s === STATUS.EN_COURS ? "En cours (<30j)" : s === STATUS.EN_RETARD ? "En retard" : s === STATUS.FAIT ? "Fait" : s || "—");
+const doorStateBadge = (state) => (state === "conforme" ? <Badge color="green">Conforme</Badge> : state === "non_conforme" ? <Badge color="red">Non conforme</Badge> : <Badge>—</Badge>);
 
 /* ----------------------------- Toast ----------------------------- */
 function Toast({ text, onClose }) {
   useEffect(() => {
-    const t = setTimeout(() => onClose && onClose(), 4000);
+    const t = setTimeout(() => onClose && onClose(), 3500);
     return () => clearTimeout(t);
   }, [onClose]);
   if (!text) return null;
@@ -304,7 +267,7 @@ function Toast({ text, onClose }) {
   );
 }
 
-/* ----------------------------- Calendrier (mois) ----------------------------- */
+/* ----------------------------- Calendrier ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
 
@@ -321,9 +284,10 @@ function MonthCalendar({ events = [], onDayClick }) {
 
   const startOfMonth = month.startOf("month").toDate();
   const endOfMonth = month.endOf("month").toDate();
-  const startDow = (startOfMonth.getDay() + 6) % 7; // lundi=0
+  const startDow = (startOfMonth.getDay() + 6) % 7;
   const gridStart = new Date(startOfMonth);
   gridStart.setDate(gridStart.getDate() - startDow);
+
   const days = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(gridStart);
@@ -344,9 +308,7 @@ function MonthCalendar({ events = [], onDayClick }) {
       </div>
 
       <div className="grid grid-cols-7 text-xs font-medium text-gray-500">
-        {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
-          <div key={l} className="px-2 py-2">{l}</div>
-        ))}
+        {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => <div key={l} className="px-2 py-2">{l}</div>)}
       </div>
 
       <div className="grid grid-cols-7 border rounded-2xl overflow-hidden">
@@ -357,27 +319,21 @@ function MonthCalendar({ events = [], onDayClick }) {
             <button
               key={iso}
               onClick={() => clickable && onDayClick && onDayClick({ date: iso, events: list })}
-              className={`min-h-[96px] p-2 border-t border-l last:border-r text-left transition
-                ${inMonth ? "bg-white" : "bg-gray-50"} ${clickable ? "hover:bg-blue-50" : ""}`}
+              className={`min-h-[96px] p-2 border-t border-l last:border-r text-left transition ${inMonth ? "bg-white" : "bg-gray-50"} ${clickable ? "hover:bg-blue-50" : ""}`}
             >
               <div className="flex items-center justify-between">
                 <div className={`text-xs ${inMonth ? "text-gray-700" : "text-gray-400"}`}>{dayjs(d).format("D")}</div>
-                {!!list.length && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">{list.length}</span>
-                )}
+                {!!list.length && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">{list.length}</span>}
               </div>
               <div className="mt-1 space-y-1">
                 {list.slice(0, 3).map((e, i) => (
                   <div
                     key={i}
                     className={`truncate text-[11px] px-1.5 py-0.5 rounded ${
-                      e.status === STATUS.EN_RETARD
-                        ? "bg-rose-50 text-rose-700"
-                        : e.status === STATUS.EN_COURS
-                        ? "bg-amber-50 text-amber-700"
-                        : e.status === STATUS.A_FAIRE
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-blue-50 text-blue-700"
+                      e.status === STATUS.EN_RETARD ? "bg-rose-50 text-rose-700" :
+                      e.status === STATUS.EN_COURS ? "bg-amber-50 text-amber-700" :
+                      e.status === STATUS.A_FAIRE  ? "bg-emerald-50 text-emerald-700" :
+                      "bg-blue-50 text-blue-700"
                     }`}
                   >
                     {e.door_name}
@@ -396,8 +352,9 @@ function MonthCalendar({ events = [], onDayClick }) {
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
   const [tab, setTab] = useState("controls"); // controls | calendar | settings | maps
+  const [toast, setToast] = useState("");
 
-  /* ---- listing + filters ---- */
+  /* ---- Doors listing ---- */
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -407,17 +364,11 @@ export default function Doors() {
   const [floor, setFloor] = useState("");
   const [doorState, setDoorState] = useState("");
 
-  /* ---- drawer ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-
-  /* ---- calendar ---- */
   const [calendar, setCalendar] = useState({ events: [] });
+  const [filesVersion, setFilesVersion] = useState(0);
 
-  /* ---- toast ---- */
-  const [toast, setToast] = useState("");
-
-  /* ---- settings ---- */
   const defaultTemplate = [
     "La porte est-elle en parfait état (fermeture correcte, non voilée) ?",
     "Joint de porte en bon état (propre, non abîmé) ?",
@@ -427,24 +378,14 @@ export default function Doors() {
   ];
   const [settings, setSettings] = useState({ checklist_template: defaultTemplate, frequency: "1_an" });
   const [savingSettings, setSavingSettings] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
-  /* ---- files refresh ---- */
-  const [filesVersion, setFilesVersion] = useState(0);
-
-  /* ---------- Deep-link helpers (QR) ---------- */
-  function getDoorParam() { try { return new URLSearchParams(window.location.search).get("door"); } catch { return null; } }
-  function setDoorParam(id) {
-    try {
-      const url = new URL(window.location.href);
-      if (id) url.searchParams.set("door", id); else url.searchParams.delete("door");
-      window.history.replaceState({}, "", url);
-    } catch {}
-  }
-  function closeDrawerAndClearParam() {
-    setDrawerOpen(false);
-    setEditing(null);
-    setDoorParam(null);
-  }
+  /* ---- Maps state ---- */
+  const [plans, setPlans] = useState([]);             // { logical_name, display_name, page_count, actions_next_30, overdue }
+  const [mapsLoading, setMapsLoading] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [planPage, setPlanPage] = useState(0);
+  const [positions, setPositions] = useState([]);
 
   // -------- data loaders
   async function reload() {
@@ -452,17 +393,13 @@ export default function Doors() {
     try {
       const data = await API.list({ q, status, building, floor, door_state: doorState });
       setDoors(Array.isArray(data.items) ? data.items : []);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
   async function reloadCalendar() {
     const data = await API.calendar().catch(() => ({ events: [] }));
     const events = (data?.events || []).map((e) => ({
       date: dayjs(e.date || e.next_check_date || e.due_date).format("YYYY-MM-DD"),
-      door_id: e.door_id,
-      door_name: e.door_name,
-      status: e.status,
+      door_id: e.door_id, door_name: e.door_name, status: e.status,
     }));
     setCalendar({ events });
   }
@@ -473,44 +410,51 @@ export default function Doors() {
   }
 
   useEffect(() => { reload(); reloadCalendar(); loadSettings(); }, []);
+  useEffect(() => { const t = setTimeout(() => { reload(); }, 350); return () => clearTimeout(t); }, [q, status, building, floor, doorState]);
+
+  // Deep link ?door=
   useEffect(() => {
+    const getDoorParam = () => { try { return new URLSearchParams(window.location.search).get("door"); } catch { return null; } };
+    const setDoorParam = (id) => {
+      try {
+        const url = new URL(window.location.href);
+        if (id) url.searchParams.set("door", id); else url.searchParams.delete("door");
+        window.history.replaceState({}, "", url);
+      } catch {}
+    };
+
     const targetId = getDoorParam();
-    if (!targetId) return;
-    (async () => {
-      const full = await API.get(targetId).catch(() => null);
-      if (full?.door?.id) { setEditing(full.door); setDrawerOpen(true); } else { setDoorParam(null); }
-    })();
-    const onPop = () => { const id = getDoorParam(); if (!id) closeDrawerAndClearParam(); };
+    if (targetId) {
+      (async () => {
+        const full = await API.get(targetId).catch(() => null);
+        if (full?.door?.id) { setEditing(full.door); setDrawerOpen(true); } else { setDoorParam(null); }
+      })();
+    }
+    const onPop = () => { const id = getDoorParam(); if (!id) { setDrawerOpen(false); setEditing(null); } };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-  useEffect(() => {
-    const t = setTimeout(() => { reload(); }, 350);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, status, building, floor, doorState]);
 
   const filtered = doors;
 
-  /* ------------------ actions door ------------------ */
+  /* ---- Door actions ---- */
   function openCreate() {
-    setEditing({
-      id: null, name: "", building: "", floor: "", location: "",
-      status: STATUS.A_FAIRE, next_check_date: null, photo_url: null, current_check: null, door_state: null,
-    });
+    setEditing({ id: null, name: "", building: "", floor: "", location: "", status: STATUS.A_FAIRE, next_check_date: null, photo_url: null, current_check: null, door_state: null });
     setDrawerOpen(true);
   }
   async function openEdit(door) {
     const full = await API.get(door.id);
     setEditing(full?.door || door);
     setDrawerOpen(true);
-    setDoorParam(door.id);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("door", door.id);
+      window.history.replaceState({}, "", url);
+    } catch {}
   }
   async function saveDoorBase() {
     if (!editing) return;
-    const payload = {
-      name: editing.name, building: editing.building || "", floor: editing.floor || "", location: editing.location || "",
-    };
+    const payload = { name: editing.name, building: editing.building || "", floor: editing.floor || "", location: editing.location || "" };
     if (editing.id) {
       await API.update(editing.id, payload);
       const full = await API.get(editing.id);
@@ -522,26 +466,25 @@ export default function Doors() {
         setEditing(full?.door || created.door);
       }
     }
-    await reload();
-    await reloadCalendar();
+    await reload(); await reloadCalendar();
   }
   async function deleteDoor() {
     if (!editing?.id) return;
-    const ok = window.confirm("Supprimer définitivement cette porte ? Cette action est irréversible.");
-    if (!ok) return;
+    if (!window.confirm("Supprimer définitivement cette porte ?")) return;
     await API.remove(editing.id);
-    setDrawerOpen(false);
-    setEditing(null);
-    await reload();
-    await reloadCalendar();
+    setDrawerOpen(false); setEditing(null);
+    await reload(); await reloadCalendar();
   }
 
-  /* ------------------ checklist workflow ------------------ */
   const baseOptions = [
     { value: "conforme", label: "Conforme" },
     { value: "non_conforme", label: "Non conforme" },
     { value: "na", label: "N/A" },
   ];
+  function allFiveAnswered(items = []) {
+    const values = (items || []).slice(0, 5).map((i) => i?.value);
+    return values.length === 5 && values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
+  }
   async function ensureCurrentCheck() {
     if (!editing?.id) return;
     let check = editing.current_check;
@@ -553,11 +496,6 @@ export default function Doors() {
       const full = await API.get(editing.id);
       setEditing(full?.door);
     }
-  }
-  function allFiveAnswered(items = []) {
-    const values = (items || []).slice(0, 5).map((i) => i?.value);
-    if (values.length < 5) return false;
-    return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
   }
   async function saveChecklistItem(idx, field, value) {
     if (!editing?.id || !editing?.current_check) return;
@@ -575,21 +513,13 @@ export default function Doors() {
     if (res?.door) {
       setEditing(res.door);
       if (res?.notice) setToast(res.notice);
-      await reload();
-      await reloadCalendar();
+      await reload(); await reloadCalendar();
     } else {
       const full = await API.get(editing.id);
       setEditing(full?.door);
     }
   }
 
-  /* ------------------ files ------------------ */
-  const [uploading, setUploading] = useState(false);
-  function onDropFiles(e) {
-    e.preventDefault();
-    const files = e.dataTransfer?.files;
-    if (files?.length) handleUpload(Array.from(files));
-  }
   async function handleUpload(files) {
     if (!editing?.id || !files?.length) return;
     setUploading(true);
@@ -599,9 +529,7 @@ export default function Doors() {
       setEditing(full?.door);
       setFilesVersion((v) => v + 1);
       setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
-    } finally {
-      setUploading(false);
-    }
+    } finally { setUploading(false); }
   }
   async function handleUploadPhoto(e) {
     const f = e.target.files?.[0];
@@ -613,42 +541,51 @@ export default function Doors() {
     setToast("Photo mise à jour ✅");
   }
 
-  /* ------------------ settings save ------------------ */
   async function saveSettings() {
     setSavingSettings(true);
     try {
       const cleaned = (settings.checklist_template || []).map((s) => (s || "").trim()).filter(Boolean);
       await API.settingsSet({ checklist_template: cleaned, frequency: settings.frequency });
-    } finally {
-      setSavingSettings(false);
-    }
+    } finally { setSavingSettings(false); }
   }
 
-  /* ------------------ MAPS state / loaders (corrigé) ------------------ */
-  const [plans, setPlans] = useState([]);
-  const [mapsLoading, setMapsLoading] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(null); // { id, logical_name, display_name, page_count, ... }
-  const [planPage, setPlanPage] = useState(0);
-  const [positions, setPositions] = useState([]); // [{door_id, door_name, x_frac, y_frac, status}]
-
+  /* ---- MAPS loaders ---- */
   async function loadPlans() {
     setMapsLoading(true);
     try {
       const r = await MAPS.listPlans().catch(() => ({ plans: [] }));
-      setPlans(Array.isArray(r?.plans) ? r.plans : []); // <-- clé correcte
-    } finally {
-      setMapsLoading(false);
-    }
+      setPlans(Array.isArray(r?.plans) ? r.plans : []);
+    } finally { setMapsLoading(false); }
   }
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
     const r = await MAPS.positions(plan.logical_name, pageIdx).catch(() => ({ items: [] }));
-    setPositions(Array.isArray(r?.items) ? r.items : []); // <-- clé correcte
+    setPositions(Array.isArray(r?.items) ? r.items : []);
   }
   useEffect(() => { if (tab === "maps") loadPlans(); }, [tab]);
   useEffect(() => { if (selectedPlan) loadPositions(selectedPlan, planPage); }, [selectedPlan, planPage]);
 
-  /* ------------------ render helpers ------------------ */
+  /* ---- Plans groupés par dossiers ---- */
+  const groupedPlans = useMemo(() => {
+    const groups = {};
+    for (const p of plans) {
+      const ln = p.logical_name || "";
+      const folder = ln.includes("/") ? ln.split("/")[0] : "Racine";
+      (groups[folder] ||= []).push(p);
+    }
+    return groups;
+  }, [plans]);
+
+  const [openFolders, setOpenFolders] = useState({});
+  useEffect(() => {
+    // ouvrir automatiquement les dossiers qui contiennent le plan sélectionné
+    if (!selectedPlan) return;
+    const folder = (selectedPlan.logical_name || "").split("/")[0] || "Racine";
+    setOpenFolders((o) => ({ ...o, [folder]: true }));
+  }, [selectedPlan]);
+
+  const toggleFolder = (name) => setOpenFolders((o) => ({ ...o, [name]: !o[name] }));
+
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
@@ -680,8 +617,7 @@ export default function Doors() {
           <div className="grid md:grid-cols-5 gap-3">
             <Input value={q} onChange={setQ} placeholder="Recherche (nom / lieu…)" />
             <Select
-              value={status}
-              onChange={setStatus}
+              value={status} onChange={setStatus}
               options={[
                 { value: "", label: "Tous statuts" },
                 { value: STATUS.A_FAIRE, label: "À faire (vert)" },
@@ -693,8 +629,7 @@ export default function Doors() {
             <Input value={building} onChange={setBuilding} placeholder="Bâtiment" />
             <Input value={floor} onChange={setFloor} placeholder="Étage / Zone" />
             <Select
-              value={doorState}
-              onChange={setDoorState}
+              value={doorState} onChange={setDoorState}
               options={[
                 { value: "", label: "Tous états (dernier contrôle)" },
                 { value: "conforme", label: "Conforme" },
@@ -703,7 +638,9 @@ export default function Doors() {
             />
           </div>
           <div className="flex gap-2">
-            <Btn variant="ghost" onClick={() => { setQ(""); setStatus(""); setBuilding(""); setFloor(""); setDoorState(""); }}>Réinitialiser</Btn>
+            <Btn variant="ghost" onClick={() => { setQ(""); setStatus(""); setBuilding(""); setFloor(""); setDoorState(""); }}>
+              Réinitialiser
+            </Btn>
           </div>
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
@@ -712,98 +649,51 @@ export default function Doors() {
       {/* Onglet Contrôles */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
-          {/* Mobile cards */}
-          <div className="sm:hidden divide-y">
-            {loading && <div className="p-4 text-gray-500">Chargement…</div>}
-            {!loading && filtered.length === 0 && <div className="p-4 text-gray-500">Aucune porte.</div>}
-            {filtered.map((d) => (
-              <div key={d.id} className="p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
-                      {d.photo_url ? (
-                        <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-[11px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
-                      )}
-                    </div>
-                    <div>
-                      <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(d)}>{d.name}</button>
-                      <div className="text-xs text-gray-500 mt-0.5">
-                        {d.building || "—"} • {d.floor || "—"} {d.location ? `• ${d.location}` : ""}
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        {doorStateBadge(d.door_state)}
-                        <span className="text-xs text-gray-500">
-                          Prochain contrôle: {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Desktop table */}
           <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-[12px] z-20 bg-gray-50/90 backdrop-blur supports-[backdrop-filter]:bg-gray-50/70">
                 <tr className="text-left border-b">
                   <th className="px-4 py-3 font-semibold text-gray-700">Porte</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Localisation</th>
-                  <th className="px-4 py-3 font-semibold text-gray-700">État (dernier contrôle)</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">État</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Statut</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Prochain contrôle</th>
                   <th className="px-4 py-3 font-semibold text-gray-700">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading && (
-                  <tr><td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td></tr>
-                )}
-                {!loading && filtered.length === 0 && (
-                  <tr><td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td></tr>
-                )}
+                {loading && <tr><td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td></tr>}
+                {!loading && !filtered.length && <tr><td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td></tr>}
                 {!loading && filtered.map((d, idx) => (
-                  <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
+                  <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 ? "bg-gray-50/40" : "bg-white"}`}>
                     <td className="px-4 py-3 min-w-[260px]">
-                      <div className="flex items-center gap-3">
-                        <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
-                          {d.photo_url ? (
-                            <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
-                          )}
-                        </div>
-                        <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>
-                          {d.name}
-                        </button>
-                      </div>
+                      <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>{d.name}</button>
                     </td>
-                    <td className="px-4 py-3">
-                      {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
-                    </td>
+                    <td className="px-4 py-3">{(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}</td>
                     <td className="px-4 py-3">{doorStateBadge(d.door_state)}</td>
-                    <td className="px-4 py-3">
-                      <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-2">
-                        <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                      </div>
-                    </td>
+                    <td className="px-4 py-3"><Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge></td>
+                    <td className="px-4 py-3 whitespace-nowrap">{d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}</td>
+                    <td className="px-4 py-3"><Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn></td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+          {/* mobile simple */}
+          <div className="sm:hidden divide-y">
+            {loading && <div className="p-4 text-gray-500">Chargement…</div>}
+            {!loading && !filtered.length && <div className="p-4 text-gray-500">Aucune porte.</div>}
+            {filtered.map((d) => (
+              <div key={d.id} className="p-4">
+                <div className="flex items-center justify-between">
+                  <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(d)}>{d.name}</button>
+                  <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
+                </div>
+                <div className="text-xs text-gray-500 mt-1">
+                  {d.building || "—"} • {d.floor || "—"} {d.location ? `• ${d.location}` : ""}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -822,7 +712,7 @@ export default function Doors() {
         </div>
       )}
 
-      {/* Onglet Plans */}
+      {/* Onglet Plans (groupé par dossiers) */}
       {tab === "maps" && (
         <div className="space-y-4">
           <PlansHeader
@@ -834,23 +724,58 @@ export default function Doors() {
             }}
           />
 
-          <PlanCards
-            plans={plans}
-            onRename={async (plan, name) => {
-              await MAPS.renamePlan(plan.logical_name, name);
-              await loadPlans();
-            }}
-            onPick={(plan) => {
-              setSelectedPlan(plan);
-              setPlanPage(0);
-            }}
-          />
+          {/* Dossiers */}
+          <div className="space-y-3">
+            {Object.keys(groupedPlans).sort().map((folder) => {
+              const list = groupedPlans[folder] || [];
+              const isOpen = !!openFolders[folder];
+              const next30 = list.reduce((s, p) => s + Number(p.actions_next_30 || 0), 0);
+              const overdue = list.reduce((s, p) => s + Number(p.overdue || 0), 0);
+              const pages = list.reduce((s, p) => s + Number(p.page_count || 0), 0);
 
+              return (
+                <div key={folder} className="border rounded-2xl bg-white shadow-sm">
+                  <button
+                    className="w-full flex items-center justify-between px-3 py-2"
+                    onClick={() => toggleFolder(folder)}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{isOpen ? "📂" : "📁"}</span>
+                      <span className="font-semibold">{folder}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Badge color="orange">≤30j: {next30}</Badge>
+                      <Badge color="red">Retard: {overdue}</Badge>
+                      <Badge color="blue">Pages: {pages}</Badge>
+                    </div>
+                  </button>
+
+                  {isOpen && (
+                    <div className="p-3 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+                      {list.map((p) => (
+                        <PlanCard
+                          key={p.logical_name}
+                          plan={p}
+                          onOpen={(plan) => { setSelectedPlan(plan); setPlanPage(0); }}
+                          onRename={async (logical, display) => { await MAPS.renamePlan(logical, display); await loadPlans(); }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {!Object.keys(groupedPlans).length && (
+              <div className="text-gray-500">Aucun plan importé.</div>
+            )}
+          </div>
+
+          {/* Viewer */}
           {selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="font-semibold">
-                  {selectedPlan.display_name || selectedPlan.logical_name}
+                  {(selectedPlan.display_name || selectedPlan.logical_name)} — {selectedPlan.page_count || 1} page(s)
                 </div>
                 <div className="flex items-center gap-2">
                   <Select
@@ -861,18 +786,18 @@ export default function Doors() {
                     }))}
                   />
                   <a
-                    href={MAPS.planFileUrl(selectedPlan.id)}
+                    href={MAPS.planFileUrl(selectedPlan.logical_name)}
                     target="_blank" rel="noreferrer"
                     className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                   >
-                    Ouvrir le PDF
+                    Télécharger le PDF
                   </a>
                 </div>
               </div>
 
               <PlanViewer
-                key={`${selectedPlan.id}:${planPage}`}
-                plan={selectedPlan}
+                key={`${selectedPlan.logical_name}:${planPage}`}
+                logicalName={selectedPlan.logical_name}
                 pageIndex={planPage}
                 positions={positions}
                 onMovePoint={async (doorId, x_frac, y_frac) => {
@@ -942,22 +867,14 @@ export default function Doors() {
 
       {/* Drawer */}
       {drawerOpen && editing && (
-        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
+        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={() => { setDrawerOpen(false); setEditing(null); try { const url = new URL(window.location.href); url.searchParams.delete("door"); window.history.replaceState({}, "", url); } catch {} }}>
           <div className="space-y-4">
             {/* Base info */}
             <div className="grid sm:grid-cols-2 gap-3">
-              <Labeled label="Nom de la porte">
-                <Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} />
-              </Labeled>
-              <Labeled label="Bâtiment">
-                <Input value={editing.building || ""} onChange={(v) => setEditing({ ...editing, building: v })} />
-              </Labeled>
-              <Labeled label="Étage / Zone">
-                <Input value={editing.floor || ""} onChange={(v) => setEditing({ ...editing, floor: v })} />
-              </Labeled>
-              <Labeled label="Localisation (complément)">
-                <Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} />
-              </Labeled>
+              <Labeled label="Nom de la porte"><Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} /></Labeled>
+              <Labeled label="Bâtiment"><Input value={editing.building || ""} onChange={(v) => setEditing({ ...editing, building: v })} /></Labeled>
+              <Labeled label="Étage / Zone"><Input value={editing.floor || ""} onChange={(v) => setEditing({ ...editing, floor: v })} /></Labeled>
+              <Labeled label="Localisation (complément)"><Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} /></Labeled>
             </div>
 
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -988,11 +905,7 @@ export default function Doors() {
                   </label>
                 </div>
                 <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
-                  {editing.photo_url ? (
-                    <img src={editing.photo_url} alt="photo porte" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
-                  )}
+                  {editing.photo_url ? <img src={editing.photo_url} alt="photo porte" className="w-full h-full object-cover" /> : <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>}
                 </div>
               </div>
             )}
@@ -1004,9 +917,7 @@ export default function Doors() {
                 {!editing.current_check && <Btn onClick={ensureCurrentCheck}>Démarrer un contrôle</Btn>}
               </div>
 
-              {!editing.current_check && (
-                <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>
-              )}
+              {!editing.current_check && <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>}
 
               {!!editing.current_check && (
                 <div className="space-y-3">
@@ -1017,29 +928,22 @@ export default function Doors() {
                       <div key={i} className="grid gap-2">
                         <div className="grid md:grid-cols-[1fr,220px] gap-2 items-center">
                           <div className="text-sm">{label}</div>
-                          <Select
-                            value={val}
-                            onChange={(v) => saveChecklistItem(i, "value", v)}
-                            options={baseOptions}
-                            placeholder="Sélectionner…"
-                          />
+                          <Select value={val} onChange={(v) => saveChecklistItem(i, "value", v)}
+                                  options={baseOptions} placeholder="Sélectionner…" />
                         </div>
-                        <div className="md:col-span-2">
-                          <Textarea
-                            value={comment}
-                            onChange={(v) => saveChecklistItem(i, "comment", v)}
-                            placeholder="Commentaire (optionnel)"
-                            rows={2}
-                          />
-                        </div>
+                        <textarea
+                          className="border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100"
+                          value={comment}
+                          onChange={(e) => saveChecklistItem(i, "comment", e.target.value)}
+                          placeholder="Commentaire (optionnel)" rows={2}
+                        />
                       </div>
                     );
                   })}
                   <div className="pt-2">
                     <a
                       href={API.nonConformPDF(editing.id)}
-                      target="_blank"
-                      rel="noreferrer"
+                      target="_blank" rel="noreferrer"
                       className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
                     >
                       Export PDF des non-conformités (SAP)
@@ -1049,28 +953,21 @@ export default function Doors() {
               )}
             </div>
 
-            {/* Fichiers / Photos (door-level) */}
+            {/* Fichiers */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="flex items-center justify-between mb-2">
                   <div className="font-semibold">Pièces jointes & photos</div>
                   <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={(e) => e.target.files?.length && handleUpload(Array.from(e.target.files))}
-                      multiple
-                    />
+                    <input type="file" className="hidden" multiple onChange={(e) => e.target.files?.length && handleUpload(Array.from(e.target.files))} />
                     Ajouter
                   </label>
                 </div>
 
                 <div
                   onDragOver={(e) => e.preventDefault()}
-                  onDrop={onDropFiles}
-                  className={`w-full border-2 border-dashed rounded-xl p-6 text-center transition ${
-                    uploading ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"
-                  }`}
+                  onDrop={(e) => { e.preventDefault(); const files = e.dataTransfer?.files; if (files?.length) handleUpload(Array.from(files)); }}
+                  className={`w-full border-2 border-dashed rounded-xl p-6 text-center transition ${uploading ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"}`}
                 >
                   <div className="text-sm text-gray-600">Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.</div>
                 </div>
@@ -1079,24 +976,20 @@ export default function Doors() {
               </div>
             )}
 
-            {/* QR Codes */}
+            {/* QR */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="font-semibold mb-2">QR code</div>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  <a
-                    href={API.qrcodesPdf(editing.id, "80,120,200")}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
-                  >
-                    Étiquettes PDF (HALEON)
-                  </a>
-                </div>
+                <a
+                  href={API.qrcodesPdf(editing.id, "80,120,200")}
+                  target="_blank" rel="noreferrer"
+                  className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
+                >
+                  Étiquettes PDF (HALEON)
+                </a>
               </div>
             )}
 
-            {/* Historique */}
             <DoorHistory doorId={editing.id} />
           </div>
         </Drawer>
@@ -1117,8 +1010,6 @@ function Labeled({ label, children }) {
 function Drawer({ title, children, onClose }) {
   const ref = useRef(null);
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
     const handler = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -1145,9 +1036,7 @@ function DoorFiles({ doorId, version = 0 }) {
     try {
       const r = await API.listFiles(doorId);
       setFiles(r?.files || []);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
   useEffect(() => { if (doorId) load(); }, [doorId, version]);
 
@@ -1184,7 +1073,6 @@ function FileCard({ f, onDelete }) {
     </div>
   );
 }
-
 function DoorHistory({ doorId }) {
   const [items, setItems] = useState([]);
   useEffect(() => {
@@ -1194,7 +1082,6 @@ function DoorHistory({ doorId }) {
       setItems(r?.checks || []);
     })();
   }, [doorId]);
-
   if (!doorId) return null;
   return (
     <div className="border rounded-2xl p-3">
@@ -1208,7 +1095,7 @@ function DoorHistory({ doorId }) {
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2">Statut</th>
                 <th className="px-3 py-2">Résultat</th>
-                <th className="px-3 py-2">Points (C / NC / N/A)</th>
+                <th className="px-3 py-2">Points</th>
                 <th className="px-3 py-2">Effectué par</th>
                 <th className="px-3 py-2">Pièces jointes</th>
                 <th className="px-3 py-2">PDF NC</th>
@@ -1223,24 +1110,8 @@ function DoorHistory({ doorId }) {
                     {h.result === "conforme" ? <Badge color="green">Conforme</Badge> :
                      h.result === "non_conforme" ? <Badge color="red">Non conforme</Badge> : <Badge>—</Badge>}
                   </td>
-                  <td className="px-3 py-2">
-                    <div className="text-xs text-gray-600">
-                      {Number(h.counts?.conforme || 0)} / {Number(h.counts?.nc || 0)} / {Number(h.counts?.na || 0)}
-                    </div>
-                    <details className="text-xs mt-1">
-                      <summary className="cursor-pointer text-blue-700">Voir le détail</summary>
-                      <ul className="list-disc ml-4 mt-1 space-y-0.5">
-                        {(h.items || []).slice(0, 5).map((it, i) => (
-                          <li key={i}>
-                            {it.label} —{" "}
-                            <span className="font-medium">
-                              {it.value === "conforme" ? "Conforme" : it.value === "non_conforme" ? "Non conforme" : "N/A"}
-                            </span>
-                            {it.comment ? <span className="text-gray-500"> — {it.comment}</span> : null}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
+                  <td className="px-3 py-2 text-xs text-gray-600">
+                    {Number(h.counts?.conforme || 0)} / {Number(h.counts?.nc || 0)} / {Number(h.counts?.na || 0)}
                   </td>
                   <td className="px-3 py-2">{(h.user || "").trim() || "—"}</td>
                   <td className="px-3 py-2">
@@ -1262,9 +1133,7 @@ function DoorHistory({ doorId }) {
                          className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs">
                         Ouvrir
                       </a>
-                    ) : (
-                      <span className="text-xs text-gray-500">—</span>
-                    )}
+                    ) : <span className="text-xs text-gray-500">—</span>}
                   </td>
                 </tr>
               ))}
@@ -1276,7 +1145,7 @@ function DoorHistory({ doorId }) {
   );
 }
 
-/* ----------------------------- MAPS components (intégrés et corrigés) ----------------------------- */
+/* ----------------------------- MAPS components ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
   return (
@@ -1294,7 +1163,7 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) onUploadZip(f);
-            e.target.value = ""; // pouvoir ré-importer le même ZIP
+            e.target.value = "";
           }}
         />
       </div>
@@ -1302,86 +1171,62 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
   );
 }
 
-function PlanCards({ plans = [], onRename, onPick }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
-      {plans.map((p) => (
-        <PlanCard key={p.id} plan={p} onRename={onRename} onPick={onPick} />
-      ))}
-    </div>
-  );
-}
-
-function PlanCard({ plan, onRename, onPick }) {
-  const [edit, setEdit] = useState(false);
-  const [name, setName] = useState(plan.display_name || plan.logical_name || "");
-
-  // vignette page 1
+function PlanCard({ plan, onOpen, onRename }) {
   const canvasRef = useRef(null);
+  const [thumbOk, setThumbOk] = useState(true);
+  const name = plan.display_name || plan.logical_name;
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const url = MAPS.planFileUrl(plan.id);
+        const url = MAPS.planFileUrl(plan.logical_name); // <-- logical_name, PAS id
         const pdf = await pdfjsLib.getDocument(url).promise;
         const page = await pdf.getPage(1);
-        const viewport = page.getViewport({ scale: 0.22 }); // vignette
-        const c = canvasRef.current;
-        if (!c || cancelled) return;
-        c.width = viewport.width;
-        c.height = viewport.height;
+        const viewport = page.getViewport({ scale: 0.22 });
+        const c = canvasRef.current; if (!c || cancelled) return;
+        c.width = viewport.width; c.height = viewport.height;
         const ctx = c.getContext("2d");
         await page.render({ canvasContext: ctx, viewport }).promise;
-      } catch {}
+      } catch {
+        setThumbOk(false);
+      }
     })();
     return () => { cancelled = true; };
-  }, [plan.id]);
+  }, [plan.logical_name]);
 
   return (
-    <div className="border rounded-2xl p-3 bg-white shadow-sm hover:shadow transition">
-      <div className="aspect-video bg-gray-50 mb-2 flex items-center justify-center overflow-hidden rounded-xl">
-        <canvas ref={canvasRef} />
+    <div className="border rounded-2xl bg-white overflow-hidden shadow-sm hover:shadow transition">
+      <div className="aspect-video bg-gray-50 flex items-center justify-center">
+        {thumbOk ? <canvas ref={canvasRef} /> : <div className="text-xs text-gray-500">Aperçu indisponible</div>}
       </div>
-      <div className="flex items-center justify-between gap-2">
-        {!edit ? (
-          <div className="font-medium truncate" title={name}>{name || "—"}</div>
-        ) : (
-          <Input value={name} onChange={setName} />
-        )}
-        <div className="flex items-center gap-2">
-          {!edit ? (
-            <Btn variant="ghost" onClick={() => setEdit(true)}>Renommer</Btn>
-          ) : (
-            <>
-              <Btn
-                variant="subtle"
-                onClick={async () => {
-                  const clean = (name || "").trim();
-                  if (clean) await onRename(plan, clean);
-                  setEdit(false);
-                }}
-              >
-                OK
-              </Btn>
-              <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>
-                Annuler
-              </Btn>
-            </>
-          )}
-          <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
+      <div className="p-3 space-y-2">
+        <div className="text-sm font-medium truncate" title={name}>{name}</div>
+        <div className="flex items-center gap-2 text-xs">
+          <Badge color="orange">≤30j: {Number(plan.actions_next_30 || 0)}</Badge>
+          {Number(plan.overdue || 0) > 0 && <Badge color="red">Retard: {Number(plan.overdue)}</Badge>}
+          <Badge color="blue">Pages: {Number(plan.page_count || 1)}</Badge>
         </div>
-      </div>
-      <div className="flex items-center gap-2 mt-2 text-xs">
-        <Badge color="orange">≤30j: {Number(plan.actions_next_30 || 0)}</Badge>
-        <Badge color="red">Retard: {Number(plan.overdue || 0)}</Badge>
-        <Badge color="blue">Pages: {Number(plan.page_count || 1)}</Badge>
+        <div className="flex items-center gap-2">
+          <Btn variant="subtle" onClick={() => onOpen(plan)}>Ouvrir</Btn>
+          <Btn
+            variant="ghost"
+            onClick={async () => {
+              const n = window.prompt("Nouveau nom d’affichage :", plan.display_name || plan.logical_name);
+              const clean = (n || "").trim();
+              if (!clean || clean === (plan.display_name || plan.logical_name)) return;
+              await onRename(plan.logical_name, clean);
+            }}
+          >
+            Renommer
+          </Btn>
+        </div>
       </div>
     </div>
   );
 }
 
-function PlanViewer({ plan, pageIndex = 0, positions = [], onMovePoint, onClickPoint }) {
+function PlanViewer({ logicalName, pageIndex = 0, positions = [], onMovePoint, onClickPoint }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
@@ -1389,23 +1234,19 @@ function PlanViewer({ plan, pageIndex = 0, positions = [], onMovePoint, onClickP
   const [scale, setScale] = useState(1);
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
 
-  // Render PDF page
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const url = MAPS.planFileUrl(plan.id);
+        const url = MAPS.planFileUrl(logicalName);
         const pdf = await pdfjsLib.getDocument(url).promise;
         const page = await pdf.getPage(Number(pageIndex) + 1);
-        // fit-to-width, max ~1200
-        const baseViewport = page.getViewport({ scale: 1 });
-        const maxW = Math.min(1200, wrapRef.current?.clientWidth || baseViewport.width);
-        const s = maxW / baseViewport.width;
+        const base = page.getViewport({ scale: 1 });
+        const maxW = Math.min(1200, wrapRef.current?.clientWidth || base.width);
+        const s = maxW / base.width;
         const viewport = page.getViewport({ scale: s });
-        const c = canvasRef.current;
-        if (!c || cancelled) return;
-        c.width = viewport.width;
-        c.height = viewport.height;
+        const c = canvasRef.current; if (!c || cancelled) return;
+        c.width = viewport.width; c.height = viewport.height;
         const ctx = c.getContext("2d");
         await page.render({ canvasContext: ctx, viewport }).promise;
         setPageSize({ w: viewport.width, h: viewport.height });
@@ -1416,31 +1257,23 @@ function PlanViewer({ plan, pageIndex = 0, positions = [], onMovePoint, onClickP
       }
     })();
     return () => { cancelled = true; };
-  }, [plan.id, pageIndex]);
+  }, [logicalName, pageIndex]);
 
-  // Zoom handlers
+  // Zoom
   const zoom = (dir) => setScale((s) => Math.max(0.5, Math.min(3, s + (dir > 0 ? 0.2 : -0.2))));
   const reset = () => setScale(1);
 
-  // Drag / move a point (positions en x_frac / y_frac 0..1)
+  // Drag
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
     const rect = overlayRef.current.getBoundingClientRect();
-    dragInfo.current = {
-      id: p.door_id,
-      startX: e.clientX,
-      startY: e.clientY,
-      baseX: p.x_frac,
-      baseY: p.y_frac,
-      rect,
-    };
+    dragInfo.current = { id: p.door_id, startX: e.clientX, startY: e.clientY, baseX: p.x_frac, baseY: p.y_frac, rect };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
   }
   function onMove(e) {
-    const info = dragInfo.current;
-    if (!info) return;
+    const info = dragInfo.current; if (!info) return;
     const dx = (e.clientX - info.startX) / info.rect.width;
     const dy = (e.clientY - info.startY) / info.rect.height;
     const x = Math.min(1, Math.max(0, info.baseX + dx));
@@ -1456,20 +1289,15 @@ function PlanViewer({ plan, pageIndex = 0, positions = [], onMovePoint, onClickP
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (!el) { dragInfo.current = null; return; }
     const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
-    if (m) {
-      const x_frac = Number(m[1]) / 100;
-      const y_frac = Number(m[2]) / 100;
-      onMovePoint?.(info.id, x_frac, y_frac);
-    }
+    if (m) onMovePoint?.(info.id, Number(m[1]) / 100, Number(m[2]) / 100);
     dragInfo.current = null;
   }
 
-  function markerClass(s) {
-    if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
-    if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
-    if (s === STATUS.A_FAIRE)  return "bg-emerald-600 ring-1 ring-emerald-300";
-    return "bg-blue-600 ring-1 ring-blue-300";
-  }
+  const markerClass = (s) =>
+    s === STATUS.EN_RETARD ? "bg-rose-600 ring-2 ring-rose-300 animate-pulse" :
+    s === STATUS.EN_COURS ? "bg-amber-500 ring-2 ring-amber-300 animate-pulse" :
+    s === STATUS.A_FAIRE  ? "bg-emerald-600 ring-1 ring-emerald-300" :
+                            "bg-blue-600 ring-1 ring-blue-300";
 
   return (
     <div className="mt-3">
@@ -1481,26 +1309,14 @@ function PlanViewer({ plan, pageIndex = 0, positions = [], onMovePoint, onClickP
       </div>
 
       <div ref={wrapRef} className="relative w-full overflow-auto border rounded-2xl bg-gray-50" style={{ height: 520 }}>
-        {pageSize.w > 0 ? (
+        {pageSize.w > 0 && (
           <div className="relative inline-block" style={{ width: pageSize.w * scale, height: pageSize.h * scale }}>
-            <canvas
-              ref={canvasRef}
-              style={{ width: pageSize.w * scale, height: pageSize.h * scale, display: loaded ? "block" : "none" }}
-            />
-            {!loaded && (
-              <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
-                Rendu en cours…
-              </div>
-            )}
-
-            <div ref={overlayRef} className="absolute inset-0" style={{ width: "100%", height: "100%" }}>
+            <canvas ref={canvasRef} style={{ width: pageSize.w * scale, height: pageSize.h * scale, display: loaded ? "block" : "none" }} />
+            {!loaded && <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">Rendu en cours…</div>}
+            <div ref={overlayRef} className="absolute inset-0">
               {positions.map((p) => (
-                <div
-                  key={p.door_id}
-                  data-id={p.door_id}
-                  className="absolute"
-                  style={{ transform: `translate(${(p.x_frac || 0) * 100}%, ${(p.y_frac || 0) * 100}%) translate(-50%, -50%)` }}
-                >
+                <div key={p.door_id} data-id={p.door_id} className="absolute"
+                     style={{ transform: `translate(${(p.x_frac || 0) * 100}%, ${(p.y_frac || 0) * 100}%) translate(-50%, -50%)` }}>
                   <button
                     title={p.name}
                     onMouseDown={(e) => onMouseDownPoint(e, p)}
@@ -1511,12 +1327,10 @@ function PlanViewer({ plan, pageIndex = 0, positions = [], onMovePoint, onClickP
               ))}
             </div>
           </div>
-        ) : (
-          <div className="relative w-full h-full">
-            <embed src={MAPS.planFileUrl(plan.id)} type="application/pdf" className="w-full h-full" />
-            <div className="absolute bottom-2 left-2 text-xs bg-white/80 backdrop-blur px-2 py-1 rounded border">
-              Mode lecture seule (PDF natif du navigateur).
-            </div>
+        )}
+        {pageSize.w === 0 && (
+          <div className="flex items-center justify-center h-full text-sm text-gray-500">
+            Impossible d’afficher ce PDF (format non supporté).
           </div>
         )}
       </div>
