@@ -2,28 +2,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
+/* ----------------------------- pdf.js (pour les vignettes & viewer) ----------------------------- */
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
+import pdfWorker from "pdfjs-dist/build/pdf.worker?url";
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-// NEW: identité robuste (cookies -> localStorage -> fallback depuis l'email)
+// Identité robuste
 function getIdentity() {
-  // 1) cookies (prioritaires si présents)
   let email = getCookie("email") || null;
   let name = getCookie("name") || null;
 
-  // 2) localStorage (si cookies absents ou vides)
   try {
     if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
-    if (!name) {
-      name =
-        localStorage.getItem("name") ||
-        localStorage.getItem("user.name") ||
-        null;
-    }
-    // Parfois on stocke un JSON "user"
+    if (!name)  name  = localStorage.getItem("name")  || localStorage.getItem("user.name")  || null;
+
     if ((!email || !name) && localStorage.getItem("user")) {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
@@ -33,19 +31,14 @@ function getIdentity() {
     }
   } catch {}
 
-  // 3) fallback: dérive un nom lisible depuis l'email si pas de name
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
     if (base) {
-      name = base
-        .replace(/[._-]+/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase())
-        .trim();
+      name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
     }
   }
-  // 4) nettoyage
   email = email ? String(email).trim() : null;
-  name = name ? String(name).trim() : null;
+  name  = name  ? String(name).trim()  : null;
 
   return { email, name };
 }
@@ -54,7 +47,7 @@ function userHeaders() {
   const { email, name } = getIdentity();
   const h = {};
   if (email) h["X-User-Email"] = email;
-  if (name) h["X-User-Name"] = name;
+  if (name)  h["X-User-Name"]  = name;
   return h;
 }
 function withHeaders(extra = {}) {
@@ -63,7 +56,6 @@ function withHeaders(extra = {}) {
 
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
-  // Doors CRUD + listing + filters
   list: async (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
@@ -91,14 +83,12 @@ const API = {
   remove: async (id) =>
     (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", ...withHeaders() })).json(),
 
-  // Checklist (create/close) + history
   startCheck: async (doorId) => {
     const id = getIdentity();
     return (
       await fetch(`/api/doors/doors/${doorId}/checks`, {
         method: "POST",
         ...withHeaders({ "Content-Type": "application/json" }),
-        // >>> ajoute _user pour fallback backend
         body: JSON.stringify({ _user: id }),
       })
     ).json();
@@ -106,24 +96,20 @@ const API = {
 
   saveCheck: async (doorId, checkId, payload) => {
     const id = getIdentity();
-    // Backend accepte JSON ou multipart sur la même route.
     if (payload?.files?.length) {
       const fd = new FormData();
       fd.append("items", JSON.stringify(payload.items || []));
       if (payload.close) fd.append("close", "true");
-      // >>> identité en multipart (fallback)
       if (id.email) fd.append("user_email", id.email);
-      if (id.name) fd.append("user_name", id.name);
-      for (const f of payload.files) fd.append("files", f);
+      if (id.name)  fd.append("user_name",  id.name);
       const r = await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
         credentials: "include",
-        headers: userHeaders(), // injecte X-User-Email / X-User-Name
+        headers: userHeaders(),
         body: fd,
       });
       return r.json();
     }
-    // JSON: ajoute aussi _user pour fallback
     return (
       await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
@@ -136,16 +122,14 @@ const API = {
   listHistory: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/history`, withHeaders())).json(),
 
-  // Attachments (door-level)
   listFiles: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/files`, withHeaders())).json(),
   uploadFile: async (doorId, file) => {
     const id = getIdentity();
     const fd = new FormData();
     fd.append("file", file);
-    // >>> identité en multipart (au cas où)
     if (id.email) fd.append("user_email", id.email);
-    if (id.name) fd.append("user_name", id.name);
+    if (id.name)  fd.append("user_name",  id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/files`, {
       method: "POST",
       credentials: "include",
@@ -157,14 +141,12 @@ const API = {
   deleteFile: async (fileId) =>
     (await fetch(`/api/doors/files/${fileId}`, { method: "DELETE", ...withHeaders() })).json(),
 
-  // Photo vignette
   uploadPhoto: async (doorId, file) => {
     const id = getIdentity();
     const fd = new FormData();
     fd.append("photo", file);
-    // >>> identité en multipart (au cas où)
     if (id.email) fd.append("user_email", id.email);
-    if (id.name) fd.append("user_name", id.name);
+    if (id.name)  fd.append("user_name",  id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/photo`, {
       method: "POST",
       credentials: "include",
@@ -174,18 +156,10 @@ const API = {
     return r.json();
   },
   photoUrl: (doorId) => `/api/doors/doors/${doorId}/photo`,
-
-  // QR code (PNG stream)
   qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
-
-  // ✅ PDF d’étiquettes (cadre blanc + HALEON + nom de porte autosize)
   qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
     `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
-
-  // Calendar (next checks, overdue, etc.)
   calendar: async () => (await fetch(`/api/doors/calendar`, withHeaders())).json(),
-
-  // Settings (template & frequency)
   settingsGet: async () => (await fetch(`/api/doors/settings`, withHeaders())).json(),
   settingsSet: async (payload) =>
     (
@@ -195,29 +169,32 @@ const API = {
         body: JSON.stringify(payload),
       })
     ).json(),
-
-  // PDF non-conformités (pour SAP)
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
 
-/* ----------------------------- API (Doors Maps) ----------------------------- */
+/* ----------------------------- API (Doors Maps) — aligné backend ----------------------------- */
 const MAPS = {
   uploadZip: async (file) => {
     const fd = new FormData();
     fd.append("zip", file);
-    const r = await fetch(`/api/doors/maps/uploadZip`, { method: "POST", credentials: "include", headers: userHeaders(), body: fd });
+    const r = await fetch(`/api/doors/maps/uploadZip`, {
+      method: "POST",
+      credentials: "include",
+      headers: userHeaders(),
+      body: fd,
+    });
     return r.json();
   },
-  listPlans: async () => (await fetch(`/api/doors/maps/plans`, withHeaders())).json(),
+  listPlans: async () => (await fetch(`/api/doors/maps/plans`, withHeaders())).json(), // { ok, plans: [...] }
   renamePlan: async (logical_name, display_name) =>
     (await fetch(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, {
       method: "PUT",
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-  planFileUrl: (planId) => `/api/doors/maps/plan/${encodeURIComponent(planId)}/file`,
+  planFileUrl: (planId) => `/api/doors/maps/plan/${encodeURIComponent(planId)}/file`, // ⚠️ param :id
   positions: async (logical_name, page_index = 0) =>
-    (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(),
+    (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(), // { ok, items: [...] }
   setPosition: async (doorId, payload) =>
     (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
       method: "PUT",
@@ -229,8 +206,7 @@ const MAPS = {
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
-    primary:
-      "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
+    primary: "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
     ghost: "bg-white text-gray-700 border hover:bg-gray-50",
     danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
     success: "bg-emerald-600 text-white hover:bg-emerald-700",
@@ -238,10 +214,7 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
     subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
   };
   return (
-    <button
-      className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`}
-      {...p}
-    >
+    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
       {children}
     </button>
   );
@@ -276,13 +249,9 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
         typeof o === "string" ? (
-          <option key={o} value={o}>
-            {o}
-          </option>
+          <option key={o} value={o}>{o}</option>
         ) : (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         )
       )}
     </select>
@@ -297,17 +266,10 @@ function Badge({ color = "gray", children, className = "" }) {
     blue: "bg-blue-100 text-blue-700",
   };
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>
-      {children}
-    </span>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>
   );
 }
-const STATUS = {
-  A_FAIRE: "a_faire",
-  EN_COURS: "en_cours_30",
-  EN_RETARD: "en_retard",
-  FAIT: "fait",
-};
+const STATUS = { A_FAIRE: "a_faire", EN_COURS: "en_cours_30", EN_RETARD: "en_retard", FAIT: "fait" };
 function statusColor(s) {
   if (s === STATUS.A_FAIRE) return "green";
   if (s === STATUS.EN_COURS) return "orange";
@@ -337,9 +299,7 @@ function Toast({ text, onClose }) {
   if (!text) return null;
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
-      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
-        {text}
-      </div>
+      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>
     </div>
   );
 }
@@ -385,9 +345,7 @@ function MonthCalendar({ events = [], onDayClick }) {
 
       <div className="grid grid-cols-7 text-xs font-medium text-gray-500">
         {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
-          <div key={l} className="px-2 py-2">
-            {l}
-          </div>
+          <div key={l} className="px-2 py-2">{l}</div>
         ))}
       </div>
 
@@ -405,9 +363,7 @@ function MonthCalendar({ events = [], onDayClick }) {
               <div className="flex items-center justify-between">
                 <div className={`text-xs ${inMonth ? "text-gray-700" : "text-gray-400"}`}>{dayjs(d).format("D")}</div>
                 {!!list.length && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                    {list.length}
-                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">{list.length}</span>
                 )}
               </div>
               <div className="mt-1 space-y-1">
@@ -427,9 +383,7 @@ function MonthCalendar({ events = [], onDayClick }) {
                     {e.door_name}
                   </div>
                 ))}
-                {list.length > 3 && (
-                  <div className="text-[11px] text-gray-500">+{list.length - 3} de plus…</div>
-                )}
+                {list.length > 3 && <div className="text-[11px] text-gray-500">+{list.length - 3} de plus…</div>}
               </div>
             </button>
           );
@@ -448,14 +402,14 @@ export default function Doors() {
   const [loading, setLoading] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState(""); // a_faire | en_cours_30 | en_retard | fait
+  const [status, setStatus] = useState("");
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
-  const [doorState, setDoorState] = useState(""); // conforme | non_conforme
+  const [doorState, setDoorState] = useState("");
 
-  /* ---- drawer (edit / inspect) ---- */
+  /* ---- drawer ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editing, setEditing] = useState(null); // door object with details
+  const [editing, setEditing] = useState(null);
 
   /* ---- calendar ---- */
   const [calendar, setCalendar] = useState({ events: [] });
@@ -471,28 +425,18 @@ export default function Doors() {
     "Plaquette d’identification (portes ≥ 2005) visible ?",
     "Porte à double battant bien synchronisée (un battant après l’autre, fermeture OK) ?",
   ];
-  const [settings, setSettings] = useState({
-    checklist_template: defaultTemplate,
-    frequency: "1_an", // 1_an, 1_mois, 2_an, 3_mois, 2_ans
-  });
+  const [settings, setSettings] = useState({ checklist_template: defaultTemplate, frequency: "1_an" });
   const [savingSettings, setSavingSettings] = useState(false);
 
-  /* ---- versionnement fichiers pour refresh instantané ---- */
+  /* ---- files refresh ---- */
   const [filesVersion, setFilesVersion] = useState(0);
 
   /* ---------- Deep-link helpers (QR) ---------- */
-  function getDoorParam() {
-    try {
-      return new URLSearchParams(window.location.search).get("door");
-    } catch {
-      return null;
-    }
-  }
+  function getDoorParam() { try { return new URLSearchParams(window.location.search).get("door"); } catch { return null; } }
   function setDoorParam(id) {
     try {
       const url = new URL(window.location.href);
-      if (id) url.searchParams.set("door", id);
-      else url.searchParams.delete("door");
+      if (id) url.searchParams.set("door", id); else url.searchParams.delete("door");
       window.history.replaceState({}, "", url);
     } catch {}
   }
@@ -524,67 +468,35 @@ export default function Doors() {
   }
   async function loadSettings() {
     const s = await API.settingsGet().catch(() => null);
-    if (s?.checklist_template?.length)
-      setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
+    if (s?.checklist_template?.length) setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
     if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
   }
 
-  // First load
-  useEffect(() => {
-    reload();
-    reloadCalendar();
-    loadSettings();
-  }, []);
-
-  // Auto-open door from ?door=<id> (QR deep link)
+  useEffect(() => { reload(); reloadCalendar(); loadSettings(); }, []);
   useEffect(() => {
     const targetId = getDoorParam();
     if (!targetId) return;
-
     (async () => {
       const full = await API.get(targetId).catch(() => null);
-      if (full?.door?.id) {
-        setEditing(full.door);
-        setDrawerOpen(true);
-      } else {
-        // ID invalide -> on nettoie le paramètre
-        setDoorParam(null);
-      }
+      if (full?.door?.id) { setEditing(full.door); setDrawerOpen(true); } else { setDoorParam(null); }
     })();
-
-    // Réagit aux navigations back/forward
-    const onPop = () => {
-      const id = getDoorParam();
-      if (!id) closeDrawerAndClearParam();
-    };
+    const onPop = () => { const id = getDoorParam(); if (!id) closeDrawerAndClearParam(); };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-
-  // Live filter (debounce)
   useEffect(() => {
-    const t = setTimeout(() => {
-      reload();
-    }, 350);
+    const t = setTimeout(() => { reload(); }, 350);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status, building, floor, doorState]);
 
-  const filtered = doors; // serveur filtre déjà
+  const filtered = doors;
 
   /* ------------------ actions door ------------------ */
   function openCreate() {
     setEditing({
-      id: null,
-      name: "",
-      building: "",
-      floor: "",
-      location: "",
-      status: STATUS.A_FAIRE,
-      next_check_date: null,
-      photo_url: null,
-      current_check: null,
-      door_state: null,
+      id: null, name: "", building: "", floor: "", location: "",
+      status: STATUS.A_FAIRE, next_check_date: null, photo_url: null, current_check: null, door_state: null,
     });
     setDrawerOpen(true);
   }
@@ -597,10 +509,7 @@ export default function Doors() {
   async function saveDoorBase() {
     if (!editing) return;
     const payload = {
-      name: editing.name,
-      building: editing.building || "",
-      floor: editing.floor || "",
-      location: editing.location || "",
+      name: editing.name, building: editing.building || "", floor: editing.floor || "", location: editing.location || "",
     };
     if (editing.id) {
       await API.update(editing.id, payload);
@@ -618,9 +527,7 @@ export default function Doors() {
   }
   async function deleteDoor() {
     if (!editing?.id) return;
-    const ok = window.confirm(
-      "Supprimer définitivement cette porte ? Cette action est irréversible."
-    );
+    const ok = window.confirm("Supprimer définitivement cette porte ? Cette action est irréversible.");
     if (!ok) return;
     await API.remove(editing.id);
     setDrawerOpen(false);
@@ -635,7 +542,6 @@ export default function Doors() {
     { value: "non_conforme", label: "Non conforme" },
     { value: "na", label: "N/A" },
   ];
-
   async function ensureCurrentCheck() {
     if (!editing?.id) return;
     let check = editing.current_check;
@@ -648,13 +554,11 @@ export default function Doors() {
       setEditing(full?.door);
     }
   }
-
   function allFiveAnswered(items = []) {
     const values = (items || []).slice(0, 5).map((i) => i?.value);
     if (values.length < 5) return false;
     return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
   }
-
   async function saveChecklistItem(idx, field, value) {
     if (!editing?.id || !editing?.current_check) return;
     const items = [...(editing.current_check.items || [])];
@@ -691,12 +595,9 @@ export default function Doors() {
     setUploading(true);
     try {
       for (const f of files) await API.uploadFile(editing.id, f);
-      // rafraîchir la fiche (si besoin)
       const full = await API.get(editing.id);
       setEditing(full?.door);
-      // force DoorFiles à recharger immédiatement
       setFilesVersion((v) => v + 1);
-      // feedback utilisateur
       setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } finally {
       setUploading(false);
@@ -716,60 +617,45 @@ export default function Doors() {
   async function saveSettings() {
     setSavingSettings(true);
     try {
-      const cleaned = (settings.checklist_template || [])
-        .map((s) => (s || "").trim())
-        .filter(Boolean);
+      const cleaned = (settings.checklist_template || []).map((s) => (s || "").trim()).filter(Boolean);
       await API.settingsSet({ checklist_template: cleaned, frequency: settings.frequency });
     } finally {
       setSavingSettings(false);
     }
   }
 
-  /* ------------------ MAPS state / loaders ------------------ */
-  const [plans, setPlans] = useState([]); // {logical_name, display_name, pages, counts:{next30, overdue, todo}}
+  /* ------------------ MAPS state / loaders (corrigé) ------------------ */
+  const [plans, setPlans] = useState([]);
   const [mapsLoading, setMapsLoading] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(null); // plan object
+  const [selectedPlan, setSelectedPlan] = useState(null); // { id, logical_name, display_name, page_count, ... }
   const [planPage, setPlanPage] = useState(0);
-  const [positions, setPositions] = useState([]); // [{door_id, x,y,status,door_name}]
-  const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
+  const [positions, setPositions] = useState([]); // [{door_id, door_name, x_frac, y_frac, status}]
 
   async function loadPlans() {
     setMapsLoading(true);
     try {
-      const r = await MAPS.listPlans().catch(() => ({ items: [] }));
-      setPlans(Array.isArray(r?.items) ? r.items : []);
+      const r = await MAPS.listPlans().catch(() => ({ plans: [] }));
+      setPlans(Array.isArray(r?.plans) ? r.plans : []); // <-- clé correcte
     } finally {
       setMapsLoading(false);
     }
   }
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
-    const r = await MAPS.positions(plan.logical_name || plan.id || plan.name, pageIdx).catch(() => ({ points: [] }));
-    setPositions(Array.isArray(r?.points) ? r.points : []);
+    const r = await MAPS.positions(plan.logical_name, pageIdx).catch(() => ({ items: [] }));
+    setPositions(Array.isArray(r?.items) ? r.items : []); // <-- clé correcte
   }
-  useEffect(() => {
-    if (tab === "maps") loadPlans();
-  }, [tab]);
-  useEffect(() => {
-    if (selectedPlan) loadPositions(selectedPlan, planPage);
-  }, [selectedPlan, planPage]);
+  useEffect(() => { if (tab === "maps") loadPlans(); }, [tab]);
+  useEffect(() => { if (selectedPlan) loadPositions(selectedPlan, planPage); }, [selectedPlan, planPage]);
 
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
-        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>
-          📋 Contrôles
-        </Btn>
-        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
-          📅 Calendrier
-        </Btn>
-        <Btn variant={tab === "maps" ? "primary" : "ghost"} onClick={() => setTab("maps")}>
-          🗺️ Plans
-        </Btn>
-        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>
-          ⚙️ Paramètres
-        </Btn>
+        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>📋 Contrôles</Btn>
+        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>📅 Calendrier</Btn>
+        <Btn variant={tab === "maps" ? "primary" : "ghost"} onClick={() => setTab("maps")}>🗺️ Plans</Btn>
+        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>⚙️ Paramètres</Btn>
       </div>
     </div>
   );
@@ -779,20 +665,16 @@ export default function Doors() {
       <Toast text={toast} onClose={() => setToast("")} />
 
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Portes coupe-feu</h1>
-        </div>
+        <div><h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Portes coupe-feu</h1></div>
         <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
-            {filtersOpen ? "Masquer les filtres" : "Filtres"}
-          </Btn>
+          <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>{filtersOpen ? "Masquer les filtres" : "Filtres"}</Btn>
           <Btn onClick={openCreate}>+ Nouvelle porte</Btn>
         </div>
       </header>
 
       <StickyTabs />
 
-      {/* Filtres (toggle) */}
+      {/* Filtres */}
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
           <div className="grid md:grid-cols-5 gap-3">
@@ -821,24 +703,13 @@ export default function Doors() {
             />
           </div>
           <div className="flex gap-2">
-            <Btn
-              variant="ghost"
-              onClick={() => {
-                setQ("");
-                setStatus("");
-                setBuilding("");
-                setFloor("");
-                setDoorState("");
-              }}
-            >
-              Réinitialiser
-            </Btn>
+            <Btn variant="ghost" onClick={() => { setQ(""); setStatus(""); setBuilding(""); setFloor(""); setDoorState(""); }}>Réinitialiser</Btn>
           </div>
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
       )}
 
-      {/* Onglet Contrôles : liste des portes */}
+      {/* Onglet Contrôles */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
           {/* Mobile cards */}
@@ -849,7 +720,6 @@ export default function Doors() {
               <div key={d.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    {/* vignette */}
                     <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
                       {d.photo_url ? (
                         <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
@@ -858,9 +728,7 @@ export default function Doors() {
                       )}
                     </div>
                     <div>
-                      <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(d)}>
-                        {d.name}
-                      </button>
+                      <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(d)}>{d.name}</button>
                       <div className="text-xs text-gray-500 mt-0.5">
                         {d.building || "—"} • {d.floor || "—"} {d.location ? `• ${d.location}` : ""}
                       </div>
@@ -876,7 +744,6 @@ export default function Doors() {
                 </div>
                 <div className="mt-3 flex gap-2">
                   <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                  {/* QR supprimé en mobile aussi pour cohérence */}
                 </div>
               </div>
             ))}
@@ -897,52 +764,44 @@ export default function Doors() {
               </thead>
               <tbody>
                 {loading && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td>
-                  </tr>
+                  <tr><td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td></tr>
                 )}
                 {!loading && filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td>
-                  </tr>
+                  <tr><td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td></tr>
                 )}
-                {!loading &&
-                  filtered.map((d, idx) => (
-                    <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
-                      <td className="px-4 py-3 min-w-[260px]">
-                        <div className="flex items-center gap-3">
-                          <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
-                            {d.photo_url ? (
-                              <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <span className="text-[10px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
-                            )}
-                          </div>
-                          <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>
-                            {d.name}
-                          </button>
+                {!loading && filtered.map((d, idx) => (
+                  <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
+                    <td className="px-4 py-3 min-w-[260px]">
+                      <div className="flex items-center gap-3">
+                        <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
+                          {d.photo_url ? (
+                            <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-[10px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
+                          )}
                         </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
-                      </td>
-                      <td className="px-4 py-3">
-                        {doorStateBadge(d.door_state)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                          {/* Bouton QR supprimé (colonne Actions) */}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>
+                          {d.name}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
+                    </td>
+                    <td className="px-4 py-3">{doorStateBadge(d.door_state)}</td>
+                    <td className="px-4 py-3">
+                      <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-2">
+                        <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -978,7 +837,7 @@ export default function Doors() {
           <PlanCards
             plans={plans}
             onRename={async (plan, name) => {
-              await MAPS.renamePlan(plan.logical_name || plan.id || plan.name, name);
+              await MAPS.renamePlan(plan.logical_name, name);
               await loadPlans();
             }}
             onPick={(plan) => {
@@ -991,45 +850,41 @@ export default function Doors() {
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="font-semibold">
-                  {selectedPlan.display_name || selectedPlan.logical_name || selectedPlan.name}
+                  {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
                   <Select
                     value={String(planPage)}
                     onChange={(v) => setPlanPage(Number(v))}
-                    options={Array.from({ length: Number(selectedPlan.pages || 1) }, (_, i) => ({ value: String(i), label: `Page ${i + 1}` }))}
+                    options={Array.from({ length: Number(selectedPlan.page_count || 1) }, (_, i) => ({
+                      value: String(i), label: `Page ${i + 1}`,
+                    }))}
                   />
                   <a
-                    href={MAPS.planFileUrl(selectedPlan.logical_name || selectedPlan.id || selectedPlan.name)}
+                    href={MAPS.planFileUrl(selectedPlan.id)}
                     target="_blank" rel="noreferrer"
                     className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                   >
-                    Ouvrir le PDF original
+                    Ouvrir le PDF
                   </a>
                 </div>
               </div>
 
               <PlanViewer
-                key={(selectedPlan.logical_name || selectedPlan.id || selectedPlan.name) + ":" + planPage}
-                fileUrl={MAPS.planFileUrl(selectedPlan.logical_name || selectedPlan.id || selectedPlan.name)}
+                key={`${selectedPlan.id}:${planPage}`}
+                plan={selectedPlan}
                 pageIndex={planPage}
-                points={positions}
-                onReady={() => setPdfReady(true)}
-                onMovePoint={async (doorId, xy) => {
+                positions={positions}
+                onMovePoint={async (doorId, x_frac, y_frac) => {
                   await MAPS.setPosition(doorId, {
-                    logical_name: selectedPlan.logical_name || selectedPlan.id || selectedPlan.name,
+                    logical_name: selectedPlan.logical_name,
                     page_index: planPage,
-                    x: xy.x, y: xy.y,
+                    x_frac, y_frac,
                   });
                   await loadPositions(selectedPlan, planPage);
                 }}
-                onClickPoint={(p) => openEdit({ id: p.door_id, name: p.door_name })}
+                onClickPoint={(p) => openEdit({ id: p.door_id, name: p.name })}
               />
-              {!pdfReady && (
-                <div className="text-xs text-gray-500 px-1 pt-2">
-                  Chargement du plan… si l’affichage vectoriel n’est pas supporté par le navigateur, un fallback lecture seule est utilisé.
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -1066,10 +921,10 @@ export default function Doors() {
                 value={settings.frequency}
                 onChange={(v) => setSettings({ ...settings, frequency: v })}
                 options={[
-                  { value: "1_an", label: "1× par an" },
-                  { value: "1_mois", label: "1× par mois" },
-                  { value: "2_an", label: "2× par an (tous les 6 mois)" },
-                  { value: "3_mois", label: "Tous les 3 mois" },
+                  { value: "1_an",  label: "1× par an" },
+                  { value: "1_mois",label: "1× par mois" },
+                  { value: "2_an",  label: "2× par an (tous les 6 mois)" },
+                  { value: "3_mois",label: "Tous les 3 mois" },
                   { value: "2_ans", label: "1× tous les 2 ans" },
                 ]}
               />
@@ -1085,12 +940,9 @@ export default function Doors() {
         </div>
       )}
 
-      {/* Drawer: fiche porte + checklist + fichiers + QR */}
+      {/* Drawer */}
       {drawerOpen && editing && (
-        <Drawer
-          title={`Porte • ${editing.name || "nouvelle"}`}
-          onClose={closeDrawerAndClearParam}
-        >
+        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
           <div className="space-y-4">
             {/* Base info */}
             <div className="grid sm:grid-cols-2 gap-3">
@@ -1122,9 +974,7 @@ export default function Doors() {
 
             <div className="flex items-center gap-3">
               <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
-              {editing?.id && (
-                <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>
-              )}
+              {editing?.id && <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>}
             </div>
 
             {/* Photo */}
@@ -1155,9 +1005,7 @@ export default function Doors() {
               </div>
 
               {!editing.current_check && (
-                <div className="text-sm text-gray-500">
-                  Lance un contrôle pour remplir les 5 points ci-dessous.
-                </div>
+                <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>
               )}
 
               {!!editing.current_check && (
@@ -1224,9 +1072,7 @@ export default function Doors() {
                     uploading ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"
                   }`}
                 >
-                  <div className="text-sm text-gray-600">
-                    Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.
-                  </div>
+                  <div className="text-sm text-gray-600">Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.</div>
                 </div>
 
                 <DoorFiles doorId={editing.id} version={filesVersion} />
@@ -1237,7 +1083,6 @@ export default function Doors() {
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="font-semibold mb-2">QR code</div>
-                {/* On garde uniquement le bouton d'étiquettes PDF */}
                 <div className="mt-1 flex flex-wrap gap-2">
                   <a
                     href={API.qrcodesPdf(editing.id, "80,120,200")}
@@ -1382,7 +1227,6 @@ function DoorHistory({ doorId }) {
                     <div className="text-xs text-gray-600">
                       {Number(h.counts?.conforme || 0)} / {Number(h.counts?.nc || 0)} / {Number(h.counts?.na || 0)}
                     </div>
-                    {/* snapshot items (condensé) */}
                     <details className="text-xs mt-1">
                       <summary className="cursor-pointer text-blue-700">Voir le détail</summary>
                       <ul className="list-disc ml-4 mt-1 space-y-0.5">
@@ -1432,18 +1276,14 @@ function DoorHistory({ doorId }) {
   );
 }
 
-/* ----------------------------- MAPS components ----------------------------- */
+/* ----------------------------- MAPS components (intégrés et corrigés) ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
   return (
     <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
       <div className="font-semibold">Plans PDF</div>
       <div className="flex items-center gap-2">
-        <Btn
-          variant="ghost"
-          onClick={() => inputRef.current?.click()}
-          disabled={mapsLoading}
-        >
+        <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={mapsLoading}>
           📦 Import ZIP de plans
         </Btn>
         <input
@@ -1454,7 +1294,7 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) onUploadZip(f);
-            e.target.value = "";
+            e.target.value = ""; // pouvoir ré-importer le même ZIP
           }}
         />
       </div>
@@ -1467,20 +1307,42 @@ function PlanCards({ plans = [], onRename, onPick }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
       {plans.map((p) => (
-        <PlanCard key={p.logical_name || p.id || p.name} plan={p} onRename={onRename} onPick={onPick} />
+        <PlanCard key={p.id} plan={p} onRename={onRename} onPick={onPick} />
       ))}
     </div>
   );
 }
+
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
-  const [name, setName] = useState(plan.display_name || plan.logical_name || plan.name || "");
-  const next30 = Number(plan?.counts?.next30 || plan?.next30 || 0);
-  const overdue = Number(plan?.counts?.overdue || plan?.overdue || 0);
-  const todo = Number(plan?.counts?.todo || plan?.todo || 0);
+  const [name, setName] = useState(plan.display_name || plan.logical_name || "");
+
+  // vignette page 1
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = MAPS.planFileUrl(plan.id);
+        const pdf = await pdfjsLib.getDocument(url).promise;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 0.22 }); // vignette
+        const c = canvasRef.current;
+        if (!c || cancelled) return;
+        c.width = viewport.width;
+        c.height = viewport.height;
+        const ctx = c.getContext("2d");
+        await page.render({ canvasContext: ctx, viewport }).promise;
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, [plan.id]);
 
   return (
     <div className="border rounded-2xl p-3 bg-white shadow-sm hover:shadow transition">
+      <div className="aspect-video bg-gray-50 mb-2 flex items-center justify-center overflow-hidden rounded-xl">
+        <canvas ref={canvasRef} />
+      </div>
       <div className="flex items-center justify-between gap-2">
         {!edit ? (
           <div className="font-medium truncate" title={name}>{name || "—"}</div>
@@ -1495,13 +1357,14 @@ function PlanCard({ plan, onRename, onPick }) {
               <Btn
                 variant="subtle"
                 onClick={async () => {
-                  await onRename(plan, (name || "").trim());
+                  const clean = (name || "").trim();
+                  if (clean) await onRename(plan, clean);
                   setEdit(false);
                 }}
               >
                 OK
               </Btn>
-              <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || plan.name || ""); setEdit(false); }}>
+              <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>
                 Annuler
               </Btn>
             </>
@@ -1510,15 +1373,15 @@ function PlanCard({ plan, onRename, onPick }) {
         </div>
       </div>
       <div className="flex items-center gap-2 mt-2 text-xs">
-        <Badge color="orange">≤30j: {next30}</Badge>
-        <Badge color="red">Retard: {overdue}</Badge>
-        <Badge color="green">À faire: {todo}</Badge>
+        <Badge color="orange">≤30j: {Number(plan.actions_next_30 || 0)}</Badge>
+        <Badge color="red">Retard: {Number(plan.overdue || 0)}</Badge>
+        <Badge color="blue">Pages: {Number(plan.page_count || 1)}</Badge>
       </div>
     </div>
   );
 }
 
-function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint }) {
+function PlanViewer({ plan, pageIndex = 0, positions = [], onMovePoint, onClickPoint }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
@@ -1526,41 +1389,40 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const [scale, setScale] = useState(1);
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
 
-  // Try to load pdf.js from CDN (no build deps)
+  // Render PDF page
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const pdfjsLib = await import("https://esm.sh/pdfjs-dist@3.11.174/build/pdf.mjs");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = "https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.mjs";
-        const loadingTask = pdfjsLib.getDocument({ url: fileUrl });
-        const pdf = await loadingTask.promise;
+        const url = MAPS.planFileUrl(plan.id);
+        const pdf = await pdfjsLib.getDocument(url).promise;
         const page = await pdf.getPage(Number(pageIndex) + 1);
-        const viewport = page.getViewport({ scale: 1.5 });
-        const canvas = canvasRef.current;
-        if (!canvas || cancelled) return;
-        const ctx = canvas.getContext("2d");
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        setPageSize({ w: canvas.width, h: canvas.height });
-
+        // fit-to-width, max ~1200
+        const baseViewport = page.getViewport({ scale: 1 });
+        const maxW = Math.min(1200, wrapRef.current?.clientWidth || baseViewport.width);
+        const s = maxW / baseViewport.width;
+        const viewport = page.getViewport({ scale: s });
+        const c = canvasRef.current;
+        if (!c || cancelled) return;
+        c.width = viewport.width;
+        c.height = viewport.height;
+        const ctx = c.getContext("2d");
         await page.render({ canvasContext: ctx, viewport }).promise;
+        setPageSize({ w: viewport.width, h: viewport.height });
         setLoaded(true);
-        onReady?.();
       } catch {
-        // Fallback: we won't render on canvas; the <embed> below will display PDF read-only
         setLoaded(false);
-        onReady?.();
+        setPageSize({ w: 0, h: 0 });
       }
     })();
     return () => { cancelled = true; };
-  }, [fileUrl, pageIndex, onReady]);
+  }, [plan.id, pageIndex]);
 
   // Zoom handlers
   const zoom = (dir) => setScale((s) => Math.max(0.5, Math.min(3, s + (dir > 0 ? 0.2 : -0.2))));
   const reset = () => setScale(1);
 
-  // Drag / move a point
+  // Drag / move a point (positions en x_frac / y_frac 0..1)
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
@@ -1569,8 +1431,8 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       id: p.door_id,
       startX: e.clientX,
       startY: e.clientY,
-      baseX: p.x,
-      baseY: p.y,
+      baseX: p.x_frac,
+      baseY: p.y_frac,
       rect,
     };
     window.addEventListener("mousemove", onMove);
@@ -1579,11 +1441,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   function onMove(e) {
     const info = dragInfo.current;
     if (!info) return;
-    const dx = (e.clientX - info.startX) / (info.rect.width);
-    const dy = (e.clientY - info.startY) / (info.rect.height);
+    const dx = (e.clientX - info.startX) / info.rect.width;
+    const dy = (e.clientY - info.startY) / info.rect.height;
     const x = Math.min(1, Math.max(0, info.baseX + dx));
     const y = Math.min(1, Math.max(0, info.baseY + dy));
-    // apply preview
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (el) el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
   }
@@ -1594,21 +1455,19 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     if (!info) return;
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (!el) { dragInfo.current = null; return; }
-    // read back final x/y from style
     const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
     if (m) {
-      const x = Number(m[1]) / 100;
-      const y = Number(m[2]) / 100;
-      onMovePoint?.(info.id, { x, y });
+      const x_frac = Number(m[1]) / 100;
+      const y_frac = Number(m[2]) / 100;
+      onMovePoint?.(info.id, x_frac, y_frac);
     }
     dragInfo.current = null;
   }
 
-  // Marker color/blink by status
   function markerClass(s) {
     if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
     if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
-    if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
+    if (s === STATUS.A_FAIRE)  return "bg-emerald-600 ring-1 ring-emerald-300";
     return "bg-blue-600 ring-1 ring-blue-300";
   }
 
@@ -1621,15 +1480,9 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         <div className="text-xs text-gray-500">Zoom: {(scale * 100).toFixed(0)}%</div>
       </div>
 
-      <div
-        ref={wrapRef}
-        className="relative w-full overflow-auto border rounded-2xl bg-gray-50"
-        style={{ height: 520 }}
-      >
-        {/* Canvas mode (if pdf.js OK) */}
-        {pageSize.w > 0 && (
-          <div className="relative inline-block"
-               style={{ width: pageSize.w * scale, height: pageSize.h * scale }}>
+      <div ref={wrapRef} className="relative w-full overflow-auto border rounded-2xl bg-gray-50" style={{ height: 520 }}>
+        {pageSize.w > 0 ? (
+          <div className="relative inline-block" style={{ width: pageSize.w * scale, height: pageSize.h * scale }}>
             <canvas
               ref={canvasRef}
               style={{ width: pageSize.w * scale, height: pageSize.h * scale, display: loaded ? "block" : "none" }}
@@ -1640,21 +1493,16 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
               </div>
             )}
 
-            {/* overlay points (absolute, 0..1 coords) */}
-            <div
-              ref={overlayRef}
-              className="absolute inset-0"
-              style={{ width: "100%", height: "100%" }}
-            >
-              {points.map((p) => (
+            <div ref={overlayRef} className="absolute inset-0" style={{ width: "100%", height: "100%" }}>
+              {positions.map((p) => (
                 <div
                   key={p.door_id}
                   data-id={p.door_id}
                   className="absolute"
-                  style={{ transform: `translate(${(p.x || 0) * 100}%, ${(p.y || 0) * 100}%) translate(-50%, -50%)` }}
+                  style={{ transform: `translate(${(p.x_frac || 0) * 100}%, ${(p.y_frac || 0) * 100}%) translate(-50%, -50%)` }}
                 >
                   <button
-                    title={p.door_name}
+                    title={p.name}
                     onMouseDown={(e) => onMouseDownPoint(e, p)}
                     onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
                     className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
@@ -1663,12 +1511,9 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
               ))}
             </div>
           </div>
-        )}
-
-        {/* Fallback <embed> if pdf.js failed */}
-        {pageSize.w === 0 && (
+        ) : (
           <div className="relative w-full h-full">
-            <embed src={fileUrl} type="application/pdf" className="w-full h-full" />
+            <embed src={MAPS.planFileUrl(plan.id)} type="application/pdf" className="w-full h-full" />
             <div className="absolute bottom-2 left-2 text-xs bg-white/80 backdrop-blur px-2 py-1 rounded border">
               Mode lecture seule (PDF natif du navigateur).
             </div>
@@ -1676,17 +1521,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         )}
       </div>
 
-      {/* Legend */}
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
-        </span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange)</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge)</span>
       </div>
     </div>
   );
