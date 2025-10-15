@@ -220,7 +220,7 @@ const MAPS = {
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-  planFileUrl: (planId) => `/api/doors/maps/plan/${encodeURIComponent(planId)}/file`, // <-- IMPORTANT: ID
+  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`,
   positions: async (logical_name, page_index = 0) =>
     (await fetch(`/api/doors/maps/positions?${new URLSearchParams({ logical_name, page_index })}`, withHeaders())).json(),
   setPosition: async (doorId, payload) =>
@@ -1004,7 +1004,7 @@ export default function Doors() {
                     options={Array.from({ length: Number(selectedPlan.page_count || 1) }, (_, i) => ({ value: String(i), label: `Page ${i + 1}` }))}
                   />
                   <a
-                    href={MAPS.planFileUrl(selectedPlan.id)} // <-- ID
+                    href={MAPS.planFileUrl(selectedPlan.logical_name)}
                     target="_blank" rel="noreferrer"
                     className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                   >
@@ -1015,7 +1015,7 @@ export default function Doors() {
 
               <PlanViewer
                 key={selectedPlan.id + ":" + planPage}
-                fileUrl={MAPS.planFileUrl(selectedPlan.id)} // <-- ID
+                fileUrl={MAPS.planFileUrl(selectedPlan.logical_name)}
                 pageIndex={planPage}
                 points={positions}
                 onReady={() => setPdfReady(true)}
@@ -1491,7 +1491,7 @@ function PlanCard({ plan, onRename, onPick }) {
       try {
         setThumbErr("");
 
-        const url = MAPS.planFileUrl(plan.id); // <-- ID
+        const url = MAPS.planFileUrl(plan.logical_name); // <-- ID
         const loadingTask = pdfjsLib.getDocument({ url });
         const pdf = await loadingTask.promise;
         const page = await pdf.getPage(1);
@@ -1507,7 +1507,7 @@ function PlanCard({ plan, onRename, onPick }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [plan.id]);
+  }, [plan.logical_name]);
 
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
