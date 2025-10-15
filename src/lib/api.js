@@ -306,41 +306,59 @@ export const api = {
     previewUrl: (id) => `${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`,
   },
 
-  /** --- DOORS (Portes coupe-feu) — NOUVEAU --- */
+  /** --- DOORS (Portes coupe-feu) — MIS À JOUR POUR server_doors.js --- */
   doors: {
-    list: (params) => get("/api/doors", params),
-    create: (payload) => post("/api/doors", payload),
-    remove: (id, confirmPhrase) =>
-      del(`/api/doors/${id}${confirmPhrase ? `?confirm=${encodeURIComponent(confirmPhrase)}` : ""}`),
+    // CRUD portes
+    list: (params) => get("/api/doors/doors", params),
+    get:   (id) => get(`/api/doors/doors/${encodeURIComponent(id)}`),
+    create: (payload) => post("/api/doors/doors", payload),
+    update: (id, payload) => put(`/api/doors/doors/${encodeURIComponent(id)}`, payload),
+    remove: (id) => del(`/api/doors/doors/${encodeURIComponent(id)}`),
 
-    next: (id) => get(`/api/doors/${id}/next`),
-    start: (id) => post(`/api/doors/${id}/start`, {}),
-    complete: (id, payload) => post(`/api/doors/${id}/complete`, payload),
-    followup: (id, payload) => post(`/api/doors/${id}/followup`, payload),
-
-    uploadFile: (id, file) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      return upload(`/api/doors/${id}/upload`, fd);
-    },
+    // Photo vignette (upload + URL)
     uploadPhoto: (id, file) => {
       const fd = new FormData();
       fd.append("photo", file);
-      return upload(`/api/doors/${id}/photo`, fd);
+      return upload(`/api/doors/doors/${encodeURIComponent(id)}/photo`, fd);
     },
+    photoUrl: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`,
 
-    templates: () => get("/api/doors/templates"),
-    createTemplate: (payload) => post("/api/doors/templates", payload),
-    updateTemplate: (id, payload) =>
-      jsonFetch(`/api/doors/templates/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    // Fichiers attachés à la porte
+    listFiles: (id) => get(`/api/doors/doors/${encodeURIComponent(id)}/files`),
+    uploadFile: (id, file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload(`/api/doors/doors/${encodeURIComponent(id)}/files`, fd);
+    },
+    deleteFile: (fileId) => del(`/api/doors/files/${encodeURIComponent(fileId)}`),
 
-    calendar: () => get("/api/doors/calendar"),
-    alerts: () => get("/api/doors/alerts"),
+    // Checklists (workflow)
+    startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, {}),
+    saveCheck: (doorId, checkId, payload = {}) => {
+      // Si fichiers → multipart; sinon JSON
+      if (payload?.files?.length) {
+        const fd = new FormData();
+        if (payload.items) fd.append("items", JSON.stringify(payload.items));
+        if (payload.close) fd.append("close", "true");
+        (payload.files || []).forEach((f) => fd.append("files", f));
+        return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, fd);
+      }
+      return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, payload);
+    },
+    listHistory: (doorId) => get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
 
-    // 🔧 Amélioration unique : nouvelle route + option "force"
+    // QR / PDF
+    qrUrl: (id, size = 256) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`,
     qrcodesUrl: (id, sizes = "80,120,200", force = false) =>
       `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
-    ncReportUrl: (inspectionId) => `${API_BASE}/api/doors/inspections/${inspectionId}/nc.pdf`,
+    nonConformPDF: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/非`, // placeholder (non utilisé)
+    nonConformitiesPdfUrl: (id) => `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`,
+
+    // Calendrier / settings / alertes
+    calendar: () => get(`/api/doors/calendar`),
+    settingsGet: () => get(`/api/doors/settings`),
+    settingsSet: (payload) => put(`/api/doors/settings`, payload),
+    alerts: () => get(`/api/doors/alerts`),
   },
 
   /** --- DOORS MAPS (Plans PDF + positions) — AJOUT --- */
