@@ -1732,12 +1732,20 @@ app.put("/api/doors/maps/plan/:logical/rename", async (req, res) => {
 /** Liste des positions pour un plan/page */
 app.get("/api/doors/maps/positions", async (req, res) => {
   try {
-    const logical = String(req.query.logical_name || "");
+    const id = String(req.query.id || "");
+    const logicalParam = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
+
+    let logical = logicalParam;
+    if (!logical && /^[0-9a-fA-F-]{36}$/.test(id)) {
+      const { rows } = await pool.query(
+        `SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`,
+        [id]
+      );
+      logical = rows?.[0]?.logical_name || "";
+    }
     if (!logical)
-      return res
-        .status(400)
-        .json({ ok: false, error: "logical_name requis" });
+      return res.status(400).json({ ok: false, error: "logical_name ou id requis" });
 
     const q = `
       WITH pend AS (
@@ -1758,7 +1766,6 @@ app.get("/api/doors/maps/positions", async (req, res) => {
     `;
     const { rows } = await pool.query(q, [logical, pageIndex]);
 
-    // Compat: items + points (x/y au lieu de x_frac/y_frac)
     const points = rows.map((r) => ({
       door_id: r.door_id,
       door_name: r.name,
@@ -1774,11 +1781,13 @@ app.get("/api/doors/maps/positions", async (req, res) => {
 });
 
 /** Enregistre/Met à jour la position d’une porte sur un plan/page */
+// remplace le handler par :
 app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
   try {
     const doorId = req.params.doorId;
-    const {
+    let {
       logical_name,
+      plan_id,            // ✅ nouveau/prioritaire
       page_index = 0,
       page_label = null,
       x_frac,
@@ -1786,12 +1795,18 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
       x,
       y,
     } = req.body || {};
+
+    // si on reçoit un plan_id (UUID), on récupère le logical_name correspondant
+    if ((!logical_name || String(logical_name).trim() === "") && plan_id && /^[0-9a-fA-F-]{36}$/.test(String(plan_id))) {
+      const { rows } = await pool.query(`SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`, [plan_id]);
+      logical_name = rows?.[0]?.logical_name || null;
+    }
+
     const xf = x_frac != null ? x_frac : x;
     const yf = y_frac != null ? y_frac : y;
+
     if (!logical_name || xf == null || yf == null) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "coords/logical requis" });
+      return res.status(400).json({ ok: false, error: "coords/logical requis" });
     }
 
     await pool.query(
@@ -1799,7 +1814,7 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (door_id, plan_logical_name, page_index)
        DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, page_label=EXCLUDED.page_label, updated_at=now()`,
-      [doorId, logical_name, Number(page_index || 0), page_label, Number(xf), Number(yf)]
+      [doorId, String(logical_name), Number(page_index || 0), page_label, Number(xf), Number(yf)]
     );
 
     res.json({ ok: true });
