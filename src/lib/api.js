@@ -337,8 +337,9 @@ export const api = {
     calendar: () => get("/api/doors/calendar"),
     alerts: () => get("/api/doors/alerts"),
 
-    qrcodesUrl: (id, sizes = "80,120,200") =>
-      `${API_BASE}/api/doors/${id}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}`,
+    // 🔧 Amélioration unique : nouvelle route + option "force"
+    qrcodesUrl: (id, sizes = "80,120,200", force = false) =>
+      `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
     ncReportUrl: (inspectionId) => `${API_BASE}/api/doors/inspections/${inspectionId}/nc.pdf`,
   },
 };
