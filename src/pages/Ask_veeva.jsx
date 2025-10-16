@@ -265,32 +265,111 @@ function Message({ role, text, citations, onPeek, feedback, onVote, msgRef }) {
   const isUser = role === "user";
   const [expanded, setExpanded] = useState(false);
 
-  // Helpers sans regex littéraux (compat remplacement)
-  const baseName = (s = "") => {
-    const parts = s.split(".");
-    return parts.length > 1 ? parts.slice(0, -1).join(".") : s;
-  };
-  const docIds = (citations || []).map(c => baseName(c.filename));
+  // ===== Extraction de numéros de documents (sans regex dans le code) =====
+  function isAlnumDashUnderscore(ch) {
+    const c = ch.charCodeAt(0);
+    const isUpper = c >= 65 && c <= 90;
+    const isLower = c >= 97 && c <= 122;
+    const isDigit = c >= 48 && c <= 57;
+    return isUpper || isLower || isDigit || ch === '-' || ch === '_';
+  }
 
-  function summarizeText(t = "", maxSentences = 2, maxChars = 220) {
-    const clean = String(t).trim();
-    const parts = [];
+  function tokenize(s) {
+    const out = [];
     let buf = "";
-    for (let i = 0; i < clean.length; i++) {
-      const ch = clean[i];
-      buf += ch;
-      if (".!?".includes(ch)) {
-        parts.push(buf.trim());
-        buf = "";
-        if (parts.length >= maxSentences) break;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (isAlnumDashUnderscore(ch)) { buf += ch; }
+      else { if (buf) { out.push(buf); buf = ""; } }
+    }
+    if (buf) out.push(buf);
+    return out;
+  }
+
+  function splitDashUnderscore(u) {
+    const parts = [];
+    let b = "";
+    for (let i = 0; i < u.length; i++) {
+      const ch = u[i];
+      if (ch === '-' || ch === '_') { if (b) { parts.push(b); b = ""; } }
+      else { b += ch; }
+    }
+    if (b) parts.push(b);
+    return parts;
+  }
+
+  const PREFIXES = [
+    "SOP","WI","WIQ","QP","PR","PROC","PRO","DEV","DEVIATION","CAPA","CC","NC","QSD","BMR","BPR","FORM","FRM"
+  ];
+
+  function looksLikeDocCode(tok) {
+    if (!tok) return false;
+    const u = tok.toUpperCase();
+    const parts = splitDashUnderscore(u);
+    if (!parts.length) return false;
+    const pref = parts[0];
+    if (PREFIXES.indexOf(pref) === -1) return false;
+    const tail = parts.slice(1).join("");
+    if (!tail) return false;
+    let digits = 0;
+    for (let i = 0; i < tail.length; i++) { const ch = tail[i]; if (ch >= '0' && ch <= '9') digits++; }
+    return digits >= 2 && tail.length <= 16;
+  }
+
+  function normalizeCode(tok) {
+    const u = tok.toUpperCase();
+    // remplace _ par - et compresse les - successifs
+    let out = "";
+    let lastDash = false;
+    for (let i = 0; i < u.length; i++) {
+      const ch = u[i] === '_' ? '-' : u[i];
+      if (ch === '-') { if (!lastDash) { out += '-'; lastDash = true; } }
+      else { out += ch; lastDash = false; }
+    }
+    return out;
+  }
+
+  function extractDocNumbers(txt, cits) {
+    const nums = [];
+    const seen = new Set();
+    function push(code) { const n = normalizeCode(code); if (!seen.has(n)) { seen.add(n); nums.push(n); } }
+
+    tokenize(String(txt || "")).forEach(function(t){ if (looksLikeDocCode(t)) push(t); });
+
+    (cits || []).forEach(function(c){
+      const name = String(c && c.filename || "");
+      const dot = name.lastIndexOf('.');
+      const base = dot > 0 ? name.slice(0, dot) : name;
+      tokenize(base).forEach(function(t){ if (looksLikeDocCode(t)) push(t); });
+    });
+
+    return nums;
+  }
+
+  const docCodes = !isUser ? extractDocNumbers(text, citations) : [];
+
+  // Résumé 1–2 petites phrases sans regex
+  function summarize(t, maxSentences, maxChars) {
+    t = String(t || "");
+    maxSentences = maxSentences || 2;
+    maxChars = maxChars || 220;
+    const parts = [];
+    let start = 0;
+    for (let i = 0; i < t.length && parts.length < maxSentences; i++) {
+      const ch = t[i];
+      if (ch === '.' || ch === '!' || ch === '?') {
+        const s = t.slice(start, i + 1).trim();
+        if (s) parts.push(s);
+        start = i + 1;
       }
     }
-    let out = parts.length ? parts.join(" ") : clean.slice(0, Math.min(maxChars, clean.length));
+    if (!parts.length) parts.push(t.slice(0, Math.min(maxChars, t.length)));
+    let out = parts.join(" ");
     if (out.length > maxChars) out = out.slice(0, maxChars).trim() + "…";
     return out;
   }
 
-  const condensedText = !isUser ? summarizeText(text) : text;
+  const condensedText = !isUser ? summarize(text) : text;
 
   return (
     <div ref={msgRef} className={"flex " + (isUser ? "justify-end" : "justify-start")}>
@@ -300,12 +379,12 @@ function Message({ role, text, citations, onPeek, feedback, onVote, msgRef }) {
           isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-900 rounded-bl-sm border"
         )}
       >
-        {/* Condensé par défaut côté assistant: numéros de docs + 1–2 phrases */}
+        {/* Vue condensée: numéros de documents + 1–2 phrases (pas de lien en tête) */}
         {!isUser && !expanded ? (
           <div>
-            {!!docIds.length && (
+            {!!docCodes.length && (
               <div className="text-[12px] text-gray-700 mb-1">
-                <span className="font-medium">📄 Docs :</span> {docIds.slice(0, 8).join(" · ")}{docIds.length > 8 ? " …" : ""}
+                <span className="font-medium">📄 Numéros :</span> {docCodes.slice(0, 10).join(" · ")}{docCodes.length > 10 ? " …" : ""}
               </div>
             )}
             <div className="whitespace-pre-wrap break-words leading-relaxed text-[14px]">{condensedText}</div>
