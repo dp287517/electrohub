@@ -1,5 +1,5 @@
 // src/pages/Doors.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import dayjs from "dayjs";
 /* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
