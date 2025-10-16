@@ -801,24 +801,27 @@ export default function Doors() {
     if (tab === "maps") loadPlans();
   }, [tab]);
 
+  // Stabiliser selectedPlan avec useMemo pour éviter re-rendus inutiles
+  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id]);
+
   useEffect(() => {
-    console.log("[DEBUG] selectedPlan changed:", selectedPlan); // Log pour diagnostiquer re-rendus
-    if (selectedPlan) {
-      loadPositions(selectedPlan, planPage);
+    console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
+    if (stableSelectedPlan) {
+      loadPositions(stableSelectedPlan, planPage);
       setPendingPlaceDoorId(null); // reset mode placement à chaque changement
     }
-  }, [selectedPlan, planPage]);
+  }, [stableSelectedPlan, planPage]);
 
   // NEW: Chargement des portes non positionnées via la nouvelle API
   useEffect(() => {
-    if (selectedPlan) {
+    if (stableSelectedPlan) {
       (async () => {
-        const key = selectedPlan.logical_name || "";
+        const key = stableSelectedPlan.logical_name || "";
         const r = await MAPS.pendingPositions(key, planPage).catch(() => ({ pending: [] }));
         setUnplacedDoors(Array.isArray(r?.pending) ? r.pending : []);
       })();
     }
-  }, [selectedPlan, planPage]);
+  }, [stableSelectedPlan, planPage]);
 
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
@@ -1676,15 +1679,14 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const overlayRef = useRef(null);
   const [loaded, setLoaded] = useState(false);
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
-  const [isMounted, setIsMounted] = useState(false); // NEW: Suivi du montage du canvas
+  const [isMounted, setIsMounted] = useState(false); // Suivi du montage du canvas
+  const [err, setErr] = useState("");
 
   // viewport state (scale + pan)
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 }); // en pixels sur le rendu courant
 
-  const [err, setErr] = useState("");
-
-  // NEW: Vérifier que le canvas est monté
+  // Vérifier que le canvas est monté
   useEffect(() => {
     if (canvasRef.current) {
       console.log("[DEBUG] Canvas mounted successfully");
@@ -1703,7 +1705,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     const renderPdf = async () => {
       // Attendre que le canvas soit monté
       if (!isMounted || !canvasRef.current) {
-        console.warn("[DEBUG] Canvas not available, delaying render");
+        console.warn("[DEBUG] Canvas not available, render aborted");
         setErr("Canvas non disponible. Essayez de recharger le plan.");
         setLoaded(false);
         onReady?.();
@@ -1770,16 +1772,35 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       }
     };
 
-    // Délai pour laisser le DOM se stabiliser
-    const timer = setTimeout(() => {
-      if (!cancelled) {
-        renderPdf();
+    // Vérifier le canvas avec un intervalle (max 2s)
+    let attempts = 0;
+    const maxAttempts = 20; // 20 * 100ms = 2s
+    const interval = setInterval(() => {
+      if (cancelled) {
+        console.log("[DEBUG] Render cancelled during interval");
+        clearInterval(interval);
+        return;
       }
-    }, 0);
+      if (canvasRef.current && isMounted) {
+        console.log("[DEBUG] Canvas ready, starting render");
+        clearInterval(interval);
+        renderPdf();
+      } else {
+        attempts++;
+        console.log(`[DEBUG] Canvas not ready, attempt ${attempts}/${maxAttempts}`);
+        if (attempts >= maxAttempts) {
+          console.warn("[DEBUG] Max attempts reached, aborting render");
+          setErr("Échec du rendu : canvas non disponible après plusieurs tentatives.");
+          setLoaded(false);
+          onReady?.();
+          clearInterval(interval);
+        }
+      }
+    }, 100);
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      clearInterval(interval);
       console.log("[DEBUG] Cleaning up PDF render");
     };
   }, [fileUrl, pageIndex, onReady, isMounted]);
@@ -1986,63 +2007,61 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         className="relative w-full overflow-auto border rounded-2xl bg-gray-50"
         style={{ height: 520 }}
       >
-        {/* Canvas mode (pdf.js) */}
-        {pageSize.w > 0 && (
-          <div
-            className="relative inline-block will-change-transform"
-            style={{
-              transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-              transformOrigin: "0 0",
-              width: pageSize.w,
-              height: pageSize.h,
-            }}
-          >
-            <canvas
-              ref={canvasRef}
-              style={{ width: pageSize.w, height: pageSize.h, display: loaded ? "block" : "none" }}
-            />
-            {!loaded && (
-              <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
-                Rendu en cours…
-              </div>
-            )}
-
-            {/* overlay points */}
-            <div
-              ref={overlayRef}
-              className="absolute inset-0"
-              style={{ width: "100%", height: "100%" }}
-              onClick={onOverlayClick}
-            >
-              {points.map((p) => {
-                const x = p.x_frac ?? p.x ?? 0;
-                const y = p.y_frac ?? p.y ?? 0;
-                const placed = p.x_frac != null && p.y_frac != null;
-                return (
-                  placed && (
-                    <div
-                      key={p.door_id}
-                      data-id={p.door_id}
-                      className="absolute"
-                      style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
-                    >
-                      <button
-                        title={p.name}
-                        data-marker="1"
-                        onMouseDown={(e) => onMouseDownPoint(e, p)}
-                        onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
-                        className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                      />
-                    </div>
-                  )
-                );
-              })}
+        {/* Canvas mode (pdf.js) - Toujours afficher le canvas */}
+        <div
+          className="relative inline-block will-change-transform"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            transformOrigin: "0 0",
+            width: pageSize.w || "100%",
+            height: pageSize.h || 520,
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, display: loaded ? "block" : "none" }}
+          />
+          {!loaded && (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+              Rendu en cours…
             </div>
+          )}
+
+          {/* overlay points */}
+          <div
+            ref={overlayRef}
+            className="absolute inset-0"
+            style={{ width: "100%", height: "100%" }}
+            onClick={onOverlayClick}
+          >
+            {points.map((p) => {
+              const x = p.x_frac ?? p.x ?? 0;
+              const y = p.y_frac ?? p.y ?? 0;
+              const placed = p.x_frac != null && p.y_frac != null;
+              return (
+                placed && (
+                  <div
+                    key={p.door_id}
+                    data-id={p.door_id}
+                    className="absolute"
+                    style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
+                  >
+                    <button
+                      title={p.name}
+                      data-marker="1"
+                      onMouseDown={(e) => onMouseDownPoint(e, p)}
+                      onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
+                      className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                    />
+                  </div>
+                )
+              );
+            })}
           </div>
-        )}
+        </div>
 
         {/* Fallback lisible */}
-        {pageSize.w === 0 && (
+        {!loaded && pageSize.w === 0 && (
           <div className="p-3 text-sm text-gray-600">
             {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
           </div>
