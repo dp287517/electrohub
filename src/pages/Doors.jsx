@@ -619,6 +619,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   useEffect(() => {
     let cancelled = false;
     console.log(`[DEBUG] Starting PDF render for ${fileUrl}, pageIndex=${pageIndex}`);
+
     const renderPdf = async () => {
       if (!isMounted || !canvasRef.current) {
         console.warn("[DEBUG] Canvas not available, render aborted");
@@ -645,9 +646,15 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
           return;
         }
         const page = await pdf.getPage(Number(pageIndex) + 1);
+
+        // Viewport à l'échelle 1 pour obtenir la largeur native
         const viewport = page.getViewport({ scale: 1 });
-        const scaleFactor = containerWidth / viewport.width;
-        const adjustedViewport = page.getViewport({ scale: Math.min(scaleFactor, 0.5) });
+
+        // Fit-to-width réel du conteneur (sans brider à 0.5)
+        const fitWidth = containerWidth > 0 ? containerWidth : viewport.width;
+        const scaleFactor = fitWidth / viewport.width;
+        const adjustedViewport = page.getViewport({ scale: scaleFactor });
+
         const canvas = canvasRef.current;
         if (!canvas || cancelled) {
           console.log("[DEBUG] Canvas not available or render cancelled");
@@ -656,17 +663,22 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
           onReady?.();
           return;
         }
+
         const ctx = canvas.getContext("2d");
         canvas.width = Math.floor(adjustedViewport.width);
         canvas.height = Math.floor(adjustedViewport.height);
         console.log(`[DEBUG] Canvas set to ${canvas.width}x${canvas.height}`);
+
+        // Dimensions logiques de la page (non transformées par CSS)
         setPageSize({ w: canvas.width, h: canvas.height });
+
         await page.render({ canvasContext: ctx, viewport: adjustedViewport }).promise;
+
         if (!cancelled) {
           console.log("[DEBUG] PDF rendered successfully");
           setLoaded(true);
-          setScale(1);
-          setPan({ x: 0, y: 0 });
+          setScale(1);           // reset zoom
+          setPan({ x: 0, y: 0 }); // reset pan
           onReady?.();
         }
       } catch (e) {
@@ -678,6 +690,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         }
       }
     };
+
     let attempts = 0;
     const maxAttempts = 20;
     const interval = setInterval(() => {
@@ -702,6 +715,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         }
       }
     }, 100);
+
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -838,8 +852,6 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     if (!el) return;
     const handlePointerDown = (e) => {
       if (e.target.dataset?.marker === "1") return; // Ignorer les clics sur les marqueurs
-      if (pointers.size > 1) return; // Ignorer les gestes multi-touch
-      console.log("[DEBUG] Overlay pointerdown, placingDoorId:", placingDoorId);
       if (placingDoorId) {
         e.stopPropagation();
         const xy = relativeXY(e);
@@ -847,7 +859,6 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         onPlaceAt?.(xy);
       }
     };
-    let pointers = new Map();
     el.addEventListener("pointerdown", handlePointerDown);
     return () => {
       el.removeEventListener("pointerdown", handlePointerDown);
@@ -858,29 +869,27 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
-    const canvas = canvasRef.current;
-    if (!canvas || !overlayRef.current) {
-      console.warn("[DEBUG] Canvas or overlay not available for drag");
+    if (!overlayRef.current) {
+      console.warn("[DEBUG] Overlay not available for drag");
       return;
     }
-    const rect = canvas.getBoundingClientRect();
+    // Mémorise uniquement des bases "propres" (fractions + dimensions natives)
     dragInfo.current = {
       id: p.door_id,
       startX: e.clientX,
       startY: e.clientY,
-      baseX: Number(p.x_frac ?? p.x ?? 0),
-      baseY: Number(p.y_frac ?? p.y ?? 0),
-      rect,
+      baseXFrac: Number(p.x_frac ?? p.x ?? 0),
+      baseYFrac: Number(p.y_frac ?? p.y ?? 0),
+      pageW: pageSize.w || 1,
+      pageH: pageSize.h || 1,
       scale,
-      panX: pan.x,
-      panY: pan.y,
     };
     console.log("[DEBUG] Starting drag for doorId:", p.door_id, {
-      baseX: dragInfo.current.baseX,
-      baseY: dragInfo.current.baseY,
-      rect,
+      baseXFrac: dragInfo.current.baseXFrac,
+      baseYFrac: dragInfo.current.baseYFrac,
+      pageW: dragInfo.current.pageW,
+      pageH: dragInfo.current.pageH,
       scale,
-      pan
     });
     window.addEventListener("mousemove", onMoveMarker);
     window.addEventListener("mouseup", onUpMarker);
@@ -889,18 +898,17 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   function onMoveMarker(e) {
     const info = dragInfo.current;
     if (!info) return;
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      console.warn("[DEBUG] Canvas not available during drag");
-      return;
-    }
-    const rect = canvas.getBoundingClientRect();
-    // Ajuster pour le zoom et la translation
-    const dx = (e.clientX - info.startX - info.panX) / (rect.width * info.scale);
-    const dy = (e.clientY - info.startY - info.panY) / (rect.height * info.scale);
-    const x = Math.min(1, Math.max(0, info.baseX + dx));
-    const y = Math.min(1, Math.max(0, info.baseY + dy));
-    console.log("[DEBUG] Moving marker:", { doorId: info.id, x, y, dx, dy, scale: info.scale, panX: info.panX, panY: info.panY });
+
+    // Delta souris en pixels → normalisation par (pageW * scale)
+    const dxPx = e.clientX - info.startX;
+    const dyPx = e.clientY - info.startY;
+
+    const dx = dxPx / (info.pageW * info.scale);
+    const dy = dyPx / (info.pageH * info.scale);
+
+    const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
+    const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
+
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (el) {
       el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
@@ -912,6 +920,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     window.removeEventListener("mousemove", onMoveMarker);
     window.removeEventListener("mouseup", onUpMarker);
     if (!info) return;
+
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (!el) {
       console.warn("[DEBUG] Marker element not found for doorId:", info.id);
@@ -943,20 +952,21 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
 
   // Calcul coordonnées relatives
   function relativeXY(evt) {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      console.warn("[DEBUG] Canvas not available for click");
-      return { x: 0, y: 0 };
-    }
-    const r = canvas.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) {
-      console.warn("[DEBUG] Canvas has invalid dimensions:", r);
-      return { x: 0, y: 0 };
-    }
-    // Ajuster pour le zoom et la translation
-    const x = Math.min(1, Math.max(0, (evt.clientX - r.left - pan.x) / (r.width * scale)));
-    const y = Math.min(1, Math.max(0, (evt.clientY - r.top - pan.y) / (r.height * scale)));
-    console.log("[DEBUG] Click coordinates:", { x, y, clientX: evt.clientX, clientY: evt.clientY, rect: r, scale, pan });
+    const wrap = wrapRef.current;
+    if (!wrap) return { x: 0, y: 0 };
+
+    // Coordonnées dans le wrapper AVANT normalisation
+    const wrect = wrap.getBoundingClientRect();
+    const localX = evt.clientX - wrect.left - pan.x; // pan appliqué au conteneur
+    const localY = evt.clientY - wrect.top - pan.y;
+
+    // Dimensions "logiques" de la page (non transformées)
+    const w = pageSize.w || wrap.clientWidth || 1;
+    const h = pageSize.h || wrap.clientHeight || 1;
+
+    // Normalisation en [0..1] en tenant compte du zoom courant
+    const x = Math.min(1, Math.max(0, localX / (w * scale)));
+    const y = Math.min(1, Math.max(0, localY / (h * scale)));
     return { x, y };
   }
 
@@ -969,7 +979,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     <div className="mt-3">
       <div
         ref={wrapRef}
-        className="relative w-full overflow-x-hidden border rounded-2xl bg-white shadow-sm"
+        className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
         style={{ height: 520 }}
       >
         <div
