@@ -896,8 +896,8 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     }
     const rect = canvas.getBoundingClientRect();
     // Ajuster pour le zoom et la translation
-    const dx = (e.clientX - info.startX) / (rect.width * info.scale);
-    const dy = (e.clientY - info.startY) / (rect.height * info.scale);
+    const dx = (e.clientX - info.startX - info.panX) / (rect.width * info.scale);
+    const dy = (e.clientY - info.startY - info.panY) / (rect.height * info.scale);
     const x = Math.min(1, Math.max(0, info.baseX + dx));
     const y = Math.min(1, Math.max(0, info.baseY + dy));
     console.log("[DEBUG] Moving marker:", { doorId: info.id, x, y, dx, dy, scale: info.scale, panX: info.panX, panY: info.panY });
@@ -1344,6 +1344,8 @@ export default function Doors() {
         door_name: item.name || item.door_name,
         x_frac: Number(item.x_frac ?? item.x ?? 0),
         y_frac: Number(item.y_frac ?? item.y ?? 0),
+        x: Number(item.x_frac ?? item.x ?? 0), // Ajouter x/y pour compatibilité
+        y: Number(item.y_frac ?? item.y ?? 0),
         status: item.status,
       })) : [];
       console.log("[DEBUG] Processed positions:", positions);
