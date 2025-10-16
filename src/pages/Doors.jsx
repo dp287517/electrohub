@@ -530,7 +530,7 @@ function PlanCard({ plan, onRename, onPick }) {
             <div className="flex items-center gap-1">
               <Btn variant="ghost" onClick={() => setEdit(true)}>✏️</Btn>
               <Btn variant="subtle" onClick={() => {
-                console.log("[DEBUG] Picking plan:", plan);
+                console.log("[PlansHeader] Picking plan:", plan);
                 onPick(plan);
               }}>Ouvrir</Btn>
             </div>
@@ -562,6 +562,11 @@ function PlanCard({ plan, onRename, onPick }) {
 }
 /**
  * PlanViewer — mobile smooth + double-tap + inertia + bounds + HiDPI render
+ * (PATCH notes)
+ *  - [PLANVIEWER] Rendu PC débloqué: getContext('2d') simple + check null
+ *  - [PLANVIEWER] Clic marqueurs desktop: pas de setPointerCapture sur les boutons (data-marker="1")
+ *  - [PLANVIEWER] Pinch fluide + HiDPI rerender plus prompt
+ *  - [PLANVIEWER] Logs F12 ajoutés
  */
 function PlanViewer({
   fileUrl,
@@ -588,9 +593,8 @@ function PlanViewer({
   const scaleRef = useRef(1);
   const panRef = useRef({ x: 0, y: 0 });
 
-  // rendu pdf: quelle “qualité” max supportée par le bitmap courant ?
-  // idée: on (re)rend le canvas en plus haute résolution après les gestes, pour que le zoom reste net
-  const qualityForScaleRef = useRef(1); // échelle max nette que couvre le bitmap actuel
+  // rendu pdf: “qualité nette” max couverte par le bitmap
+  const qualityForScaleRef = useRef(1);
   const rerenderTimerRef = useRef(null);
 
   // rAF transform
@@ -610,11 +614,10 @@ function PlanViewer({
 
   // helpers
   const DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-  const MAX_ZOOM = 3;                 // limite de zoom UI
-  const MAX_QUALITY_SCALE = 3 * DPR;  // cap mémoire/CPU pour rendu HiDPI
+  const MAX_ZOOM = 3;
+  const MAX_QUALITY_SCALE = 3 * DPR;
 
   const clampPan = (pan) => {
-    // borne le pan pour garder le plan visible
     const cw = wrapRef.current?.clientWidth || containerWidth || 0;
     const ch = wrapRef.current?.clientHeight || viewerH || 0;
     const contentW = (pageSize.w || 0) * scaleRef.current;
@@ -622,7 +625,6 @@ function PlanViewer({
 
     if (cw === 0 || ch === 0 || contentW === 0 || contentH === 0) return pan;
 
-    // autoriser un petit “bleed” (20px) pour un meilleur feeling aux bords
     const margin = 20;
     const minX = Math.min(margin, cw - contentW - margin);
     const maxX = Math.max(-margin, margin);
@@ -650,30 +652,31 @@ function PlanViewer({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // rendu PDF (fonction partagée) — peut faire un rendu HiDPI si requestedScale > 1
+  // rendu PDF (HiDPI optionnel)
   const renderPdfAtQuality = useCallback(async (requestedScaleForQuality = 1) => {
-    // requestedScaleForQuality ~ combien de zoom “net” on veut couvrir
-    // on borne par MAX_QUALITY_SCALE et on multiplie par DPR
+    console.log("[PLANVIEWER][renderPdfAtQuality] start", {
+      fileUrl, pageIndex, requestedScaleForQuality,
+    });
     const canvas = canvasRef.current;
     if (!canvas) throw new Error("canvas manquant");
     const loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
     const pdf = await loadingTask.promise;
     const page = await pdf.getPage(Number(pageIndex) + 1);
 
-    // 1) viewport logique (fit-to-width)
+    // viewport logique (fit-to-width)
     const native = page.getViewport({ scale: 1 });
     const fitWidth = containerWidth > 0 ? containerWidth : native.width;
     const scaleFactor = fitWidth / native.width;
 
-    // 2) viewport HiDPI pour le bitmap réel (on rend “plus grand” puis on affiche en CSS aux dimensions logiques)
+    // viewport HiDPI pour le bitmap réel
     const qualityScale = Math.min(MAX_QUALITY_SCALE, Math.max(1, requestedScaleForQuality * DPR));
     const viewportHiDPI = page.getViewport({ scale: scaleFactor * qualityScale });
 
-    // 3) taille CSS logique (overlay s’aligne là-dessus)
+    // taille CSS logique (overlay s’aligne là-dessus)
     const logicalW = Math.floor(native.width * scaleFactor);
     const logicalH = Math.floor(native.height * scaleFactor);
 
-    // 4) taille bitmap réelle
+    // taille bitmap réelle
     canvas.width = Math.floor(viewportHiDPI.width);
     canvas.height = Math.floor(viewportHiDPI.height);
     canvas.style.width = `${logicalW}px`;
@@ -681,11 +684,18 @@ function PlanViewer({
 
     setPageSize({ w: logicalW, h: logicalH });
 
-    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+    // ⚠️ PATCH: contexte 2D simple + check
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      console.error("[PLANVIEWER][renderPdfAtQuality] getContext('2d') => null");
+      throw new Error("Contexte 2D non disponible (getContext('2d') == null)");
+    }
     await page.render({ canvasContext: ctx, viewport: viewportHiDPI }).promise;
 
-    // on enregistre la “qualité nette” max couverte par ce rendu
     qualityForScaleRef.current = Math.max(1, requestedScaleForQuality);
+    console.log("[PLANVIEWER][renderPdfAtQuality] done", {
+      logicalW, logicalH, dpr: DPR, qualityForScale: qualityForScaleRef.current
+    });
   }, [fileUrl, pageIndex, containerWidth]);
 
   // rendu initial
@@ -694,8 +704,10 @@ function PlanViewer({
     (async () => {
       try {
         setErr("");
+        console.log("[PLANVIEWER] initial render…", { fileUrl, pageIndex, containerWidth });
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
           pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+          console.log("[PLANVIEWER] workerSrc set");
         }
         await renderPdfAtQuality(1);
         if (cancelled) return;
@@ -704,35 +716,43 @@ function PlanViewer({
         panRef.current = clampPan({ x: 0, y: 0 });
         scheduleFrame();
         onReady?.();
+        console.log("[PLANVIEWER] initial render OK");
       } catch (e) {
         if (!cancelled) {
           setErr(`Erreur de rendu du plan : ${e.message}`);
           setLoaded(false);
           onReady?.();
+          console.error("[PLANVIEWER] initial render FAIL:", e);
         }
       }
     })();
     return () => { cancelled = true; };
   }, [fileUrl, pageIndex, containerWidth, onReady, renderPdfAtQuality]);
 
-  // (re)rendu HiDPI après un zoom : debounce
+  // (re)rendu HiDPI après un zoom : debounce (PATCH seuil/délai)
   const requestHiDpiRerender = useCallback(() => {
     if (!loaded) return;
     if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
     rerenderTimerRef.current = setTimeout(async () => {
       rerenderTimerRef.current = null;
-      // si le zoom courant est supérieur à ce que couvre le bitmap -> re-render plus net
       const need = Math.min(MAX_ZOOM, Math.max(1, scaleRef.current));
-      if (need > qualityForScaleRef.current * 0.92) {
+      if (need > qualityForScaleRef.current * 0.95) {
+        console.log("[PLANVIEWER][HiDPI] rerender needed", {
+          need, hasQualityFor: qualityForScaleRef.current
+        });
         try {
           await renderPdfAtQuality(need);
-          // après rerender, re-applique transform courante
           scheduleFrame();
+          console.log("[PLANVIEWER][HiDPI] rerender done");
         } catch (e) {
-          console.warn("[PDF HiDPI] rerender failed:", e);
+          console.warn("[PLANVIEWER][HiDPI] rerender failed:", e);
         }
+      } else {
+        console.log("[PLANVIEWER][HiDPI] skip rerender", {
+          need, hasQualityFor: qualityForScaleRef.current
+        });
       }
-    }, 160); // petit délai pour éviter de rerender pendant le geste
+    }, 120);
   }, [loaded, renderPdfAtQuality]);
 
   // WHEEL zoom (desktop)
@@ -754,13 +774,14 @@ function PlanViewer({
       scaleRef.current = next;
       panRef.current = clampPan({ x: panRef.current.x + nx, y: panRef.current.y + ny });
       scheduleFrame();
+      console.log("[PLANVIEWER][wheel] zoom", { prev, next });
       requestHiDpiRerender();
     };
     wrap.addEventListener("wheel", onWheel, { passive: false });
     return () => wrap.removeEventListener("wheel", onWheel);
   }, [loaded, requestHiDpiRerender]);
 
-  // Gestes pointer: pan + pinch + double-tap + inertie
+  // Gestes pointer: pan + pinch + double-tap + inertie (PATCH: capture conditionnelle + pinch fluide)
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
@@ -775,11 +796,10 @@ function PlanViewer({
     let inertiaId = null;
 
     const stopInertia = () => { if (inertiaId) cancelAnimationFrame(inertiaId); inertiaId = null; };
-
     const startInertia = () => {
       stopInertia();
-      const FRICTION = 0.92;         // 0..1 (plus bas = arrêt rapide)
-      const MIN_SPEED = 0.15;        // px/frame
+      const FRICTION = 0.92;
+      const MIN_SPEED = 0.15;
       const step = () => {
         velocity.x *= FRICTION;
         velocity.y *= FRICTION;
@@ -796,29 +816,38 @@ function PlanViewer({
     let lastTapPos = { x: 0, y: 0 };
 
     const onPointerDown = (e) => {
+      // PATCH: ne pas capturer si clic sur un marker (laisse le bouton recevoir le click)
+      if (e.target instanceof HTMLElement && e.target.dataset?.marker === "1") {
+        // log utile si souci clic desktop
+        console.log("[PLANVIEWER][pointerdown] bypass on marker");
+        return;
+      }
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+
       wrap.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       stopInertia();
+      wrap.style.cursor = "grabbing";
 
-      // double-tap (touch only, 1 doigt)
+      // double-tap (touch only)
       if (e.pointerType === "touch" && pointers.size === 1) {
         const now = performance.now();
         const dt = now - lastTapTime;
         const dist = Math.hypot(e.clientX - lastTapPos.x, e.clientY - lastTapPos.y);
         if (dt < 300 && dist < 24) {
-          // toggle zoom autour du doigt
           const rect = wrap.getBoundingClientRect();
           const cx = e.clientX - rect.left - panRef.current.x;
           const cy = e.clientY - rect.top - panRef.current.y;
           const prev = scaleRef.current;
-          const next = prev < 1.2 ? 1.8 : 1; // zoom-in puis retour
+          const next = prev < 1.2 ? 1.8 : 1;
           const nx = cx - (cx * next) / prev;
           const ny = cy - (cy * next) / prev;
           scaleRef.current = next;
           panRef.current = clampPan({ x: panRef.current.x + nx, y: panRef.current.y + ny });
           scheduleFrame();
+          console.log("[PLANVIEWER][doubleTap] toggle zoom", { prev, next });
           requestHiDpiRerender();
-          lastTapTime = 0; // reset
+          lastTapTime = 0;
           return;
         }
         lastTapTime = now;
@@ -849,12 +878,12 @@ function PlanViewer({
         const dy = p.y - singlePanBase.startY;
         panRef.current = clampPan({ x: singlePanBase.baseX + dx, y: singlePanBase.baseY + dy });
         scheduleFrame();
-        // velocity
+        // velocity (px/frame)
         const dt = Math.max(1, now - lastMoveT);
         velocity = { x: (p.x - lastMoveX) / (dt / (1000 / 60)), y: (p.y - lastMoveY) / (dt / (1000 / 60)) };
         lastMoveT = now; lastMoveX = p.x; lastMoveY = p.y;
       } else if (pointers.size === 2) {
-        // pinch
+        // pinch — PATCH: facteur continu (sans crans)
         const [p1, p2] = Array.from(pointers.values());
         const cx = (p1.x + p2.x) / 2;
         const cy = (p1.y + p2.y) / 2;
@@ -863,12 +892,15 @@ function PlanViewer({
           pinchBase = { dist, scale: scaleRef.current, panX: panRef.current.x, panY: panRef.current.y, cx, cy };
           return;
         }
-        const factor = Math.max(0.5, Math.min(MAX_ZOOM, (pinchBase.scale * dist) / pinchBase.dist));
+        const raw = (pinchBase.scale * dist) / pinchBase.dist;
+        const factor = Math.max(0.5, Math.min(MAX_ZOOM, raw));
+
         const rect = wrap.getBoundingClientRect();
         const localX = pinchBase.cx - rect.left - pinchBase.panX;
         const localY = pinchBase.cy - rect.top - pinchBase.panY;
         const nx = localX - (localX * factor) / pinchBase.scale;
         const ny = localY - (localY * factor) / pinchBase.scale;
+
         scaleRef.current = factor;
         panRef.current = clampPan({ x: pinchBase.panX + nx, y: pinchBase.panY + ny });
         scheduleFrame();
@@ -886,12 +918,11 @@ function PlanViewer({
         const p = Array.from(pointers.values())[0];
         singlePanBase = { startX: p.x, startY: p.y, baseX: panRef.current.x, baseY: panRef.current.y };
       } else {
-        // fin d’un geste pan à 1 doigt -> lancer l’inertie
         if (Math.hypot(velocity.x, velocity.y) > 0.5) startInertia();
         singlePanBase = null;
-        // fin d’un geste -> tenter un rerender HiDPI si nécessaire
         requestHiDpiRerender();
       }
+      wrap.style.cursor = "grab";
     };
 
     wrap.addEventListener("pointerdown", onPointerDown);
@@ -913,10 +944,14 @@ function PlanViewer({
     const el = overlayRef.current;
     if (!el) return;
     const handlePointerDown = (e) => {
-      if (e.target.dataset?.marker === "1") return;
+      if (e.target instanceof HTMLElement && e.target.dataset?.marker === "1") {
+        // ne pas interférer avec les clicks sur boutons
+        return;
+      }
       if (placingDoorId) {
         e.stopPropagation();
         const xy = relativeXY(e);
+        console.log("[PLANVIEWER][place] onPlaceAt", { placingDoorId, xy });
         onPlaceAt?.(xy);
       }
     };
@@ -939,6 +974,7 @@ function PlanViewer({
       pageH: pageSize.h || 1,
       scale: scaleRef.current,
     };
+    console.log("[PLANVIEWER][drag] start", dragInfo.current);
     window.addEventListener("mousemove", onMoveMarker);
     window.addEventListener("mouseup", onUpMarker);
   }
@@ -965,7 +1001,8 @@ function PlanViewer({
     if (!el) { dragInfo.current = null; return; }
     const x = (parseFloat(el.style.left || "0") || 0) / 100;
     const y = (parseFloat(el.style.top || "0") || 0) / 100;
-    try { onMovePoint?.(info.id, { x, y }); } catch {}
+    console.log("[PLANVIEWER][drag] end → onMovePoint", { id: info.id, x, y });
+    try { onMovePoint?.(info.id, { x, y }); } catch (e) { console.error("[PLANVIEWER][drag] onMovePoint error", e); }
     dragInfo.current = null;
   }
 
@@ -990,7 +1027,7 @@ function PlanViewer({
   }
 
   // debug
-  useEffect(() => { console.log("[DEBUG] Points:", points); }, [points]);
+  useEffect(() => { console.log("[PLANVIEWER] points update", points); }, [points]);
 
   const finalHeight = Math.min(viewerH, pageSize.h || viewerH);
 
@@ -999,7 +1036,7 @@ function PlanViewer({
       <div
         ref={wrapRef}
         className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
-        style={{ height: finalHeight }}
+        style={{ height: finalHeight, cursor: "grab" }}
       >
         <div
           ref={layerRef}
@@ -1050,7 +1087,7 @@ function PlanViewer({
                     title={p.name || p.door_name || p.door_id}
                     data-marker="1"
                     onMouseDown={(e) => onMouseDownPoint(e, p)}
-                    onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
+                    onClick={(e) => { e.stopPropagation(); console.log("[PLANVIEWER] click marker", p); onClickPoint?.(p); }}
                     className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
                   />
                 </div>
@@ -1364,10 +1401,10 @@ export default function Doors() {
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
     const key = plan.id || plan.logical_name || "";
-    console.log("[DEBUG] Loading positions for plan:", { key, pageIdx });
+    console.log("[MAPS] Loading positions for plan:", { key, pageIdx });
     try {
       const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
-      console.log("[DEBUG] Raw positions response:", r);
+      console.log("[MAPS] Raw positions response:", r);
       const positions = Array.isArray(r?.items) ? r.items.map(item => ({
         door_id: item.door_id,
         door_name: item.name || item.door_name,
@@ -1377,10 +1414,10 @@ export default function Doors() {
         y: Number(item.y_frac ?? item.y ?? 0),
         status: item.status,
       })) : [];
-      console.log("[DEBUG] Processed positions:", positions);
+      console.log("[MAPS] Processed positions:", positions);
       setPositions(positions);
     } catch (e) {
-      console.error("[ERROR] Failed to load positions:", e.message);
+      console.error("[MAPS] Failed to load positions:", e.message);
       setPositions([]);
     }
   }
@@ -1400,7 +1437,7 @@ export default function Doors() {
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id]);
 
   useEffect(() => {
-    console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
+    console.log("[MAPS] selectedPlan changed:", stableSelectedPlan);
     if (stableSelectedPlan) {
       loadPositions(stableSelectedPlan, planPage);
       loadUnplacedDoors(stableSelectedPlan, planPage);
@@ -1411,7 +1448,7 @@ export default function Doors() {
   /* ------------------ MAPS handlers ------------------ */
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
   const handleMovePoint = useCallback(async (doorId, xy) => {
-    console.log("[DEBUG] Moving point:", { doorId, xy });
+    console.log("[MAPS] Moving point:", { doorId, xy });
     if (!stableSelectedPlan) return;
     await MAPS.setPosition(doorId, {
       logical_name: stableSelectedPlan.logical_name,
@@ -1424,12 +1461,12 @@ export default function Doors() {
   }, [stableSelectedPlan, planPage]);
 
   const handleClickPoint = useCallback((p) => {
-    console.log("[DEBUG] Clicking point:", p);
+    console.log("[MAPS] Clicking point:", p);
     openEdit({ id: p.door_id, name: p.name });
   }, []);
 
   const handlePlaceAt = useCallback(async (xy) => {
-    console.log("[DEBUG] Placing door at:", { doorId: pendingPlaceDoorId, xy });
+    console.log("[MAPS] Placing door at:", { doorId: pendingPlaceDoorId, xy });
     if (!pendingPlaceDoorId || !stableSelectedPlan) return;
     try {
       await MAPS.setPosition(pendingPlaceDoorId, {
@@ -1444,7 +1481,7 @@ export default function Doors() {
       await loadUnplacedDoors(stableSelectedPlan, planPage);
       setToast("Porte placée avec succès ✅");
     } catch (e) {
-      console.error("[ERROR] Failed to place door:", e.message);
+      console.error("[MAPS] Failed to place door:", e.message);
       setToast("Erreur lors du placement de la porte : " + e.message);
     }
   }, [pendingPlaceDoorId, stableSelectedPlan, planPage]);
@@ -1667,7 +1704,7 @@ export default function Doors() {
               await loadPlans();
             }}
             onPick={(plan) => {
-              console.log("[DEBUG] Picking plan:", plan);
+              console.log("[MAPS] Picking plan:", plan);
               setSelectedPlan(plan);
               setPdfReady(false);
             }}
@@ -1705,7 +1742,7 @@ export default function Doors() {
                             : "bg-white text-amber-800 border-amber-200 hover:bg-amber-100"
                         }`}
                         onClick={() => {
-                          console.log("[DEBUG] Selecting door for placement:", p.door_id);
+                          console.log("[MAPS] Selecting door for placement:", p.door_id);
                           setPendingPlaceDoorId((cur) => (cur === p.door_id ? null : p.door_id));
                         }}
                         title="Cliquer puis cliquer sur le plan pour placer"
@@ -1717,7 +1754,7 @@ export default function Doors() {
                       <button
                         className="px-2 py-1 rounded-md border text-xs bg-white text-gray-700 hover:bg-gray-50"
                         onClick={() => {
-                          console.log("[DEBUG] Cancelling placement");
+                          console.log("[MAPS] Cancelling placement");
                           setPendingPlaceDoorId(null);
                         }}
                       >
