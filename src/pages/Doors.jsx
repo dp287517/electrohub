@@ -1335,8 +1335,23 @@ export default function Doors() {
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
     const key = plan.id || plan.logical_name || "";
-    const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
-    setPositions(Array.isArray(r?.items) ? r.items : []);
+    console.log("[DEBUG] Loading positions for plan:", { key, pageIdx });
+    try {
+      const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
+      console.log("[DEBUG] Raw positions response:", r);
+      const positions = Array.isArray(r?.items) ? r.items.map(item => ({
+        door_id: item.door_id,
+        door_name: item.name || item.door_name,
+        x_frac: Number(item.x_frac ?? item.x ?? 0),
+        y_frac: Number(item.y_frac ?? item.y ?? 0),
+        status: item.status,
+      })) : [];
+      console.log("[DEBUG] Processed positions:", positions);
+      setPositions(positions);
+    } catch (e) {
+      console.error("[ERROR] Failed to load positions:", e.message);
+      setPositions([]);
+    }
   }
 
   async function loadUnplacedDoors(plan, pageIdx = 0) {
