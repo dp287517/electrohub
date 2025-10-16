@@ -1,24 +1,20 @@
 // src/pages/Doors.jsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
-
 /* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
 }
-
 // NEW: identité robuste (cookies -> localStorage -> fallback depuis l'email)
 function getIdentity() {
   // 1) cookies (prioritaires si présents)
   let email = getCookie("email") || null;
   let name = getCookie("name") || null;
-
   // 2) localStorage (si cookies absents ou vides)
   try {
     if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
@@ -37,7 +33,6 @@ function getIdentity() {
       } catch {}
     }
   } catch {}
-
   // 3) fallback: dérive un nom lisible depuis l'email si pas de name
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
@@ -51,10 +46,8 @@ function getIdentity() {
   // 4) nettoyage
   email = email ? String(email).trim() : null;
   name = name ? String(name).trim() : null;
-
   return { email, name };
 }
-
 function userHeaders() {
   const { email, name } = getIdentity();
   const h = {};
@@ -65,7 +58,6 @@ function userHeaders() {
 function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
-
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
   // Doors CRUD + listing + filters
@@ -95,7 +87,6 @@ const API = {
     ).json(),
   remove: async (id) =>
     (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", ...withHeaders() })).json(),
-
   // Checklist (create/close) + history
   startCheck: async (doorId) => {
     const id = getIdentity();
@@ -108,7 +99,6 @@ const API = {
       })
     ).json();
   },
-
   saveCheck: async (doorId, checkId, payload) => {
     const id = getIdentity();
     // Backend accepte JSON ou multipart sur la même route.
@@ -137,10 +127,8 @@ const API = {
       })
     ).json();
   },
-
   listHistory: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/history`, withHeaders())).json(),
-
   // Attachments (door-level)
   listFiles: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/files`, withHeaders())).json(),
@@ -161,7 +149,6 @@ const API = {
   },
   deleteFile: async (fileId) =>
     (await fetch(`/api/doors/files/${fileId}`, { method: "DELETE", ...withHeaders() })).json(),
-
   // Photo vignette
   uploadPhoto: async (doorId, file) => {
     const id = getIdentity();
@@ -179,17 +166,13 @@ const API = {
     return r.json();
   },
   photoUrl: (doorId) => `/api/doors/doors/${doorId}/photo`,
-
   // QR code (PNG stream)
   qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
-
   // ✅ PDF d’étiquettes (cadre blanc + HALEON + nom de porte autosize)
   qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
     `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
-
   // Calendar (next checks, overdue, etc.)
   calendar: async () => (await fetch(`/api/doors/calendar`, withHeaders())).json(),
-
   // Settings (template & frequency)
   settingsGet: async () => (await fetch(`/api/doors/settings`, withHeaders())).json(),
   settingsSet: async (payload) =>
@@ -200,11 +183,9 @@ const API = {
         body: JSON.stringify(payload),
       })
     ).json(),
-
   // PDF non-conformités (pour SAP)
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
-
 /* ----------------------------- API (Doors Maps) ----------------------------- */
 const MAPS = {
   uploadZip: async (file) => {
@@ -215,19 +196,15 @@ const MAPS = {
     });
     return r.json();
   },
-
   listPlans: async () => (await fetch(`/api/doors/maps/plans`, withHeaders())).json(),
-
   renamePlan: async (logical_name, display_name) =>
     (await fetch(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, {
       method: "PUT",
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-
   planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, // compat
-  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`,      // UUID
-
+  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`, // UUID
   // ✅ positions: accepte indifféremment un UUID ou un logical_name
   positions: async (idOrLogical, page_index = 0) => {
     const looksUuid = typeof idOrLogical === "string" && /^[0-9a-fA-F-]{36}$/.test(idOrLogical);
@@ -237,14 +214,12 @@ const MAPS = {
     const r = await fetch(`/api/doors/maps/positions?${new URLSearchParams(params)}`, withHeaders());
     return r.json();
   },
-
   // Nouvelle méthode pour portes non positionnées
   pendingPositions: async (logical_name, page_index = 0) => {
     const params = { logical_name, page_index };
     const r = await fetch(`/api/doors/maps/pending-positions?${new URLSearchParams(params)}`, withHeaders());
     return r.json();
   },
-
   // setPosition: on envoie aussi plan_id si dispo (le backend peut l’ignorer si non supporté)
   setPosition: async (doorId, payload) =>
     (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
@@ -253,24 +228,21 @@ const MAPS = {
       body: JSON.stringify(payload),
     })).json(),
 };
-
 // helper pour charger les PDFs protégés avec cookies + X-User-*
 function pdfDocOpts(url) {
   return {
     url,
-    withCredentials: true,      // envoie les cookies (session)
+    withCredentials: true, // envoie les cookies (session)
     httpHeaders: userHeaders(), // en-têtes X-User-Email / X-User-Name
   };
 }
-
 /* ---------- ✅ Helper d’URL PDF (ID prioritaire, fallback logical) ---------- */
 function planFileUrlSafe(plan) {
   const looksLikeUuid = typeof plan?.id === "string" && /^[0-9a-fA-F-]{36}$/.test(plan.id);
   return looksLikeUuid
-    ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`      // UUID route
+    ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file` // UUID route
     : `/api/doors/maps/plan/${encodeURIComponent(plan?.logical_name || "")}/file`; // fallback logical
 }
-
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -372,7 +344,6 @@ function doorStateBadge(state) {
   if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
   return <Badge>—</Badge>;
 }
-
 /* ----------------------------- Toast ----------------------------- */
 function Toast({ text, onClose }) {
   useEffect(() => {
@@ -388,11 +359,9 @@ function Toast({ text, onClose }) {
     </div>
   );
 }
-
 /* ----------------------------- Calendrier (mois) ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
-
   const eventsByDate = useMemo(() => {
     const map = {};
     for (const e of events) {
@@ -403,7 +372,6 @@ function MonthCalendar({ events = [], onDayClick }) {
     }
     return map;
   }, [events]);
-
   const startOfMonth = month.startOf("month").toDate();
   const endOfMonth = month.endOf("month").toDate();
   const startDow = (startOfMonth.getDay() + 6) % 7; // lundi=0
@@ -416,7 +384,6 @@ function MonthCalendar({ events = [], onDayClick }) {
     const iso = dayjs(d).format("YYYY-MM-DD");
     days.push({ d, iso, inMonth: d >= startOfMonth && d <= endOfMonth });
   }
-
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -427,7 +394,6 @@ function MonthCalendar({ events = [], onDayClick }) {
           <Btn variant="ghost" onClick={() => setMonth((m) => m.add(1, "month"))}>Suiv. →</Btn>
         </div>
       </div>
-
       <div className="grid grid-cols-7 text-xs font-medium text-gray-500">
         {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
           <div key={l} className="px-2 py-2">
@@ -435,7 +401,6 @@ function MonthCalendar({ events = [], onDayClick }) {
           </div>
         ))}
       </div>
-
       <div className="grid grid-cols-7 border rounded-2xl overflow-hidden">
         {days.map(({ d, iso, inMonth }) => {
           const list = eventsByDate[iso] || [];
@@ -483,11 +448,544 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
+/* ----------------------------- MAPS components ----------------------------- */
+function PlansHeader({ mapsLoading, onUploadZip }) {
+  const inputRef = useRef(null);
+  return (
+    <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
+      <div className="font-semibold">Plans PDF</div>
+      <div className="flex items-center gap-2">
+        <Btn
+          variant="ghost"
+          onClick={() => inputRef.current?.click()}
+          disabled={mapsLoading}
+        >
+          📦 Import ZIP de plans
+        </Btn>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".zip,application/zip"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) onUploadZip(f);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+function PlanCards({ plans = [], onRename, onPick }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
+      {plans.map((p) => (
+        <PlanCard key={p.id} plan={p} onRename={onRename} onPick={onPick} />
+      ))}
+    </div>
+  );
+}
+function PlanCard({ plan, onRename, onPick }) {
+  const [edit, setEdit] = useState(false);
+  const [name, setName] = useState(plan.display_name || plan.logical_name || "");
+  const next30 = Number(plan?.actions_next_30 || 0);
+  const overdue = Number(plan?.overdue || 0);
+  const canvasRef = useRef(null);
+  const [thumbErr, setThumbErr] = useState("");
+  // Miniature page 1 via pdf.js (local, plus de CDN)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setThumbErr("");
+        const url = planFileUrlSafe(plan);
+        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(url)); // ✅
+        const pdf = await loadingTask.promise;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 0.25 });
+        const c = canvasRef.current;
+        if (!c || cancelled) return;
+        c.width = Math.floor(viewport.width);
+        c.height = Math.floor(viewport.height);
+        const ctx = c.getContext("2d");
+        await page.render({ canvasContext: ctx, viewport }).promise;
+      } catch (e) {
+        if (!cancelled) setThumbErr("Aperçu indisponible.");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [plan.id]);
+  return (
+    <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
+      <div className="aspect-video bg-gray-50 flex items-center justify-center">
+        <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
+      </div>
+      <div className="p-3">
+        {!edit ? (
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-medium truncate" title={name}>{name || "—"}</div>
+            <div className="flex items-center gap-1">
+              <Btn variant="ghost" onClick={() => setEdit(true)}>✏️</Btn>
+              <Btn variant="subtle" onClick={() => {
+                console.log("[DEBUG] Picking plan:", plan);
+                onPick(plan);
+              }}>Ouvrir</Btn>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input value={name} onChange={setName} />
+            <Btn
+              variant="subtle"
+              onClick={async () => {
+                await onRename(plan, (name || "").trim());
+                setEdit(false);
+              }}
+            >
+              OK
+            </Btn>
+            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>
+              Annuler
+            </Btn>
+          </div>
+        )}
+        <div className="flex items-center gap-2 mt-2 text-xs">
+          <Badge color="orange">≤30j: {next30}</Badge>
+          <Badge color="red">Retard: {overdue}</Badge>
+        </div>
+      </div>
+    </div>
+  );
+}
+/**
+ * PlanViewer
+ * - Zoom: molette/trackpad (wheel), pinch sur tactile
+ * - Pan: drag (souris) / pan tactile
+ * - Déplacement d’un marqueur: mousedown + drag
+ * - Placement d’une porte en attente: prop placingDoorId + onPlaceAt(xy), clic/touch pour déposer
+ */
+function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, placingDoorId, onPlaceAt }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
+  const [loaded, setLoaded] = useState(false);
+  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+  const [isMounted, setIsMounted] = useState(false);
+  const [err, setErr] = useState("");
+  const [containerWidth, setContainerWidth] = useState(0); // NEW: Suivi de la largeur du conteneur
 
+  // viewport state (scale + pan)
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+
+  // Vérifier que le canvas est monté et suivre la largeur du conteneur
+  useEffect(() => {
+    if (canvasRef.current) {
+      console.log("[DEBUG] Canvas mounted successfully");
+      setIsMounted(true);
+    } else {
+      console.warn("[DEBUG] Canvas not mounted");
+      setIsMounted(false);
+    }
+    if (wrapRef.current) {
+      const updateWidth = () => {
+        setContainerWidth(wrapRef.current.offsetWidth);
+      };
+      updateWidth();
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+  }, []);
+
+  // pdf.js render (to canvas)
+  useEffect(() => {
+    let cancelled = false;
+    console.log(`[DEBUG] Starting PDF render for ${fileUrl}, pageIndex=${pageIndex}`);
+
+    const renderPdf = async () => {
+      if (!isMounted || !canvasRef.current) {
+        console.warn("[DEBUG] Canvas not available, render aborted");
+        setErr("Canvas non disponible. Essayez de recharger le plan.");
+        setLoaded(false);
+        onReady?.();
+        return;
+      }
+
+      try {
+        setErr("");
+        console.log(`[DEBUG] Loading PDF from ${fileUrl}`);
+
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          console.warn("[DEBUG] pdf.js worker not set, using default");
+          pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+        }
+
+        const loadingTask = pdfjsLib.getDocument({
+          ...pdfDocOpts(fileUrl),
+          standardFontDataUrl: "/standard_fonts/",
+        });
+        const pdf = await loadingTask.promise;
+        console.log(`[DEBUG] PDF loaded, numPages=${pdf.numPages}`);
+
+        if (cancelled) {
+          console.log("[DEBUG] Render cancelled before page fetch");
+          return;
+        }
+
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        // Ajuster l'échelle pour s'adapter à la largeur du conteneur
+        const viewport = page.getViewport({ scale: 1 });
+        const scaleFactor = containerWidth / viewport.width;
+        const adjustedViewport = page.getViewport({ scale: Math.min(scaleFactor, 0.5) }); // Limiter à 0.5 max
+        const canvas = canvasRef.current;
+
+        if (!canvas || cancelled) {
+          console.log("[DEBUG] Canvas not available or render cancelled");
+          setErr("Canvas non disponible ou rendu annulé.");
+          setLoaded(false);
+          onReady?.();
+          return;
+        }
+
+        const ctx = canvas.getContext("2d");
+        canvas.width = Math.floor(adjustedViewport.width);
+        canvas.height = Math.floor(adjustedViewport.height);
+        console.log(`[DEBUG] Canvas set to ${canvas.width}x${canvas.height}`);
+
+        setPageSize({ w: canvas.width, h: canvas.height });
+
+        await page.render({ canvasContext: ctx, viewport: adjustedViewport }).promise;
+        if (!cancelled) {
+          console.log("[DEBUG] PDF rendered successfully");
+          setLoaded(true);
+          setScale(1);
+          setPan({ x: 0, y: 0 });
+          onReady?.();
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.error(`[ERROR] Failed to render PDF: ${e.message}`);
+          setErr(`Erreur de rendu du plan : ${e.message}`);
+          setLoaded(false);
+          onReady?.();
+        }
+      }
+    };
+
+    // Vérifier le canvas avec un intervalle (max 2s)
+    let attempts = 0;
+    const maxAttempts = 20;
+    const interval = setInterval(() => {
+      if (cancelled) {
+        console.log("[DEBUG] Render cancelled during interval");
+        clearInterval(interval);
+        return;
+      }
+      if (canvasRef.current && isMounted) {
+        console.log("[DEBUG] Canvas ready, starting render");
+        clearInterval(interval);
+        renderPdf();
+      } else {
+        attempts++;
+        console.log(`[DEBUG] Canvas not ready, attempt ${attempts}/${maxAttempts}`);
+        if (attempts >= maxAttempts) {
+          console.warn("[DEBUG] Max attempts reached, aborting render");
+          setErr("Échec du rendu : canvas non disponible après plusieurs tentatives.");
+          setLoaded(false);
+          onReady?.();
+          clearInterval(interval);
+        }
+      }
+    }, 100);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      console.log("[DEBUG] Cleaning up PDF render");
+    };
+  }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
+
+  // wheel zoom (avec focus sur le curseur)
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+
+    function onWheel(e) {
+      if (!loaded) return;
+      const delta = e.deltaY;
+      const isZoom = e.ctrlKey || e.metaKey;
+      if (!isZoom && Math.abs(delta) < 40) return;
+
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left - pan.x;
+      const cy = e.clientY - rect.top - pan.y;
+
+      const prev = scale;
+      const next = Math.max(0.5, Math.min(3, prev * (delta > 0 ? 0.9 : 1.1)));
+
+      const nx = cx - (cx * next) / prev;
+      const ny = cy - (cy * next) / prev;
+      setScale(next);
+      setPan((p) => ({ x: p.x + nx, y: p.y + ny }));
+    }
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [loaded, scale, pan.x, pan.y]);
+
+  // pan à la souris (drag fond)
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    let dragging = false;
+    let sx = 0, sy = 0;
+    let baseX = 0, baseY = 0;
+
+    function down(e) {
+      if ((e.target instanceof HTMLElement) && e.target.dataset?.marker === "1") return;
+      dragging = true;
+      sx = e.clientX;
+      sy = e.clientY;
+      baseX = pan.x;
+      baseY = pan.y;
+      el.style.cursor = "grabbing";
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    }
+    function move(e) {
+      if (!dragging) return;
+      setPan({ x: baseX + (e.clientX - sx), y: baseY + (e.clientY - sy) });
+    }
+    function up() {
+      dragging = false;
+      el.style.cursor = "default";
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    }
+
+    el.addEventListener("mousedown", down);
+    return () => {
+      el.removeEventListener("mousedown", down);
+    };
+  }, [pan.x, pan.y]);
+
+  // gestures tactiles: pinch + pan à un doigt
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+
+    let pointers = new Map();
+
+    function onPointerDown(e) {
+      pointers.set(e.pointerId, e);
+      el.setPointerCapture(e.pointerId);
+    }
+    function onPointerMove(e) {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, e);
+
+      if (pointers.size === 1) {
+        // pan à un doigt
+      } else if (pointers.size === 2) {
+        // pinch
+        const [p1, p2] = Array.from(pointers.values());
+        const dist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+
+        if (!el._pinchBase) {
+          el._pinchBase = { dist, scale, panX: pan.x, panY: pan.y, cx: (p1.clientX + p2.clientX) / 2, cy: (p1.clientY + p2.clientY) / 2 };
+          return;
+        }
+        const base = el._pinchBase;
+        const factor = Math.max(0.5, Math.min(3, base.scale * (dist / base.dist)));
+
+        const rect = el.getBoundingClientRect();
+        const cx = base.cx - rect.left - base.panX;
+        const cy = base.cy - rect.top - base.panY;
+        const nx = cx - (cx * factor) / base.scale;
+        const ny = cy - (cy * factor) / base.scale;
+
+        setScale(factor);
+        setPan({ x: base.panX + nx, y: base.panY + ny });
+      }
+    }
+    function onPointerUp(e) {
+      pointers.delete(e.pointerId);
+      el.releasePointerCapture(e.pointerId);
+      if (pointers.size < 2) el._pinchBase = null;
+    }
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [scale, pan.x, pan.y]);
+
+  // drag marker (déplacement d’un point existant)
+  const dragInfo = useRef(null);
+  function onMouseDownPoint(e, p) {
+    e.stopPropagation();
+    const rect = overlayRef.current.getBoundingClientRect();
+    dragInfo.current = {
+      id: p.door_id,
+      startX: e.clientX,
+      startY: e.clientY,
+      baseX: p.x_frac ?? p.x ?? 0,
+      baseY: p.y_frac ?? p.y ?? 0,
+      rect,
+    };
+    window.addEventListener("mousemove", onMoveMarker);
+    window.addEventListener("mouseup", onUpMarker);
+  }
+  function onMoveMarker(e) {
+    const info = dragInfo.current;
+    if (!info) return;
+    const dx = (e.clientX - info.startX) / (info.rect.width);
+    const dy = (e.clientY - info.startY) / (info.rect.height);
+    const x = Math.min(1, Math.max(0, (info.baseX ?? 0) + dx));
+    const y = Math.min(1, Math.max(0, (info.baseY ?? 0) + dy));
+    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (el) el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
+  }
+  function onUpMarker() {
+    const info = dragInfo.current;
+    window.removeEventListener("mousemove", onMoveMarker);
+    window.removeEventListener("mouseup", onUpMarker);
+    if (!info) return;
+    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (!el) { dragInfo.current = null; return; }
+    const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
+    if (m) {
+      const x = Number(m[1]) / 100;
+      const y = Number(m[2]) / 100;
+      onMovePoint?.(info.id, { x, y });
+    }
+    dragInfo.current = null;
+  }
+
+  function markerClass(s) {
+    if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
+    if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
+    if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
+    return "bg-blue-600 ring-1 ring-blue-300";
+  }
+
+  // calcul coordonnées relatives (0..1) pour placement au clic
+  function relativeXY(evt) {
+    const overlay = overlayRef.current;
+    if (!overlay) {
+      console.warn("[DEBUG] Overlay not available for click");
+      return { x: 0, y: 0 };
+    }
+    const r = overlay.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (evt.clientX - r.left) / r.width));
+    const y = Math.min(1, Math.max(0, (evt.clientY - r.top) / r.height));
+    console.log("[DEBUG] Click coordinates:", { x, y });
+    return { x, y };
+  }
+
+  function onOverlayClick(e) {
+    e.stopPropagation(); // Empêcher la propagation aux éléments sous-jacents
+    console.log("[DEBUG] Overlay clicked, placingDoorId:", placingDoorId);
+    if (!placingDoorId) return;
+    const xy = relativeXY(e);
+    onPlaceAt?.(xy);
+  }
+
+  return (
+    <div className="mt-3">
+      <div
+        ref={wrapRef}
+        className="relative w-full overflow-x-hidden border rounded-2xl bg-white shadow-sm"
+        style={{ height: 520 }}
+      >
+        {/* Canvas mode (pdf.js) */}
+        <div
+          className="relative inline-block will-change-transform mx-auto"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            transformOrigin: "0 0",
+            width: pageSize.w || "100%",
+            height: pageSize.h || 520,
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, display: loaded ? "block" : "none" }}
+          />
+          {!loaded && (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+              Rendu en cours…
+            </div>
+          )}
+
+          {/* overlay points */}
+          <div
+            ref={overlayRef}
+            className="absolute inset-0 z-10"
+            style={{ width: "100%", height: "100%" }}
+            onClick={onOverlayClick}
+          >
+            {points.map((p) => {
+              const x = p.x_frac ?? p.x ?? 0;
+              const y = p.y_frac ?? p.y ?? 0;
+              const placed = p.x_frac != null && p.y_frac != null;
+              return (
+                placed && (
+                  <div
+                    key={p.door_id}
+                    data-id={p.door_id}
+                    className="absolute"
+                    style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
+                  >
+                    <button
+                      title={p.name}
+                      data-marker="1"
+                      onMouseDown={(e) => onMouseDownPoint(e, p)}
+                      onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
+                      className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                    />
+                  </div>
+                )
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Fallback lisible */}
+        {!loaded && pageSize.w === 0 && (
+          <div className="p-3 text-sm text-gray-600">
+            {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
+          </div>
+        )}
+      </div>
+
+      {/* Légende */}
+      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
+        </span>
+      </div>
+    </div>
+  );
+}
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
   const [tab, setTab] = useState("controls"); // controls | calendar | settings | maps
-
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -497,17 +995,13 @@ export default function Doors() {
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [doorState, setDoorState] = useState(""); // conforme | non_conforme
-
   /* ---- drawer (edit / inspect) ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null); // door object with details
-
   /* ---- calendar ---- */
   const [calendar, setCalendar] = useState({ events: [] });
-
   /* ---- toast ---- */
   const [toast, setToast] = useState("");
-
   /* ---- settings ---- */
   const defaultTemplate = [
     "La porte est-elle en parfait état (fermeture correcte, non voilée) ?",
@@ -521,10 +1015,8 @@ export default function Doors() {
     frequency: "1_an", // 1_an, 1_mois, 2_an, 3_mois, 2_ans
   });
   const [savingSettings, setSavingSettings] = useState(false);
-
   /* ---- versionnement fichiers pour refresh instantané ---- */
   const [filesVersion, setFilesVersion] = useState(0);
-
   /* ---------- Deep-link helpers (QR) ---------- */
   function getDoorParam() {
     try {
@@ -546,7 +1038,6 @@ export default function Doors() {
     setEditing(null);
     setDoorParam(null);
   }
-
   // -------- data loaders
   async function reload() {
     setLoading(true);
@@ -573,19 +1064,16 @@ export default function Doors() {
       setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
     if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
   }
-
   // First load
   useEffect(() => {
     reload();
     reloadCalendar();
     loadSettings();
   }, []);
-
   // Auto-open door from ?door=<id> (QR deep link)
   useEffect(() => {
     const targetId = getDoorParam();
     if (!targetId) return;
-
     (async () => {
       const full = await API.get(targetId).catch(() => null);
       if (full?.door?.id) {
@@ -596,7 +1084,6 @@ export default function Doors() {
         setDoorParam(null);
       }
     })();
-
     // Réagit aux navigations back/forward
     const onPop = () => {
       const id = getDoorParam();
@@ -605,7 +1092,6 @@ export default function Doors() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-
   // Live filter (debounce)
   useEffect(() => {
     const t = setTimeout(() => {
@@ -614,9 +1100,7 @@ export default function Doors() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status, building, floor, doorState]);
-
   const filtered = doors; // serveur filtre déjà
-
   /* ------------------ actions door ------------------ */
   function openCreate() {
     setEditing({
@@ -673,14 +1157,12 @@ export default function Doors() {
     await reload();
     await reloadCalendar();
   }
-
   /* ------------------ checklist workflow ------------------ */
   const baseOptions = [
     { value: "conforme", label: "Conforme" },
     { value: "non_conforme", label: "Non conforme" },
     { value: "na", label: "N/A" },
   ];
-
   async function ensureCurrentCheck() {
     if (!editing?.id) return;
     let check = editing.current_check;
@@ -693,13 +1175,11 @@ export default function Doors() {
       setEditing(full?.door);
     }
   }
-
   function allFiveAnswered(items = []) {
     const values = (items || []).slice(0, 5).map((i) => i?.value);
     if (values.length < 5) return false;
     return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
   }
-
   async function saveChecklistItem(idx, field, value) {
     if (!editing?.id || !editing?.current_check) return;
     const items = [...(editing.current_check.items || [])];
@@ -708,10 +1188,8 @@ export default function Doors() {
     if (field === "value") next.value = value;
     if (field === "comment") next.comment = value;
     items[idx] = next;
-
     const payload = { items };
     if (allFiveAnswered(items)) payload.close = true;
-
     const res = await API.saveCheck(editing.id, editing.current_check.id, payload);
     if (res?.door) {
       setEditing(res.door);
@@ -723,7 +1201,6 @@ export default function Doors() {
       setEditing(full?.door);
     }
   }
-
   /* ------------------ files ------------------ */
   const [uploading, setUploading] = useState(false);
   function onDropFiles(e) {
@@ -756,7 +1233,6 @@ export default function Doors() {
     await reload();
     setToast("Photo mise à jour ✅");
   }
-
   /* ------------------ settings save ------------------ */
   async function saveSettings() {
     setSavingSettings(true);
@@ -769,7 +1245,6 @@ export default function Doors() {
       setSavingSettings(false);
     }
   }
-
   /* ------------------ MAPS state / loaders ------------------ */
   const [plans, setPlans] = useState([]); // {id, logical_name, display_name, page_count, actions_next_30, overdue}
   const [mapsLoading, setMapsLoading] = useState(false);
@@ -797,6 +1272,12 @@ export default function Doors() {
     const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
     setPositions(Array.isArray(r?.items) ? r.items : []);
   }
+  async function loadUnplacedDoors(plan, pageIdx = 0) {
+    if (!plan) return;
+    const key = plan.logical_name || "";
+    const r = await MAPS.pendingPositions(key, pageIdx).catch(() => ({ pending: [] }));
+    setUnplacedDoors(Array.isArray(r?.pending) ? r.pending : []);
+  }
   useEffect(() => {
     if (tab === "maps") loadPlans();
   }, [tab]);
@@ -808,18 +1289,8 @@ export default function Doors() {
     console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
     if (stableSelectedPlan) {
       loadPositions(stableSelectedPlan, planPage);
+      loadUnplacedDoors(stableSelectedPlan, planPage);
       setPendingPlaceDoorId(null); // reset mode placement à chaque changement
-    }
-  }, [stableSelectedPlan, planPage]);
-
-  // NEW: Chargement des portes non positionnées via la nouvelle API
-  useEffect(() => {
-    if (stableSelectedPlan) {
-      (async () => {
-        const key = stableSelectedPlan.logical_name || "";
-        const r = await MAPS.pendingPositions(key, planPage).catch(() => ({ pending: [] }));
-        setUnplacedDoors(Array.isArray(r?.pending) ? r.pending : []);
-      })();
     }
   }, [stableSelectedPlan, planPage]);
 
@@ -846,7 +1317,6 @@ export default function Doors() {
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
-
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Portes coupe-feu</h1>
@@ -858,9 +1328,7 @@ export default function Doors() {
           <Btn onClick={openCreate}>+ Nouvelle porte</Btn>
         </div>
       </header>
-
       <StickyTabs />
-
       {/* Filtres (toggle) */}
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
@@ -906,7 +1374,6 @@ export default function Doors() {
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
       )}
-
       {/* Onglet Contrôles : liste des portes (vignettes photo intactes) */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
@@ -949,7 +1416,6 @@ export default function Doors() {
               </div>
             ))}
           </div>
-
           {/* Desktop table */}
           <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
@@ -1015,7 +1481,6 @@ export default function Doors() {
           </div>
         </div>
       )}
-
       {/* Onglet Calendrier */}
       {tab === "calendar" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4">
@@ -1029,7 +1494,6 @@ export default function Doors() {
           />
         </div>
       )}
-
       {/* Onglet Plans */}
       {tab === "maps" && (
         <div className="space-y-4">
@@ -1041,7 +1505,6 @@ export default function Doors() {
               await loadPlans();
             }}
           />
-
           <PlanCards
             plans={plans}
             onRename={async (plan, name) => {
@@ -1049,12 +1512,11 @@ export default function Doors() {
               await loadPlans();
             }}
             onPick={(plan) => {
+              console.log("[DEBUG] Picking plan:", plan);
               setSelectedPlan(plan);
-              // planPage est fixe à 0, pas de setPlanPage
               setPdfReady(false);
             }}
           />
-
           {selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1062,10 +1524,11 @@ export default function Doors() {
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Dropdown pages supprimé, page fixe à 0 */}
+                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>
+                    Fermer le plan
+                  </Btn>
                 </div>
               </div>
-
               {/* Bandeau portes en attente de positionnement */}
               <div className="mt-3 p-2 rounded-xl border bg-amber-50/60">
                 <div className="text-sm text-amber-700 font-medium">
@@ -1086,9 +1549,10 @@ export default function Doors() {
                             ? "bg-amber-600 text-white border-amber-700"
                             : "bg-white text-amber-800 border-amber-200 hover:bg-amber-100"
                         }`}
-                        onClick={() =>
-                          setPendingPlaceDoorId((cur) => (cur === p.door_id ? null : p.door_id))
-                        }
+                        onClick={() => {
+                          console.log("[DEBUG] Selecting door for placement:", p.door_id);
+                          setPendingPlaceDoorId((cur) => (cur === p.door_id ? null : p.door_id));
+                        }}
                         title="Cliquer puis cliquer sur le plan pour placer"
                       >
                         Placer • {p.door_name}
@@ -1097,7 +1561,10 @@ export default function Doors() {
                     {pendingPlaceDoorId && (
                       <button
                         className="px-2 py-1 rounded-md border text-xs bg-white text-gray-700 hover:bg-gray-50"
-                        onClick={() => setPendingPlaceDoorId(null)}
+                        onClick={() => {
+                          console.log("[DEBUG] Cancelling placement");
+                          setPendingPlaceDoorId(null);
+                        }}
                       >
                         Annuler le placement
                       </button>
@@ -1112,38 +1579,48 @@ export default function Doors() {
                   </div>
                 )}
               </div>
-
               <PlanViewer
-                key={(selectedPlan.id || selectedPlan.logical_name) + ":" + planPage}
-                fileUrl={planFileUrlSafe(selectedPlan)}
+                key={stableSelectedPlan?.id || stableSelectedPlan?.logical_name || ""}
+                fileUrl={planFileUrlSafe(stableSelectedPlan)}
                 pageIndex={planPage}
                 points={positions}
                 onReady={() => setPdfReady(true)}
                 onMovePoint={async (doorId, xy) => {
+                  console.log("[DEBUG] Moving point:", { doorId, xy });
                   await MAPS.setPosition(doorId, {
-                    logical_name: selectedPlan.logical_name, // fallback
-                    plan_id: selectedPlan.id,                // ✅ prioritaire si géré par le backend
+                    logical_name: stableSelectedPlan.logical_name,
+                    plan_id: stableSelectedPlan.id,
                     page_index: planPage,
-                    x_frac: xy.x, y_frac: xy.y,
+                    x_frac: xy.x,
+                    y_frac: xy.y,
                   });
-                  await loadPositions(selectedPlan, planPage);
+                  await loadPositions(stableSelectedPlan, planPage);
                 }}
-                onClickPoint={(p) => openEdit({ id: p.door_id, name: p.name })}
-                // NEW: placement d’une porte « en attente »
+                onClickPoint={(p) => {
+                  console.log("[DEBUG] Clicking point:", p);
+                  openEdit({ id: p.door_id, name: p.name });
+                }}
                 placingDoorId={pendingPlaceDoorId}
                 onPlaceAt={async (xy) => {
+                  console.log("[DEBUG] Placing door at:", { doorId: pendingPlaceDoorId, xy });
                   if (!pendingPlaceDoorId) return;
-                  await MAPS.setPosition(pendingPlaceDoorId, {
-                    logical_name: selectedPlan.logical_name, // fallback
-                    plan_id: selectedPlan.id,                // ✅ prioritaire si géré par le backend
-                    page_index: planPage,
-                    x_frac: xy.x, y_frac: xy.y,
-                  });
-                  setPendingPlaceDoorId(null);
-                  await loadPositions(selectedPlan, planPage);
+                  try {
+                    await MAPS.setPosition(pendingPlaceDoorId, {
+                      logical_name: stableSelectedPlan.logical_name,
+                      plan_id: stableSelectedPlan.id,
+                      page_index: planPage,
+                      x_frac: xy.x,
+                      y_frac: xy.y,
+                    });
+                    setPendingPlaceDoorId(null);
+                    await loadPositions(stableSelectedPlan, planPage);
+                    await loadUnplacedDoors(stableSelectedPlan, planPage); // Recharger les portes non positionnées
+                  } catch (e) {
+                    console.error("[ERROR] Failed to place door:", e.message);
+                    setToast("Erreur lors du placement de la porte : " + e.message);
+                  }
                 }}
               />
-
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
                   Chargement du plan… (canvas pdf.js)
@@ -1153,7 +1630,6 @@ export default function Doors() {
           )}
         </div>
       )}
-
       {/* Onglet Paramètres */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
@@ -1203,7 +1679,6 @@ export default function Doors() {
           </div>
         </div>
       )}
-
       {/* Drawer: fiche porte + checklist + fichiers + QR */}
       {drawerOpen && editing && (
         <Drawer
@@ -1226,7 +1701,6 @@ export default function Doors() {
                 <Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} />
               </Labeled>
             </div>
-
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Statut</span>
@@ -1238,14 +1712,12 @@ export default function Doors() {
                 Prochain contrôle : {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
               </div>
             </div>
-
             <div className="flex items-center gap-3">
               <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
               {editing?.id && (
                 <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>
               )}
             </div>
-
             {/* Photo */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -1265,20 +1737,17 @@ export default function Doors() {
                 </div>
               </div>
             )}
-
             {/* Checklist */}
             <div className="border rounded-2xl p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="font-semibold">Checklist</div>
                 {!editing.current_check && <Btn onClick={ensureCurrentCheck}>Démarrer un contrôle</Btn>}
               </div>
-
               {!editing.current_check && (
                 <div className="text-sm text-gray-500">
                   Lance un contrôle pour remplir les 5 points ci-dessous.
                 </div>
               )}
-
               {!!editing.current_check && (
                 <div className="space-y-3">
                   {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate).slice(0, 5).map((label, i) => {
@@ -1319,7 +1788,6 @@ export default function Doors() {
                 </div>
               )}
             </div>
-
             {/* Fichiers / Photos (door-level) */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -1335,7 +1803,6 @@ export default function Doors() {
                     Ajouter
                   </label>
                 </div>
-
                 <div
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={onDropFiles}
@@ -1347,11 +1814,9 @@ export default function Doors() {
                     Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.
                   </div>
                 </div>
-
                 <DoorFiles doorId={editing.id} version={filesVersion} />
               </div>
             )}
-
             {/* QR Codes */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -1368,7 +1833,6 @@ export default function Doors() {
                 </div>
               </div>
             )}
-
             {/* Historique */}
             <DoorHistory doorId={editing.id} />
           </div>
@@ -1377,7 +1841,6 @@ export default function Doors() {
     </section>
   );
 }
-
 /* ----------------------------- Sous-composants ----------------------------- */
 function Labeled({ label, children }) {
   return (
@@ -1409,7 +1872,6 @@ function Drawer({ title, children, onClose }) {
     </div>
   );
 }
-
 function DoorFiles({ doorId, version = 0 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -1423,7 +1885,6 @@ function DoorFiles({ doorId, version = 0 }) {
     }
   }
   useEffect(() => { if (doorId) load(); }, [doorId, version]);
-
   return (
     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {loading && <div className="text-gray-500">Chargement…</div>}
@@ -1457,7 +1918,6 @@ function FileCard({ f, onDelete }) {
     </div>
   );
 }
-
 function DoorHistory({ doorId }) {
   const [items, setItems] = useState([]);
   useEffect(() => {
@@ -1467,7 +1927,6 @@ function DoorHistory({ doorId }) {
       setItems(r?.checks || []);
     })();
   }, [doorId]);
-
   if (!doorId) return null;
   return (
     <div className="border rounded-2xl p-3">
@@ -1546,540 +2005,6 @@ function DoorHistory({ doorId }) {
           </table>
         </div>
       )}
-    </div>
-  );
-}
-
-/* ----------------------------- MAPS components ----------------------------- */
-function PlansHeader({ mapsLoading, onUploadZip }) {
-  const inputRef = useRef(null);
-  return (
-    <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
-      <div className="font-semibold">Plans PDF</div>
-      <div className="flex items-center gap-2">
-        <Btn
-          variant="ghost"
-          onClick={() => inputRef.current?.click()}
-          disabled={mapsLoading}
-        >
-          📦 Import ZIP de plans
-        </Btn>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".zip,application/zip"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onUploadZip(f);
-            e.target.value = "";
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function PlanCards({ plans = [], onRename, onPick }) {
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
-      {plans.map((p) => (
-        <PlanCard key={p.id} plan={p} onRename={onRename} onPick={onPick} />
-      ))}
-    </div>
-  );
-}
-
-function PlanCard({ plan, onRename, onPick }) {
-  const [edit, setEdit] = useState(false);
-  const [name, setName] = useState(plan.display_name || plan.logical_name || "");
-  const next30 = Number(plan?.actions_next_30 || 0);
-  const overdue = Number(plan?.overdue || 0);
-  const canvasRef = useRef(null);
-  const [thumbErr, setThumbErr] = useState("");
-
-  // Miniature page 1 via pdf.js (local, plus de CDN)
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setThumbErr("");
-
-        const url = planFileUrlSafe(plan);
-        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(url)); // ✅
-        const pdf = await loadingTask.promise;
-        const page = await pdf.getPage(1);
-        const viewport = page.getViewport({ scale: 0.25 });
-        const c = canvasRef.current;
-        if (!c || cancelled) return;
-        c.width = Math.floor(viewport.width);
-        c.height = Math.floor(viewport.height);
-        const ctx = c.getContext("2d");
-        await page.render({ canvasContext: ctx, viewport }).promise;
-      } catch (e) {
-        if (!cancelled) setThumbErr("Aperçu indisponible.");
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [plan.id]);
-
-  return (
-    <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div className="aspect-video bg-gray-50 flex items-center justify-center">
-        <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
-        {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
-      </div>
-      <div className="p-3">
-        {!edit ? (
-          <div className="flex items-start justify-between gap-2">
-            <div className="font-medium truncate" title={name}>{name || "—"}</div>
-            <div className="flex items-center gap-1">
-              <Btn variant="ghost" onClick={() => setEdit(true)}>✏️</Btn>
-              <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <Input value={name} onChange={setName} />
-            <Btn
-              variant="subtle"
-              onClick={async () => {
-                await onRename(plan, (name || "").trim());
-                setEdit(false);
-              }}
-            >
-              OK
-            </Btn>
-            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>
-              Annuler
-            </Btn>
-          </div>
-        )}
-
-        <div className="flex items-center gap-2 mt-2 text-xs">
-          <Badge color="orange">≤30j: {next30}</Badge>
-          <Badge color="red">Retard: {overdue}</Badge>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * PlanViewer
- * - Zoom: molette/trackpad (wheel), pinch sur tactile
- * - Pan: drag (souris) / pan tactile
- * - Déplacement d’un marqueur: mousedown + drag
- * - Placement d’une porte en attente: prop placingDoorId + onPlaceAt(xy), clic/touch pour déposer
- */
-function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, placingDoorId, onPlaceAt }) {
-  const wrapRef = useRef(null);
-  const canvasRef = useRef(null);
-  const overlayRef = useRef(null);
-  const [loaded, setLoaded] = useState(false);
-  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
-  const [isMounted, setIsMounted] = useState(false); // Suivi du montage du canvas
-  const [err, setErr] = useState("");
-
-  // viewport state (scale + pan)
-  const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 }); // en pixels sur le rendu courant
-
-  // Vérifier que le canvas est monté
-  useEffect(() => {
-    if (canvasRef.current) {
-      console.log("[DEBUG] Canvas mounted successfully");
-      setIsMounted(true);
-    } else {
-      console.warn("[DEBUG] Canvas not mounted");
-      setIsMounted(false);
-    }
-  }, []);
-
-  // pdf.js render (to canvas)
-  useEffect(() => {
-    let cancelled = false;
-    console.log(`[DEBUG] Starting PDF render for ${fileUrl}, pageIndex=${pageIndex}`);
-
-    const renderPdf = async () => {
-      // Attendre que le canvas soit monté
-      if (!isMounted || !canvasRef.current) {
-        console.warn("[DEBUG] Canvas not available, render aborted");
-        setErr("Canvas non disponible. Essayez de recharger le plan.");
-        setLoaded(false);
-        onReady?.();
-        return;
-      }
-
-      try {
-        setErr("");
-        console.log(`[DEBUG] Loading PDF from ${fileUrl}`);
-
-        // Configurer le worker explicitement
-        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-          console.warn("[DEBUG] pdf.js worker not set, using default");
-          pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-        }
-
-        // Charger le PDF
-        const loadingTask = pdfjsLib.getDocument({
-          ...pdfDocOpts(fileUrl),
-          standardFontDataUrl: "/standard_fonts/",
-        });
-        const pdf = await loadingTask.promise;
-        console.log(`[DEBUG] PDF loaded, numPages=${pdf.numPages}`);
-
-        if (cancelled) {
-          console.log("[DEBUG] Render cancelled before page fetch");
-          return;
-        }
-
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-        const viewport = page.getViewport({ scale: 0.5 }); // Échelle initiale réduite
-        const canvas = canvasRef.current;
-
-        if (!canvas || cancelled) {
-          console.log("[DEBUG] Canvas not available or render cancelled");
-          setErr("Canvas non disponible ou rendu annulé.");
-          setLoaded(false);
-          onReady?.();
-          return;
-        }
-
-        const ctx = canvas.getContext("2d");
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        console.log(`[DEBUG] Canvas set to ${canvas.width}x${canvas.height}`);
-
-        setPageSize({ w: canvas.width, h: canvas.height });
-
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        if (!cancelled) {
-          console.log("[DEBUG] PDF rendered successfully");
-          setLoaded(true);
-          setScale(1);
-          setPan({ x: 0, y: 0 });
-          onReady?.();
-        }
-      } catch (e) {
-        if (!cancelled) {
-          console.error(`[ERROR] Failed to render PDF: ${e.message}`);
-          setErr(`Erreur de rendu du plan : ${e.message}`);
-          setLoaded(false);
-          onReady?.();
-        }
-      }
-    };
-
-    // Vérifier le canvas avec un intervalle (max 2s)
-    let attempts = 0;
-    const maxAttempts = 20; // 20 * 100ms = 2s
-    const interval = setInterval(() => {
-      if (cancelled) {
-        console.log("[DEBUG] Render cancelled during interval");
-        clearInterval(interval);
-        return;
-      }
-      if (canvasRef.current && isMounted) {
-        console.log("[DEBUG] Canvas ready, starting render");
-        clearInterval(interval);
-        renderPdf();
-      } else {
-        attempts++;
-        console.log(`[DEBUG] Canvas not ready, attempt ${attempts}/${maxAttempts}`);
-        if (attempts >= maxAttempts) {
-          console.warn("[DEBUG] Max attempts reached, aborting render");
-          setErr("Échec du rendu : canvas non disponible après plusieurs tentatives.");
-          setLoaded(false);
-          onReady?.();
-          clearInterval(interval);
-        }
-      }
-    }, 100);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-      console.log("[DEBUG] Cleaning up PDF render");
-    };
-  }, [fileUrl, pageIndex, onReady, isMounted]);
-
-  // ---------- wheel zoom (avec focus sur le curseur) ----------
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-
-    function onWheel(e) {
-      if (!loaded) return;
-      const delta = e.deltaY;
-      // trackpad pinch envoie deltaY avec ctrlKey === true (Chrome) => traiter comme zoom
-      const isZoom = e.ctrlKey || e.metaKey;
-      if (!isZoom && Math.abs(delta) < 40) return; // scroll léger = pan natif scrollbar
-
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const cx = e.clientX - rect.left - pan.x;
-      const cy = e.clientY - rect.top - pan.y;
-
-      const prev = scale;
-      const next = Math.max(0.5, Math.min(3, prev * (delta > 0 ? 0.9 : 1.1)));
-
-      // rester centré autour du curseur
-      const nx = cx - (cx * next) / prev;
-      const ny = cy - (cy * next) / prev;
-      setScale(next);
-      setPan((p) => ({ x: p.x + nx, y: p.y + ny }));
-    }
-
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [loaded, scale, pan.x, pan.y]);
-
-  // ---------- pan à la souris (drag fond) ----------
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    let dragging = false;
-    let sx = 0, sy = 0;
-    let baseX = 0, baseY = 0;
-
-    function down(e) {
-      // ignorer si l’on démarre sur un marker (le marker gère son propre drag)
-      if ((e.target instanceof HTMLElement) && e.target.dataset?.marker === "1") return;
-      dragging = true;
-      sx = e.clientX;
-      sy = e.clientY;
-      baseX = pan.x;
-      baseY = pan.y;
-      el.style.cursor = "grabbing";
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-    function move(e) {
-      if (!dragging) return;
-      setPan({ x: baseX + (e.clientX - sx), y: baseY + (e.clientY - sy) });
-    }
-    function up() {
-      dragging = false;
-      el.style.cursor = "default";
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    }
-
-    el.addEventListener("mousedown", down);
-    return () => {
-      el.removeEventListener("mousedown", down);
-    };
-  }, [pan.x, pan.y]);
-
-  // ---------- gestures tactiles: pinch + pan à un doigt ----------
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-
-    let pointers = new Map();
-
-    function onPointerDown(e) {
-      pointers.set(e.pointerId, e);
-      el.setPointerCapture(e.pointerId);
-    }
-    function onPointerMove(e) {
-      if (!pointers.has(e.pointerId)) return;
-      pointers.set(e.pointerId, e);
-
-      if (pointers.size === 1) {
-        // pan à un doigt
-        const ev = Array.from(pointers.values())[0];
-        // utiliser movementX/Y n'est pas fiable, calculer diff manuel
-        const prev = ev; // stocké, mais ici nous avons seulement le dernier… on pan via delta vs last pan
-        // simplifier: quand un seul doigt, laisser le navigateur scroller; on force pan via transform si on veut
-        // on fait plutôt rien ici; le drag souris couvre desktop, et mobile peut glisser le conteneur overflow
-      } else if (pointers.size === 2) {
-        // pinch
-        const [p1, p2] = Array.from(pointers.values());
-        const dist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
-
-        if (!el._pinchBase) {
-          el._pinchBase = { dist, scale, panX: pan.x, panY: pan.y, cx: (p1.clientX + p2.clientX) / 2, cy: (p1.clientY + p2.clientY) / 2 };
-          return;
-        }
-        const base = el._pinchBase;
-        const factor = Math.max(0.5, Math.min(3, base.scale * (dist / base.dist)));
-
-        const rect = el.getBoundingClientRect();
-        const cx = base.cx - rect.left - base.panX;
-        const cy = base.cy - rect.top - base.panY;
-        const nx = cx - (cx * factor) / base.scale;
-        const ny = cy - (cy * factor) / base.scale;
-
-        setScale(factor);
-        setPan({ x: base.panX + nx, y: base.panY + ny });
-      }
-    }
-    function onPointerUp(e) {
-      pointers.delete(e.pointerId);
-      el.releasePointerCapture(e.pointerId);
-      if (pointers.size < 2) el._pinchBase = null;
-    }
-    el.addEventListener("pointerdown", onPointerDown);
-    el.addEventListener("pointermove", onPointerMove);
-    el.addEventListener("pointerup", onPointerUp);
-    el.addEventListener("pointercancel", onPointerUp);
-    return () => {
-      el.removeEventListener("pointerdown", onPointerDown);
-      el.removeEventListener("pointermove", onPointerMove);
-      el.removeEventListener("pointerup", onPointerUp);
-      el.removeEventListener("pointercancel", onPointerUp);
-    };
-  }, [scale, pan.x, pan.y]);
-
-  // ---------- drag marker (déplacement d’un point existant) ----------
-  const dragInfo = useRef(null);
-  function onMouseDownPoint(e, p) {
-    e.stopPropagation();
-    const rect = overlayRef.current.getBoundingClientRect();
-    dragInfo.current = {
-      id: p.door_id,
-      startX: e.clientX,
-      startY: e.clientY,
-      baseX: p.x_frac ?? p.x ?? 0,
-      baseY: p.y_frac ?? p.y ?? 0,
-      rect,
-    };
-    window.addEventListener("mousemove", onMoveMarker);
-    window.addEventListener("mouseup", onUpMarker);
-  }
-  function onMoveMarker(e) {
-    const info = dragInfo.current;
-    if (!info) return;
-    const dx = (e.clientX - info.startX) / (info.rect.width);
-    const dy = (e.clientY - info.startY) / (info.rect.height);
-    const x = Math.min(1, Math.max(0, (info.baseX ?? 0) + dx));
-    const y = Math.min(1, Math.max(0, (info.baseY ?? 0) + dy));
-    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (el) el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
-  }
-  function onUpMarker() {
-    const info = dragInfo.current;
-    window.removeEventListener("mousemove", onMoveMarker);
-    window.removeEventListener("mouseup", onUpMarker);
-    if (!info) return;
-    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (!el) { dragInfo.current = null; return; }
-    const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
-    if (m) {
-      const x = Number(m[1]) / 100;
-      const y = Number(m[2]) / 100;
-      onMovePoint?.(info.id, { x, y });
-    }
-    dragInfo.current = null;
-  }
-
-  function markerClass(s) {
-    if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
-    if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
-    if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
-    return "bg-blue-600 ring-1 ring-blue-300";
-  }
-
-  // calcul coordonnées relatives (0..1) pour placement au clic
-  function relativeXY(evt) {
-    const overlay = overlayRef.current;
-    if (!overlay) return { x: 0, y: 0 };
-    const r = overlay.getBoundingClientRect();
-    const x = Math.min(1, Math.max(0, (evt.clientX - r.left) / r.width));
-    const y = Math.min(1, Math.max(0, (evt.clientY - r.top) / r.height));
-    return { x, y };
-  }
-
-  function onOverlayClick(e) {
-    if (!placingDoorId) return;
-    // déposer la porte en attente
-    const xy = relativeXY(e);
-    onPlaceAt?.(xy);
-  }
-
-  return (
-    <div className="mt-3">
-      <div
-        ref={wrapRef}
-        className="relative w-full overflow-auto border rounded-2xl bg-gray-50"
-        style={{ height: 520 }}
-      >
-        {/* Canvas mode (pdf.js) - Toujours afficher le canvas */}
-        <div
-          className="relative inline-block will-change-transform"
-          style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
-            transformOrigin: "0 0",
-            width: pageSize.w || "100%",
-            height: pageSize.h || 520,
-          }}
-        >
-          <canvas
-            ref={canvasRef}
-            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, display: loaded ? "block" : "none" }}
-          />
-          {!loaded && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
-              Rendu en cours…
-            </div>
-          )}
-
-          {/* overlay points */}
-          <div
-            ref={overlayRef}
-            className="absolute inset-0"
-            style={{ width: "100%", height: "100%" }}
-            onClick={onOverlayClick}
-          >
-            {points.map((p) => {
-              const x = p.x_frac ?? p.x ?? 0;
-              const y = p.y_frac ?? p.y ?? 0;
-              const placed = p.x_frac != null && p.y_frac != null;
-              return (
-                placed && (
-                  <div
-                    key={p.door_id}
-                    data-id={p.door_id}
-                    className="absolute"
-                    style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
-                  >
-                    <button
-                      title={p.name}
-                      data-marker="1"
-                      onMouseDown={(e) => onMouseDownPoint(e, p)}
-                      onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
-                      className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                    />
-                  </div>
-                )
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Fallback lisible */}
-        {!loaded && pageSize.w === 0 && (
-          <div className="p-3 text-sm text-gray-600">
-            {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
-          </div>
-        )}
-      </div>
-
-      {/* Légende */}
-      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
-        </span>
-      </div>
     </div>
   );
 }
