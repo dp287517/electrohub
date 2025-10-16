@@ -1636,6 +1636,7 @@ app.get(
   "/api/doors/maps/plan/:id([0-9a-fA-F\\-]{36})/file",
   async (req, res) => {
     try {
+      console.log(`[DEBUG] Request for PDF plan id=${req.params.id}, headers=${JSON.stringify(req.headers)}`);
       const { rows } = await pool.query(
         `SELECT file_path, content FROM fd_plans WHERE id=$1`,
         [req.params.id]
@@ -1645,14 +1646,18 @@ app.get(
       const buf = row?.content;
 
       if (buf && buf.length) {
+        console.log(`[DEBUG] Serving PDF from DB content, size=${buf.length}`);
         res.type("application/pdf");
         return res.end(buf, "binary");
       }
       if (p && fs.existsSync(p)) {
+        console.log(`[DEBUG] Serving PDF from file path=${p}`);
         return res.type("application/pdf").sendFile(path.resolve(p));
       }
+      console.log(`[DEBUG] No PDF found for id=${req.params.id}`);
       return res.status(404).send("not_found");
     } catch (e) {
+      console.error(`[ERROR] Failed to serve PDF for id=${req.params.id}: ${e.message}`);
       res.status(500).send("err");
     }
   }
