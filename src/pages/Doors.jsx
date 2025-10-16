@@ -858,20 +858,30 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) {
-      console.warn("[DEBUG] Canvas rect not available for drag");
+    const canvas = canvasRef.current;
+    if (!canvas || !overlayRef.current) {
+      console.warn("[DEBUG] Canvas or overlay not available for drag");
       return;
     }
+    const rect = canvas.getBoundingClientRect();
     dragInfo.current = {
       id: p.door_id,
       startX: e.clientX,
       startY: e.clientY,
-      baseX: p.x_frac ?? p.x ?? 0,
-      baseY: p.y_frac ?? p.y ?? 0,
+      baseX: Number(p.x_frac ?? p.x ?? 0),
+      baseY: Number(p.y_frac ?? p.y ?? 0),
       rect,
+      scale,
+      panX: pan.x,
+      panY: pan.y,
     };
-    console.log("[DEBUG] Starting drag for doorId:", p.door_id, { baseX: dragInfo.current.baseX, baseY: dragInfo.current.baseY });
+    console.log("[DEBUG] Starting drag for doorId:", p.door_id, {
+      baseX: dragInfo.current.baseX,
+      baseY: dragInfo.current.baseY,
+      rect,
+      scale,
+      pan
+    });
     window.addEventListener("mousemove", onMoveMarker);
     window.addEventListener("mouseup", onUpMarker);
   }
@@ -879,13 +889,22 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   function onMoveMarker(e) {
     const info = dragInfo.current;
     if (!info) return;
-    const dx = (e.clientX - info.startX) / info.rect.width;
-    const dy = (e.clientY - info.startY) / info.rect.height;
-    const x = Math.min(1, Math.max(0, (info.baseX ?? 0) + dx));
-    const y = Math.min(1, Math.max(0, (info.baseY ?? 0) + dy));
-    console.log("[DEBUG] Moving marker:", { doorId: info.id, x, y });
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      console.warn("[DEBUG] Canvas not available during drag");
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    // Ajuster pour le zoom et la translation
+    const dx = (e.clientX - info.startX) / (rect.width * info.scale);
+    const dy = (e.clientY - info.startY) / (rect.height * info.scale);
+    const x = Math.min(1, Math.max(0, info.baseX + dx));
+    const y = Math.min(1, Math.max(0, info.baseY + dy));
+    console.log("[DEBUG] Moving marker:", { doorId: info.id, x, y, dx, dy, scale: info.scale, panX: info.panX, panY: info.panY });
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (el) el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
+    if (el) {
+      el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
+    }
   }
 
   function onUpMarker() {
@@ -894,12 +913,23 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     window.removeEventListener("mouseup", onUpMarker);
     if (!info) return;
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (!el) { dragInfo.current = null; return; }
+    if (!el) {
+      console.warn("[DEBUG] Marker element not found for doorId:", info.id);
+      dragInfo.current = null;
+      return;
+    }
     const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
     if (m) {
       const x = Number(m[1]) / 100;
       const y = Number(m[2]) / 100;
-      onMovePoint?.(info.id, { x, y });
+      console.log("[DEBUG] Final position for doorId:", info.id, { x, y });
+      try {
+        onMovePoint?.(info.id, { x, y });
+      } catch (e) {
+        console.error("[ERROR] Failed to update position on drag end:", e.message);
+      }
+    } else {
+      console.warn("[DEBUG] Failed to parse transform for doorId:", info.id);
     }
     dragInfo.current = null;
   }
@@ -913,17 +943,27 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
 
   // Calcul coordonnées relatives
   function relativeXY(evt) {
-    const overlay = overlayRef.current;
-    if (!overlay) {
-      console.warn("[DEBUG] Overlay not available for click");
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      console.warn("[DEBUG] Canvas not available for click");
       return { x: 0, y: 0 };
     }
-    const r = overlay.getBoundingClientRect();
-    const x = Math.min(1, Math.max(0, (evt.clientX - r.left) / r.width));
-    const y = Math.min(1, Math.max(0, (evt.clientY - r.top) / r.height));
-    console.log("[DEBUG] Click coordinates:", { x, y });
+    const r = canvas.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) {
+      console.warn("[DEBUG] Canvas has invalid dimensions:", r);
+      return { x: 0, y: 0 };
+    }
+    // Ajuster pour le zoom et la translation
+    const x = Math.min(1, Math.max(0, (evt.clientX - r.left - pan.x) / (r.width * scale)));
+    const y = Math.min(1, Math.max(0, (evt.clientY - r.top - pan.y) / (r.height * scale)));
+    console.log("[DEBUG] Click coordinates:", { x, y, clientX: evt.clientX, clientY: evt.clientY, rect: r, scale, pan });
     return { x, y };
   }
+
+  // Log points pour débogage
+  useEffect(() => {
+    console.log("[DEBUG] Points received:", points);
+  }, [points]);
 
   return (
     <div className="mt-3">
@@ -953,29 +993,39 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
           <div
             ref={overlayRef}
             className="absolute inset-0 z-10"
-            style={{ width: "100%", height: "100%", touchAction: placingDoorId ? "none" : "auto" }}
+            style={{
+              width: pageSize.w || "100%",
+              height: pageSize.h || 520,
+              touchAction: placingDoorId ? "none" : "auto",
+            }}
           >
             {points.map((p) => {
-              const x = p.x_frac ?? p.x ?? 0;
-              const y = p.y_frac ?? p.y ?? 0;
-              const placed = p.x_frac != null && p.y_frac != null;
+              const x = Number(p.x_frac ?? p.x ?? 0);
+              const y = Number(p.y_frac ?? p.y ?? 0);
+              const placed = x >= 0 && x <= 1 && y >= 0 && y <= 1;
+              if (!placed) {
+                console.warn("[DEBUG] Skipping unplaced or invalid point:", p);
+                return null;
+              }
               return (
-                placed && (
-                  <div
-                    key={p.door_id}
-                    data-id={p.door_id}
-                    className="absolute"
-                    style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
-                  >
-                    <button
-                      title={p.name}
-                      data-marker="1"
-                      onMouseDown={(e) => onMouseDownPoint(e, p)}
-                      onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
-                      className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                    />
-                  </div>
-                )
+                <div
+                  key={p.door_id}
+                  data-id={p.door_id}
+                  className="absolute"
+                  style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
+                >
+                  <button
+                    title={p.name || p.door_name || p.door_id}
+                    data-marker="1"
+                    onMouseDown={(e) => onMouseDownPoint(e, p)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      console.log("[DEBUG] Clicking point:", p);
+                      onClickPoint?.(p);
+                    }}
+                    className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                  />
+                </div>
               );
             })}
           </div>
