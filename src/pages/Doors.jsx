@@ -1685,32 +1685,53 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   // pdf.js render (to canvas)
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    console.log(`[DEBUG] Starting PDF render for ${fileUrl}, pageIndex=${pageIndex}`);
+
+    // Vérifier que le canvas est monté avant de commencer
+    if (!canvasRef.current) {
+      console.warn("[DEBUG] Canvas ref not available on mount");
+      setErr("Canvas non disponible. Essayez de recharger le plan.");
+      setLoaded(false);
+      onReady?.();
+      return;
+    }
+
+    const renderPdf = async () => {
       try {
         setErr("");
-        console.log(`[DEBUG] Loading PDF from ${fileUrl}, pageIndex=${pageIndex}`);
+        console.log(`[DEBUG] Loading PDF from ${fileUrl}`);
 
-        // Explicitement configurer le worker
+        // Configurer le worker explicitement
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
           console.warn("[DEBUG] pdf.js worker not set, using default");
           pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
         }
 
-        // Charger le PDF avec standardFontDataUrl pour éviter les erreurs de polices
+        // Charger le PDF
         const loadingTask = pdfjsLib.getDocument({
           ...pdfDocOpts(fileUrl),
-          standardFontDataUrl: "/standard_fonts/", // Aligner avec le backend
+          standardFontDataUrl: "/standard_fonts/",
         });
         const pdf = await loadingTask.promise;
         console.log(`[DEBUG] PDF loaded, numPages=${pdf.numPages}`);
 
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-        const viewport = page.getViewport({ scale: 0.5 }); // Réduit pour tester
-        const canvas = canvasRef.current;
-        if (!canvas || cancelled) {
-          console.log("[DEBUG] Canvas not available or cancelled");
+        if (cancelled) {
+          console.log("[DEBUG] Render cancelled before page fetch");
           return;
         }
+
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        const viewport = page.getViewport({ scale: 0.5 }); // Échelle initiale réduite
+        const canvas = canvasRef.current;
+
+        if (!canvas || cancelled) {
+          console.log("[DEBUG] Canvas not available or render cancelled");
+          setErr("Canvas non disponible ou rendu annulé.");
+          setLoaded(false);
+          onReady?.();
+          return;
+        }
+
         const ctx = canvas.getContext("2d");
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
@@ -1729,13 +1750,18 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       } catch (e) {
         if (!cancelled) {
           console.error(`[ERROR] Failed to render PDF: ${e.message}`);
-          setLoaded(false);
           setErr(`Erreur de rendu du plan : ${e.message}`);
+          setLoaded(false);
           onReady?.();
         }
       }
-    })();
-    return () => { cancelled = true; };
+    };
+
+    renderPdf();
+    return () => {
+      cancelled = true;
+      console.log("[DEBUG] Cleaning up PDF render");
+    };
   }, [fileUrl, pageIndex, onReady]);
 
   // ---------- wheel zoom (avec focus sur le curseur) ----------
