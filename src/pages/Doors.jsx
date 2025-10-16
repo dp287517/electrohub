@@ -583,16 +583,13 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-
     const preventBrowserZoom = (e) => {
       if (e.touches && e.touches.length > 1) {
         e.preventDefault();
       }
     };
-
     el.addEventListener("touchstart", preventBrowserZoom, { passive: false });
     el.addEventListener("touchmove", preventBrowserZoom, { passive: false });
-
     return () => {
       el.removeEventListener("touchstart", preventBrowserZoom);
       el.removeEventListener("touchmove", preventBrowserZoom);
@@ -777,14 +774,12 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     let pointers = new Map();
     let singlePanBase = null;
     let pinchBase = null;
-
     function onPointerDown(e) {
       pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
       el.setPointerCapture(e.pointerId);
       singlePanBase = null;
       pinchBase = null;
     }
-
     function onPointerMove(e) {
       if (!pointers.has(e.pointerId)) return;
       pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
@@ -814,7 +809,6 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         setPan({ x: pinchBase.panX + nx, y: pinchBase.panY + ny });
       }
     }
-
     function onPointerUp(e) {
       pointers.delete(e.pointerId);
       el.releasePointerCapture(e.pointerId);
@@ -826,7 +820,6 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         singlePanBase = null;
       }
     }
-
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
@@ -839,11 +832,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     };
   }, [pan, scale]);
 
-  // NEW: Gestion explicite du clic/touch pour placer une porte
+  // Gestion explicite du clic/touch pour placer une porte
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
-
     const handlePointerDown = (e) => {
       if (e.target.dataset?.marker === "1") return; // Ignorer les clics sur les marqueurs
       if (pointers.size > 1) return; // Ignorer les gestes multi-touch
@@ -851,10 +843,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       if (placingDoorId) {
         e.stopPropagation();
         const xy = relativeXY(e);
+        console.log("[DEBUG] Calling onPlaceAt with:", { xy });
         onPlaceAt?.(xy);
       }
     };
-
     let pointers = new Map();
     el.addEventListener("pointerdown", handlePointerDown);
     return () => {
@@ -866,7 +858,11 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
-    const rect = overlayRef.current.getBoundingClientRect();
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect) {
+      console.warn("[DEBUG] Overlay rect not available for drag");
+      return;
+    }
     dragInfo.current = {
       id: p.door_id,
       startX: e.clientX,
@@ -875,6 +871,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       baseY: p.y_frac ?? p.y ?? 0,
       rect,
     };
+    console.log("[DEBUG] Starting drag for doorId:", p.door_id, { baseX: dragInfo.current.baseX, baseY: dragInfo.current.baseY });
     window.addEventListener("mousemove", onMoveMarker);
     window.addEventListener("mouseup", onUpMarker);
   }
@@ -882,12 +879,20 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   function onMoveMarker(e) {
     const info = dragInfo.current;
     if (!info) return;
-    const dx = (e.clientX - info.startX) / (info.rect.width);
-    const dy = (e.clientY - info.startY) / (info.rect.height);
+    const rect = overlayRef.current?.getBoundingClientRect();
+    if (!rect) {
+      console.warn("[DEBUG] Overlay rect not available during drag");
+      return;
+    }
+    const dx = (e.clientX - info.startX) / rect.width;
+    const dy = (e.clientY - info.startY) / rect.height;
     const x = Math.min(1, Math.max(0, (info.baseX ?? 0) + dx));
     const y = Math.min(1, Math.max(0, (info.baseY ?? 0) + dy));
+    console.log("[DEBUG] Moving marker:", { doorId: info.id, x, y });
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (el) el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
+    if (el) {
+      el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
+    }
   }
 
   function onUpMarker() {
@@ -896,12 +901,23 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     window.removeEventListener("mouseup", onUpMarker);
     if (!info) return;
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (!el) { dragInfo.current = null; return; }
+    if (!el) {
+      console.warn("[DEBUG] Marker element not found for doorId:", info.id);
+      dragInfo.current = null;
+      return;
+    }
     const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
     if (m) {
       const x = Number(m[1]) / 100;
       const y = Number(m[2]) / 100;
-      onMovePoint?.(info.id, { x, y });
+      console.log("[DEBUG] Final position for doorId:", info.id, { x, y });
+      try {
+        onMovePoint?.(info.id, { x, y });
+      } catch (e) {
+        console.error("[ERROR] Failed to update position on drag end:", e.message);
+      }
+    } else {
+      console.warn("[DEBUG] Failed to parse transform for doorId:", info.id);
     }
     dragInfo.current = null;
   }
@@ -921,6 +937,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       return { x: 0, y: 0 };
     }
     const r = overlay.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) {
+      console.warn("[DEBUG] Overlay has invalid dimensions:", r);
+      return { x: 0, y: 0 };
+    }
     const x = Math.min(1, Math.max(0, (evt.clientX - r.left) / r.width));
     const y = Math.min(1, Math.max(0, (evt.clientY - r.top) / r.height));
     console.log("[DEBUG] Click coordinates:", { x, y });
@@ -958,26 +978,32 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
             style={{ width: "100%", height: "100%", touchAction: placingDoorId ? "none" : "auto" }}
           >
             {points.map((p) => {
-              const x = p.x_frac ?? p.x ?? 0;
-              const y = p.y_frac ?? p.y ?? 0;
-              const placed = p.x_frac != null && p.y_frac != null;
+              const x = Number(p.x_frac ?? p.x ?? 0);
+              const y = Number(p.y_frac ?? p.y ?? 0);
+              const placed = x >= 0 && x <= 1 && y >= 0 && y <= 1;
+              if (!placed) {
+                console.warn("[DEBUG] Skipping unplaced or invalid point:", p);
+                return null;
+              }
               return (
-                placed && (
-                  <div
-                    key={p.door_id}
-                    data-id={p.door_id}
-                    className="absolute"
-                    style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
-                  >
-                    <button
-                      title={p.name}
-                      data-marker="1"
-                      onMouseDown={(e) => onMouseDownPoint(e, p)}
-                      onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
-                      className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                    />
-                  </div>
-                )
+                <div
+                  key={p.door_id}
+                  data-id={p.door_id}
+                  className="absolute"
+                  style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
+                >
+                  <button
+                    title={p.name || p.door_name || p.door_id}
+                    data-marker="1"
+                    onMouseDown={(e) => onMouseDownPoint(e, p)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      console.log("[DEBUG] Clicking point:", p);
+                      onClickPoint?.(p);
+                    }}
+                    className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                  />
+                </div>
               );
             })}
           </div>
