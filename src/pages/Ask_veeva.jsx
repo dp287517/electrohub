@@ -150,228 +150,6 @@ function FeedbackBar({ onVote, state }) {
   );
 }
 
-/* ----------------------- DECISION GAUGES & FLOW VIZ ----------------------- */
-function Bar({ label, value = 0, hint, accent = "indigo", crowned = false, icon = "⚙️" }) {
-  const pct = Math.max(0, Math.min(100, Math.round(value)));
-  const barCls = {
-    indigo: "bg-indigo-500",
-    sky: "bg-sky-500",
-    emerald: "bg-emerald-500",
-    amber: "bg-amber-500",
-    rose: "bg-rose-500",
-    violet: "bg-violet-500",
-  }[accent] || "bg-indigo-500";
-
-  return (
-    <div className="w-full">
-      <div className="flex justify-between items-end text-[11px] text-gray-700">
-        <span className="font-medium flex items-center gap-1">
-          <span className="text-base leading-none">{icon}</span>
-          {label}
-          {crowned && <span title="A pris le dessus" className="ml-1">👑</span>}
-        </span>
-        <span className="tabular-nums">{pct}%</span>
-      </div>
-      <div className="h-2 mt-1 rounded bg-gray-200 overflow-hidden">
-        <div
-          className={clsx("h-2 transition-all duration-700 ease-out", barCls)}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      {hint && <div className="text-[11px] text-gray-500 mt-1">{hint}</div>}
-    </div>
-  );
-}
-
-/** Extrait des poids à partir de decision_trace renvoyé par le backend */
-function extractDecisionWeights(trace) {
-  const def = { ether: 40, naoris: 30, bunk: 20, maket: 10, answer: 80 };
-  if (!trace || typeof trace !== "object") return def;
-
-  const ether = Math.round((trace.hybrid_weight ?? 0.6) * 100);       // PySearch → Ether
-  const naoris = Math.round((trace.vector_weight ?? 0.7) * 100);      // PgVector → Naoris
-  const bunk = Math.round((trace.rerank_weight ?? 0.8) * 100);        // ReRank  → Bunk
-  const maket = Math.round((trace.mmr_lambda ?? 0.7) * 100);          // MMR     → Maket
-  const answer = Math.round((trace.answer_confidence ?? 0.85) * 100); // Answer
-
-  return {
-    ether: clamp01(ether),
-    naoris: clamp01(naoris),
-    bunk: clamp01(bunk),
-    maket: clamp01(maket),
-    answer: clamp01(answer),
-  };
-}
-function clamp01(v) { return Math.max(0, Math.min(100, v)); }
-
-/** Flow animé piloté par JS — fiable & synchrone avec l'état */
-function FlowRail({ playing = true, stepDuration = 650 }) {
-  const steps = [
-    { key: "q", label: "Question", short: "?", icon: "❓" },
-    { key: "ether", label: "Ether", short: "Eth", icon: "⚡" },
-    { key: "naoris", label: "Naoris", short: "Nao", icon: "🧠" },
-    { key: "bunk", label: "Bunk", short: "Bnk", icon: "🧮" },
-    { key: "maket", label: "Maket", short: "Mkt", icon: "🎛️" },
-    { key: "answer", label: "OpenAI Answer", short: "Ans", icon: "🤖" },
-  ];
-  const [idx, setIdx] = useState(0);
-  const timer = useRef(null);
-
-  useEffect(() => {
-    if (!playing) {
-      setIdx(0);
-      if (timer.current) { clearInterval(timer.current); timer.current = null; }
-      return;
-    }
-    // boucle
-    timer.current = setInterval(() => {
-      setIdx((i) => (i + 1) % steps.length);
-    }, stepDuration);
-    return () => { if (timer.current) clearInterval(timer.current); };
-  }, [playing, stepDuration]);
-
-  const leftPct = (idx / (steps.length - 1)) * 100;
-
-  return (
-    <div className="w-full">
-      {/* bande labels — compacte & scrollable sur mobile */}
-      <div className="flex overflow-x-auto no-scrollbar gap-2 sm:gap-3 px-1 sm:px-2">
-        {steps.map((s, i) => (
-          <div key={s.key} className="shrink-0 text-[11px] sm:text-[12px]">
-            <div className={clsx(
-              "px-2 py-1 rounded border bg-white shadow-sm flex items-center gap-1 whitespace-nowrap",
-              i === idx ? "border-blue-300 ring-1 ring-blue-200" : "border-gray-200"
-            )}>
-              <span className="text-sm">{s.icon}</span>
-              {/* Sur mobile, n'afficher que l’abrégé; sur sm+ le nom complet */}
-              <span className="sm:hidden">{s.short}</span>
-              <span className="hidden sm:inline">{s.label}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* rail */}
-      <div className="relative mx-2 sm:mx-3 mt-3 h-2 rounded bg-gradient-to-r from-indigo-200 via-sky-200 to-violet-200 overflow-hidden">
-        <div className="absolute inset-0 opacity-50">
-          <div className="w-full h-full bg-[linear-gradient(90deg,rgba(255,255,255,.25)_0,rgba(255,255,255,0)_20%,rgba(255,255,255,0)_80%,rgba(255,255,255,.25)_100%)] animate-[ping_3s_infinite]" />
-        </div>
-        {/* dot animée : pilotée par left% + transition */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 sm:w-3.5 sm:h-3.5 rounded-full bg-blue-600 shadow-md transition-all duration-500"
-          style={{ left: `calc(${leftPct}% - 6px)` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function DecisionGauges({ decisionTrace }) {
-  const w = extractDecisionWeights(decisionTrace);
-  const base = [
-    { k: "ether", v: w.ether },
-    { k: "naoris", v: w.naoris },
-    { k: "bunk", v: w.bunk },
-    { k: "maket", v: w.maket },
-  ];
-  const top = base.reduce((a, b) => (b.v > a.v ? b : a), base[0])?.k;
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <Bar label="⚡ Ether" value={w.ether} hint="BM25/TF-IDF + heuristiques" accent="indigo" crowned={top==="ether"} icon="⚡" />
-      <Bar label="🧠 Naoris" value={w.naoris} hint="Matching vecteur" accent="sky" crowned={top==="naoris"} icon="🧠" />
-      <Bar label="🧮 Bunk" value={w.bunk} hint="Rerank cross-encoder" accent="emerald" crowned={top==="bunk"} icon="🧮" />
-      <Bar label="🎛️ Maket" value={w.maket} hint="Diversification MMR (λ)" accent="amber" crowned={top==="maket"} icon="🎛️" />
-      <div className="sm:col-span-2">
-        <Bar label="🤖 OpenAI Answer" value={w.answer} hint="Synthèse contrôlée par contexte" accent="rose" icon="🤖" />
-      </div>
-    </div>
-  );
-}
-
-/* --------------------------- Sidebar (multi-focus) --------------------------- */
-function SidebarContexts({
-  contexts,
-  selected,
-  toggleSelect,
-  selectOnly,
-  clearSelection,
-  onAskSelected,
-  onPeek,
-  onOpen,
-}) {
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <h3 className="font-semibold text-base">Documents du contexte</h3>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-600">{selected.size} sélectionné(s)</span>
-          <button
-            onClick={onAskSelected}
-            disabled={!selected.size}
-            className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            Re-poser (focus)
-          </button>
-          {!!selected.size && (
-            <button
-              onClick={clearSelection}
-              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-            >
-              Vider
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="space-y-2 overflow-auto pr-1">
-        {!contexts?.length && (
-          <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>
-        )}
-        {contexts?.map((d) => {
-          const checked = selected.has(d.doc_id);
-          return (
-            <div key={d.doc_id} className="border rounded-lg p-2 bg-white flex items-start gap-2">
-              <input
-                type="checkbox"
-                className="mt-1 accent-blue-600"
-                checked={checked}
-                onChange={() => toggleSelect(d.doc_id)}
-                title="Ajouter/retirer du focus multiple"
-              />
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-[13px] break-words whitespace-break-spaces leading-snug">
-                  📄 {d.filename}
-                </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    onClick={() => selectOnly(d.doc_id)}
-                    className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-                  >
-                    Focus seul
-                  </button>
-                  <button
-                    onClick={() => onPeek?.({ doc_id: d.doc_id, filename: d.filename })}
-                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-                  >
-                    Aperçu
-                  </button>
-                  <button
-                    onClick={() => onOpen?.({ doc_id: d.doc_id, filename: d.filename })}
-                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-                  >
-                    Ouvrir
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------- Viewer pane ------------------------------- */
 function Viewer({ file, onClose }) {
   const [err, setErr] = useState(null);
@@ -482,60 +260,16 @@ function Viewer({ file, onClose }) {
   );
 }
 
-/* ------------------------------ Flow Modal ------------------------------ */
-function FlowModal({ open, onClose, lastDecision }) {
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-auto shadow-2xl border">
-        <div className="flex items-center justify-between p-3 border-b">
-          <div className="font-semibold">Comment ça marche (visu)</div>
-          <div className="flex items-center gap-2">
-            <a
-              href="/ask-veeva-viz.html"
-              target="_blank"
-              rel="noreferrer"
-              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-              title="Ouvrir la page de présentation (plein écran)"
-            >
-              Ouvrir en plein écran
-            </a>
-            <button onClick={onClose} className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200">Fermer</button>
-          </div>
-        </div>
-
-        <div className="p-4 space-y-4">
-          <FlowRail playing />
-          <DecisionGauges decisionTrace={lastDecision} />
-          <div className="grid sm:grid-cols-2 gap-3 text-[13px] text-gray-700">
-            <div className="p-3 rounded-lg bg-gray-50 border">
-              <div className="font-medium mb-1">🧮 Bunk (ReRank)</div>
-              <div className="text-xs text-gray-500 mt-1">
-                Re-score des candidats (Ether + Naoris) par similarité sémantique.
-              </div>
-            </div>
-            <div className="p-3 rounded-lg bg-gray-50 border">
-              <div className="font-medium mb-1">🤖 Réponse OpenAI</div>
-              <div className="text-xs text-gray-500 mt-1">
-                Synthèse stricte basée sur le contexte (citations incluses).
-              </div>
-            </div>
-          </div>
-
-          <div className="text-xs text-gray-500">
-            Astuce : Les jauges reflètent les poids utilisés dans la décision pour <em>cette</em> réponse.
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* --------------------------------- Chat Box -------------------------------- */
 function Message({ role, text, citations, onPeek, feedback, onVote, msgRef }) {
   const isUser = role === "user";
+  const [expanded, setExpanded] = useState(false);
+
+  // Condensation: on affiche un extrait court par défaut
+  const MAX_CHARS = 420; // ~3–5 lignes
+  const isLong = !isUser && String(text || "").length > MAX_CHARS;
+  const shownText = !isUser && !expanded && isLong ? `${text.slice(0, MAX_CHARS).trim()}…` : text;
+
   return (
     <div ref={msgRef} className={"flex " + (isUser ? "justify-end" : "justify-start")}>
       <div
@@ -544,11 +278,103 @@ function Message({ role, text, citations, onPeek, feedback, onVote, msgRef }) {
           isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-900 rounded-bl-sm border"
         )}
       >
-        <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
+        <div className="whitespace-pre-wrap break-words leading-relaxed">{shownText}</div>
+        {!isUser && isLong && (
+          <div className="mt-2">
+            <button
+              onClick={() => setExpanded((v) => !v)}
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            >
+              {expanded ? "Réduire" : "Afficher plus"}
+            </button>
+          </div>
+        )}
         {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
         {!isUser && onVote && (
           <FeedbackBar onVote={onVote} state={feedback?.state || "idle"} />
         )}
+      </div>
+    </div>
+  );
+}
+
+function SidebarContexts({
+  contexts,
+  selected,
+  toggleSelect,
+  selectOnly,
+  clearSelection,
+  onAskSelected,
+  onPeek,
+  onOpen,
+}) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <h3 className="font-semibold text-base">Documents du contexte</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-600">{selected.size} sélectionné(s)</span>
+          <button
+            onClick={onAskSelected}
+            disabled={!selected.size}
+            className="text-xs px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            Re-poser (focus)
+          </button>
+          {!!selected.size && (
+            <button
+              onClick={clearSelection}
+              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            >
+              Vider
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-2 overflow-auto pr-1">
+        {!contexts?.length && (
+          <div className="text-sm text-gray-500">Aucun document dans le contexte.</div>
+        )}
+        {contexts?.map((d) => {
+          const checked = selected.has(d.doc_id);
+          return (
+            <div key={d.doc_id} className="border rounded-lg p-2 bg-white flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-1 accent-blue-600"
+                checked={checked}
+                onChange={() => toggleSelect(d.doc_id)}
+                title="Ajouter/retirer du focus multiple"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-[13px] break-words whitespace-break-spaces leading-snug">
+                  📄 {d.filename}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => selectOnly(d.doc_id)}
+                    className="text-xs px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                  >
+                    Focus seul
+                  </button>
+                  <button
+                    onClick={() => onPeek?.({ doc_id: d.doc_id, filename: d.filename })}
+                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+                  >
+                    Aperçu
+                  </button>
+                  <button
+                    onClick={() => onOpen?.({ doc_id: d.doc_id, filename: d.filename })}
+                    className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+                  >
+                    Ouvrir
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -562,10 +388,6 @@ function ChatBox() {
   const [selectedDocs, setSelectedDocs] = useState(() => new Set());
   const [suggestions, setSuggestions] = useState([]);
   const [viewerFile, setViewerFile] = useState(null);
-
-  // decision trace & flow modal
-  const [lastDecision, setLastDecision] = useState(null);
-  const [showViz, setShowViz] = useState(false);
 
   // Profil courant
   const [user, setUser] = useState(null);
@@ -693,7 +515,6 @@ function ChatBox() {
 
       setContexts(resp?.contexts || []);
       setSuggestions((resp?.suggestions || []).slice(0, 8));
-      setLastDecision(resp?.decision_trace || null);
     } catch (e) {
       setMessages((m) => {
         const next = [...m, { role: "assistant", text: `Une erreur est survenue : ${e?.message || e}` }];
@@ -825,50 +646,24 @@ function ChatBox() {
     setWaitingProfile(false);
     setPendingQuestion(null);
     setFeedbackState({});
-    setLastDecision(null);
     // Revenir en haut de la zone liste
     if (listRef.current) listRef.current.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  const weights = extractDecisionWeights(lastDecision);
-
   return (
     <div className="flex flex-col h-full">
-      {/* En-tête */}
+      {/* En-tête minimaliste */}
       <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
         <div className="text-sm text-gray-900 font-medium flex items-center gap-2">
           🔎 Recherche IA
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowViz(true)}
-            className="text-xs px-3 py-1.5 rounded bg-purple-600 text-white hover:bg-purple-700"
-            title="Voir la visualisation du fonctionnement (modale)"
-          >
-            🎬 Voir la visualisation
-          </button>
-          <button
             onClick={onClearChat}
             className="text-xs px-3 py-1.5 rounded bg-red-50 text-red-700 border border-red-200 hover:bg-red-100"
           >
             🗑️ Supprimer la conversation
           </button>
-        </div>
-      </div>
-
-      {/* Bandeau décision (flow + gauges compactes) */}
-      <div className="grid lg:grid-cols-[1.2fr_1fr] gap-3 mb-3">
-        <div className="rounded-lg border bg-white p-3">
-          {/* playing = !sending : s'arrête quand la réponse est finie */}
-          <FlowRail playing={!sending} />
-        </div>
-        <div className="rounded-lg border bg-white p-3">
-          <div className="grid grid-cols-2 gap-2">
-            <Bar label="⚡ Ether" value={weights.ether} accent="indigo" icon="⚡" />
-            <Bar label="🧠 Naoris" value={weights.naoris} accent="sky" icon="🧠" />
-            <Bar label="🧮 Bunk" value={weights.bunk} accent="emerald" icon="🧮" />
-            <Bar label="🎛️ Maket" value={weights.maket} accent="amber" icon="🎛️" />
-          </div>
         </div>
       </div>
 
@@ -919,6 +714,7 @@ function ChatBox() {
             </div>
           )}
 
+          {/* Zone de saisie */}
           <div className="mt-3 flex items-end gap-2">
             <textarea
               rows={2}
@@ -942,6 +738,14 @@ function ChatBox() {
             >
               Envoyer 🚀
             </button>
+          </div>
+
+          {/* Disclaimer + copyright */}
+          <div className="mt-2 text-[11px] text-gray-500 leading-snug">
+            <div>
+              Nous sommes plusieurs IA qui collaborent pour vous assister. Des erreurs peuvent subsister&nbsp;: vérifiez toujours la pertinence et la viabilité des réponses avant décision.
+            </div>
+            <div className="mt-1 text-gray-400">© Daniel Palha</div>
           </div>
         </div>
 
@@ -967,9 +771,6 @@ function ChatBox() {
 
       {/* Viewer modal */}
       <Viewer file={viewerFile} onClose={() => setViewerFile(null)} />
-
-      {/* Flow modal */}
-      <FlowModal open={showViz} onClose={() => setShowViz(false)} lastDecision={lastDecision} />
     </div>
   );
 }
@@ -1121,15 +922,7 @@ export default function AskVeevaPage() {
     <section className="max-w-[1400px] 2xl:max-w-[1600px] mx-auto px-3 sm:px-4">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h1 className="text-2xl sm:text-3xl font-bold">Ask Veeva</h1>
-        <a
-          href="/ask-veeva-viz.html"
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs px-3 py-1.5 rounded bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-          title="Voir la page de présentation (plein écran)"
-        >
-          🎥 Page de présentation
-        </a>
+        {/* Bouton "page de présentation" supprimé */}
       </div>
 
       <div className="flex gap-2">
