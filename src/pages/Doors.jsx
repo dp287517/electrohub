@@ -1,11 +1,10 @@
 // src/pages/Doors.jsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import dayjs from "dayjs";
-/* >>> PDF.js (local via pdfjs-dist) */
+/* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
@@ -13,8 +12,10 @@ function getCookie(name) {
 }
 // NEW: identité robuste (cookies -> localStorage -> fallback depuis l'email)
 function getIdentity() {
+  // 1) cookies (prioritaires si présents)
   let email = getCookie("email") || null;
   let name = getCookie("name") || null;
+  // 2) localStorage (si cookies absents ou vides)
   try {
     if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
     if (!name) {
@@ -23,6 +24,7 @@ function getIdentity() {
         localStorage.getItem("user.name") ||
         null;
     }
+    // Parfois on stocke un JSON "user"
     if ((!email || !name) && localStorage.getItem("user")) {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
@@ -31,6 +33,7 @@ function getIdentity() {
       } catch {}
     }
   } catch {}
+  // 3) fallback: dérive un nom lisible depuis l'email si pas de name
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
     if (base) {
@@ -40,6 +43,7 @@ function getIdentity() {
         .trim();
     }
   }
+  // 4) nettoyage
   email = email ? String(email).trim() : null;
   name = name ? String(name).trim() : null;
   return { email, name };
@@ -54,9 +58,9 @@ function userHeaders() {
 function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
-
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
+  // Doors CRUD + listing + filters
   list: async (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
@@ -83,33 +87,38 @@ const API = {
     ).json(),
   remove: async (id) =>
     (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", ...withHeaders() })).json(),
-
+  // Checklist (create/close) + history
   startCheck: async (doorId) => {
     const id = getIdentity();
     return (
       await fetch(`/api/doors/doors/${doorId}/checks`, {
         method: "POST",
         ...withHeaders({ "Content-Type": "application/json" }),
+        // >>> ajoute _user pour fallback backend
         body: JSON.stringify({ _user: id }),
       })
     ).json();
   },
   saveCheck: async (doorId, checkId, payload) => {
     const id = getIdentity();
+    // Backend accepte JSON ou multipart sur la même route.
     if (payload?.files?.length) {
       const fd = new FormData();
       fd.append("items", JSON.stringify(payload.items || []));
       if (payload.close) fd.append("close", "true");
+      // >>> identité en multipart (fallback)
       if (id.email) fd.append("user_email", id.email);
       if (id.name) fd.append("user_name", id.name);
+      for (const f of payload.files) fd.append("files", f);
       const r = await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
         credentials: "include",
-        headers: userHeaders(),
+        headers: userHeaders(), // injecte X-User-Email / X-User-Name
         body: fd,
       });
       return r.json();
     }
+    // JSON: ajoute aussi _user pour fallback
     return (
       await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
@@ -120,13 +129,14 @@ const API = {
   },
   listHistory: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/history`, withHeaders())).json(),
-
+  // Attachments (door-level)
   listFiles: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/files`, withHeaders())).json(),
   uploadFile: async (doorId, file) => {
     const id = getIdentity();
     const fd = new FormData();
     fd.append("file", file);
+    // >>> identité en multipart (au cas où)
     if (id.email) fd.append("user_email", id.email);
     if (id.name) fd.append("user_name", id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/files`, {
@@ -139,11 +149,12 @@ const API = {
   },
   deleteFile: async (fileId) =>
     (await fetch(`/api/doors/files/${fileId}`, { method: "DELETE", ...withHeaders() })).json(),
-
+  // Photo vignette
   uploadPhoto: async (doorId, file) => {
     const id = getIdentity();
     const fd = new FormData();
     fd.append("photo", file);
+    // >>> identité en multipart (au cas où)
     if (id.email) fd.append("user_email", id.email);
     if (id.name) fd.append("user_name", id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/photo`, {
@@ -155,10 +166,14 @@ const API = {
     return r.json();
   },
   photoUrl: (doorId) => `/api/doors/doors/${doorId}/photo`,
+  // QR code (PNG stream)
   qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
+  // ✅ PDF d’étiquettes (cadre blanc + HALEON + nom de porte autosize)
   qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
     `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
+  // Calendar (next checks, overdue, etc.)
   calendar: async () => (await fetch(`/api/doors/calendar`, withHeaders())).json(),
+  // Settings (template & frequency)
   settingsGet: async () => (await fetch(`/api/doors/settings`, withHeaders())).json(),
   settingsSet: async (payload) =>
     (
@@ -168,9 +183,9 @@ const API = {
         body: JSON.stringify(payload),
       })
     ).json(),
+  // PDF non-conformités (pour SAP)
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
-
 /* ----------------------------- API (Doors Maps) ----------------------------- */
 const MAPS = {
   uploadZip: async (file) => {
@@ -188,8 +203,9 @@ const MAPS = {
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`,
-  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`,
+  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, // compat
+  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`, // UUID
+  // ✅ positions: accepte indifféremment un UUID ou un logical_name
   positions: async (idOrLogical, page_index = 0) => {
     const looksUuid = typeof idOrLogical === "string" && /^[0-9a-fA-F-]{36}$/.test(idOrLogical);
     const params = looksUuid
@@ -198,11 +214,13 @@ const MAPS = {
     const r = await fetch(`/api/doors/maps/positions?${new URLSearchParams(params)}`, withHeaders());
     return r.json();
   },
+  // Nouvelle méthode pour portes non positionnées
   pendingPositions: async (logical_name, page_index = 0) => {
     const params = { logical_name, page_index };
     const r = await fetch(`/api/doors/maps/pending-positions?${new URLSearchParams(params)}`, withHeaders());
     return r.json();
   },
+  // setPosition: on envoie aussi plan_id si dispo (le backend peut l’ignorer si non supporté)
   setPosition: async (doorId, payload) =>
     (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
       method: "PUT",
@@ -214,18 +232,17 @@ const MAPS = {
 function pdfDocOpts(url) {
   return {
     url,
-    withCredentials: true,
-    httpHeaders: userHeaders(),
+    withCredentials: true, // envoie les cookies (session)
+    httpHeaders: userHeaders(), // en-têtes X-User-Email / X-User-Name
   };
 }
 /* ---------- ✅ Helper d’URL PDF (ID prioritaire, fallback logical) ---------- */
 function planFileUrlSafe(plan) {
   const looksLikeUuid = typeof plan?.id === "string" && /^[0-9a-fA-F-]{36}$/.test(plan.id);
   return looksLikeUuid
-    ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`
-    : `/api/doors/maps/plan/${encodeURIComponent(plan?.logical_name || "")}/file`;
+    ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file` // UUID route
+    : `/api/doors/maps/plan/${encodeURIComponent(plan?.logical_name || "")}/file`; // fallback logical
 }
-
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -327,555 +344,17 @@ function doorStateBadge(state) {
   if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
   return <Badge>—</Badge>;
 }
-
-/**
- * PlanViewer — rendu pdf.js sérialisé, gestes fluides, overlay non-bloquant, HiDPI rerender
- */
-function PlanViewer({
-  fileUrl,
-  pageIndex = 0,
-  points = [],
-  onReady,
-  onMovePoint,
-  onClickPoint,
-  placingDoorId,
-  onPlaceAt,
-}) {
-  const wrapRef = useRef(null);
-  const canvasRef = useRef(null);
-  const overlayRef = useRef(null);
-  const layerRef = useRef(null);
-
-  const [loaded, setLoaded] = useState(false);
-  const [err, setErr] = useState("");
-  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
-  const [containerWidth, setContainerWidth] = useState(0);
-  const [viewerH, setViewerH] = useState(520);
-
-  // état piloté via refs (rAF)
-  const scaleRef = useRef(1);
-  const panRef = useRef({ x: 0, y: 0 });
-
-  // qualité pdf courante
-  const qualityForScaleRef = useRef(1);
-  const rerenderTimerRef = useRef(null);
-
-  // rAF transform
-  const rafRef = useRef(null);
-  const needsFrame = useRef(false);
-  const scheduleFrame = () => {
-    if (needsFrame.current) return;
-    needsFrame.current = true;
-    rafRef.current = requestAnimationFrame(() => {
-      needsFrame.current = false;
-      if (!layerRef.current) return;
-      const { x, y } = panRef.current;
-      const s = scaleRef.current;
-      layerRef.current.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
-    });
-  };
-
-  // --- pdf.js render guards ---
-  const pdfDocRef = useRef(null);     // PDFDocumentProxy
-  const pdfUrlRef = useRef(null);     // pour détecter changement d'URL
-  const renderTaskRef = useRef(null); // PageRenderTask
-  const renderSeqRef = useRef(0);     // numéro de séquence des renders
-
-  // limites
-  const DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-  const MAX_ZOOM = 3;
-  const MAX_QUALITY_SCALE = 3 * DPR;
-
-  const clampPan = (pan) => {
-    const cw = wrapRef.current?.clientWidth || containerWidth || 0;
-    const ch = wrapRef.current?.clientHeight || viewerH || 0;
-    const contentW = (pageSize.w || 0) * scaleRef.current;
-    const contentH = (pageSize.h || 0) * scaleRef.current;
-    if (cw === 0 || ch === 0 || contentW === 0 || contentH === 0) return pan;
-    const margin = 20;
-    const minX = Math.min(margin, cw - contentW - margin);
-    const maxX = Math.max(-margin, margin);
-    const minY = Math.min(margin, ch - contentH - margin);
-    const maxY = Math.max(-margin, margin);
-    return {
-      x: Math.max(minX, Math.min(maxX, pan.x)),
-      y: Math.max(minY, Math.min(maxY, pan.y)),
-    };
-  };
-
-  // taille wrapper & hauteur responsive
+/* ----------------------------- Toast ----------------------------- */
+function Toast({ text, onClose }) {
   useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    wrap.style.touchAction = "none"; // bloque les gestes natifs (évite les "crans")
-    const onResize = () => {
-      setContainerWidth(wrap.offsetWidth || 0);
-      const dvh = Math.max(window.innerHeight || 700, 700) * 0.85;
-      setViewerH(Math.max(320, Math.floor(dvh)));
-    };
-    onResize();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  // rendu PDF (sérialisé + annulable)
-  const renderPdfAtQuality = useCallback(async (requestedScaleForQuality = 1) => {
-    const seq = ++renderSeqRef.current;
-    console.log("[PLANVIEWER][renderPdfAtQuality] start", { requestedScaleForQuality, seq, fileUrl });
-
-    // annule un render en cours (sinon erreur "same canvas")
-    if (renderTaskRef.current) {
-      try {
-        renderTaskRef.current.cancel();
-        await renderTaskRef.current.promise.catch(() => {});
-      } catch {}
-      renderTaskRef.current = null;
-    }
-
-    // charge ou recharge le doc si nécessaire
-    if (!pdfDocRef.current || pdfUrlRef.current !== fileUrl) {
-      if (pdfDocRef.current) {
-        try { await pdfDocRef.current.destroy(); } catch {}
-        pdfDocRef.current = null;
-      }
-      const loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
-      pdfDocRef.current = await loadingTask.promise;
-      pdfUrlRef.current = fileUrl;
-      console.log("[PLANVIEWER] pdf loaded", { numPages: pdfDocRef.current.numPages, url: pdfUrlRef.current });
-    }
-
-    const page = await pdfDocRef.current.getPage(Number(pageIndex) + 1);
-
-    // viewport logique (fit-to-width)
-    const native = page.getViewport({ scale: 1 });
-    const fitWidth = containerWidth > 0 ? containerWidth : native.width;
-    const scaleFactor = fitWidth / native.width;
-
-    // HiDPI pour bitmap
-    const qualityScale = Math.min(MAX_QUALITY_SCALE, Math.max(1, requestedScaleForQuality * DPR));
-    const viewportHiDPI = page.getViewport({ scale: scaleFactor * qualityScale });
-
-    const canvas = canvasRef.current;
-    if (!canvas) throw new Error("canvas manquant");
-
-    const logicalW = Math.floor(native.width * scaleFactor);
-    const logicalH = Math.floor(native.height * scaleFactor);
-
-    canvas.width = Math.floor(viewportHiDPI.width);
-    canvas.height = Math.floor(viewportHiDPI.height);
-    canvas.style.width = `${logicalW}px`;
-    canvas.style.height = `${logicalH}px`;
-
-    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
-
-    const task = page.render({ canvasContext: ctx, viewport: viewportHiDPI });
-    renderTaskRef.current = task;
-
-    await task.promise.finally(() => {
-      if (renderTaskRef.current === task) renderTaskRef.current = null;
-    });
-
-    if (seq !== renderSeqRef.current) {
-      console.log("[PLANVIEWER] render ignored (stale seq)", { seq, current: renderSeqRef.current });
-      return;
-    }
-
-    setPageSize({ w: logicalW, h: logicalH });
-    qualityForScaleRef.current = Math.max(1, requestedScaleForQuality);
-    setLoaded(true);
-    console.log("[PLANVIEWER][renderPdfAtQuality] done", { logicalW, logicalH, quality: qualityForScaleRef.current, seq });
-  }, [fileUrl, pageIndex, containerWidth]);
-
-  // rendu initial
-  useEffect(() => {
-    console.log("[PLANVIEWER] initial render…", { fileUrl, pageIndex, containerWidth });
-    let cancelled = false;
-    (async () => {
-      try {
-        setErr("");
-        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-          pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-        }
-        await renderPdfAtQuality(1);
-        if (cancelled) return;
-        scaleRef.current = 1;
-        panRef.current = { x: 0, y: 0 };
-        scheduleFrame();
-        onReady?.();
-      } catch (e) {
-        if (!cancelled) {
-          console.error("[PLANVIEWER] initial render FAIL:", e);
-          setErr(`Erreur de rendu du plan : ${e.message}`);
-          setLoaded(false);
-          onReady?.();
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (renderTaskRef.current) {
-        try { renderTaskRef.current.cancel(); } catch {}
-      }
-    };
-  }, [fileUrl, pageIndex, containerWidth, onReady, renderPdfAtQuality]);
-
-  // (re)rendu HiDPI après zoom (debounce)
-  const requestHiDpiRerender = useCallback(() => {
-    if (!loaded) return;
-    if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
-    rerenderTimerRef.current = setTimeout(async () => {
-      rerenderTimerRef.current = null;
-      const need = Math.min(MAX_ZOOM, Math.max(1, scaleRef.current));
-      if (need > qualityForScaleRef.current * 0.92) {
-        try {
-          await renderPdfAtQuality(need);
-          scheduleFrame();
-        } catch (e) {
-          console.warn("[PLANVIEWER] HiDPI rerender failed:", e);
-        }
-      }
-    }, 160);
-  }, [loaded, renderPdfAtQuality]);
-
-  // WHEEL zoom (desktop)
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-    const onWheel = (e) => {
-      if (!loaded) return;
-      console.log("[PLANVIEWER] wheel", { ctrl: e.ctrlKey || e.metaKey, deltaY: e.deltaY });
-      const isZoom = e.ctrlKey || e.metaKey;
-      if (!isZoom && Math.abs(e.deltaY) < 40) return;
-      e.preventDefault();
-      const rect = wrap.getBoundingClientRect();
-      const cx = e.clientX - rect.left - panRef.current.x;
-      const cy = e.clientY - rect.top - panRef.current.y;
-      const prev = scaleRef.current;
-      const next = Math.max(0.5, Math.min(MAX_ZOOM, prev * (e.deltaY > 0 ? 0.9 : 1.1)));
-      const nx = cx - (cx * next) / prev;
-      const ny = cy - (cy * next) / prev;
-      scaleRef.current = next;
-      panRef.current = clampPan({ x: panRef.current.x + nx, y: panRef.current.y + ny });
-      scheduleFrame();
-      requestHiDpiRerender();
-    };
-    wrap.addEventListener("wheel", onWheel, { passive: false });
-    return () => wrap.removeEventListener("wheel", onWheel);
-  }, [loaded, requestHiDpiRerender]);
-
-  // Gestes pointer: pan + pinch + double-tap + inertie
-  useEffect(() => {
-    console.log("[PLANVIEWER] pointer handlers mounted");
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-
-    const pointers = new Map();
-    let singlePanBase = null;
-    let pinchBase = null;
-
-    let velocity = { x: 0, y: 0 };
-    let lastMoveT = 0, lastMoveX = 0, lastMoveY = 0;
-    let inertiaId = null;
-
-    const stopInertia = () => { if (inertiaId) cancelAnimationFrame(inertiaId); inertiaId = null; };
-    const startInertia = () => {
-      stopInertia();
-      const FRICTION = 0.92;
-      const MIN_SPEED = 0.15;
-      const step = () => {
-        velocity.x *= FRICTION;
-        velocity.y *= FRICTION;
-        if (Math.hypot(velocity.x, velocity.y) < MIN_SPEED) { inertiaId = null; return; }
-        panRef.current = clampPan({ x: panRef.current.x + velocity.x, y: panRef.current.y + velocity.y });
-        scheduleFrame();
-        inertiaId = requestAnimationFrame(step);
-      };
-      inertiaId = requestAnimationFrame(step);
-    };
-
-    let lastTapTime = 0;
-    let lastTapPos = { x: 0, y: 0 };
-
-    const onPointerDown = (e) => {
-      wrap.setPointerCapture(e.pointerId);
-      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      stopInertia();
-
-      if (e.pointerType === "touch" && pointers.size === 1) {
-        const now = performance.now();
-        const dt = now - lastTapTime;
-        const dist = Math.hypot(e.clientX - lastTapPos.x, e.clientY - lastTapPos.y);
-        if (dt < 300 && dist < 24) {
-          const rect = wrap.getBoundingClientRect();
-          const cx = e.clientX - rect.left - panRef.current.x;
-          const cy = e.clientY - rect.top - panRef.current.y;
-          const prev = scaleRef.current;
-          const next = prev < 1.2 ? 1.8 : 1;
-          const nx = cx - (cx * next) / prev;
-          const ny = cy - (cy * next) / prev;
-          scaleRef.current = next;
-          panRef.current = clampPan({ x: panRef.current.x + nx, y: panRef.current.y + ny });
-          scheduleFrame();
-          requestHiDpiRerender();
-          lastTapTime = 0;
-          return;
-        }
-        lastTapTime = now;
-        lastTapPos = { x: e.clientX, y: e.clientY };
-      }
-    };
-
-    const onPointerMove = (e) => {
-      if (!pointers.has(e.pointerId)) return;
-      const prevP = pointers.get(e.pointerId);
-      const curP = { x: e.clientX, y: e.clientY };
-      pointers.set(e.pointerId, curP);
-
-      const now = performance.now();
-
-      if (pointers.size === 1) {
-        const p = Array.from(pointers.values())[0];
-        if (!singlePanBase) {
-          singlePanBase = {
-            startX: p.x, startY: p.y,
-            baseX: panRef.current.x, baseY: panRef.current.y
-          };
-          lastMoveT = now; lastMoveX = p.x; lastMoveY = p.y;
-          return;
-        }
-        const dx = p.x - singlePanBase.startX;
-        const dy = p.y - singlePanBase.startY;
-        panRef.current = clampPan({ x: singlePanBase.baseX + dx, y: singlePanBase.baseY + dy });
-        scheduleFrame();
-        const dt = Math.max(1, now - lastMoveT);
-        velocity = { x: (p.x - lastMoveX) / (dt / (1000 / 60)), y: (p.y - lastMoveY) / (dt / (1000 / 60)) };
-        lastMoveT = now; lastMoveX = p.x; lastMoveY = p.y;
-      } else if (pointers.size === 2) {
-        const [p1, p2] = Array.from(pointers.values());
-        const cx = (p1.x + p2.x) / 2;
-        const cy = (p1.y + p2.y) / 2;
-        const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-        if (!pinchBase) {
-          pinchBase = { dist, scale: scaleRef.current, panX: panRef.current.x, panY: panRef.current.y, cx, cy };
-          return;
-        }
-        const factor = Math.max(0.5, Math.min(MAX_ZOOM, (pinchBase.scale * dist) / pinchBase.dist));
-        const rect = wrap.getBoundingClientRect();
-        const localX = pinchBase.cx - rect.left - pinchBase.panX;
-        const localY = pinchBase.cy - rect.top - pinchBase.panY;
-        const nx = localX - (localX * factor) / pinchBase.scale;
-        const ny = localY - (localY * factor) / pinchBase.scale;
-        scaleRef.current = factor;
-        panRef.current = clampPan({ x: pinchBase.panX + nx, y: pinchBase.panY + ny });
-        scheduleFrame();
-      }
-    };
-
-    const onPointerUp = (e) => {
-      if (pointers.has(e.pointerId)) {
-        wrap.releasePointerCapture(e.pointerId);
-        pointers.delete(e.pointerId);
-      }
-      if (pointers.size < 2) pinchBase = null;
-
-      if (pointers.size === 1) {
-        const p = Array.from(pointers.values())[0];
-        singlePanBase = { startX: p.x, startY: p.y, baseX: panRef.current.x, baseY: panRef.current.y };
-      } else {
-        if (Math.hypot(velocity.x, velocity.y) > 0.5) startInertia();
-        singlePanBase = null;
-        requestHiDpiRerender();
-      }
-    };
-
-    wrap.addEventListener("pointerdown", onPointerDown);
-    wrap.addEventListener("pointermove", onPointerMove);
-    wrap.addEventListener("pointerup", onPointerUp);
-    wrap.addEventListener("pointercancel", onPointerUp);
-    return () => {
-      wrap.removeEventListener("pointerdown", onPointerDown);
-      wrap.removeEventListener("pointermove", onPointerMove);
-      wrap.removeEventListener("pointerup", onPointerUp);
-      wrap.removeEventListener("pointercancel", onPointerUp);
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
-    };
-  }, [requestHiDpiRerender]);
-
-  // click/touch pour placer (actif seulement en mode placement)
-  useEffect(() => {
-    const el = overlayRef.current;
-    if (!el) return;
-    const handlePointerDown = (e) => {
-      if (!placingDoorId) return;
-      if (e.target.dataset?.marker === "1") return;
-      e.stopPropagation();
-      const xy = relativeXY(e);
-      console.log("[PLANVIEWER] place at", xy);
-      onPlaceAt?.(xy);
-    };
-    el.addEventListener("pointerdown", handlePointerDown);
-    return () => el.removeEventListener("pointerdown", handlePointerDown);
-  }, [placingDoorId, onPlaceAt]);
-
-  // drag marker
-  const dragInfo = useRef(null);
-  function onMouseDownPoint(e, p) {
-    e.stopPropagation();
-    if (!overlayRef.current) return;
-    dragInfo.current = {
-      id: p.door_id,
-      startX: e.clientX,
-      startY: e.clientY,
-      baseXFrac: Number(p.x_frac ?? p.x ?? 0),
-      baseYFrac: Number(p.y_frac ?? p.y ?? 0),
-      pageW: pageSize.w || 1,
-      pageH: pageSize.h || 1,
-      scale: scaleRef.current,
-    };
-    window.addEventListener("mousemove", onMoveMarker);
-    window.addEventListener("mouseup", onUpMarker);
-  }
-  function onMoveMarker(e) {
-    const info = dragInfo.current;
-    if (!info) return;
-    const dx = (e.clientX - info.startX) / (info.pageW * info.scale);
-    const dy = (e.clientY - info.startY) / (info.pageH * info.scale);
-    const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
-    const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
-    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (el) {
-      el.style.left = `${x * 100}%`;
-      el.style.top = `${y * 100}%`;
-      el.style.transform = `translate(-50%, -50%)`;
-    }
-  }
-  function onUpMarker() {
-    const info = dragInfo.current;
-    window.removeEventListener("mousemove", onMoveMarker);
-    window.removeEventListener("mouseup", onUpMarker);
-    if (!info) return;
-    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (!el) { dragInfo.current = null; return; }
-    const x = (parseFloat(el.style.left || "0") || 0) / 100;
-    const y = (parseFloat(el.style.top || "0") || 0) / 100;
-    try { onMovePoint?.(info.id, { x, y }); } catch {}
-    dragInfo.current = null;
-  }
-
-  function markerClass(s) {
-    if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
-    if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
-    if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
-    return "bg-blue-600 ring-1 ring-blue-300";
-  }
-
-  function relativeXY(evt) {
-    const wrap = wrapRef.current;
-    if (!wrap) return { x: 0, y: 0 };
-    const rect = wrap.getBoundingClientRect();
-    const localX = evt.clientX - rect.left - panRef.current.x;
-    const localY = evt.clientY - rect.top - panRef.current.y;
-    const w = pageSize.w || wrap.clientWidth || 1;
-    const h = pageSize.h || wrap.clientHeight || 1;
-    const x = Math.min(1, Math.max(0, localX / (w * scaleRef.current)));
-    const y = Math.min(1, Math.max(0, localY / (h * scaleRef.current)));
-    return { x, y };
-  }
-
-  useEffect(() => {
-    console.log("[PLANVIEWER] points update", points);
-  }, [points]);
-
-  const finalHeight = Math.min(viewerH, pageSize.h || viewerH);
-
+    const t = setTimeout(() => onClose && onClose(), 4000);
+    return () => clearTimeout(t);
+  }, [onClose]);
+  if (!text) return null;
   return (
-    <div className="mt-3">
-      <div
-        ref={wrapRef}
-        className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
-        style={{ height: finalHeight }}
-      >
-        <div
-          ref={layerRef}
-          className="relative inline-block will-change-transform"
-          style={{
-            transformOrigin: "0 0",
-            width: pageSize.w || "100%",
-            height: pageSize.h || finalHeight,
-          }}
-        >
-          <canvas
-            ref={canvasRef}
-            style={{
-              width: pageSize.w || "100%",
-              height: pageSize.h || finalHeight,
-              display: loaded ? "block" : "none",
-            }}
-          />
-          {!loaded && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
-              Rendu en cours…
-            </div>
-          )}
-          <div
-            ref={overlayRef}
-            className="absolute inset-0 z-10"
-            style={{
-              width: pageSize.w || "100%",
-              height: pageSize.h || finalHeight,
-              // 🔑 laisse passer les gestes vers le wrap, sauf en mode placement
-              pointerEvents: placingDoorId ? "auto" : "none",
-            }}
-          >
-            {points.map((p) => {
-              const x = Number(p.x_frac ?? p.x ?? 0);
-              const y = Number(p.y_frac ?? p.y ?? 0);
-              if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return null;
-              return (
-                <div
-                  key={p.door_id}
-                  data-id={p.door_id}
-                  className="absolute"
-                  style={{
-                    left: `${x * 100}%`,
-                    top: `${y * 100}%`,
-                    transform: "translate(-50%, -50%)",
-                    // le conteneur ne bloque pas les gestes
-                    pointerEvents: "none",
-                  }}
-                >
-                  <button
-                    title={p.name || p.door_name || p.door_id}
-                    data-marker="1"
-                    onMouseDown={(e) => onMouseDownPoint(e, p)}
-                    onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
-                    className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                    // mais le bouton, oui
-                    style={{ pointerEvents: "auto" }}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        {!loaded && pageSize.w === 0 && (
-          <div className="p-3 text-sm text-gray-600">
-            {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
-          </div>
-        )}
-      </div>
-
-      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
-        </span>
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
+      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
+        {text}
       </div>
     </div>
   );
@@ -893,10 +372,9 @@ function MonthCalendar({ events = [], onDayClick }) {
     }
     return map;
   }, [events]);
-
   const startOfMonth = month.startOf("month").toDate();
   const endOfMonth = month.endOf("month").toDate();
-  const startDow = (startOfMonth.getDay() + 6) % 7; // lundi = 0
+  const startDow = (startOfMonth.getDay() + 6) % 7; // lundi=0
   const gridStart = new Date(startOfMonth);
   gridStart.setDate(gridStart.getDate() - startDow);
   const days = [];
@@ -906,7 +384,6 @@ function MonthCalendar({ events = [], onDayClick }) {
     const iso = dayjs(d).format("YYYY-MM-DD");
     days.push({ d, iso, inMonth: d >= startOfMonth && d <= endOfMonth });
   }
-
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -919,7 +396,9 @@ function MonthCalendar({ events = [], onDayClick }) {
       </div>
       <div className="grid grid-cols-7 text-xs font-medium text-gray-500">
         {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
-          <div key={l} className="px-2 py-2">{l}</div>
+          <div key={l} className="px-2 py-2">
+            {l}
+          </div>
         ))}
       </div>
       <div className="grid grid-cols-7 border rounded-2xl overflow-hidden">
@@ -969,7 +448,6 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-
 /* ----------------------------- MAPS components ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
@@ -977,7 +455,11 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
       <div className="font-semibold">Plans PDF</div>
       <div className="flex items-center gap-2">
-        <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={mapsLoading}>
+        <Btn
+          variant="ghost"
+          onClick={() => inputRef.current?.click()}
+          disabled={mapsLoading}
+        >
           📦 Import ZIP de plans
         </Btn>
         <input
@@ -987,10 +469,7 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
-            if (f) {
-              console.log("[PlansHeader] Upload ZIP…", f);
-              onUploadZip(f);
-            }
+            if (f) onUploadZip(f);
             e.target.value = "";
           }}
         />
@@ -998,18 +477,16 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     </div>
   );
 }
-
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
       {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
       {plans.map((p) => (
-        <PlanCard key={p.id || p.logical_name} plan={p} onRename={onRename} onPick={onPick} />
+        <PlanCard key={p.id} plan={p} onRename={onRename} onPick={onPick} />
       ))}
     </div>
   );
 }
-
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -1017,15 +494,14 @@ function PlanCard({ plan, onRename, onPick }) {
   const overdue = Number(plan?.overdue || 0);
   const canvasRef = useRef(null);
   const [thumbErr, setThumbErr] = useState("");
-
-  // Miniature page 1 via pdf.js
+  // Miniature page 1 via pdf.js (local, plus de CDN)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setThumbErr("");
         const url = planFileUrlSafe(plan);
-        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
+        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(url)); // ✅
         const pdf = await loadingTask.promise;
         const page = await pdf.getPage(1);
         const viewport = page.getViewport({ scale: 0.25 });
@@ -1035,17 +511,12 @@ function PlanCard({ plan, onRename, onPick }) {
         c.height = Math.floor(viewport.height);
         const ctx = c.getContext("2d");
         await page.render({ canvasContext: ctx, viewport }).promise;
-        console.log("[PlanCard] thumb rendered", { logical: plan.logical_name, id: plan.id });
       } catch (e) {
-        if (!cancelled) {
-          console.warn("[PlanCard] thumb error:", e);
-          setThumbErr("Aperçu indisponible.");
-        }
+        if (!cancelled) setThumbErr("Aperçu indisponible.");
       }
     })();
     return () => { cancelled = true; };
-  }, [plan.id, plan.logical_name]);
-
+  }, [plan.id]);
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div className="aspect-video bg-gray-50 flex items-center justify-center">
@@ -1058,15 +529,10 @@ function PlanCard({ plan, onRename, onPick }) {
             <div className="font-medium truncate" title={name}>{name || "—"}</div>
             <div className="flex items-center gap-1">
               <Btn variant="ghost" onClick={() => setEdit(true)}>✏️</Btn>
-              <Btn
-                variant="subtle"
-                onClick={() => {
-                  console.log("[PlansHeader] Picking plan:", plan);
-                  onPick(plan);
-                }}
-              >
-                Ouvrir
-              </Btn>
+              <Btn variant="subtle" onClick={() => {
+                console.log("[DEBUG] Picking plan:", plan);
+                onPick(plan);
+              }}>Ouvrir</Btn>
             </div>
           </div>
         ) : (
@@ -1081,13 +547,7 @@ function PlanCard({ plan, onRename, onPick }) {
             >
               OK
             </Btn>
-            <Btn
-              variant="ghost"
-              onClick={() => {
-                setName(plan.display_name || plan.logical_name || "");
-                setEdit(false);
-              }}
-            >
+            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>
               Annuler
             </Btn>
           </div>
@@ -1100,48 +560,433 @@ function PlanCard({ plan, onRename, onPick }) {
     </div>
   );
 }
+/**
+ * PlanViewer
+ * - Zoom: molette/trackpad (wheel), pinch sur tactile
+ * - Pan: drag (souris) / pan tactile
+ * - Déplacement d’un marqueur: mousedown + drag
+ * - Placement d’une porte en attente: prop placingDoorId + onPlaceAt(xy), clic/touch pour déposer
+ */
+function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, placingDoorId, onPlaceAt }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const overlayRef = useRef(null);
+  const [loaded, setLoaded] = useState(false);
+  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+  const [isMounted, setIsMounted] = useState(false);
+  const [err, setErr] = useState("");
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
 
-/* ----------------------------- Toast ----------------------------- */
-function Toast({ text, onClose }) {
+  // Prevent browser pinch-zoom on mobile
   useEffect(() => {
-    const t = setTimeout(() => onClose && onClose(), 4000);
-    return () => clearTimeout(t);
-  }, [onClose]);
-  if (!text) return null;
+    const el = wrapRef.current;
+    if (!el) return;
+    const preventBrowserZoom = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
+    el.addEventListener("touchstart", preventBrowserZoom, { passive: false });
+    el.addEventListener("touchmove", preventBrowserZoom, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", preventBrowserZoom);
+      el.removeEventListener("touchmove", preventBrowserZoom);
+    };
+  }, []);
+
+  // Vérifier canvas et conteneur
+  useEffect(() => {
+    setIsMounted(!!canvasRef.current);
+    if (wrapRef.current) {
+      const updateWidth = () => setContainerWidth(wrapRef.current.offsetWidth);
+      updateWidth();
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+  }, []);
+
+  // pdf.js render (fit-to-width, no 0.5 cap)
+  useEffect(() => {
+    let cancelled = false;
+    const renderPdf = async () => {
+      if (!isMounted || !canvasRef.current) {
+        setErr("Canvas non disponible. Essayez de recharger le plan.");
+        setLoaded(false);
+        onReady?.();
+        return;
+      }
+      try {
+        setErr("");
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+        }
+        const loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
+        const pdf = await loadingTask.promise;
+        if (cancelled) return;
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+
+        const viewport = page.getViewport({ scale: 1 });
+        const fitWidth = containerWidth > 0 ? containerWidth : viewport.width;
+        const scaleFactor = fitWidth / viewport.width;
+        const adjustedViewport = page.getViewport({ scale: scaleFactor });
+
+        const canvas = canvasRef.current;
+        if (!canvas || cancelled) {
+          setErr("Canvas non disponible ou rendu annulé.");
+          setLoaded(false);
+          onReady?.();
+          return;
+        }
+        const ctx = canvas.getContext("2d");
+        canvas.width = Math.floor(adjustedViewport.width);
+        canvas.height = Math.floor(adjustedViewport.height);
+        setPageSize({ w: canvas.width, h: canvas.height });
+
+        await page.render({ canvasContext: ctx, viewport: adjustedViewport }).promise;
+
+        if (!cancelled) {
+          setLoaded(true);
+          setScale(1);
+          setPan({ x: 0, y: 0 });
+          onReady?.();
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setErr(`Erreur de rendu du plan : ${e.message}`);
+          setLoaded(false);
+          onReady?.();
+        }
+      }
+    };
+
+    let attempts = 0;
+    const maxAttempts = 20;
+    const interval = setInterval(() => {
+      if (cancelled) { clearInterval(interval); return; }
+      if (canvasRef.current && isMounted) {
+        clearInterval(interval);
+        renderPdf();
+      } else if (++attempts >= maxAttempts) {
+        setErr("Échec du rendu : canvas non disponible après plusieurs tentatives.");
+        setLoaded(false);
+        onReady?.();
+        clearInterval(interval);
+      }
+    }, 100);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
+
+  // Wheel zoom
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    function onWheel(e) {
+      if (!loaded) return;
+      const delta = e.deltaY;
+      const isZoom = e.ctrlKey || e.metaKey;
+      if (!isZoom && Math.abs(delta) < 40) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left - pan.x;
+      const cy = e.clientY - rect.top - pan.y;
+      const prev = scale;
+      const next = Math.max(0.5, Math.min(3, prev * (delta > 0 ? 0.9 : 1.1)));
+      const nx = cx - (cx * next) / prev;
+      const ny = cy - (cy * next) / prev;
+      setScale(next);
+      setPan((p) => ({ x: p.x + nx, y: p.y + ny }));
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [loaded, scale, pan.x, pan.y]);
+
+  // Pan à la souris (drag fond)
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    let dragging = false;
+    let sx = 0, sy = 0;
+    let baseX = 0, baseY = 0;
+    function down(e) {
+      if ((e.target instanceof HTMLElement) && e.target.dataset?.marker === "1") return;
+      dragging = true;
+      sx = e.clientX; sy = e.clientY;
+      baseX = pan.x; baseY = pan.y;
+      el.style.cursor = "grabbing";
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    }
+    function move(e) {
+      if (!dragging) return;
+      setPan({ x: baseX + (e.clientX - sx), y: baseY + (e.clientY - sy) });
+    }
+    function up() {
+      dragging = false;
+      el.style.cursor = "default";
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    }
+    el.addEventListener("mousedown", down);
+    return () => { el.removeEventListener("mousedown", down); };
+  }, [pan.x, pan.y]);
+
+  // Gestes tactiles: pinch + pan
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    let pointers = new Map();
+    let singlePanBase = null;
+    let pinchBase = null;
+    function onPointerDown(e) {
+      pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+      el.setPointerCapture(e.pointerId);
+      singlePanBase = null; pinchBase = null;
+    }
+    function onPointerMove(e) {
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+      if (pointers.size === 1) {
+        const p = Array.from(pointers.values())[0];
+        if (!singlePanBase) {
+          singlePanBase = { startX: p.clientX, startY: p.clientY, basePanX: pan.x, basePanY: pan.y };
+          return;
+        }
+        const dx = p.clientX - singlePanBase.startX;
+        const dy = p.clientY - singlePanBase.startY;
+        setPan({ x: singlePanBase.basePanX + dx, y: singlePanBase.basePanY + dy });
+      } else if (pointers.size === 2) {
+        const [p1, p2] = Array.from(pointers.values());
+        const dist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+        if (!pinchBase) {
+          pinchBase = { dist, scale, panX: pan.x, panY: pan.y, cx: (p1.clientX + p2.clientX) / 2, cy: (p1.clientY + p2.clientY) / 2 };
+          return;
+        }
+        const factor = Math.max(0.5, Math.min(3, pinchBase.scale * (dist / pinchBase.dist)));
+        const rect = el.getBoundingClientRect();
+        const cx = pinchBase.cx - rect.left - pinchBase.panX;
+        const cy = pinchBase.cy - rect.top - pinchBase.panY;
+        const nx = cx - (cx * factor) / pinchBase.scale;
+        const ny = cy - (cy * factor) / pinchBase.scale;
+        setScale(factor);
+        setPan({ x: pinchBase.panX + nx, y: pinchBase.panY + ny });
+      }
+    }
+    function onPointerUp(e) {
+      pointers.delete(e.pointerId);
+      el.releasePointerCapture(e.pointerId);
+      if (pointers.size < 2) pinchBase = null;
+      if (pointers.size === 1) {
+        const p = Array.from(pointers.values())[0];
+        singlePanBase = { startX: p.clientX, startY: p.clientY, basePanX: pan.x, basePanY: pan.y };
+      } else {
+        singlePanBase = null;
+      }
+    }
+    el.addEventListener("pointerdown", onPointerDown);
+    el.addEventListener("pointermove", onPointerMove);
+    el.addEventListener("pointerup", onPointerUp);
+    el.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      el.removeEventListener("pointerdown", onPointerDown);
+      el.removeEventListener("pointermove", onPointerMove);
+      el.removeEventListener("pointerup", onPointerUp);
+      el.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [pan, scale]);
+
+  // Clic/touch pour placer une porte
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el) return;
+    const handlePointerDown = (e) => {
+      if (e.target.dataset?.marker === "1") return;
+      if (placingDoorId) {
+        e.stopPropagation();
+        const xy = relativeXY(e);
+        onPlaceAt?.(xy);
+      }
+    };
+    el.addEventListener("pointerdown", handlePointerDown);
+    return () => el.removeEventListener("pointerdown", handlePointerDown);
+  }, [placingDoorId, onPlaceAt]);
+
+  // Drag marker
+  const dragInfo = useRef(null);
+  function onMouseDownPoint(e, p) {
+    e.stopPropagation();
+    if (!overlayRef.current) return;
+    dragInfo.current = {
+      id: p.door_id,
+      startX: e.clientX,
+      startY: e.clientY,
+      baseXFrac: Number(p.x_frac ?? p.x ?? 0),
+      baseYFrac: Number(p.y_frac ?? p.y ?? 0),
+      pageW: pageSize.w || 1,
+      pageH: pageSize.h || 1,
+      scale,
+    };
+    window.addEventListener("mousemove", onMoveMarker);
+    window.addEventListener("mouseup", onUpMarker);
+  }
+
+  function onMoveMarker(e) {
+    const info = dragInfo.current;
+    if (!info) return;
+    const dxPx = e.clientX - info.startX;
+    const dyPx = e.clientY - info.startY;
+    const dx = dxPx / (info.pageW * info.scale);
+    const dy = dyPx / (info.pageH * info.scale);
+    const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
+    const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
+    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (el) {
+      // Positionner en % du parent
+      el.style.left = `${x * 100}%`;
+      el.style.top = `${y * 100}%`;
+      el.style.transform = `translate(-50%, -50%)`;
+    }
+  }
+
+  function onUpMarker() {
+    const info = dragInfo.current;
+    window.removeEventListener("mousemove", onMoveMarker);
+    window.removeEventListener("mouseup", onUpMarker);
+    if (!info) return;
+    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (!el) { dragInfo.current = null; return; }
+    // Lire les pourcentages left/top
+    const leftPct = parseFloat(el.style.left || "0");
+    const topPct  = parseFloat(el.style.top || "0");
+    const x = isFinite(leftPct) ? leftPct / 100 : 0;
+    const y = isFinite(topPct)  ? topPct  / 100 : 0;
+    try { onMovePoint?.(info.id, { x, y }); } catch {}
+    dragInfo.current = null;
+  }
+
+  function markerClass(s) {
+    if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
+    if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
+    if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
+    return "bg-blue-600 ring-1 ring-blue-300";
+  }
+
+  // Coordonnées relatives click/touch
+  function relativeXY(evt) {
+    const wrap = wrapRef.current;
+    if (!wrap) return { x: 0, y: 0 };
+    const wrect = wrap.getBoundingClientRect();
+    const localX = evt.clientX - wrect.left - pan.x;
+    const localY = evt.clientY - wrect.top - pan.y;
+    const w = pageSize.w || wrap.clientWidth || 1;
+    const h = pageSize.h || wrap.clientHeight || 1;
+    const x = Math.min(1, Math.max(0, localX / (w * scale)));
+    const y = Math.min(1, Math.max(0, localY / (h * scale)));
+    return { x, y };
+  }
+
+  // Log points
+  useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
+
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
-      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
-        {text}
+    <div className="mt-3">
+      <div
+        ref={wrapRef}
+        className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
+        style={{ height: 520 }}
+      >
+        <div
+          className="relative inline-block will-change-transform mx-auto"
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            transformOrigin: "0 0",
+            width: pageSize.w || "100%",
+            height: pageSize.h || 520,
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, display: loaded ? "block" : "none" }}
+          />
+          {!loaded && (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+              Rendu en cours…
+            </div>
+          )}
+          <div
+            ref={overlayRef}
+            className="absolute inset-0 z-10"
+            style={{
+              width: pageSize.w || "100%",
+              height: pageSize.h || 520,
+              touchAction: placingDoorId ? "none" : "auto",
+            }}
+          >
+            {points.map((p) => {
+              const x = Number(p.x_frac ?? p.x ?? 0);
+              const y = Number(p.y_frac ?? p.y ?? 0);
+              const placed = x >= 0 && x <= 1 && y >= 0 && y <= 1;
+              if (!placed) return null;
+              return (
+                <div
+                  key={p.door_id}
+                  data-id={p.door_id}
+                  className="absolute"
+                  style={{
+                    left: `${x * 100}%`,
+                    top: `${y * 100}%`,
+                    transform: "translate(-50%, -50%)",
+                  }}
+                >
+                  <button
+                    title={p.name || p.door_name || p.door_id}
+                    data-marker="1"
+                    onMouseDown={(e) => onMouseDownPoint(e, p)}
+                    onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
+                    className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        {!loaded && pageSize.w === 0 && (
+          <div className="p-3 text-sm text-gray-600">
+            {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
+          </div>
+        )}
+      </div>
+      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
+        </span>
       </div>
     </div>
   );
 }
-
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
-  console.log("[Doors] mount");
   const [tab, setTab] = useState("controls"); // controls | calendar | settings | maps
-
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState(""); // a_faire | en_cours_30 | en_retard | fait
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
-  const [doorState, setDoorState] = useState("");
-
+  const [doorState, setDoorState] = useState(""); // conforme | non_conforme
   /* ---- drawer (edit / inspect) ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
-
+  const [editing, setEditing] = useState(null); // door object with details
   /* ---- calendar ---- */
   const [calendar, setCalendar] = useState({ events: [] });
-
   /* ---- toast ---- */
   const [toast, setToast] = useState("");
-
   /* ---- settings ---- */
   const defaultTemplate = [
     "La porte est-elle en parfait état (fermeture correcte, non voilée) ?",
@@ -1152,13 +997,11 @@ export default function Doors() {
   ];
   const [settings, setSettings] = useState({
     checklist_template: defaultTemplate,
-    frequency: "1_an",
+    frequency: "1_an", // 1_an, 1_mois, 2_an, 3_mois, 2_ans
   });
   const [savingSettings, setSavingSettings] = useState(false);
-
   /* ---- versionnement fichiers pour refresh instantané ---- */
   const [filesVersion, setFilesVersion] = useState(0);
-
   /* ---------- Deep-link helpers (QR) ---------- */
   function getDoorParam() {
     try {
@@ -1180,7 +1023,6 @@ export default function Doors() {
     setEditing(null);
     setDoorParam(null);
   }
-
   // -------- data loaders
   async function reload() {
     setLoading(true);
@@ -1207,15 +1049,13 @@ export default function Doors() {
       setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
     if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
   }
-
   // First load
   useEffect(() => {
     reload();
     reloadCalendar();
     loadSettings();
   }, []);
-
-  // Auto-open door from ?door=<id>
+  // Auto-open door from ?door=<id> (QR deep link)
   useEffect(() => {
     const targetId = getDoorParam();
     if (!targetId) return;
@@ -1225,9 +1065,11 @@ export default function Doors() {
         setEditing(full.door);
         setDrawerOpen(true);
       } else {
+        // ID invalide -> on nettoie le paramètre
         setDoorParam(null);
       }
     })();
+    // Réagit aux navigations back/forward
     const onPop = () => {
       const id = getDoorParam();
       if (!id) closeDrawerAndClearParam();
@@ -1235,7 +1077,6 @@ export default function Doors() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-
   // Live filter (debounce)
   useEffect(() => {
     const t = setTimeout(() => {
@@ -1244,9 +1085,7 @@ export default function Doors() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status, building, floor, doorState]);
-
-  const filtered = doors;
-
+  const filtered = doors; // serveur filtre déjà
   /* ------------------ actions door ------------------ */
   function openCreate() {
     setEditing({
@@ -1303,7 +1142,6 @@ export default function Doors() {
     await reload();
     await reloadCalendar();
   }
-
   /* ------------------ checklist workflow ------------------ */
   const baseOptions = [
     { value: "conforme", label: "Conforme" },
@@ -1348,7 +1186,6 @@ export default function Doors() {
       setEditing(full?.door);
     }
   }
-
   /* ------------------ files ------------------ */
   const [uploading, setUploading] = useState(false);
   function onDropFiles(e) {
@@ -1361,9 +1198,12 @@ export default function Doors() {
     setUploading(true);
     try {
       for (const f of files) await API.uploadFile(editing.id, f);
+      // rafraîchir la fiche (si besoin)
       const full = await API.get(editing.id);
       setEditing(full?.door);
+      // force DoorFiles à recharger immédiatement
       setFilesVersion((v) => v + 1);
+      // feedback utilisateur
       setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } finally {
       setUploading(false);
@@ -1378,7 +1218,6 @@ export default function Doors() {
     await reload();
     setToast("Photo mise à jour ✅");
   }
-
   /* ------------------ settings save ------------------ */
   async function saveSettings() {
     setSavingSettings(true);
@@ -1391,15 +1230,14 @@ export default function Doors() {
       setSavingSettings(false);
     }
   }
-
-  /* ------------------ MAPS state / loaders ------------------ */
-  const [plans, setPlans] = useState([]);
+/* ------------------ MAPS state / loaders ------------------ */
+  const [plans, setPlans] = useState([]); // {id, logical_name, display_name, page_count, actions_next_30, overdue}
   const [mapsLoading, setMapsLoading] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(null);
-  const planPage = 0;
-  const [positions, setPositions] = useState([]);
-  const [pdfReady, setPdfReady] = useState(false);
-  const [unplacedDoors, setUnplacedDoors] = useState([]);
+  const [selectedPlan, setSelectedPlan] = useState(null); // plan object
+  const planPage = 0; // Fixé à la première page
+  const [positions, setPositions] = useState([]); // [{door_id, x_frac, y_frac, status, name}]
+  const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
+  const [unplacedDoors, setUnplacedDoors] = useState([]); // [{door_id, door_name}]
   const [pendingPlaceDoorId, setPendingPlaceDoorId] = useState(null);
 
   async function loadPlans() {
@@ -1415,25 +1253,23 @@ export default function Doors() {
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
     const key = plan.id || plan.logical_name || "";
-    console.log("[MAPS] Loading positions for plan:", { key, pageIdx });
+    console.log("[DEBUG] Loading positions for plan:", { key, pageIdx });
     try {
       const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
-      console.log("[MAPS] Raw positions response:", r);
-      const positions = Array.isArray(r?.items)
-        ? r.items.map((item) => ({
-            door_id: item.door_id,
-            door_name: item.name || item.door_name,
-            x_frac: Number(item.x_frac ?? item.x ?? 0),
-            y_frac: Number(item.y_frac ?? item.y ?? 0),
-            x: Number(item.x_frac ?? item.x ?? 0),
-            y: Number(item.y_frac ?? item.y ?? 0),
-            status: item.status,
-          }))
-        : [];
-      console.log("[MAPS] Processed positions:", positions);
+      console.log("[DEBUG] Raw positions response:", r);
+      const positions = Array.isArray(r?.items) ? r.items.map(item => ({
+        door_id: item.door_id,
+        door_name: item.name || item.door_name,
+        x_frac: Number(item.x_frac ?? item.x ?? 0),
+        y_frac: Number(item.y_frac ?? item.y ?? 0),
+        x: Number(item.x_frac ?? item.x ?? 0), // Ajouter x/y pour compatibilité
+        y: Number(item.y_frac ?? item.y ?? 0),
+        status: item.status,
+      })) : [];
+      console.log("[DEBUG] Processed positions:", positions);
       setPositions(positions);
     } catch (e) {
-      console.error("[MAPS] Failed to load positions:", e.message);
+      console.error("[ERROR] Failed to load positions:", e.message);
       setPositions([]);
     }
   }
@@ -1449,64 +1285,58 @@ export default function Doors() {
     if (tab === "maps") loadPlans();
   }, [tab]);
 
+  // Stabiliser selectedPlan pour éviter re-rendus inutiles
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id]);
 
   useEffect(() => {
-    console.log("[MAPS] selectedPlan changed:", stableSelectedPlan);
+    console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
     if (stableSelectedPlan) {
       loadPositions(stableSelectedPlan, planPage);
       loadUnplacedDoors(stableSelectedPlan, planPage);
-      setPendingPlaceDoorId(null);
+      setPendingPlaceDoorId(null); // reset mode placement à chaque changement
     }
   }, [stableSelectedPlan, planPage]);
 
   /* ------------------ MAPS handlers ------------------ */
-  const handlePdfReady = useCallback(() => {
-    console.log("[MAPS] PlanViewer ready");
-    setPdfReady(true);
+  const handlePdfReady = useCallback(() => setPdfReady(true), []);
+  const handleMovePoint = useCallback(async (doorId, xy) => {
+    console.log("[DEBUG] Moving point:", { doorId, xy });
+    if (!stableSelectedPlan) return;
+    await MAPS.setPosition(doorId, {
+      logical_name: stableSelectedPlan.logical_name,
+      plan_id: stableSelectedPlan.id,
+      page_index: planPage,
+      x_frac: xy.x,
+      y_frac: xy.y,
+    });
+    await loadPositions(stableSelectedPlan, planPage);
+  }, [stableSelectedPlan, planPage]);
+
+  const handleClickPoint = useCallback((p) => {
+    console.log("[DEBUG] Clicking point:", p);
+    openEdit({ id: p.door_id, name: p.name });
   }, []);
-  const handleMovePoint = useCallback(
-    async (doorId, xy) => {
-      console.log("[MAPS] Moving point:", { doorId, xy });
-      if (!stableSelectedPlan) return;
-      await MAPS.setPosition(doorId, {
+
+  const handlePlaceAt = useCallback(async (xy) => {
+    console.log("[DEBUG] Placing door at:", { doorId: pendingPlaceDoorId, xy });
+    if (!pendingPlaceDoorId || !stableSelectedPlan) return;
+    try {
+      await MAPS.setPosition(pendingPlaceDoorId, {
         logical_name: stableSelectedPlan.logical_name,
         plan_id: stableSelectedPlan.id,
         page_index: planPage,
         x_frac: xy.x,
         y_frac: xy.y,
       });
+      setPendingPlaceDoorId(null);
       await loadPositions(stableSelectedPlan, planPage);
-    },
-    [stableSelectedPlan, planPage]
-  );
-  const handleClickPoint = useCallback((p) => {
-    console.log("[MAPS] Clicking point:", p);
-    openEdit({ id: p.door_id, name: p.name });
-  }, []);
-  const handlePlaceAt = useCallback(
-    async (xy) => {
-      console.log("[MAPS] Placing door at:", { doorId: pendingPlaceDoorId, xy });
-      if (!pendingPlaceDoorId || !stableSelectedPlan) return;
-      try {
-        await MAPS.setPosition(pendingPlaceDoorId, {
-          logical_name: stableSelectedPlan.logical_name,
-          plan_id: stableSelectedPlan.id,
-          page_index: planPage,
-          x_frac: xy.x,
-          y_frac: xy.y,
-        });
-        setPendingPlaceDoorId(null);
-        await loadPositions(stableSelectedPlan, planPage);
-        await loadUnplacedDoors(stableSelectedPlan, planPage);
-        setToast("Porte placée avec succès ✅");
-      } catch (e) {
-        console.error("[MAPS] Failed to place door:", e.message);
-        setToast("Erreur lors du placement de la porte : " + e.message);
-      }
-    },
-    [pendingPlaceDoorId, stableSelectedPlan, planPage]
-  );
+      await loadUnplacedDoors(stableSelectedPlan, planPage);
+      setToast("Porte placée avec succès ✅");
+    } catch (e) {
+      console.error("[ERROR] Failed to place door:", e.message);
+      setToast("Erreur lors du placement de la porte : " + e.message);
+    }
+  }, [pendingPlaceDoorId, stableSelectedPlan, planPage]);
 
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
@@ -1542,10 +1372,8 @@ export default function Doors() {
           <Btn onClick={openCreate}>+ Nouvelle porte</Btn>
         </div>
       </header>
-
       <StickyTabs />
-
-      {/* Filtres */}
+      {/* Filtres (toggle) */}
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
           <div className="grid md:grid-cols-5 gap-3">
@@ -1590,8 +1418,7 @@ export default function Doors() {
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
       )}
-
-      {/* Onglet Contrôles */}
+      {/* Onglet Contrôles : liste des portes (vignettes photo intactes) */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
           {/* Mobile cards */}
@@ -1602,6 +1429,7 @@ export default function Doors() {
               <div key={d.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
+                    {/* vignette */}
                     <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
                       {d.photo_url ? (
                         <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
@@ -1632,7 +1460,6 @@ export default function Doors() {
               </div>
             ))}
           </div>
-
           {/* Desktop table */}
           <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
@@ -1677,7 +1504,9 @@ export default function Doors() {
                       <td className="px-4 py-3">
                         {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
                       </td>
-                      <td className="px-4 py-3">{doorStateBadge(d.door_state)}</td>
+                      <td className="px-4 py-3">
+                        {doorStateBadge(d.door_state)}
+                      </td>
                       <td className="px-4 py-3">
                         <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
                       </td>
@@ -1696,7 +1525,6 @@ export default function Doors() {
           </div>
         </div>
       )}
-
       {/* Onglet Calendrier */}
       {tab === "calendar" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4">
@@ -1710,7 +1538,6 @@ export default function Doors() {
           />
         </div>
       )}
-
       {/* Onglet Plans */}
       {tab === "maps" && (
         <div className="space-y-4">
@@ -1729,7 +1556,7 @@ export default function Doors() {
               await loadPlans();
             }}
             onPick={(plan) => {
-              console.log("[MAPS] Picking plan:", plan);
+              console.log("[DEBUG] Picking plan:", plan);
               setSelectedPlan(plan);
               setPdfReady(false);
             }}
@@ -1746,14 +1573,15 @@ export default function Doors() {
                   </Btn>
                 </div>
               </div>
-
               {/* Bandeau portes en attente de positionnement */}
               <div className="mt-3 p-2 rounded-xl border bg-amber-50/60">
                 <div className="text-sm text-amber-700 font-medium">
                   Portes en attente de positionnement ({unplacedDoors.length})
                 </div>
                 {!unplacedDoors.length && (
-                  <div className="text-xs text-amber-700/80 mt-1">Aucune porte en attente pour cette page.</div>
+                  <div className="text-xs text-amber-700/80 mt-1">
+                    Aucune porte en attente pour cette page.
+                  </div>
                 )}
                 {!!unplacedDoors.length && (
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1766,7 +1594,7 @@ export default function Doors() {
                             : "bg-white text-amber-800 border-amber-200 hover:bg-amber-100"
                         }`}
                         onClick={() => {
-                          console.log("[MAPS] Selecting door for placement:", p.door_id);
+                          console.log("[DEBUG] Selecting door for placement:", p.door_id);
                           setPendingPlaceDoorId((cur) => (cur === p.door_id ? null : p.door_id));
                         }}
                         title="Cliquer puis cliquer sur le plan pour placer"
@@ -1778,7 +1606,7 @@ export default function Doors() {
                       <button
                         className="px-2 py-1 rounded-md border text-xs bg-white text-gray-700 hover:bg-gray-50"
                         onClick={() => {
-                          console.log("[MAPS] Cancelling placement");
+                          console.log("[DEBUG] Cancelling placement");
                           setPendingPlaceDoorId(null);
                         }}
                       >
@@ -1789,12 +1617,12 @@ export default function Doors() {
                 )}
                 {!!pendingPlaceDoorId && (
                   <div className="text-xs text-amber-700/90 mt-2">
-                    Astuce : cliquez/touchez l’endroit souhaité sur le plan pour déposer «{" "}
-                    {unplacedDoors.find((u) => u.door_id === pendingPlaceDoorId)?.door_name || "porte"} ».
+                    Astuce : cliquez/touchez l’endroit souhaité sur le plan pour déposer « {
+                      unplacedDoors.find(u => u.door_id === pendingPlaceDoorId)?.door_name || "porte"
+                    } ».
                   </div>
                 )}
               </div>
-
               <PlanViewer
                 key={stableSelectedPlan?.id || stableSelectedPlan?.logical_name || ""}
                 fileUrl={planFileUrlSafe(stableSelectedPlan)}
@@ -1815,7 +1643,6 @@ export default function Doors() {
           )}
         </div>
       )}
-
       {/* Onglet Paramètres */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
@@ -1865,10 +1692,12 @@ export default function Doors() {
           </div>
         </div>
       )}
-
       {/* Drawer: fiche porte + checklist + fichiers + QR */}
       {drawerOpen && editing && (
-        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
+        <Drawer
+          title={`Porte • ${editing.name || "nouvelle"}`}
+          onClose={closeDrawerAndClearParam}
+        >
           <div className="space-y-4">
             {/* Base info */}
             <div className="grid sm:grid-cols-2 gap-3">
@@ -1898,9 +1727,10 @@ export default function Doors() {
             </div>
             <div className="flex items-center gap-3">
               <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
-              {editing?.id && <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>}
+              {editing?.id && (
+                <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>
+              )}
             </div>
-
             {/* Photo */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -1920,7 +1750,6 @@ export default function Doors() {
                 </div>
               </div>
             )}
-
             {/* Checklist */}
             <div className="border rounded-2xl p-3">
               <div className="flex items-center justify-between mb-2">
@@ -1928,37 +1757,37 @@ export default function Doors() {
                 {!editing.current_check && <Btn onClick={ensureCurrentCheck}>Démarrer un contrôle</Btn>}
               </div>
               {!editing.current_check && (
-                <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>
+                <div className="text-sm text-gray-500">
+                  Lance un contrôle pour remplir les 5 points ci-dessous.
+                </div>
               )}
               {!!editing.current_check && (
                 <div className="space-y-3">
-                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate)
-                    .slice(0, 5)
-                    .map((label, i) => {
-                      const val = editing.current_check.items?.[i]?.value || "";
-                      const comment = editing.current_check.items?.[i]?.comment || "";
-                      return (
-                        <div key={i} className="grid gap-2">
-                          <div className="grid md:grid-cols-[1fr,220px] gap-2 items-center">
-                            <div className="text-sm">{label}</div>
-                            <Select
-                              value={val}
-                              onChange={(v) => saveChecklistItem(i, "value", v)}
-                              options={baseOptions}
-                              placeholder="Sélectionner…"
-                            />
-                          </div>
-                          <div className="md:col-span-2">
-                            <Textarea
-                              value={comment}
-                              onChange={(v) => saveChecklistItem(i, "comment", v)}
-                              placeholder="Commentaire (optionnel)"
-                              rows={2}
-                            />
-                          </div>
+                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate).slice(0, 5).map((label, i) => {
+                    const val = editing.current_check.items?.[i]?.value || "";
+                    const comment = editing.current_check.items?.[i]?.comment || "";
+                    return (
+                      <div key={i} className="grid gap-2">
+                        <div className="grid md:grid-cols-[1fr,220px] gap-2 items-center">
+                          <div className="text-sm">{label}</div>
+                          <Select
+                            value={val}
+                            onChange={(v) => saveChecklistItem(i, "value", v)}
+                            options={baseOptions}
+                            placeholder="Sélectionner…"
+                          />
                         </div>
-                      );
-                    })}
+                        <div className="md:col-span-2">
+                          <Textarea
+                            value={comment}
+                            onChange={(v) => saveChecklistItem(i, "comment", v)}
+                            placeholder="Commentaire (optionnel)"
+                            rows={2}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
                   <div className="pt-2">
                     <a
                       href={API.nonConformPDF(editing.id)}
@@ -1972,8 +1801,7 @@ export default function Doors() {
                 </div>
               )}
             </div>
-
-            {/* Fichiers / Photos */}
+            {/* Fichiers / Photos (door-level) */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="flex items-center justify-between mb-2">
@@ -1995,12 +1823,13 @@ export default function Doors() {
                     uploading ? "bg-blue-50 border-blue-300" : "bg-gray-50 border-gray-200"
                   }`}
                 >
-                  <div className="text-sm text-gray-600">Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.</div>
+                  <div className="text-sm text-gray-600">
+                    Glisser-déposer des fichiers ici, ou utiliser “Ajouter”.
+                  </div>
                 </div>
                 <DoorFiles doorId={editing.id} version={filesVersion} />
               </div>
             )}
-
             {/* QR Codes */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -2017,7 +1846,6 @@ export default function Doors() {
                 </div>
               </div>
             )}
-
             {/* Historique */}
             <DoorHistory doorId={editing.id} />
           </div>
@@ -2026,7 +1854,6 @@ export default function Doors() {
     </section>
   );
 }
-
 /* ----------------------------- Sous-composants ----------------------------- */
 function Labeled({ label, children }) {
   return (
@@ -2036,7 +1863,6 @@ function Labeled({ label, children }) {
     </label>
   );
 }
-
 function Drawer({ title, children, onClose }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -2059,7 +1885,6 @@ function Drawer({ title, children, onClose }) {
     </div>
   );
 }
-
 function DoorFiles({ doorId, version = 0 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -2083,7 +1908,6 @@ function DoorFiles({ doorId, version = 0 }) {
     </div>
   );
 }
-
 function FileCard({ f, onDelete }) {
   const isImage = (f.mime || "").startsWith("image/");
   const url = f.download_url || f.inline_url || f.url;
@@ -2107,7 +1931,6 @@ function FileCard({ f, onDelete }) {
     </div>
   );
 }
-
 function DoorHistory({ doorId }) {
   const [items, setItems] = useState([]);
   useEffect(() => {
@@ -2149,6 +1972,7 @@ function DoorHistory({ doorId }) {
                     <div className="text-xs text-gray-600">
                       {Number(h.counts?.conforme || 0)} / {Number(h.counts?.nc || 0)} / {Number(h.counts?.na || 0)}
                     </div>
+                    {/* snapshot items (condensé) */}
                     <details className="text-xs mt-1">
                       <summary className="cursor-pointer text-blue-700">Voir le détail</summary>
                       <ul className="list-disc ml-4 mt-1 space-y-0.5">
@@ -2170,13 +1994,8 @@ function DoorHistory({ doorId }) {
                     {!!h.files?.length && (
                       <div className="flex flex-wrap gap-2">
                         {h.files.map((f) => (
-                          <a
-                            key={f.id}
-                            href={f.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
-                          >
+                          <a key={f.id} href={f.url} target="_blank" rel="noreferrer"
+                             className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs">
                             {f.name}
                           </a>
                         ))}
@@ -2185,12 +2004,8 @@ function DoorHistory({ doorId }) {
                   </td>
                   <td className="px-3 py-2">
                     {h.nc_pdf_url ? (
-                      <a
-                        href={h.nc_pdf_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs"
-                      >
+                      <a href={h.nc_pdf_url} target="_blank" rel="noreferrer"
+                         className="px-2 py-1 rounded bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 text-xs">
                         Ouvrir
                       </a>
                     ) : (
