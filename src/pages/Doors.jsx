@@ -1245,55 +1245,42 @@ export default function Doors() {
       setSavingSettings(false);
     }
   }
-  /* ------------------ MAPS state / loaders ------------------ */
-  const [plans, setPlans] = useState([]); // {id, logical_name, display_name, page_count, actions_next_30, overdue}
-  const [mapsLoading, setMapsLoading] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(null); // plan object
-  const planPage = 0; // Fixé à la première page
-  const [positions, setPositions] = useState([]); // [{door_id, x_frac,y_frac,status,name}]
-  const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
-
-  // NEW: portes non positionnées (dans ce plan/page) + sélection pour placement
-  const [unplacedDoors, setUnplacedDoors] = useState([]); // [{door_id, door_name}]
-  const [pendingPlaceDoorId, setPendingPlaceDoorId] = useState(null);
-
-  async function loadPlans() {
-    setMapsLoading(true);
-    try {
-      const r = await MAPS.listPlans().catch(() => ({ plans: [] }));
-      setPlans(Array.isArray(r?.plans) ? r.plans : []);
-    } finally {
-      setMapsLoading(false);
-    }
-  }
-  async function loadPositions(plan, pageIdx = 0) {
-    if (!plan) return;
-    const key = plan.id || plan.logical_name || "";
-    const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
-    setPositions(Array.isArray(r?.items) ? r.items : []);
-  }
-  async function loadUnplacedDoors(plan, pageIdx = 0) {
-    if (!plan) return;
-    const key = plan.logical_name || "";
-    const r = await MAPS.pendingPositions(key, pageIdx).catch(() => ({ pending: [] }));
-    setUnplacedDoors(Array.isArray(r?.pending) ? r.pending : []);
-  }
-  useEffect(() => {
-    if (tab === "maps") loadPlans();
-  }, [tab]);
-
-  // Stabiliser selectedPlan avec useMemo pour éviter re-rendus inutiles
-  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id]);
-
-  useEffect(() => {
-    console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
-    if (stableSelectedPlan) {
-      loadPositions(stableSelectedPlan, planPage);
-      loadUnplacedDoors(stableSelectedPlan, planPage);
-      setPendingPlaceDoorId(null); // reset mode placement à chaque changement
-    }
+  /* ------------------ MAPS handlers ------------------ */
+  const handlePdfReady = useCallback(() => setPdfReady(true), []);
+  const handleMovePoint = useCallback(async (doorId, xy) => {
+    console.log("[DEBUG] Moving point:", { doorId, xy });
+    await MAPS.setPosition(doorId, {
+      logical_name: stableSelectedPlan.logical_name,
+      plan_id: stableSelectedPlan.id,
+      page_index: planPage,
+      x_frac: xy.x,
+      y_frac: xy.y,
+    });
+    await loadPositions(stableSelectedPlan, planPage);
   }, [stableSelectedPlan, planPage]);
-
+  const handleClickPoint = useCallback((p) => {
+    console.log("[DEBUG] Clicking point:", p);
+    openEdit({ id: p.door_id, name: p.name });
+  }, []);
+  const handlePlaceAt = useCallback(async (xy) => {
+    console.log("[DEBUG] Placing door at:", { doorId: pendingPlaceDoorId, xy });
+    if (!pendingPlaceDoorId) return;
+    try {
+      await MAPS.setPosition(pendingPlaceDoorId, {
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id,
+        page_index: planPage,
+        x_frac: xy.x,
+        y_frac: xy.y,
+      });
+      setPendingPlaceDoorId(null);
+      await loadPositions(stableSelectedPlan, planPage);
+      await loadUnplacedDoors(stableSelectedPlan, planPage);
+    } catch (e) {
+      console.error("[ERROR] Failed to place door:", e.message);
+      setToast("Erreur lors du placement de la porte : " + e.message);
+    }
+  }, [pendingPlaceDoorId, stableSelectedPlan, planPage]);
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1313,7 +1300,6 @@ export default function Doors() {
       </div>
     </div>
   );
-
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
@@ -1584,42 +1570,11 @@ export default function Doors() {
                 fileUrl={planFileUrlSafe(stableSelectedPlan)}
                 pageIndex={planPage}
                 points={positions}
-                onReady={() => setPdfReady(true)}
-                onMovePoint={async (doorId, xy) => {
-                  console.log("[DEBUG] Moving point:", { doorId, xy });
-                  await MAPS.setPosition(doorId, {
-                    logical_name: stableSelectedPlan.logical_name,
-                    plan_id: stableSelectedPlan.id,
-                    page_index: planPage,
-                    x_frac: xy.x,
-                    y_frac: xy.y,
-                  });
-                  await loadPositions(stableSelectedPlan, planPage);
-                }}
-                onClickPoint={(p) => {
-                  console.log("[DEBUG] Clicking point:", p);
-                  openEdit({ id: p.door_id, name: p.name });
-                }}
+                onReady={handlePdfReady}
+                onMovePoint={handleMovePoint}
+                onClickPoint={handleClickPoint}
                 placingDoorId={pendingPlaceDoorId}
-                onPlaceAt={async (xy) => {
-                  console.log("[DEBUG] Placing door at:", { doorId: pendingPlaceDoorId, xy });
-                  if (!pendingPlaceDoorId) return;
-                  try {
-                    await MAPS.setPosition(pendingPlaceDoorId, {
-                      logical_name: stableSelectedPlan.logical_name,
-                      plan_id: stableSelectedPlan.id,
-                      page_index: planPage,
-                      x_frac: xy.x,
-                      y_frac: xy.y,
-                    });
-                    setPendingPlaceDoorId(null);
-                    await loadPositions(stableSelectedPlan, planPage);
-                    await loadUnplacedDoors(stableSelectedPlan, planPage); // Recharger les portes non positionnées
-                  } catch (e) {
-                    console.error("[ERROR] Failed to place door:", e.message);
-                    setToast("Erreur lors du placement de la porte : " + e.message);
-                  }
-                }}
+                onPlaceAt={handlePlaceAt}
               />
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
