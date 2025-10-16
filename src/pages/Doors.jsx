@@ -562,12 +562,23 @@ function PlanCard({ plan, onRename, onPick }) {
 }
 /**
  * PlanViewer
- * - Zoom: molette/trackpad (wheel), pinch sur tactile
- * - Pan: drag (souris) / pan tactile
- * - Déplacement d’un marqueur: mousedown + drag
- * - Placement d’une porte en attente: prop placingDoorId + onPlaceAt(xy), clic/touch pour déposer
+ * - Zoom: molette/trackpad (wheel), pinch sur tactile (ultra fluide)
+ * - Pan: drag (souris) / pan tactile (raf)
+ * - Déplacement d’un marqueur: pointerdown + drag
+ * - Clic porte fiable (desktop): pointerup avec seuil
+ * - Création porte: appui long (600ms) -> onCreateDoorAt(xy) [optionnel]
  */
-function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, placingDoorId, onPlaceAt }) {
+function PlanViewer({
+  fileUrl,
+  pageIndex = 0,
+  points = [],
+  onReady,
+  onMovePoint,
+  onClickPoint,
+  placingDoorId,
+  onPlaceAt,
+  onCreateDoorAt, // (xy: {x,y} en 0..1) optionnel
+}) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
@@ -576,23 +587,47 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const [isMounted, setIsMounted] = useState(false);
   const [err, setErr] = useState("");
   const [containerWidth, setContainerWidth] = useState(0);
-  const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
 
-  // Prevent browser pinch-zoom on mobile
+  // Vue (pan/scale) avec raf
+  const [scale, _setScale] = useState(1);
+  const [pan, _setPan] = useState({ x: 0, y: 0 });
+  const viewRef = useRef({ scale: 1, panX: 0, panY: 0 });
+  const rafRef = useRef(0);
+  const pendingRef = useRef(false);
+
+  function setScale(next) {
+    viewRef.current.scale = next;
+    scheduleRaf();
+  }
+  function setPan(next) {
+    viewRef.current.panX = next.x;
+    viewRef.current.panY = next.y;
+    scheduleRaf();
+  }
+  function scheduleRaf() {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    rafRef.current = requestAnimationFrame(() => {
+      pendingRef.current = false;
+      _setScale(viewRef.current.scale);
+      _setPan({ x: viewRef.current.panX, y: viewRef.current.panY });
+    });
+  }
+
+  // Empêcher le zoom navigateur & gestes par défaut
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const preventBrowserZoom = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
-    el.addEventListener("touchstart", preventBrowserZoom, { passive: false });
-    el.addEventListener("touchmove", preventBrowserZoom, { passive: false });
+    const prevent = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
+    el.addEventListener("touchstart", prevent, { passive: false });
+    el.addEventListener("touchmove", prevent, { passive: false });
     return () => {
-      el.removeEventListener("touchstart", preventBrowserZoom);
-      el.removeEventListener("touchmove", preventBrowserZoom);
+      el.removeEventListener("touchstart", prevent);
+      el.removeEventListener("touchmove", prevent);
     };
   }, []);
 
-  // Vérifier canvas et conteneur
+  // Vérifier canvas & largeur conteneur
   useEffect(() => {
     setIsMounted(!!canvasRef.current);
     if (wrapRef.current) {
@@ -603,7 +638,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     }
   }, []);
 
-  // pdf.js render (fit-to-width, no 0.5 cap)
+  // pdf.js render (fit-to-width)
   useEffect(() => {
     let cancelled = false;
     const renderPdf = async () => {
@@ -672,194 +707,226 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       }
     }, 100);
 
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => { cancelled = true; clearInterval(interval); cancelAnimationFrame(rafRef.current); };
   }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
 
-  // Wheel zoom
+  // Wheel zoom (desktop) fluide
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    function onWheel(e) {
+    const onWheel = (e) => {
       if (!loaded) return;
-      const delta = e.deltaY;
       const isZoom = e.ctrlKey || e.metaKey;
-      if (!isZoom && Math.abs(delta) < 40) return;
+      if (!isZoom && Math.abs(e.deltaY) < 40) return;
       e.preventDefault();
       const rect = el.getBoundingClientRect();
-      const cx = e.clientX - rect.left - pan.x;
-      const cy = e.clientY - rect.top - pan.y;
-      const prev = scale;
-      const next = Math.max(0.5, Math.min(3, prev * (delta > 0 ? 0.9 : 1.1)));
+      const cx = e.clientX - rect.left - viewRef.current.panX;
+      const cy = e.clientY - rect.top - viewRef.current.panY;
+      const prev = viewRef.current.scale;
+      const next = Math.max(0.5, Math.min(4, prev * (e.deltaY > 0 ? 0.92 : 1.08)));
       const nx = cx - (cx * next) / prev;
       const ny = cy - (cy * next) / prev;
       setScale(next);
-      setPan((p) => ({ x: p.x + nx, y: p.y + ny }));
-    }
+      setPan({ x: viewRef.current.panX + nx, y: viewRef.current.panY + ny });
+    };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [loaded, scale, pan.x, pan.y]);
+  }, [loaded]);
 
-  // Pan à la souris (drag fond)
+  // Gestes tactiles: pinch + pan (ultra fluide)
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    let dragging = false;
-    let sx = 0, sy = 0;
-    let baseX = 0, baseY = 0;
-    function down(e) {
-      if ((e.target instanceof HTMLElement) && e.target.dataset?.marker === "1") return;
-      dragging = true;
-      sx = e.clientX; sy = e.clientY;
-      baseX = pan.x; baseY = pan.y;
-      el.style.cursor = "grabbing";
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-    function move(e) {
-      if (!dragging) return;
-      setPan({ x: baseX + (e.clientX - sx), y: baseY + (e.clientY - sy) });
-    }
-    function up() {
-      dragging = false;
-      el.style.cursor = "default";
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    }
-    el.addEventListener("mousedown", down);
-    return () => { el.removeEventListener("mousedown", down); };
-  }, [pan.x, pan.y]);
 
-  // Gestes tactiles: pinch + pan
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
     let pointers = new Map();
-    let singlePanBase = null;
-    let pinchBase = null;
-    function onPointerDown(e) {
-      pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+    let base = null; // { panX, panY, scale, cx, cy, dist } pour pinch
+
+    const onPointerDown = (e) => {
       el.setPointerCapture(e.pointerId);
-      singlePanBase = null; pinchBase = null;
-    }
-    function onPointerMove(e) {
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    };
+
+    const onPointerMove = (e) => {
       if (!pointers.has(e.pointerId)) return;
-      pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
       if (pointers.size === 1) {
-        const p = Array.from(pointers.values())[0];
-        if (!singlePanBase) {
-          singlePanBase = { startX: p.clientX, startY: p.clientY, basePanX: pan.x, basePanY: pan.y };
+        // pan à 1 doigt
+        const p = [...pointers.values()][0];
+        if (!base) {
+          base = { panX: viewRef.current.panX, panY: viewRef.current.panY, x: p.x, y: p.y };
           return;
         }
-        const dx = p.clientX - singlePanBase.startX;
-        const dy = p.clientY - singlePanBase.startY;
-        setPan({ x: singlePanBase.basePanX + dx, y: singlePanBase.basePanY + dy });
+        const dx = p.x - base.x;
+        const dy = p.y - base.y;
+        setPan({ x: base.panX + dx, y: base.panY + dy });
       } else if (pointers.size === 2) {
-        const [p1, p2] = Array.from(pointers.values());
-        const dist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
-        if (!pinchBase) {
-          pinchBase = { dist, scale, panX: pan.x, panY: pan.y, cx: (p1.clientX + p2.clientX) / 2, cy: (p1.clientY + p2.clientY) / 2 };
+        // pinch à 2 doigts
+        const [a, b] = [...pointers.values()];
+        const midX = (a.x + b.x) / 2;
+        const midY = (a.y + b.y) / 2;
+        const dist = Math.hypot(a.x - b.x, a.y - b.y);
+        if (!base || base.dist == null) {
+          base = {
+            panX: viewRef.current.panX,
+            panY: viewRef.current.panY,
+            scale: viewRef.current.scale,
+            cx: midX,
+            cy: midY,
+            dist,
+          };
           return;
         }
-        const factor = Math.max(0.5, Math.min(3, pinchBase.scale * (dist / pinchBase.dist)));
+        const factor = Math.max(0.5, Math.min(4, base.scale * (dist / base.dist)));
+
         const rect = el.getBoundingClientRect();
-        const cx = pinchBase.cx - rect.left - pinchBase.panX;
-        const cy = pinchBase.cy - rect.top - pinchBase.panY;
-        const nx = cx - (cx * factor) / pinchBase.scale;
-        const ny = cy - (cy * factor) / pinchBase.scale;
+        const relX = base.cx - rect.left - base.panX;
+        const relY = base.cy - rect.top - base.panY;
+        const nx = relX - (relX * factor) / base.scale;
+        const ny = relY - (relY * factor) / base.scale;
+
         setScale(factor);
-        setPan({ x: pinchBase.panX + nx, y: pinchBase.panY + ny });
+        setPan({ x: base.panX + nx, y: base.panY + ny });
       }
-    }
-    function onPointerUp(e) {
+    };
+
+    const onPointerUp = (e) => {
       pointers.delete(e.pointerId);
       el.releasePointerCapture(e.pointerId);
-      if (pointers.size < 2) pinchBase = null;
       if (pointers.size === 1) {
-        const p = Array.from(pointers.values())[0];
-        singlePanBase = { startX: p.clientX, startY: p.clientY, basePanX: pan.x, basePanY: pan.y };
+        // garde un point de base pour reprendre le pan
+        const p = [...pointers.values()][0];
+        base = { panX: viewRef.current.panX, panY: viewRef.current.panY, x: p.x, y: p.y };
+      } else if (pointers.size === 0) {
+        base = null;
       } else {
-        singlePanBase = null;
+        // 2->1 doigts
+        base = null;
       }
-    }
+    };
+
     el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
     el.addEventListener("pointercancel", onPointerUp);
+
     return () => {
       el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("pointerup", onPointerUp);
       el.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [pan, scale]);
+  }, []);
 
-  // Clic/touch pour placer une porte
+  // Clic/touch pour placer une porte (mode placement) + appui long pour création
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
+
+    let longPressTimer = null;
+    const LONG_MS = 600;
+    let downXY = null;
+
     const handlePointerDown = (e) => {
       if (e.target.dataset?.marker === "1") return;
+      downXY = { x: e.clientX, y: e.clientY };
+      // Appui long -> créer porte si pas en mode placement
+      if (!placingDoorId && onCreateDoorAt) {
+        longPressTimer = setTimeout(() => {
+          const xy = relativeXY(e);
+          onCreateDoorAt?.(xy);
+          longPressTimer = null;
+        }, LONG_MS);
+      }
+    };
+
+    const clearLP = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } };
+
+    const handlePointerUp = (e) => {
+      // Si on était en mode placement -> simple tap dépose
       if (placingDoorId) {
-        e.stopPropagation();
         const xy = relativeXY(e);
         onPlaceAt?.(xy);
       }
+      clearLP();
+      downXY = null;
     };
-    el.addEventListener("pointerdown", handlePointerDown);
-    return () => el.removeEventListener("pointerdown", handlePointerDown);
-  }, [placingDoorId, onPlaceAt]);
 
-  // Drag marker
+    const handlePointerMove = (e) => {
+      // Annule appui long si on bouge trop
+      if (downXY && Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y) > 8) clearLP();
+    };
+
+    el.addEventListener("pointerdown", handlePointerDown);
+    el.addEventListener("pointerup", handlePointerUp);
+    el.addEventListener("pointermove", handlePointerMove);
+    el.addEventListener("pointercancel", clearLP);
+
+    return () => {
+      el.removeEventListener("pointerdown", handlePointerDown);
+      el.removeEventListener("pointerup", handlePointerUp);
+      el.removeEventListener("pointermove", handlePointerMove);
+      el.removeEventListener("pointercancel", clearLP);
+      clearLP();
+    };
+  }, [placingDoorId, onPlaceAt, onCreateDoorAt]);
+
+  // Drag + clic fiable sur marker
   const dragInfo = useRef(null);
-  function onMouseDownPoint(e, p) {
+  function onPointerDownPoint(e, p) {
     e.stopPropagation();
-    if (!overlayRef.current) return;
     dragInfo.current = {
       id: p.door_id,
       startX: e.clientX,
       startY: e.clientY,
+      moved: false,
       baseXFrac: Number(p.x_frac ?? p.x ?? 0),
       baseYFrac: Number(p.y_frac ?? p.y ?? 0),
       pageW: pageSize.w || 1,
       pageH: pageSize.h || 1,
-      scale,
+      scale: viewRef.current.scale,
     };
-    window.addEventListener("mousemove", onMoveMarker);
-    window.addEventListener("mouseup", onUpMarker);
+    window.addEventListener("pointermove", onMoveMarker);
+    window.addEventListener("pointerup", onUpMarker, { once: true });
   }
-
   function onMoveMarker(e) {
     const info = dragInfo.current;
     if (!info) return;
     const dxPx = e.clientX - info.startX;
     const dyPx = e.clientY - info.startY;
+    if (!info.moved && Math.hypot(dxPx, dyPx) > 4) info.moved = true;
+
     const dx = dxPx / (info.pageW * info.scale);
     const dy = dyPx / (info.pageH * info.scale);
     const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
     const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
-    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (el) {
-      // Positionner en % du parent
-      el.style.left = `${x * 100}%`;
-      el.style.top = `${y * 100}%`;
-      el.style.transform = `translate(-50%, -50%)`;
+    const node = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (node) {
+      node.style.left = `${x * 100}%`;
+      node.style.top = `${y * 100}%`;
+      node.style.transform = `translate(-50%, -50%)`;
     }
   }
-
-  function onUpMarker() {
+  function onUpMarker(e) {
+    window.removeEventListener("pointermove", onMoveMarker);
     const info = dragInfo.current;
-    window.removeEventListener("mousemove", onMoveMarker);
-    window.removeEventListener("mouseup", onUpMarker);
-    if (!info) return;
-    const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (!el) { dragInfo.current = null; return; }
-    // Lire les pourcentages left/top
-    const leftPct = parseFloat(el.style.left || "0");
-    const topPct  = parseFloat(el.style.top || "0");
-    const x = isFinite(leftPct) ? leftPct / 100 : 0;
-    const y = isFinite(topPct)  ? topPct  / 100 : 0;
-    try { onMovePoint?.(info.id, { x, y }); } catch {}
     dragInfo.current = null;
+    if (!info) return;
+
+    // CLIC (desktop) si pas bougé -> ouvrir
+    if (!info.moved) {
+      const p = points.find(pt => pt.door_id === info.id);
+      if (p) onClickPoint?.(p);
+      return;
+    }
+    // Sinon: fin de drag -> commit
+    const node = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (!node) return;
+    const leftPct = parseFloat(node.style.left || "0");
+    const topPct  = parseFloat(node.style.top || "0");
+    const x = (isFinite(leftPct) ? leftPct : 0) / 100;
+    const y = (isFinite(topPct) ? topPct : 0) / 100;
+    try { onMovePoint?.(info.id, { x, y }); } catch {}
   }
 
   function markerClass(s) {
@@ -874,14 +941,17 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     const wrap = wrapRef.current;
     if (!wrap) return { x: 0, y: 0 };
     const wrect = wrap.getBoundingClientRect();
-    const localX = evt.clientX - wrect.left - pan.x;
-    const localY = evt.clientY - wrect.top - pan.y;
+    const localX = evt.clientX - wrect.left - viewRef.current.panX;
+    const localY = evt.clientY - wrect.top - viewRef.current.panY;
     const w = pageSize.w || wrap.clientWidth || 1;
     const h = pageSize.h || wrap.clientHeight || 1;
-    const x = Math.min(1, Math.max(0, localX / (w * scale)));
-    const y = Math.min(1, Math.max(0, localY / (h * scale)));
+    const x = Math.min(1, Math.max(0, localX / (w * viewRef.current.scale)));
+    const y = Math.min(1, Math.max(0, localY / (h * viewRef.current.scale)));
     return { x, y };
   }
+
+  // Hauteur dynamique (mobile: pas d’espace blanc)
+  const wrapperHeight = Math.max(320, Math.round(pageSize.h * scale)); // garde un min en desktop
 
   // Log points
   useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
@@ -891,12 +961,12 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       <div
         ref={wrapRef}
         className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
-        style={{ height: 520 }}
+        style={{ height: wrapperHeight, touchAction: 'none' }} // IMPORTANT pour gestes fluides
       >
         <div
           className="relative inline-block will-change-transform mx-auto"
           style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${scale})`,
             transformOrigin: "0 0",
             width: pageSize.w || "100%",
             height: pageSize.h || 520,
@@ -917,7 +987,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
             style={{
               width: pageSize.w || "100%",
               height: pageSize.h || 520,
-              touchAction: placingDoorId ? "none" : "auto",
+              touchAction: 'none', // IMPORTANT: sinon le navigateur intercepte
             }}
           >
             {points.map((p) => {
@@ -939,8 +1009,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
                   <button
                     title={p.name || p.door_name || p.door_id}
                     data-marker="1"
-                    onMouseDown={(e) => onMouseDownPoint(e, p)}
-                    onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
+                    onPointerDown={(e) => onPointerDownPoint(e, p)}
                     className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
                   />
                 </div>
@@ -1633,6 +1702,43 @@ export default function Doors() {
                 onClickPoint={handleClickPoint}
                 placingDoorId={pendingPlaceDoorId}
                 onPlaceAt={handlePlaceAt}
+                onCreateDoorAt={async ({ x, y }) => {
+                  try {
+                    // 1) Créer la porte (nom par défaut)
+                    const created = await API.create({
+                      name: "Nouvelle porte",
+                      building: "",
+                      floor: "",
+                      location: "",
+                    });
+                    const id = created?.door?.id;
+                    if (!id) throw new Error("Création de porte impossible");
+
+                    // 2) Poser directement sur ce plan & cette page
+                    await MAPS.setPosition(id, {
+                      logical_name: stableSelectedPlan.logical_name,
+                      plan_id: stableSelectedPlan.id,
+                      page_index: planPage,
+                      x_frac: x,
+                      y_frac: y,
+                    });
+
+                    // 3) Rafraîchir l’affichage
+                    await loadPositions(stableSelectedPlan, planPage);
+                    await loadUnplacedDoors(stableSelectedPlan, planPage);
+
+                    // (optionnel) sortir du mode placement si actif
+                    setPendingPlaceDoorId(null);
+
+                    // (optionnel) ouvrir la fiche de la porte créée
+                    openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
+
+                    setToast("Porte créée et positionnée ✅");
+                  } catch (e) {
+                    console.error(e);
+                    setToast("Erreur lors de la création/position : " + (e.message || e));
+                  }
+                }}
               />
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
