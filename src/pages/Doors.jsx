@@ -820,6 +820,7 @@ function PlanViewer({
 
   // Clic/touch pour placer une porte (mode placement) + appui long pour création
   useEffect(() => {
+    if (!onCreateDoorAt) return; // ✅ désactive totalement l’appui long si pas de callback
     const el = overlayRef.current;
     if (!el) return;
 
@@ -984,11 +985,8 @@ function PlanViewer({
           <div
             ref={overlayRef}
             className="absolute inset-0 z-10"
-            style={{
-              width: pageSize.w || "100%",
-              height: pageSize.h || 520,
-              touchAction: 'none', // IMPORTANT: sinon le navigateur intercepte
-            }}
+            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, touchAction: 'none' }}
+            onContextMenu={onCreateDoorAt ? handleContextMenu : undefined}  // ✅ neutralisé si pas de prop
           >
             {points.map((p) => {
               const x = Number(p.x_frac ?? p.x ?? 0);
@@ -1407,6 +1405,45 @@ export default function Doors() {
     }
   }, [pendingPlaceDoorId, stableSelectedPlan, planPage]);
 
+  async function createDoorAtCenter() {
+    if (!stableSelectedPlan) return;
+    try {
+      // 1) Créer la porte (nom par défaut)
+      const created = await API.create({
+        name: "Nouvelle porte",
+        building: "",
+        floor: "",
+        location: "",
+      });
+      const id = created?.door?.id;
+      if (!id) throw new Error("Création de porte impossible");
+
+      // 2) Poser la porte au CENTRE du plan (0.5, 0.5) sur la page courante
+      await MAPS.setPosition(id, {
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id,
+        page_index: planPage,
+        x_frac: 0.5,
+        y_frac: 0.5,
+      });
+
+      // 3) Rafraîchir & ouvrir la fiche
+      await loadPositions(stableSelectedPlan, planPage);
+      await loadUnplacedDoors(stableSelectedPlan, planPage);
+
+      // (optionnel) sortir d’un éventuel mode placement
+      setPendingPlaceDoorId(null);
+
+      // Ouvrir la fiche pour éditer
+      openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
+
+      setToast("Porte créée au centre du plan ✅");
+    } catch (e) {
+      console.error(e);
+      setToast("Erreur lors de la création : " + (e?.message || e));
+    }
+  }
+
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1637,6 +1674,15 @@ export default function Doors() {
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* ➕ NOUVELLE PORTE */}
+                  <Btn
+                    variant="subtle"
+                    onClick={createDoorAtCenter}
+                    title="Créer une nouvelle porte au centre du plan"
+                  >
+                    ➕ Nouvelle porte
+                  </Btn>
+
                   <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>
                     Fermer le plan
                   </Btn>
@@ -1699,46 +1745,9 @@ export default function Doors() {
                 points={positions}
                 onReady={handlePdfReady}
                 onMovePoint={handleMovePoint}
-                onClickPoint={handleClickPoint}
+                onClickPoint={handleClickPoint}   /* ✅ on garde l’ouverture de la porte */
                 placingDoorId={pendingPlaceDoorId}
                 onPlaceAt={handlePlaceAt}
-                onCreateDoorAt={async ({ x, y }) => {
-                  try {
-                    // 1) Créer la porte (nom par défaut)
-                    const created = await API.create({
-                      name: "Nouvelle porte",
-                      building: "",
-                      floor: "",
-                      location: "",
-                    });
-                    const id = created?.door?.id;
-                    if (!id) throw new Error("Création de porte impossible");
-
-                    // 2) Poser directement sur ce plan & cette page
-                    await MAPS.setPosition(id, {
-                      logical_name: stableSelectedPlan.logical_name,
-                      plan_id: stableSelectedPlan.id,
-                      page_index: planPage,
-                      x_frac: x,
-                      y_frac: y,
-                    });
-
-                    // 3) Rafraîchir l’affichage
-                    await loadPositions(stableSelectedPlan, planPage);
-                    await loadUnplacedDoors(stableSelectedPlan, planPage);
-
-                    // (optionnel) sortir du mode placement si actif
-                    setPendingPlaceDoorId(null);
-
-                    // (optionnel) ouvrir la fiche de la porte créée
-                    openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
-
-                    setToast("Porte créée et positionnée ✅");
-                  } catch (e) {
-                    console.error(e);
-                    setToast("Erreur lors de la création/position : " + (e.message || e));
-                  }
-                }}
               />
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
