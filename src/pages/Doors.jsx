@@ -802,6 +802,7 @@ export default function Doors() {
   }, [tab]);
 
   useEffect(() => {
+    console.log("[DEBUG] selectedPlan changed:", selectedPlan); // Log pour diagnostiquer re-rendus
     if (selectedPlan) {
       loadPositions(selectedPlan, planPage);
       setPendingPlaceDoorId(null); // reset mode placement à chaque changement
@@ -1675,6 +1676,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   const overlayRef = useRef(null);
   const [loaded, setLoaded] = useState(false);
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+  const [isMounted, setIsMounted] = useState(false); // NEW: Suivi du montage du canvas
 
   // viewport state (scale + pan)
   const [scale, setScale] = useState(1);
@@ -1682,21 +1684,32 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
 
   const [err, setErr] = useState("");
 
+  // NEW: Vérifier que le canvas est monté
+  useEffect(() => {
+    if (canvasRef.current) {
+      console.log("[DEBUG] Canvas mounted successfully");
+      setIsMounted(true);
+    } else {
+      console.warn("[DEBUG] Canvas not mounted");
+      setIsMounted(false);
+    }
+  }, []);
+
   // pdf.js render (to canvas)
   useEffect(() => {
     let cancelled = false;
     console.log(`[DEBUG] Starting PDF render for ${fileUrl}, pageIndex=${pageIndex}`);
 
-    // Vérifier que le canvas est monté avant de commencer
-    if (!canvasRef.current) {
-      console.warn("[DEBUG] Canvas ref not available on mount");
-      setErr("Canvas non disponible. Essayez de recharger le plan.");
-      setLoaded(false);
-      onReady?.();
-      return;
-    }
-
     const renderPdf = async () => {
+      // Attendre que le canvas soit monté
+      if (!isMounted || !canvasRef.current) {
+        console.warn("[DEBUG] Canvas not available, delaying render");
+        setErr("Canvas non disponible. Essayez de recharger le plan.");
+        setLoaded(false);
+        onReady?.();
+        return;
+      }
+
       try {
         setErr("");
         console.log(`[DEBUG] Loading PDF from ${fileUrl}`);
@@ -1757,12 +1770,19 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       }
     };
 
-    renderPdf();
+    // Délai pour laisser le DOM se stabiliser
+    const timer = setTimeout(() => {
+      if (!cancelled) {
+        renderPdf();
+      }
+    }, 0);
+
     return () => {
       cancelled = true;
+      clearTimeout(timer);
       console.log("[DEBUG] Cleaning up PDF render");
     };
-  }, [fileUrl, pageIndex, onReady]);
+  }, [fileUrl, pageIndex, onReady, isMounted]);
 
   // ---------- wheel zoom (avec focus sur le curseur) ----------
   useEffect(() => {
