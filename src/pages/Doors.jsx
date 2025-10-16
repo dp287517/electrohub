@@ -583,11 +583,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const preventBrowserZoom = (e) => {
-      if (e.touches && e.touches.length > 1) {
-        e.preventDefault();
-      }
-    };
+    const preventBrowserZoom = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
     el.addEventListener("touchstart", preventBrowserZoom, { passive: false });
     el.addEventListener("touchmove", preventBrowserZoom, { passive: false });
     return () => {
@@ -598,31 +594,20 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
 
   // Vérifier canvas et conteneur
   useEffect(() => {
-    if (canvasRef.current) {
-      console.log("[DEBUG] Canvas mounted successfully");
-      setIsMounted(true);
-    } else {
-      console.warn("[DEBUG] Canvas not mounted");
-      setIsMounted(false);
-    }
+    setIsMounted(!!canvasRef.current);
     if (wrapRef.current) {
-      const updateWidth = () => {
-        setContainerWidth(wrapRef.current.offsetWidth);
-      };
+      const updateWidth = () => setContainerWidth(wrapRef.current.offsetWidth);
       updateWidth();
       window.addEventListener("resize", updateWidth);
       return () => window.removeEventListener("resize", updateWidth);
     }
   }, []);
 
-  // pdf.js render
+  // pdf.js render (fit-to-width, no 0.5 cap)
   useEffect(() => {
     let cancelled = false;
-    console.log(`[DEBUG] Starting PDF render for ${fileUrl}, pageIndex=${pageIndex}`);
-
     const renderPdf = async () => {
       if (!isMounted || !canvasRef.current) {
-        console.warn("[DEBUG] Canvas not available, render aborted");
         setErr("Canvas non disponible. Essayez de recharger le plan.");
         setLoaded(false);
         onReady?.();
@@ -630,60 +615,41 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       }
       try {
         setErr("");
-        console.log(`[DEBUG] Loading PDF from ${fileUrl}`);
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-          console.warn("[DEBUG] pdf.js worker not set, using default");
           pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
         }
-        const loadingTask = pdfjsLib.getDocument({
-          ...pdfDocOpts(fileUrl),
-          standardFontDataUrl: "/standard_fonts/",
-        });
+        const loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
         const pdf = await loadingTask.promise;
-        console.log(`[DEBUG] PDF loaded, numPages=${pdf.numPages}`);
-        if (cancelled) {
-          console.log("[DEBUG] Render cancelled before page fetch");
-          return;
-        }
+        if (cancelled) return;
         const page = await pdf.getPage(Number(pageIndex) + 1);
 
-        // Viewport à l'échelle 1 pour obtenir la largeur native
         const viewport = page.getViewport({ scale: 1 });
-
-        // Fit-to-width réel du conteneur (sans brider à 0.5)
         const fitWidth = containerWidth > 0 ? containerWidth : viewport.width;
         const scaleFactor = fitWidth / viewport.width;
         const adjustedViewport = page.getViewport({ scale: scaleFactor });
 
         const canvas = canvasRef.current;
         if (!canvas || cancelled) {
-          console.log("[DEBUG] Canvas not available or render cancelled");
           setErr("Canvas non disponible ou rendu annulé.");
           setLoaded(false);
           onReady?.();
           return;
         }
-
         const ctx = canvas.getContext("2d");
         canvas.width = Math.floor(adjustedViewport.width);
         canvas.height = Math.floor(adjustedViewport.height);
-        console.log(`[DEBUG] Canvas set to ${canvas.width}x${canvas.height}`);
-
-        // Dimensions logiques de la page (non transformées par CSS)
         setPageSize({ w: canvas.width, h: canvas.height });
 
         await page.render({ canvasContext: ctx, viewport: adjustedViewport }).promise;
 
         if (!cancelled) {
-          console.log("[DEBUG] PDF rendered successfully");
           setLoaded(true);
-          setScale(1);           // reset zoom
-          setPan({ x: 0, y: 0 }); // reset pan
+          setScale(1);
+          setPan({ x: 0, y: 0 });
           onReady?.();
         }
       } catch (e) {
         if (!cancelled) {
-          console.error(`[ERROR] Failed to render PDF: ${e.message}`);
           setErr(`Erreur de rendu du plan : ${e.message}`);
           setLoaded(false);
           onReady?.();
@@ -694,33 +660,19 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     let attempts = 0;
     const maxAttempts = 20;
     const interval = setInterval(() => {
-      if (cancelled) {
-        console.log("[DEBUG] Render cancelled during interval");
-        clearInterval(interval);
-        return;
-      }
+      if (cancelled) { clearInterval(interval); return; }
       if (canvasRef.current && isMounted) {
-        console.log("[DEBUG] Canvas ready, starting render");
         clearInterval(interval);
         renderPdf();
-      } else {
-        attempts++;
-        console.log(`[DEBUG] Canvas not ready, attempt ${attempts}/${maxAttempts}`);
-        if (attempts >= maxAttempts) {
-          console.warn("[DEBUG] Max attempts reached, aborting render");
-          setErr("Échec du rendu : canvas non disponible après plusieurs tentatives.");
-          setLoaded(false);
-          onReady?.();
-          clearInterval(interval);
-        }
+      } else if (++attempts >= maxAttempts) {
+        setErr("Échec du rendu : canvas non disponible après plusieurs tentatives.");
+        setLoaded(false);
+        onReady?.();
+        clearInterval(interval);
       }
     }, 100);
 
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-      console.log("[DEBUG] Cleaning up PDF render");
-    };
+    return () => { cancelled = true; clearInterval(interval); };
   }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
 
   // Wheel zoom
@@ -757,10 +709,8 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     function down(e) {
       if ((e.target instanceof HTMLElement) && e.target.dataset?.marker === "1") return;
       dragging = true;
-      sx = e.clientX;
-      sy = e.clientY;
-      baseX = pan.x;
-      baseY = pan.y;
+      sx = e.clientX; sy = e.clientY;
+      baseX = pan.x; baseY = pan.y;
       el.style.cursor = "grabbing";
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up);
@@ -776,12 +726,10 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       window.removeEventListener("mouseup", up);
     }
     el.addEventListener("mousedown", down);
-    return () => {
-      el.removeEventListener("mousedown", down);
-    };
+    return () => { el.removeEventListener("mousedown", down); };
   }, [pan.x, pan.y]);
 
-  // Gestes tactiles: pinch + pan à un doigt
+  // Gestes tactiles: pinch + pan
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -791,8 +739,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     function onPointerDown(e) {
       pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
       el.setPointerCapture(e.pointerId);
-      singlePanBase = null;
-      pinchBase = null;
+      singlePanBase = null; pinchBase = null;
     }
     function onPointerMove(e) {
       if (!pointers.has(e.pointerId)) return;
@@ -846,34 +793,27 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     };
   }, [pan, scale]);
 
-  // Gestion explicite du clic/touch pour placer une porte
+  // Clic/touch pour placer une porte
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
     const handlePointerDown = (e) => {
-      if (e.target.dataset?.marker === "1") return; // Ignorer les clics sur les marqueurs
+      if (e.target.dataset?.marker === "1") return;
       if (placingDoorId) {
         e.stopPropagation();
         const xy = relativeXY(e);
-        console.log("[DEBUG] Calling onPlaceAt with:", { xy });
         onPlaceAt?.(xy);
       }
     };
     el.addEventListener("pointerdown", handlePointerDown);
-    return () => {
-      el.removeEventListener("pointerdown", handlePointerDown);
-    };
+    return () => el.removeEventListener("pointerdown", handlePointerDown);
   }, [placingDoorId, onPlaceAt]);
 
   // Drag marker
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
-    if (!overlayRef.current) {
-      console.warn("[DEBUG] Overlay not available for drag");
-      return;
-    }
-    // Mémorise uniquement des bases "propres" (fractions + dimensions natives)
+    if (!overlayRef.current) return;
     dragInfo.current = {
       id: p.door_id,
       startX: e.clientX,
@@ -884,13 +824,6 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       pageH: pageSize.h || 1,
       scale,
     };
-    console.log("[DEBUG] Starting drag for doorId:", p.door_id, {
-      baseXFrac: dragInfo.current.baseXFrac,
-      baseYFrac: dragInfo.current.baseYFrac,
-      pageW: dragInfo.current.pageW,
-      pageH: dragInfo.current.pageH,
-      scale,
-    });
     window.addEventListener("mousemove", onMoveMarker);
     window.addEventListener("mouseup", onUpMarker);
   }
@@ -898,20 +831,18 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
   function onMoveMarker(e) {
     const info = dragInfo.current;
     if (!info) return;
-
-    // Delta souris en pixels → normalisation par (pageW * scale)
     const dxPx = e.clientX - info.startX;
     const dyPx = e.clientY - info.startY;
-
     const dx = dxPx / (info.pageW * info.scale);
     const dy = dyPx / (info.pageH * info.scale);
-
     const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
     const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
-
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (el) {
-      el.style.transform = `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)`;
+      // Positionner en % du parent
+      el.style.left = `${x * 100}%`;
+      el.style.top = `${y * 100}%`;
+      el.style.transform = `translate(-50%, -50%)`;
     }
   }
 
@@ -920,26 +851,14 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     window.removeEventListener("mousemove", onMoveMarker);
     window.removeEventListener("mouseup", onUpMarker);
     if (!info) return;
-
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-    if (!el) {
-      console.warn("[DEBUG] Marker element not found for doorId:", info.id);
-      dragInfo.current = null;
-      return;
-    }
-    const m = el.style.transform.match(/translate\(([\d.]+)%?,\s*([\d.]+)%?\)/);
-    if (m) {
-      const x = Number(m[1]) / 100;
-      const y = Number(m[2]) / 100;
-      console.log("[DEBUG] Final position for doorId:", info.id, { x, y });
-      try {
-        onMovePoint?.(info.id, { x, y });
-      } catch (e) {
-        console.error("[ERROR] Failed to update position on drag end:", e.message);
-      }
-    } else {
-      console.warn("[DEBUG] Failed to parse transform for doorId:", info.id);
-    }
+    if (!el) { dragInfo.current = null; return; }
+    // Lire les pourcentages left/top
+    const leftPct = parseFloat(el.style.left || "0");
+    const topPct  = parseFloat(el.style.top || "0");
+    const x = isFinite(leftPct) ? leftPct / 100 : 0;
+    const y = isFinite(topPct)  ? topPct  / 100 : 0;
+    try { onMovePoint?.(info.id, { x, y }); } catch {}
     dragInfo.current = null;
   }
 
@@ -950,30 +869,22 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     return "bg-blue-600 ring-1 ring-blue-300";
   }
 
-  // Calcul coordonnées relatives
+  // Coordonnées relatives click/touch
   function relativeXY(evt) {
     const wrap = wrapRef.current;
     if (!wrap) return { x: 0, y: 0 };
-
-    // Coordonnées dans le wrapper AVANT normalisation
     const wrect = wrap.getBoundingClientRect();
-    const localX = evt.clientX - wrect.left - pan.x; // pan appliqué au conteneur
+    const localX = evt.clientX - wrect.left - pan.x;
     const localY = evt.clientY - wrect.top - pan.y;
-
-    // Dimensions "logiques" de la page (non transformées)
     const w = pageSize.w || wrap.clientWidth || 1;
     const h = pageSize.h || wrap.clientHeight || 1;
-
-    // Normalisation en [0..1] en tenant compte du zoom courant
     const x = Math.min(1, Math.max(0, localX / (w * scale)));
     const y = Math.min(1, Math.max(0, localY / (h * scale)));
     return { x, y };
   }
 
-  // Log points pour débogage
-  useEffect(() => {
-    console.log("[DEBUG] Points received:", points);
-  }, [points]);
+  // Log points
+  useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
 
   return (
     <div className="mt-3">
@@ -1013,26 +924,23 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
               const x = Number(p.x_frac ?? p.x ?? 0);
               const y = Number(p.y_frac ?? p.y ?? 0);
               const placed = x >= 0 && x <= 1 && y >= 0 && y <= 1;
-              if (!placed) {
-                console.warn("[DEBUG] Skipping unplaced or invalid point:", p);
-                return null;
-              }
+              if (!placed) return null;
               return (
                 <div
                   key={p.door_id}
                   data-id={p.door_id}
                   className="absolute"
-                  style={{ transform: `translate(${x * 100}%, ${y * 100}%) translate(-50%, -50%)` }}
+                  style={{
+                    left: `${x * 100}%`,
+                    top: `${y * 100}%`,
+                    transform: "translate(-50%, -50%)",
+                  }}
                 >
                   <button
                     title={p.name || p.door_name || p.door_id}
                     data-marker="1"
                     onMouseDown={(e) => onMouseDownPoint(e, p)}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      console.log("[DEBUG] Clicking point:", p);
-                      onClickPoint?.(p);
-                    }}
+                    onClick={(e) => { e.stopPropagation(); onClickPoint?.(p); }}
                     className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
                   />
                 </div>
