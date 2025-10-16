@@ -1688,20 +1688,39 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     (async () => {
       try {
         setErr("");
+        console.log(`[DEBUG] Loading PDF from ${fileUrl}, pageIndex=${pageIndex}`);
 
-        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
+        // Explicitement configurer le worker
+        if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+          console.warn("[DEBUG] pdf.js worker not set, using default");
+          pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+        }
+
+        // Charger le PDF avec standardFontDataUrl pour éviter les erreurs de polices
+        const loadingTask = pdfjsLib.getDocument({
+          ...pdfDocOpts(fileUrl),
+          standardFontDataUrl: "/standard_fonts/", // Aligner avec le backend
+        });
         const pdf = await loadingTask.promise;
+        console.log(`[DEBUG] PDF loaded, numPages=${pdf.numPages}`);
+
         const page = await pdf.getPage(Number(pageIndex) + 1);
-        const viewport = page.getViewport({ scale: 1 });
+        const viewport = page.getViewport({ scale: 0.5 }); // Réduit pour tester
         const canvas = canvasRef.current;
-        if (!canvas || cancelled) return;
+        if (!canvas || cancelled) {
+          console.log("[DEBUG] Canvas not available or cancelled");
+          return;
+        }
         const ctx = canvas.getContext("2d");
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
+        console.log(`[DEBUG] Canvas set to ${canvas.width}x${canvas.height}`);
+
         setPageSize({ w: canvas.width, h: canvas.height });
 
         await page.render({ canvasContext: ctx, viewport }).promise;
         if (!cancelled) {
+          console.log("[DEBUG] PDF rendered successfully");
           setLoaded(true);
           setScale(1);
           setPan({ x: 0, y: 0 });
@@ -1709,8 +1728,9 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         }
       } catch (e) {
         if (!cancelled) {
+          console.error(`[ERROR] Failed to render PDF: ${e.message}`);
           setLoaded(false);
-          setErr("Aperçu indisponible.");
+          setErr(`Erreur de rendu du plan : ${e.message}`);
           onReady?.();
         }
       }
@@ -1978,7 +1998,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
         {/* Fallback lisible */}
         {pageSize.w === 0 && (
           <div className="p-3 text-sm text-gray-600">
-            {err || "Aperçu indisponible."}
+            {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
           </div>
         )}
       </div>
