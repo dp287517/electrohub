@@ -496,8 +496,22 @@ function PlanCard({ plan, onRename, onPick }) {
   const overdue = Number(plan?.overdue || 0);
   const canvasRef = useRef(null);
   const [thumbErr, setThumbErr] = useState("");
+  const [visible, setVisible] = useState(false);
+  const obsRef = useRef(null);
+
+  useEffect(() => {
+    const el = obsRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) setVisible(true); });
+    }, { rootMargin: '200px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
   // Miniature page 1 via pdf.js (local, plus de CDN)
   useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
     (async () => {
       try {
@@ -506,24 +520,31 @@ function PlanCard({ plan, onRename, onPick }) {
         const loadingTask = pdfjsLib.getDocument(pdfDocOpts(url)); // ✅
         const pdf = await loadingTask.promise;
         const page = await pdf.getPage(1);
-        const viewport = page.getViewport({ scale: 0.25 });
+        const viewport = page.getViewport({ scale: 0.15 });
+        const cap = 320; // px
+        const factor = Math.min(cap / viewport.width, 1); // cap largeur
+        const adjusted = page.getViewport({ scale: 0.15 * factor });
         const c = canvasRef.current;
         if (!c || cancelled) return;
-        c.width = Math.floor(viewport.width);
-        c.height = Math.floor(viewport.height);
+        c.width = Math.floor(adjusted.width);
+        c.height = Math.floor(adjusted.height);
         const ctx = c.getContext("2d");
-        await page.render({ canvasContext: ctx, viewport }).promise;
+        await page.render({ canvasContext: ctx, viewport: adjusted }).promise;
       } catch (e) {
         if (!cancelled) setThumbErr("Aperçu indisponible.");
       }
     })();
     return () => { cancelled = true; };
-  }, [plan.id, plan.logical_name]);
+  }, [plan.id, plan.logical_name, visible]);
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div className="aspect-video bg-gray-50 flex items-center justify-center">
-        <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+      <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
+        {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+        {!visible && <div className="text-xs text-gray-400">…</div>}
         {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
+        <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
+          {name}
+        </div>
       </div>
       <div className="p-3">
         {!edit ? (
@@ -644,6 +665,7 @@ function PlanViewer({
   // pdf.js render (fit-to-width)
   useEffect(() => {
     let cancelled = false;
+    let pdf = null;
     const renderPdf = async () => {
       if (!isMounted || !canvasRef.current) {
         setErr("Canvas non disponible. Essayez de recharger le plan.");
@@ -657,7 +679,7 @@ function PlanViewer({
           pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
         }
         const loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
-        const pdf = await loadingTask.promise;
+        pdf = await loadingTask.promise;
         if (cancelled) return;
         const page = await pdf.getPage(Number(pageIndex) + 1);
 
@@ -710,7 +732,12 @@ function PlanViewer({
       }
     }, 100);
 
-    return () => { cancelled = true; clearInterval(interval); cancelAnimationFrame(rafRef.current); };
+    return () => { 
+      cancelled = true; 
+      clearInterval(interval); 
+      cancelAnimationFrame(rafRef.current);
+      if (pdf) pdf.destroy();
+    };
   }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
 
   // Wheel zoom (desktop) fluide
@@ -1213,6 +1240,10 @@ export default function Doors() {
     setEditing(null);
     await reload();
     await reloadCalendar();
+    if (tab === "maps" && selectedPlan) {
+      await loadPositions(selectedPlan, planPage);
+      await loadUnplacedDoors(selectedPlan, planPage);
+    }
   }
   /* ------------------ checklist workflow ------------------ */
   const baseOptions = [
@@ -1329,7 +1360,7 @@ export default function Doors() {
     try {
       const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
       console.log("[DEBUG] Raw positions response:", r);
-      const positions = Array.isArray(r?.items) ? r.items.map(item => ({
+      let positions = Array.isArray(r?.items) ? r.items.map(item => ({
         door_id: item.door_id,
         door_name: item.name || item.door_name,
         x_frac: Number(item.x_frac ?? item.x ?? 0),
@@ -1337,8 +1368,12 @@ export default function Doors() {
         x: Number(item.x_frac ?? item.x ?? 0), // Ajouter x/y pour compatibilité
         y: Number(item.y_frac ?? item.y ?? 0),
         status: item.status,
+        building: item.building,
+        floor: item.floor,
+        door_state: item.door_state,
       })) : [];
       console.log("[DEBUG] Processed positions:", positions);
+      positions = positions.filter(it => matchFilters(it));
       setPositions(positions);
     } catch (e) {
       console.error("[ERROR] Failed to load positions:", e.message);
@@ -1346,11 +1381,42 @@ export default function Doors() {
     }
   }
 
+  async function getAllPlacedDoorIds(plans) {
+    const set = new Set();
+    for (const p of plans) {
+      const key = p.id || p.logical_name;
+      const r = await MAPS.positions(key, 0).catch(() => ({ items: [] }));
+      (r.items || []).forEach(it => set.add(it.door_id));
+    }
+    return set;
+  }
+
   async function loadUnplacedDoors(plan, pageIdx = 0) {
     if (!plan) return;
     const key = plan.logical_name || "";
     const r = await MAPS.pendingPositions(key, pageIdx).catch(() => ({ pending: [] }));
-    setUnplacedDoors(Array.isArray(r?.pending) ? r.pending : []);
+    const placed = await getAllPlacedDoorIds(plans);
+    let pending = Array.isArray(r?.pending) ? r.pending.map(p => ({
+      ...p,
+      door_name: p.door_name,
+      status: p.status,
+      building: p.building,
+      floor: p.floor,
+      door_state: p.door_state,
+    })) : [];
+    pending = pending.filter(it => !placed.has(it.door_id));
+    pending = pending.filter(it => matchFilters(it));
+    setUnplacedDoors(pending);
+  }
+
+  function matchFilters(it) {
+    const name = (it.door_name || '').toLowerCase();
+    if (q && !name.includes(q.toLowerCase())) return false;
+    if (status && it.status !== status) return false;
+    if (building && it.building !== building) return false;
+    if (floor && it.floor !== floor) return false;
+    if (doorState && it.door_state !== doorState) return false;
+    return true;
   }
 
   useEffect(() => {
@@ -1358,7 +1424,7 @@ export default function Doors() {
   }, [tab]);
 
   // Stabiliser selectedPlan pour éviter re-rendus inutiles
-  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id]);
+  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id, selectedPlan?.logical_name]);
 
   useEffect(() => {
     console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
@@ -1367,7 +1433,7 @@ export default function Doors() {
       loadUnplacedDoors(stableSelectedPlan, planPage);
       setPendingPlaceDoorId(null); // reset mode placement à chaque changement
     }
-  }, [stableSelectedPlan, planPage]);
+  }, [stableSelectedPlan, planPage, q, status, building, floor, doorState]);
 
   /* ------------------ MAPS handlers ------------------ */
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
@@ -1386,7 +1452,7 @@ export default function Doors() {
 
   const handleClickPoint = useCallback((p) => {
     console.log("[DEBUG] Clicking point:", p);
-    openEdit({ id: p.door_id, name: p.name });
+    openEdit({ id: p.door_id, name: p.door_name || p.name });
   }, []);
 
   const handlePlaceAt = useCallback(async (xy) => {
@@ -1659,6 +1725,9 @@ export default function Doors() {
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
                           <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
+                          <Btn variant="subtle" onClick={() => { setTab("maps"); setPendingPlaceDoorId(d.id); }}>
+                            Placer sur plan
+                          </Btn>
                         </div>
                       </td>
                     </tr>
@@ -1785,7 +1854,7 @@ export default function Doors() {
                 onClickPoint={handleClickPoint}   /* ✅ on garde l’ouverture de la porte */
                 placingDoorId={pendingPlaceDoorId}
                 onPlaceAt={handlePlaceAt}
-                onCreateDoorAt={handleCreateDoorAt}
+                // onCreateDoorAt={handleCreateDoorAt}  // ❌ désactivé
               />
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
