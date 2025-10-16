@@ -265,10 +265,32 @@ function Message({ role, text, citations, onPeek, feedback, onVote, msgRef }) {
   const isUser = role === "user";
   const [expanded, setExpanded] = useState(false);
 
-  // Condensation: on affiche un extrait court par défaut
-  const MAX_CHARS = 420; // ~3–5 lignes
-  const isLong = !isUser && String(text || "").length > MAX_CHARS;
-  const shownText = !isUser && !expanded && isLong ? `${text.slice(0, MAX_CHARS).trim()}…` : text;
+  // Helpers sans regex littéraux (compat remplacement)
+  const baseName = (s = "") => {
+    const parts = s.split(".");
+    return parts.length > 1 ? parts.slice(0, -1).join(".") : s;
+  };
+  const docIds = (citations || []).map(c => baseName(c.filename));
+
+  function summarizeText(t = "", maxSentences = 2, maxChars = 220) {
+    const clean = String(t).trim();
+    const parts = [];
+    let buf = "";
+    for (let i = 0; i < clean.length; i++) {
+      const ch = clean[i];
+      buf += ch;
+      if (".!?".includes(ch)) {
+        parts.push(buf.trim());
+        buf = "";
+        if (parts.length >= maxSentences) break;
+      }
+    }
+    let out = parts.length ? parts.join(" ") : clean.slice(0, Math.min(maxChars, clean.length));
+    if (out.length > maxChars) out = out.slice(0, maxChars).trim() + "…";
+    return out;
+  }
+
+  const condensedText = !isUser ? summarizeText(text) : text;
 
   return (
     <div ref={msgRef} className={"flex " + (isUser ? "justify-end" : "justify-start")}>
@@ -278,20 +300,42 @@ function Message({ role, text, citations, onPeek, feedback, onVote, msgRef }) {
           isUser ? "bg-blue-600 text-white rounded-br-sm" : "bg-white text-gray-900 rounded-bl-sm border"
         )}
       >
-        <div className="whitespace-pre-wrap break-words leading-relaxed">{shownText}</div>
-        {!isUser && isLong && (
-          <div className="mt-2">
-            <button
-              onClick={() => setExpanded((v) => !v)}
-              className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
-            >
-              {expanded ? "Réduire" : "Afficher plus"}
-            </button>
+        {/* Condensé par défaut côté assistant: numéros de docs + 1–2 phrases */}
+        {!isUser && !expanded ? (
+          <div>
+            {!!docIds.length && (
+              <div className="text-[12px] text-gray-700 mb-1">
+                <span className="font-medium">📄 Docs :</span> {docIds.slice(0, 8).join(" · ")}{docIds.length > 8 ? " …" : ""}
+              </div>
+            )}
+            <div className="whitespace-pre-wrap break-words leading-relaxed text-[14px]">{condensedText}</div>
+            <div className="mt-2">
+              <button
+                onClick={() => setExpanded(true)}
+                className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+              >
+                Afficher plus
+              </button>
+            </div>
           </div>
-        )}
-        {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
-        {!isUser && onVote && (
-          <FeedbackBar onVote={onVote} state={feedback?.state || "idle"} />
+        ) : (
+          <>
+            <div className="whitespace-pre-wrap break-words leading-relaxed">{text}</div>
+            {!isUser && <CitationChips citations={citations} onPeek={onPeek} />}
+            {!isUser && onVote && (
+              <FeedbackBar onVote={onVote} state={feedback?.state || "idle"} />
+            )}
+            {!isUser && (
+              <div className="mt-2">
+                <button
+                  onClick={() => setExpanded(false)}
+                  className="text-xs px-2 py-1 rounded bg-gray-100 hover:bg-gray-200"
+                >
+                  Réduire
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
