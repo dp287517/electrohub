@@ -561,93 +561,149 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 /**
- * PlanViewer
- * - Zoom: molette/trackpad (wheel), pinch sur tactile
- * - Pan: drag (souris) / pan tactile
- * - Déplacement d’un marqueur: mousedown + drag
- * - Placement d’une porte en attente: prop placingDoorId + onPlaceAt(xy), clic/touch pour déposer
+ * PlanViewer — mobile smooth + double-tap + inertia + bounds + HiDPI render
  */
-function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, placingDoorId, onPlaceAt }) {
+function PlanViewer({
+  fileUrl,
+  pageIndex = 0,
+  points = [],
+  onReady,
+  onMovePoint,
+  onClickPoint,
+  placingDoorId,
+  onPlaceAt,
+}) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
+  const layerRef = useRef(null);
+
   const [loaded, setLoaded] = useState(false);
-  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
-  const [isMounted, setIsMounted] = useState(false);
   const [err, setErr] = useState("");
+  const [pageSize, setPageSize] = useState({ w: 0, h: 0 }); // dimensions CSS/logiques
   const [containerWidth, setContainerWidth] = useState(0);
-  const [scale, setScale] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [viewerH, setViewerH] = useState(520);
 
-  // Prevent browser pinch-zoom on mobile
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const preventBrowserZoom = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
-    el.addEventListener("touchstart", preventBrowserZoom, { passive: false });
-    el.addEventListener("touchmove", preventBrowserZoom, { passive: false });
-    return () => {
-      el.removeEventListener("touchstart", preventBrowserZoom);
-      el.removeEventListener("touchmove", preventBrowserZoom);
+  // état piloté via refs (rAF)
+  const scaleRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+
+  // rendu pdf: quelle “qualité” max supportée par le bitmap courant ?
+  // idée: on (re)rend le canvas en plus haute résolution après les gestes, pour que le zoom reste net
+  const qualityForScaleRef = useRef(1); // échelle max nette que couvre le bitmap actuel
+  const rerenderTimerRef = useRef(null);
+
+  // rAF transform
+  const rafRef = useRef(null);
+  const needsFrame = useRef(false);
+  const scheduleFrame = () => {
+    if (needsFrame.current) return;
+    needsFrame.current = true;
+    rafRef.current = requestAnimationFrame(() => {
+      needsFrame.current = false;
+      if (!layerRef.current) return;
+      const { x, y } = panRef.current;
+      const s = scaleRef.current;
+      layerRef.current.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
+    });
+  };
+
+  // helpers
+  const DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  const MAX_ZOOM = 3;                 // limite de zoom UI
+  const MAX_QUALITY_SCALE = 3 * DPR;  // cap mémoire/CPU pour rendu HiDPI
+
+  const clampPan = (pan) => {
+    // borne le pan pour garder le plan visible
+    const cw = wrapRef.current?.clientWidth || containerWidth || 0;
+    const ch = wrapRef.current?.clientHeight || viewerH || 0;
+    const contentW = (pageSize.w || 0) * scaleRef.current;
+    const contentH = (pageSize.h || 0) * scaleRef.current;
+
+    if (cw === 0 || ch === 0 || contentW === 0 || contentH === 0) return pan;
+
+    // autoriser un petit “bleed” (20px) pour un meilleur feeling aux bords
+    const margin = 20;
+    const minX = Math.min(margin, cw - contentW - margin);
+    const maxX = Math.max(-margin, margin);
+    const minY = Math.min(margin, ch - contentH - margin);
+    const maxY = Math.max(-margin, margin);
+
+    return {
+      x: Math.max(minX, Math.min(maxX, pan.x)),
+      y: Math.max(minY, Math.min(maxY, pan.y)),
     };
-  }, []);
+  };
 
-  // Vérifier canvas et conteneur
+  // taille wrapper & hauteur responsive (évite le blanc sous le plan)
   useEffect(() => {
-    setIsMounted(!!canvasRef.current);
-    if (wrapRef.current) {
-      const updateWidth = () => setContainerWidth(wrapRef.current.offsetWidth);
-      updateWidth();
-      window.addEventListener("resize", updateWidth);
-      return () => window.removeEventListener("resize", updateWidth);
-    }
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    wrap.style.touchAction = "none"; // bloque les gestes natifs (crans)
+    const onResize = () => {
+      setContainerWidth(wrap.offsetWidth || 0);
+      const dvh = Math.max(window.innerHeight || 700, 700) * 0.85;
+      setViewerH(Math.max(320, Math.floor(dvh)));
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  // pdf.js render (fit-to-width, no 0.5 cap)
+  // rendu PDF (fonction partagée) — peut faire un rendu HiDPI si requestedScale > 1
+  const renderPdfAtQuality = useCallback(async (requestedScaleForQuality = 1) => {
+    // requestedScaleForQuality ~ combien de zoom “net” on veut couvrir
+    // on borne par MAX_QUALITY_SCALE et on multiplie par DPR
+    const canvas = canvasRef.current;
+    if (!canvas) throw new Error("canvas manquant");
+    const loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
+    const pdf = await loadingTask.promise;
+    const page = await pdf.getPage(Number(pageIndex) + 1);
+
+    // 1) viewport logique (fit-to-width)
+    const native = page.getViewport({ scale: 1 });
+    const fitWidth = containerWidth > 0 ? containerWidth : native.width;
+    const scaleFactor = fitWidth / native.width;
+
+    // 2) viewport HiDPI pour le bitmap réel (on rend “plus grand” puis on affiche en CSS aux dimensions logiques)
+    const qualityScale = Math.min(MAX_QUALITY_SCALE, Math.max(1, requestedScaleForQuality * DPR));
+    const viewportHiDPI = page.getViewport({ scale: scaleFactor * qualityScale });
+
+    // 3) taille CSS logique (overlay s’aligne là-dessus)
+    const logicalW = Math.floor(native.width * scaleFactor);
+    const logicalH = Math.floor(native.height * scaleFactor);
+
+    // 4) taille bitmap réelle
+    canvas.width = Math.floor(viewportHiDPI.width);
+    canvas.height = Math.floor(viewportHiDPI.height);
+    canvas.style.width = `${logicalW}px`;
+    canvas.style.height = `${logicalH}px`;
+
+    setPageSize({ w: logicalW, h: logicalH });
+
+    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+    await page.render({ canvasContext: ctx, viewport: viewportHiDPI }).promise;
+
+    // on enregistre la “qualité nette” max couverte par ce rendu
+    qualityForScaleRef.current = Math.max(1, requestedScaleForQuality);
+  }, [fileUrl, pageIndex, containerWidth]);
+
+  // rendu initial
   useEffect(() => {
     let cancelled = false;
-    const renderPdf = async () => {
-      if (!isMounted || !canvasRef.current) {
-        setErr("Canvas non disponible. Essayez de recharger le plan.");
-        setLoaded(false);
-        onReady?.();
-        return;
-      }
+    (async () => {
       try {
         setErr("");
         if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
           pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
         }
-        const loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
-        const pdf = await loadingTask.promise;
+        await renderPdfAtQuality(1);
         if (cancelled) return;
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-
-        const viewport = page.getViewport({ scale: 1 });
-        const fitWidth = containerWidth > 0 ? containerWidth : viewport.width;
-        const scaleFactor = fitWidth / viewport.width;
-        const adjustedViewport = page.getViewport({ scale: scaleFactor });
-
-        const canvas = canvasRef.current;
-        if (!canvas || cancelled) {
-          setErr("Canvas non disponible ou rendu annulé.");
-          setLoaded(false);
-          onReady?.();
-          return;
-        }
-        const ctx = canvas.getContext("2d");
-        canvas.width = Math.floor(adjustedViewport.width);
-        canvas.height = Math.floor(adjustedViewport.height);
-        setPageSize({ w: canvas.width, h: canvas.height });
-
-        await page.render({ canvasContext: ctx, viewport: adjustedViewport }).promise;
-
-        if (!cancelled) {
-          setLoaded(true);
-          setScale(1);
-          setPan({ x: 0, y: 0 });
-          onReady?.();
-        }
+        setLoaded(true);
+        scaleRef.current = 1;
+        panRef.current = clampPan({ x: 0, y: 0 });
+        scheduleFrame();
+        onReady?.();
       } catch (e) {
         if (!cancelled) {
           setErr(`Erreur de rendu du plan : ${e.message}`);
@@ -655,145 +711,204 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
           onReady?.();
         }
       }
-    };
+    })();
+    return () => { cancelled = true; };
+  }, [fileUrl, pageIndex, containerWidth, onReady, renderPdfAtQuality]);
 
-    let attempts = 0;
-    const maxAttempts = 20;
-    const interval = setInterval(() => {
-      if (cancelled) { clearInterval(interval); return; }
-      if (canvasRef.current && isMounted) {
-        clearInterval(interval);
-        renderPdf();
-      } else if (++attempts >= maxAttempts) {
-        setErr("Échec du rendu : canvas non disponible après plusieurs tentatives.");
-        setLoaded(false);
-        onReady?.();
-        clearInterval(interval);
+  // (re)rendu HiDPI après un zoom : debounce
+  const requestHiDpiRerender = useCallback(() => {
+    if (!loaded) return;
+    if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
+    rerenderTimerRef.current = setTimeout(async () => {
+      rerenderTimerRef.current = null;
+      // si le zoom courant est supérieur à ce que couvre le bitmap -> re-render plus net
+      const need = Math.min(MAX_ZOOM, Math.max(1, scaleRef.current));
+      if (need > qualityForScaleRef.current * 0.92) {
+        try {
+          await renderPdfAtQuality(need);
+          // après rerender, re-applique transform courante
+          scheduleFrame();
+        } catch (e) {
+          console.warn("[PDF HiDPI] rerender failed:", e);
+        }
       }
-    }, 100);
+    }, 160); // petit délai pour éviter de rerender pendant le geste
+  }, [loaded, renderPdfAtQuality]);
 
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
-
-  // Wheel zoom
+  // WHEEL zoom (desktop)
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    function onWheel(e) {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const onWheel = (e) => {
       if (!loaded) return;
-      const delta = e.deltaY;
       const isZoom = e.ctrlKey || e.metaKey;
-      if (!isZoom && Math.abs(delta) < 40) return;
+      if (!isZoom && Math.abs(e.deltaY) < 40) return;
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const cx = e.clientX - rect.left - pan.x;
-      const cy = e.clientY - rect.top - pan.y;
-      const prev = scale;
-      const next = Math.max(0.5, Math.min(3, prev * (delta > 0 ? 0.9 : 1.1)));
+      const rect = wrap.getBoundingClientRect();
+      const cx = e.clientX - rect.left - panRef.current.x;
+      const cy = e.clientY - rect.top - panRef.current.y;
+      const prev = scaleRef.current;
+      const next = Math.max(0.5, Math.min(MAX_ZOOM, prev * (e.deltaY > 0 ? 0.9 : 1.1)));
       const nx = cx - (cx * next) / prev;
       const ny = cy - (cy * next) / prev;
-      setScale(next);
-      setPan((p) => ({ x: p.x + nx, y: p.y + ny }));
-    }
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
-  }, [loaded, scale, pan.x, pan.y]);
+      scaleRef.current = next;
+      panRef.current = clampPan({ x: panRef.current.x + nx, y: panRef.current.y + ny });
+      scheduleFrame();
+      requestHiDpiRerender();
+    };
+    wrap.addEventListener("wheel", onWheel, { passive: false });
+    return () => wrap.removeEventListener("wheel", onWheel);
+  }, [loaded, requestHiDpiRerender]);
 
-  // Pan à la souris (drag fond)
+  // Gestes pointer: pan + pinch + double-tap + inertie
   useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    let dragging = false;
-    let sx = 0, sy = 0;
-    let baseX = 0, baseY = 0;
-    function down(e) {
-      if ((e.target instanceof HTMLElement) && e.target.dataset?.marker === "1") return;
-      dragging = true;
-      sx = e.clientX; sy = e.clientY;
-      baseX = pan.x; baseY = pan.y;
-      el.style.cursor = "grabbing";
-      window.addEventListener("mousemove", move);
-      window.addEventListener("mouseup", up);
-    }
-    function move(e) {
-      if (!dragging) return;
-      setPan({ x: baseX + (e.clientX - sx), y: baseY + (e.clientY - sy) });
-    }
-    function up() {
-      dragging = false;
-      el.style.cursor = "default";
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-    }
-    el.addEventListener("mousedown", down);
-    return () => { el.removeEventListener("mousedown", down); };
-  }, [pan.x, pan.y]);
+    const wrap = wrapRef.current;
+    if (!wrap) return;
 
-  // Gestes tactiles: pinch + pan
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    let pointers = new Map();
+    const pointers = new Map();
     let singlePanBase = null;
     let pinchBase = null;
-    function onPointerDown(e) {
-      pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
-      el.setPointerCapture(e.pointerId);
-      singlePanBase = null; pinchBase = null;
-    }
-    function onPointerMove(e) {
+
+    // inertie
+    let velocity = { x: 0, y: 0 };
+    let lastMoveT = 0, lastMoveX = 0, lastMoveY = 0;
+    let inertiaId = null;
+
+    const stopInertia = () => { if (inertiaId) cancelAnimationFrame(inertiaId); inertiaId = null; };
+
+    const startInertia = () => {
+      stopInertia();
+      const FRICTION = 0.92;         // 0..1 (plus bas = arrêt rapide)
+      const MIN_SPEED = 0.15;        // px/frame
+      const step = () => {
+        velocity.x *= FRICTION;
+        velocity.y *= FRICTION;
+        if (Math.hypot(velocity.x, velocity.y) < MIN_SPEED) { inertiaId = null; return; }
+        panRef.current = clampPan({ x: panRef.current.x + velocity.x, y: panRef.current.y + velocity.y });
+        scheduleFrame();
+        inertiaId = requestAnimationFrame(step);
+      };
+      inertiaId = requestAnimationFrame(step);
+    };
+
+    // double-tap
+    let lastTapTime = 0;
+    let lastTapPos = { x: 0, y: 0 };
+
+    const onPointerDown = (e) => {
+      wrap.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      stopInertia();
+
+      // double-tap (touch only, 1 doigt)
+      if (e.pointerType === "touch" && pointers.size === 1) {
+        const now = performance.now();
+        const dt = now - lastTapTime;
+        const dist = Math.hypot(e.clientX - lastTapPos.x, e.clientY - lastTapPos.y);
+        if (dt < 300 && dist < 24) {
+          // toggle zoom autour du doigt
+          const rect = wrap.getBoundingClientRect();
+          const cx = e.clientX - rect.left - panRef.current.x;
+          const cy = e.clientY - rect.top - panRef.current.y;
+          const prev = scaleRef.current;
+          const next = prev < 1.2 ? 1.8 : 1; // zoom-in puis retour
+          const nx = cx - (cx * next) / prev;
+          const ny = cy - (cy * next) / prev;
+          scaleRef.current = next;
+          panRef.current = clampPan({ x: panRef.current.x + nx, y: panRef.current.y + ny });
+          scheduleFrame();
+          requestHiDpiRerender();
+          lastTapTime = 0; // reset
+          return;
+        }
+        lastTapTime = now;
+        lastTapPos = { x: e.clientX, y: e.clientY };
+      }
+    };
+
+    const onPointerMove = (e) => {
       if (!pointers.has(e.pointerId)) return;
-      pointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+      const prevP = pointers.get(e.pointerId);
+      const curP = { x: e.clientX, y: e.clientY };
+      pointers.set(e.pointerId, curP);
+
+      const now = performance.now();
+
       if (pointers.size === 1) {
+        // pan
         const p = Array.from(pointers.values())[0];
         if (!singlePanBase) {
-          singlePanBase = { startX: p.clientX, startY: p.clientY, basePanX: pan.x, basePanY: pan.y };
+          singlePanBase = {
+            startX: p.x, startY: p.y,
+            baseX: panRef.current.x, baseY: panRef.current.y
+          };
+          lastMoveT = now; lastMoveX = p.x; lastMoveY = p.y;
           return;
         }
-        const dx = p.clientX - singlePanBase.startX;
-        const dy = p.clientY - singlePanBase.startY;
-        setPan({ x: singlePanBase.basePanX + dx, y: singlePanBase.basePanY + dy });
+        const dx = p.x - singlePanBase.startX;
+        const dy = p.y - singlePanBase.startY;
+        panRef.current = clampPan({ x: singlePanBase.baseX + dx, y: singlePanBase.baseY + dy });
+        scheduleFrame();
+        // velocity
+        const dt = Math.max(1, now - lastMoveT);
+        velocity = { x: (p.x - lastMoveX) / (dt / (1000 / 60)), y: (p.y - lastMoveY) / (dt / (1000 / 60)) };
+        lastMoveT = now; lastMoveX = p.x; lastMoveY = p.y;
       } else if (pointers.size === 2) {
+        // pinch
         const [p1, p2] = Array.from(pointers.values());
-        const dist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+        const cx = (p1.x + p2.x) / 2;
+        const cy = (p1.y + p2.y) / 2;
+        const dist = Math.hypot(p1.x - p2.x, p1.y - p2.y);
         if (!pinchBase) {
-          pinchBase = { dist, scale, panX: pan.x, panY: pan.y, cx: (p1.clientX + p2.clientX) / 2, cy: (p1.clientY + p2.clientY) / 2 };
+          pinchBase = { dist, scale: scaleRef.current, panX: panRef.current.x, panY: panRef.current.y, cx, cy };
           return;
         }
-        const factor = Math.max(0.5, Math.min(3, pinchBase.scale * (dist / pinchBase.dist)));
-        const rect = el.getBoundingClientRect();
-        const cx = pinchBase.cx - rect.left - pinchBase.panX;
-        const cy = pinchBase.cy - rect.top - pinchBase.panY;
-        const nx = cx - (cx * factor) / pinchBase.scale;
-        const ny = cy - (cy * factor) / pinchBase.scale;
-        setScale(factor);
-        setPan({ x: pinchBase.panX + nx, y: pinchBase.panY + ny });
+        const factor = Math.max(0.5, Math.min(MAX_ZOOM, (pinchBase.scale * dist) / pinchBase.dist));
+        const rect = wrap.getBoundingClientRect();
+        const localX = pinchBase.cx - rect.left - pinchBase.panX;
+        const localY = pinchBase.cy - rect.top - pinchBase.panY;
+        const nx = localX - (localX * factor) / pinchBase.scale;
+        const ny = localY - (localY * factor) / pinchBase.scale;
+        scaleRef.current = factor;
+        panRef.current = clampPan({ x: pinchBase.panX + nx, y: pinchBase.panY + ny });
+        scheduleFrame();
       }
-    }
-    function onPointerUp(e) {
-      pointers.delete(e.pointerId);
-      el.releasePointerCapture(e.pointerId);
+    };
+
+    const onPointerUp = (e) => {
+      if (pointers.has(e.pointerId)) {
+        wrap.releasePointerCapture(e.pointerId);
+        pointers.delete(e.pointerId);
+      }
       if (pointers.size < 2) pinchBase = null;
+
       if (pointers.size === 1) {
         const p = Array.from(pointers.values())[0];
-        singlePanBase = { startX: p.clientX, startY: p.clientY, basePanX: pan.x, basePanY: pan.y };
+        singlePanBase = { startX: p.x, startY: p.y, baseX: panRef.current.x, baseY: panRef.current.y };
       } else {
+        // fin d’un geste pan à 1 doigt -> lancer l’inertie
+        if (Math.hypot(velocity.x, velocity.y) > 0.5) startInertia();
         singlePanBase = null;
+        // fin d’un geste -> tenter un rerender HiDPI si nécessaire
+        requestHiDpiRerender();
       }
-    }
-    el.addEventListener("pointerdown", onPointerDown);
-    el.addEventListener("pointermove", onPointerMove);
-    el.addEventListener("pointerup", onPointerUp);
-    el.addEventListener("pointercancel", onPointerUp);
-    return () => {
-      el.removeEventListener("pointerdown", onPointerDown);
-      el.removeEventListener("pointermove", onPointerMove);
-      el.removeEventListener("pointerup", onPointerUp);
-      el.removeEventListener("pointercancel", onPointerUp);
     };
-  }, [pan, scale]);
 
-  // Clic/touch pour placer une porte
+    wrap.addEventListener("pointerdown", onPointerDown);
+    wrap.addEventListener("pointermove", onPointerMove);
+    wrap.addEventListener("pointerup", onPointerUp);
+    wrap.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      wrap.removeEventListener("pointerdown", onPointerDown);
+      wrap.removeEventListener("pointermove", onPointerMove);
+      wrap.removeEventListener("pointerup", onPointerUp);
+      wrap.removeEventListener("pointercancel", onPointerUp);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (rerenderTimerRef.current) clearTimeout(rerenderTimerRef.current);
+    };
+  }, [requestHiDpiRerender]);
+
+  // click/touch pour placer
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
@@ -809,7 +924,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     return () => el.removeEventListener("pointerdown", handlePointerDown);
   }, [placingDoorId, onPlaceAt]);
 
-  // Drag marker
+  // drag marker (left/top en %)
   const dragInfo = useRef(null);
   function onMouseDownPoint(e, p) {
     e.stopPropagation();
@@ -822,30 +937,25 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
       baseYFrac: Number(p.y_frac ?? p.y ?? 0),
       pageW: pageSize.w || 1,
       pageH: pageSize.h || 1,
-      scale,
+      scale: scaleRef.current,
     };
     window.addEventListener("mousemove", onMoveMarker);
     window.addEventListener("mouseup", onUpMarker);
   }
-
   function onMoveMarker(e) {
     const info = dragInfo.current;
     if (!info) return;
-    const dxPx = e.clientX - info.startX;
-    const dyPx = e.clientY - info.startY;
-    const dx = dxPx / (info.pageW * info.scale);
-    const dy = dyPx / (info.pageH * info.scale);
+    const dx = (e.clientX - info.startX) / (info.pageW * info.scale);
+    const dy = (e.clientY - info.startY) / (info.pageH * info.scale);
     const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
     const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (el) {
-      // Positionner en % du parent
       el.style.left = `${x * 100}%`;
       el.style.top = `${y * 100}%`;
       el.style.transform = `translate(-50%, -50%)`;
     }
   }
-
   function onUpMarker() {
     const info = dragInfo.current;
     window.removeEventListener("mousemove", onMoveMarker);
@@ -853,11 +963,8 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     if (!info) return;
     const el = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
     if (!el) { dragInfo.current = null; return; }
-    // Lire les pourcentages left/top
-    const leftPct = parseFloat(el.style.left || "0");
-    const topPct  = parseFloat(el.style.top || "0");
-    const x = isFinite(leftPct) ? leftPct / 100 : 0;
-    const y = isFinite(topPct)  ? topPct  / 100 : 0;
+    const x = (parseFloat(el.style.left || "0") || 0) / 100;
+    const y = (parseFloat(el.style.top || "0") || 0) / 100;
     try { onMovePoint?.(info.id, { x, y }); } catch {}
     dragInfo.current = null;
   }
@@ -869,42 +976,47 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
     return "bg-blue-600 ring-1 ring-blue-300";
   }
 
-  // Coordonnées relatives click/touch
   function relativeXY(evt) {
     const wrap = wrapRef.current;
     if (!wrap) return { x: 0, y: 0 };
-    const wrect = wrap.getBoundingClientRect();
-    const localX = evt.clientX - wrect.left - pan.x;
-    const localY = evt.clientY - wrect.top - pan.y;
+    const rect = wrap.getBoundingClientRect();
+    const localX = evt.clientX - rect.left - panRef.current.x;
+    const localY = evt.clientY - rect.top - panRef.current.y;
     const w = pageSize.w || wrap.clientWidth || 1;
     const h = pageSize.h || wrap.clientHeight || 1;
-    const x = Math.min(1, Math.max(0, localX / (w * scale)));
-    const y = Math.min(1, Math.max(0, localY / (h * scale)));
+    const x = Math.min(1, Math.max(0, localX / (w * scaleRef.current)));
+    const y = Math.min(1, Math.max(0, localY / (h * scaleRef.current)));
     return { x, y };
   }
 
-  // Log points
-  useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
+  // debug
+  useEffect(() => { console.log("[DEBUG] Points:", points); }, [points]);
+
+  const finalHeight = Math.min(viewerH, pageSize.h || viewerH);
 
   return (
     <div className="mt-3">
       <div
         ref={wrapRef}
         className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
-        style={{ height: 520 }}
+        style={{ height: finalHeight }}
       >
         <div
-          className="relative inline-block will-change-transform mx-auto"
+          ref={layerRef}
+          className="relative inline-block will-change-transform"
           style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: "0 0",
             width: pageSize.w || "100%",
-            height: pageSize.h || 520,
+            height: pageSize.h || finalHeight,
           }}
         >
           <canvas
             ref={canvasRef}
-            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, display: loaded ? "block" : "none" }}
+            style={{
+              width: pageSize.w || "100%",
+              height: pageSize.h || finalHeight,
+              display: loaded ? "block" : "none",
+            }}
           />
           {!loaded && (
             <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
@@ -916,15 +1028,13 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
             className="absolute inset-0 z-10"
             style={{
               width: pageSize.w || "100%",
-              height: pageSize.h || 520,
-              touchAction: placingDoorId ? "none" : "auto",
+              height: pageSize.h || finalHeight,
             }}
           >
             {points.map((p) => {
               const x = Number(p.x_frac ?? p.x ?? 0);
               const y = Number(p.y_frac ?? p.y ?? 0);
-              const placed = x >= 0 && x <= 1 && y >= 0 && y <= 1;
-              if (!placed) return null;
+              if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return null;
               return (
                 <div
                   key={p.door_id}
@@ -954,6 +1064,7 @@ function PlanViewer({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint,
           </div>
         )}
       </div>
+
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
         <span className="inline-flex items-center gap-1">
           <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
