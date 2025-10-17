@@ -650,18 +650,6 @@ function PlanViewer({
       _setPan({ x: viewRef.current.panX, y: viewRef.current.panY });
     });
   }
-  // Empêcher le zoom navigateur & gestes par défaut
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const prevent = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
-    el.addEventListener("touchstart", prevent, { passive: false });
-    el.addEventListener("touchmove", prevent, { passive: false });
-    return () => {
-      el.removeEventListener("touchstart", prevent);
-      el.removeEventListener("touchmove", prevent);
-    };
-  }, []);
   // Vérifier canvas & largeur conteneur
   useEffect(() => {
     setIsMounted(!!canvasRef.current);
@@ -837,18 +825,31 @@ function PlanViewer({
       el.removeEventListener("pointercancel", onPointerUp);
     };
   }, []);
-  // Clic/touch pour placer une porte (mode placement) + appui long pour création
+  // (A) Clic/touch pour PLACER une porte quand placingDoorId est défini
   useEffect(() => {
-    if (!onCreateDoorAt) return; // désactive totalement l’appui long si pas de callback
+    const el = overlayRef.current;
+    if (!el) return;
+    const handlePointerUp = (e) => {
+      if (!placingDoorId) return;
+      const xy = relativeXY(e);
+      onPlaceAt?.(xy);
+    };
+    el.addEventListener("pointerup", handlePointerUp);
+    return () => el.removeEventListener("pointerup", handlePointerUp);
+  }, [placingDoorId, onPlaceAt]);
+
+  // (B) Appui long pour CRÉER une porte (optionnel)
+  useEffect(() => {
+    if (!onCreateDoorAt) return; // seulement si fourni
     const el = overlayRef.current;
     if (!el) return;
     let longPressTimer = null;
     const LONG_MS = 600;
     let downXY = null;
     const handlePointerDown = (e) => {
-      if (e.target.dataset?.marker === "1") return;
+      if (e.target?.dataset?.marker === "1") return;
       downXY = { x: e.clientX, y: e.clientY };
-      if (!placingDoorId && onCreateDoorAt) {
+      if (!placingDoorId) {
         longPressTimer = setTimeout(() => {
           const xy = relativeXY(e);
           onCreateDoorAt?.(xy);
@@ -857,29 +858,21 @@ function PlanViewer({
       }
     };
     const clearLP = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } };
-    const handlePointerUp = (e) => {
-      if (placingDoorId) {
-        const xy = relativeXY(e);
-        onPlaceAt?.(xy);
-      }
-      clearLP();
-      downXY = null;
-    };
     const handlePointerMove = (e) => {
       if (downXY && Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y) > 8) clearLP();
     };
     el.addEventListener("pointerdown", handlePointerDown);
-    el.addEventListener("pointerup", handlePointerUp);
     el.addEventListener("pointermove", handlePointerMove);
     el.addEventListener("pointercancel", clearLP);
+    el.addEventListener("pointerup", clearLP);
     return () => {
       el.removeEventListener("pointerdown", handlePointerDown);
-      el.removeEventListener("pointerup", handlePointerUp);
       el.removeEventListener("pointermove", handlePointerMove);
       el.removeEventListener("pointercancel", clearLP);
+      el.removeEventListener("pointerup", clearLP);
       clearLP();
     };
-  }, [placingDoorId, onPlaceAt, onCreateDoorAt]);
+  }, [placingDoorId, onCreateDoorAt]);
   // Drag + clic fiable sur marker
   const dragInfo = useRef(null);
   function onPointerDownPoint(e, p) {
@@ -963,7 +956,7 @@ function PlanViewer({
     const xy = relativeXY(e);
     onCreateDoorAt?.(xy);
   }
-  const wrapperHeight = Math.max(320, Math.round(pageSize.h * scale));
+  const wrapperHeight = Math.max(320, pageSize.h || 520); // fixe, pas lié au zoom
   useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
   const [interactive, setInteractive] = useState(false);
   useEffect(() => {
@@ -1420,11 +1413,16 @@ export default function Doors() {
     setUnplacedDoors(pending);
   }
   function matchFilters(it) {
-    const name = (it.door_name || '').toLowerCase();
-    if (q && !name.includes(q.toLowerCase())) return false;
+    const name = (it.door_name || "").toLowerCase().trim();
+    const qNorm = (q || "").toLowerCase().trim();
+    if (qNorm && !name.includes(qNorm)) return false;
+
     if (status && it.status !== status) return false;
-    if (building && it.building !== building) return false;
-    if (floor && it.floor !== floor) return false;
+
+    const eq = (a, b) => (a || "").toString().trim().toLowerCase() === (b || "").toString().trim().toLowerCase();
+    if (building && !eq(it.building, building)) return false;
+    if (floor && !eq(it.floor, floor)) return false;
+
     if (doorState && it.door_state !== doorState) return false;
     return true;
   }
@@ -1438,7 +1436,6 @@ export default function Doors() {
     if (stableSelectedPlan) {
       loadPositions(stableSelectedPlan, planPage);
       loadUnplacedDoors(stableSelectedPlan, planPage);
-      setPendingPlaceDoorId(null); // reset mode placement à chaque changement
     }
   }, [stableSelectedPlan, planPage, q, status, building, floor, doorState, plans]);
   /* ------------------ MAPS handlers ------------------ */
@@ -1781,7 +1778,13 @@ export default function Doors() {
                   >
                     ➕ Nouvelle porte
                   </Btn>
-                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>
+                  <Btn
+                    variant="ghost"
+                    onClick={() => {
+                      setSelectedPlan(null);
+                      setPendingPlaceDoorId(null); // 🔹 évite un ID de placement “fantôme”
+                    }}
+                  >
                     Fermer le plan
                   </Btn>
                 </div>
@@ -1849,7 +1852,7 @@ export default function Doors() {
                 onReady={handlePdfReady}
                 onMovePoint={handleMovePoint}
                 onClickPoint={handleClickPoint} /* ✅ on garde l’ouverture de la porte */
-                placingDoorId={pendingPlaceDoorId}
+                placingDoorId={pdfReady ? pendingPlaceDoorId : null} // 🔹 pas de placement avant ready
                 onPlaceAt={handlePlaceAt}
                 // onCreateDoorAt={handleCreateDoorAt} // ❌ désactivé
               />
