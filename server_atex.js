@@ -1,47 +1,48 @@
+// server_atex_combined.js — Backend ATEX complet + intégration "Plans" (Leaflet-ready)
+// Remplace ton server_atex.js actuel par CE fichier (ou copie-colle). 
+// Port par défaut: process.env.ATEX_PORT || 3001
+
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import multer from 'multer';
+import fs from 'fs';
+import fsp from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import StreamZip from 'node-stream-zip';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+
+// NOTE: Node 18+ fournit fetch en global → utilisé pour les endpoints IA/photo
 
 dotenv.config();
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL || process.env.DATABASE_URL,
+  ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
+});
 
 const app = express();
 app.use(helmet());
 app.use(express.json({ limit: '20mb' }));
 app.use(cookieParser());
 
-// CORS
+// CORS (simple et permissif — aligne si besoin)
 const ORIGIN = process.env.CORS_ORIGIN || '*';
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-User-Email,X-User-Name,X-Site');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
-// Schema - Ajout de la colonne frequency_months si elle n'existe pas
-async function ensureSchema() {
-  await pool.query(`
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT FROM information_schema.columns 
-        WHERE table_name = 'atex_equipments' AND column_name = 'frequency_months'
-      ) THEN
-        ALTER TABLE atex_equipments ADD COLUMN frequency_months INTEGER;
-      END IF;
-    END $$;
-  `);
-}
-ensureSchema().catch(e => console.error('[ATEX SCHEMA] error:', e.message));
-
-// Utils
+// ======================================================================
+//                  Utils génériques (dates, conformité)
+// ======================================================================
 function addMonths(dateStr, months = 36) {
   if (!dateStr) return null;
   const d = new Date(dateStr);
@@ -59,7 +60,6 @@ function daysUntil(dateStr) {
   return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
 }
 
-// Enhanced Conformité: Parse category from marking and check against zone
 function getCategoryFromMarking(ref, type) {
   const upper = (ref || '').toUpperCase();
   const match = upper.match(new RegExp(`II\\s*([1-3])${type}`, 'i'));
@@ -89,7 +89,6 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
   const catDust = getCategoryFromMarking(ref, 'D');
 
   const problems = [];
-
   if (needsGas) {
     if (catGas === null) {
       problems.push('No gas category (G) in ATEX marking for gas zone.');
@@ -100,7 +99,6 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
       }
     }
   }
-
   if (needsDust) {
     if (catDust === null) {
       problems.push('No dust category (D) in ATEX marking for dust zone.');
@@ -111,21 +109,342 @@ function assessCompliance(atex_ref = '', zone_gas = null, zone_dust = null) {
       }
     }
   }
-
   return { status: problems.length ? 'Non conforme' : 'Conforme', problems };
 }
 
+// ======================================================================
+//                  Schéma DB (ajouts + tables Plans)
+// ======================================================================
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Répertoires pour les plans
+const DATA_ROOT = process.env.ATEX_DATA_DIR || path.join(__dirname, 'data_atex');
+const FILES_DIR = path.join(DATA_ROOT, 'files');
+const MAPS_ROOT = path.join(DATA_ROOT, 'maps');
+const MAPS_INCOMING_DIR = path.join(MAPS_ROOT, 'incoming');
+const MAPS_STORE_DIR = path.join(MAPS_ROOT, 'plans');
+await fsp.mkdir(DATA_ROOT, { recursive: true });
+await fsp.mkdir(FILES_DIR, { recursive: true });
+await fsp.mkdir(MAPS_INCOMING_DIR, { recursive: true });
+await fsp.mkdir(MAPS_STORE_DIR, { recursive: true });
+
+// PDF.js worker & fonts (nécessaires pour compter les pages)
+function resolvePdfWorker() {
+  try {
+    return require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+  } catch {
+    return require.resolve('pdfjs-dist/build/pdf.worker.mjs');
+  }
+}
+pdfjsLib.GlobalWorkerOptions.workerSrc = resolvePdfWorker();
+const pdfjsPkgDir = path.dirname(require.resolve('pdfjs-dist/package.json'));
+const PDF_STANDARD_FONTS = path.join(pdfjsPkgDir, 'standard_fonts/');
+
+async function ensureSchema() {
+  // 1) Colonne frequency_months sur atex_equipments (compat ascendante)
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT FROM information_schema.columns 
+        WHERE table_name = 'atex_equipments' AND column_name = 'frequency_months'
+      ) THEN
+        ALTER TABLE atex_equipments ADD COLUMN frequency_months INTEGER;
+      END IF;
+    END $$;
+  `);
+
+  // 2) Tables Plans & Positions (inspiré logique "portes")
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atex_plans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      logical_name TEXT NOT NULL,
+      version TEXT NOT NULL,
+      filename TEXT,
+      file_path TEXT,
+      page_count INT,
+      content BYTEA,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS atex_plans_logical_idx ON atex_plans(logical_name);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS atex_plans_created_idx ON atex_plans(created_at DESC);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atex_plan_names (
+      logical_name TEXT PRIMARY KEY,
+      display_name TEXT
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atex_positions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      equipment_id UUID REFERENCES atex_equipments(id) ON DELETE CASCADE,
+      plan_logical_name TEXT NOT NULL,
+      page_index INT NOT NULL DEFAULT 0,
+      page_label TEXT,
+      x_frac NUMERIC,
+      y_frac NUMERIC,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'atex_positions_uniq'
+      ) THEN
+        ALTER TABLE atex_positions
+        ADD CONSTRAINT atex_positions_uniq UNIQUE (equipment_id, plan_logical_name, page_index);
+      END IF;
+    END $$;
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_pos_equip ON atex_positions(equipment_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atex_pos_plan_page ON atex_positions(plan_logical_name, page_index);`);
+}
+await ensureSchema().catch(e => console.error('[ATEX SCHEMA] error:', e.message));
+
+// ======================================================================
+//                            Helpers Plans
+// ======================================================================
+function parsePlanName(entryName) {
+  const base = path.basename(entryName).replace(/\.pdf$/i, '');
+  const m = base.match(/^(.*?)(?:[_-](v?\d+))?$/i);
+  const logical = (m?.[1] || base || 'plan').trim();
+  const version = (m?.[2] || 'v1').trim();
+  return { logical, version };
+}
+
+async function pdfPageCount(abs) {
+  const data = new Uint8Array(await fsp.readFile(abs));
+  const doc = await pdfjsLib.getDocument({ data, standardFontDataUrl: PDF_STANDARD_FONTS }).promise;
+  const n = doc.numPages || 1;
+  await doc.cleanup();
+  return n;
+}
+
+// ======================================================================
+//                         API: Health (simple)
+// ======================================================================
 app.get('/api/atex/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
 
+// ======================================================================
+//                         API: Plans / Positions
+// ======================================================================
+const uploadZip = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, MAPS_INCOMING_DIR),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, '_')}`),
+  }),
+  limits: { fileSize: 300 * 1024 * 1024 },
+});
+
+app.post('/api/atex/maps/uploadZip', uploadZip.single('zip'), async (req, res) => {
+  const zipPath = req.file?.path;
+  if (!zipPath) return res.status(400).json({ ok: false, error: 'zip manquant' });
+
+  const zip = new StreamZip.async({ file: zipPath, storeEntries: true });
+  const imported = [];
+  try {
+    const entries = await zip.entries();
+    const files = Object.values(entries).filter((e) => !e.isDirectory && /\.pdf$/i.test(e.name));
+
+    for (const entry of files) {
+      const tmpOut = path.join(MAPS_INCOMING_DIR, `tmp_${Date.now()}_${path.basename(entry.name).replace(/[^\w.\-]+/g, '_')}`);
+      await fsp.mkdir(path.dirname(tmpOut), { recursive: true });
+      await zip.extract(entry.name, tmpOut);
+
+      const { logical, version } = parsePlanName(entry.name);
+
+      const safeRel = entry.name.replace(/[^\w.\-\/]+/g, '_');
+      const dest = path.join(MAPS_STORE_DIR, `${Date.now()}_${safeRel}`);
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await fsp.rename(tmpOut, dest);
+
+      const page_count = await pdfPageCount(dest).catch(() => 1);
+      let buf = null;
+      try { buf = await fsp.readFile(dest); } catch {}
+
+      await pool.query(
+        `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, content)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [logical, version, path.basename(dest), dest, page_count, buf]
+      );
+
+      await pool.query(
+        `INSERT INTO atex_plan_names (logical_name, display_name)
+         VALUES ($1, $2)
+         ON CONFLICT (logical_name) DO NOTHING`,
+        [logical, logical]
+      );
+
+      imported.push({ logical_name: logical, version, page_count });
+    }
+
+    res.json({ ok: true, imported });
+  } catch (e) {
+    console.error('[UPLOAD ZIP] error:', e?.message);
+    res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    await zip.close().catch(() => {});
+    fs.rmSync(zipPath, { force: true });
+  }
+});
+
+app.get('/api/atex/maps/plans', async (_req, res) => {
+  try {
+    const q = `
+      WITH latest AS (
+        SELECT DISTINCT ON (logical_name)
+               id, logical_name, version, page_count, created_at
+          FROM atex_plans
+         ORDER BY logical_name, created_at DESC
+      )
+      SELECT l.id, l.logical_name, n.display_name, l.version, l.page_count, l.created_at
+        FROM latest l
+        LEFT JOIN atex_plan_names n ON n.logical_name = l.logical_name
+       ORDER BY l.logical_name ASC;`;
+    const { rows } = await pool.query(q);
+    res.json({ ok: true, plans: rows });
+  } catch (e) {
+    console.error('[PLANS LIST] error:', e?.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.put('/api/atex/maps/plan/:logical/rename', async (req, res) => {
+  try {
+    const logical = String(req.params.logical || '');
+    const display_name = String(req.body?.display_name || '').trim() || logical;
+    if (!logical) return res.status(400).json({ ok: false, error: 'logical_name requis' });
+
+    await pool.query(
+      `INSERT INTO atex_plan_names (logical_name, display_name)
+       VALUES ($1,$2)
+       ON CONFLICT (logical_name) DO UPDATE SET display_name = EXCLUDED.display_name`,
+      [logical, display_name]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[PLAN RENAME] error:', e?.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/atex/maps/plan/:idOrLogical/file', async (req, res) => {
+  try {
+    const key = String(req.params.idOrLogical || '');
+    let row = null;
+    if (/^[0-9a-fA-F-]{36}$/.test(key)) {
+      const r = await pool.query('SELECT * FROM atex_plans WHERE id=$1 LIMIT 1', [key]);
+      row = r.rows?.[0] || null;
+    } else {
+      const r = await pool.query('SELECT * FROM atex_plans WHERE logical_name=$1 ORDER BY created_at DESC LIMIT 1', [key]);
+      row = r.rows?.[0] || null;
+    }
+    if (!row) return res.status(404).json({ ok: false, error: 'plan introuvable' });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    if (row.content) return res.send(row.content);
+    if (row.file_path && fs.existsSync(row.file_path)) {
+      return fs.createReadStream(row.file_path).pipe(res);
+    }
+    res.status(410).json({ ok: false, error: 'fichier indisponible' });
+  } catch (e) {
+    console.error('[PLAN FILE] error:', e?.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/atex/maps/positions', async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    const logicalParam = String(req.query.logical_name || '');
+    const pageIndex = Number(req.query.page_index || 0);
+
+    let logical = logicalParam;
+    if (!logical && /^[0-9a-fA-F-]{36}$/.test(id)) {
+      const { rows } = await pool.query('SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1', [id]);
+      logical = rows?.[0]?.logical_name || '';
+    }
+    if (!logical) return res.status(400).json({ ok: false, error: 'logical_name ou id requis' });
+
+    const q = `
+      SELECT p.id, p.equipment_id, p.plan_logical_name, p.page_index, p.page_label,
+             p.x_frac::float AS x_frac, p.y_frac::float AS y_frac,
+             e.code, e.building, e.room, e.component_type, e.status
+        FROM atex_positions p
+        LEFT JOIN atex_equipments e ON e.id = p.equipment_id
+       WHERE p.plan_logical_name = $1 AND p.page_index = $2
+       ORDER BY e.building, e.room, e.code;`;
+    const { rows } = await pool.query(q, [logical, pageIndex]);
+    res.json({ ok: true, positions: rows });
+  } catch (e) {
+    console.error('[POS LIST] error:', e?.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.put('/api/atex/maps/positions/:equipmentId', async (req, res) => {
+  try {
+    const equipmentId = String(req.params.equipmentId || '');
+    const body = req.body || {};
+    const logical = String(body.plan_logical_name || body.logical_name || '');
+    const page_index = Number(body.page_index ?? 0);
+    const x_frac = Number(body.x_frac ?? NaN);
+    const y_frac = Number(body.y_frac ?? NaN);
+    const page_label = body.page_label ? String(body.page_label) : null;
+
+    if (!equipmentId || !logical || Number.isNaN(x_frac) || Number.isNaN(y_frac)) {
+      return res.status(400).json({ ok: false, error: 'paramètres invalides' });
+    }
+
+    const q = `
+      INSERT INTO atex_positions (equipment_id, plan_logical_name, page_index, page_label, x_frac, y_frac, created_at, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6, now(), now())
+      ON CONFLICT (equipment_id, plan_logical_name, page_index)
+      DO UPDATE SET page_label = EXCLUDED.page_label,
+                    x_frac = EXCLUDED.x_frac,
+                    y_frac = EXCLUDED.y_frac,
+                    updated_at = now()
+      RETURNING id;`;
+    const { rows } = await pool.query(q, [equipmentId, logical, page_index, page_label, x_frac, y_frac]);
+    res.json({ ok: true, id: rows?.[0]?.id });
+  } catch (e) {
+    console.error('[POS UPSERT] error:', e?.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.delete('/api/atex/maps/positions/:equipmentId', async (req, res) => {
+  try {
+    const equipmentId = String(req.params.equipmentId || '');
+    const logical = String(req.query.plan_logical_name || req.query.logical_name || '');
+    const page_index = Number(req.query.page_index ?? 0);
+    if (!equipmentId || !logical) {
+      return res.status(400).json({ ok: false, error: 'paramètres invalides' });
+    }
+    await pool.query('DELETE FROM atex_positions WHERE equipment_id=$1 AND plan_logical_name=$2 AND page_index=$3', [equipmentId, logical, page_index]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[POS DELETE] error:', e?.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ======================================================================
+//                     API: ATEX EXISTANT (CRUD & Co.)
+// ======================================================================
 // SUGGESTS
 app.get('/api/atex/suggests', async (req, res) => {
   try {
     const fields = ['building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref', 'atex_ref'];
     const out = {};
     for (const f of fields) {
-      const r = await pool.query(
-        `SELECT DISTINCT ${f} FROM atex_equipments WHERE ${f} IS NOT NULL AND ${f}<>'' ORDER BY ${f} ASC LIMIT 200`
-      );
+      const r = await pool.query(`SELECT DISTINCT ${f} FROM atex_equipments WHERE ${f} IS NOT NULL AND ${f}<>'' ORDER BY ${f} ASC LIMIT 200`);
       out[f] = r.rows.map(x => x[f]);
     }
     res.json(out);
@@ -135,7 +454,7 @@ app.get('/api/atex/suggests', async (req, res) => {
   }
 });
 
-// Helpers
+// Helpers LIST
 function asArray(v) { return v == null ? [] : (Array.isArray(v) ? v : [v]); }
 function addLikeIn(where, values, i, field, arr) {
   if (!arr.length) return i;
@@ -144,8 +463,6 @@ function addLikeIn(where, values, i, field, arr) {
   values.push(...arr);
   return i + arr.length;
 }
-
-// LIST
 async function runListQuery({ whereSql, values, sortSafe, dirSafe, limit, offset }) {
   return pool.query(
     `SELECT * FROM atex_equipments ${whereSql} ORDER BY ${sortSafe} ${dirSafe} LIMIT ${limit} OFFSET ${offset}`,
@@ -153,6 +470,7 @@ async function runListQuery({ whereSql, values, sortSafe, dirSafe, limit, offset
   );
 }
 
+// LIST
 app.get('/api/atex/equipments', async (req, res) => {
   try {
     const { q, sort = 'id', dir = 'desc', page = '1', pageSize = '100' } = req.query;
@@ -210,11 +528,7 @@ app.get('/api/atex/equipments', async (req, res) => {
 // CREATE
 app.post('/api/atex/equipments', async (req, res) => {
   try {
-    const {
-      site, building, room, component_type, manufacturer, manufacturer_ref,
-      atex_ref, zone_gas, zone_dust, last_control, next_control,
-      comments, frequency_months
-    } = req.body;
+    const { site, building, room, component_type, manufacturer, manufacturer_ref, atex_ref, zone_gas, zone_dust, last_control, next_control, comments, frequency_months } = req.body;
 
     const { status } = assessCompliance(atex_ref, zone_gas, zone_dust);
     const nextCtrl = next_control || addMonths(last_control, frequency_months ? Number(frequency_months) : 36);
@@ -225,9 +539,7 @@ app.post('/api/atex/equipments', async (req, res) => {
         zone_gas, zone_dust, status, last_control, next_control, comments, frequency_months)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
-      [site, building, room, component_type, manufacturer, manufacturer_ref, atex_ref,
-       zone_gas ?? null, zone_dust ?? null, status, last_control || null, nextCtrl || null,
-       comments || null, frequency_months || 36]
+      [site, building, room, component_type, manufacturer, manufacturer_ref, atex_ref, zone_gas ?? null, zone_dust ?? null, status, last_control || null, nextCtrl || null, comments || null, frequency_months || 36]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -242,15 +554,10 @@ app.put('/api/atex/equipments/:id', async (req, res) => {
     const id = req.params.id;
     const patch = { ...req.body };
 
-    const validFields = [
-      'site', 'building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref',
-      'atex_ref', 'zone_gas', 'zone_dust', 'last_control', 'next_control', 'comments', 'frequency_months'
-    ];
+    const validFields = ['site', 'building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref', 'atex_ref', 'zone_gas', 'zone_dust', 'last_control', 'next_control', 'comments', 'frequency_months'];
     const filteredPatch = {};
     for (const key of validFields) {
-      if (patch[key] !== undefined) {
-        filteredPatch[key] = patch[key] === '' ? null : patch[key];
-      }
+      if (patch[key] !== undefined) filteredPatch[key] = patch[key] === '' ? null : patch[key];
     }
 
     if ('atex_ref' in filteredPatch || 'zone_gas' in filteredPatch || 'zone_dust' in filteredPatch) {
@@ -295,32 +602,24 @@ app.delete('/api/atex/equipments/:id', async (req, res) => {
   }
 });
 
-// ------- Pièces jointes (table atex_attachments) -------
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
-
+// Pièces jointes
+const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 app.get('/api/atex/equipments/:id/attachments', async (req, res) => {
   try {
-    const r = await pool.query(
-      'SELECT id, filename, mimetype, size, created_at FROM atex_attachments WHERE equipment_id=$1 ORDER BY created_at DESC',
-      [req.params.id]
-    );
+    const r = await pool.query('SELECT id, filename, mimetype, size, created_at FROM atex_attachments WHERE equipment_id=$1 ORDER BY created_at DESC', [req.params.id]);
     res.json(r.rows);
   } catch (e) {
     console.error('[ATTACH LIST] error:', e?.message);
     res.status(500).json({ error: 'Attachments list failed' });
   }
 });
-
-app.post('/api/atex/equipments/:id/attachments', upload.array('files', 12), async (req, res) => {
+app.post('/api/atex/equipments/:id/attachments', uploadMem.array('files', 12), async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!req.files?.length) return res.status(400).json({ error: 'No files' });
     const results = [];
     for (const f of req.files) {
-      const q = await pool.query(
-        'INSERT INTO atex_attachments (equipment_id, filename, mimetype, size, data) VALUES ($1,$2,$3,$4,$5) RETURNING id, filename, mimetype, size, created_at',
-        [id, f.originalname, f.mimetype, f.size, f.buffer]
-      );
+      const q = await pool.query('INSERT INTO atex_attachments (equipment_id, filename, mimetype, size, data) VALUES ($1,$2,$3,$4,$5) RETURNING id, filename, mimetype, size, created_at', [id, f.originalname, f.mimetype, f.size, f.buffer]);
       results.push(q.rows[0]);
     }
     res.status(201).json(results);
@@ -329,7 +628,6 @@ app.post('/api/atex/equipments/:id/attachments', upload.array('files', 12), asyn
     res.status(500).json({ error: 'Upload failed' });
   }
 });
-
 app.get('/api/atex/attachments/:attId/download', async (req, res) => {
   try {
     const r = await pool.query('SELECT filename, mimetype, size, data FROM atex_attachments WHERE id=$1', [req.params.attId]);
@@ -343,7 +641,6 @@ app.get('/api/atex/attachments/:attId/download', async (req, res) => {
     res.status(500).json({ error: 'Download failed' });
   }
 });
-
 app.delete('/api/atex/attachments/:attId', async (req, res) => {
   try {
     await pool.query('DELETE FROM atex_attachments WHERE id=$1', [req.params.attId]);
@@ -354,24 +651,14 @@ app.delete('/api/atex/attachments/:attId', async (req, res) => {
   }
 });
 
-// ------- Analyse Photo pour auto-remplissage -------
-app.post('/api/atex/photo-analysis', upload.single('photo'), async (req, res) => {
+// Analyse Photo (auto-remplissage)
+app.post('/api/atex/photo-analysis', uploadMem.single('photo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No photo provided' });
     if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY missing' });
 
     const base64 = req.file.buffer.toString('base64');
-
-    const prompt = `
-Analyze this equipment photo or label. Extract the following information if visible:
-- Manufacturer name (e.g., Schneider, Siemens)
-- Manufacturer reference or model number (e.g., 218143RT, NSX100F)
-- ATEX marking (e.g., II 2G Ex ib IIC T4 Gb, or similar full ATEX certification string)
-
-Be precise and only extract text that matches these fields. If not found or unclear, use null.
-
-Return ONLY a JSON object with keys: manufacturer, manufacturer_ref, atex_ref.
-`.trim();
+    const prompt = `\nAnalyze this equipment photo or label. Extract the following information if visible:\n- Manufacturer name (e.g., Schneider, Siemens)\n- Manufacturer reference or model number (e.g., 218143RT, NSX100F)\n- ATEX marking (e.g., II 2G Ex ib IIC T4 Gb, or similar full ATEX certification string)\n\nBe precise and only extract text that matches these fields. If not found or unclear, use null.\n\nReturn ONLY a JSON object with keys: manufacturer, manufacturer_ref, atex_ref.\n`.trim();
 
     const resp = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -380,13 +667,10 @@ Return ONLY a JSON object with keys: manufacturer, manufacturer_ref, atex_ref.
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: 'You are an expert in reading equipment labels and ATEX markings. Respond with JSON only.' },
-          {
-            role: 'user',
-            content: [
-              { type: 'text', text: prompt },
-              { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
-            ]
-          }
+          { role: 'user', content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
+          ]}
         ],
         response_format: { type: 'json_object' },
         temperature: 0.2,
@@ -404,11 +688,7 @@ Return ONLY a JSON object with keys: manufacturer, manufacturer_ref, atex_ref.
     const analysis = json.choices?.[0]?.message?.content?.trim();
 
     let parsed;
-    try {
-      parsed = JSON.parse(analysis);
-    } catch {
-      return res.status(500).json({ error: 'Invalid JSON from analysis' });
-    }
+    try { parsed = JSON.parse(analysis); } catch { return res.status(500).json({ error: 'Invalid JSON from analysis' }); }
 
     res.json({
       manufacturer: parsed.manufacturer || null,
@@ -421,7 +701,7 @@ Return ONLY a JSON object with keys: manufacturer, manufacturer_ref, atex_ref.
   }
 });
 
-// ------- Chat IA -------
+// Chat IA (analyse conformité textuelle)
 app.post('/api/atex/ai/:id', async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY manquant' });
@@ -430,32 +710,7 @@ app.post('/api/atex/ai/:id', async (req, res) => {
     const eq = r.rows[0];
     if (!eq) return res.status(404).json({ error: 'Not found' });
 
-    const prompt = `
-You are an ATEX compliance expert. Analyze the equipment's compliance with ATEX standards. Provide a structured response in English:
-
-1) Reasons for non-compliance (if applicable, be specific about marking vs. zone mismatch, protection levels, etc.)
-
-2) Preventive measures
-
-3) Palliative measures
-
-4) Corrective actions
-
-Be concise and accurate. Recall: Gas zones - 0 (most hazardous), 1, 2 (least); Equipment category 1 for all, 2 for 1-2, 3 for 2 only. Similar for dust.
-
-Equipment:
-- Building: ${eq.building}
-- Room: ${eq.room}
-- Type: ${eq.component_type}
-- Manufacturer: ${eq.manufacturer}
-- Manufacturer Ref: ${eq.manufacturer_ref}
-- ATEX Marking: ${eq.atex_ref}
-- Gas Zone: ${eq.zone_gas ?? '—'}
-- Dust Zone: ${eq.zone_dust ?? '—'}
-- Current Status: ${eq.status}
-- Last Control: ${eq.last_control ?? '—'}
-- Next Control: ${eq.next_control ?? '—'}
-`.trim();
+    const prompt = `\nYou are an ATEX compliance expert. Analyze the equipment's compliance with ATEX standards. Provide a structured response in English:\n\n1) Reasons for non-compliance (if applicable, be specific about marking vs. zone mismatch, protection levels, etc.)\n\n2) Preventive measures\n\n3) Palliative measures\n\n4) Corrective actions\n\nBe concise and accurate. Recall: Gas zones - 0 (most hazardous), 1, 2 (least); Equipment category 1 for all, 2 for 1-2, 3 for 2 only. Similar for dust.\n\nEquipment:\n- Building: ${eq.building}\n- Room: ${eq.room}\n- Type: ${eq.component_type}\n- Manufacturer: ${eq.manufacturer}\n- Manufacturer Ref: ${eq.manufacturer_ref}\n- ATEX Marking: ${eq.atex_ref}\n- Gas Zone: ${eq.zone_gas ?? '—'}\n- Dust Zone: ${eq.zone_dust ?? '—'}\n- Current Status: ${eq.status}\n- Last Control: ${eq.last_control ?? '—'}\n- Next Control: ${eq.next_control ?? '—'}\n`.trim();
 
     const resp = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -478,7 +733,7 @@ Equipment:
   }
 });
 
-// ------- ASSESMENT & ANALYTICS -------
+// Analytics + Export
 app.get('/api/atex/analytics', async (req, res) => {
   try {
     const now = new Date();
@@ -560,7 +815,6 @@ app.get('/api/atex/analytics', async (req, res) => {
   }
 });
 
-// ------- EXPORT EXCEL -------
 app.get('/api/atex/export', async (req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -611,5 +865,8 @@ app.get('/api/atex/export', async (req, res) => {
   }
 });
 
+// ======================================================================
+//                                  Boot
+// ======================================================================
 const port = process.env.ATEX_PORT || 3001;
 app.listen(port, () => console.log(`ATEX service listening on :${port}`));
