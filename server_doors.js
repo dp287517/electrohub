@@ -1728,13 +1728,13 @@ app.put("/api/doors/maps/plan/:logical/rename", async (req, res) => {
        ON CONFLICT (logical_name) DO UPDATE SET display_name = EXCLUDED.display_name`,
       [logical, String(display_name).trim()]
     );
-    res.json({ ok: true });
+  res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-/** Liste des positions pour un plan/page */
+/** Liste des positions pour un plan/page — avec building, floor, door_state */
 app.get("/api/doors/maps/positions", async (req, res) => {
   try {
     const id = String(req.query.id || "");
@@ -1757,23 +1757,42 @@ app.get("/api/doors/maps/positions", async (req, res) => {
         SELECT door_id, due_date
           FROM fd_checks
          WHERE closed_at IS NULL
+      ),
+      last_closed AS (
+        SELECT DISTINCT ON (door_id)
+               door_id, status
+          FROM fd_checks
+         WHERE closed_at IS NOT NULL
+         ORDER BY door_id, closed_at DESC
       )
-      SELECT p.door_id, d.name, p.x_frac, p.y_frac,
+      SELECT p.door_id,
+             d.name,
+             d.building,
+             d.floor,
+             p.x_frac, p.y_frac,
              CASE
                WHEN pend.due_date < CURRENT_DATE THEN 'en_retard'
                WHEN pend.due_date <= CURRENT_DATE + INTERVAL '30 day' THEN 'en_cours_30'
                ELSE 'a_faire'
-             END AS status
+             END AS status,
+             CASE WHEN lc.status = 'nc' THEN 'non_conforme'
+                  WHEN lc.status = 'ok' THEN 'conforme'
+                  ELSE NULL END AS door_state
         FROM fd_door_positions p
         JOIN fd_doors d ON d.id = p.door_id
    LEFT JOIN pend ON pend.door_id = p.door_id
+   LEFT JOIN last_closed lc ON lc.door_id = p.door_id
        WHERE p.plan_logical_name=$1 AND p.page_index=$2
+       ORDER BY d.name ASC
     `;
     const { rows } = await pool.query(q, [logical, pageIndex]);
 
     const points = rows.map((r) => ({
       door_id: r.door_id,
       door_name: r.name,
+      building: r.building,
+      floor: r.floor,
+      door_state: r.door_state,
       x: Number(r.x_frac ?? 0),
       y: Number(r.y_frac ?? 0),
       status: r.status,
@@ -1785,7 +1804,7 @@ app.get("/api/doors/maps/positions", async (req, res) => {
   }
 });
 
-/** Nouvelle route : Liste des portes non positionnées pour un plan/page */
+/** Portes NON positionnées pour un plan/page — enrichies building/floor/door_state/status */
 app.get("/api/doors/maps/pending-positions", async (req, res) => {
   try {
     const logical = String(req.query.logical_name || "");
@@ -1796,20 +1815,49 @@ app.get("/api/doors/maps/pending-positions", async (req, res) => {
     }
 
     const q = `
-      SELECT d.id AS door_id, d.name AS door_name
-      FROM fd_doors d
-      LEFT JOIN fd_door_positions p
-        ON p.door_id = d.id
-        AND p.plan_logical_name = $1
-        AND p.page_index = $2
-      WHERE p.door_id IS NULL
-      ORDER BY d.name ASC;
+      WITH pend AS (
+        SELECT door_id, due_date
+          FROM fd_checks
+         WHERE closed_at IS NULL
+      ),
+      last_closed AS (
+        SELECT DISTINCT ON (door_id)
+               door_id, status
+          FROM fd_checks
+         WHERE closed_at IS NOT NULL
+         ORDER BY door_id, closed_at DESC
+      )
+      SELECT d.id   AS door_id,
+             d.name AS door_name,
+             d.building,
+             d.floor,
+             CASE
+               WHEN pend.due_date < CURRENT_DATE THEN 'en_retard'
+               WHEN pend.due_date <= CURRENT_DATE + INTERVAL '30 day' THEN 'en_cours_30'
+               ELSE 'a_faire'
+             END AS status,
+             CASE WHEN lc.status = 'nc' THEN 'non_conforme'
+                  WHEN lc.status = 'ok' THEN 'conforme'
+                  ELSE NULL END AS door_state
+        FROM fd_doors d
+        LEFT JOIN fd_door_positions p
+          ON p.door_id = d.id
+         AND p.plan_logical_name = $1
+         AND p.page_index = $2
+   LEFT JOIN pend ON pend.door_id = d.id
+   LEFT JOIN last_closed lc ON lc.door_id = d.id
+       WHERE p.door_id IS NULL
+       ORDER BY d.name ASC;
     `;
     const { rows } = await pool.query(q, [logical, pageIndex]);
 
     const pending = rows.map((r) => ({
       door_id: r.door_id,
       door_name: r.door_name,
+      building: r.building,
+      floor: r.floor,
+      door_state: r.door_state,
+      status: r.status,
     }));
 
     res.json({ ok: true, pending });
@@ -1818,14 +1866,13 @@ app.get("/api/doors/maps/pending-positions", async (req, res) => {
   }
 });
 
-/** Enregistre/Met à jour la position d’une porte sur un plan/page */
-// remplace le handler par :
+/** Enregistre/Met à jour la position d’une porte sur un plan/page (supporte plan_id) */
 app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
   try {
     const doorId = req.params.doorId;
     let {
       logical_name,
-      plan_id,            // ✅ nouveau/prioritaire
+      plan_id,            // ✅ prioritaire si fourni (UUID → résolu en logical_name)
       page_index = 0,
       page_label = null,
       x_frac,
@@ -1834,9 +1881,12 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
       y,
     } = req.body || {};
 
-    // si on reçoit un plan_id (UUID), on récupère le logical_name correspondant
+    // si plan_id fourni et logical_name manquant → on le résout
     if ((!logical_name || String(logical_name).trim() === "") && plan_id && /^[0-9a-fA-F-]{36}$/.test(String(plan_id))) {
-      const { rows } = await pool.query(`SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`, [plan_id]);
+      const { rows } = await pool.query(
+        `SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`,
+        [plan_id]
+      );
       logical_name = rows?.[0]?.logical_name || null;
     }
 
@@ -1871,3 +1921,4 @@ app.listen(PORT, HOST, () => {
     `QR base default: ${process.env.PUBLIC_BASE || "(dynamic from host)"} + ${DEFAULT_APP_PATH}`
   );
 });
+
