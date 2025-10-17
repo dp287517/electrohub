@@ -50,14 +50,13 @@ function noCache(res) {
   // Nos réponses varient selon l'identity et le site
   res.setHeader("Vary", "X-Site, X-User-Email, X-User-Name");
 }
-// En prime: ne génère pas d'ETag/Last-Modified (sinon 304 possibles)
-app.set("etag", false);
 
 // ------------------------------
 // App & Config
 // ------------------------------
 const app = express();
 app.set("trust proxy", 1);
+app.set("etag", false);
 
 // 🔐 Helmet — CSP locale (pdf.js local, plus de CDN)
 app.use(
@@ -1751,6 +1750,7 @@ app.put("/api/doors/maps/plan/:logical/rename", async (req, res) => {
 /** Liste des positions pour un plan/page (enrichie pour les filtres) */
 app.get("/api/doors/maps/positions", async (req, res) => {
   try {
+    noCache(res);
     const id = String(req.query.id || "");
     const logicalParam = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
@@ -1833,6 +1833,7 @@ app.get("/api/doors/maps/positions", async (req, res) => {
 /** Liste des portes NON positionnées pour un plan/page (enrichie pour les filtres) */
 app.get("/api/doors/maps/pending-positions", async (req, res) => {
   try {
+    noCache(res);
     const logical = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
 
@@ -1910,6 +1911,7 @@ app.get("/api/doors/maps/pending-positions", async (req, res) => {
 /** Enregistre / met à jour la position d’une porte sur un plan/page (UPSERT robuste) */
 app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
   try {
+    noCache(res);
     const doorId = String(req.params.doorId || "");
     let {
       logical_name,
