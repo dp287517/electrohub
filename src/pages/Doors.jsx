@@ -1874,57 +1874,7 @@ export default function Doors() {
                 </div>
               </div>
 
-              {/* Bandeau portes en attente de positionnement */}
-              <div className="mt-3 p-2 rounded-xl border bg-amber-50/60">
-                <div className="text-sm text-amber-700 font-medium">
-                  Portes en attente de positionnement ({unplacedDoors.length})
-                </div>
-                {(placedLoading || mapsLoading) && (
-                  <div className="text-xs text-amber-700/80 mt-1">
-                    Calcul en cours (chargement de tous les plans)…
-                  </div>
-                )}
-                {!placedLoading && !mapsLoading && !unplacedDoors.length && (
-                  <div className="text-xs text-amber-700/80 mt-1">
-                    Aucune porte en attente pour cette page.
-                  </div>
-                )}
-                {!!unplacedDoors.length && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {unplacedDoors.map((p) => (
-                      <button
-                        key={p.door_id}
-                        className={`px-2 py-1 rounded-md border text-xs transition ${
-                          pendingPlaceDoorId === p.door_id
-                            ? "bg-amber-600 text-white border-amber-700"
-                            : "bg-white text-amber-800 border-amber-200 hover:bg-amber-100"
-                        }`}
-                        onClick={() => {
-                          setPendingPlaceDoorId((cur) => (cur === p.door_id ? null : p.door_id));
-                        }}
-                        title="Cliquer puis cliquer sur le plan pour placer"
-                      >
-                        Placer • {p.door_name}
-                      </button>
-                    ))}
-                    {pendingPlaceDoorId && (
-                      <button
-                        className="px-2 py-1 rounded-md border text-xs bg-white text-gray-700 hover:bg-gray-50"
-                        onClick={() => setPendingPlaceDoorId(null)}
-                      >
-                        Annuler le placement
-                      </button>
-                    )}
-                  </div>
-                )}
-                {!!pendingPlaceDoorId && (
-                  <div className="text-xs text-amber-700/90 mt-2">
-                    Astuce : cliquez/touchez l’endroit souhaité sur le plan pour déposer « {
-                      unplacedDoors.find(u => u.door_id === pendingPlaceDoorId)?.door_name || "porte"
-                    } ».
-                  </div>
-                )}
-              </div>
+              {/* Bandeau portes en attente de positionnement — supprimé */}
 
               <PlanViewer
                 key={stableSelectedPlan?.id || stableSelectedPlan?.logical_name || ""}
