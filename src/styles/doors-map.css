@@ -1,0 +1,31 @@
+/* src/styles/doors-map.css */
+.door-marker {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.9), 0 1px 6px rgba(0,0,0,.25);
+  pointer-events: auto;
+}
+.door-marker--green { background: #059669; }   /* A_FAIRE */
+.door-marker--amber { background: #f59e0b; }   /* EN_COURS */
+.door-marker--red   { background: #e11d48; }   /* EN_RETARD */
+.door-marker--blue  { background: #2563eb; }   /* FAIT/autre */
+
+.door-marker::after { /* point central + contraste */
+  content: "";
+  position: absolute; inset: 7px;
+  border-radius: 9999px; background: rgba(255,255,255,.9);
+}
+
+/* petit menu de désambig */
+.door-pick {
+  position: absolute; z-index: 10000;
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+  padding: 6px; box-shadow: 0 10px 30px rgba(0,0,0,.15);
+}
+.door-pick button {
+  display: block; width: 100%;
+  text-align: left; padding: 6px 8px; border-radius: 8px; font-size: 12px;
+}
+.door-pick button:hover { background: #f3f4f6; }
