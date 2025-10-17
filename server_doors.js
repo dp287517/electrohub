@@ -39,6 +39,20 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// --- cache killers pour JSON
+function noCache(res) {
+  // Navigateur + proxy
+  res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate, max-age=0");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  // CDNs (Cloudflare/Render proxy)
+  res.setHeader("Surrogate-Control", "no-store");
+  // Nos réponses varient selon l'identity et le site
+  res.setHeader("Vary", "X-Site, X-User-Email, X-User-Name");
+}
+// En prime: ne génère pas d'ETag/Last-Modified (sinon 304 possibles)
+app.set("etag", false);
+
 // ------------------------------
 // App & Config
 // ------------------------------
