@@ -433,22 +433,6 @@ function MonthCalendar({ events = [], onDayClick }) {
 }
 
 /* ----------------------------- MAPS components ----------------------------- */
-/** ▼▼▼ Ajout d’un limiteur de concurrence pour miniatures pdf.js ▼▼▼ **/
-const __thumbQueue = { running: 0, max: 2, waiters: [] };
-async function runInThumbQueue(fn) {
-  if (__thumbQueue.running >= __thumbQueue.max) {
-    await new Promise((res) => __thumbQueue.waiters.push(res));
-  }
-  __thumbQueue.running++;
-  try { return await fn(); }
-  finally {
-    __thumbQueue.running--;
-    const next = __thumbQueue.waiters.shift();
-    if (next) next();
-  }
-}
-/** ▲▲▲ **/
-
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
   return (
@@ -485,8 +469,6 @@ function PlanCards({ plans = [], onRename, onPick }) {
   );
 }
 
-// Changes to PlanCard in Doors.jsx
-
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -496,6 +478,7 @@ function PlanCard({ plan, onRename, onPick }) {
   const [thumbErr, setThumbErr] = useState("");
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
+
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
@@ -505,39 +488,38 @@ function PlanCard({ plan, onRename, onPick }) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
-  // Miniature page 1 via pdf.js (avec annulation propre + **file render throttling**)
+
+  // Miniature page 1 via pdf.js (avec annulation propre)
   useEffect(() => {
-    if (!visible || isMobile) return;
+    if (!visible) return;
     let cancelled = false;
     let pdf = null;
     let renderTask = null;
     let loadingTask = null;
     (async () => {
-      await runInThumbQueue(async () => {
-        try {
-          setThumbErr("");
-          const url = planFileUrlSafe(plan);
-          loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(url), standardFontDataUrl: "/standard_fonts/" });
-          pdf = await loadingTask.promise;
-          if (cancelled) return;
-          const page = await pdf.getPage(1);
-          const viewport = page.getViewport({ scale: 1 });
-          const cap = window.innerWidth < 640 ? 220 : 320;
-          const baseScale = cap / viewport.width;
-          const adjusted = page.getViewport({ scale: baseScale });
-          const c = canvasRef.current;
-          if (!c || cancelled) return;
-          c.width = Math.floor(adjusted.width);
-          c.height = Math.floor(adjusted.height);
-          const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true });
-          renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
-          await renderTask.promise;
-          page.cleanup?.();
-        } catch (e) {
-          if (!cancelled) setThumbErr("Aperçu indisponible.");
-        }
-      });
+      try {
+        setThumbErr("");
+        const url = planFileUrlSafe(plan);
+        loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
+        pdf = await loadingTask.promise;
+        if (cancelled) return;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 1 });
+        const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
+        const cap = isMobile ? 220 : 320;
+        const baseScale = cap / viewport.width;
+        const adjusted = page.getViewport({ scale: baseScale });
+        const c = canvasRef.current;
+        if (!c || cancelled) return;
+        c.width = Math.floor(adjusted.width);
+        c.height = Math.floor(adjusted.height);
+        const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true });
+        renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
+        await renderTask.promise;
+        page.cleanup?.();
+      } catch (e) {
+        if (!cancelled) setThumbErr("Aperçu indisponible.");
+      }
     })();
     return () => {
       cancelled = true;
@@ -545,12 +527,12 @@ function PlanCard({ plan, onRename, onPick }) {
       if (pdf) { try { pdf.destroy(); } catch {} }
       else if (loadingTask) { try { loadingTask.destroy(); } catch {} }
     };
-  }, [plan.id, plan.logical_name, visible, isMobile]);
+  }, [plan.id, plan.logical_name, visible]);
+
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
-        {visible && !isMobile && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
-        {visible && isMobile && <div className="w-full h-full flex items-center justify-center text-gray-500">PDF</div>}
+        {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
         {!visible && <div className="text-xs text-gray-400">…</div>}
         {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
@@ -813,277 +795,275 @@ function PlanViewer({
       el.removeEventListener("pointercancel", onPointerUp);
     };
   }, []);
-  /*** >>> PARTIE 2/2 — suite de PlanViewer et reste du fichier ***/
 
-// (A) Tap pour PLACER (ignore si scroll > 8px, bouton gauche seulement)
-const lastDown = useRef(null);
-useEffect(() => {
-  const el = overlayRef.current;
-  if (!el) return;
-  const handlePointerDown = (e) => {
-    lastDown.current = { x: e.clientX, y: e.clientY, t: performance.now?.() || Date.now(), btn: e.button };
-  };
-  const handlePointerUp = (e) => {
-    if (!placingDoorId) return;
-    // PC: bouton gauche (0) — sur mobile, e.button est souvent 0/undefined
-    if (typeof e.button === "number" && e.button !== 0 && e.pointerType === "mouse") return;
-    const d = lastDown.current;
-    const moved = d ? Math.hypot((e.clientX || 0) - d.x, (e.clientY || 0) - d.y) > 8 : false;
-    if (moved) return;
-    const xy = relativeXY(e);
-    onPlaceAt?.(xy);
-  };
-  el.addEventListener("pointerdown", handlePointerDown);
-  el.addEventListener("pointerup", handlePointerUp);
-  el.addEventListener("pointercancel", handlePointerUp);
-  return () => {
-    el.removeEventListener("pointerdown", handlePointerDown);
-    el.removeEventListener("pointerup", handlePointerUp);
-    el.removeEventListener("pointercancel", handlePointerUp);
-  };
-}, [placingDoorId, onPlaceAt]);
+  // (A) Tap pour PLACER (ignore si scroll > 8px, bouton gauche seulement)
+  const lastDown = useRef(null);
+  useEffect(() => {
+    const el = overlayRef.current;
+    if (!el) return;
+    const handlePointerDown = (e) => {
+      lastDown.current = { x: e.clientX, y: e.clientY, t: performance.now?.() || Date.now(), btn: e.button };
+    };
+    const handlePointerUp = (e) => {
+      if (!placingDoorId) return;
+      // PC: bouton gauche (0) — sur mobile, e.button est souvent 0/undefined
+      if (typeof e.button === "number" && e.button !== 0 && e.pointerType === "mouse") return;
+      const d = lastDown.current;
+      const moved = d ? Math.hypot((e.clientX || 0) - d.x, (e.clientY || 0) - d.y) > 8 : false;
+      if (moved) return;
+      const xy = relativeXY(e);
+      onPlaceAt?.(xy);
+    };
+    el.addEventListener("pointerdown", handlePointerDown);
+    el.addEventListener("pointerup", handlePointerUp);
+    el.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      el.removeEventListener("pointerdown", handlePointerDown);
+      el.removeEventListener("pointerup", handlePointerUp);
+      el.removeEventListener("pointercancel", handlePointerUp);
+    };
+  }, [placingDoorId, onPlaceAt]);
 
-// (B) Appui long pour CRÉER (optionnel)
-useEffect(() => {
-  if (!onCreateDoorAt) return;
-  const el = overlayRef.current;
-  if (!el) return;
-  let longPressTimer = null;
-  const LONG_MS = 600;
-  let downXY = null;
-  const handlePointerDown = (e) => {
-    if (e.target?.dataset?.marker === "1") return;
-    downXY = { x: e.clientX, y: e.clientY };
-    if (!placingDoorId) {
-      longPressTimer = setTimeout(() => {
-        const xy = relativeXY(e);
-        onCreateDoorAt?.(xy);
-        longPressTimer = null;
-      }, LONG_MS);
+  // (B) Appui long pour CRÉER (optionnel)
+  useEffect(() => {
+    if (!onCreateDoorAt) return;
+    const el = overlayRef.current;
+    if (!el) return;
+    let longPressTimer = null;
+    const LONG_MS = 600;
+    let downXY = null;
+    const handlePointerDown = (e) => {
+      if (e.target?.dataset?.marker === "1") return;
+      downXY = { x: e.clientX, y: e.clientY };
+      if (!placingDoorId) {
+        longPressTimer = setTimeout(() => {
+          const xy = relativeXY(e);
+          onCreateDoorAt?.(xy);
+          longPressTimer = null;
+        }, LONG_MS);
+      }
+    };
+    const clearLP = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } };
+    const handlePointerMove = (e) => {
+      if (downXY && Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y) > 8) clearLP();
+    };
+    el.addEventListener("pointerdown", handlePointerDown);
+    el.addEventListener("pointermove", handlePointerMove);
+    el.addEventListener("pointercancel", clearLP);
+    el.addEventListener("pointerup", clearLP);
+    return () => {
+      el.removeEventListener("pointerdown", handlePointerDown);
+      el.removeEventListener("pointermove", handlePointerMove);
+      el.removeEventListener("pointercancel", clearLP);
+      el.removeEventListener("pointerup", clearLP);
+      clearLP();
+    };
+  }, [placingDoorId, onCreateDoorAt]);
+
+  // Drag + clic fiable sur marker (cleanup global ajouté)
+  const dragInfo = useRef(null);
+  function onPointerDownPoint(e, p) {
+    e.stopPropagation();
+    e.preventDefault();
+    isMarkerDragging.current = true;
+    dragInfo.current = {
+      id: p.door_id,
+      startX: e.clientX,
+      startY: e.clientY,
+      moved: false,
+      baseXFrac: Number(p.x_frac ?? p.x ?? 0),
+      baseYFrac: Number(p.y_frac ?? p.y ?? 0),
+      pageW: pageSize.w || 1,
+      pageH: pageSize.h || 1,
+      scale: viewRef.current.scale,
+    };
+    window.addEventListener("pointermove", onMoveMarker);
+    window.addEventListener("pointerup", onUpMarker, { once: true });
+    window.addEventListener("pointercancel", onUpMarker, { once: true });
+  }
+  function onMoveMarker(e) {
+    const info = dragInfo.current;
+    if (!info) return;
+    const dxPx = e.clientX - info.startX;
+    const dyPx = e.clientY - info.startY;
+    if (!info.moved && Math.hypot(dxPx, dyPx) > 4) info.moved = true;
+    const dx = dxPx / (info.pageW * info.scale);
+    const dy = dyPx / (info.pageH * info.scale);
+    const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
+    const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
+    const node = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (node) {
+      node.style.left = `${x * 100}%`;
+      node.style.top = `${y * 100}%`;
+      node.style.transform = `translate(-50%, -50%)`;
     }
-  };
-  const clearLP = () => { if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; } };
-  const handlePointerMove = (e) => {
-    if (downXY && Math.hypot(e.clientX - downXY.x, e.clientY - downXY.y) > 8) clearLP();
-  };
-  el.addEventListener("pointerdown", handlePointerDown);
-  el.addEventListener("pointermove", handlePointerMove);
-  el.addEventListener("pointercancel", clearLP);
-  el.addEventListener("pointerup", clearLP);
-  return () => {
-    el.removeEventListener("pointerdown", handlePointerDown);
-    el.removeEventListener("pointermove", handlePointerMove);
-    el.removeEventListener("pointercancel", clearLP);
-    el.removeEventListener("pointerup", clearLP);
-    clearLP();
-  };
-}, [placingDoorId, onCreateDoorAt]);
-
-// Drag + clic fiable sur marker (cleanup global ajouté)
-const dragInfo = useRef(null);
-function onPointerDownPoint(e, p) {
-  e.stopPropagation();
-  e.preventDefault();
-  isMarkerDragging.current = true;
-  dragInfo.current = {
-    id: p.door_id,
-    startX: e.clientX,
-    startY: e.clientY,
-    moved: false,
-    baseXFrac: Number(p.x_frac ?? p.x ?? 0),
-    baseYFrac: Number(p.y_frac ?? p.y ?? 0),
-    pageW: pageSize.w || (wrapRef.current?.clientWidth || 1),
-    pageH: pageSize.h || (wrapRef.current?.clientHeight || 1),
-    scale: viewRef.current.scale,
-  };
-  window.addEventListener("pointermove", onMoveMarker);
-  window.addEventListener("pointerup", onUpMarker, { once: true });
-  window.addEventListener("pointercancel", onUpMarker, { once: true });
-}
-function onMoveMarker(e) {
-  const info = dragInfo.current;
-  if (!info) return;
-  const dxPx = e.clientX - info.startX;
-  const dyPx = e.clientY - info.startY;
-  if (!info.moved && Math.hypot(dxPx, dyPx) > 4) info.moved = true;
-  const dx = dxPx / (info.pageW * info.scale);
-  const dy = dyPx / (info.pageH * info.scale);
-  const x = Math.min(1, Math.max(0, info.baseXFrac + dx));
-  const y = Math.min(1, Math.max(0, info.baseYFrac + dy));
-  const node = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-  if (node) {
-    node.style.left = `${x * 100}%`;
-    node.style.top = `${y * 100}%`;
-    node.style.transform = `translate(-50%, -50%)`;
   }
-}
-function onUpMarker() {
-  window.removeEventListener("pointermove", onMoveMarker);
-  isMarkerDragging.current = false;
-  const info = dragInfo.current;
-  dragInfo.current = null;
-  if (!info) return;
-  if (!info.moved) {
-    const p = points.find(pt => pt.door_id === info.id);
-    if (p) onClickPoint?.(p);
-    return;
-  }
-  const node = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
-  if (!node) return;
-  const leftPct = parseFloat(node.style.left || "0");
-  const topPct = parseFloat(node.style.top || "0");
-  const x = (isFinite(leftPct) ? leftPct : 0) / 100;
-  const y = (isFinite(topPct) ? topPct : 0) / 100;
-  try { onMovePoint?.(info.id, { x, y }); } catch {}
-}
-useEffect(() => {
-  return () => {
+  function onUpMarker() {
     window.removeEventListener("pointermove", onMoveMarker);
-    window.removeEventListener("pointerup", onUpMarker);
-    window.removeEventListener("pointercancel", onUpMarker);
-  };
-}, []);
+    isMarkerDragging.current = false;
+    const info = dragInfo.current;
+    dragInfo.current = null;
+    if (!info) return;
+    if (!info.moved) {
+      const p = points.find(pt => pt.door_id === info.id);
+      if (p) onClickPoint?.(p);
+      return;
+    }
+    const node = overlayRef.current?.querySelector(`[data-id="${info.id}"]`);
+    if (!node) return;
+    const leftPct = parseFloat(node.style.left || "0");
+    const topPct = parseFloat(node.style.top || "0");
+    const x = (isFinite(leftPct) ? leftPct : 0) / 100;
+    const y = (isFinite(topPct) ? topPct : 0) / 100;
+    try { onMovePoint?.(info.id, { x, y }); } catch {}
+  }
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", onMoveMarker);
+      window.removeEventListener("pointerup", onUpMarker);
+      window.removeEventListener("pointercancel", onUpMarker);
+    };
+  }, []);
 
-function markerClass(s) {
-  if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
-  if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
-  if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
-  return "bg-blue-600 ring-1 ring-blue-300";
-}
+  function markerClass(s) {
+    if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
+    if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
+    if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
+    return "bg-blue-600 ring-1 ring-blue-300";
+  }
 
-// Coordonnées relatives (guard évitant NaN + fallback tant que pageSize=0)
-function relativeXY(evt) {
-  const wrap = wrapRef.current;
-  if (!wrap) return { x: 0, y: 0 };
-  const wrect = wrap.getBoundingClientRect();
-  const cx = Number(evt.clientX ?? 0);
-  const cy = Number(evt.clientY ?? 0);
-  const localX = cx - wrect.left - viewRef.current.panX;
-  const localY = cy - wrect.top - viewRef.current.panY;
-  // Fallback aux dimensions visibles si pdf pas encore mesuré
-  const w = (pageSize.w || wrap.clientWidth || 1);
-  const h = (pageSize.h || wrap.clientHeight || 1);
-  const x = Math.min(1, Math.max(0, localX / (w * viewRef.current.scale)));
-  const y = Math.min(1, Math.max(0, localY / (h * viewRef.current.scale)));
-  return { x, y };
-}
+  // Coordonnées relatives (guard évitant NaN)
+  function relativeXY(evt) {
+    const wrap = wrapRef.current;
+    if (!wrap) return { x: 0, y: 0 };
+    const wrect = wrap.getBoundingClientRect();
+    const cx = Number(evt.clientX ?? 0);
+    const cy = Number(evt.clientY ?? 0);
+    const localX = cx - wrect.left - viewRef.current.panX;
+    const localY = cy - wrect.top - viewRef.current.panY;
+    const w = pageSize.w || wrap.clientWidth || 1;
+    const h = pageSize.h || wrap.clientHeight || 1;
+    const x = Math.min(1, Math.max(0, localX / (w * viewRef.current.scale)));
+    const y = Math.min(1, Math.max(0, localY / (h * viewRef.current.scale)));
+    return { x, y };
+  }
 
-function handleContextMenu(e) {
-  if (!onCreateDoorAt) return;
-  if (e.target?.dataset?.marker === "1") return;
-  e.preventDefault();
-  const xy = relativeXY(e);
-  onCreateDoorAt?.(xy);
-}
+  function handleContextMenu(e) {
+    if (!onCreateDoorAt) return;
+    if (e.target?.dataset?.marker === "1") return;
+    e.preventDefault();
+    const xy = relativeXY(e);
+    onCreateDoorAt?.(xy);
+  }
 
-// Mode interaction → touchAction dynamique pour éviter le “crash scroll” mobile
-const [interactive, setInteractive] = useState(false);
-useEffect(() => {
-  const el = wrapRef.current;
-  if (!el) return;
-  const start = () => setInteractive(true);
-  const stop = () => setTimeout(() => setInteractive(false), 150);
-  el.addEventListener("pointerdown", start);
-  el.addEventListener("pointerup", stop);
-  el.addEventListener("pointercancel", stop);
-  return () => {
-    el.removeEventListener("pointerdown", start);
-    el.removeEventListener("pointerup", stop);
-    el.removeEventListener("pointercancel", stop);
-  };
-}, []);
+  // Mode interaction → touchAction dynamique pour éviter le “crash scroll” mobile
+  const [interactive, setInteractive] = useState(false);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const start = () => setInteractive(true);
+    const stop = () => setTimeout(() => setInteractive(false), 150);
+    el.addEventListener("pointerdown", start);
+    el.addEventListener("pointerup", stop);
+    el.addEventListener("pointercancel", stop);
+    return () => {
+      el.removeEventListener("pointerdown", start);
+      el.removeEventListener("pointerup", stop);
+      el.removeEventListener("pointercancel", stop);
+    };
+  }, []);
 
-const wrapperHeight = Math.max(320, pageSize.h || 520);
-useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
+  const wrapperHeight = Math.max(320, pageSize.h || 520);
+  useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
 
-const touchAction =
-  (placingDoorId || isMarkerDragging.current || scale !== 1) ? "none" : "pan-y";
-const placingCursor = placingDoorId ? "crosshair" : "default";
+  const touchAction =
+    (placingDoorId || isMarkerDragging.current || scale !== 1) ? "none" : "pan-y";
+  const placingCursor = placingDoorId ? "crosshair" : "default";
 
-return (
-  <div className="mt-3">
-    <div
-      ref={wrapRef}
-      className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
-      style={{
-        height: wrapperHeight,
-        touchAction: touchAction,
-        overscrollBehavior: 'contain',
-        cursor: placingCursor,
-      }}
-    >
+  return (
+    <div className="mt-3">
       <div
-        className={`relative inline-block mx-auto ${interactive ? 'will-change-transform' : ''}`}
+        ref={wrapRef}
+        className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
         style={{
-          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${scale})`,
-          transformOrigin: "0 0",
-          width: pageSize.w || "100%",
-          height: pageSize.h || 520,
+          height: wrapperHeight,
+          touchAction: touchAction,
+          overscrollBehavior: 'contain',
+          cursor: placingCursor,
         }}
       >
-        <canvas
-          ref={canvasRef}
-          style={{ width: pageSize.w || "100%", height: pageSize.h || 520, display: loaded ? "block" : "none" }}
-        />
-        {!loaded && (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
-            Rendu en cours…
-          </div>
-        )}
         <div
-          ref={overlayRef}
-          className="absolute inset-0 z-10"
+          className={`relative inline-block mx-auto ${interactive ? 'will-change-transform' : ''}`}
           style={{
+            transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${scale})`,
+            transformOrigin: "0 0",
             width: pageSize.w || "100%",
             height: pageSize.h || 520,
-            touchAction: touchAction,
-            cursor: placingCursor,
           }}
-          onContextMenu={onCreateDoorAt ? handleContextMenu : undefined}
         >
-          {points.map((p) => {
-            const x = Number(p.x_frac ?? p.x ?? 0);
-            const y = Number(p.y_frac ?? p.y ?? 0);
-            const placed = x >= 0 && x <= 1 && y >= 0 && y <= 1;
-            if (!placed) return null;
-            return (
-              <div
-                key={p.door_id}
-                data-id={p.door_id}
-                className="absolute"
-                style={{ left: `${x * 100}%`, top: `${y * 100}%`, transform: "translate(-50%, -50%)" }}
-              >
-                <button
-                  title={p.door_name || p.name || p.door_id}
-                  data-marker="1"
-                  onPointerDown={(e) => onPointerDownPoint(e, p)}
-                  className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                  style={{ transform: `scale(${1 / (viewRef.current?.scale || 1)})`, transformOrigin: "center center" }}
-                />
-              </div>
-            );
-          })}
+          <canvas
+            ref={canvasRef}
+            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, display: loaded ? "block" : "none" }}
+          />
+          {!loaded && (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+              Rendu en cours…
+            </div>
+          )}
+          <div
+            ref={overlayRef}
+            className="absolute inset-0 z-10"
+            style={{
+              width: pageSize.w || "100%",
+              height: pageSize.h || 520,
+              touchAction: touchAction,
+              cursor: placingCursor,
+            }}
+            onContextMenu={onCreateDoorAt ? handleContextMenu : undefined}
+          >
+            {points.map((p) => {
+              const x = Number(p.x_frac ?? p.x ?? 0);
+              const y = Number(p.y_frac ?? p.y ?? 0);
+              const placed = x >= 0 && x <= 1 && y >= 0 && y <= 1;
+              if (!placed) return null;
+              return (
+                <div
+                  key={p.door_id}
+                  data-id={p.door_id}
+                  className="absolute"
+                  style={{ left: `${x * 100}%`, top: `${y * 100}%`, transform: "translate(-50%, -50%)" }}
+                >
+                  <button
+                    title={p.door_name || p.name || p.door_id}
+                    data-marker="1"
+                    onPointerDown={(e) => onPointerDownPoint(e, p)}
+                    className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
+                    style={{ transform: `scale(${1 / (viewRef.current?.scale || 1)})`, transformOrigin: "center center" }}
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
+        {!loaded && pageSize.w === 0 && (
+          <div className="p-3 text-sm text-gray-600">
+            {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
+          </div>
+        )}
       </div>
-      {!loaded && pageSize.w === 0 && (
-        <div className="p-3 text-sm text-gray-600">
-          {err || "Erreur de rendu du plan. Vérifiez la console pour plus de détails."}
-        </div>
-      )}
+      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
+        </span>
+      </div>
     </div>
-    <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-      <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full bg-emerald-600" /> À faire (vert)
-      </span>
-      <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full bg-amber-500 animate-pulse" /> ≤30j (orange clignotant)
-      </span>
-      <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" /> En retard (rouge clignotant)
-      </span>
-    </div>
-  </div>
-);
+  );
 }
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
@@ -1907,8 +1887,7 @@ export default function Doors() {
                 onReady={handlePdfReady}
                 onMovePoint={handleMovePoint}
                 onClickPoint={handleClickPoint}
-                /** 🔧 IMPORTANT : plus de barrière pdfReady → on accepte le clic dès l’ouverture **/
-                placingDoorId={pendingPlaceDoorId}
+                placingDoorId={pdfReady ? pendingPlaceDoorId : null}
                 onPlaceAt={handlePlaceAt}
                 // onCreateDoorAt={handleCreateDoorAt} // désactivé par défaut
               />
