@@ -3,30 +3,26 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import dayjs from "dayjs";
 import 'dayjs/locale/fr';
 dayjs.locale('fr');
+
 /* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
 }
-// NEW: identité robuste (cookies -> localStorage -> fallback depuis l'email)
+// Identité robuste (cookies -> localStorage -> fallback email)
 function getIdentity() {
-  // 1) cookies (prioritaires si présents)
   let email = getCookie("email") || null;
   let name = getCookie("name") || null;
-  // 2) localStorage (si cookies absents ou vides)
   try {
     if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
     if (!name) {
-      name =
-        localStorage.getItem("name") ||
-        localStorage.getItem("user.name") ||
-        null;
+      name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
     }
-    // Parfois on stocke un JSON "user"
     if ((!email || !name) && localStorage.getItem("user")) {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
@@ -35,17 +31,12 @@ function getIdentity() {
       } catch {}
     }
   } catch {}
-  // 3) fallback: dérive un nom lisible depuis l'email si pas de name
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
     if (base) {
-      name = base
-        .replace(/[._-]+/g, " ")
-        .replace(/\b\w/g, (c) => c.toUpperCase())
-        .trim();
+      name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
     }
   }
-  // 4) nettoyage
   email = email ? String(email).trim() : null;
   name = name ? String(name).trim() : null;
   return { email, name };
@@ -60,9 +51,9 @@ function userHeaders() {
 function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
+
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
-  // Doors CRUD + listing + filters
   list: async (params = {}) => {
     const qs = new URLSearchParams(
       Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "")
@@ -89,38 +80,34 @@ const API = {
     ).json(),
   remove: async (id) =>
     (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", ...withHeaders() })).json(),
-  // Checklist (create/close) + history
+
   startCheck: async (doorId) => {
     const id = getIdentity();
     return (
       await fetch(`/api/doors/doors/${doorId}/checks`, {
         method: "POST",
         ...withHeaders({ "Content-Type": "application/json" }),
-        // >>> ajoute _user pour fallback backend
         body: JSON.stringify({ _user: id }),
       })
     ).json();
   },
   saveCheck: async (doorId, checkId, payload) => {
     const id = getIdentity();
-    // Backend accepte JSON ou multipart sur la même route.
     if (payload?.files?.length) {
       const fd = new FormData();
       fd.append("items", JSON.stringify(payload.items || []));
       if (payload.close) fd.append("close", "true");
-      // >>> identité en multipart (fallback)
       if (id.email) fd.append("user_email", id.email);
       if (id.name) fd.append("user_name", id.name);
       for (const f of payload.files) fd.append("files", f);
       const r = await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
         credentials: "include",
-        headers: userHeaders(), // injecte X-User-Email / X-User-Name
+        headers: userHeaders(),
         body: fd,
       });
       return r.json();
     }
-    // JSON: ajoute aussi _user pour fallback
     return (
       await fetch(`/api/doors/doors/${doorId}/checks/${checkId}`, {
         method: "PUT",
@@ -131,14 +118,13 @@ const API = {
   },
   listHistory: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/history`, withHeaders())).json(),
-  // Attachments (door-level)
+
   listFiles: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/files`, withHeaders())).json(),
   uploadFile: async (doorId, file) => {
     const id = getIdentity();
     const fd = new FormData();
     fd.append("file", file);
-    // >>> identité en multipart (au cas où)
     if (id.email) fd.append("user_email", id.email);
     if (id.name) fd.append("user_name", id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/files`, {
@@ -151,12 +137,11 @@ const API = {
   },
   deleteFile: async (fileId) =>
     (await fetch(`/api/doors/files/${fileId}`, { method: "DELETE", ...withHeaders() })).json(),
-  // Photo vignette
+
   uploadPhoto: async (doorId, file) => {
     const id = getIdentity();
     const fd = new FormData();
     fd.append("photo", file);
-    // >>> identité en multipart (au cas où)
     if (id.email) fd.append("user_email", id.email);
     if (id.name) fd.append("user_name", id.name);
     const r = await fetch(`/api/doors/doors/${doorId}/photo`, {
@@ -168,14 +153,12 @@ const API = {
     return r.json();
   },
   photoUrl: (doorId) => `/api/doors/doors/${doorId}/photo`,
-  // QR code (PNG stream)
   qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
-  // ✅ PDF d’étiquettes (cadre blanc + HALEON + nom de porte autosize)
   qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
     `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
-  // Calendar (next checks, overdue, etc.)
+
   calendar: async () => (await fetch(`/api/doors/calendar`, withHeaders())).json(),
-  // Settings (template & frequency)
+
   settingsGet: async () => (await fetch(`/api/doors/settings`, withHeaders())).json(),
   settingsSet: async (payload) =>
     (
@@ -185,9 +168,9 @@ const API = {
         body: JSON.stringify(payload),
       })
     ).json(),
-  // PDF non-conformités (pour SAP)
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
+
 /* ----------------------------- API (Doors Maps) ----------------------------- */
 const MAPS = {
   uploadZip: async (file) => {
@@ -205,9 +188,8 @@ const MAPS = {
       ...withHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ display_name }),
     })).json(),
-  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, // compat
-  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`, // UUID
-  // ✅ positions: accepte indifféremment un UUID ou un logical_name
+  planFileUrl: (logical) => `/api/doors/maps/plan/${encodeURIComponent(logical)}/file`,
+  planFileUrlById: (id) => `/api/doors/maps/plan/${encodeURIComponent(id)}/file`,
   positions: async (idOrLogical, page_index = 0) => {
     const looksUuid = typeof idOrLogical === "string" && /^[0-9a-fA-F-]{36}$/.test(idOrLogical);
     const params = looksUuid
@@ -216,13 +198,11 @@ const MAPS = {
     const r = await fetch(`/api/doors/maps/positions?${new URLSearchParams(params)}`, withHeaders());
     return r.json();
   },
-  // Nouvelle méthode pour portes non positionnées
   pendingPositions: async (logical_name, page_index = 0) => {
     const params = { logical_name, page_index };
     const r = await fetch(`/api/doors/maps/pending-positions?${new URLSearchParams(params)}`, withHeaders());
     return r.json();
   },
-  // setPosition: on envoie aussi plan_id si dispo (le backend peut l’ignorer si non supporté)
   setPosition: async (doorId, payload) =>
     (await fetch(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, {
       method: "PUT",
@@ -230,27 +210,23 @@ const MAPS = {
       body: JSON.stringify(payload),
     })).json(),
 };
+
 // helper pour charger les PDFs protégés avec cookies + X-User-*
 function pdfDocOpts(url) {
-  return {
-    url,
-    withCredentials: true, // envoie les cookies (session)
-    httpHeaders: userHeaders(), // en-têtes X-User-Email / X-User-Name
-  };
+  return { url, withCredentials: true, httpHeaders: userHeaders() };
 }
-/* ---------- ✅ Helper d’URL PDF (ID prioritaire, fallback logical) ---------- */
 function planFileUrlSafe(plan) {
   const looksLikeUuid = typeof plan?.id === "string" && /^[0-9a-fA-F-]{36}$/.test(plan.id);
   return looksLikeUuid
-    ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file` // UUID route
-    : `/api/doors/maps/plan/${encodeURIComponent(plan?.logical_name || "")}/file`; // fallback logical
+    ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`
+    : `/api/doors/maps/plan/${encodeURIComponent(plan?.logical_name || "")}/file`;
 }
+
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
-    primary:
-      "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
-    ghost: "bg-white text-gray-700 border hover:bg-gray-50",
+    primary: "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
+    ghost: "bg-white text-black border hover:bg-gray-50",
     danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
     success: "bg-emerald-600 text-white hover:bg-emerald-700",
     warn: "bg-amber-500 text-white hover:bg-amber-600",
@@ -265,11 +241,13 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
     </button>
   );
 }
+
+// ✅ champs fond blanc + écriture noire
 function Input({ value, onChange, className = "", ...p }) {
   return (
     <input
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100
-                 bg-white text-gray-900 placeholder-gray-400 ${className}`}
+                 bg-white text-black placeholder-black ${className}`}
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value)}
       {...p}
@@ -280,7 +258,7 @@ function Textarea({ value, onChange, className = "", ...p }) {
   return (
     <textarea
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100
-                 bg-white text-gray-900 placeholder-gray-400 ${className}`}
+                 bg-white text-black placeholder-black ${className}`}
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value)}
       {...p}
@@ -290,25 +268,23 @@ function Textarea({ value, onChange, className = "", ...p }) {
 function Select({ value, onChange, options = [], className = "", placeholder }) {
   return (
     <select
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 ${className}`}
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100
+                  bg-white text-black ${className}`}
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value)}
     >
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
         typeof o === "string" ? (
-          <option key={o} value={o}>
-            {o}
-          </option>
+          <option key={o} value={o}>{o}</option>
         ) : (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         )
       )}
     </select>
   );
 }
+
 function Badge({ color = "gray", children, className = "" }) {
   const map = {
     gray: "bg-gray-100 text-gray-700",
@@ -323,6 +299,7 @@ function Badge({ color = "gray", children, className = "" }) {
     </span>
   );
 }
+
 const STATUS = {
   A_FAIRE: "a_faire",
   EN_COURS: "en_cours_30",
@@ -348,6 +325,7 @@ function doorStateBadge(state) {
   if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
   return <Badge>—</Badge>;
 }
+
 /* ----------------------------- Toast ----------------------------- */
 function Toast({ text, onClose }) {
   useEffect(() => {
@@ -363,6 +341,7 @@ function Toast({ text, onClose }) {
     </div>
   );
 }
+
 /* ----------------------------- Calendrier (mois) ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
@@ -452,6 +431,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
+
 /* ----------------------------- MAPS components ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
@@ -459,11 +439,7 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
       <div className="font-semibold">Plans PDF</div>
       <div className="flex items-center gap-2">
-        <Btn
-          variant="ghost"
-          onClick={() => inputRef.current?.click()}
-          disabled={mapsLoading}
-        >
+        <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={mapsLoading}>
           📦 Import ZIP de plans
         </Btn>
         <input
@@ -481,6 +457,7 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     </div>
   );
 }
+
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -491,6 +468,7 @@ function PlanCards({ plans = [], onRename, onPick }) {
     </div>
   );
 }
+
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -500,6 +478,7 @@ function PlanCard({ plan, onRename, onPick }) {
   const [thumbErr, setThumbErr] = useState("");
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
+
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
@@ -509,31 +488,32 @@ function PlanCard({ plan, onRename, onPick }) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-  // Miniature page 1 via pdf.js (local, plus de CDN)
+
+  // Miniature page 1 via pdf.js (avec annulation propre)
   useEffect(() => {
     if (!visible) return;
     let cancelled = false;
     let pdf = null;
     let renderTask = null;
-    let loadingTask = null; // ✅ ajouté pour annulation pendant chargement
+    let loadingTask = null;
     (async () => {
       try {
         setThumbErr("");
         const url = planFileUrlSafe(plan);
-        loadingTask = pdfjsLib.getDocument(pdfDocOpts(url)); // ✅
+        loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
         pdf = await loadingTask.promise;
-        if (cancelled) return; // ✅ skip si annulé après load (évite getPage inutile)
+        if (cancelled) return;
         const page = await pdf.getPage(1);
         const viewport = page.getViewport({ scale: 1 });
         const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
-        const cap = isMobile ? 220 : 320; // ⬅️ cap plus bas sur mobile
+        const cap = isMobile ? 220 : 320;
         const baseScale = cap / viewport.width;
         const adjusted = page.getViewport({ scale: baseScale });
         const c = canvasRef.current;
         if (!c || cancelled) return;
         c.width = Math.floor(adjusted.width);
         c.height = Math.floor(adjusted.height);
-        const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true }); // ✅ opti GPU (false pour no read)
+        const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true });
         renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
         await renderTask.promise;
         page.cleanup?.();
@@ -544,13 +524,11 @@ function PlanCard({ plan, onRename, onPick }) {
     return () => {
       cancelled = true;
       try { renderTask?.cancel(); } catch {}
-      if (pdf) {
-        try { pdf.destroy(); } catch {}
-      } else if (loadingTask) {
-        try { loadingTask.destroy(); } catch {} // ✅ annule si pas encore loaded
-      }
+      if (pdf) { try { pdf.destroy(); } catch {} }
+      else if (loadingTask) { try { loadingTask.destroy(); } catch {} }
     };
   }, [plan.id, plan.logical_name, visible]);
+
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
@@ -567,10 +545,9 @@ function PlanCard({ plan, onRename, onPick }) {
             <div className="font-medium truncate" title={name}>{name || "—"}</div>
             <div className="flex items-center gap-1">
               <Btn variant="ghost" onClick={() => setEdit(true)}>✏️</Btn>
-              <Btn variant="subtle" onClick={() => {
-                console.log("[DEBUG] Picking plan:", plan);
-                onPick(plan);
-              }}>Ouvrir</Btn>
+              <Btn variant="subtle" onClick={() => { console.log("[DEBUG] Picking plan:", plan); onPick(plan); }}>
+                Ouvrir
+              </Btn>
             </div>
           </div>
         ) : (
@@ -578,10 +555,7 @@ function PlanCard({ plan, onRename, onPick }) {
             <Input value={name} onChange={setName} />
             <Btn
               variant="subtle"
-              onClick={async () => {
-                await onRename(plan, (name || "").trim());
-                setEdit(false);
-              }}
+              onClick={async () => { await onRename(plan, (name || "").trim()); setEdit(false); }}
             >
               OK
             </Btn>
@@ -598,13 +572,13 @@ function PlanCard({ plan, onRename, onPick }) {
     </div>
   );
 }
+
 /**
- * PlanViewer
- * - Zoom: molette/trackpad (wheel), pinch sur tactile (ultra fluide)
- * - Pan: drag (souris) / pan tactile (raf)
- * - Déplacement d’un marqueur: pointerdown + drag
- * - Clic porte fiable (desktop): pointerup avec seuil
- * - Création porte: appui long (600ms) -> onCreateDoorAt(xy) [optionnel]
+ * PlanViewer (corrigé mobile)
+ * - Zoom wheel / pinch
+ * - Pan drag / tactile
+ * - Déplacement marqueur
+ * - Placement: tap court (scroll ignoré via seuil)
  */
 function PlanViewer({
   fileUrl,
@@ -615,17 +589,19 @@ function PlanViewer({
   onClickPoint,
   placingDoorId,
   onPlaceAt,
-  onCreateDoorAt, // (xy: {x,y} en 0..1) optionnel
+  onCreateDoorAt,
 }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
   const isMarkerDragging = useRef(false);
+
   const [loaded, setLoaded] = useState(false);
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
   const [isMounted, setIsMounted] = useState(false);
   const [err, setErr] = useState("");
   const [containerWidth, setContainerWidth] = useState(0);
+
   // Vue (pan/scale) avec raf
   const [scale, _setScale] = useState(1);
   const [pan, _setPan] = useState({ x: 0, y: 0 });
@@ -650,6 +626,7 @@ function PlanViewer({
       _setPan({ x: viewRef.current.panX, y: viewRef.current.panY });
     });
   }
+
   // Vérifier canvas & largeur conteneur
   useEffect(() => {
     setIsMounted(!!canvasRef.current);
@@ -660,11 +637,12 @@ function PlanViewer({
       return () => window.removeEventListener("resize", updateWidth);
     }
   }, []);
+
   // pdf.js render (fit-to-width)
   useEffect(() => {
     let cancelled = false;
     let pdf = null;
-    let loadingTask = null; // ⬅️
+    let loadingTask = null;
     const renderPdf = async () => {
       if (!isMounted || !canvasRef.current) {
         setErr("Canvas non disponible. Essayez de recharger le plan.");
@@ -684,7 +662,7 @@ function PlanViewer({
         const viewport = page.getViewport({ scale: 1 });
         const fitWidth = containerWidth > 0 ? containerWidth : viewport.width;
         const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
-        const maxCssWidth = isMobile ? Math.min(fitWidth, 900) : fitWidth; // évite des couches GPU énormes
+        const maxCssWidth = isMobile ? Math.min(fitWidth, 900) : fitWidth;
         const scaleFactor = maxCssWidth / viewport.width;
         const adjustedViewport = page.getViewport({ scale: scaleFactor });
         const canvas = canvasRef.current;
@@ -732,10 +710,11 @@ function PlanViewer({
       clearInterval(interval);
       cancelAnimationFrame(rafRef.current);
       try { pdf?.destroy(); } catch {}
-      try { loadingTask?.destroy?.(); } catch {} // ⬅️
+      try { loadingTask?.destroy?.(); } catch {}
     };
   }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
-  // Wheel zoom (desktop) fluide
+
+  // Wheel zoom (desktop)
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -757,46 +736,36 @@ function PlanViewer({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [loaded]);
-  // Gestes tactiles: pinch + pan (ultra fluide)
+
+  // Gestes tactiles (corrigé : pas de setPointerCapture sur touch)
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     let pointers = new Map();
-    let base = null; // { panX, panY, scale, cx, cy, dist } pour pinch
+    let base = null;
     const onPointerDown = (e) => {
-      el.setPointerCapture(e.pointerId);
+      if (e.pointerType === "mouse") {
+        try { el.setPointerCapture(e.pointerId); } catch {}
+      }
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     };
     const onPointerMove = (e) => {
-      // si on déplace un marqueur, on ne pan/pinch pas le plan
       if (isMarkerDragging.current) return;
       if (!pointers.has(e.pointerId)) return;
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 1) {
-        // pan à 1 doigt
         const p = [...pointers.values()][0];
-        if (!base) {
-          base = { panX: viewRef.current.panX, panY: viewRef.current.panY, x: p.x, y: p.y };
-          return;
-        }
+        if (!base) { base = { panX: viewRef.current.panX, panY: viewRef.current.panY, x: p.x, y: p.y }; return; }
         const dx = p.x - base.x;
         const dy = p.y - base.y;
         setPan({ x: base.panX + dx, y: base.panY + dy });
       } else if (pointers.size === 2) {
-        // pinch à 2 doigts
         const [a, b] = [...pointers.values()];
         const midX = (a.x + b.x) / 2;
         const midY = (a.y + b.y) / 2;
         const dist = Math.hypot(a.x - b.x, a.y - b.y);
         if (!base || base.dist == null) {
-          base = {
-            panX: viewRef.current.panX,
-            panY: viewRef.current.panY,
-            scale: viewRef.current.scale,
-            cx: midX,
-            cy: midY,
-            dist,
-          };
+          base = { panX: viewRef.current.panX, panY: viewRef.current.panY, scale: viewRef.current.scale, cx: midX, cy: midY, dist };
           return;
         }
         const factor = Math.max(0.5, Math.min(4, base.scale * (dist / base.dist)));
@@ -811,7 +780,7 @@ function PlanViewer({
     };
     const onPointerUp = (e) => {
       if (pointers.has(e.pointerId)) pointers.delete(e.pointerId);
-      if (pointers.size < 2) base = null; // reset base quand on quitte le pinch
+      if (pointers.size < 2) base = null;
       try { el.releasePointerCapture(e.pointerId); } catch {}
     };
     el.addEventListener("pointerdown", onPointerDown);
@@ -825,22 +794,36 @@ function PlanViewer({
       el.removeEventListener("pointercancel", onPointerUp);
     };
   }, []);
-  // (A) Clic/touch pour PLACER une porte quand placingDoorId est défini
+
+  // (A) Tap pour PLACER (ignore si scroll > 8px)
+  const lastDown = useRef(null);
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
+    const handlePointerDown = (e) => {
+      lastDown.current = { x: e.clientX, y: e.clientY, t: performance.now?.() || Date.now() };
+    };
     const handlePointerUp = (e) => {
       if (!placingDoorId) return;
+      const d = lastDown.current;
+      const moved = d ? Math.hypot((e.clientX || 0) - d.x, (e.clientY || 0) - d.y) > 8 : false;
+      if (moved) return;
       const xy = relativeXY(e);
       onPlaceAt?.(xy);
     };
+    el.addEventListener("pointerdown", handlePointerDown);
     el.addEventListener("pointerup", handlePointerUp);
-    return () => el.removeEventListener("pointerup", handlePointerUp);
+    el.addEventListener("pointercancel", handlePointerUp);
+    return () => {
+      el.removeEventListener("pointerdown", handlePointerDown);
+      el.removeEventListener("pointerup", handlePointerUp);
+      el.removeEventListener("pointercancel", handlePointerUp);
+    };
   }, [placingDoorId, onPlaceAt]);
 
-  // (B) Appui long pour CRÉER une porte (optionnel)
+  // (B) Appui long pour CRÉER (optionnel)
   useEffect(() => {
-    if (!onCreateDoorAt) return; // seulement si fourni
+    if (!onCreateDoorAt) return;
     const el = overlayRef.current;
     if (!el) return;
     let longPressTimer = null;
@@ -873,7 +856,8 @@ function PlanViewer({
       clearLP();
     };
   }, [placingDoorId, onCreateDoorAt]);
-  // Drag + clic fiable sur marker
+
+  // Drag + clic fiable sur marker (cleanup global ajouté)
   const dragInfo = useRef(null);
   function onPointerDownPoint(e, p) {
     e.stopPropagation();
@@ -930,25 +914,37 @@ function PlanViewer({
     const y = (isFinite(topPct) ? topPct : 0) / 100;
     try { onMovePoint?.(info.id, { x, y }); } catch {}
   }
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", onMoveMarker);
+      window.removeEventListener("pointerup", onUpMarker);
+      window.removeEventListener("pointercancel", onUpMarker);
+    };
+  }, []);
+
   function markerClass(s) {
     if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
     if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
     if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
     return "bg-blue-600 ring-1 ring-blue-300";
   }
-  // Coordonnées relatives click/touch
+
+  // Coordonnées relatives (guard évitant NaN)
   function relativeXY(evt) {
     const wrap = wrapRef.current;
     if (!wrap) return { x: 0, y: 0 };
     const wrect = wrap.getBoundingClientRect();
-    const localX = evt.clientX - wrect.left - viewRef.current.panX;
-    const localY = evt.clientY - wrect.top - viewRef.current.panY;
+    const cx = Number(evt.clientX ?? 0);
+    const cy = Number(evt.clientY ?? 0);
+    const localX = cx - wrect.left - viewRef.current.panX;
+    const localY = cy - wrect.top - viewRef.current.panY;
     const w = pageSize.w || wrap.clientWidth || 1;
     const h = pageSize.h || wrap.clientHeight || 1;
     const x = Math.min(1, Math.max(0, localX / (w * viewRef.current.scale)));
     const y = Math.min(1, Math.max(0, localY / (h * viewRef.current.scale)));
     return { x, y };
   }
+
   function handleContextMenu(e) {
     if (!onCreateDoorAt) return;
     if (e.target?.dataset?.marker === "1") return;
@@ -956,8 +952,10 @@ function PlanViewer({
     const xy = relativeXY(e);
     onCreateDoorAt?.(xy);
   }
-  const wrapperHeight = Math.max(320, pageSize.h || 520); // fixe, pas lié au zoom
+
+  const wrapperHeight = Math.max(320, pageSize.h || 520);
   useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
+
   const [interactive, setInteractive] = useState(false);
   useEffect(() => {
     const el = wrapRef.current;
@@ -973,6 +971,7 @@ function PlanViewer({
       el.removeEventListener("pointercancel", stop);
     };
   }, []);
+
   return (
     <div className="mt-3">
       <div
@@ -1014,21 +1013,14 @@ function PlanViewer({
                   key={p.door_id}
                   data-id={p.door_id}
                   className="absolute"
-                  style={{
-                    left: `${x * 100}%`,
-                    top: `${y * 100}%`,
-                    transform: "translate(-50%, -50%)",
-                  }}
+                  style={{ left: `${x * 100}%`, top: `${y * 100}%`, transform: "translate(-50%, -50%)" }}
                 >
                   <button
                     title={p.door_name || p.name || p.door_id}
                     data-marker="1"
                     onPointerDown={(e) => onPointerDownPoint(e, p)}
                     className={`w-4 h-4 rounded-full shadow ${markerClass(p.status)}`}
-                    style={{
-                      transform: `scale(${1 / (viewRef.current?.scale || 1)})`,
-                      transformOrigin: "center center",
-                    }}
+                    style={{ transform: `scale(${1 / (viewRef.current?.scale || 1)})`, transformOrigin: "center center" }}
                   />
                 </div>
               );
@@ -1055,9 +1047,11 @@ function PlanViewer({
     </div>
   );
 }
+
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
   const [tab, setTab] = useState("controls"); // controls | calendar | settings | maps
+
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -1067,13 +1061,17 @@ export default function Doors() {
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [doorState, setDoorState] = useState(""); // conforme | non_conforme
+
   /* ---- drawer (edit / inspect) ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null); // door object with details
+
   /* ---- calendar ---- */
   const [calendar, setCalendar] = useState({ events: [] });
+
   /* ---- toast ---- */
   const [toast, setToast] = useState("");
+
   /* ---- settings ---- */
   const defaultTemplate = [
     "La porte est-elle en parfait état (fermeture correcte, non voilée) ?",
@@ -1087,8 +1085,10 @@ export default function Doors() {
     frequency: "1_an", // 1_an, 1_mois, 2_an, 3_mois, 2_ans
   });
   const [savingSettings, setSavingSettings] = useState(false);
+
   /* ---- versionnement fichiers pour refresh instantané ---- */
   const [filesVersion, setFilesVersion] = useState(0);
+
   /* ---------- Deep-link helpers (QR) ---------- */
   function getDoorParam() {
     try {
@@ -1110,6 +1110,7 @@ export default function Doors() {
     setEditing(null);
     setDoorParam(null);
   }
+
   // -------- data loaders
   async function reload() {
     setLoading(true);
@@ -1136,12 +1137,14 @@ export default function Doors() {
       setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
     if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
   }
+
   // First load
   useEffect(() => {
     reload();
     reloadCalendar();
     loadSettings();
   }, []);
+
   // Auto-open door from ?door=<id> (QR deep link)
   useEffect(() => {
     const targetId = getDoorParam();
@@ -1152,11 +1155,9 @@ export default function Doors() {
         setEditing(full.door);
         setDrawerOpen(true);
       } else {
-        // ID invalide -> on nettoie le paramètre
         setDoorParam(null);
       }
     })();
-    // Réagit aux navigations back/forward
     const onPop = () => {
       const id = getDoorParam();
       if (!id) closeDrawerAndClearParam();
@@ -1164,6 +1165,7 @@ export default function Doors() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
   // Live filter (debounce)
   useEffect(() => {
     const t = setTimeout(() => {
@@ -1172,7 +1174,9 @@ export default function Doors() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status, building, floor, doorState]);
+
   const filtered = doors; // serveur filtre déjà
+
   /* ------------------ actions door ------------------ */
   function openCreate() {
     setEditing({
@@ -1233,6 +1237,7 @@ export default function Doors() {
       await loadUnplacedDoors(selectedPlan, planPage);
     }
   }
+
   /* ------------------ checklist workflow ------------------ */
   const baseOptions = [
     { value: "conforme", label: "Conforme" },
@@ -1277,6 +1282,7 @@ export default function Doors() {
       setEditing(full?.door);
     }
   }
+
   /* ------------------ files ------------------ */
   const [uploading, setUploading] = useState(false);
   function onDropFiles(e) {
@@ -1289,12 +1295,9 @@ export default function Doors() {
     setUploading(true);
     try {
       for (const f of files) await API.uploadFile(editing.id, f);
-      // rafraîchir la fiche (si besoin)
       const full = await API.get(editing.id);
       setEditing(full?.door);
-      // force DoorFiles à recharger immédiatement
       setFilesVersion((v) => v + 1);
-      // feedback utilisateur
       setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } finally {
       setUploading(false);
@@ -1309,6 +1312,7 @@ export default function Doors() {
     await reload();
     setToast("Photo mise à jour ✅");
   }
+
   /* ------------------ settings save ------------------ */
   async function saveSettings() {
     setSavingSettings(true);
@@ -1321,7 +1325,8 @@ export default function Doors() {
       setSavingSettings(false);
     }
   }
-/* ------------------ MAPS state / loaders ------------------ */
+
+  /* ------------------ MAPS state / loaders ------------------ */
   const [plans, setPlans] = useState([]); // {id, logical_name, display_name, page_count, actions_next_30, overdue}
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null); // plan object
@@ -1330,6 +1335,7 @@ export default function Doors() {
   const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
   const [unplacedDoors, setUnplacedDoors] = useState([]); // [{door_id, door_name}]
   const [pendingPlaceDoorId, setPendingPlaceDoorId] = useState(null);
+
   // Cache des portes déjà placées sur tous les plans (pour filtrer les "en attente")
   const placedCacheRef = useRef({ plansHash: "", ids: new Set() });
   const [placedLoading, setPlacedLoading] = useState(false);
@@ -1357,6 +1363,7 @@ export default function Doors() {
       setPlacedLoading(false);
     }
   }
+
   async function loadPlans() {
     setMapsLoading(true);
     try {
@@ -1378,7 +1385,7 @@ export default function Doors() {
         door_name: item.name || item.door_name,
         x_frac: Number(item.x_frac ?? item.x ?? 0),
         y_frac: Number(item.y_frac ?? item.y ?? 0),
-        x: Number(item.x_frac ?? item.x ?? 0), // Ajouter x/y pour compatibilité
+        x: Number(item.x_frac ?? item.x ?? 0),
         y: Number(item.y_frac ?? item.y ?? 0),
         status: item.status,
         building: item.building,
@@ -1397,7 +1404,6 @@ export default function Doors() {
     if (!plan) return;
     const key = plan.logical_name || "";
     const r = await MAPS.pendingPositions(key, pageIdx).catch(() => ({ pending: [] }));
-    // ⚠️ ne calcule la liste "en attente" que quand TOUS les plans sont connus
     if (!plans?.length) { setUnplacedDoors([]); return; }
     const placed = await getAllPlacedDoorIdsCached(plans);
     let pending = Array.isArray(r?.pending) ? r.pending.map(p => ({
@@ -1426,10 +1432,12 @@ export default function Doors() {
     if (doorState && it.door_state !== doorState) return false;
     return true;
   }
+
   useEffect(() => {
     if (tab === "maps") loadPlans();
   }, [tab]);
-  // Stabiliser selectedPlan pour éviter re-rendus inutiles
+
+  // Stabiliser selectedPlan
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id, selectedPlan?.logical_name]);
   useEffect(() => {
     console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
@@ -1438,6 +1446,7 @@ export default function Doors() {
       loadUnplacedDoors(stableSelectedPlan, planPage);
     }
   }, [stableSelectedPlan, planPage, q, status, building, floor, doorState, plans]);
+
   /* ------------------ MAPS handlers ------------------ */
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
   const handleMovePoint = useCallback(async (doorId, xy) => {
@@ -1476,7 +1485,8 @@ export default function Doors() {
       setToast("Erreur lors du placement de la porte : " + e.message);
     }
   }, [pendingPlaceDoorId, stableSelectedPlan, planPage]);
-  // ⭐️ NOUVEAU : Création directe à l’endroit cliqué / appui long
+
+  // Création directe à l’endroit cliqué (désactivée par défaut)
   const handleCreateDoorAt = useCallback(async (xy) => {
     if (!stableSelectedPlan) return;
     try {
@@ -1505,10 +1515,10 @@ export default function Doors() {
       setToast("Erreur lors de la création : " + (e?.message || e));
     }
   }, [stableSelectedPlan, planPage]);
+
   async function createDoorAtCenter() {
     if (!stableSelectedPlan) return;
     try {
-      // 1) Créer la porte (nom par défaut)
       const created = await API.create({
         name: "Nouvelle porte",
         building: "",
@@ -1517,7 +1527,6 @@ export default function Doors() {
       });
       const id = created?.door?.id;
       if (!id) throw new Error("Création de porte impossible");
-      // 2) Poser la porte au CENTRE du plan (0.5, 0.5) sur la page courante
       await MAPS.setPosition(id, {
         logical_name: stableSelectedPlan.logical_name,
         plan_id: stableSelectedPlan.id,
@@ -1525,12 +1534,9 @@ export default function Doors() {
         x_frac: 0.5,
         y_frac: 0.5,
       });
-      // 3) Rafraîchir & ouvrir la fiche
       await loadPositions(stableSelectedPlan, planPage);
       await loadUnplacedDoors(stableSelectedPlan, planPage);
-      // (optionnel) sortir d’un éventuel mode placement
       setPendingPlaceDoorId(null);
-      // Ouvrir la fiche pour éditer
       openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
       setToast("Porte créée au centre du plan ✅");
     } catch (e) {
@@ -1538,6 +1544,7 @@ export default function Doors() {
       setToast("Erreur lors de la création : " + (e?.message || e));
     }
   }
+
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1557,9 +1564,11 @@ export default function Doors() {
       </div>
     </div>
   );
+
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
+
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Portes coupe-feu</h1>
@@ -1571,7 +1580,9 @@ export default function Doors() {
           <Btn onClick={openCreate}>+ Nouvelle porte</Btn>
         </div>
       </header>
+
       <StickyTabs />
+
       {/* Filtres (toggle) */}
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
@@ -1587,6 +1598,7 @@ export default function Doors() {
                 { value: STATUS.EN_RETARD, label: "En retard (rouge)" },
                 { value: STATUS.FAIT, label: "Fait (hist.)" },
               ]}
+              placeholder="Tous statuts"
             />
             <Input value={building} onChange={setBuilding} placeholder="Bâtiment" />
             <Input value={floor} onChange={setFloor} placeholder="Étage / Zone" />
@@ -1598,6 +1610,7 @@ export default function Doors() {
                 { value: "conforme", label: "Conforme" },
                 { value: "non_conforme", label: "Non conforme" },
               ]}
+              placeholder="Tous états"
             />
           </div>
           <div className="flex gap-2">
@@ -1617,7 +1630,8 @@ export default function Doors() {
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
       )}
-      {/* Onglet Contrôles : liste des portes (vignettes photo intactes) */}
+
+      {/* Onglet Contrôles : liste des portes */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
           {/* Mobile cards */}
@@ -1628,7 +1642,6 @@ export default function Doors() {
               <div key={d.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    {/* vignette */}
                     <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
                       {d.photo_url ? (
                         <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
@@ -1659,6 +1672,7 @@ export default function Doors() {
               </div>
             ))}
           </div>
+
           {/* Desktop table */}
           <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
@@ -1727,6 +1741,7 @@ export default function Doors() {
           </div>
         </div>
       )}
+
       {/* Onglet Calendrier */}
       {tab === "calendar" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4">
@@ -1740,6 +1755,7 @@ export default function Doors() {
           />
         </div>
       )}
+
       {/* Onglet Plans */}
       {tab === "maps" && (
         <div className="space-y-4">
@@ -1782,13 +1798,14 @@ export default function Doors() {
                     variant="ghost"
                     onClick={() => {
                       setSelectedPlan(null);
-                      setPendingPlaceDoorId(null); // 🔹 évite un ID de placement “fantôme”
+                      setPendingPlaceDoorId(null);
                     }}
                   >
                     Fermer le plan
                   </Btn>
                 </div>
               </div>
+
               {/* Bandeau portes en attente de positionnement */}
               <div className="mt-3 p-2 rounded-xl border bg-amber-50/60">
                 <div className="text-sm text-amber-700 font-medium">
@@ -1844,6 +1861,7 @@ export default function Doors() {
                   </div>
                 )}
               </div>
+
               <PlanViewer
                 key={stableSelectedPlan?.id || stableSelectedPlan?.logical_name || ""}
                 fileUrl={planFileUrlSafe(stableSelectedPlan)}
@@ -1851,10 +1869,10 @@ export default function Doors() {
                 points={positions}
                 onReady={handlePdfReady}
                 onMovePoint={handleMovePoint}
-                onClickPoint={handleClickPoint} /* ✅ on garde l’ouverture de la porte */
-                placingDoorId={pdfReady ? pendingPlaceDoorId : null} // 🔹 pas de placement avant ready
+                onClickPoint={handleClickPoint}
+                placingDoorId={pdfReady ? pendingPlaceDoorId : null}
                 onPlaceAt={handlePlaceAt}
-                // onCreateDoorAt={handleCreateDoorAt} // ❌ désactivé
+                // onCreateDoorAt={handleCreateDoorAt} // désactivé par défaut
               />
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
@@ -1865,6 +1883,7 @@ export default function Doors() {
           )}
         </div>
       )}
+
       {/* Onglet Paramètres */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
@@ -1902,6 +1921,7 @@ export default function Doors() {
                   { value: "3_mois", label: "Tous les 3 mois" },
                   { value: "2_ans", label: "1× tous les 2 ans" },
                 ]}
+                placeholder="Choisir…"
               />
               <div className="text-xs text-gray-500 mt-2">La date de prochain contrôle s’affiche <b>sans heure</b>.</div>
             </div>
@@ -1914,6 +1934,7 @@ export default function Doors() {
           </div>
         </div>
       )}
+
       {/* Drawer: fiche porte + checklist + fichiers + QR */}
       {drawerOpen && editing && (
         <Drawer
@@ -1936,6 +1957,7 @@ export default function Doors() {
                 <Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} />
               </Labeled>
             </div>
+
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Statut</span>
@@ -1947,12 +1969,12 @@ export default function Doors() {
                 Prochain contrôle : {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
               </div>
             </div>
+
             <div className="flex items-center gap-3">
               <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
-              {editing?.id && (
-                <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>
-              )}
+              {editing?.id && <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>}
             </div>
+
             {/* Photo */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -1972,6 +1994,7 @@ export default function Doors() {
                 </div>
               </div>
             )}
+
             {/* Checklist */}
             <div className="border rounded-2xl p-3">
               <div className="flex items-center justify-between mb-2">
@@ -2023,6 +2046,7 @@ export default function Doors() {
                 </div>
               )}
             </div>
+
             {/* Fichiers / Photos (door-level) */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -2052,6 +2076,7 @@ export default function Doors() {
                 <DoorFiles doorId={editing.id} version={filesVersion} />
               </div>
             )}
+
             {/* QR Codes */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -2068,6 +2093,7 @@ export default function Doors() {
                 </div>
               </div>
             )}
+
             {/* Historique */}
             <DoorHistory doorId={editing.id} />
           </div>
@@ -2076,6 +2102,7 @@ export default function Doors() {
     </section>
   );
 }
+
 /* ----------------------------- Sous-composants ----------------------------- */
 function Labeled({ label, children }) {
   return (
@@ -2085,6 +2112,7 @@ function Labeled({ label, children }) {
     </label>
   );
 }
+
 function Drawer({ title, children, onClose }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -2107,6 +2135,7 @@ function Drawer({ title, children, onClose }) {
     </div>
   );
 }
+
 function DoorFiles({ doorId, version = 0 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -2130,6 +2159,7 @@ function DoorFiles({ doorId, version = 0 }) {
     </div>
   );
 }
+
 function FileCard({ f, onDelete }) {
   const isImage = (f.mime || "").startsWith("image/");
   const url = f.download_url || f.inline_url || f.url;
@@ -2153,6 +2183,7 @@ function FileCard({ f, onDelete }) {
     </div>
   );
 }
+
 function DoorHistory({ doorId }) {
   const [items, setItems] = useState([]);
   useEffect(() => {
@@ -2194,7 +2225,6 @@ function DoorHistory({ doorId }) {
                     <div className="text-xs text-gray-600">
                       {Number(h.counts?.conforme || 0)} / {Number(h.counts?.nc || 0)} / {Number(h.counts?.na || 0)}
                     </div>
-                    {/* snapshot items (condensé) */}
                     <details className="text-xs mt-1">
                       <summary className="cursor-pointer text-blue-700">Voir le détail</summary>
                       <ul className="list-disc ml-4 mt-1 space-y-0.5">
