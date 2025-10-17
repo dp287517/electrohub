@@ -1734,13 +1734,14 @@ app.put("/api/doors/maps/plan/:logical/rename", async (req, res) => {
   }
 });
 
-/** Liste des positions pour un plan/page */
+/** Liste des positions pour un plan/page (enrichie pour les filtres) */
 app.get("/api/doors/maps/positions", async (req, res) => {
   try {
     const id = String(req.query.id || "");
     const logicalParam = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
 
+    // Résolution logical_name à partir d'un id (UUID) si besoin
     let logical = logicalParam;
     if (!logical && /^[0-9a-fA-F-]{36}$/.test(id)) {
       const { rows } = await pool.query(
@@ -1749,26 +1750,52 @@ app.get("/api/doors/maps/positions", async (req, res) => {
       );
       logical = rows?.[0]?.logical_name || "";
     }
-    if (!logical)
+    if (!logical) {
       return res.status(400).json({ ok: false, error: "logical_name ou id requis" });
+    }
 
+    /* 
+      status = basé sur le prochain contrôle (pendant)
+      door_state = basé sur le dernier contrôle clos (ok/nc -> conforme/non_conforme)
+    */
     const q = `
       WITH pend AS (
         SELECT door_id, due_date
           FROM fd_checks
          WHERE closed_at IS NULL
+      ),
+      last_closed AS (
+        SELECT DISTINCT ON (door_id) door_id, status
+          FROM fd_checks
+         WHERE closed_at IS NOT NULL
+         ORDER BY door_id, closed_at DESC
       )
-      SELECT p.door_id, d.name, p.x_frac, p.y_frac,
-             CASE
-               WHEN pend.due_date < CURRENT_DATE THEN 'en_retard'
-               WHEN pend.due_date <= CURRENT_DATE + INTERVAL '30 day' THEN 'en_cours_30'
-               ELSE 'a_faire'
-             END AS status
-        FROM fd_door_positions p
-        JOIN fd_doors d ON d.id = p.door_id
-   LEFT JOIN pend ON pend.door_id = p.door_id
-       WHERE p.plan_logical_name=$1 AND p.page_index=$2
+      SELECT
+        p.door_id,
+        d.name,
+        d.building,
+        d.floor,
+        p.x_frac,
+        p.y_frac,
+        CASE
+          WHEN pend.due_date < CURRENT_DATE THEN 'en_retard'
+          WHEN pend.due_date <= CURRENT_DATE + INTERVAL '30 day' THEN 'en_cours_30'
+          ELSE 'a_faire'
+        END AS status,
+        CASE
+          WHEN lc.status = 'nc' THEN 'non_conforme'
+          WHEN lc.status = 'ok' THEN 'conforme'
+          ELSE NULL
+        END AS door_state
+      FROM fd_door_positions p
+      JOIN fd_doors d ON d.id = p.door_id
+      LEFT JOIN pend ON pend.due_date IS NOT NULL AND pend.door_id = p.door_id
+      LEFT JOIN last_closed lc ON lc.door_id = p.door_id
+      WHERE p.plan_logical_name = $1
+        AND p.page_index = $2
+      ORDER BY d.name ASC
     `;
+
     const { rows } = await pool.query(q, [logical, pageIndex]);
 
     const points = rows.map((r) => ({
@@ -1777,6 +1804,9 @@ app.get("/api/doors/maps/positions", async (req, res) => {
       x: Number(r.x_frac ?? 0),
       y: Number(r.y_frac ?? 0),
       status: r.status,
+      building: r.building,
+      floor: r.floor,
+      door_state: r.door_state,
     }));
 
     res.json({ ok: true, items: rows, points });
@@ -1785,7 +1815,8 @@ app.get("/api/doors/maps/positions", async (req, res) => {
   }
 });
 
-/** Nouvelle route : Liste des portes non positionnées pour un plan/page */
+
+/** Liste des portes NON positionnées pour un plan/page (enrichie pour les filtres) */
 app.get("/api/doors/maps/pending-positions", async (req, res) => {
   try {
     const logical = String(req.query.logical_name || "");
@@ -1795,21 +1826,64 @@ app.get("/api/doors/maps/pending-positions", async (req, res) => {
       return res.status(400).json({ ok: false, error: "logical_name requis" });
     }
 
+    /*
+      On renvoie :
+        - door_id, door_name
+        - building, floor
+        - door_state (dernier clos)
+        - status (prochain contrôle)
+      Les portes déjà positionnées sur (logical,pageIndex) sont exclues.
+    */
     const q = `
-      SELECT d.id AS door_id, d.name AS door_name
+      WITH pos AS (
+        SELECT door_id
+        FROM fd_door_positions
+        WHERE plan_logical_name = $1
+          AND page_index = $2
+      ),
+      pend AS (
+        SELECT door_id, due_date
+        FROM fd_checks
+        WHERE closed_at IS NULL
+      ),
+      last_closed AS (
+        SELECT DISTINCT ON (door_id) door_id, status
+        FROM fd_checks
+        WHERE closed_at IS NOT NULL
+        ORDER BY door_id, closed_at DESC
+      )
+      SELECT
+        d.id AS door_id,
+        d.name AS door_name,
+        d.building,
+        d.floor,
+        CASE
+          WHEN lc.status = 'nc' THEN 'non_conforme'
+          WHEN lc.status = 'ok' THEN 'conforme'
+          ELSE NULL
+        END AS door_state,
+        CASE
+          WHEN pend.due_date < CURRENT_DATE THEN 'en_retard'
+          WHEN pend.due_date <= CURRENT_DATE + INTERVAL '30 day' THEN 'en_cours_30'
+          ELSE 'a_faire'
+        END AS status
       FROM fd_doors d
-      LEFT JOIN fd_door_positions p
-        ON p.door_id = d.id
-        AND p.plan_logical_name = $1
-        AND p.page_index = $2
-      WHERE p.door_id IS NULL
-      ORDER BY d.name ASC;
+      LEFT JOIN pos ON pos.door_id = d.id
+      LEFT JOIN pend ON pend.door_id = d.id
+      LEFT JOIN last_closed lc ON lc.door_id = d.id
+      WHERE pos.door_id IS NULL
+      ORDER BY d.name ASC
     `;
+
     const { rows } = await pool.query(q, [logical, pageIndex]);
 
     const pending = rows.map((r) => ({
       door_id: r.door_id,
       door_name: r.door_name,
+      building: r.building,
+      floor: r.floor,
+      door_state: r.door_state,
+      status: r.status,
     }));
 
     res.json({ ok: true, pending });
@@ -1818,14 +1892,14 @@ app.get("/api/doors/maps/pending-positions", async (req, res) => {
   }
 });
 
-/** Enregistre/Met à jour la position d’une porte sur un plan/page */
-// remplace le handler par :
+
+/** Enregistre / met à jour la position d’une porte sur un plan/page (UPSERT robuste) */
 app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
   try {
-    const doorId = req.params.doorId;
+    const doorId = String(req.params.doorId || "");
     let {
       logical_name,
-      plan_id,            // ✅ nouveau/prioritaire
+      plan_id,            // UUID accepté : on en déduit logical_name s'il manque
       page_index = 0,
       page_label = null,
       x_frac,
@@ -1834,40 +1908,42 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
       y,
     } = req.body || {};
 
-    // si on reçoit un plan_id (UUID), on récupère le logical_name correspondant
+    // Résout logical_name si plan_id fourni
     if ((!logical_name || String(logical_name).trim() === "") && plan_id && /^[0-9a-fA-F-]{36}$/.test(String(plan_id))) {
-      const { rows } = await pool.query(`SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`, [plan_id]);
+      const { rows } = await pool.query(
+        `SELECT logical_name FROM fd_plans WHERE id=$1 LIMIT 1`,
+        [plan_id]
+      );
       logical_name = rows?.[0]?.logical_name || null;
     }
 
-    const xf = x_frac != null ? x_frac : x;
-    const yf = y_frac != null ? y_frac : y;
+    // Normalise coords (on accepte x/y ou x_frac/y_frac)
+    const xfRaw = (x_frac != null ? x_frac : x);
+    const yfRaw = (y_frac != null ? y_frac : y);
+    const xf = Number(xfRaw);
+    const yf = Number(yfRaw);
 
-    if (!logical_name || xf == null || yf == null) {
+    if (!doorId || !logical_name || !Number.isFinite(xf) || !Number.isFinite(yf)) {
       return res.status(400).json({ ok: false, error: "coords/logical requis" });
     }
+
+    // Clamp 0..1 pour sécurité
+    const xClamped = Math.min(1, Math.max(0, xf));
+    const yClamped = Math.min(1, Math.max(0, yf));
 
     await pool.query(
       `INSERT INTO fd_door_positions (door_id, plan_logical_name, page_index, page_label, x_frac, y_frac)
        VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (door_id, plan_logical_name, page_index)
-       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, page_label=EXCLUDED.page_label, updated_at=now()`,
-      [doorId, String(logical_name), Number(page_index || 0), page_label, Number(xf), Number(yf)]
+       DO UPDATE SET x_frac=EXCLUDED.x_frac,
+                     y_frac=EXCLUDED.y_frac,
+                     page_label=EXCLUDED.page_label,
+                     updated_at=now()`,
+      [doorId, String(logical_name), Number(page_index || 0), page_label, xClamped, yClamped]
     );
 
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
-});
-
-// ------------------------------
-// Boot
-// ------------------------------
-await ensureSchema();
-app.listen(PORT, HOST, () => {
-  console.log(`[fire-doors] listening on ${HOST}:${PORT}`);
-  console.log(
-    `QR base default: ${process.env.PUBLIC_BASE || "(dynamic from host)"} + ${DEFAULT_APP_PATH}`
-  );
 });
