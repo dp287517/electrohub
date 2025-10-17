@@ -3,12 +3,10 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import dayjs from "dayjs";
 import 'dayjs/locale/fr';
 dayjs.locale('fr');
-
 /* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
@@ -51,7 +49,6 @@ function userHeaders() {
 function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
-
 /* 🔸 Hook utilitaire mobile */
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => {
@@ -65,7 +62,6 @@ function useIsMobile() {
   }, []);
   return isMobile;
 }
-
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
   list: async (params = {}) => {
@@ -76,7 +72,6 @@ const API = {
     return r.json();
   },
   get: async (id) => (await fetch(`/api/doors/doors/${id}`, withHeaders())).json(),
-
   // ✅ vérifie r.ok et remonte un message d'erreur lisible
   create: async (payload) => {
     const r = await fetch(`/api/doors/doors`, {
@@ -92,7 +87,6 @@ const API = {
     }
     return data;
   },
-
   update: async (id, payload) =>
     (
       await fetch(`/api/doors/doors/${id}`, {
@@ -103,7 +97,6 @@ const API = {
     ).json(),
   remove: async (id) =>
     (await fetch(`/api/doors/doors/${id}`, { method: "DELETE", ...withHeaders() })).json(),
-
   startCheck: async (doorId) => {
     const id = getIdentity();
     return (
@@ -141,7 +134,6 @@ const API = {
   },
   listHistory: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/history`, withHeaders())).json(),
-
   listFiles: async (doorId) =>
     (await fetch(`/api/doors/doors/${doorId}/files`, withHeaders())).json(),
   uploadFile: async (doorId, file) => {
@@ -160,7 +152,6 @@ const API = {
   },
   deleteFile: async (fileId) =>
     (await fetch(`/api/doors/files/${fileId}`, { method: "DELETE", ...withHeaders() })).json(),
-
   uploadPhoto: async (doorId, file) => {
     const id = getIdentity();
     const fd = new FormData();
@@ -179,9 +170,7 @@ const API = {
   qrUrl: (doorId, size = 256) => `/api/doors/doors/${doorId}/qrcode?size=${size}`,
   qrcodesPdf: (doorId, sizes = "80,120,200", force = false) =>
     `/api/doors/doors/${doorId}/qrcodes.pdf?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`,
-
   calendar: async () => (await fetch(`/api/doors/calendar`, withHeaders())).json(),
-
   settingsGet: async () => (await fetch(`/api/doors/settings`, withHeaders())).json(),
   settingsSet: async (payload) =>
     (
@@ -193,7 +182,6 @@ const API = {
     ).json(),
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
-
 /* ----------------------------- API (Doors Maps) ----------------------------- */
 const MAPS = {
   uploadZip: async (file) => {
@@ -233,7 +221,6 @@ const MAPS = {
       body: JSON.stringify(payload),
     })).json(),
 };
-
 // helper pour charger les PDFs protégés avec cookies + X-User-*
 function pdfDocOpts(url) {
   return { url, withCredentials: true, httpHeaders: userHeaders() };
@@ -244,7 +231,6 @@ function planFileUrlSafe(plan) {
     ? `/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`
     : `/api/doors/maps/plan/${encodeURIComponent(plan?.logical_name || "")}/file`;
 }
-
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -264,7 +250,6 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
     </button>
   );
 }
-
 // ✅ champs fond blanc + écriture noire
 function Input({ value, onChange, className = "", ...p }) {
   return (
@@ -307,7 +292,6 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
     </select>
   );
 }
-
 function Badge({ color = "gray", children, className = "" }) {
   const map = {
     gray: "bg-gray-100 text-gray-700",
@@ -322,7 +306,6 @@ function Badge({ color = "gray", children, className = "" }) {
     </span>
   );
 }
-
 const STATUS = {
   A_FAIRE: "a_faire",
   EN_COURS: "en_cours_30",
@@ -348,7 +331,6 @@ function doorStateBadge(state) {
   if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
   return <Badge>—</Badge>;
 }
-
 /* ----------------------------- Toast ----------------------------- */
 function Toast({ text, onClose }) {
   useEffect(() => {
@@ -364,7 +346,6 @@ function Toast({ text, onClose }) {
     </div>
   );
 }
-
 /* ----------------------------- Calendrier (mois) ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
@@ -454,7 +435,6 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-
 /* ----------------------------- MAPS components ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
@@ -480,7 +460,6 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     </div>
   );
 }
-
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -491,7 +470,6 @@ function PlanCards({ plans = [], onRename, onPick }) {
     </div>
   );
 }
-
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -502,7 +480,6 @@ function PlanCard({ plan, onRename, onPick }) {
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
   const isMobile = useIsMobile(); // 🔹 NOUVEAU
-
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
@@ -512,7 +489,6 @@ function PlanCard({ plan, onRename, onPick }) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-
   // 🔹 MOBILE: pas de rendu PDF dans la vignette (évite crash/perf) → tuile simple
   useEffect(() => {
     if (isMobile) return; // skip rendu canvas si mobile
@@ -552,7 +528,6 @@ function PlanCard({ plan, onRename, onPick }) {
       else if (loadingTask) { try { loadingTask.destroy(); } catch {} }
     };
   }, [plan.id, plan.logical_name, visible, isMobile]);
-
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
@@ -606,7 +581,243 @@ function PlanCard({ plan, onRename, onPick }) {
     </div>
   );
 }
+// --- PlanViewerLeaflet.jsx (inline pour simplicité) ---
+import L from 'leaflet';
 
+function PlanViewerLeaflet({
+  fileUrl,
+  pageIndex = 0,
+  points = [],
+  onReady,
+  onMovePoint,
+  onClickPoint,
+  placingDoorId,
+  onPlaceAt,
+}) {
+  const wrapRef = useRef(null);
+  const mapRef = useRef(null);
+  const imageLayerRef = useRef(null);
+  const markersLayerRef = useRef(null);
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  const [picker, setPicker] = useState(null); // {x,y, items:[{door_id, door_name}]}
+
+  // Rendu PDF -> image HD (2.5x) puis Leaflet ImageOverlay
+  useEffect(() => {
+    let cancelled = false;
+    let pdf, loadingTask;
+    (async () => {
+      try {
+        if (!wrapRef.current) return;
+        // charge PDF
+        loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
+        pdf = await loadingTask.promise;
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+
+        // calcule l’échelle HD
+        const viewportBase = page.getViewport({ scale: 1 });
+        const targetScale = 2.5; // ← qualité
+        const viewport = page.getViewport({ scale: targetScale });
+
+        // rendu offscreen
+        const canvas = document.createElement('canvas');
+        canvas.width  = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const ctx = canvas.getContext('2d', { alpha: true });
+        await page.render({ canvasContext: ctx, viewport }).promise;
+
+        if (cancelled) return;
+
+        const dataUrl = canvas.toDataURL('image/png');
+        setImgSize({ w: canvas.width, h: canvas.height });
+
+        // init map si besoin
+        if (!mapRef.current) {
+          const m = L.map(wrapRef.current, {
+            crs: L.CRS.Simple,
+            zoomControl: false,
+            zoomAnimation: true,
+            // options pro mobile :
+            tap: true,
+            tapTolerance: 20,
+            inertia: true,
+            wheelDebounceTime: 35,
+            wheelPxPerZoomLevel: 60,
+            preferCanvas: true,
+          });
+          L.control.zoom({ position: 'topright' }).addTo(m);
+          mapRef.current = m;
+
+          m.on('click', (e) => {
+            // Placement d’une porte (mode “placingDoorId”)
+            if (placingDoorId && onPlaceAt) {
+              const { w, h } = imgSizeRef.current || { w: 1, h: 1 };
+              const p = m.latLngToLayerPoint(e.latlng);
+              const x = Math.min(1, Math.max(0, p.x / w));
+              const y = Math.min(1, Math.max(0, p.y / h));
+              onPlaceAt({ x, y });
+              return;
+            }
+            // Désambiguïsation clic proche de plusieurs marqueurs
+            const clicked = e.containerPoint;
+            const near = [];
+            markersLayerRef.current?.eachLayer((mk) => {
+              const mp = m.latLngToContainerPoint(mk.getLatLng());
+              const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
+              if (dist <= 18) near.push(mk.__meta); // meta injectée plus bas
+            });
+            if (near.length === 1 && onClickPoint) {
+              onClickPoint(near[0]);
+            } else if (near.length > 1) {
+              // Ouvre un petit sélecteur
+              setPicker({ x: clicked.x, y: clicked.y, items: near });
+            } else {
+              setPicker(null);
+            }
+          });
+
+          // Ferme le picker si on bouge/zoome
+          m.on('zoomstart movestart', () => setPicker(null));
+        }
+
+        // dimensions & bounds
+        const map = mapRef.current;
+        const bounds = L.latLngBounds([ [0,0], [viewport.height, viewport.width] ]); // (y,x)
+        if (imageLayerRef.current) {
+          map.removeLayer(imageLayerRef.current);
+        }
+        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
+        imageLayerRef.current = layer;
+        layer.addTo(map);
+        map.fitBounds(bounds, { padding: [10,10] });
+
+        // couche des marqueurs
+        if (!markersLayerRef.current) {
+          markersLayerRef.current = L.layerGroup().addTo(map);
+        }
+        // (re)dessine les marqueurs
+        drawMarkers(points, viewport.width, viewport.height);
+
+        onReady?.();
+      } catch (e) {
+        // noop: laisse Leaflet vide si erreur
+        console.error('Leaflet viewer error', e);
+      } finally {
+        try { pdf?.destroy(); } catch {}
+        try { loadingTask?.destroy?.(); } catch {}
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [fileUrl, pageIndex]);
+
+  // garde taille en ref pour click/place
+  const imgSizeRef = useRef(imgSize);
+  useEffect(() => { imgSizeRef.current = imgSize; }, [imgSize]);
+
+  // (re)dessine marqueurs quand points changent
+  useEffect(() => {
+    if (!mapRef.current || !imgSize.w) return;
+    drawMarkers(points, imgSize.w, imgSize.h);
+  }, [points, imgSize]);
+
+  function markerClass(status) {
+    if (status === STATUS.EN_RETARD) return 'door-marker door-marker--red';
+    if (status === STATUS.EN_COURS)  return 'door-marker door-marker--amber';
+    if (status === STATUS.A_FAIRE)   return 'door-marker door-marker--green';
+    return 'door-marker door-marker--blue';
+  }
+
+  function drawMarkers(list, w, h) {
+    const map = mapRef.current;
+    if (!map) return;
+    const g = markersLayerRef.current;
+    g?.clearLayers();
+    (list || []).forEach((p) => {
+      const x = Number(p.x_frac ?? p.x ?? 0) * w;
+      const y = Number(p.y_frac ?? p.y ?? 0) * h;
+      if (Number.isNaN(x) || Number.isNaN(y)) return;
+
+      const latlng = L.latLng(y, x);
+      const icon = L.divIcon({
+        className: markerClass(p.status),
+        iconSize: [28, 28],
+      });
+      const mk = L.marker(latlng, {
+        icon,
+        draggable: true,          // ← drag natif (mobile ok)
+        autoPan: true,
+        bubblingMouseEvents: false,
+        keyboard: false,
+        riseOnHover: true,
+      });
+
+      // stocke métadonnées pour la désambig
+      mk.__meta = {
+        door_id: p.door_id,
+        door_name: p.door_name || p.name,
+        status: p.status,
+        x_frac: p.x_frac, y_frac: p.y_frac,
+      };
+
+      mk.on('click', (e) => {
+        // on laisse la désambig globale (map click) décider si plusieurs sont proches
+        // mais si seul, Leaflet déclenche ce click et near.length === 1 → onClickPoint
+        // rien à faire ici
+      });
+
+      mk.on('dragend', () => {
+        if (!onMovePoint) return;
+        const ll = mk.getLatLng();
+        const pxy = map.latLngToLayerPoint(ll);
+        const xFrac = Math.min(1, Math.max(0, pxy.x / w));
+        const yFrac = Math.min(1, Math.max(0, pxy.y / h));
+        onMovePoint(p.door_id, { x: xFrac, y: yFrac });
+      });
+
+      mk.addTo(g);
+    });
+  }
+
+  // UI de sélection quand plusieurs portes sont collées
+  const onPickDoor = (d) => {
+    setPicker(null);
+    onClickPoint?.(d);
+  };
+
+  const wrapperHeight = Math.max(320, imgSize.h ? Math.min(imgSize.h, 1200) : 520);
+
+  return (
+    <div className="mt-3 relative">
+      <div
+        ref={wrapRef}
+        className="relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
+        style={{ height: wrapperHeight }}
+      />
+      {/* Picker flottant */}
+      {picker && (
+        <div
+          className="door-pick"
+          style={{
+            left: Math.max(8, picker.x - 120),
+            top: Math.max(8, picker.y - 8),
+          }}
+        >
+          {picker.items.slice(0, 8).map((it) => (
+            <button key={it.door_id} onClick={() => onPickDoor(it)}>
+              {it.door_name || it.door_id}
+            </button>
+          ))}
+          {picker.items.length > 8 ? <div className="text-xs text-gray-500 px-1">…</div> : null}
+        </div>
+      )}
+      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-600"/> À faire</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-amber-500"/> ≤30j</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-rose-600"/> En retard</span>
+      </div>
+    </div>
+  );
+}
 /**
  * PlanViewer — FIX mobile scroll & placement PC
  * - Zoom wheel / pinch
@@ -630,13 +841,11 @@ function PlanViewer({
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
   const isMarkerDragging = useRef(false);
-
   const [loaded, setLoaded] = useState(false);
   const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
   const [isMounted, setIsMounted] = useState(false);
   const [err, setErr] = useState("");
   const [containerWidth, setContainerWidth] = useState(0);
-
   // Vue (pan/scale) avec raf
   const [scale, _setScale] = useState(1);
   const [pan, _setPan] = useState({ x: 0, y: 0 });
@@ -661,7 +870,6 @@ function PlanViewer({
       _setPan({ x: viewRef.current.panX, y: viewRef.current.panY });
     });
   }
-
   // Vérifier canvas & largeur conteneur
   useEffect(() => {
     setIsMounted(!!canvasRef.current);
@@ -672,7 +880,6 @@ function PlanViewer({
       return () => window.removeEventListener("resize", updateWidth);
     }
   }, []);
-
   // pdf.js render (fit-to-width)
   useEffect(() => {
     let cancelled = false;
@@ -748,7 +955,6 @@ function PlanViewer({
       try { loadingTask?.destroy?.(); } catch {}
     };
   }, [fileUrl, pageIndex, onReady, isMounted, containerWidth]);
-
   // Wheel zoom (desktop)
   useEffect(() => {
     const el = wrapRef.current;
@@ -771,7 +977,6 @@ function PlanViewer({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [loaded]);
-
   // Gestes tactiles (pas de setPointerCapture sur touch)
   useEffect(() => {
     const el = wrapRef.current;
@@ -829,7 +1034,6 @@ function PlanViewer({
       el.removeEventListener("pointercancel", onPointerUp);
     };
   }, []);
-
   // (A) Tap pour PLACER (ignore si scroll > 8px, bouton gauche seulement)
   const lastDown = useRef(null);
   useEffect(() => {
@@ -856,7 +1060,6 @@ function PlanViewer({
       el.removeEventListener("pointercancel", handlePointerUp);
     };
   }, [placingDoorId, onPlaceAt]);
-
   // (B) Appui long pour CRÉER (optionnel)
   useEffect(() => {
     if (!onCreateDoorAt) return;
@@ -892,7 +1095,6 @@ function PlanViewer({
       clearLP();
     };
   }, [placingDoorId, onCreateDoorAt]);
-
   // Drag + clic fiable sur marker (cleanup global ajouté)
   const dragInfo = useRef(null);
   function onPointerDownPoint(e, p) {
@@ -957,14 +1159,12 @@ function PlanViewer({
       window.removeEventListener("pointercancel", onUpMarker);
     };
   }, []);
-
   function markerClass(s) {
     if (s === STATUS.EN_RETARD) return "bg-rose-600 ring-2 ring-rose-300 animate-pulse";
     if (s === STATUS.EN_COURS) return "bg-amber-500 ring-2 ring-amber-300 animate-pulse";
     if (s === STATUS.A_FAIRE) return "bg-emerald-600 ring-1 ring-emerald-300";
     return "bg-blue-600 ring-1 ring-blue-300";
   }
-
   // Coordonnées relatives (guard évitant NaN)
   function relativeXY(evt) {
     const wrap = wrapRef.current;
@@ -980,7 +1180,6 @@ function PlanViewer({
     const y = Math.min(1, Math.max(0, localY / (h * viewRef.current.scale)));
     return { x, y };
   }
-
   function handleContextMenu(e) {
     if (!onCreateDoorAt) return;
     if (e.target?.dataset?.marker === "1") return;
@@ -988,7 +1187,6 @@ function PlanViewer({
     const xy = relativeXY(e);
     onCreateDoorAt?.(xy);
   }
-
   // Mode interaction → touchAction dynamique pour éviter le “crash scroll” mobile
   const [interactive, setInteractive] = useState(false);
   useEffect(() => {
@@ -1005,7 +1203,6 @@ function PlanViewer({
       el.removeEventListener("pointercancel", stop);
     };
   }, []);
-
   /* 🔸 Forcer un re-render de l’overlay quand la liste des points change
      (utile si React “recycle” les nodes et que la classe couleur doit changer) */
   const pointsVersion = useMemo(() => {
@@ -1014,13 +1211,10 @@ function PlanViewer({
       return (points || []).map(p => `${p.door_id}:${p.status}`).join("|");
     } catch { return String(Math.random()); }
   }, [points]);
-
   const wrapperHeight = Math.max(320, pageSize.h || 520);
-
   const touchAction =
     (placingDoorId || isMarkerDragging.current || scale !== 1) ? "none" : "pan-y";
   const placingCursor = placingDoorId ? "crosshair" : "default";
-
   return (
     <div className="mt-3">
       <div
@@ -1110,7 +1304,6 @@ function PlanViewer({
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
   const [tab, setTab] = useState("controls"); // controls | calendar | settings | maps
-
   /* ---- listing + filters ---- */
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -1120,17 +1313,13 @@ export default function Doors() {
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [doorState, setDoorState] = useState(""); // conforme | non_conforme
-
   /* ---- drawer (edit / inspect) ---- */
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null); // door object with details
-
   /* ---- calendar ---- */
   const [calendar, setCalendar] = useState({ events: [] });
-
   /* ---- toast ---- */
   const [toast, setToast] = useState("");
-
   /* ---- settings ---- */
   const defaultTemplate = [
     "La porte est-elle en parfait état (fermeture correcte, non voilée) ?",
@@ -1144,10 +1333,8 @@ export default function Doors() {
     frequency: "1_an",
   });
   const [savingSettings, setSavingSettings] = useState(false);
-
   /* ---- versionnement fichiers pour refresh instantané ---- */
   const [filesVersion, setFilesVersion] = useState(0);
-
   /* ---------- Deep-link helpers (QR) ---------- */
   function getDoorParam() {
     try {
@@ -1169,7 +1356,6 @@ export default function Doors() {
     setEditing(null);
     setDoorParam(null);
   }
-
   // -------- data loaders
   async function reload() {
     setLoading(true);
@@ -1196,14 +1382,12 @@ export default function Doors() {
       setSettings((x) => ({ ...x, checklist_template: s.checklist_template }));
     if (s?.frequency) setSettings((x) => ({ ...x, frequency: s.frequency }));
   }
-
   // First load
   useEffect(() => {
     reload();
     reloadCalendar();
     loadSettings();
   }, []);
-
   // Auto-open door from ?door=<id> (QR deep link)
   useEffect(() => {
     const targetId = getDoorParam();
@@ -1224,7 +1408,6 @@ export default function Doors() {
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
-
   // Live filter (debounce)
   useEffect(() => {
     const t = setTimeout(() => {
@@ -1233,9 +1416,7 @@ export default function Doors() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status, building, floor, doorState]);
-
   const filtered = doors; // filtré côté serveur
-
   /* ------------------ actions door ------------------ */
   function openCreate() {
     setEditing({
@@ -1299,7 +1480,6 @@ export default function Doors() {
       await loadUnplacedDoors(selectedPlan, planPage);
     }
   }
-
   /* ------------------ checklist workflow ------------------ */
   const baseOptions = [
     { value: "conforme", label: "Conforme" },
@@ -1349,7 +1529,6 @@ export default function Doors() {
       setEditing(full?.door);
     }
   }
-
   /* ------------------ files ------------------ */
   const [uploading, setUploading] = useState(false);
   function onDropFiles(e) {
@@ -1379,7 +1558,6 @@ export default function Doors() {
     await reload();
     setToast("Photo mise à jour ✅");
   }
-
   /* ------------------ settings save ------------------ */
   async function saveSettings() {
     setSavingSettings(true);
@@ -1392,7 +1570,6 @@ export default function Doors() {
       setSavingSettings(false);
     }
   }
-
   /* ------------------ MAPS state / loaders ------------------ */
   const [plans, setPlans] = useState([]); // {id, logical_name, display_name, page_count, actions_next_30, overdue}
   const [mapsLoading, setMapsLoading] = useState(false);
@@ -1402,15 +1579,12 @@ export default function Doors() {
   const [pdfReady, setPdfReady] = useState(false); // viewer ready / fallback ok
   const [unplacedDoors, setUnplacedDoors] = useState([]); // [{door_id, door_name}]
   const [pendingPlaceDoorId, setPendingPlaceDoorId] = useState(null);
-
   // Cache des portes déjà placées sur tous les plans (pour filtrer les "en attente")
   const placedCacheRef = useRef({ plansHash: "", ids: new Set() });
   const [placedLoading, setPlacedLoading] = useState(false);
-
   function hashPlans(list) {
     return (list || []).map(p => p.id || p.logical_name).join("|");
   }
-
   async function getAllPlacedDoorIdsCached(plansList) {
     const h = hashPlans(plansList);
     if (placedCacheRef.current.plansHash === h && placedCacheRef.current.ids.size) {
@@ -1430,7 +1604,6 @@ export default function Doors() {
       setPlacedLoading(false);
     }
   }
-
   async function loadPlans() {
     setMapsLoading(true);
     try {
@@ -1485,21 +1658,16 @@ export default function Doors() {
     const name = (it.door_name || "").toLowerCase().trim();
     const qNorm = (q || "").toLowerCase().trim();
     if (qNorm && !name.includes(qNorm)) return false;
-
     if (status && it.status !== status) return false;
-
     const eq = (a, b) => (a || "").toString().trim().toLowerCase() === (b || "").toString().trim().toLowerCase();
     if (building && !eq(it.building, building)) return false;
     if (floor && !eq(it.floor, floor)) return false;
-
     if (doorState && it.door_state !== doorState) return false;
     return true;
   }
-
   useEffect(() => {
     if (tab === "maps") loadPlans();
   }, [tab]);
-
   // Stabiliser selectedPlan
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id, selectedPlan?.logical_name]);
   useEffect(() => {
@@ -1508,7 +1676,6 @@ export default function Doors() {
       loadUnplacedDoors(stableSelectedPlan, planPage);
     }
   }, [stableSelectedPlan, planPage, q, status, building, floor, doorState, plans]);
-
   /* ------------------ MAPS handlers ------------------ */
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
   const handleMovePoint = useCallback(async (doorId, xy) => {
@@ -1543,7 +1710,6 @@ export default function Doors() {
       setToast("Erreur lors du placement de la porte : " + e.message);
     }
   }, [pendingPlaceDoorId, stableSelectedPlan, planPage]);
-
   // Création directe à l’endroit cliqué (désactivée par défaut)
   const handleCreateDoorAt = useCallback(async (xy) => {
     if (!stableSelectedPlan) return;
@@ -1573,7 +1739,6 @@ export default function Doors() {
       setToast("Erreur lors de la création : " + (e?.message || e));
     }
   }, [stableSelectedPlan, planPage]);
-
   async function createDoorAtCenter() {
     if (!stableSelectedPlan) return;
     try {
@@ -1602,7 +1767,6 @@ export default function Doors() {
       setToast("Erreur lors de la création : " + (e?.message || e));
     }
   }
-
   /* 🔁 Auto-refresh des positions quand l’onglet Plans est ouvert */
   useEffect(() => {
     if (tab !== "maps" || !stableSelectedPlan) return;
@@ -1615,7 +1779,6 @@ export default function Doors() {
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
   }, [tab, stableSelectedPlan, planPage, q, status, building, floor, doorState]);
-
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1635,11 +1798,9 @@ export default function Doors() {
       </div>
     </div>
   );
-
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
-
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Portes coupe-feu</h1>
@@ -1651,9 +1812,7 @@ export default function Doors() {
           {/* ❌ Bouton “+ Nouvelle porte” retiré ici (on le garde dans l’interface des plans) */}
         </div>
       </header>
-
       <StickyTabs />
-
       {/* Filtres (toggle) */}
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
@@ -1701,7 +1860,6 @@ export default function Doors() {
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
       )}
-
       {/* Onglet Contrôles : liste des portes */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
@@ -1743,7 +1901,6 @@ export default function Doors() {
               </div>
             ))}
           </div>
-
           {/* Desktop table */}
           <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
@@ -1810,7 +1967,6 @@ export default function Doors() {
           </div>
         </div>
       )}
-
       {/* Onglet Calendrier */}
       {tab === "calendar" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4">
@@ -1824,7 +1980,6 @@ export default function Doors() {
           />
         </div>
       )}
-
       {/* Onglet Plans */}
       {tab === "maps" && (
         <div className="space-y-4">
@@ -1873,21 +2028,25 @@ export default function Doors() {
                   </Btn>
                 </div>
               </div>
-
               {/* Bandeau portes en attente de positionnement — supprimé */}
+              {selectedPlan && (
+  <div className="bg-white rounded-2xl border shadow-sm p-3">
+    {/* ... header ... */}
 
-              <PlanViewer
-                key={stableSelectedPlan?.id || stableSelectedPlan?.logical_name || ""}
-                fileUrl={planFileUrlSafe(stableSelectedPlan)}
-                pageIndex={planPage}
-                points={positions}
-                onReady={handlePdfReady}
-                onMovePoint={handleMovePoint}
-                onClickPoint={handleClickPoint}
-                placingDoorId={pdfReady ? pendingPlaceDoorId : null}
-                onPlaceAt={handlePlaceAt}
-                // onCreateDoorAt={handleCreateDoorAt} // désactivé par défaut
-              />
+    <PlanViewerLeaflet
+      key={stableSelectedPlan?.id || stableSelectedPlan?.logical_name || ""}
+      fileUrl={planFileUrlSafe(stableSelectedPlan)}
+      pageIndex={planPage}
+      points={positions}
+      onReady={handlePdfReady}
+      onMovePoint={handleMovePoint}
+      onClickPoint={handleClickPoint}
+      placingDoorId={pdfReady ? pendingPlaceDoorId : null}
+      onPlaceAt={handlePlaceAt}
+    />
+    {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
+  </div>
+)}
               {!pdfReady && (
                 <div className="text-xs text-gray-500 px-1 pt-2">
                   Chargement du plan… (canvas pdf.js)
@@ -1897,7 +2056,6 @@ export default function Doors() {
           )}
         </div>
       )}
-
       {/* Onglet Paramètres */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
@@ -1948,7 +2106,6 @@ export default function Doors() {
           </div>
         </div>
       )}
-
       {/* Drawer: fiche porte + checklist + fichiers + QR */}
       {drawerOpen && editing && (
         <Drawer
@@ -1971,7 +2128,6 @@ export default function Doors() {
                 <Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} />
               </Labeled>
             </div>
-
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Statut</span>
@@ -1983,12 +2139,10 @@ export default function Doors() {
                 Prochain contrôle : {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
               </div>
             </div>
-
             <div className="flex items-center gap-3">
               <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
               {editing?.id && <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>}
             </div>
-
             {/* Photo */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -2008,7 +2162,6 @@ export default function Doors() {
                 </div>
               </div>
             )}
-
             {/* Checklist */}
             <div className="border rounded-2xl p-3">
               <div className="flex items-center justify-between mb-2">
@@ -2060,7 +2213,6 @@ export default function Doors() {
                 </div>
               )}
             </div>
-
             {/* Fichiers / Photos (door-level) */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -2090,7 +2242,6 @@ export default function Doors() {
                 <DoorFiles doorId={editing.id} version={filesVersion} />
               </div>
             )}
-
             {/* QR Codes */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -2107,7 +2258,6 @@ export default function Doors() {
                 </div>
               </div>
             )}
-
             {/* Historique */}
             <DoorHistory doorId={editing.id} />
           </div>
@@ -2116,7 +2266,6 @@ export default function Doors() {
     </section>
   );
 }
-
 /* ----------------------------- Sous-composants ----------------------------- */
 function Labeled({ label, children }) {
   return (
@@ -2126,7 +2275,6 @@ function Labeled({ label, children }) {
     </label>
   );
 }
-
 function Drawer({ title, children, onClose }) {
   const ref = useRef(null);
   useEffect(() => {
@@ -2149,7 +2297,6 @@ function Drawer({ title, children, onClose }) {
     </div>
   );
 }
-
 function DoorFiles({ doorId, version = 0 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -2173,7 +2320,6 @@ function DoorFiles({ doorId, version = 0 }) {
     </div>
   );
 }
-
 function FileCard({ f, onDelete }) {
   const isImage = (f.mime || "").startsWith("image/");
   const url = f.download_url || f.inline_url || f.url;
@@ -2197,7 +2343,6 @@ function FileCard({ f, onDelete }) {
     </div>
   );
 }
-
 function DoorHistory({ doorId }) {
   const [items, setItems] = useState([]);
   useEffect(() => {
