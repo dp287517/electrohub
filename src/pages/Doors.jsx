@@ -574,11 +574,12 @@ function PlanCard({ plan, onRename, onPick }) {
 }
 
 /**
- * PlanViewer (corrigé mobile)
+ * PlanViewer — FIX mobile scroll & placement PC
  * - Zoom wheel / pinch
  * - Pan drag / tactile
  * - Déplacement marqueur
- * - Placement: tap court (scroll ignoré via seuil)
+ * - Placement = tap court (ignore scroll > 8px), bouton gauche uniquement
+ * - touchAction DYNAMIQUE: 'pan-y' par défaut, 'none' pendant interaction/zoom/placement
  */
 function PlanViewer({
   fileUrl,
@@ -737,7 +738,7 @@ function PlanViewer({
     return () => el.removeEventListener("wheel", onWheel);
   }, [loaded]);
 
-  // Gestes tactiles (corrigé : pas de setPointerCapture sur touch)
+  // Gestes tactiles (pas de setPointerCapture sur touch)
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -795,16 +796,18 @@ function PlanViewer({
     };
   }, []);
 
-  // (A) Tap pour PLACER (ignore si scroll > 8px)
+  // (A) Tap pour PLACER (ignore si scroll > 8px, bouton gauche seulement)
   const lastDown = useRef(null);
   useEffect(() => {
     const el = overlayRef.current;
     if (!el) return;
     const handlePointerDown = (e) => {
-      lastDown.current = { x: e.clientX, y: e.clientY, t: performance.now?.() || Date.now() };
+      lastDown.current = { x: e.clientX, y: e.clientY, t: performance.now?.() || Date.now(), btn: e.button };
     };
     const handlePointerUp = (e) => {
       if (!placingDoorId) return;
+      // PC: bouton gauche (0) — sur mobile, e.button est souvent 0/undefined
+      if (typeof e.button === "number" && e.button !== 0 && e.pointerType === "mouse") return;
       const d = lastDown.current;
       const moved = d ? Math.hypot((e.clientX || 0) - d.x, (e.clientY || 0) - d.y) > 8 : false;
       if (moved) return;
@@ -953,9 +956,7 @@ function PlanViewer({
     onCreateDoorAt?.(xy);
   }
 
-  const wrapperHeight = Math.max(320, pageSize.h || 520);
-  useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
-
+  // Mode interaction → touchAction dynamique pour éviter le “crash scroll” mobile
   const [interactive, setInteractive] = useState(false);
   useEffect(() => {
     const el = wrapRef.current;
@@ -972,12 +973,24 @@ function PlanViewer({
     };
   }, []);
 
+  const wrapperHeight = Math.max(320, pageSize.h || 520);
+  useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
+
+  const touchAction =
+    (placingDoorId || isMarkerDragging.current || scale !== 1) ? "none" : "pan-y";
+  const placingCursor = placingDoorId ? "crosshair" : "default";
+
   return (
     <div className="mt-3">
       <div
         ref={wrapRef}
         className="relative w-full overflow-hidden border rounded-2xl bg-white shadow-sm"
-        style={{ height: wrapperHeight, touchAction: 'none', overscrollBehavior: 'contain' }}
+        style={{
+          height: wrapperHeight,
+          touchAction: touchAction,
+          overscrollBehavior: 'contain',
+          cursor: placingCursor,
+        }}
       >
         <div
           className={`relative inline-block mx-auto ${interactive ? 'will-change-transform' : ''}`}
@@ -1000,7 +1013,12 @@ function PlanViewer({
           <div
             ref={overlayRef}
             className="absolute inset-0 z-10"
-            style={{ width: pageSize.w || "100%", height: pageSize.h || 520, touchAction: 'none' }}
+            style={{
+              width: pageSize.w || "100%",
+              height: pageSize.h || 520,
+              touchAction: touchAction,
+              cursor: placingCursor,
+            }}
             onContextMenu={onCreateDoorAt ? handleContextMenu : undefined}
           >
             {points.map((p) => {
@@ -1047,7 +1065,6 @@ function PlanViewer({
     </div>
   );
 }
-
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
   const [tab, setTab] = useState("controls"); // controls | calendar | settings | maps
