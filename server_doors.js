@@ -94,6 +94,7 @@ app.use(
 );
 
 app.use(express.json({ limit: "16mb" }));
+app.use("/standard_fonts", express.static(PDF_STANDARD_FONTS));
 
 const PORT = Number(process.env.FIRE_DOORS_PORT || 3016);
 const HOST = process.env.FIRE_DOORS_HOST || "0.0.0.0";
