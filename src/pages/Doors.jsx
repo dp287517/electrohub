@@ -52,6 +52,20 @@ function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
 
+/* 🔸 Hook utilitaire mobile */
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 640;
+  });
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isMobile;
+}
+
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
   list: async (params = {}) => {
@@ -63,7 +77,7 @@ const API = {
   },
   get: async (id) => (await fetch(`/api/doors/doors/${id}`, withHeaders())).json(),
 
-  // ✅ point 2: vérifie r.ok et remonte un message d'erreur lisible
+  // ✅ vérifie r.ok et remonte un message d'erreur lisible
   create: async (payload) => {
     const r = await fetch(`/api/doors/doors`, {
       method: "POST",
@@ -487,6 +501,7 @@ function PlanCard({ plan, onRename, onPick }) {
   const [thumbErr, setThumbErr] = useState("");
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
+  const isMobile = useIsMobile(); // 🔹 NOUVEAU
 
   useEffect(() => {
     const el = obsRef.current;
@@ -498,8 +513,9 @@ function PlanCard({ plan, onRename, onPick }) {
     return () => io.disconnect();
   }, []);
 
-  // Miniature page 1 via pdf.js (avec annulation propre)
+  // 🔹 MOBILE: pas de rendu PDF dans la vignette (évite crash/perf) → tuile simple
   useEffect(() => {
+    if (isMobile) return; // skip rendu canvas si mobile
     if (!visible) return;
     let cancelled = false;
     let pdf = null;
@@ -514,8 +530,7 @@ function PlanCard({ plan, onRename, onPick }) {
         if (cancelled) return;
         const page = await pdf.getPage(1);
         const viewport = page.getViewport({ scale: 1 });
-        const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
-        const cap = isMobile ? 220 : 320;
+        const cap = 320;
         const baseScale = cap / viewport.width;
         const adjusted = page.getViewport({ scale: baseScale });
         const c = canvasRef.current;
@@ -536,14 +551,24 @@ function PlanCard({ plan, onRename, onPick }) {
       if (pdf) { try { pdf.destroy(); } catch {} }
       else if (loadingTask) { try { loadingTask.destroy(); } catch {} }
     };
-  }, [plan.id, plan.logical_name, visible]);
+  }, [plan.id, plan.logical_name, visible, isMobile]);
 
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
-        {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
-        {!visible && <div className="text-xs text-gray-400">…</div>}
-        {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
+        {/* 🔸 MOBILE: icône PDF plutôt que canvas */}
+        {isMobile ? (
+          <div className="flex flex-col items-center justify-center text-gray-500">
+            <div className="text-4xl leading-none">📄</div>
+            <div className="text-[11px] mt-1">PDF</div>
+          </div>
+        ) : (
+          <>
+            {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+            {!visible && <div className="text-xs text-gray-400">…</div>}
+            {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
+          </>
+        )}
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
           {name}
         </div>
@@ -554,7 +579,7 @@ function PlanCard({ plan, onRename, onPick }) {
             <div className="font-medium truncate" title={name}>{name || "—"}</div>
             <div className="flex items-center gap-1">
               <Btn variant="ghost" onClick={() => setEdit(true)}>✏️</Btn>
-              <Btn variant="subtle" onClick={() => { console.log("[DEBUG] Picking plan:", plan); onPick(plan); }}>
+              <Btn variant="subtle" onClick={() => { onPick(plan); }}>
                 Ouvrir
               </Btn>
             </div>
@@ -815,7 +840,6 @@ function PlanViewer({
     };
     const handlePointerUp = (e) => {
       if (!placingDoorId) return;
-      // PC: bouton gauche (0) — sur mobile, e.button est souvent 0/undefined
       if (typeof e.button === "number" && e.button !== 0 && e.pointerType === "mouse") return;
       const d = lastDown.current;
       const moved = d ? Math.hypot((e.clientX || 0) - d.x, (e.clientY || 0) - d.y) > 8 : false;
@@ -982,8 +1006,16 @@ function PlanViewer({
     };
   }, []);
 
+  /* 🔸 Forcer un re-render de l’overlay quand la liste des points change
+     (utile si React “recycle” les nodes et que la classe couleur doit changer) */
+  const pointsVersion = useMemo(() => {
+    // hash léger sur ids + status
+    try {
+      return (points || []).map(p => `${p.door_id}:${p.status}`).join("|");
+    } catch { return String(Math.random()); }
+  }, [points]);
+
   const wrapperHeight = Math.max(320, pageSize.h || 520);
-  useEffect(() => { console.log("[DEBUG] Points received:", points); }, [points]);
 
   const touchAction =
     (placingDoorId || isMarkerDragging.current || scale !== 1) ? "none" : "pan-y";
@@ -1020,6 +1052,7 @@ function PlanViewer({
             </div>
           )}
           <div
+            key={pointsVersion /* 🔸 clé pour rafraichir classes couleur */}
             ref={overlayRef}
             className="absolute inset-0 z-10"
             style={{
@@ -1108,7 +1141,7 @@ export default function Doors() {
   ];
   const [settings, setSettings] = useState({
     checklist_template: defaultTemplate,
-    frequency: "1_an", // 1_an, 1_mois, 2_an, 3_mois, 2_ans
+    frequency: "1_an",
   });
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -1201,7 +1234,7 @@ export default function Doors() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status, building, floor, doorState]);
 
-  const filtered = doors; // serveur filtre déjà
+  const filtered = doors; // filtré côté serveur
 
   /* ------------------ actions door ------------------ */
   function openCreate() {
@@ -1238,7 +1271,6 @@ export default function Doors() {
       const full = await API.get(editing.id);
       setEditing(full?.door || editing);
     } else {
-      // ✅ point 1a: on envoie un status par défaut lors de la création
       const created = await API.create({
         ...payload,
         status: editing.status || STATUS.A_FAIRE,
@@ -1307,6 +1339,11 @@ export default function Doors() {
       if (res?.notice) setToast(res.notice);
       await reload();
       await reloadCalendar();
+      // 🔄 si le plan est ouvert, rafraîchir les points immédiatement (couleur/état)
+      if (tab === "maps" && selectedPlan) {
+        await loadPositions(selectedPlan, planPage);
+        await loadUnplacedDoors(selectedPlan, planPage);
+      }
     } else {
       const full = await API.get(editing.id);
       setEditing(full?.door);
@@ -1406,10 +1443,8 @@ export default function Doors() {
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
     const key = plan.id || plan.logical_name || "";
-    console.log("[DEBUG] Loading positions for plan:", { key, pageIdx });
     try {
       const r = await MAPS.positions(key, pageIdx).catch(() => ({ items: [] }));
-      console.log("[DEBUG] Raw positions response:", r);
       let positions = Array.isArray(r?.items) ? r.items.map(item => ({
         door_id: item.door_id,
         door_name: item.name || item.door_name,
@@ -1422,11 +1457,9 @@ export default function Doors() {
         floor: item.floor,
         door_state: item.door_state,
       })) : [];
-      console.log("[DEBUG] Processed positions:", positions);
       positions = positions.filter(it => matchFilters(it));
       setPositions(positions);
-    } catch (e) {
-      console.error("[ERROR] Failed to load positions:", e.message);
+    } catch {
       setPositions([]);
     }
   }
@@ -1470,7 +1503,6 @@ export default function Doors() {
   // Stabiliser selectedPlan
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan?.id, selectedPlan?.logical_name]);
   useEffect(() => {
-    console.log("[DEBUG] selectedPlan changed:", stableSelectedPlan);
     if (stableSelectedPlan) {
       loadPositions(stableSelectedPlan, planPage);
       loadUnplacedDoors(stableSelectedPlan, planPage);
@@ -1480,7 +1512,6 @@ export default function Doors() {
   /* ------------------ MAPS handlers ------------------ */
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
   const handleMovePoint = useCallback(async (doorId, xy) => {
-    console.log("[DEBUG] Moving point:", { doorId, xy });
     if (!stableSelectedPlan) return;
     await MAPS.setPosition(doorId, {
       logical_name: stableSelectedPlan.logical_name,
@@ -1492,11 +1523,9 @@ export default function Doors() {
     await loadPositions(stableSelectedPlan, planPage);
   }, [stableSelectedPlan, planPage]);
   const handleClickPoint = useCallback((p) => {
-    console.log("[DEBUG] Clicking point:", p);
     openEdit({ id: p.door_id, name: p.door_name || p.name });
   }, []);
   const handlePlaceAt = useCallback(async (xy) => {
-    console.log("[DEBUG] Placing door at:", { doorId: pendingPlaceDoorId, xy });
     if (!pendingPlaceDoorId || !stableSelectedPlan) return;
     try {
       await MAPS.setPosition(pendingPlaceDoorId, {
@@ -1511,7 +1540,6 @@ export default function Doors() {
       await loadUnplacedDoors(stableSelectedPlan, planPage);
       setToast("Porte placée avec succès ✅");
     } catch (e) {
-      console.error("[ERROR] Failed to place door:", e.message);
       setToast("Erreur lors du placement de la porte : " + e.message);
     }
   }, [pendingPlaceDoorId, stableSelectedPlan, planPage]);
@@ -1525,7 +1553,7 @@ export default function Doors() {
         building: "",
         floor: "",
         location: "",
-        status: STATUS.A_FAIRE, // ✅
+        status: STATUS.A_FAIRE,
       });
       const id = created?.door?.id;
       if (!id) throw new Error("Création de porte impossible");
@@ -1542,7 +1570,6 @@ export default function Doors() {
       openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
       setToast("Porte créée et placée ✅");
     } catch (e) {
-      console.error(e);
       setToast("Erreur lors de la création : " + (e?.message || e));
     }
   }, [stableSelectedPlan, planPage]);
@@ -1555,7 +1582,7 @@ export default function Doors() {
         building: "",
         floor: "",
         location: "",
-        status: STATUS.A_FAIRE, // ✅
+        status: STATUS.A_FAIRE,
       });
       const id = created?.door?.id;
       if (!id) throw new Error("Création de porte impossible");
@@ -1572,10 +1599,22 @@ export default function Doors() {
       openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
       setToast("Porte créée au centre du plan ✅");
     } catch (e) {
-      console.error(e);
       setToast("Erreur lors de la création : " + (e?.message || e));
     }
   }
+
+  /* 🔁 Auto-refresh des positions quand l’onglet Plans est ouvert */
+  useEffect(() => {
+    if (tab !== "maps" || !stableSelectedPlan) return;
+    const tick = () => {
+      loadPositions(stableSelectedPlan, planPage);
+      loadUnplacedDoors(stableSelectedPlan, planPage);
+    };
+    const iv = setInterval(tick, 8000); // toutes les 8s
+    const onVis = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
+  }, [tab, stableSelectedPlan, planPage, q, status, building, floor, doorState]);
 
   /* ------------------ render helpers ------------------ */
   const StickyTabs = () => (
@@ -1609,7 +1648,7 @@ export default function Doors() {
           <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
             {filtersOpen ? "Masquer les filtres" : "Filtres"}
           </Btn>
-          <Btn onClick={openCreate}>+ Nouvelle porte</Btn>
+          {/* ❌ Bouton “+ Nouvelle porte” retiré ici (on le garde dans l’interface des plans) */}
         </div>
       </header>
 
@@ -1761,9 +1800,7 @@ export default function Doors() {
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
                           <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                          <Btn variant="subtle" onClick={() => { setTab("maps"); setPendingPlaceDoorId(d.id); }}>
-                            Placer sur plan
-                          </Btn>
+                          {/* ❌ Bouton "Placer sur plan" retiré dans l'onglet Contrôles */}
                         </div>
                       </td>
                     </tr>
@@ -1806,7 +1843,6 @@ export default function Doors() {
               await loadPlans();
             }}
             onPick={(plan) => {
-              console.log("[DEBUG] Picking plan:", plan);
               setSelectedPlan(plan);
               setPdfReady(false);
             }}
@@ -1818,7 +1854,7 @@ export default function Doors() {
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* ➕ NOUVELLE PORTE */}
+                  {/* ➕ NOUVELLE PORTE (conservé ici) */}
                   <Btn
                     variant="subtle"
                     onClick={createDoorAtCenter}
@@ -1864,7 +1900,6 @@ export default function Doors() {
                             : "bg-white text-amber-800 border-amber-200 hover:bg-amber-100"
                         }`}
                         onClick={() => {
-                          console.log("[DEBUG] Selecting door for placement:", p.door_id);
                           setPendingPlaceDoorId((cur) => (cur === p.door_id ? null : p.door_id));
                         }}
                         title="Cliquer puis cliquer sur le plan pour placer"
@@ -1875,10 +1910,7 @@ export default function Doors() {
                     {pendingPlaceDoorId && (
                       <button
                         className="px-2 py-1 rounded-md border text-xs bg-white text-gray-700 hover:bg-gray-50"
-                        onClick={() => {
-                          console.log("[DEBUG] Cancelling placement");
-                          setPendingPlaceDoorId(null);
-                        }}
+                        onClick={() => setPendingPlaceDoorId(null)}
                       >
                         Annuler le placement
                       </button>
