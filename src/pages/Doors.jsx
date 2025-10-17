@@ -485,6 +485,8 @@ function PlanCards({ plans = [], onRename, onPick }) {
   );
 }
 
+// Changes to PlanCard in Doors.jsx
+
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -494,7 +496,6 @@ function PlanCard({ plan, onRename, onPick }) {
   const [thumbErr, setThumbErr] = useState("");
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
-
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
@@ -504,10 +505,10 @@ function PlanCard({ plan, onRename, onPick }) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
-
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
   // Miniature page 1 via pdf.js (avec annulation propre + **file render throttling**)
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || isMobile) return;
     let cancelled = false;
     let pdf = null;
     let renderTask = null;
@@ -517,16 +518,12 @@ function PlanCard({ plan, onRename, onPick }) {
         try {
           setThumbErr("");
           const url = planFileUrlSafe(plan);
-          loadingTask = pdfjsLib.getDocument({ 
-            ...pdfDocOpts(url),
-            standardFontDataUrl: "/standard_fonts/",
-          });
+          loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(url), standardFontDataUrl: "/standard_fonts/" });
           pdf = await loadingTask.promise;
           if (cancelled) return;
           const page = await pdf.getPage(1);
           const viewport = page.getViewport({ scale: 1 });
-          const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
-          const cap = isMobile ? 220 : 320;
+          const cap = window.innerWidth < 640 ? 220 : 320;
           const baseScale = cap / viewport.width;
           const adjusted = page.getViewport({ scale: baseScale });
           const c = canvasRef.current;
@@ -548,12 +545,12 @@ function PlanCard({ plan, onRename, onPick }) {
       if (pdf) { try { pdf.destroy(); } catch {} }
       else if (loadingTask) { try { loadingTask.destroy(); } catch {} }
     };
-  }, [plan.id, plan.logical_name, visible]);
-
+  }, [plan.id, plan.logical_name, visible, isMobile]);
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
-        {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+        {visible && !isMobile && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+        {visible && isMobile && <div className="w-full h-full flex items-center justify-center text-gray-500">PDF</div>}
         {!visible && <div className="text-xs text-gray-400">…</div>}
         {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
