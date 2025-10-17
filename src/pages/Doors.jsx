@@ -517,7 +517,10 @@ function PlanCard({ plan, onRename, onPick }) {
         try {
           setThumbErr("");
           const url = planFileUrlSafe(plan);
-          loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
+          loadingTask = pdfjsLib.getDocument({ 
+            ...pdfDocOpts(url),
+            standardFontDataUrl: "/standard_fonts/",
+          });
           pdf = await loadingTask.promise;
           if (cancelled) return;
           const page = await pdf.getPage(1);
