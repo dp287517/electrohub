@@ -62,14 +62,23 @@ const API = {
     return r.json();
   },
   get: async (id) => (await fetch(`/api/doors/doors/${id}`, withHeaders())).json(),
-  create: async (payload) =>
-    (
-      await fetch(`/api/doors/doors`, {
-        method: "POST",
-        ...withHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(payload),
-      })
-    ).json(),
+
+  // ✅ point 2: vérifie r.ok et remonte un message d'erreur lisible
+  create: async (payload) => {
+    const r = await fetch(`/api/doors/doors`, {
+      method: "POST",
+      ...withHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+    let data = null;
+    try { data = await r.json(); } catch {}
+    if (!r.ok) {
+      const msg = data?.error || data?.message || `HTTP ${r.status}`;
+      throw new Error(`Création de porte: ${msg}`);
+    }
+    return data;
+  },
+
   update: async (id, payload) =>
     (
       await fetch(`/api/doors/doors/${id}`, {
@@ -1229,7 +1238,11 @@ export default function Doors() {
       const full = await API.get(editing.id);
       setEditing(full?.door || editing);
     } else {
-      const created = await API.create(payload);
+      // ✅ point 1a: on envoie un status par défaut lors de la création
+      const created = await API.create({
+        ...payload,
+        status: editing.status || STATUS.A_FAIRE,
+      });
       if (created?.door?.id) {
         const full = await API.get(created.door.id);
         setEditing(full?.door || created.door);
@@ -1512,6 +1525,7 @@ export default function Doors() {
         building: "",
         floor: "",
         location: "",
+        status: STATUS.A_FAIRE, // ✅
       });
       const id = created?.door?.id;
       if (!id) throw new Error("Création de porte impossible");
@@ -1541,6 +1555,7 @@ export default function Doors() {
         building: "",
         floor: "",
         location: "",
+        status: STATUS.A_FAIRE, // ✅
       });
       const id = created?.door?.id;
       if (!id) throw new Error("Création de porte impossible");
