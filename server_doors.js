@@ -1963,3 +1963,16 @@ app.put("/api/doors/maps/positions/:doorId", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ------------------------------
+// Boot
+// ------------------------------
+try {
+  await ensureSchema(); // ✅ prépare la DB
+  app.listen(PORT, HOST, () => {
+    console.log(`[fire-doors] listening on ${HOST}:${PORT}`);
+  });
+} catch (e) {
+  console.error("[fire-doors] failed to start:", e);
+  process.exit(1);
+}
