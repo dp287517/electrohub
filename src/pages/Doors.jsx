@@ -1,78 +1,65 @@
-// src/Doors.jsx — PARTIE 1/2 (zoom animé off + cleanup + PDF.js worker sûr)
-import { useEffect, useMemo, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
+// src/pages/Doors.jsx — PARTIE 1/2
+import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
-import 'dayjs/locale/fr';
-dayjs.locale('fr');
-import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
-import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
-import L from 'leaflet';
-import './styles/doors-map.css';
-import { api } from './lib/api.js';
+import "dayjs/locale/fr";
+dayjs.locale("fr");
 
+import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url"; // ✅ worker fiable prod
+import L from "leaflet";
+
+// Styles (depuis src/pages)
+import "leaflet/dist/leaflet.css";
+import "../styles/doors-map.css";
+
+import { api } from "../lib/api.js";
+
+/* >>> PDF.js */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
-/* ----------------------------- petites UI ----------------------------- */
-function Btn({ children, variant = "primary", className = "", ...p }) {
-  const map = {
-    primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
-    ghost: "bg-white text-black border hover:bg-gray-50",
-    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
-    success: "bg-emerald-600 text-white hover:bg-emerald-700",
-    warn: "bg-amber-500 text-white hover:bg-amber-600",
-    subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
-  };
-  return (
-    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
-      {children}
-    </button>
-  );
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : null;
 }
-function Input({ value, onChange, className = "", ...p }) {
-  return (
-    <input
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      {...p}
-    />
-  );
+function getIdentity() {
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+  try {
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
+    }
+  } catch {}
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+  }
+  email = email ? String(email).trim() : null;
+  name = name ? String(name).trim() : null;
+  return { email, name };
 }
-function Textarea({ value, onChange, className = "", ...p }) {
-  return (
-    <textarea
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      {...p}
-    />
-  );
+function userHeaders() {
+  const { email, name } = getIdentity();
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
 }
-function Select({ value, onChange, options = [], className = "", placeholder }) {
-  return (
-    <select
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {placeholder != null && <option value="">{placeholder}</option>}
-      {options.map((o) =>
-        typeof o === "string" ? <option key={o} value={o}>{o}</option>
-                             : <option key={o.value} value={o.value}>{o.label}</option>
-      )}
-    </select>
-  );
+function withHeaders(extra = {}) {
+  return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
-function Badge({ color = "gray", children, className = "" }) {
-  const map = {
-    gray: "bg-gray-100 text-gray-700",
-    green: "bg-emerald-100 text-emerald-700",
-    orange: "bg-amber-100 text-amber-700",
-    red: "bg-rose-100 text-rose-700",
-    blue: "bg-blue-100 text-blue-700",
-  };
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>;
+function pdfDocOpts(url) {
+  // 👉 Pense à copier /node_modules/pdfjs-dist/standard_fonts/ vers /public/standard_fonts/
+  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
+
+/* ----------------------------- API Doors (locale à l’écran) ----------------------------- */
 const STATUS = {
   A_FAIRE: "a_faire",
   EN_COURS: "en_cours_30",
@@ -99,46 +86,6 @@ function doorStateBadge(state) {
   return <Badge>—</Badge>;
 }
 
-function getCookie(name) {
-  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
-  return m ? decodeURIComponent(m[1]) : null;
-}
-function getIdentity() {
-  let email = getCookie("email") || null;
-  let name = getCookie("name") || null;
-  try {
-    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
-    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
-    if ((!email || !name) && localStorage.getItem("user")) {
-      try {
-        const u = JSON.parse(localStorage.getItem("user"));
-        if (!email && u?.email) email = String(u.email);
-        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
-      } catch {}
-    }
-  } catch {}
-  if (!name && email) {
-    const base = String(email).split("@")[0] || "";
-    if (base) {
-      name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
-    }
-  }
-  email = email ? String(email).trim() : null;
-  name = name ? String(name).trim() : null;
-  return { email, name };
-}
-function userHeaders() {
-  const { email, name } = getIdentity();
-  const h = {};
-  if (email) h["X-User-Email"] = email;
-  if (name) h["X-User-Name"] = name;
-  return h;
-}
-function withHeaders(extra = {}) {
-  return { credentials: "include", headers: { ...userHeaders(), ...extra } };
-}
-
-/* ----------------------------- API Doors (écran) ----------------------------- */
 const API = {
   list: async (params = {}) => {
     const qs = new URLSearchParams(
@@ -257,12 +204,70 @@ const API = {
     ).json(),
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
-function pdfDocOpts(url) {
-  // NOTE: standardFontDataUrl côté public/ => mets ton dossier "standard_fonts" dans /public
-  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
+
+/* ----------------------------- UI helpers ----------------------------- */
+function Btn({ children, variant = "primary", className = "", ...p }) {
+  const map = {
+    primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
+    ghost: "bg-white text-black border hover:bg-gray-50",
+    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700",
+    warn: "bg-amber-500 text-white hover:bg-amber-600",
+    subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
+  };
+  return (
+    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
+      {children}
+    </button>
+  );
+}
+function Input({ value, onChange, className = "", ...p }) {
+  return (
+    <input
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      {...p}
+    />
+  );
+}
+function Textarea({ value, onChange, className = "", ...p }) {
+  return (
+    <textarea
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      {...p}
+    />
+  );
+}
+function Select({ value, onChange, options = [], className = "", placeholder }) {
+  return (
+    <select
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {placeholder != null && <option value="">{placeholder}</option>}
+      {options.map((o) =>
+        typeof o === "string" ? <option key={o} value={o}>{o}</option>
+                             : <option key={o.value} value={o.value}>{o.label}</option>
+      )}
+    </select>
+  );
+}
+function Badge({ color = "gray", children, className = "" }) {
+  const map = {
+    gray: "bg-gray-100 text-gray-700",
+    green: "bg-emerald-100 text-emerald-700",
+    orange: "bg-amber-100 text-amber-700",
+    red: "bg-rose-100 text-rose-700",
+    blue: "bg-blue-100 text-blue-700",
+  };
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>;
 }
 
-/* ----------------------------- Plans grid (début) ----------------------------- */
+/* ----------------------------- Plans grid ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
   return (
@@ -298,10 +303,7 @@ function PlanCards({ plans = [], onRename, onPick }) {
   );
 }
 function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.innerWidth < 640;
-  });
+  const [isMobile, setIsMobile] = useState(() => (typeof window === "undefined" ? false : window.innerWidth < 640));
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640);
     window.addEventListener("resize", onResize);
@@ -323,16 +325,16 @@ function PlanCard({ plan, onRename, onPick }) {
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
-    const io = new IntersectionObserver((entries) => {
-      entries.forEach(e => { if (e.isIntersecting) setVisible(true); });
-    }, { rootMargin: '200px' });
+    const io = new IntersectionObserver(
+      (entries) => entries.forEach((e) => { if (e.isIntersecting) setVisible(true); }),
+      { rootMargin: "200px" }
+    );
     io.observe(el);
     return () => io.disconnect();
   }, []);
 
   useEffect(() => {
-    if (isMobile) return;
-    if (!visible) return;
+    if (isMobile || !visible) return;
     let cancelled = false;
     let loadingTask = null;
     let renderTask = null;
@@ -416,20 +418,21 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 
-/* ===== La suite de Doors.jsx (PlanViewerLeaflet, calendrier, Drawer, etc.) arrive en PARTIE 2/2 ===== */
-
 export default function DoorsPlaceholder() {
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
       <div className="bg-white rounded-2xl border shadow-sm p-4">
         <div className="text-sm text-gray-600">
-          Chargement de l’écran “Portes”… (partie 2/2 à venir)
+          Chargement de l’écran “Portes”… (dis-moi <b>go</b> pour coller la PARTIE 2/2)
         </div>
       </div>
     </section>
   );
 }
-/* --- PlanViewerLeaflet.jsx (inline) --- */
+
+/* --- PlanViewerLeaflet (inline) --- */
+import { forwardRef, useCallback, useImperativeHandle } from "react";
+
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
   pageIndex = 0,
@@ -457,11 +460,11 @@ const PlanViewerLeaflet = forwardRef(({
         if (!wrapRef.current) return;
 
         // 1) charge le PDF
-        loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
+        loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
-        // 2) viewport adapté conteneur
+        // 2) viewport
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
@@ -470,7 +473,7 @@ const PlanViewerLeaflet = forwardRef(({
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
-        // 3) rendu bitmap (dataURL pour éviter CSP blob/worker)
+        // 3) rendu bitmap
         const canvas = document.createElement("canvas");
         canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
@@ -482,12 +485,11 @@ const PlanViewerLeaflet = forwardRef(({
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
-        // 4) init Leaflet (une seule fois)
+        // 4) init Leaflet
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
             zoomControl: false,
-            // ✅ empêche les glitchs _leaflet_pos
             zoomAnimation: false,
             fadeAnimation: false,
             markerZoomAnimation: false,
@@ -524,7 +526,6 @@ const PlanViewerLeaflet = forwardRef(({
         const map = mapRef.current;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
 
-        // suspend le wheel pendant l’ajustement initial
         map.scrollWheelZoom.disable();
 
         if (imageLayerRef.current) {
@@ -551,7 +552,6 @@ const PlanViewerLeaflet = forwardRef(({
         }
         drawMarkers(points, viewport.width, viewport.height);
 
-        // réactive le wheel après stabilisation
         setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
 
         onReady?.();
@@ -571,7 +571,6 @@ const PlanViewerLeaflet = forwardRef(({
 
       const map = mapRef.current;
       if (map) {
-        // ✅ cleanup complet
         try { map.scrollWheelZoom?.disable(); } catch {}
         try { map.touchZoom?.disable(); } catch {}
         try { map.boxZoom?.disable(); } catch {}
@@ -590,7 +589,7 @@ const PlanViewerLeaflet = forwardRef(({
     };
   }, [fileUrl, pageIndex, onReady]);
 
-  // Redessiner les marqueurs si liste/size change
+  // Redessiner les marqueurs
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
     drawMarkers(points, imgSize.w, imgSize.h);
@@ -1489,7 +1488,8 @@ export default function Doors() {
                   <div className="pt-2">
                     <a
                       href={API.nonConformPDF(editing.id)}
-                      target="_blank" rel="noreferrer"
+                      target="_blank"
+                      rel="noreferrer"
                       className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
                     >
                       Export PDF des non-conformités (SAP)
