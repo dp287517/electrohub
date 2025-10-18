@@ -450,6 +450,17 @@ const PlanViewerLeaflet = forwardRef(({
     return Math.max(minPx, Math.min(maxPx, Math.round(px)));
   }, []);
 
+  // ✅ helper icône centrée (corrige le “saut” au zoom)
+  function makeDoorIcon(size, cls) {
+    const s = Math.max(8, Math.round(size));
+    return L.divIcon({
+      className: cls,
+      iconSize: [s, s],
+      iconAnchor: [Math.round(s / 2), Math.round(s / 2)], // centre l’icône
+      popupAnchor: [0, -Math.round(s / 2)],
+    });
+  }
+
   useEffect(() => {
     aliveRef.current = true;
     let cancelled = false;
@@ -624,11 +635,11 @@ const PlanViewerLeaflet = forwardRef(({
     }
     const g = markersLayerRef.current;
 
-    // Si on redimensionne seulement, on met à jour les icônes sans recréer la logique
+    // ✅ Redimensionnement: on recrée l'icône avec ancre centrée (pas de "saut" au zoom)
     if (resizing) {
       const size = getIconSize();
       g.eachLayer((mk) => {
-        const icon = L.divIcon({ className: mk.__cls || 'door-marker door-marker--blue', iconSize: [size, size] });
+        const icon = makeDoorIcon(size, mk.__cls || 'door-marker door-marker--blue');
         mk.setIcon(icon);
       });
       return;
@@ -643,7 +654,7 @@ const PlanViewerLeaflet = forwardRef(({
       const latlng = L.latLng(y, x);
       const size = getIconSize();
       const cls = markerClass(p.status);
-      const icon = L.divIcon({ className: cls, iconSize: [size, size] });
+      const icon = makeDoorIcon(size, cls); // ✅ icône centrée
       const mk = L.marker(latlng, {
         icon,
         draggable: true,
@@ -667,13 +678,15 @@ const PlanViewerLeaflet = forwardRef(({
         onClickPoint?.(mk.__meta);
       });
 
-      // 👉 Enregistrement en fractions stables (indépendant du zoom)
+      // 👉 Enregistrement en fractions stables (indépendant du zoom) + arrondi + clamp
       mk.on('dragend', () => {
         if (!onMovePoint) return;
         const ll = mk.getLatLng();          // ll.lat = y, ll.lng = x (CRS.Simple)
         const xFrac = Math.min(1, Math.max(0, ll.lng / w));
         const yFrac = Math.min(1, Math.max(0, ll.lat / h));
-        onMovePoint(p.door_id, { x: xFrac, y: yFrac });
+        const xf = Math.round(xFrac * 1e6) / 1e6;
+        const yf = Math.round(yFrac * 1e6) / 1e6;
+        onMovePoint(p.door_id, { x: xf, y: yf });
       });
       mk.addTo(g);
     });
@@ -802,6 +815,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
+// src/pages/Doors.jsx — PARTIE 2/2
 
 /* ----------------------------- Page principale ----------------------------- */
 function Doors() {
@@ -1119,25 +1133,40 @@ function Doors() {
     openEdit({ id: p.door_id, name: p.door_name || p.name });
   }, []);
 
+  // ✅ Création de porte au centre + payload safe + message d’erreur clair
   async function createDoorAtCenter() {
     if (!stableSelectedPlan) return;
     try {
-      const created = await API.create({ name: "Nouvelle porte", building: "", floor: "", location: "", status: STATUS.A_FAIRE });
+      const payload = {
+        name: "Nouvelle porte",
+        building: "",
+        floor: "",
+        location: "",
+        status: STATUS.A_FAIRE,
+      };
+      const created = await API.create(payload);
       const id = created?.door?.id;
-      if (!id) throw new Error("Création de porte impossible");
-      const xy = { x_frac: 0.5, y_frac: 0.5 };
+      if (!id) throw new Error("Réponse inattendue de l'API (pas d'ID).");
+
+      // centre du plan (fractions indépendantes du zoom)
       await api.doorsMaps.setPosition(id, {
         logical_name: stableSelectedPlan.logical_name,
         plan_id: stableSelectedPlan.id,
         page_index: planPage,
-        ...xy,
+        x_frac: 0.5,
+        y_frac: 0.5,
       });
+
       await loadPositions(stableSelectedPlan, planPage);
-      viewerRef.current?.adjust();
+      viewerRef.current?.adjust(); // recadre sur le plan
       setToast("Porte créée au centre du plan ✅");
+
+      // ouvre directement la fiche
       openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
     } catch (e) {
-      setToast("Erreur lors de la création : " + (e?.message || e));
+      const msg = e?.message || "Erreur inconnue";
+      console.error("createDoorAtCenter error:", e);
+      setToast("Erreur lors de la création : " + msg);
     }
   }
 
