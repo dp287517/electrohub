@@ -7,9 +7,11 @@ import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from 'leaflet';
 import '../styles/doors-map.css';
 import { api } from '../lib/api.js';
+
 /* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
+
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
@@ -64,6 +66,7 @@ function useIsMobile() {
   }, []);
   return isMobile;
 }
+
 /* ----------------------------- API (Doors) ----------------------------- */
 const API = {
   list: async (params = {}) => {
@@ -186,6 +189,7 @@ const API = {
 function pdfDocOpts(url) {
   return { url, withCredentials: true, httpHeaders: userHeaders() };
 }
+
 /* ----------------------------- UI helpers ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -282,6 +286,7 @@ function doorStateBadge(state) {
   if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
   return <Badge>—</Badge>;
 }
+
 /* ----------------------------- Toast ----------------------------- */
 function Toast({ text, onClose }) {
   useEffect(() => {
@@ -297,6 +302,7 @@ function Toast({ text, onClose }) {
     </div>
   );
 }
+
 /* ----------------------------- Calendrier (mois) ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
@@ -387,6 +393,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
+
 /* ----------------------------- MAPS components ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
@@ -412,6 +419,7 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     </div>
   );
 }
+
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -422,6 +430,7 @@ function PlanCards({ plans = [], onRename, onPick }) {
     </div>
   );
 }
+
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -432,6 +441,7 @@ function PlanCard({ plan, onRename, onPick }) {
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
   const isMobile = useIsMobile();
+
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
@@ -441,25 +451,31 @@ function PlanCard({ plan, onRename, onPick }) {
     io.observe(el);
     return () => io.disconnect();
   }, []);
+
+  /* ✅ PATCH vignette PDF : scale “safe”, cleanup propre, pas de double destroy */
   useEffect(() => {
     if (isMobile) return;
     if (!visible) return;
     let cancelled = false;
-    let pdf = null;
-    let renderTask = null;
     let loadingTask = null;
+    let renderTask = null;
+
     (async () => {
       try {
         setThumbErr("");
         const url = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
         loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
-        pdf = await loadingTask.promise;
+        const pdf = await loadingTask.promise;
         if (cancelled) return;
+
         const page = await pdf.getPage(1);
-        const viewport = page.getViewport({ scale: 1 });
-        const cap = 320;
-        const baseScale = cap / viewport.width;
-        const adjusted = page.getViewport({ scale: baseScale });
+        const vp1 = page.getViewport({ scale: 1 });
+        const capCss = 320;                         // largeur CSS vignette
+        const dpr = window.devicePixelRatio || 1;
+        const targetBitmapW = capCss * dpr;
+        const scale = Math.min(2, Math.max(0.5, targetBitmapW / vp1.width));
+        const adjusted = page.getViewport({ scale });
+
         const c = canvasRef.current;
         if (!c || cancelled) return;
         c.width = Math.floor(adjusted.width);
@@ -467,18 +483,20 @@ function PlanCard({ plan, onRename, onPick }) {
         const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true });
         renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
         await renderTask.promise;
-        page.cleanup?.();
       } catch (e) {
-        if (!cancelled) setThumbErr("Aperçu indisponible.");
+        if (e?.name !== "RenderingCancelledException") {
+          setThumbErr("Aperçu indisponible.");
+        }
       }
     })();
+
     return () => {
       cancelled = true;
       try { renderTask?.cancel(); } catch {}
-      if (pdf) { try { pdf.destroy(); } catch {} }
-      else if (loadingTask) { try { loadingTask.destroy(); } catch {} }
+      try { loadingTask?.destroy(); } catch {}
     };
   }, [plan.id, plan.logical_name, visible, isMobile]);
+
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
@@ -531,7 +549,8 @@ function PlanCard({ plan, onRename, onPick }) {
     </div>
   );
 }
-/* --- PlanViewerLeaflet.jsx (inline pour simplicité) --- */
+
+/* --- PlanViewerLeaflet.jsx (inline) --- */
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
   pageIndex = 0,
@@ -546,26 +565,52 @@ const PlanViewerLeaflet = forwardRef(({
   const markersLayerRef = useRef(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null); // {x,y, items:[{door_id, door_name}]}
+
+  /* ✅ PATCH principal : rendu PDF “safe”, fitBounds fiable, erreurs worker ignorées si annulées */
   useEffect(() => {
     let cancelled = false;
-    let pdf, loadingTask, renderTask;
+    let loadingTask = null;
+    let renderTask = null;
+    let objectUrl = null; // pour revoke
+
     (async () => {
       try {
         if (!wrapRef.current) return;
-        loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
-        pdf = await loadingTask.promise;
+
+        // 1) Charge le PDF
+        loadingTask = pdfjsLib.getDocument({
+          ...pdfDocOpts(fileUrl),
+          standardFontDataUrl: "/standard_fonts/",
+        });
+        const pdf = await loadingTask.promise;
+        if (cancelled) return;
+
+        // 2) Choix du scale en fonction de la largeur réelle du conteneur
         const page = await pdf.getPage(Number(pageIndex) + 1);
-        const viewport = page.getViewport({ scale: 2.0 });
+        const baseVp = page.getViewport({ scale: 1 });
+        const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
+        const dpr = window.devicePixelRatio || 1;
+        const targetBitmapW = containerW * dpr;
+        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        const viewport = page.getViewport({ scale: safeScale });
+
+        // 3) Rendu bitmap
         const canvas = document.createElement("canvas");
-        canvas.width = Math.floor(viewport.width);
+        canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
-        const ctx = canvas.getContext("2d", { alpha: true });
+        const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: false });
         renderTask = page.render({ canvasContext: ctx, viewport });
         await renderTask.promise;
         if (cancelled) return;
-        // ↓ (optionnel mais conseillé) : DataURL -> Blob -> ObjectURL pour mémoire
-        const dataUrl = canvas.toDataURL("image/png"); // CSP-friendly
+
+        // 4) toBlob -> ObjectURL (mémoire + facile à révoquer)
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 0.92));
+        objectUrl = URL.createObjectURL(blob);
+
+        // 5) MAJ taille image pour les marqueurs
         setImgSize({ w: canvas.width, h: canvas.height });
+
+        // 6) Crée la carte si nécessaire
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
@@ -582,8 +627,8 @@ const PlanViewerLeaflet = forwardRef(({
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           mapRef.current = m;
+
           m.on("click", (e) => {
-            // plus de mode placement : on ne gère que la sélection de marqueurs
             const clicked = e.containerPoint;
             const near = [];
             markersLayerRef.current?.eachLayer((mk) => {
@@ -597,48 +642,63 @@ const PlanViewerLeaflet = forwardRef(({
           });
           m.on("zoomstart movestart", () => setPicker(null));
         }
+
+        // 7) Overlay image + bornes/zoom
         const map = mapRef.current;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-        if (imageLayerRef.current) map.removeLayer(imageLayerRef.current);
-        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
+
+        if (imageLayerRef.current) {
+          map.removeLayer(imageLayerRef.current);
+          imageLayerRef.current = null;
+        }
+        const layer = L.imageOverlay(objectUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
-        setTimeout(() => { try { map.invalidateSize(false); } catch {} }, 0);
+
+        // Laisse le layout se stabiliser avant fitBounds
+        await new Promise(requestAnimationFrame);
+        map.invalidateSize(false);
+
         const fitZoom = map.getBoundsZoom(bounds, true);
+        map.options.zoomSnap = 0.1;
+        map.options.zoomDelta = 0.5;
         map.setMinZoom(fitZoom - 1);
         map.setMaxZoom(fitZoom + 6);
         map.setMaxBounds(bounds.pad(0.5));
-        map.options.zoomSnap = 0.1;
-        map.options.zoomDelta = 0.5;
-        map.scrollWheelZoom.enable();
-        map.fitBounds(bounds, { padding: [10, 10] });
+        map.fitBounds(bounds, { padding: [10, 10] }); // affiche l’intégralité du plan
+
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
         }
         drawMarkers(points, viewport.width, viewport.height);
         onReady?.();
       } catch (e) {
-        if (e?.name !== "RenderingCancelledException") {
-          console.error("Leaflet viewer error", e);
-        }
+        if (e?.name === "RenderingCancelledException") return;
+        const msg = String(e?.message || "");
+        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
+        console.error("Leaflet viewer error", e);
       }
     })();
+
     return () => {
       cancelled = true;
       try { renderTask?.cancel(); } catch {}
-      try { pdf?.destroy(); } catch {}
-      try { loadingTask?.destroy?.(); } catch {}
+      try { loadingTask?.destroy(); } catch {}
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       imageLayerRef.current = null;
       if (markersLayerRef.current) { markersLayerRef.current.clearLayers(); markersLayerRef.current = null; }
+      if (objectUrl) { try { URL.revokeObjectURL(objectUrl); } catch {} }
     };
   }, [fileUrl, pageIndex, onReady]);
+
   const imgSizeRef = useRef(imgSize);
   useEffect(() => { imgSizeRef.current = imgSize; }, [imgSize]);
+
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
     drawMarkers(points, imgSize.w, imgSize.h);
   }, [points, imgSize]);
+
   function markerClass(status) {
     if (status === STATUS.EN_RETARD) return 'door-marker door-marker--red';
     if (status === STATUS.EN_COURS) return 'door-marker door-marker--amber';
@@ -676,30 +736,33 @@ const PlanViewerLeaflet = forwardRef(({
       };
       mk.on('dragend', () => {
         if (!onMovePoint) return;
-        const ll = mk.getLatLng();
-        const pxy = map.latLngToLayerPoint(ll);
-        const xFrac = Math.min(1, Math.max(0, pxy.x / w));
-        const yFrac = Math.min(1, Math.max(0, pxy.y / h));
+        const ll = map.latLngToLayerPoint(mk.getLatLng());
+        const xFrac = Math.min(1, Math.max(0, ll.x / w));
+        const yFrac = Math.min(1, Math.max(0, ll.y / h));
         onMovePoint(p.door_id, { x: xFrac, y: yFrac });
       });
       mk.addTo(g);
     });
   }
+
   const onPickDoor = (d) => {
     setPicker(null);
     onClickPoint?.(d);
   };
+
+  /* ✅ PATCH bouton Ajuster : invalidateSize -> fitZoom -> fitBounds */
   const adjust = () => {
     const m = mapRef.current;
     const layer = imageLayerRef.current;
     if (!m || !layer) return;
     const b = layer.getBounds();
+    m.invalidateSize(false);
     const fitZoom = m.getBoundsZoom(b, true);
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [10, 10] });
-    setTimeout(() => { try { m.invalidateSize(false); } catch {} }, 0);
   };
   useImperativeHandle(ref, () => ({ adjust }));
+
   const wrapperHeight = Math.max(320, imgSize.h ? Math.min(imgSize.h, 1200) : 520);
   return (
     <div className="mt-3 relative">
@@ -747,15 +810,19 @@ export default function Doors() {
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
+
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [doorState, setDoorState] = useState("");
+
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+
   const [calendar, setCalendar] = useState({ events: [] });
   const [toast, setToast] = useState("");
+
   const defaultTemplate = [
     "La porte est-elle en parfait état (fermeture correcte, non voilée) ?",
     "Joint de porte en bon état (propre, non abîmé) ?",
@@ -768,7 +835,10 @@ export default function Doors() {
     frequency: "1_an",
   });
   const [savingSettings, setSavingSettings] = useState(false);
+
   const [filesVersion, setFilesVersion] = useState(0);
+
+  // Plans / cartes
   const [plans, setPlans] = useState([]);
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -776,6 +846,8 @@ export default function Doors() {
   const [positions, setPositions] = useState([]);
   const [pdfReady, setPdfReady] = useState(false);
   const viewerRef = useRef(null);
+
+  /* ----------------------------- URL helpers ----------------------------- */
   function getDoorParam() {
     try {
       return new URLSearchParams(window.location.search).get("door");
@@ -796,6 +868,8 @@ export default function Doors() {
     setEditing(null);
     setDoorParam(null);
   }
+
+  /* ----------------------------- Chargements init ----------------------------- */
   async function reload() {
     setLoading(true);
     try {
@@ -851,6 +925,8 @@ export default function Doors() {
     }, 350);
     return () => clearTimeout(t);
   }, [q, status, building, floor, doorState]);
+
+  /* ----------------------------- CRUD portes ----------------------------- */
   const filtered = doors;
   function openCreate() {
     setEditing({
@@ -913,11 +989,13 @@ export default function Doors() {
       await loadPositions(selectedPlan, planPage);
     }
   }
+
   const baseOptions = [
     { value: "conforme", label: "Conforme" },
     { value: "non_conforme", label: "Non conforme" },
     { value: "na", label: "N/A" },
   ];
+
   async function ensureCurrentCheck() {
     if (!editing?.id) return;
     let check = editing.current_check;
@@ -934,7 +1012,7 @@ export default function Doors() {
     const values = (items || []).slice(0, 5).map((i) => i?.value);
     if (values.length < 5) return false;
     return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
-  }
+    }
   async function saveChecklistItem(idx, field, value) {
     if (!editing?.id || !editing?.current_check) return;
     const items = [...(editing.current_check.items || [])];
@@ -959,6 +1037,8 @@ export default function Doors() {
       setEditing(full?.door);
     }
   }
+
+  /* ----------------------------- Uploads ----------------------------- */
   const [uploading, setUploading] = useState(false);
   function onDropFiles(e) {
     e.preventDefault();
@@ -987,6 +1067,8 @@ export default function Doors() {
     await reload();
     setToast("Photo mise à jour ✅");
   }
+
+  /* ----------------------------- Settings ----------------------------- */
   async function saveSettings() {
     setSavingSettings(true);
     try {
@@ -998,6 +1080,8 @@ export default function Doors() {
       setSavingSettings(false);
     }
   }
+
+  /* ----------------------------- Plans ----------------------------- */
   async function loadPlans() {
     setMapsLoading(true);
     try {
@@ -1006,6 +1090,17 @@ export default function Doors() {
     } finally {
       setMapsLoading(false);
     }
+  }
+  function matchFilters(it) {
+    const name = (it.door_name || "").toLowerCase().trim();
+    const qNorm = (q || "").toLowerCase().trim();
+    if (qNorm && !name.includes(qNorm)) return false;
+    if (status && it.status !== status) return false;
+    const eq = (a, b) => (a || "").toString().trim().toLowerCase() === (b || "").toString().trim().toLowerCase();
+    if (building && !eq(it.building, building)) return false;
+    if (floor && !eq(it.floor, floor)) return false;
+    if (doorState && it.door_state !== doorState) return false;
+    return true;
   }
   async function loadPositions(plan, pageIdx = 0) {
     if (!plan) return;
@@ -1030,26 +1125,18 @@ export default function Doors() {
       setPositions([]);
     }
   }
-  function matchFilters(it) {
-    const name = (it.door_name || "").toLowerCase().trim();
-    const qNorm = (q || "").toLowerCase().trim();
-    if (qNorm && !name.includes(qNorm)) return false;
-    if (status && it.status !== status) return false;
-    const eq = (a, b) => (a || "").toString().trim().toLowerCase() === (b || "").toString().trim().toLowerCase();
-    if (building && !eq(it.building, building)) return false;
-    if (floor && !eq(it.floor, floor)) return false;
-    if (doorState && it.door_state !== doorState) return false;
-    return true;
-  }
+
   useEffect(() => {
     if (tab === "maps") loadPlans();
   }, [tab]);
+
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   useEffect(() => {
     if (stableSelectedPlan) {
       loadPositions(stableSelectedPlan, planPage);
     }
   }, [stableSelectedPlan, planPage, q, status, building, floor, doorState, plans]);
+
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
   const handleMovePoint = useCallback(async (doorId, xy) => {
     if (!stableSelectedPlan) return;
@@ -1065,6 +1152,7 @@ export default function Doors() {
   const handleClickPoint = useCallback((p) => {
     openEdit({ id: p.door_id, name: p.door_name || p.name });
   }, []);
+
   async function createDoorAtCenter() {
     if (!stableSelectedPlan) return;
     try {
@@ -1086,6 +1174,8 @@ export default function Doors() {
       setToast("Erreur lors de la création : " + (e?.message || e));
     }
   }
+
+  // Refresh périodique quand un plan est ouvert
   useEffect(() => {
     if (tab !== "maps" || !stableSelectedPlan) return;
     const tick = () => {
@@ -1096,6 +1186,7 @@ export default function Doors() {
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
   }, [tab, stableSelectedPlan, planPage, q, status, building, floor, doorState]);
+
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
@@ -1114,9 +1205,12 @@ export default function Doors() {
       </div>
     </div>
   );
+
+  /* ----------------------------- RENDER ----------------------------- */
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
+
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Portes coupe-feu</h1>
@@ -1127,7 +1221,9 @@ export default function Doors() {
           </Btn>
         </div>
       </header>
+
       <StickyTabs />
+
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
           <div className="grid md:grid-cols-5 gap-3">
@@ -1174,6 +1270,7 @@ export default function Doors() {
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
       )}
+
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
           <div className="sm:hidden divide-y">
@@ -1213,6 +1310,7 @@ export default function Doors() {
               </div>
             ))}
           </div>
+
           <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-[12px] z-20 bg-gray-50/90 backdrop-blur supports-[backdrop-filter]:bg-gray-50/70">
@@ -1277,6 +1375,7 @@ export default function Doors() {
           </div>
         </div>
       )}
+
       {tab === "calendar" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4">
           <MonthCalendar
@@ -1289,6 +1388,7 @@ export default function Doors() {
           />
         </div>
       )}
+
       {tab === "maps" && (
         <div className="space-y-4">
           <PlansHeader
@@ -1336,8 +1436,8 @@ export default function Doors() {
               </div>
               <PlanViewerLeaflet
                 ref={viewerRef}
-                key={stableSelectedPlan?.id || stableSelectedPlan?.logical_name || ""}
-                fileUrl={api.doorsMaps.planFileUrlAuto(stableSelectedPlan, { bust: true })}
+                key={selectedPlan?.id || selectedPlan?.logical_name || ""}
+                fileUrl={api.doorsMaps.planFileUrlAuto(selectedPlan, { bust: true })}
                 pageIndex={planPage}
                 points={positions}
                 onReady={handlePdfReady}
@@ -1349,6 +1449,7 @@ export default function Doors() {
           )}
         </div>
       )}
+
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
           <div className="grid md:grid-cols-2 gap-4">
@@ -1398,6 +1499,8 @@ export default function Doors() {
           </div>
         </div>
       )}
+
+      {/* Drawer Édition */}
       {drawerOpen && editing && (
         <Drawer
           title={`Porte • ${editing.name || "nouvelle"}`}
@@ -1418,6 +1521,7 @@ export default function Doors() {
                 <Input value={editing.location || ""} onChange={(v) => setEditing({ ...editing, location: v })} />
               </Labeled>
             </div>
+
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Statut</span>
@@ -1429,10 +1533,12 @@ export default function Doors() {
                 Prochain contrôle : {editing.next_check_date ? dayjs(editing.next_check_date).format("DD/MM/YYYY") : "—"}
               </div>
             </div>
+
             <div className="flex items-center gap-3">
               <Btn variant="ghost" onClick={saveDoorBase}>Enregistrer la fiche</Btn>
               {editing?.id && <Btn variant="danger" onClick={deleteDoor}>Supprimer</Btn>}
             </div>
+
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="flex items-center justify-between mb-2">
@@ -1451,6 +1557,7 @@ export default function Doors() {
                 </div>
               </div>
             )}
+
             <div className="border rounded-2xl p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="font-semibold">Checklist</div>
@@ -1501,6 +1608,7 @@ export default function Doors() {
                 </div>
               )}
             </div>
+
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="flex items-center justify-between mb-2">
@@ -1529,6 +1637,7 @@ export default function Doors() {
                 <DoorFiles doorId={editing.id} version={filesVersion} />
               </div>
             )}
+
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="font-semibold mb-2">QR code</div>
@@ -1544,6 +1653,7 @@ export default function Doors() {
                 </div>
               </div>
             )}
+
             <DoorHistory doorId={editing.id} />
           </div>
         </Drawer>
@@ -1551,6 +1661,7 @@ export default function Doors() {
     </section>
   );
 }
+
 /* ----------------------------- Sous-composants ----------------------------- */
 function Labeled({ label, children }) {
   return (
