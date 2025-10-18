@@ -418,18 +418,6 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 
-export default function DoorsPlaceholder() {
-  return (
-    <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
-      <div className="bg-white rounded-2xl border shadow-sm p-4">
-        <div className="text-sm text-gray-600">
-          Chargement de l’écran “Portes”… (dis-moi <b>go</b> pour coller la PARTIE 2/2)
-        </div>
-      </div>
-    </section>
-  );
-}
-
 /* --- PlanViewerLeaflet (inline) --- */
 import { forwardRef, useCallback, useImperativeHandle } from "react";
 
