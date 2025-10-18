@@ -1,4 +1,4 @@
-// src/Doors.jsx — PARTIE 1/2 (zoom animé désactivé + cleanup renforcé)
+// src/Doors.jsx — PARTIE 1/2 (zoom animé off + cleanup + PDF.js worker sûr)
 import { useEffect, useMemo, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import dayjs from "dayjs";
 import 'dayjs/locale/fr';
@@ -6,14 +6,99 @@ dayjs.locale('fr');
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from 'leaflet';
-import '../styles/doors-map.css';
-import { api } from '../lib/api.js';
+import './styles/doors-map.css';
+import { api } from './lib/api.js';
 
-/* >>> PDF.js */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
-/* ----------------------------- Utils ----------------------------- */
+/* ----------------------------- petites UI ----------------------------- */
+function Btn({ children, variant = "primary", className = "", ...p }) {
+  const map = {
+    primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
+    ghost: "bg-white text-black border hover:bg-gray-50",
+    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700",
+    warn: "bg-amber-500 text-white hover:bg-amber-600",
+    subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
+  };
+  return (
+    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
+      {children}
+    </button>
+  );
+}
+function Input({ value, onChange, className = "", ...p }) {
+  return (
+    <input
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      {...p}
+    />
+  );
+}
+function Textarea({ value, onChange, className = "", ...p }) {
+  return (
+    <textarea
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+      {...p}
+    />
+  );
+}
+function Select({ value, onChange, options = [], className = "", placeholder }) {
+  return (
+    <select
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {placeholder != null && <option value="">{placeholder}</option>}
+      {options.map((o) =>
+        typeof o === "string" ? <option key={o} value={o}>{o}</option>
+                             : <option key={o.value} value={o.value}>{o.label}</option>
+      )}
+    </select>
+  );
+}
+function Badge({ color = "gray", children, className = "" }) {
+  const map = {
+    gray: "bg-gray-100 text-gray-700",
+    green: "bg-emerald-100 text-emerald-700",
+    orange: "bg-amber-100 text-amber-700",
+    red: "bg-rose-100 text-rose-700",
+    blue: "bg-blue-100 text-blue-700",
+  };
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>;
+}
+const STATUS = {
+  A_FAIRE: "a_faire",
+  EN_COURS: "en_cours_30",
+  EN_RETARD: "en_retard",
+  FAIT: "fait",
+};
+function statusColor(s) {
+  if (s === STATUS.A_FAIRE) return "green";
+  if (s === STATUS.EN_COURS) return "orange";
+  if (s === STATUS.EN_RETARD) return "red";
+  if (s === STATUS.FAIT) return "blue";
+  return "gray";
+}
+function statusLabel(s) {
+  if (s === STATUS.A_FAIRE) return "À faire";
+  if (s === STATUS.EN_COURS) return "En cours (<30j)";
+  if (s === STATUS.EN_RETARD) return "En retard";
+  if (s === STATUS.FAIT) return "Fait";
+  return s || "—";
+}
+function doorStateBadge(state) {
+  if (state === "conforme") return <Badge color="green">Conforme</Badge>;
+  if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
+  return <Badge>—</Badge>;
+}
+
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
@@ -23,9 +108,7 @@ function getIdentity() {
   let name = getCookie("name") || null;
   try {
     if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
-    if (!name) {
-      name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
-    }
+    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
     if ((!email || !name) && localStorage.getItem("user")) {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
@@ -54,20 +137,8 @@ function userHeaders() {
 function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
-function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return window.innerWidth < 640;
-  });
-  useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 640);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return isMobile;
-}
 
-/* ----------------------------- API Doors ----------------------------- */
+/* ----------------------------- API Doors (écran) ----------------------------- */
 const API = {
   list: async (params = {}) => {
     const qs = new URLSearchParams(
@@ -187,97 +258,11 @@ const API = {
   nonConformPDF: (doorId) => `/api/doors/doors/${doorId}/nonconformities.pdf`,
 };
 function pdfDocOpts(url) {
-  return { url, withCredentials: true, httpHeaders: userHeaders() };
+  // NOTE: standardFontDataUrl côté public/ => mets ton dossier "standard_fonts" dans /public
+  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
 
-/* ----------------------------- UI helpers ----------------------------- */
-function Btn({ children, variant = "primary", className = "", ...p }) {
-  const map = {
-    primary: "bg-blue-600 text-white hover:bg-blue-700 focus:ring-2 focus:ring-blue-200 shadow-sm",
-    ghost: "bg-white text-black border hover:bg-gray-50",
-    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
-    success: "bg-emerald-600 text-white hover:bg-emerald-700",
-    warn: "bg-amber-500 text-white hover:bg-amber-600",
-    subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
-  };
-  return (
-    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
-      {children}
-    </button>
-  );
-}
-function Input({ value, onChange, className = "", ...p }) {
-  return (
-    <input
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      {...p}
-    />
-  );
-}
-function Textarea({ value, onChange, className = "", ...p }) {
-  return (
-    <textarea
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-      {...p}
-    />
-  );
-}
-function Select({ value, onChange, options = [], className = "", placeholder }) {
-  return (
-    <select
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value)}
-    >
-      {placeholder != null && <option value="">{placeholder}</option>}
-      {options.map((o) =>
-        typeof o === "string" ? <option key={o} value={o}>{o}</option>
-                             : <option key={o.value} value={o.value}>{o.label}</option>
-      )}
-    </select>
-  );
-}
-function Badge({ color = "gray", children, className = "" }) {
-  const map = {
-    gray: "bg-gray-100 text-gray-700",
-    green: "bg-emerald-100 text-emerald-700",
-    orange: "bg-amber-100 text-amber-700",
-    red: "bg-rose-100 text-rose-700",
-    blue: "bg-blue-100 text-blue-700",
-  };
-  return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>;
-}
-const STATUS = {
-  A_FAIRE: "a_faire",
-  EN_COURS: "en_cours_30",
-  EN_RETARD: "en_retard",
-  FAIT: "fait",
-};
-function statusColor(s) {
-  if (s === STATUS.A_FAIRE) return "green";
-  if (s === STATUS.EN_COURS) return "orange";
-  if (s === STATUS.EN_RETARD) return "red";
-  if (s === STATUS.FAIT) return "blue";
-  return "gray";
-}
-function statusLabel(s) {
-  if (s === STATUS.A_FAIRE) return "À faire";
-  if (s === STATUS.EN_COURS) return "En cours (<30j)";
-  if (s === STATUS.EN_RETARD) return "En retard";
-  if (s === STATUS.FAIT) return "Fait";
-  return s || "—";
-}
-function doorStateBadge(state) {
-  if (state === "conforme") return <Badge color="green">Conforme</Badge>;
-  if (state === "non_conforme") return <Badge color="red">Non conforme</Badge>;
-  return <Badge>—</Badge>;
-}
-
-/* ----------------------------- Plans grid ----------------------------- */
+/* ----------------------------- Plans grid (début) ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
   return (
@@ -311,6 +296,18 @@ function PlanCards({ plans = [], onRename, onPick }) {
       ))}
     </div>
   );
+}
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 640;
+  });
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isMobile;
 }
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
@@ -419,6 +416,19 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 
+/* ===== La suite de Doors.jsx (PlanViewerLeaflet, calendrier, Drawer, etc.) arrive en PARTIE 2/2 ===== */
+
+export default function DoorsPlaceholder() {
+  return (
+    <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
+      <div className="bg-white rounded-2xl border shadow-sm p-4">
+        <div className="text-sm text-gray-600">
+          Chargement de l’écran “Portes”… (partie 2/2 à venir)
+        </div>
+      </div>
+    </section>
+  );
+}
 /* --- PlanViewerLeaflet.jsx (inline) --- */
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
@@ -460,7 +470,7 @@ const PlanViewerLeaflet = forwardRef(({
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
-        // 3) rendu bitmap
+        // 3) rendu bitmap (dataURL pour éviter CSP blob/worker)
         const canvas = document.createElement("canvas");
         canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
@@ -469,15 +479,15 @@ const PlanViewerLeaflet = forwardRef(({
         await renderTask.promise;
         if (cancelled) return;
 
-        const dataUrl = canvas.toDataURL("image/png"); // CSP-safe
+        const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
-        // 4) init carte (une seule fois)
+        // 4) init Leaflet (une seule fois)
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
             zoomControl: false,
-            // ✅ Désactive toutes les animations liées au zoom pour éviter _leaflet_pos undefined
+            // ✅ empêche les glitchs _leaflet_pos
             zoomAnimation: false,
             fadeAnimation: false,
             markerZoomAnimation: false,
@@ -561,7 +571,7 @@ const PlanViewerLeaflet = forwardRef(({
 
       const map = mapRef.current;
       if (map) {
-        // ✅ désactiver proprement tous les handlers pour éviter des callbacks après remove()
+        // ✅ cleanup complet
         try { map.scrollWheelZoom?.disable(); } catch {}
         try { map.touchZoom?.disable(); } catch {}
         try { map.boxZoom?.disable(); } catch {}
@@ -580,7 +590,7 @@ const PlanViewerLeaflet = forwardRef(({
     };
   }, [fileUrl, pageIndex, onReady]);
 
-  // Redessiner les marqueurs
+  // Redessiner les marqueurs si liste/size change
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
     drawMarkers(points, imgSize.w, imgSize.h);
@@ -682,16 +692,14 @@ const PlanViewerLeaflet = forwardRef(({
   );
 });
 
-
+/* ----- Toast ----- */
 function Toast({ text, onClose }) {
   useEffect(() => {
     if (!text) return;
     const t = setTimeout(() => onClose?.(), 4000);
     return () => clearTimeout(t);
   }, [text, onClose]);
-
   if (!text) return null;
-
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2000]">
       <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
@@ -701,6 +709,64 @@ function Toast({ text, onClose }) {
   );
 }
 
+/* ----- Mini calendrier mensuel ----- */
+function MonthCalendar({ events = [], onDayClick }) {
+  const [cursor, setCursor] = useState(() => dayjs().startOf('month'));
+  const start = cursor.startOf('week');
+  const end = cursor.endOf('month').endOf('week');
+  const days = [];
+  let d = start;
+  while (d.isBefore(end)) {
+    days.push(d);
+    d = d.add(1, 'day');
+  }
+  const map = new Map();
+  for (const e of events) {
+    const k = dayjs(e.date).format('YYYY-MM-DD');
+    const arr = map.get(k) || [];
+    arr.push(e);
+    map.set(k, arr);
+  }
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-semibold">{cursor.format('MMMM YYYY')}</div>
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={() => setCursor(cursor.subtract(1, 'month'))}>◀</Btn>
+          <Btn variant="ghost" onClick={() => setCursor(dayjs().startOf('month'))}>Aujourd’hui</Btn>
+          <Btn variant="ghost" onClick={() => setCursor(cursor.add(1, 'month'))}>▶</Btn>
+        </div>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-xs text-gray-600 mb-1">
+        {['Lun','Mar','Mer','Jeu','Ven','Sam','Dim'].map((l)=>(
+          <div key={l} className="px-2 py-1">{l}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
+        {days.map((day)=> {
+          const key = day.format('YYYY-MM-DD');
+          const es = map.get(key) || [];
+          const isCurMonth = day.month() === cursor.month();
+          return (
+            <button
+              key={key}
+              onClick={() => onDayClick?.({ date: key, events: es })}
+              className={`border rounded-lg p-2 text-left min-h-[64px] ${isCurMonth ? 'bg-white' : 'bg-gray-50 text-gray-500'}`}
+            >
+              <div className="text-[11px] mb-1">{day.format('D')}</div>
+              <div className="flex flex-wrap gap-1">
+                {es.slice(0,3).map((ev, i)=>(
+                  <span key={i} className="px-1 rounded bg-blue-100 text-blue-700 text-[10px]">{ev.door_name || ev.door_id}</span>
+                ))}
+                {es.length>3 && <span className="text-[10px] text-gray-500">+{es.length-3}</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
