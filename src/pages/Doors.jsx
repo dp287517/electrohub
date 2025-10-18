@@ -547,7 +547,7 @@ const PlanViewerLeaflet = forwardRef(({
   const [picker, setPicker] = useState(null); // {x,y, items:[{door_id, door_name}]}
   useEffect(() => {
     let cancelled = false;
-    let pdf, loadingTask, objUrl;
+    let pdf, loadingTask, renderTask;
 
     (async () => {
       try {
@@ -560,13 +560,12 @@ const PlanViewerLeaflet = forwardRef(({
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
-        await page.render({ canvasContext: ctx, viewport }).promise;
+        renderTask = page.render({ canvasContext: ctx, viewport });
+        await renderTask.promise;
         if (cancelled) return;
 
         // ↓ (optionnel mais conseillé) : DataURL -> Blob -> ObjectURL pour mémoire
-        const blob = await new Promise(res => canvas.toBlob(res, "image/png", 0.92));
-        objUrl = URL.createObjectURL(blob);
-
+        const dataUrl = canvas.toDataURL("image/png"); // CSP-friendly
         setImgSize({ w: canvas.width, h: canvas.height });
 
         if (!mapRef.current) {
@@ -607,7 +606,7 @@ const PlanViewerLeaflet = forwardRef(({
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
 
         if (imageLayerRef.current) map.removeLayer(imageLayerRef.current);
-        const layer = L.imageOverlay(objUrl, bounds, { interactive: false, opacity: 1 });
+        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
 
@@ -626,15 +625,15 @@ const PlanViewerLeaflet = forwardRef(({
         drawMarkers(points, viewport.width, viewport.height);
         onReady?.();
       } catch (e) {
-        console.error("Leaflet viewer error", e);
-      } finally {
-        try { pdf?.destroy(); } catch {}
-        try { loadingTask?.destroy?.(); } catch {}
+        if (e?.name !== "RenderingCancelledException") {
+          console.error("Leaflet viewer error", e);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
+      try { renderTask?.cancel(); } catch {}
       try { pdf?.destroy(); } catch {}
       try { loadingTask?.destroy?.(); } catch {}
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
