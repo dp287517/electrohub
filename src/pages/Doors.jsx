@@ -5,7 +5,7 @@ dayjs.locale('fr');
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from 'leaflet';
-import './styles/doors-map.css';
+import '../styles/doors-map.css';
 import { api } from '../lib/api.js';
 /* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
