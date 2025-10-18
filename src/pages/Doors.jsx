@@ -1,5 +1,5 @@
 // src/pages/Doors.jsx — PARTIE 1/2
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 dayjs.locale("fr");
@@ -420,8 +420,6 @@ function PlanCard({ plan, onRename, onPick }) {
 }
 
 /* --- PlanViewerLeaflet --- */
-import { forwardRef, useCallback, useImperativeHandle } from "react";
-
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
   pageIndex = 0,
@@ -437,6 +435,20 @@ const PlanViewerLeaflet = forwardRef(({
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null);
   const aliveRef = useRef(true);
+
+  // --- Helpers pour taille dynamique des marqueurs (shrink quand on zoome)
+  const basePx = 28;
+  const minPx = 12;
+  const maxPx = 34;
+  const getIconSize = useCallback(() => {
+    const m = mapRef.current;
+    if (!m) return basePx;
+    // On prend le zoom “fit” comme référence 0 et on réduit ~12% par cran
+    const fit = m.getMinZoom?.() ?? m.getZoom();
+    const dz = Math.max(0, (m.getZoom() ?? fit) - fit);
+    const px = basePx * Math.pow(0.88, dz);
+    return Math.max(minPx, Math.min(maxPx, Math.round(px)));
+  }, []);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -494,21 +506,34 @@ const PlanViewerLeaflet = forwardRef(({
           L.control.zoom({ position: "topright" }).addTo(m);
           mapRef.current = m;
 
-          // sélection
+          // 🔹 mini-hook: expose un scale marker côté CSS si tu veux en profiter plus tard
+          m.on('zoom', () => {
+            const z = m.getZoom();
+            const scale = Math.min(1.4, Math.max(0.6, 1 + (z - (m.getMinZoom?.() ?? z)) * 0.05));
+            m.getContainer().style.setProperty('--door-scale', scale.toFixed(2));
+          });
+
+          // sélection “click carte”
           m.on("click", (e) => {
             if (!aliveRef.current) return;
             const clicked = e.containerPoint;
             const near = [];
+            const size = getIconSize();
+            const pickRadius = Math.max(18, Math.floor(size / 2) + 6);
             markersLayerRef.current?.eachLayer((mk) => {
               const mp = m.latLngToContainerPoint(mk.getLatLng());
               const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
-              if (dist <= 18) near.push(mk.__meta);
+              if (dist <= pickRadius) near.push(mk.__meta);
             });
             if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
             else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
             else setPicker(null);
           });
           m.on("zoomstart movestart", () => setPicker(null));
+          m.on("zoomend", () => {
+            // Redimensionner les icônes quand le zoom change
+            try { drawMarkers(points, viewport.width, viewport.height, true); } catch {}
+          });
         }
 
         // 5) overlay + bornes
@@ -576,7 +601,7 @@ const PlanViewerLeaflet = forwardRef(({
       imageLayerRef.current = null;
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
     };
-  }, [fileUrl, pageIndex, onReady]);
+  }, [fileUrl, pageIndex, onReady, getIconSize]);
 
   // Redessiner les marqueurs
   useEffect(() => {
@@ -590,13 +615,25 @@ const PlanViewerLeaflet = forwardRef(({
     if (status === STATUS.A_FAIRE) return 'door-marker door-marker--green';
     return 'door-marker door-marker--blue';
   }
-  function drawMarkers(list, w, h) {
+
+  function drawMarkers(list, w, h, resizing = false) {
     const map = mapRef.current;
     if (!map) return;
     if (!markersLayerRef.current) {
       markersLayerRef.current = L.layerGroup().addTo(map);
     }
     const g = markersLayerRef.current;
+
+    // Si on redimensionne seulement, on met à jour les icônes sans recréer la logique
+    if (resizing) {
+      const size = getIconSize();
+      g.eachLayer((mk) => {
+        const icon = L.divIcon({ className: mk.__cls || 'door-marker door-marker--blue', iconSize: [size, size] });
+        mk.setIcon(icon);
+      });
+      return;
+    }
+
     g.clearLayers();
     (list || []).forEach((p) => {
       const x = Number(p.x_frac ?? p.x ?? 0) * w;
@@ -604,7 +641,9 @@ const PlanViewerLeaflet = forwardRef(({
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
       const latlng = L.latLng(y, x);
-      const icon = L.divIcon({ className: markerClass(p.status), iconSize: [28, 28] });
+      const size = getIconSize();
+      const cls = markerClass(p.status);
+      const icon = L.divIcon({ className: cls, iconSize: [size, size] });
       const mk = L.marker(latlng, {
         icon,
         draggable: true,
@@ -620,11 +659,20 @@ const PlanViewerLeaflet = forwardRef(({
         x_frac: p.x_frac,
         y_frac: p.y_frac,
       };
+      mk.__cls = cls;
+
+      // 👉 Click direct sur le marqueur
+      mk.on('click', () => {
+        setPicker(null);
+        onClickPoint?.(mk.__meta);
+      });
+
+      // 👉 Enregistrement en fractions stables (indépendant du zoom)
       mk.on('dragend', () => {
         if (!onMovePoint) return;
-        const pt = map.latLngToLayerPoint(mk.getLatLng());
-        const xFrac = Math.min(1, Math.max(0, pt.x / w));
-        const yFrac = Math.min(1, Math.max(0, pt.y / h));
+        const ll = mk.getLatLng();          // ll.lat = y, ll.lng = x (CRS.Simple)
+        const xFrac = Math.min(1, Math.max(0, ll.lng / w));
+        const yFrac = Math.min(1, Math.max(0, ll.lat / h));
         onMovePoint(p.door_id, { x: xFrac, y: yFrac });
       });
       mk.addTo(g);
@@ -679,7 +727,6 @@ const PlanViewerLeaflet = forwardRef(({
     </div>
   );
 });
-
 /* ----- Toast ----- */
 function Toast({ text, onClose }) {
   useEffect(() => {
@@ -757,7 +804,7 @@ function MonthCalendar({ events = [], onDayClick }) {
 }
 
 /* ----------------------------- Page principale ----------------------------- */
-export default function Doors() {
+function Doors() {
   const [tab, setTab] = useState("controls");
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -1108,7 +1155,6 @@ export default function Doors() {
   function openPlan(plan) {
     setSelectedPlan(plan);
     setPdfReady(false);
-    // génère une URL avec bust une seule fois, et la garde tant que le plan est ouvert
     const stableUrl = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
     setPlanFileUrl(stableUrl);
   }
@@ -1720,3 +1766,5 @@ function DoorHistory({ doorId }) {
     </div>
   );
 }
+
+export default Doors;
