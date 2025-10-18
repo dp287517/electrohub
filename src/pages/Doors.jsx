@@ -5,7 +5,7 @@ import "dayjs/locale/fr";
 dayjs.locale("fr");
 
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
-import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url"; // ✅ worker fiable prod
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url"; // ✅ worker bundlé fiable
 import L from "leaflet";
 
 // Styles (depuis src/pages)
@@ -14,10 +14,11 @@ import "../styles/doors-map.css";
 
 import { api } from "../lib/api.js";
 
-/* >>> PDF.js */
+/* >>> PDF.js (worker + logs réduits) */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
+/* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
@@ -55,11 +56,11 @@ function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
 function pdfDocOpts(url) {
-  // 👉 Pense à copier /node_modules/pdfjs-dist/standard_fonts/ vers /public/standard_fonts/
+  // ⚠️ Copie /standard_fonts/ dans /public pour éviter les warnings TT
   return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
 
-/* ----------------------------- API Doors (locale à l’écran) ----------------------------- */
+/* ----------------------------- API Doors ----------------------------- */
 const STATUS = {
   A_FAIRE: "a_faire",
   EN_COURS: "en_cours_30",
@@ -418,7 +419,7 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 
-/* --- PlanViewerLeaflet (inline) --- */
+/* --- PlanViewerLeaflet --- */
 import { forwardRef, useCallback, useImperativeHandle } from "react";
 
 const PlanViewerLeaflet = forwardRef(({
@@ -445,9 +446,9 @@ const PlanViewerLeaflet = forwardRef(({
 
     (async () => {
       try {
-        if (!wrapRef.current) return;
+        if (!wrapRef.current || !fileUrl) return;
 
-        // 1) charge le PDF
+        // 1) charge le PDF (worker bundlé + standard_fonts)
         loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTask.promise;
         if (cancelled) return;
@@ -793,6 +794,7 @@ export default function Doors() {
   const [plans, setPlans] = useState([]);
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
+  const [planFileUrl, setPlanFileUrl] = useState(null); // ✅ URL stable tant que le plan est ouvert
   const planPage = 0;
   const [positions, setPositions] = useState([]);
   const [pdfReady, setPdfReady] = useState(false);
@@ -1092,7 +1094,7 @@ export default function Doors() {
     }
   }
 
-  // Refresh périodique quand un plan est ouvert
+  // Refresh périodique quand un plan est ouvert (positions uniquement)
   useEffect(() => {
     if (tab !== "maps" || !stableSelectedPlan) return;
     const tick = () => { loadPositions(stableSelectedPlan, planPage); };
@@ -1101,6 +1103,20 @@ export default function Doors() {
     document.addEventListener("visibilitychange", onVis);
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
   }, [tab, stableSelectedPlan, planPage, q, status, building, floor, doorState]);
+
+  // 👉 Important : on fige l’URL du PDF une seule fois quand on ouvre un plan
+  function openPlan(plan) {
+    setSelectedPlan(plan);
+    setPdfReady(false);
+    // génère une URL avec bust une seule fois, et la garde tant que le plan est ouvert
+    const stableUrl = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
+    setPlanFileUrl(stableUrl);
+  }
+  function closePlan() {
+    setSelectedPlan(null);
+    setPlanFileUrl(null);
+    setPdfReady(false);
+  }
 
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1302,7 +1318,7 @@ export default function Doors() {
               await api.doorsMaps.renamePlan(plan.logical_name, name);
               await loadPlans();
             }}
-            onPick={(plan) => { setSelectedPlan(plan); setPdfReady(false); }}
+            onPick={openPlan}   // ✅ fige l’URL du PDF
           />
           {selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
@@ -1314,13 +1330,13 @@ export default function Doors() {
                   <Btn variant="subtle" onClick={createDoorAtCenter} title="Créer une nouvelle porte au centre du plan">
                     ➕ Nouvelle porte
                   </Btn>
-                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>Fermer le plan</Btn>
+                  <Btn variant="ghost" onClick={closePlan}>Fermer le plan</Btn>
                 </div>
               </div>
               <PlanViewerLeaflet
                 ref={viewerRef}
                 key={selectedPlan?.id || selectedPlan?.logical_name || ""}
-                fileUrl={api.doorsMaps.planFileUrlAuto(selectedPlan, { bust: true })}
+                fileUrl={planFileUrl}                  // ✅ URL stable
                 pageIndex={planPage}
                 points={positions}
                 onReady={handlePdfReady}
@@ -1356,7 +1372,7 @@ export default function Doors() {
                   </div>
                 ))}
               </div>
-            </div>
+            </div }
             <div>
               <div className="font-semibold mb-2">Fréquence</div>
               <Select
