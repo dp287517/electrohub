@@ -1,4 +1,4 @@
-// src/Doors.jsx — Partie 1/2
+// src/Doors.jsx — Partie 1/2 (corrigée)
 import { useEffect, useMemo, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import dayjs from "dayjs";
 import 'dayjs/locale/fr';
@@ -223,7 +223,7 @@ function Input({ value, onChange, className = "", ...p }) {
 function Textarea({ value, onChange, className = "", ...p }) {
   return (
     <textarea
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
       value={value ?? ""}
       onChange={(e) => onChange(e.target.value)}
       {...p}
@@ -451,7 +451,7 @@ function PlanCard({ plan, onRename, onPick }) {
     return () => io.disconnect();
   }, []);
 
-  // ✅ vignette PDF : scale “safe”, cleanup propre
+  // ✅ vignette PDF
   useEffect(() => {
     if (isMobile) return;
     if (!visible) return;
@@ -565,8 +565,7 @@ const PlanViewerLeaflet = forwardRef(({
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null); // {x,y, items:[{door_id, door_name}]}
 
-  // ✅ PATCH principal : rendu PDF “safe”, fitBounds fiable, erreurs worker ignorées si annulées
-  // ✅ CSP-safe : utilisation d’un Data URL (pas de blob:)
+  // ✅ Rendu + init de la carte
   useEffect(() => {
     let cancelled = false;
     let loadingTask = null;
@@ -584,7 +583,7 @@ const PlanViewerLeaflet = forwardRef(({
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
-        // 2) Scale en fonction de la largeur réelle du conteneur
+        // 2) Viewport calculé sur la largeur du conteneur
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
@@ -602,11 +601,10 @@ const PlanViewerLeaflet = forwardRef(({
         await renderTask.promise;
         if (cancelled) return;
 
-        // 4) Data URL (CSP autorise "img-src data:")
-        //    (possibilité de passer en JPEG si besoin de réduire la taille)
+        // 4) Data URL (CSP ok)
         const dataUrl = canvas.toDataURL("image/png");
 
-        // 5) Taille image pour les marqueurs
+        // 5) Taille image -> calc markers
         setImgSize({ w: canvas.width, h: canvas.height });
 
         // 6) Crée la carte si nécessaire
@@ -654,7 +652,6 @@ const PlanViewerLeaflet = forwardRef(({
         imageLayerRef.current = layer;
         layer.addTo(map);
 
-        // Laisse le layout se stabiliser avant fitBounds
         await new Promise(requestAnimationFrame);
         map.invalidateSize(false);
 
@@ -664,11 +661,12 @@ const PlanViewerLeaflet = forwardRef(({
         map.setMinZoom(fitZoom - 1);
         map.setMaxZoom(fitZoom + 6);
         map.setMaxBounds(bounds.pad(0.5));
-        map.fitBounds(bounds, { padding: [10, 10] }); // affiche l’intégralité du plan
+        map.fitBounds(bounds, { padding: [10, 10] }); // montre tout le plan
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
         }
+
         drawMarkers(points, viewport.width, viewport.height);
         onReady?.();
       } catch (e) {
@@ -686,13 +684,15 @@ const PlanViewerLeaflet = forwardRef(({
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       imageLayerRef.current = null;
       if (markersLayerRef.current) { markersLayerRef.current.clearLayers(); markersLayerRef.current = null; }
-      // (dataURL) rien à révoquer
+      // (Data URL) rien à révoquer
     };
   }, [fileUrl, pageIndex, onReady]);
 
+  // Suivre la taille image
   const imgSizeRef = useRef(imgSize);
   useEffect(() => { imgSizeRef.current = imgSize; }, [imgSize]);
 
+  // Redessiner les marqueurs si points changent
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
     drawMarkers(points, imgSize.w, imgSize.h);
@@ -704,15 +704,24 @@ const PlanViewerLeaflet = forwardRef(({
     if (status === STATUS.A_FAIRE) return 'door-marker door-marker--green';
     return 'door-marker door-marker--blue';
   }
+
   function drawMarkers(list, w, h) {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map) return; // map pas prête
+
+    // ⚠️ s’assurer que le layerGroup existe
+    if (!markersLayerRef.current) {
+      markersLayerRef.current = L.layerGroup().addTo(map);
+    }
     const g = markersLayerRef.current;
-    g?.clearLayers();
+    if (!g) return; // garde-fou
+
+    g.clearLayers();
     (list || []).forEach((p) => {
       const x = Number(p.x_frac ?? p.x ?? 0) * w;
       const y = Number(p.y_frac ?? p.y ?? 0) * h;
-      if (Number.isNaN(x) || Number.isNaN(y)) return;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
       const latlng = L.latLng(y, x);
       const icon = L.divIcon({
         className: markerClass(p.status),
@@ -726,6 +735,7 @@ const PlanViewerLeaflet = forwardRef(({
         keyboard: false,
         riseOnHover: true,
       });
+
       mk.__meta = {
         door_id: p.door_id,
         door_name: p.door_name || p.name,
@@ -733,6 +743,7 @@ const PlanViewerLeaflet = forwardRef(({
         x_frac: p.x_frac,
         y_frac: p.y_frac,
       };
+
       mk.on('dragend', () => {
         if (!onMovePoint) return;
         const ll = map.latLngToLayerPoint(mk.getLatLng());
@@ -740,6 +751,7 @@ const PlanViewerLeaflet = forwardRef(({
         const yFrac = Math.min(1, Math.max(0, ll.y / h));
         onMovePoint(p.door_id, { x: xFrac, y: yFrac });
       });
+
       mk.addTo(g);
     });
   }
@@ -766,11 +778,7 @@ const PlanViewerLeaflet = forwardRef(({
   return (
     <div className="mt-3 relative">
       <div className="flex items-center justify-end gap-2 mb-2">
-        <Btn
-          variant="ghost"
-          aria-label="Ajuster le zoom au plan"
-          onClick={adjust}
-        >
+        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>
           Ajuster
         </Btn>
       </div>
