@@ -681,7 +681,26 @@ const PlanViewerLeaflet = forwardRef(({
     </div>
   );
 });
-// src/Doors.jsx — PARTIE 2/2 (à coller APRÈS la partie 1)
+
+
+function Toast({ text, onClose }) {
+  useEffect(() => {
+    if (!text) return;
+    const t = setTimeout(() => onClose?.(), 4000);
+    return () => clearTimeout(t);
+  }, [text, onClose]);
+
+  if (!text) return null;
+
+  return (
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2000]">
+      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
+        {text}
+      </div>
+    </div>
+  );
+}
+
 
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
