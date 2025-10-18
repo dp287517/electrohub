@@ -1,3 +1,4 @@
+// src/Doors.jsx — Partie 1/2
 import { useEffect, useMemo, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import dayjs from "dayjs";
 import 'dayjs/locale/fr';
@@ -8,7 +9,7 @@ import L from 'leaflet';
 import '../styles/doors-map.css';
 import { api } from '../lib/api.js';
 
-/* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
+/* >>> PDF.js (local via pdfjs-dist) */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
@@ -53,7 +54,7 @@ function userHeaders() {
 function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
-/* 🔸 Hook utilitaire mobile */
+/* 🔸 Mobile */
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -303,7 +304,7 @@ function Toast({ text, onClose }) {
   );
 }
 
-/* ----------------------------- Calendrier (mois) ----------------------------- */
+/* ----------------------------- Calendrier ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [month, setMonth] = useState(dayjs());
   const eventsByDate = useMemo(() => {
@@ -419,7 +420,6 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     </div>
   );
 }
-
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -430,7 +430,6 @@ function PlanCards({ plans = [], onRename, onPick }) {
     </div>
   );
 }
-
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -452,7 +451,7 @@ function PlanCard({ plan, onRename, onPick }) {
     return () => io.disconnect();
   }, []);
 
-  /* ✅ PATCH vignette PDF : scale “safe”, cleanup propre, pas de double destroy */
+  // ✅ vignette PDF : scale “safe”, cleanup propre
   useEffect(() => {
     if (isMobile) return;
     if (!visible) return;
@@ -470,7 +469,7 @@ function PlanCard({ plan, onRename, onPick }) {
 
         const page = await pdf.getPage(1);
         const vp1 = page.getViewport({ scale: 1 });
-        const capCss = 320;                         // largeur CSS vignette
+        const capCss = 320; // largeur CSS vignette
         const dpr = window.devicePixelRatio || 1;
         const targetBitmapW = capCss * dpr;
         const scale = Math.min(2, Math.max(0.5, targetBitmapW / vp1.width));
@@ -566,12 +565,12 @@ const PlanViewerLeaflet = forwardRef(({
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null); // {x,y, items:[{door_id, door_name}]}
 
-  /* ✅ PATCH principal : rendu PDF “safe”, fitBounds fiable, erreurs worker ignorées si annulées */
+  // ✅ PATCH principal : rendu PDF “safe”, fitBounds fiable, erreurs worker ignorées si annulées
+  // ✅ CSP-safe : utilisation d’un Data URL (pas de blob:)
   useEffect(() => {
     let cancelled = false;
     let loadingTask = null;
     let renderTask = null;
-    let objectUrl = null; // pour revoke
 
     (async () => {
       try {
@@ -585,7 +584,7 @@ const PlanViewerLeaflet = forwardRef(({
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
-        // 2) Choix du scale en fonction de la largeur réelle du conteneur
+        // 2) Scale en fonction de la largeur réelle du conteneur
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
@@ -603,11 +602,11 @@ const PlanViewerLeaflet = forwardRef(({
         await renderTask.promise;
         if (cancelled) return;
 
-        // 4) toBlob -> ObjectURL (mémoire + facile à révoquer)
-        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png", 0.92));
-        objectUrl = URL.createObjectURL(blob);
+        // 4) Data URL (CSP autorise "img-src data:")
+        //    (possibilité de passer en JPEG si besoin de réduire la taille)
+        const dataUrl = canvas.toDataURL("image/png");
 
-        // 5) MAJ taille image pour les marqueurs
+        // 5) Taille image pour les marqueurs
         setImgSize({ w: canvas.width, h: canvas.height });
 
         // 6) Crée la carte si nécessaire
@@ -651,7 +650,7 @@ const PlanViewerLeaflet = forwardRef(({
           map.removeLayer(imageLayerRef.current);
           imageLayerRef.current = null;
         }
-        const layer = L.imageOverlay(objectUrl, bounds, { interactive: false, opacity: 1 });
+        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
 
@@ -687,7 +686,7 @@ const PlanViewerLeaflet = forwardRef(({
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       imageLayerRef.current = null;
       if (markersLayerRef.current) { markersLayerRef.current.clearLayers(); markersLayerRef.current = null; }
-      if (objectUrl) { try { URL.revokeObjectURL(objectUrl); } catch {} }
+      // (dataURL) rien à révoquer
     };
   }, [fileUrl, pageIndex, onReady]);
 
@@ -750,7 +749,7 @@ const PlanViewerLeaflet = forwardRef(({
     onClickPoint?.(d);
   };
 
-  /* ✅ PATCH bouton Ajuster : invalidateSize -> fitZoom -> fitBounds */
+  // ✅ bouton Ajuster : invalidateSize -> fitZoom -> fitBounds
   const adjust = () => {
     const m = mapRef.current;
     const layer = imageLayerRef.current;
@@ -1012,7 +1011,7 @@ export default function Doors() {
     const values = (items || []).slice(0, 5).map((i) => i?.value);
     if (values.length < 5) return false;
     return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
-    }
+  }
   async function saveChecklistItem(idx, field, value) {
     if (!editing?.id || !editing?.current_check) return;
     const items = [...(editing.current_check.items || [])];
