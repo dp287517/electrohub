@@ -1,4 +1,4 @@
-// src/Doors.jsx — Partie 1/2 (corrigée)
+// src/Doors.jsx — PARTIE 1/2 (zoom animé désactivé + cleanup renforcé)
 import { useEffect, useMemo, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import dayjs from "dayjs";
 import 'dayjs/locale/fr';
@@ -9,7 +9,7 @@ import L from 'leaflet';
 import '../styles/doors-map.css';
 import { api } from '../lib/api.js';
 
-/* >>> PDF.js (local via pdfjs-dist) */
+/* >>> PDF.js */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
@@ -54,7 +54,6 @@ function userHeaders() {
 function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
-/* 🔸 Mobile */
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => {
     if (typeof window === "undefined") return false;
@@ -68,7 +67,7 @@ function useIsMobile() {
   return isMobile;
 }
 
-/* ----------------------------- API (Doors) ----------------------------- */
+/* ----------------------------- API Doors ----------------------------- */
 const API = {
   list: async (params = {}) => {
     const qs = new URLSearchParams(
@@ -202,10 +201,7 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
     subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
   };
   return (
-    <button
-      className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`}
-      {...p}
-    >
+    <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>
       {children}
     </button>
   );
@@ -239,11 +235,8 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
     >
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
-        typeof o === "string" ? (
-          <option key={o} value={o}>{o}</option>
-        ) : (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        )
+        typeof o === "string" ? <option key={o} value={o}>{o}</option>
+                             : <option key={o.value} value={o.value}>{o.label}</option>
       )}
     </select>
   );
@@ -256,11 +249,7 @@ function Badge({ color = "gray", children, className = "" }) {
     red: "bg-rose-100 text-rose-700",
     blue: "bg-blue-100 text-blue-700",
   };
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>
-      {children}
-    </span>
-  );
+  return <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color]} ${className}`}>{children}</span>;
 }
 const STATUS = {
   A_FAIRE: "a_faire",
@@ -288,114 +277,7 @@ function doorStateBadge(state) {
   return <Badge>—</Badge>;
 }
 
-/* ----------------------------- Toast ----------------------------- */
-function Toast({ text, onClose }) {
-  useEffect(() => {
-    const t = setTimeout(() => onClose && onClose(), 4000);
-    return () => clearTimeout(t);
-  }, [onClose]);
-  if (!text) return null;
-  return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
-      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">
-        {text}
-      </div>
-    </div>
-  );
-}
-
-/* ----------------------------- Calendrier ----------------------------- */
-function MonthCalendar({ events = [], onDayClick }) {
-  const [month, setMonth] = useState(dayjs());
-  const eventsByDate = useMemo(() => {
-    const map = {};
-    for (const e of events) {
-      const key = e.date || e.next_check_date || e.due_date;
-      if (!key) continue;
-      const iso = dayjs(key).format("YYYY-MM-DD");
-      (map[iso] ||= []).push(e);
-    }
-    return map;
-  }, [events]);
-  const startOfMonth = month.startOf("month").toDate();
-  const endOfMonth = month.endOf("month").toDate();
-  const startDow = (startOfMonth.getDay() + 6) % 7; // lundi=0
-  const gridStart = new Date(startOfMonth);
-  gridStart.setDate(gridStart.getDate() - startDow);
-  const days = [];
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(gridStart);
-    d.setDate(gridStart.getDate() + i);
-    const iso = dayjs(d).format("YYYY-MM-DD");
-    days.push({ d, iso, inMonth: d >= startOfMonth && d <= endOfMonth });
-  }
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-lg font-semibold">{month.format("MMMM YYYY")}</div>
-        <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={() => setMonth((m) => m.subtract(1, "month"))}>← Préc.</Btn>
-          <Btn variant="ghost" onClick={() => setMonth(dayjs())}>Aujourd'hui</Btn>
-          <Btn variant="ghost" onClick={() => setMonth((m) => m.add(1, "month"))}>Suiv. →</Btn>
-        </div>
-      </div>
-      <div className="grid grid-cols-7 text-xs font-medium text-gray-500">
-        {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
-          <div key={l} className="px-2 py-2">
-            {l}
-          </div>
-        ))}
-      </div>
-      <div className="grid grid-cols-7 border rounded-2xl overflow-hidden">
-        {days.map(({ d, iso, inMonth }) => {
-          const list = eventsByDate[iso] || [];
-          const clickable = list.length > 0;
-          return (
-            <button
-              key={iso}
-              onClick={() => clickable && onDayClick && onDayClick({ date: iso, events: list })}
-              className={`min-h-[96px] p-2 border-t border-l last:border-r text-left transition ${
-                inMonth ? "bg-white" : "bg-gray-50"
-              } ${clickable ? "hover:bg-blue-50" : ""}`}
-            >
-              <div className="flex items-center justify-between">
-                <div className={`text-xs ${inMonth ? "text-gray-700" : "text-gray-400"}`}>{dayjs(d).format("D")}</div>
-                {!!list.length && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                    {list.length}
-                  </span>
-                )}
-              </div>
-              <div className="mt-1 space-y-1">
-                {list.slice(0, 3).map((e, i) => (
-                  <div
-                    key={i}
-                    className={`truncate text-[11px] px-1.5 py-0.5 rounded ${
-                      e.status === STATUS.EN_RETARD
-                        ? "bg-rose-50 text-rose-700"
-                        : e.status === STATUS.EN_COURS
-                        ? "bg-amber-50 text-amber-700"
-                        : e.status === STATUS.A_FAIRE
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-blue-50 text-blue-700"
-                    }`}
-                  >
-                    {e.door_name}
-                  </div>
-                ))}
-                {list.length > 3 && (
-                  <div className="text-[11px] text-gray-500">+{list.length - 3} de plus…</div>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/* ----------------------------- MAPS components ----------------------------- */
+/* ----------------------------- Plans grid ----------------------------- */
 function PlansHeader({ mapsLoading, onUploadZip }) {
   const inputRef = useRef(null);
   return (
@@ -451,7 +333,6 @@ function PlanCard({ plan, onRename, onPick }) {
     return () => io.disconnect();
   }, []);
 
-  // ✅ vignette PDF
   useEffect(() => {
     if (isMobile) return;
     if (!visible) return;
@@ -469,7 +350,7 @@ function PlanCard({ plan, onRename, onPick }) {
 
         const page = await pdf.getPage(1);
         const vp1 = page.getViewport({ scale: 1 });
-        const capCss = 320; // largeur CSS vignette
+        const capCss = 320;
         const dpr = window.devicePixelRatio || 1;
         const targetBitmapW = capCss * dpr;
         const scale = Math.min(2, Math.max(0.5, targetBitmapW / vp1.width));
@@ -483,9 +364,7 @@ function PlanCard({ plan, onRename, onPick }) {
         renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
         await renderTask.promise;
       } catch (e) {
-        if (e?.name !== "RenderingCancelledException") {
-          setThumbErr("Aperçu indisponible.");
-        }
+        if (e?.name !== "RenderingCancelledException") setThumbErr("Aperçu indisponible.");
       }
     })();
 
@@ -521,23 +400,14 @@ function PlanCard({ plan, onRename, onPick }) {
             <div className="font-medium truncate" title={name}>{name || "—"}</div>
             <div className="flex items-center gap-1">
               <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>✏️</Btn>
-              <Btn variant="subtle" onClick={() => { onPick(plan); }}>
-                Ouvrir
-              </Btn>
+              <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
             </div>
           </div>
         ) : (
           <div className="flex items-center gap-2">
             <Input value={name} onChange={setName} />
-            <Btn
-              variant="subtle"
-              onClick={async () => { await onRename(plan, (name || "").trim()); setEdit(false); }}
-            >
-              OK
-            </Btn>
-            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>
-              Annuler
-            </Btn>
+            <Btn variant="subtle" onClick={async () => { await onRename(plan, (name || "").trim()); setEdit(false); }}>OK</Btn>
+            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>Annuler</Btn>
           </div>
         )}
         <div className="flex items-center gap-2 mt-2 text-xs">
@@ -563,10 +433,11 @@ const PlanViewerLeaflet = forwardRef(({
   const imageLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  const [picker, setPicker] = useState(null); // {x,y, items:[{door_id, door_name}]}
+  const [picker, setPicker] = useState(null);
+  const aliveRef = useRef(true);
 
-  // ✅ Rendu + init de la carte
   useEffect(() => {
+    aliveRef.current = true;
     let cancelled = false;
     let loadingTask = null;
     let renderTask = null;
@@ -575,15 +446,12 @@ const PlanViewerLeaflet = forwardRef(({
       try {
         if (!wrapRef.current) return;
 
-        // 1) Charge le PDF
-        loadingTask = pdfjsLib.getDocument({
-          ...pdfDocOpts(fileUrl),
-          standardFontDataUrl: "/standard_fonts/",
-        });
+        // 1) charge le PDF
+        loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl), standardFontDataUrl: "/standard_fonts/" });
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
-        // 2) Viewport calculé sur la largeur du conteneur
+        // 2) viewport adapté conteneur
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
@@ -592,7 +460,7 @@ const PlanViewerLeaflet = forwardRef(({
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
-        // 3) Rendu bitmap
+        // 3) rendu bitmap
         const canvas = document.createElement("canvas");
         canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
@@ -601,31 +469,33 @@ const PlanViewerLeaflet = forwardRef(({
         await renderTask.promise;
         if (cancelled) return;
 
-        // 4) Data URL (CSP ok)
-        const dataUrl = canvas.toDataURL("image/png");
-
-        // 5) Taille image -> calc markers
+        const dataUrl = canvas.toDataURL("image/png"); // CSP-safe
         setImgSize({ w: canvas.width, h: canvas.height });
 
-        // 6) Crée la carte si nécessaire
+        // 4) init carte (une seule fois)
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
             zoomControl: false,
-            zoomAnimation: true,
+            // ✅ Désactive toutes les animations liées au zoom pour éviter _leaflet_pos undefined
+            zoomAnimation: false,
+            fadeAnimation: false,
+            markerZoomAnimation: false,
             scrollWheelZoom: true,
             touchZoom: true,
             tap: true,
             tapTolerance: 20,
             inertia: true,
-            wheelDebounceTime: 35,
+            wheelDebounceTime: 50,
             wheelPxPerZoomLevel: 60,
             preferCanvas: true,
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           mapRef.current = m;
 
+          // sélection
           m.on("click", (e) => {
+            if (!aliveRef.current) return;
             const clicked = e.containerPoint;
             const near = [];
             markersLayerRef.current?.eachLayer((mk) => {
@@ -640,9 +510,12 @@ const PlanViewerLeaflet = forwardRef(({
           m.on("zoomstart movestart", () => setPicker(null));
         }
 
-        // 7) Overlay image + bornes/zoom
+        // 5) overlay + bornes
         const map = mapRef.current;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
+
+        // suspend le wheel pendant l’ajustement initial
+        map.scrollWheelZoom.disable();
 
         if (imageLayerRef.current) {
           map.removeLayer(imageLayerRef.current);
@@ -661,13 +534,16 @@ const PlanViewerLeaflet = forwardRef(({
         map.setMinZoom(fitZoom - 1);
         map.setMaxZoom(fitZoom + 6);
         map.setMaxBounds(bounds.pad(0.5));
-        map.fitBounds(bounds, { padding: [10, 10] }); // montre tout le plan
+        map.fitBounds(bounds, { padding: [10, 10] });
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
         }
-
         drawMarkers(points, viewport.width, viewport.height);
+
+        // réactive le wheel après stabilisation
+        setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
+
         onReady?.();
       } catch (e) {
         if (e?.name === "RenderingCancelledException") return;
@@ -678,21 +554,33 @@ const PlanViewerLeaflet = forwardRef(({
     })();
 
     return () => {
+      aliveRef.current = false;
       cancelled = true;
       try { renderTask?.cancel(); } catch {}
       try { loadingTask?.destroy(); } catch {}
-      if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
+
+      const map = mapRef.current;
+      if (map) {
+        // ✅ désactiver proprement tous les handlers pour éviter des callbacks après remove()
+        try { map.scrollWheelZoom?.disable(); } catch {}
+        try { map.touchZoom?.disable(); } catch {}
+        try { map.boxZoom?.disable(); } catch {}
+        try { map.doubleClickZoom?.disable(); } catch {}
+        try { map.dragging?.disable(); } catch {}
+        try { map.keyboard?.disable(); } catch {}
+        try { map.off(); } catch {}
+        try { map.stop?.(); } catch {}
+        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
+        try { map._handlers?.forEach?.(h => { try { h.disable(); } catch {} }); } catch {}
+        try { map.remove(); } catch {}
+      }
+      mapRef.current = null;
       imageLayerRef.current = null;
-      if (markersLayerRef.current) { markersLayerRef.current.clearLayers(); markersLayerRef.current = null; }
-      // (Data URL) rien à révoquer
+      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
     };
   }, [fileUrl, pageIndex, onReady]);
 
-  // Suivre la taille image
-  const imgSizeRef = useRef(imgSize);
-  useEffect(() => { imgSizeRef.current = imgSize; }, [imgSize]);
-
-  // Redessiner les marqueurs si points changent
+  // Redessiner les marqueurs
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
     drawMarkers(points, imgSize.w, imgSize.h);
@@ -704,18 +592,13 @@ const PlanViewerLeaflet = forwardRef(({
     if (status === STATUS.A_FAIRE) return 'door-marker door-marker--green';
     return 'door-marker door-marker--blue';
   }
-
   function drawMarkers(list, w, h) {
     const map = mapRef.current;
-    if (!map) return; // map pas prête
-
-    // ⚠️ s’assurer que le layerGroup existe
+    if (!map) return;
     if (!markersLayerRef.current) {
       markersLayerRef.current = L.layerGroup().addTo(map);
     }
     const g = markersLayerRef.current;
-    if (!g) return; // garde-fou
-
     g.clearLayers();
     (list || []).forEach((p) => {
       const x = Number(p.x_frac ?? p.x ?? 0) * w;
@@ -723,10 +606,7 @@ const PlanViewerLeaflet = forwardRef(({
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
       const latlng = L.latLng(y, x);
-      const icon = L.divIcon({
-        className: markerClass(p.status),
-        iconSize: [28, 28],
-      });
+      const icon = L.divIcon({ className: markerClass(p.status), iconSize: [28, 28] });
       const mk = L.marker(latlng, {
         icon,
         draggable: true,
@@ -735,7 +615,6 @@ const PlanViewerLeaflet = forwardRef(({
         keyboard: false,
         riseOnHover: true,
       });
-
       mk.__meta = {
         door_id: p.door_id,
         door_name: p.door_name || p.name,
@@ -743,34 +622,30 @@ const PlanViewerLeaflet = forwardRef(({
         x_frac: p.x_frac,
         y_frac: p.y_frac,
       };
-
       mk.on('dragend', () => {
         if (!onMovePoint) return;
-        const ll = map.latLngToLayerPoint(mk.getLatLng());
-        const xFrac = Math.min(1, Math.max(0, ll.x / w));
-        const yFrac = Math.min(1, Math.max(0, ll.y / h));
+        const pt = map.latLngToLayerPoint(mk.getLatLng());
+        const xFrac = Math.min(1, Math.max(0, pt.x / w));
+        const yFrac = Math.min(1, Math.max(0, pt.y / h));
         onMovePoint(p.door_id, { x: xFrac, y: yFrac });
       });
-
       mk.addTo(g);
     });
   }
 
-  const onPickDoor = (d) => {
-    setPicker(null);
-    onClickPoint?.(d);
-  };
+  const onPickDoor = (d) => { setPicker(null); onClickPoint?.(d); };
 
-  // ✅ bouton Ajuster : invalidateSize -> fitZoom -> fitBounds
   const adjust = () => {
     const m = mapRef.current;
     const layer = imageLayerRef.current;
     if (!m || !layer) return;
     const b = layer.getBounds();
+    m.scrollWheelZoom?.disable();
     m.invalidateSize(false);
     const fitZoom = m.getBoundsZoom(b, true);
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [10, 10] });
+    setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
@@ -778,22 +653,17 @@ const PlanViewerLeaflet = forwardRef(({
   return (
     <div className="mt-3 relative">
       <div className="flex items-center justify-end gap-2 mb-2">
-        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>
-          Ajuster
-        </Btn>
+        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>Ajuster</Btn>
       </div>
       <div
         ref={wrapRef}
-        className="relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
+        className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
         style={{ height: wrapperHeight }}
       />
       {picker && (
         <div
           className="door-pick"
-          style={{
-            left: Math.max(8, picker.x - 120),
-            top: Math.max(8, picker.y - 8),
-          }}
+          style={{ left: Math.max(8, picker.x - 120), top: Math.max(8, picker.y - 8) }}
         >
           {picker.items.slice(0, 8).map((it) => (
             <button key={it.door_id} onClick={() => onPickDoor(it)}>
@@ -811,13 +681,15 @@ const PlanViewerLeaflet = forwardRef(({
     </div>
   );
 });
+// src/Doors.jsx — PARTIE 2/2 (à coller APRÈS la partie 1)
+
 /* ----------------------------- Page principale ----------------------------- */
 export default function Doors() {
   const [tab, setTab] = useState("controls");
   const [doors, setDoors] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
 
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [building, setBuilding] = useState("");
@@ -856,11 +728,8 @@ export default function Doors() {
 
   /* ----------------------------- URL helpers ----------------------------- */
   function getDoorParam() {
-    try {
-      return new URLSearchParams(window.location.search).get("door");
-    } catch {
-      return null;
-    }
+    try { return new URLSearchParams(window.location.search).get("door"); }
+    catch { return null; }
   }
   function setDoorParam(id) {
     try {
@@ -919,60 +788,43 @@ export default function Doors() {
         setDoorParam(null);
       }
     })();
-    const onPop = () => {
-      const id = getDoorParam();
-      if (!id) closeDrawerAndClearParam();
-    };
+    const onPop = () => { if (!getDoorParam()) closeDrawerAndClearParam(); };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   useEffect(() => {
-    const t = setTimeout(() => {
-      reload();
-    }, 350);
+    const t = setTimeout(reload, 350);
     return () => clearTimeout(t);
   }, [q, status, building, floor, doorState]);
 
   /* ----------------------------- CRUD portes ----------------------------- */
   const filtered = doors;
-  function openCreate() {
-    setEditing({
-      id: null,
-      name: "",
-      building: "",
-      floor: "",
-      location: "",
-      status: STATUS.A_FAIRE,
-      next_check_date: null,
-      photo_url: null,
-      current_check: null,
-      door_state: null,
-    });
-    setDrawerOpen(true);
-  }
   async function openEdit(door) {
     const full = await API.get(door.id);
     setEditing(full?.door || door);
     setDrawerOpen(true);
     setDoorParam(door.id);
   }
+  function openCreate() {
+    setEditing({
+      id: null, name: "", building: "", floor: "", location: "",
+      status: STATUS.A_FAIRE, next_check_date: null, photo_url: null,
+      current_check: null, door_state: null,
+    });
+    setDrawerOpen(true);
+  }
   async function saveDoorBase() {
     if (!editing) return;
     const payload = {
-      name: editing.name,
-      building: editing.building || "",
-      floor: editing.floor || "",
-      location: editing.location || "",
+      name: editing.name, building: editing.building || "",
+      floor: editing.floor || "", location: editing.location || "",
     };
     if (editing.id) {
       await API.update(editing.id, payload);
       const full = await API.get(editing.id);
       setEditing(full?.door || editing);
     } else {
-      const created = await API.create({
-        ...payload,
-        status: editing.status || STATUS.A_FAIRE,
-      });
+      const created = await API.create({ ...payload, status: editing.status || STATUS.A_FAIRE });
       if (created?.door?.id) {
         const full = await API.get(created.door.id);
         setEditing(full?.door || created.door);
@@ -983,18 +835,14 @@ export default function Doors() {
   }
   async function deleteDoor() {
     if (!editing?.id) return;
-    const ok = window.confirm(
-      "Supprimer définitivement cette porte ? Cette action est irréversible."
-    );
+    const ok = window.confirm("Supprimer définitivement cette porte ? Cette action est irréversible.");
     if (!ok) return;
     await API.remove(editing.id);
     setDrawerOpen(false);
     setEditing(null);
     await reload();
     await reloadCalendar();
-    if (tab === "maps" && selectedPlan) {
-      await loadPositions(selectedPlan, planPage);
-    }
+    if (tab === "maps" && selectedPlan) await loadPositions(selectedPlan, planPage);
   }
 
   const baseOptions = [
@@ -1002,7 +850,6 @@ export default function Doors() {
     { value: "non_conforme", label: "Non conforme" },
     { value: "na", label: "N/A" },
   ];
-
   async function ensureCurrentCheck() {
     if (!editing?.id) return;
     let check = editing.current_check;
@@ -1017,8 +864,8 @@ export default function Doors() {
   }
   function allFiveAnswered(items = []) {
     const values = (items || []).slice(0, 5).map((i) => i?.value);
-    if (values.length < 5) return false;
-    return values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
+    return values.length === 5 &&
+      values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
   }
   async function saveChecklistItem(idx, field, value) {
     if (!editing?.id || !editing?.current_check) return;
@@ -1036,9 +883,7 @@ export default function Doors() {
       if (res?.notice) setToast(res.notice);
       await reload();
       await reloadCalendar();
-      if (tab === "maps" && selectedPlan) {
-        await loadPositions(selectedPlan, planPage);
-      }
+      if (tab === "maps" && selectedPlan) await loadPositions(selectedPlan, planPage);
     } else {
       const full = await API.get(editing.id);
       setEditing(full?.door);
@@ -1079,9 +924,7 @@ export default function Doors() {
   async function saveSettings() {
     setSavingSettings(true);
     try {
-      const cleaned = (settings.checklist_template || [])
-        .map((s) => (s || "").trim())
-        .filter(Boolean);
+      const cleaned = (settings.checklist_template || []).map((s) => (s || "").trim()).filter(Boolean);
       await API.settingsSet({ checklist_template: cleaned, frequency: settings.frequency });
     } finally {
       setSavingSettings(false);
@@ -1114,7 +957,7 @@ export default function Doors() {
     const key = plan.id || plan.logical_name || "";
     try {
       const r = await api.doorsMaps.positionsAuto(key, pageIdx).catch(() => ({ items: [] }));
-      let positions = Array.isArray(r?.items) ? r.items.map(item => ({
+      let list = Array.isArray(r?.items) ? r.items.map(item => ({
         door_id: item.door_id,
         door_name: item.name || item.door_name,
         x_frac: Number(item.x_frac ?? item.x ?? 0),
@@ -1126,22 +969,17 @@ export default function Doors() {
         floor: item.floor,
         door_state: item.door_state,
       })) : [];
-      positions = positions.filter(it => matchFilters(it));
-      setPositions(positions);
+      list = list.filter(it => matchFilters(it));
+      setPositions(list);
     } catch {
       setPositions([]);
     }
   }
-
-  useEffect(() => {
-    if (tab === "maps") loadPlans();
-  }, [tab]);
+  useEffect(() => { if (tab === "maps") loadPlans(); }, [tab]);
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
   useEffect(() => {
-    if (stableSelectedPlan) {
-      loadPositions(stableSelectedPlan, planPage);
-    }
+    if (stableSelectedPlan) loadPositions(stableSelectedPlan, planPage);
   }, [stableSelectedPlan, planPage, q, status, building, floor, doorState, plans]);
 
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
@@ -1185,9 +1023,7 @@ export default function Doors() {
   // Refresh périodique quand un plan est ouvert
   useEffect(() => {
     if (tab !== "maps" || !stableSelectedPlan) return;
-    const tick = () => {
-      loadPositions(stableSelectedPlan, planPage);
-    };
+    const tick = () => { loadPositions(stableSelectedPlan, planPage); };
     const iv = setInterval(tick, 8000);
     const onVis = () => { if (!document.hidden) tick(); };
     document.addEventListener("visibilitychange", onVis);
@@ -1197,18 +1033,10 @@ export default function Doors() {
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
-        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>
-          📋 Contrôles
-        </Btn>
-        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
-          📅 Calendrier
-        </Btn>
-        <Btn variant={tab === "maps" ? "primary" : "ghost"} onClick={() => setTab("maps")}>
-          🗺️ Plans
-        </Btn>
-        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>
-          ⚙️ Paramètres
-        </Btn>
+        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>📋 Contrôles</Btn>
+        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>📅 Calendrier</Btn>
+        <Btn variant={tab === "maps" ? "primary" : "ghost"} onClick={() => setTab("maps")}>🗺️ Plans</Btn>
+        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>⚙️ Paramètres</Btn>
       </div>
     </div>
   );
@@ -1226,6 +1054,7 @@ export default function Doors() {
           <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
             {filtersOpen ? "Masquer les filtres" : "Filtres"}
           </Btn>
+          <Btn variant="subtle" onClick={openCreate}>➕ Nouvelle porte</Btn>
         </div>
       </header>
 
@@ -1263,13 +1092,7 @@ export default function Doors() {
           <div className="flex gap-2">
             <Btn
               variant="ghost"
-              onClick={() => {
-                setQ("");
-                setStatus("");
-                setBuilding("");
-                setFloor("");
-                setDoorState("");
-              }}
+              onClick={() => { setQ(""); setStatus(""); setBuilding(""); setFloor(""); setDoorState(""); }}
             >
               Réinitialiser
             </Btn>
@@ -1341,42 +1164,37 @@ export default function Doors() {
                     <td colSpan={6} className="px-4 py-4 text-gray-500">Aucune porte.</td>
                   </tr>
                 )}
-                {!loading &&
-                  filtered.map((d, idx) => (
-                    <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
-                      <td className="px-4 py-3 min-w-[260px]">
-                        <div className="flex items-center gap-3">
-                          <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
-                            {d.photo_url ? (
-                              <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
-                            ) : (
-                              <span className="text-[10px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
-                            )}
-                          </div>
-                          <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>
-                            {d.name}
-                          </button>
+                {!loading && filtered.map((d, idx) => (
+                  <tr key={d.id} className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}>
+                    <td className="px-4 py-3 min-w-[260px]">
+                      <div className="flex items-center gap-3">
+                        <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
+                          {d.photo_url ? (
+                            <img src={d.photo_url} alt={d.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-[10px] text-gray-500 p-1 text-center">Photo à<br/>prendre</span>
+                          )}
                         </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
-                      </td>
-                      <td className="px-4 py-3">
-                        {doorStateBadge(d.door_state)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(d)}>
+                          {d.name}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {(d.building || "—") + " • " + (d.floor || "—") + (d.location ? ` • ${d.location}` : "")}
+                    </td>
+                    <td className="px-4 py-3">{doorStateBadge(d.door_state)}</td>
+                    <td className="px-4 py-3"><Badge color={statusColor(d.status)}>{statusLabel(d.status)}</Badge></td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {d.next_check_date ? dayjs(d.next_check_date).format("DD/MM/YYYY") : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-2">
+                        <Btn variant="ghost" onClick={() => openEdit(d)}>Ouvrir</Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -1412,10 +1230,7 @@ export default function Doors() {
               await api.doorsMaps.renamePlan(plan.logical_name, name);
               await loadPlans();
             }}
-            onPick={(plan) => {
-              setSelectedPlan(plan);
-              setPdfReady(false);
-            }}
+            onPick={(plan) => { setSelectedPlan(plan); setPdfReady(false); }}
           />
           {selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
@@ -1424,21 +1239,10 @@ export default function Doors() {
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Btn
-                    variant="subtle"
-                    onClick={createDoorAtCenter}
-                    title="Créer une nouvelle porte au centre du plan"
-                  >
+                  <Btn variant="subtle" onClick={createDoorAtCenter} title="Créer une nouvelle porte au centre du plan">
                     ➕ Nouvelle porte
                   </Btn>
-                  <Btn
-                    variant="ghost"
-                    onClick={() => {
-                      setSelectedPlan(null);
-                    }}
-                  >
-                    Fermer le plan
-                  </Btn>
+                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>Fermer le plan</Btn>
                 </div>
               </div>
               <PlanViewerLeaflet
@@ -1509,10 +1313,7 @@ export default function Doors() {
 
       {/* Drawer Édition */}
       {drawerOpen && editing && (
-        <Drawer
-          title={`Porte • ${editing.name || "nouvelle"}`}
-          onClose={closeDrawerAndClearParam}
-        >
+        <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
           <div className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-3">
               <Labeled label="Nom de la porte">
@@ -1571,9 +1372,7 @@ export default function Doors() {
                 {!editing.current_check && <Btn onClick={ensureCurrentCheck}>Démarrer un contrôle</Btn>}
               </div>
               {!editing.current_check && (
-                <div className="text-sm text-gray-500">
-                  Lance un contrôle pour remplir les 5 points ci-dessous.
-                </div>
+                <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>
               )}
               {!!editing.current_check && (
                 <div className="space-y-3">
@@ -1605,8 +1404,7 @@ export default function Doors() {
                   <div className="pt-2">
                     <a
                       href={API.nonConformPDF(editing.id)}
-                      target="_blank"
-                      rel="noreferrer"
+                      target="_blank" rel="noreferrer"
                       className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 inline-flex items-center"
                     >
                       Export PDF des non-conformités (SAP)
@@ -1681,8 +1479,6 @@ function Labeled({ label, children }) {
 function Drawer({ title, children, onClose }) {
   const ref = useRef(null);
   useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
     const handler = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
