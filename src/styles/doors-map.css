@@ -9,18 +9,21 @@
    puissent rester au-dessus si besoin. */
 .leaflet-container {
   background: #fff;
-  z-index: 0;             /* ✅ corrige les problèmes de stacking */
-  touch-action: pan-x pan-y;
+  z-index: 0;                         /* ✅ corrige les problèmes de stacking */
+  touch-action: pan-x pan-y;          /* ✅ gestures natives, pas de zoom double-tap */
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;                  /* évite la sélection de texte pendant les drags */
 }
 
 /* Conteneur parent utilisé dans le composant React:
    isole le contexte de superposition (stacking context) pour éviter
    que les transforms de Leaflet n'interfèrent avec le reste de la page. */
 .leaflet-wrapper {
-  isolation: isolate;     /* ✅ crée un nouveau stacking context */
+  isolation: isolate;                 /* ✅ nouveau stacking context */
   position: relative;
-  contain: layout paint;  /* ✅ boosts perf en évitant la propagation des paints */
+  contain: layout paint;              /* ✅ boosts perf en évitant la propagation des paints */
+  overflow: hidden;                   /* évite les scrollbars transitoires au zoom */
 }
 
 /* S'assure que les contrôles restent cliquables par-dessus l'overlay */
@@ -35,9 +38,17 @@
 .leaflet-dragging .leaflet-grab { cursor: grabbing; }
 
 /* Améliore le rendu du bitmap du plan (PDF → <img>) */
-.leaflet-image-layer, .leaflet-tile {
+.leaflet-image-layer,
+.leaflet-tile {
   image-rendering: auto;
   -ms-interpolation-mode: nearest-neighbor;
+  pointer-events: none;               /* l'overlay image ne doit pas bloquer les clics */
+}
+
+/* Les couches interactives prennent les événements */
+.leaflet-pane.leaflet-overlay-pane,
+.leaflet-pane.leaflet-marker-pane {
+  pointer-events: auto;
 }
 
 /* -------------------------------------------------------------
@@ -46,8 +57,8 @@
 -------------------------------------------------------------- */
 
 :root {
-  --door-base: 28px;   /* taille "design" par défaut */
-  --door-scale: 1;     /* multiplicateur (peut être piloté en JS si souhaité) */
+  --door-base: 28px;    /* taille "design" par défaut */
+  --door-scale: 1;      /* multiplicateur (peut être piloté en JS si souhaité) */
   --door-ring: rgba(255, 255, 255, .9);
   --door-shadow: 0 0 0 2px var(--door-ring), 0 1px 6px rgba(0,0,0,.25);
 }
@@ -65,12 +76,21 @@
   pointer-events: auto;
   will-change: transform;                 /* perf */
   transition: transform 120ms ease-out;   /* léger feedback */
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
 /* Focus clavier (accessibilité) */
 .door-marker:focus-visible {
-  outline: 2px solid #3b82f6; /* bleu */
+  outline: 3px solid #3b82f6; /* bleu */
   outline-offset: 2px;
+}
+
+/* Hover léger (si device pointer fin) */
+@media (hover: hover) and (pointer: fine) {
+  .door-marker:hover {
+    transform: translateZ(0) scale(1.04);
+  }
 }
 
 /* Statuts (couleur = currentColor pour ::before, etc.) */
@@ -90,7 +110,10 @@
 
 /* État "sélectionné" (optionnel — si vous ajoutez data-selected="1" en JS) */
 .door-marker[data-selected="1"] {
-  box-shadow: 0 0 0 3px #93c5fd, 0 0 0 6px var(--door-ring), 0 6px 16px rgba(0,0,0,.25);
+  box-shadow:
+    0 0 0 3px #93c5fd,
+    0 0 0 6px var(--door-ring),
+    0 6px 16px rgba(0,0,0,.25);
 }
 
 /* Curseur sur drag (Leaflet ajoute .leaflet-dragging) */
@@ -165,6 +188,18 @@
   overflow: auto;
 }
 
+/* Petite flèche visuelle (optionnelle) */
+.door-pick::before {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 16px;
+  border-width: 6px;
+  border-style: solid;
+  border-color: transparent transparent #fff transparent;
+  filter: drop-shadow(0 -1px 0 #e5e7eb);
+}
+
 .door-pick button {
   display: block;
   width: 100%;
@@ -173,8 +208,46 @@
   border-radius: 8px;
   font-size: 12px;
   line-height: 1.15;
+  color: #111827;
 }
 
 .door-pick button:hover {
   background: #f3f4f6;
+}
+
+/* Scrollbar discrète (navigateurs compatibles) */
+.door-pick::-webkit-scrollbar { width: 8px; }
+.door-pick::-webkit-scrollbar-thumb { background: #e5e7eb; border-radius: 6px; }
+.door-pick:hover::-webkit-scrollbar-thumb { background: #d1d5db; }
+
+/* -------------------------------------------------------------
+   Dark mode (léger) — si l’app passe en dark, on garde du contraste
+-------------------------------------------------------------- */
+
+@media (prefers-color-scheme: dark) {
+  .leaflet-container { background: #0b0f13; }
+  .leaflet-wrapper { background: #0b0f13; }
+  .door-pick {
+    background: #0f172a;
+    border-color: #1f2937;
+    box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    color: #e5e7eb;
+  }
+  .door-pick::before {
+    border-color: transparent transparent #0f172a transparent;
+    filter: drop-shadow(0 -1px 0 #1f2937);
+  }
+  .door-pick button { color: #e5e7eb; }
+  .door-pick button:hover { background: #111827; }
+  :root { --door-ring: rgba(17, 24, 39, .9); }
+}
+
+/* -------------------------------------------------------------
+   Impression : on fige et on coupe les animations
+-------------------------------------------------------------- */
+
+@media print {
+  .leaflet-container { background: #fff !important; }
+  .door-marker::before,
+  .door-marker::after { animation: none !important; }
 }
