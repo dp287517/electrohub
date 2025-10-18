@@ -56,7 +56,7 @@ function withHeaders(extra = {}) {
   return { credentials: "include", headers: { ...userHeaders(), ...extra } };
 }
 function pdfDocOpts(url) {
-  // ⚠️ Copie /standard_fonts/ dans /public pour éviter les warnings TT
+  // ⚠️ Copie /standard_fonts/ dans /public pour éviter au max les warnings TT
   return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
 
@@ -420,6 +420,7 @@ function PlanCard({ plan, onRename, onPick }) {
 }
 
 /* --- PlanViewerLeaflet --- */
+// ✅ Icônes HTML inline (ancre centrée), taille FIXE pour éviter tout “glissement” au zoom.
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
   pageIndex = 0,
@@ -436,27 +437,31 @@ const PlanViewerLeaflet = forwardRef(({
   const [picker, setPicker] = useState(null);
   const aliveRef = useRef(true);
 
-  // --- Helpers pour taille dynamique des marqueurs (shrink quand on zoome)
-  const basePx = 28;
-  const minPx = 12;
-  const maxPx = 34;
-  const getIconSize = useCallback(() => {
-    const m = mapRef.current;
-    if (!m) return basePx;
-    // On prend le zoom “fit” comme référence 0 et on réduit ~12% par cran
-    const fit = m.getMinZoom?.() ?? m.getZoom();
-    const dz = Math.max(0, (m.getZoom() ?? fit) - fit);
-    const px = basePx * Math.pow(0.88, dz);
-    return Math.max(minPx, Math.min(maxPx, Math.round(px)));
-  }, []);
+  // Taille fixe → pas de redimensionnement lié au zoom (évite les décalages visuels)
+  const ICON_PX = 22;
 
-  // ✅ helper icône centrée (corrige le “saut” au zoom)
-  function makeDoorIcon(size, cls) {
-    const s = Math.max(8, Math.round(size));
+  function makeDoorIcon(status) {
+    const fill =
+      status === STATUS.EN_RETARD ? "#e11d48" : // rose-600
+      status === STATUS.EN_COURS ? "#f59e0b" : // amber-500
+      status === STATUS.A_FAIRE ? "#059669" :  // emerald-600
+      "#2563eb"; // blue-600
+    const border =
+      status === STATUS.EN_RETARD ? "#fb7185" :
+      status === STATUS.EN_COURS ? "#fbbf24" :
+      status === STATUS.A_FAIRE ? "#34d399" :
+      "#60a5fa";
+    const s = ICON_PX;
+    const html = `<div style="
+      width:${s}px;height:${s}px;border-radius:9999px;
+      background:${fill};border:2px solid ${border};
+      box-shadow:0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
+    "></div>`;
     return L.divIcon({
-      className: cls,
+      className: "door-marker-inline",
+      html,
       iconSize: [s, s],
-      iconAnchor: [Math.round(s / 2), Math.round(s / 2)], // centre l’icône
+      iconAnchor: [Math.round(s / 2), Math.round(s / 2)], // centre exact
       popupAnchor: [0, -Math.round(s / 2)],
     });
   }
@@ -471,12 +476,10 @@ const PlanViewerLeaflet = forwardRef(({
       try {
         if (!wrapRef.current || !fileUrl) return;
 
-        // 1) charge le PDF (worker bundlé + standard_fonts)
         loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTask.promise;
         if (cancelled) return;
 
-        // 2) viewport
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
@@ -485,7 +488,6 @@ const PlanViewerLeaflet = forwardRef(({
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
-        // 3) rendu bitmap
         const canvas = document.createElement("canvas");
         canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
@@ -497,40 +499,27 @@ const PlanViewerLeaflet = forwardRef(({
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
-        // 4) init Leaflet
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
             zoomControl: false,
-            zoomAnimation: false,
+            zoomAnimation: true,
             fadeAnimation: false,
             markerZoomAnimation: false,
             scrollWheelZoom: true,
             touchZoom: true,
             tap: true,
-            tapTolerance: 20,
-            inertia: true,
-            wheelDebounceTime: 50,
-            wheelPxPerZoomLevel: 60,
             preferCanvas: true,
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           mapRef.current = m;
 
-          // 🔹 mini-hook: expose un scale marker côté CSS si tu veux en profiter plus tard
-          m.on('zoom', () => {
-            const z = m.getZoom();
-            const scale = Math.min(1.4, Math.max(0.6, 1 + (z - (m.getMinZoom?.() ?? z)) * 0.05));
-            m.getContainer().style.setProperty('--door-scale', scale.toFixed(2));
-          });
-
-          // sélection “click carte”
+          // Click carte → sélection d’un marqueur proche
           m.on("click", (e) => {
             if (!aliveRef.current) return;
             const clicked = e.containerPoint;
             const near = [];
-            const size = getIconSize();
-            const pickRadius = Math.max(18, Math.floor(size / 2) + 6);
+            const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
             markersLayerRef.current?.eachLayer((mk) => {
               const mp = m.latLngToContainerPoint(mk.getLatLng());
               const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
@@ -541,16 +530,10 @@ const PlanViewerLeaflet = forwardRef(({
             else setPicker(null);
           });
           m.on("zoomstart movestart", () => setPicker(null));
-          m.on("zoomend", () => {
-            // Redimensionner les icônes quand le zoom change
-            try { drawMarkers(points, viewport.width, viewport.height, true); } catch {}
-          });
         }
 
-        // 5) overlay + bornes
         const map = mapRef.current;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-
         map.scrollWheelZoom.disable();
 
         if (imageLayerRef.current) {
@@ -596,65 +579,39 @@ const PlanViewerLeaflet = forwardRef(({
 
       const map = mapRef.current;
       if (map) {
-        try { map.scrollWheelZoom?.disable(); } catch {}
-        try { map.touchZoom?.disable(); } catch {}
-        try { map.boxZoom?.disable(); } catch {}
-        try { map.doubleClickZoom?.disable(); } catch {}
-        try { map.dragging?.disable(); } catch {}
-        try { map.keyboard?.disable(); } catch {}
         try { map.off(); } catch {}
         try { map.stop?.(); } catch {}
         try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-        try { map._handlers?.forEach?.(h => { try { h.disable(); } catch {} }); } catch {}
         try { map.remove(); } catch {}
       }
       mapRef.current = null;
       imageLayerRef.current = null;
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
     };
-  }, [fileUrl, pageIndex, onReady, getIconSize]);
+  }, [fileUrl, pageIndex, onReady]);
 
-  // Redessiner les marqueurs
+  // Redessiner les marqueurs quand points/size changent
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
     drawMarkers(points, imgSize.w, imgSize.h);
   }, [points, imgSize]);
 
-  function markerClass(status) {
-    if (status === STATUS.EN_RETARD) return 'door-marker door-marker--red';
-    if (status === STATUS.EN_COURS) return 'door-marker door-marker--amber';
-    if (status === STATUS.A_FAIRE) return 'door-marker door-marker--green';
-    return 'door-marker door-marker--blue';
-  }
-
-  function drawMarkers(list, w, h, resizing = false) {
+  function drawMarkers(list, w, h) {
     const map = mapRef.current;
     if (!map) return;
     if (!markersLayerRef.current) {
       markersLayerRef.current = L.layerGroup().addTo(map);
     }
     const g = markersLayerRef.current;
-
-    // ✅ Redimensionnement: on recrée l'icône avec ancre centrée (pas de "saut" au zoom)
-    if (resizing) {
-      const size = getIconSize();
-      g.eachLayer((mk) => {
-        const icon = makeDoorIcon(size, mk.__cls || 'door-marker door-marker--blue');
-        mk.setIcon(icon);
-      });
-      return;
-    }
-
     g.clearLayers();
+
     (list || []).forEach((p) => {
       const x = Number(p.x_frac ?? p.x ?? 0) * w;
       const y = Number(p.y_frac ?? p.y ?? 0) * h;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
       const latlng = L.latLng(y, x);
-      const size = getIconSize();
-      const cls = markerClass(p.status);
-      const icon = makeDoorIcon(size, cls); // ✅ icône centrée
+      const icon = makeDoorIcon(p.status);
       const mk = L.marker(latlng, {
         icon,
         draggable: true,
@@ -670,24 +627,22 @@ const PlanViewerLeaflet = forwardRef(({
         x_frac: p.x_frac,
         y_frac: p.y_frac,
       };
-      mk.__cls = cls;
 
-      // 👉 Click direct sur le marqueur
-      mk.on('click', () => {
+      mk.on("click", () => {
         setPicker(null);
         onClickPoint?.(mk.__meta);
       });
 
-      // 👉 Enregistrement en fractions stables (indépendant du zoom) + arrondi + clamp
-      mk.on('dragend', () => {
+      mk.on("dragend", () => {
         if (!onMovePoint) return;
-        const ll = mk.getLatLng();          // ll.lat = y, ll.lng = x (CRS.Simple)
+        const ll = mk.getLatLng(); // CRS.Simple → lat=y, lng=x
         const xFrac = Math.min(1, Math.max(0, ll.lng / w));
         const yFrac = Math.min(1, Math.max(0, ll.lat / h));
         const xf = Math.round(xFrac * 1e6) / 1e6;
         const yf = Math.round(yFrac * 1e6) / 1e6;
         onMovePoint(p.door_id, { x: xf, y: yf });
       });
+
       mk.addTo(g);
     });
   }
@@ -733,13 +688,14 @@ const PlanViewerLeaflet = forwardRef(({
         </div>
       )}
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-emerald-600"/> À faire</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-amber-500"/> ≤30j</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full bg-rose-600"/> En retard</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#059669"}}/> À faire</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#f59e0b"}}/> ≤30j</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#e11d48"}}/> En retard</span>
       </div>
     </div>
   );
 });
+
 /* ----- Toast ----- */
 function Toast({ text, onClose }) {
   useEffect(() => {
@@ -932,6 +888,42 @@ function Doors() {
     return () => clearTimeout(t);
   }, [q, status, building, floor, doorState]);
 
+  /* ----------------------------- Helpers création / noms uniques ----------------------------- */
+  function formatDoorNumber(n) {
+    return String(n).padStart(3, "0");
+  }
+  function baseDoorName() {
+    return "Porte";
+  }
+  async function suggestUniqueDoorName() {
+    // On essaye "Porte 001", "Porte 002", ... jusqu'à succès lors de l'API.create
+    // Comme l’API ne propose pas un endpoint “exists”, on fera les tentatives côté create().
+    // Cette fonction retourne seulement une proposition initiale.
+    return `${baseDoorName()} ${formatDoorNumber(1)}`;
+  }
+  async function createDoorWithUniqueName(payloadBase, { maxTries = 60 } = {}) {
+    let n = 1;
+    let lastErr = null;
+    while (n <= maxTries) {
+      const candidate = `${baseDoorName()} ${formatDoorNumber(n)}`;
+      try {
+        const res = await API.create({ ...payloadBase, name: candidate });
+        return res; // succès
+      } catch (e) {
+        lastErr = e;
+        const msg = String(e?.message || "");
+        // Si c'est un conflit de nom, on tente le suivant. Sinon on relance l'erreur.
+        if (msg.toLowerCase().includes("duplicate key") || msg.toLowerCase().includes("unique constraint")) {
+          n += 1;
+          continue;
+        }
+        throw e; // autre erreur
+      }
+    }
+    // Si on arrive ici, tout a échoué à cause de doublons
+    throw new Error(lastErr?.message || "Impossible de générer un nom unique");
+  }
+
   /* ----------------------------- CRUD portes ----------------------------- */
   const filtered = doors;
   async function openEdit(door) {
@@ -959,10 +951,40 @@ function Doors() {
       const full = await API.get(editing.id);
       setEditing(full?.door || editing);
     } else {
-      const created = await API.create({ ...payload, status: editing.status || STATUS.A_FAIRE });
-      if (created?.door?.id) {
-        const full = await API.get(created.door.id);
-        setEditing(full?.door || created.door);
+      // Nouvelle porte → gérer les doublons automatiquement
+      const base = {
+        building: payload.building,
+        floor: payload.floor,
+        location: payload.location,
+        status: editing.status || STATUS.A_FAIRE,
+      };
+      try {
+        let nameToUse = (payload.name || "").trim();
+        let created = null;
+        if (!nameToUse) {
+          // S'il n'y a pas de nom, on laisse createDoorWithUniqueName itérer
+          created = await createDoorWithUniqueName(base);
+        } else {
+          // Il y a un nom. On tente 1) tel quel, 2) fallback auto si doublon.
+          try {
+            created = await API.create({ ...base, name: nameToUse });
+          } catch (e) {
+            const msg = String(e?.message || "");
+            if (msg.toLowerCase().includes("duplicate key") || msg.toLowerCase().includes("unique constraint")) {
+              created = await createDoorWithUniqueName(base);
+              setToast(`Nom déjà pris. Créé comme « ${created?.door?.name} » ✅`);
+            } else {
+              throw e;
+            }
+          }
+        }
+        if (created?.door?.id) {
+          const full = await API.get(created.door.id);
+          setEditing(full?.door || created.door);
+          setDoorParam(created?.door?.id);
+        }
+      } catch (e) {
+        setToast("Erreur création : " + (e?.message || e));
       }
     }
     await reload();
@@ -1133,18 +1155,18 @@ function Doors() {
     openEdit({ id: p.door_id, name: p.door_name || p.name });
   }, []);
 
-  // ✅ Création de porte au centre + payload safe + message d’erreur clair
+  // ✅ Création de porte au centre avec génération auto d’un nom unique
   async function createDoorAtCenter() {
     if (!stableSelectedPlan) return;
     try {
-      const payload = {
-        name: "Nouvelle porte",
+      const basePayload = {
         building: "",
         floor: "",
         location: "",
         status: STATUS.A_FAIRE,
       };
-      const created = await API.create(payload);
+      // On tente noms séquentiels (Porte 001, 002, …) jusqu’au succès
+      const created = await createDoorWithUniqueName(basePayload);
       const id = created?.door?.id;
       if (!id) throw new Error("Réponse inattendue de l'API (pas d'ID).");
 
@@ -1159,7 +1181,7 @@ function Doors() {
 
       await loadPositions(stableSelectedPlan, planPage);
       viewerRef.current?.adjust(); // recadre sur le plan
-      setToast("Porte créée au centre du plan ✅");
+      setToast(`Porte créée (« ${created?.door?.name} ») au centre du plan ✅`);
 
       // ouvre directement la fiche
       openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
