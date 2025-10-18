@@ -10,6 +10,8 @@
 .leaflet-container {
   background: #fff;
   z-index: 0;             /* ✅ corrige les problèmes de stacking */
+  touch-action: pan-x pan-y;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Conteneur parent utilisé dans le composant React:
@@ -18,6 +20,7 @@
 .leaflet-wrapper {
   isolation: isolate;     /* ✅ crée un nouveau stacking context */
   position: relative;
+  contain: layout paint;  /* ✅ boosts perf en évitant la propagation des paints */
 }
 
 /* S'assure que les contrôles restent cliquables par-dessus l'overlay */
@@ -26,20 +29,51 @@
   z-index: 1000;
 }
 
+/* Lorsque l'utilisateur drag la carte/marker (Leaflet ajoute ces classes) */
+.leaflet-grab { cursor: grab; }
+.leaflet-grabbing,
+.leaflet-dragging .leaflet-grab { cursor: grabbing; }
+
+/* Améliore le rendu du bitmap du plan (PDF → <img>) */
+.leaflet-image-layer, .leaflet-tile {
+  image-rendering: auto;
+  -ms-interpolation-mode: nearest-neighbor;
+}
+
+/* -------------------------------------------------------------
+   Variables & base pour marqueurs
+   (prépare le redimensionnement via var(--door-scale))
+-------------------------------------------------------------- */
+
+:root {
+  --door-base: 28px;   /* taille "design" par défaut */
+  --door-scale: 1;     /* multiplicateur (peut être piloté en JS si souhaité) */
+  --door-ring: rgba(255, 255, 255, .9);
+  --door-shadow: 0 0 0 2px var(--door-ring), 0 1px 6px rgba(0,0,0,.25);
+}
+
 /* -------------------------------------------------------------
    Marqueurs ronds (portes)
 -------------------------------------------------------------- */
 
 .door-marker {
   position: relative;
-  width: 28px;
-  height: 28px;
+  width: calc(var(--door-base) * var(--door-scale));
+  height: calc(var(--door-base) * var(--door-scale));
   border-radius: 9999px;
-  box-shadow: 0 0 0 2px rgba(255,255,255,.9), 0 1px 6px rgba(0,0,0,.25);
+  box-shadow: var(--door-shadow);
   pointer-events: auto;
+  will-change: transform;                 /* perf */
+  transition: transform 120ms ease-out;   /* léger feedback */
 }
 
-/* Statuts */
+/* Focus clavier (accessibilité) */
+.door-marker:focus-visible {
+  outline: 2px solid #3b82f6; /* bleu */
+  outline-offset: 2px;
+}
+
+/* Statuts (couleur = currentColor pour ::before, etc.) */
 .door-marker--green { background: #059669; color: #059669; }   /* A_FAIRE */
 .door-marker--amber { background: #f59e0b; color: #f59e0b; }   /* EN_COURS */
 .door-marker--red   { background: #e11d48; color: #e11d48; }   /* EN_RETARD */
@@ -49,19 +83,27 @@
 .door-marker::after {
   content: "";
   position: absolute;
-  inset: 7px;
+  inset: calc(7px * var(--door-scale));
   border-radius: 9999px;
   background: rgba(255,255,255,.9);
 }
+
+/* État "sélectionné" (optionnel — si vous ajoutez data-selected="1" en JS) */
+.door-marker[data-selected="1"] {
+  box-shadow: 0 0 0 3px #93c5fd, 0 0 0 6px var(--door-ring), 0 6px 16px rgba(0,0,0,.25);
+}
+
+/* Curseur sur drag (Leaflet ajoute .leaflet-dragging) */
+.leaflet-dragging .door-marker { cursor: grabbing; }
 
 /* -------------------------------------------------------------
    Animations (orange/rouge)
 -------------------------------------------------------------- */
 
 @keyframes door-pulse {
-  0%   { transform: scale(1);   opacity: .55; }
-  70%  { transform: scale(1.75); opacity: 0; }
-  100% { transform: scale(1.75); opacity: 0; }
+  0%   { transform: scale(1);    opacity: .55; }
+  70%  { transform: scale(1.75); opacity: 0;    }
+  100% { transform: scale(1.75); opacity: 0;    }
 }
 
 @keyframes door-blink {
@@ -74,7 +116,7 @@
 .door-marker--red::before {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: calc(-6px * var(--door-scale));
   border-radius: 9999px;
   border: 3px solid currentColor;
   opacity: .55;
@@ -85,6 +127,25 @@
 .door-marker--amber::after,
 .door-marker--red::after {
   animation: door-blink 1.2s infinite;
+}
+
+/* Respecte le réglage système "réduire les animations" */
+@media (prefers-reduced-motion: reduce) {
+  .door-marker--amber::before,
+  .door-marker--red::before,
+  .door-marker--amber::after,
+  .door-marker--red::after {
+    animation: none !important;
+  }
+}
+
+/* -------------------------------------------------------------
+   Échelle responsive (optionnel)
+   → sans JS, on réduit un peu sur petits écrans
+-------------------------------------------------------------- */
+
+@media (max-width: 640px) {
+  :root { --door-scale: 0.9; }
 }
 
 /* -------------------------------------------------------------
@@ -99,6 +160,9 @@
   border-radius: 12px;
   padding: 6px;
   box-shadow: 0 10px 30px rgba(0,0,0,.15);
+  max-width: 240px;
+  max-height: 260px;
+  overflow: auto;
 }
 
 .door-pick button {
@@ -108,6 +172,7 @@
   padding: 6px 8px;
   border-radius: 8px;
   font-size: 12px;
+  line-height: 1.15;
 }
 
 .door-pick button:hover {
