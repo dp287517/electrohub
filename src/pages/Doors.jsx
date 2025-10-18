@@ -9,6 +9,7 @@ import '../styles/doors-map.css';
 import { api } from '../lib/api.js';
 /* >>> PDF.js (local via pdfjs-dist, plus de CDN) */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 /* ----------------------------- Utils ----------------------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
@@ -548,7 +549,6 @@ const PlanViewerLeaflet = forwardRef(({
   useEffect(() => {
     let cancelled = false;
     let pdf, loadingTask, renderTask;
-
     (async () => {
       try {
         if (!wrapRef.current) return;
@@ -563,11 +563,9 @@ const PlanViewerLeaflet = forwardRef(({
         renderTask = page.render({ canvasContext: ctx, viewport });
         await renderTask.promise;
         if (cancelled) return;
-
         // ↓ (optionnel mais conseillé) : DataURL -> Blob -> ObjectURL pour mémoire
         const dataUrl = canvas.toDataURL("image/png"); // CSP-friendly
         setImgSize({ w: canvas.width, h: canvas.height });
-
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
@@ -584,7 +582,6 @@ const PlanViewerLeaflet = forwardRef(({
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           mapRef.current = m;
-
           m.on("click", (e) => {
             // plus de mode placement : on ne gère que la sélection de marqueurs
             const clicked = e.containerPoint;
@@ -598,18 +595,15 @@ const PlanViewerLeaflet = forwardRef(({
             else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
             else setPicker(null);
           });
-
           m.on("zoomstart movestart", () => setPicker(null));
         }
-
         const map = mapRef.current;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-
         if (imageLayerRef.current) map.removeLayer(imageLayerRef.current);
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
-
+        setTimeout(() => { try { map.invalidateSize(false); } catch {} }, 0);
         const fitZoom = map.getBoundsZoom(bounds, true);
         map.setMinZoom(fitZoom - 1);
         map.setMaxZoom(fitZoom + 6);
@@ -618,7 +612,6 @@ const PlanViewerLeaflet = forwardRef(({
         map.options.zoomDelta = 0.5;
         map.scrollWheelZoom.enable();
         map.fitBounds(bounds, { padding: [10, 10] });
-
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
         }
@@ -630,7 +623,6 @@ const PlanViewerLeaflet = forwardRef(({
         }
       }
     })();
-
     return () => {
       cancelled = true;
       try { renderTask?.cancel(); } catch {}
@@ -639,7 +631,6 @@ const PlanViewerLeaflet = forwardRef(({
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       imageLayerRef.current = null;
       if (markersLayerRef.current) { markersLayerRef.current.clearLayers(); markersLayerRef.current = null; }
-      try { if (objUrl) URL.revokeObjectURL(objUrl); } catch {}
     };
   }, [fileUrl, pageIndex, onReady]);
   const imgSizeRef = useRef(imgSize);
@@ -706,6 +697,7 @@ const PlanViewerLeaflet = forwardRef(({
     const fitZoom = m.getBoundsZoom(b, true);
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [10, 10] });
+    setTimeout(() => { try { m.invalidateSize(false); } catch {} }, 0);
   };
   useImperativeHandle(ref, () => ({ adjust }));
   const wrapperHeight = Math.max(320, imgSize.h ? Math.min(imgSize.h, 1200) : 520);
@@ -1079,7 +1071,6 @@ export default function Doors() {
       const created = await API.create({ name: "Nouvelle porte", building: "", floor: "", location: "", status: STATUS.A_FAIRE });
       const id = created?.door?.id;
       if (!id) throw new Error("Création de porte impossible");
-
       const xy = { x_frac: 0.5, y_frac: 0.5 };
       await api.doorsMaps.setPosition(id, {
         logical_name: stableSelectedPlan.logical_name,
@@ -1087,9 +1078,7 @@ export default function Doors() {
         page_index: planPage,
         ...xy,
       });
-
       await loadPositions(stableSelectedPlan, planPage);
-
       viewerRef.current?.adjust();
       setToast("Porte créée au centre du plan ✅");
       openEdit({ id, name: created?.door?.name || "Nouvelle porte" });
