@@ -1372,7 +1372,7 @@ export default function Doors() {
                   </div>
                 ))}
               </div>
-            </div }
+            </div>
             <div>
               <div className="font-semibold mb-2">Fréquence</div>
               <Select
