@@ -495,6 +495,10 @@ const PlanViewerLeaflet = forwardRef(({
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
+  // ✅ Nouveaux refs pour corriger le reset mobile
+  const interactingRef = useRef(false);
+  const roRef = useRef(null);
+
   const ICON_PX = 22;
 
   function makeDoorIcon(status, isUnsaved) {
@@ -587,20 +591,6 @@ const PlanViewerLeaflet = forwardRef(({
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
     };
-    const cleanupMap = () => {
-      const map = mapRef.current;
-      if (map) {
-        try { map.off(); } catch {}
-        try { map.stop?.(); } catch {}
-        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-        try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
-        try { map.remove(); } catch {}
-      }
-      mapRef.current = null;
-      imageLayerRef.current = null;
-      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
-      addBtnControlRef.current = null;
-    };
 
     (async () => {
       try {
@@ -648,7 +638,7 @@ const PlanViewerLeaflet = forwardRef(({
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           ensureAddButton(m);
-          // Select marqueur proche
+          // Sélection d’un marqueur proche
           m.on("click", (e) => {
             if (!aliveRef.current) return;
             const clicked = e.containerPoint;
@@ -663,7 +653,14 @@ const PlanViewerLeaflet = forwardRef(({
             else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
             else setPicker(null);
           });
-          m.on("zoomstart movestart", () => setPicker(null));
+          // ⛳️ Flag d’interaction pour bloquer tout recentrage automatique
+          m.on("zoomstart movestart", () => {
+            setPicker(null);
+            interactingRef.current = true;
+          });
+          m.on("zoomend moveend", () => {
+            setTimeout(() => { interactingRef.current = false; }, 200);
+          });
           mapRef.current = m;
         }
 
@@ -694,7 +691,20 @@ const PlanViewerLeaflet = forwardRef(({
         }
         drawMarkers(points, viewport.width, viewport.height);
 
-        setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
+        // ✅ ResizeObserver sur le conteneur (plus fiable sur mobile que window.resize)
+        if (wrapRef.current && !roRef.current) {
+          roRef.current = new ResizeObserver(() => {
+            const m = mapRef.current;
+            if (!m) return;
+            if (interactingRef.current) return; // jamais pendant un pinch/drag
+            const center = m.getCenter();
+            const zoom = m.getZoom();
+            m.invalidateSize(false);
+            m.setView(center, zoom, { animate: false }); // → pas de “reset”
+          });
+          roRef.current.observe(wrapRef.current);
+        }
+
         try { await pdf.cleanup(); } catch {}
         onReady?.();
       } catch (e) {
@@ -706,22 +716,12 @@ const PlanViewerLeaflet = forwardRef(({
       }
     })();
 
-    const onResize = () => {
-      const m = mapRef.current;
-      const layer = imageLayerRef.current;
-      if (!m || !layer) return;
-      const b = layer.getBounds();
-      m.invalidateSize(false);
-      m.fitBounds(b, { padding: [8, 8] });
-    };
-    window.addEventListener("resize", onResize);
-    window.addEventListener("orientationchange", onResize);
-
     return () => {
-      cancelled = true;
       aliveRef.current = false;
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("orientationchange", onResize);
+      // Nettoyage observer
+      try { roRef.current?.disconnect(); } catch {}
+      roRef.current = null;
+
       // Important : on ne détruit pas la map si on va réutiliser le viewer avec le même conteneur.
       // Ici on nettoie tout car ce composant est démonté/re-monté selon l’usage.
       try { renderTaskRef.current?.cancel(); } catch {}
@@ -927,7 +927,6 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-// src/pages/Doors.jsx — PARTIE 2/2 (FIX)
 // src/pages/Doors.jsx — PARTIE 2/2 (FIX)
 
 
