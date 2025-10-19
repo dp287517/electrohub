@@ -60,25 +60,6 @@ function pdfDocOpts(url) {
   return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
 
-/* ---------- Blink styles (injectés une fois) ---------- */
-(function injectBlink() {
-  if (typeof document === "undefined") return;
-  if (document.getElementById("doors-blink-styles")) return;
-  const css = `
-  @keyframes door-blink-orange { 0%{box-shadow:0 0 0 0 rgba(245,158,11,.65)} 70%{box-shadow:0 0 0 10px rgba(245,158,11,0)} 100%{box-shadow:0 0 0 0 rgba(245,158,11,0)} }
-  @keyframes door-blink-red { 0%{box-shadow:0 0 0 0 rgba(225,29,72,.65)} 70%{box-shadow:0 0 0 10px rgba(225,29,72,0)} 100%{box-shadow:0 0 0 0 rgba(225,29,72,0)} }
-  .door-marker-inline .blink-orange { animation: door-blink-orange 1.2s ease-out infinite; }
-  .door-marker-inline .blink-red { animation: door-blink-red 1.2s ease-out infinite; }
-  /* helper tailles */
-  .door-marker-inline .dot{border-radius:9999px;border:2px solid rgba(0,0,0,.08)}
-  `;
-  const tag = document.createElement("style");
-  tag.id = "doors-blink-styles";
-  tag.type = "text/css";
-  tag.appendChild(document.createTextNode(css));
-  document.head.appendChild(tag);
-})();
-
 /* ----------------------------- API Doors ----------------------------- */
 const STATUS = {
   A_FAIRE: "a_faire",
@@ -327,11 +308,7 @@ function useIsMobile() {
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640);
     window.addEventListener("resize", onResize);
-    window.addEventListener("orientationchange", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("orientationchange", onResize);
-    };
+    return () => window.removeEventListener("resize", onResize);
   }, []);
   return isMobile;
 }
@@ -388,6 +365,8 @@ function PlanCard({ plan, onRename, onPick }) {
         await renderTask.promise;
       } catch (e) {
         if (e?.name !== "RenderingCancelledException") setThumbErr("Aperçu indisponible.");
+      } finally {
+        try { await loadingTask?.destroy(); } catch {}
       }
     })();
 
@@ -442,43 +421,7 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 
-/* --- Modal plein écran (mobile) --- */
-function PlanFullModal({ open, title, onClose, children }) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
-    const onOrient = () => { /* forcer une recalcul de layout */ document.body.offsetHeight; };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("orientationchange", onOrient);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("orientationchange", onOrient);
-    };
-  }, [open, onClose]);
-
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-[1000] bg-black/80 text-white">
-      <div className="absolute inset-0">
-        <div className="absolute top-0 inset-x-0 p-3 flex items-center justify-between">
-          <div className="font-semibold truncate pr-2">{title}</div>
-          <button className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm" onClick={onClose}>
-            Fermer
-          </button>
-        </div>
-        <div className="absolute inset-0 pt-12 pb-2">
-          <div className="w-full h-full">
-            {children}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* --- PlanViewerLeaflet --- */
-// ✅ Icônes HTML inline (ancre centrée), taille FIXE pour éviter tout “glissement” au zoom.
-// + rendu PDF *adaptatif* (re-render après zoom pour garder la netteté)
+/* --- PlanViewerLeaflet (nouvelle version tuile + clignotement + bouton ➕) --- */
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
   pageIndex = 0,
@@ -486,25 +429,45 @@ const PlanViewerLeaflet = forwardRef(({
   onReady,
   onMovePoint,
   onClickPoint,
-  onCreatePoint,     // ➕ bouton flottant (control)
-  unsavedIds = new Set(), // 🟦 marqueurs bleus pour les portes non encore “enregistrées”
+  onCreatePoint,                // ➕ depuis la carte
+  unsavedIds,                  // Set d'IDs “non enregistrés” → bleu
 }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
-  const imageLayerRef = useRef(null);
-  const markersLayerRef = useRef(null);
-  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  const [picker, setPicker] = useState(null);
+  const imgSizeRef = useRef({ w: 0, h: 0 });
+
+  // file d'attente pour éviter “Worker was terminated”
+  const loadSeq = useRef(0);
   const aliveRef = useRef(true);
 
-  // Taille fixe → pas de redimensionnement lié au zoom (évite les décalages visuels)
+  // Taille fixe des icônes (évite jitter au zoom)
   const ICON_PX = 22;
 
-  function makeDoorIcon(status, isBlue = false) {
-    // 🟦 Nouveau : support de .door-marker--blue via classe existante côté CSS utilisateur
-    if (isBlue) {
+  // ————— styles clignotement (injectés 1x)
+  useEffect(() => {
+    const id = "doors-map-blink-styles";
+    if (document.getElementById(id)) return;
+    const style = document.createElement("style");
+    style.id = id;
+    style.textContent = `
+      @keyframes blink-soft { 0%,100%{opacity:1; filter:drop-shadow(0 0 0 rgba(0,0,0,0.0));}
+                               50%{opacity:.6; filter:drop-shadow(0 0 4px rgba(0,0,0,.18));}}
+      .mk-blink { animation: blink-soft 1.2s ease-in-out infinite; }
+      .leaflet-control-adddoor .btn {width:32px;height:32px;border-radius:9999px;border:1px solid #cbd5e1;background:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 2px rgba(0,0,0,.12);}
+      .leaflet-control-adddoor .btn:active{transform:scale(.98);}
+    `;
+    document.head.appendChild(style);
+  }, []);
+
+  // ————— construction de l’icône
+  function makeDoorIcon(status, isUnsaved) {
+    // porte non enregistrée → bleu, sinon couleur statut
+    if (isUnsaved) {
       const s = ICON_PX;
-      const html = `<div class="dot door-marker--blue" style="width:${s}px;height:${s}px;"></div>`;
+      const html = `<div class="door-marker--blue" style="
+        width:${s}px;height:${s}px;border-radius:9999px;border:2px solid #93c5fd;
+        box-shadow:0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
+      "></div>`;
       return L.divIcon({
         className: "door-marker-inline",
         html,
@@ -514,233 +477,216 @@ const PlanViewerLeaflet = forwardRef(({
       });
     }
 
+    const isLate = status === STATUS.EN_RETARD;
+    const isSoon = status === STATUS.EN_COURS;
+
     const fill =
-      status === STATUS.EN_RETARD ? "#e11d48" : // red
-      status === STATUS.EN_COURS ? "#f59e0b" : // orange
-      status === STATUS.A_FAIRE ? "#059669" :  // green
-      "#2563eb"; // blue
+      isLate ? "#e11d48" :
+      isSoon ? "#f59e0b" :
+      status === STATUS.A_FAIRE ? "#059669" :
+      "#2563eb";
     const border =
-      status === STATUS.EN_RETARD ? "#fb7185" :
-      status === STATUS.EN_COURS ? "#fbbf24" :
+      isLate ? "#fb7185" :
+      isSoon ? "#fbbf24" :
       status === STATUS.A_FAIRE ? "#34d399" :
       "#60a5fa";
-
-    // 🔔 Blink wrapper (orange/rouge)
-    const blinkerClass =
-      status === STATUS.EN_RETARD ? "blink-red" :
-      status === STATUS.EN_COURS ? "blink-orange" : "";
-
     const s = ICON_PX;
-    const html = `
-      <div class="${blinkerClass}">
-        <div class="dot" style="width:${s}px;height:${s}px;background:${fill};border-color:${border}"></div>
-      </div>`;
+    const blinkClass = (isLate || isSoon) ? "mk-blink" : "";
+    const html = `<div class="${blinkClass}" style="
+      width:${s}px;height:${s}px;border-radius:9999px;
+      background:${fill};border:2px solid ${border};
+      box-shadow:0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
+    "></div>`;
     return L.divIcon({
       className: "door-marker-inline",
       html,
       iconSize: [s, s],
-      iconAnchor: [Math.round(s / 2), Math.round(s / 2)], // centre exact
+      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
       popupAnchor: [0, -Math.round(s / 2)],
     });
   }
 
-  // ---- Rendu PDF adaptatif (toujours net) ----
-  const baseViewportRef = useRef(null);
-  const pdfPageRef = useRef(null);
-  const rerenderTimer = useRef(null);
-  const renderingRef = useRef(null);
+  // ————— GridLayer tuile depuis un canvas source haute résolution
+  function makeCanvasTileLayer(srcCanvas, w, h) {
+    const tileSize = 256;
+    const ImgLayer = L.GridLayer.extend({
+      createTile: function(coords) {
+        const tile = L.DomUtil.create('canvas', 'leaflet-tile');
+        tile.width = tileSize;
+        tile.height = tileSize;
+        const ctx = tile.getContext('2d');
+        // calcul de la zone du canvas source à copier
+        const scale = Math.pow(2, coords.z); // CRS.Simple + nativeZoom calculé ci-dessous
+        const x = coords.x * tileSize / scale;
+        const y = coords.y * tileSize / scale;
+        const sw = tileSize / scale;
+        const sh = tileSize / scale;
 
-  async function renderToOverlay(desiredCssPixelWidth) {
-    // desiredCssPixelWidth = largeur *affichée* (en px CSS) de l’image dans la carte
-    if (!pdfPageRef.current || !baseViewportRef.current || !wrapRef.current) return;
+        // clamp dans le canvas
+        const sx = Math.max(0, Math.min(w, x));
+        const sy = Math.max(0, Math.min(h, y));
+        const sW = Math.max(0, Math.min(w - sx, sw));
+        const sH = Math.max(0, Math.min(h - sy, sh));
 
-    const dpr = window.devicePixelRatio || 1;
-    const targetBitmapW = Math.max(512, Math.min(8192, Math.floor(desiredCssPixelWidth * dpr)));
-    const baseVp = baseViewportRef.current;
-    const scale = Math.max(0.5, Math.min(8, targetBitmapW / baseVp.width));
-    const viewport = pdfPageRef.current.getViewport({ scale });
-
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.floor(viewport.width);
-    canvas.height = Math.floor(viewport.height);
-    const ctx = canvas.getContext("2d", { alpha: true });
-
-    // Annule le rendu précédent si besoin
-    try { renderingRef.current?.cancel(); } catch {}
-
-    const task = pdfPageRef.current.render({ canvasContext: ctx, viewport });
-    renderingRef.current = task;
-    await task.promise;
-
-    const dataUrl = canvas.toDataURL("image/png");
-    setImgSize({ w: canvas.width, h: canvas.height });
-
-    const map = mapRef.current;
-    if (!map) return;
-
-    const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-    if (imageLayerRef.current) {
-      map.removeLayer(imageLayerRef.current);
-      imageLayerRef.current = null;
-    }
-    const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
-    imageLayerRef.current = layer;
-    layer.addTo(map);
-
-    await new Promise(requestAnimationFrame);
-    map.invalidateSize(false);
-
-    const fitZoom = map.getBoundsZoom(bounds, true);
-    map.options.zoomSnap = 0.1;
-    map.options.zoomDelta = 0.5;
-    map.setMinZoom(fitZoom - 1);
-    map.setMaxZoom(fitZoom + 6);
-    map.setMaxBounds(bounds.pad(0.5));
-
-    // Conserver le centre / zoom actuel si déjà initialisé, sinon ajuster
-    if (!map.__didInitialFit) {
-      map.fitBounds(bounds, { padding: [10, 10] });
-      map.__didInitialFit = true;
-    }
-
-    // Redessiner les marqueurs
-    drawMarkers(points, viewport.width, viewport.height);
+        if (sW > 0 && sH > 0) {
+          ctx.drawImage(srcCanvas, sx, sy, sW, sH, 0, 0, Math.ceil(sW * scale), Math.ceil(sH * scale));
+        }
+        return tile;
+      }
+    });
+    return function() { return new ImgLayer({ tileSize }); };
   }
 
-  function scheduleRerenderFromMap() {
-    const map = mapRef.current;
-    const layer = imageLayerRef.current;
-    if (!map || !layer) return;
-    // largeur affichée actuelle du plan (en px CSS)
-    const a = map.latLngToContainerPoint([0, 0]);
-    const b = map.latLngToContainerPoint([imgSize.h || 0, imgSize.w || 0]); // lat=y, lng=x
-    const widthCss = Math.abs(b.x - a.x);
-    clearTimeout(rerenderTimer.current);
-    rerenderTimer.current = setTimeout(() => renderToOverlay(widthCss), 120);
+  // ————— bouton ➕ dans la carte
+  function addCreateControl(map) {
+    const AddDoor = L.Control.extend({
+      options: { position: 'topleft' },
+      onAdd: function() {
+        const div = L.DomUtil.create('div', 'leaflet-control-adddoor');
+        const btn = L.DomUtil.create('button', 'btn', div);
+        btn.type = "button";
+        btn.title = "Ajouter une porte au centre";
+        btn.innerHTML = "+";
+        L.DomEvent.on(btn, 'click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          onCreatePoint?.();
+        });
+        return div;
+      }
+    });
+    const c = new AddDoor();
+    map.addControl(c);
   }
 
+  // ————— création / destruction carte + tuiles
   useEffect(() => {
     aliveRef.current = true;
-    let cancelled = false;
+    const seqId = ++loadSeq.current;
+
     let loadingTask = null;
+    let page = null;
+    let renderTask = null;
 
-    (async () => {
+    let map = null;
+    let markers = null;
+    let tileLayer = null;
+
+    const run = async () => {
+      if (!wrapRef.current || !fileUrl) return;
       try {
-        if (!wrapRef.current || !fileUrl) return;
-
-        // Charge uniquement une fois la page PDF ; on re-rendera ensuite selon le zoom
+        // charge doc + page
         loadingTask = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTask.promise;
-        if (cancelled) return;
+        if (!aliveRef.current || loadSeq.current !== seqId) return;
 
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-        pdfPageRef.current = page;
-        baseViewportRef.current = page.getViewport({ scale: 1 });
+        page = await pdf.getPage(Number(pageIndex) + 1);
+        const baseVp = page.getViewport({ scale: 1 });
 
-        // Init carte
-        if (!mapRef.current) {
-          const m = L.map(wrapRef.current, {
-            crs: L.CRS.Simple,
-            zoomControl: false,
-            zoomAnimation: true,
-            fadeAnimation: false,
-            markerZoomAnimation: false,
-            scrollWheelZoom: true,
-            touchZoom: true,
-            tap: true,
-            preferCanvas: true,
-          });
-          L.control.zoom({ position: "topright" }).addTo(m);
-          mapRef.current = m;
+        // Cible haute résolution, mais bornée pour mémoire
+        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        const maxTarget = 4096; // largeur max (perf/mémoire)
+        const scale = Math.max(1, Math.min(4, (maxTarget * dpr) / baseVp.width));
+        const vp = page.getViewport({ scale });
 
-          // Click carte → sélection d’un marqueur proche
-          m.on("click", (e) => {
-            if (!aliveRef.current) return;
-            const clicked = e.containerPoint;
-            const near = [];
-            const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
-            markersLayerRef.current?.eachLayer((mk) => {
-              const mp = m.latLngToContainerPoint(mk.getLatLng());
-              const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
-              if (dist <= pickRadius) near.push(mk.__meta);
-            });
-            if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
-            else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
-            else setPicker(null);
-          });
-          m.on("zoomstart movestart", () => setPicker(null));
-          m.on("zoomend resize", scheduleRerenderFromMap);
+        // rendu offscreen canvas
+        const srcCanvas = document.createElement("canvas");
+        srcCanvas.width = Math.floor(vp.width);
+        srcCanvas.height = Math.floor(vp.height);
+        const ctx = srcCanvas.getContext("2d", { alpha: true, willReadFrequently: false });
 
-          // ➕ Contrôle “Nouvelle porte” toujours visible dans la carte
-          if (onCreatePoint) {
-            const AddCtrl = L.Control.extend({
-              onAdd() {
-                const btn = L.DomUtil.create("button", "leaflet-bar");
-                btn.title = "Créer une nouvelle porte au centre du plan";
-                btn.style.cssText = "background:white;border:1px solid #ddd;border-radius:8px;padding:6px 10px;cursor:pointer;margin:4px;box-shadow:0 1px 2px rgba(0,0,0,.08)";
-                btn.innerHTML = "➕";
-                L.DomEvent.on(btn, "click", (ev) => { L.DomEvent.stop(ev); onCreatePoint(); });
-                return btn;
-              }
-            });
-            const addCtrl = new AddCtrl({ position: "topright" });
-            addCtrl.addTo(m);
-          }
-        }
+        renderTask = page.render({ canvasContext: ctx, viewport: vp });
+        await renderTask.promise;
 
-        // Premier rendu en fonction de la largeur visible initiale
-        const map = mapRef.current;
-        // estimer une largeur raisonnable si pas encore de taille (ex: modals)
-        const approxWidth = wrapRef.current.clientWidth || 1024;
-        await renderToOverlay(approxWidth);
+        imgSizeRef.current = { w: srcCanvas.width, h: srcCanvas.height };
 
-        if (!markersLayerRef.current) {
-          markersLayerRef.current = L.layerGroup().addTo(map);
-        }
-        drawMarkers(points, imgSize.w || baseViewportRef.current.width, imgSize.h || baseViewportRef.current.height);
+        // init carte
+        map = L.map(wrapRef.current, {
+          crs: L.CRS.Simple,
+          zoomControl: false,
+          zoomAnimation: true,
+          fadeAnimation: false,
+          markerZoomAnimation: false,
+          scrollWheelZoom: true,
+          touchZoom: true,
+          tap: true,
+          preferCanvas: true,
+        });
+        mapRef.current = map;
+        L.control.zoom({ position: "topright" }).addTo(map);
+        addCreateControl(map);
+
+        // tile layer depuis le canvas source
+        const w = srcCanvas.width, h = srcCanvas.height;
+        const bounds = L.latLngBounds([[0, 0], [h, w]]);
+        const TileCtor = makeCanvasTileLayer(srcCanvas, w, h);
+        tileLayer = new (TileCtor())();
+
+        // calcul maxNativeZoom pour que 1 tuile ~256px
+        const tileSize = 256;
+        const nativeZoom = Math.ceil(Math.max(Math.log2(w / tileSize), Math.log2(h / tileSize)));
+        tileLayer.options.maxNativeZoom = nativeZoom;
+
+        tileLayer.addTo(map);
+        map.fitBounds(bounds, { padding: [10, 10] });
+        map.setMinZoom(map.getZoom() - 1);
+        map.setMaxBounds(bounds.pad(0.5));
+
+        // calque des marqueurs
+        markers = L.layerGroup().addTo(map);
+
+        // picker proximité + nettoyages sur mouvement
+        map.on("click", (e) => {
+          // sélection nearest (gérée via click sur marker; pas de picker multi ici)
+        });
+
+        // dessin initial
+        drawMarkers(points);
 
         onReady?.();
       } catch (e) {
-        if (e?.name === "RenderingCancelledException") return;
+        // on ignore les terminaisons à chaud
         const msg = String(e?.message || "");
-        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
-        console.error("Leaflet viewer error", e);
+        if (!/terminated/i.test(msg)) console.error("Leaflet viewer error", e);
+      } finally {
+        try { await loadingTask?.destroy(); } catch {}
       }
-    })();
+    };
+
+    run();
 
     return () => {
       aliveRef.current = false;
-      cancelled = true;
+      try { renderTask?.cancel(); } catch {}
       try { loadingTask?.destroy(); } catch {}
-      try { renderingRef.current?.cancel(); } catch {}
 
-      const map = mapRef.current;
-      if (map) {
-        try { map.off(); } catch {}
-        try { map.stop?.(); } catch {}
-        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-        try { map.remove(); } catch {}
+      // cleanup carte
+      const m = mapRef.current;
+      if (m) {
+        try { m.off(); } catch {}
+        try { m.stop?.(); } catch {}
+        try { m.eachLayer(l => { try { m.removeLayer(l); } catch {} }); } catch {}
+        try { m.remove(); } catch {}
       }
       mapRef.current = null;
-      imageLayerRef.current = null;
-      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
     };
   }, [fileUrl, pageIndex, onReady, onCreatePoint]);
 
-  // Redessiner les marqueurs quand points/size changent
+  // ————— redraw markers quand points changent
   useEffect(() => {
-    if (!mapRef.current || !imgSize.w) return;
-    drawMarkers(points, imgSize.w, imgSize.h);
-  }, [points, imgSize, unsavedIds]);
+    if (!mapRef.current) return;
+    drawMarkers(points);
+  }, [points]);
 
-  function drawMarkers(list, w, h) {
+  function drawMarkers(list) {
     const map = mapRef.current;
     if (!map) return;
-    if (!markersLayerRef.current) {
-      markersLayerRef.current = L.layerGroup().addTo(map);
-    }
-    const g = markersLayerRef.current;
-    g.clearLayers();
+    // (re)trouve/cree le group
+    let group = null;
+    map.eachLayer((l) => { if (l instanceof L.LayerGroup && l !== tileLayer) group = l; });
+    if (!group) group = L.layerGroup().addTo(map);
+    else group.clearLayers();
+
+    const { w, h } = imgSizeRef.current;
 
     (list || []).forEach((p) => {
       const x = Number(p.x_frac ?? p.x ?? 0) * w;
@@ -748,8 +694,8 @@ const PlanViewerLeaflet = forwardRef(({
       if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 
       const latlng = L.latLng(y, x);
-      const isBlue = unsavedIds?.has?.(p.door_id);
-      const icon = makeDoorIcon(p.status, isBlue);
+      const isUnsaved = unsavedIds?.has?.(p.door_id);
+      const icon = makeDoorIcon(p.status, isUnsaved);
       const mk = L.marker(latlng, {
         icon,
         draggable: true,
@@ -758,52 +704,43 @@ const PlanViewerLeaflet = forwardRef(({
         keyboard: false,
         riseOnHover: true,
       });
-      mk.__meta = {
-        door_id: p.door_id,
-        door_name: p.door_name || p.name,
-        status: p.status,
-        x_frac: p.x_frac,
-        y_frac: p.y_frac,
-      };
 
       mk.on("click", () => {
-        setPicker(null);
-        onClickPoint?.(mk.__meta);
+        onClickPoint?.({ door_id: p.door_id, door_name: p.door_name || p.name, status: p.status, x_frac: p.x_frac, y_frac: p.y_frac });
       });
 
       mk.on("dragend", () => {
         if (!onMovePoint) return;
         const ll = mk.getLatLng(); // CRS.Simple → lat=y, lng=x
-        const xFrac = Math.min(1, Math.max(0, ll.lng / w));
-        const yFrac = Math.min(1, Math.max(0, ll.lat / h));
+        const xFrac = Math.min(1, Math.max(0, w ? ll.lng / w : 0));
+        const yFrac = Math.min(1, Math.max(0, h ? ll.lat / h : 0));
         const xf = Math.round(xFrac * 1e6) / 1e6;
         const yf = Math.round(yFrac * 1e6) / 1e6;
         onMovePoint(p.door_id, { x: xf, y: yf });
       });
 
-      mk.addTo(g);
+      mk.addTo(group);
     });
   }
 
-  const onPickDoor = (d) => { setPicker(null); onClickPoint?.(d); };
-
+  // ————— ajustement programmatique
   const adjust = () => {
     const m = mapRef.current;
-    const layer = imageLayerRef.current;
-    if (!m || !layer) return;
-    const b = layer.getBounds();
+    if (!m) return;
+    const { w, h } = imgSizeRef.current;
+    if (!w || !h) return;
+    const b = L.latLngBounds([[0, 0], [h, w]]);
     m.scrollWheelZoom?.disable();
     m.invalidateSize(false);
     const fitZoom = m.getBoundsZoom(b, true);
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [10, 10] });
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
-    // Re-render à la nouvelle largeur affichée
-    scheduleRerenderFromMap();
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
-  const wrapperHeight = Math.max(320, imgSize.h ? Math.min(imgSize.h, 1400) : 520);
+  // wrapper: hauteur adaptative (desktop) — le plein écran mobile est géré dans PARTIE 2 (modal)
+  const wrapperHeight =  Math.min(1200, Math.max(420, imgSizeRef.current.h || 520));
   return (
     <div className="mt-3 relative">
       <div className="flex items-center justify-end gap-2 mb-2">
@@ -814,24 +751,11 @@ const PlanViewerLeaflet = forwardRef(({
         className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
         style={{ height: wrapperHeight }}
       />
-      {picker && (
-        <div
-          className="door-pick"
-          style={{ left: Math.max(8, picker.x - 120), top: Math.max(8, picker.y - 8) }}
-        >
-          {picker.items.slice(0, 8).map((it) => (
-            <button key={it.door_id} onClick={() => onPickDoor(it)}>
-              {it.door_name || it.door_id}
-            </button>
-          ))}
-          {picker.items.length > 8 ? <div className="text-xs text-gray-500 px-1">…</div> : null}
-        </div>
-      )}
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
         <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#059669"}}/> À faire</span>
         <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#f59e0b"}}/> ≤30j (clignote)</span>
         <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#e11d48"}}/> En retard (clignote)</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#2563eb"}}/> Nouveau</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full border" style={{background:"#2563eb",borderColor:"#93c5fd"}}/> Nouvelle (bleu)</span>
       </div>
     </div>
   );
@@ -914,8 +838,6 @@ function MonthCalendar({ events = [], onDayClick }) {
 }
 // src/pages/Doors.jsx — PARTIE 2/2 (MODIFIÉE)
 
-// (tout ce qui est au-dessus est inchangé — cf. PARTIE 1/2)
-
 /* ----------------------------- Page principale ----------------------------- */
 function Doors() {
   const [tab, setTab] = useState("controls");
@@ -960,11 +882,12 @@ function Doors() {
   const [pdfReady, setPdfReady] = useState(false);
   const viewerRef = useRef(null);
 
-  // 🟦 Nouvelles portes non encore “Enregistrées” (affichage en bleu)
-  const [unsavedIds, setUnsavedIds] = useState(() => new Set());
-
-  // 📱 Mobile / rotation → modal plein écran pour les plans
+  // Plein écran plan (mobile/desktop)
   const isMobile = useIsMobile();
+  const [fullScreenOpen, setFullScreenOpen] = useState(false);
+
+  // IDs de portes “non enregistrées” (marqueur BLEU jusqu’au clic “Enregistrer la fiche”)
+  const [unsavedIds, setUnsavedIds] = useState(() => new Set());
 
   /* ----------------------------- URL helpers ----------------------------- */
   function getDoorParam() {
@@ -1045,7 +968,6 @@ function Doors() {
     return "Porte";
   }
   async function suggestUniqueDoorName() {
-    // On essaye "Porte 001", "Porte 002", ... jusqu'à succès lors de l'API.create
     return `${baseDoorName()} ${formatDoorNumber(1)}`;
   }
   async function createDoorWithUniqueName(payloadBase, { maxTries = 60 } = {}) {
@@ -1072,7 +994,7 @@ function Doors() {
   /* ----------------------------- CRUD portes ----------------------------- */
   const filtered = doors;
   async function openEdit(door) {
-    const full = await API.get(door.id);
+    const full = await API.get(door.id).catch(() => null);
     setEditing(full?.door || door);
     setDrawerOpen(true);
     setDoorParam(door.id);
@@ -1085,7 +1007,6 @@ function Doors() {
     });
     setDrawerOpen(true);
   }
-
   async function saveDoorBase() {
     if (!editing) return;
     const payload = {
@@ -1094,17 +1015,17 @@ function Doors() {
     };
     if (editing.id) {
       await API.update(editing.id, payload);
-      const full = await API.get(editing.id);
-      setEditing(full?.door || editing);
-      // ✅ Si la porte était "nouvelle" (bleue), elle passe au vert après un enregistrement
+      // ➜ si c’était une nouvelle porte (bleue), on la “valide” → elle devient verte (statut A_FAIRE)
       setUnsavedIds((prev) => {
-        if (!prev || !prev.size) return prev;
-        const s = new Set(prev);
-        s.delete(editing.id);
-        return s;
+        if (!prev.has(editing.id)) return prev;
+        const next = new Set(prev);
+        next.delete(editing.id);
+        return next;
       });
+      const full = await API.get(editing.id).catch(() => null);
+      setEditing(full?.door || editing);
     } else {
-      // Nouvelle porte → gérer les doublons automatiquement
+      // (Cas peu probable maintenant que la création passe par la carte)
       const base = {
         building: payload.building,
         floor: payload.floor,
@@ -1114,23 +1035,19 @@ function Doors() {
       try {
         let nameToUse = (payload.name || "").trim();
         let created = null;
-        if (!nameToUse) {
-          created = await createDoorWithUniqueName(base);
-        } else {
-          try {
-            created = await API.create({ ...base, name: nameToUse });
-          } catch (e) {
+        if (!nameToUse) created = await createDoorWithUniqueName(base);
+        else {
+          try { created = await API.create({ ...base, name: nameToUse }); }
+          catch (e) {
             const msg = String(e?.message || "");
             if (msg.toLowerCase().includes("duplicate key") || msg.toLowerCase().includes("unique constraint")) {
               created = await createDoorWithUniqueName(base);
               setToast(`Nom déjà pris. Créé comme « ${created?.door?.name} » ✅`);
-            } else {
-              throw e;
-            }
+            } else { throw e; }
           }
         }
         if (created?.door?.id) {
-          const full = await API.get(created.door.id);
+          const full = await API.get(created.door.id).catch(() => null);
           setEditing(full?.door || created.door);
           setDoorParam(created?.door?.id);
         }
@@ -1141,24 +1058,23 @@ function Doors() {
     await reload();
     await reloadCalendar();
   }
-
   async function deleteDoor() {
     if (!editing?.id) return;
     const ok = window.confirm("Supprimer définitivement cette porte ? Cette action est irréversible.");
     if (!ok) return;
     await API.remove(editing.id);
+    // nettoie l’état “unsaved”
+    setUnsavedIds((prev) => {
+      if (!prev.has(editing.id)) return prev;
+      const next = new Set(prev);
+      next.delete(editing.id);
+      return next;
+    });
     setDrawerOpen(false);
     setEditing(null);
     await reload();
     await reloadCalendar();
     if (tab === "maps" && selectedPlan) await loadPositions(selectedPlan, planPage);
-    // Nettoyer du set d'unsaved s'il y était
-    setUnsavedIds((prev) => {
-      if (!prev || !prev.size) return prev;
-      const s = new Set(prev);
-      s.delete(editing.id);
-      return s;
-    });
   }
 
   const baseOptions = [
@@ -1174,8 +1090,8 @@ function Doors() {
       check = s?.check || null;
     }
     if (check) {
-      const full = await API.get(editing.id);
-      setEditing(full?.door);
+      const full = await API.get(editing.id).catch(() => null);
+      setEditing(full?.door || editing);
     }
   }
   function allFiveAnswered(items = []) {
@@ -1201,8 +1117,8 @@ function Doors() {
       await reloadCalendar();
       if (tab === "maps" && selectedPlan) await loadPositions(selectedPlan, planPage);
     } else {
-      const full = await API.get(editing.id);
-      setEditing(full?.door);
+      const full = await API.get(editing.id).catch(() => null);
+      setEditing(full?.door || editing);
     }
   }
 
@@ -1218,8 +1134,8 @@ function Doors() {
     setUploading(true);
     try {
       for (const f of files) await API.uploadFile(editing.id, f);
-      const full = await API.get(editing.id);
-      setEditing(full?.door);
+      const full = await API.get(editing.id).catch(() => null);
+      setEditing(full?.door || editing);
       setFilesVersion((v) => v + 1);
       setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } finally {
@@ -1230,8 +1146,8 @@ function Doors() {
     const f = e.target.files?.[0];
     if (!f || !editing?.id) return;
     await API.uploadPhoto(editing.id, f);
-    const full = await API.get(editing.id);
-    setEditing(full?.door);
+    const full = await API.get(editing.id).catch(() => null);
+    setEditing(full?.door || editing);
     await reload();
     setToast("Photo mise à jour ✅");
   }
@@ -1314,7 +1230,7 @@ function Doors() {
     openEdit({ id: p.door_id, name: p.door_name || p.name });
   }, []);
 
-  // ✅ Création de porte au centre avec génération auto d’un nom unique
+  // ✅ Création via bouton ➕ intégré à Leaflet
   async function createDoorAtCenter() {
     if (!stableSelectedPlan) return;
     try {
@@ -1324,7 +1240,6 @@ function Doors() {
         location: "",
         status: STATUS.A_FAIRE,
       };
-      // On tente noms séquentiels (Porte 001, 002, …) jusqu’au succès
       const created = await createDoorWithUniqueName(basePayload);
       const id = created?.door?.id;
       if (!id) throw new Error("Réponse inattendue de l'API (pas d'ID).");
@@ -1338,15 +1253,15 @@ function Doors() {
         y_frac: 0.5,
       });
 
-      // 🟦 marquer la porte comme "non enregistrée" pour l'afficher en bleu
+      // marque “non enregistrée” → icône BLEUE
       setUnsavedIds((prev) => {
-        const s = new Set(prev || []);
-        s.add(id);
-        return s;
+        const next = new Set(prev);
+        next.add(id);
+        return next;
       });
 
       await loadPositions(stableSelectedPlan, planPage);
-      viewerRef.current?.adjust(); // recadre sur le plan
+      viewerRef.current?.adjust();
       setToast(`Porte créée (« ${created?.door?.name} ») au centre du plan ✅`);
 
       // ouvre directement la fiche
@@ -1368,7 +1283,7 @@ function Doors() {
     return () => { clearInterval(iv); document.removeEventListener("visibilitychange", onVis); };
   }, [tab, stableSelectedPlan, planPage, q, status, building, floor, doorState]);
 
-  // 👉 Important : on fige l’URL du PDF une seule fois quand on ouvre un plan
+  // 👉 fige l’URL du PDF une seule fois quand on ouvre un plan
   function openPlan(plan) {
     setSelectedPlan(plan);
     setPdfReady(false);
@@ -1379,7 +1294,14 @@ function Doors() {
     setSelectedPlan(null);
     setPlanFileUrl(null);
     setPdfReady(false);
+    setFullScreenOpen(false);
   }
+
+  // Auto plein-écran sur mobile à l’ouverture d’un plan
+  useEffect(() => {
+    if (!selectedPlan) return;
+    if (isMobile) setFullScreenOpen(true);
+  }, [selectedPlan, isMobile]);
 
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1405,7 +1327,6 @@ function Doors() {
           <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
             {filtersOpen ? "Masquer les filtres" : "Filtres"}
           </Btn>
-          {/* ⚠️ Ce bouton create général (hors plans) reste inchangé */}
           <Btn variant="subtle" onClick={openCreate}>➕ Nouvelle porte</Btn>
         </div>
       </header>
@@ -1585,59 +1506,52 @@ function Doors() {
             onPick={openPlan}   // ✅ fige l’URL du PDF
           />
 
-          {/* --- Affichage du plan sélectionné --- */}
           {selectedPlan && (
             <>
-              {/* Desktop / tablette: carte inline */}
-              {!isMobile && (
-                <div className="bg-white rounded-2xl border shadow-sm p-3">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div className="font-semibold">
-                      {selectedPlan.display_name || selectedPlan.logical_name}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {/* ❌ on retire le bouton texte “➕ Nouvelle porte” ici (le ➕ est dans Leaflet) */}
-                      <Btn variant="ghost" onClick={closePlan}>Fermer le plan</Btn>
-                    </div>
+              {/* Bloc plan “intégré” (avec bouton Plein écran) */}
+              <div className="bg-white rounded-2xl border shadow-sm p-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="font-semibold">
+                    {selectedPlan.display_name || selectedPlan.logical_name}
                   </div>
+                  <div className="flex items-center gap-2">
+                    <Btn variant="ghost" onClick={() => setFullScreenOpen(true)}>🔎 Plein écran</Btn>
+                    <Btn variant="ghost" onClick={closePlan}>Fermer le plan</Btn>
+                  </div>
+                </div>
+                <PlanViewerLeaflet
+                  ref={viewerRef}
+                  key={selectedPlan?.id || selectedPlan?.logical_name || ""}
+                  fileUrl={planFileUrl}                  // ✅ URL stable
+                  pageIndex={planPage}
+                  points={positions}
+                  onReady={handlePdfReady}
+                  onMovePoint={handleMovePoint}
+                  onClickPoint={handleClickPoint}
+                  onCreatePoint={createDoorAtCenter}     // ➕ dans la carte
+                  unsavedIds={unsavedIds}                // BLEU pour nouvelles portes
+                />
+                {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
+              </div>
+
+              {/* Modal plein écran */}
+              {fullScreenOpen && (
+                <FullScreenPlanModal
+                  title={selectedPlan.display_name || selectedPlan.logical_name}
+                  onClose={() => setFullScreenOpen(false)}
+                >
                   <PlanViewerLeaflet
-                    ref={viewerRef}
-                    key={selectedPlan?.id || selectedPlan?.logical_name || ""}
-                    fileUrl={planFileUrl}                  // ✅ URL stable
+                    key={(selectedPlan?.id || selectedPlan?.logical_name || "") + "-fullscreen"}
+                    fileUrl={planFileUrl}
                     pageIndex={planPage}
                     points={positions}
-                    onReady={handlePdfReady}
+                    onReady={() => {}}
                     onMovePoint={handleMovePoint}
                     onClickPoint={handleClickPoint}
-                    onCreatePoint={createDoorAtCenter}     // ➕ control dans la carte
-                    unsavedIds={unsavedIds}                // 🟦 marqueurs bleus
+                    onCreatePoint={createDoorAtCenter}
+                    unsavedIds={unsavedIds}
                   />
-                  {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
-                </div>
-              )}
-
-              {/* Mobile: modal plein écran pour voir tout le plan (portrait & paysage) */}
-              {isMobile && (
-                <PlanFullModal
-                  open={true}
-                  title={selectedPlan.display_name || selectedPlan.logical_name}
-                  onClose={closePlan}
-                >
-                  <div className="w-full h-full">
-                    <PlanViewerLeaflet
-                      ref={viewerRef}
-                      key={(selectedPlan?.id || selectedPlan?.logical_name || "") + "-m"}
-                      fileUrl={planFileUrl}
-                      pageIndex={planPage}
-                      points={positions}
-                      onReady={handlePdfReady}
-                      onMovePoint={handleMovePoint}
-                      onClickPoint={handleClickPoint}
-                      onCreatePoint={createDoorAtCenter}
-                      unsavedIds={unsavedIds}
-                    />
-                  </div>
-                </PlanFullModal>
+                </FullScreenPlanModal>
               )}
             </>
           )}
@@ -1880,6 +1794,46 @@ function Drawer({ title, children, onClose }) {
     </div>
   );
 }
+
+/* Plein écran plan (modal) */
+function FullScreenPlanModal({ title, children, onClose }) {
+  const shellRef = useRef(null);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose?.(); };
+    const onResize = () => {
+      // force recalcul taille Leaflet
+      const el = shellRef.current?.querySelector?.(".leaflet-wrapper");
+      if (el) {
+        el.style.height = `${Math.max(300, window.innerHeight - 80)}px`;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    onResize();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-white" ref={shellRef}>
+      <div className="flex items-center justify-between px-3 py-2 border-b">
+        <div className="font-semibold truncate">{title}</div>
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={onClose}>Fermer</Btn>
+        </div>
+      </div>
+      <div className="flex-1 min-h-0 p-2">
+        {/* Le PlanViewerLeaflet s’adapte ; on laisse la hauteur se régler via wrapper */}
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function DoorFiles({ doorId, version = 0 }) {
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
