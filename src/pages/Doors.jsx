@@ -1,5 +1,4 @@
-// src/pages/Doors.jsx — PARTIE 1/2 (MOBILE ULTRA-FLUID FIX v3)
-// ⚠️ Desktop inchangé. Tous les ajustements ci-dessous ciblent ou respectent le mode mobile.
+// src/pages/Doors.jsx — PARTIE 1/2 (DESKTOP MODAL-READY + MOBILE NO-JUMP v4)
 
 import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
@@ -19,12 +18,16 @@ import { api } from "../lib/api.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
-/* --- Styles spécifiques requis par la demande --- */
+/* --- Styles spécifiques : anti-flash & UI marqueurs --- */
 const InlineMapStyles = () => (
   <style>{`
   @keyframes blinkPulse { 0%{opacity:1} 50%{opacity:.35} 100%{opacity:1} }
   .blink-orange { animation: blinkPulse 1.2s ease-in-out infinite; }
   .blink-red { animation: blinkPulse .9s ease-in-out infinite; }
+
+  /* Fond blanc pour éviter le "flash" gris/transparent */
+  .leaflet-container { background:#fff; }
+  .leaflet-pane, .leaflet-map-pane { will-change: transform; }
 
   .door-pick {
     position:absolute; z-index:1300;
@@ -474,7 +477,9 @@ const PlanViewerLeaflet = forwardRef(({
   onClickPoint,
   onCreatePoint,
   unsavedIds,
-  disabled = false
+  disabled = false,
+  /** "once" = fit une fois (défaut) | "never" = jamais fit (tu gères via ref.adjust) */
+  fitStrategy = "once",
 }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
@@ -502,14 +507,8 @@ const PlanViewerLeaflet = forwardRef(({
     return (window.innerWidth < 640) || !!mm;
   }, []);
 
-  // Auto-adjust une seule fois après init (mobile)
-  const didAutoAdjustRef = useRef(false);
-
-  function getViewportHeight() {
-    if (typeof window === "undefined") return 800;
-    const vh = window.visualViewport?.height || window.innerHeight || 800;
-    return Math.max(360, Math.floor(vh));
-  }
+  // Ajustement initial seulement (jamais pendant l'interaction)
+  const didInitialFitRef = useRef(false);
 
   function makeDoorIcon(status, isUnsaved) {
     if (isUnsaved) {
@@ -618,7 +617,6 @@ const PlanViewerLeaflet = forwardRef(({
         await cleanupPdf();
         cleanupMap();
 
-        const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = window.devicePixelRatio || 1;
 
         loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
@@ -628,7 +626,8 @@ const PlanViewerLeaflet = forwardRef(({
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
+        // rendu bitmap stable, qualité correcte
+        const targetBitmapW = Math.min(4096, Math.max(1536, Math.floor((wrapRef.current.clientWidth || 1024) * dpr)));
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
@@ -636,9 +635,9 @@ const PlanViewerLeaflet = forwardRef(({
         canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
-        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
-
-        await renderTaskRef.current.promise;
+        const renderTask = page.render({ canvasContext: ctx, viewport });
+        renderTaskRef.current = renderTask;
+        await renderTask.promise;
         if (cancelled) return;
 
         const dataUrl = canvas.toDataURL("image/png");
@@ -647,7 +646,7 @@ const PlanViewerLeaflet = forwardRef(({
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
-          zoomAnimation: true,
+          zoomAnimation: !isMobile,   // pas d’animation sur mobile → moins de flash
           fadeAnimation: false,
           markerZoomAnimation: false,
           tap: false,
@@ -655,10 +654,14 @@ const PlanViewerLeaflet = forwardRef(({
           scrollWheelZoom: isMobile ? false : true,
           dragging: true,
           preferCanvas: true,
+          updateWhenIdle: true,
           inertia: true,
           wheelPxPerZoomLevel: isMobile ? 180 : 120,
           bounceAtZoomLimits: false,
         });
+
+        // Limites visqueuses (pas de “rebond-retour” brusque)
+        m.options.maxBoundsViscosity = 1.0;
 
         try {
           if (isMobile) {
@@ -718,24 +721,23 @@ const PlanViewerLeaflet = forwardRef(({
         await new Promise(requestAnimationFrame);
         m.invalidateSize(false);
 
+        // Fit initial seulement si demandé
         const fitZoom = m.getBoundsZoom(bounds, true);
         m.options.zoomSnap = 0.1;
         m.options.zoomDelta = 0.5;
         m.setMinZoom(fitZoom);
         m.setMaxZoom(fitZoom + 6);
         m.setMaxBounds(bounds.pad(0.5));
-        m.fitBounds(bounds, { padding: [8, 8] });
+
+        if (fitStrategy === "once" && !didInitialFitRef.current) {
+          didInitialFitRef.current = true;
+          m.fitBounds(bounds, { padding: [8, 8] });
+        }
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(m);
         }
         drawMarkers(points, viewport.width, viewport.height);
-
-        // ✅ Mobile : garantit le plein cadre à l'ouverture du modal, une seule fois
-        if (isMobile && !didAutoAdjustRef.current) {
-          didAutoAdjustRef.current = true;
-          setTimeout(() => { try { adjust(); } catch {} }, 0);
-        }
 
         try { await pdf.cleanup(); } catch {}
         onReady?.();
@@ -746,28 +748,19 @@ const PlanViewerLeaflet = forwardRef(({
       }
     })();
 
+    // 👉 Resize/orientation : on ne refit JAMAIS (on invalide seulement)
     const onResize = () => {
       const m = mapRef.current;
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
-
-      if (isMobile) {
-        m.invalidateSize(false);
-        return;
-      }
-      const b = layer.getBounds();
       m.invalidateSize(false);
-      m.fitBounds(b, { padding: [8, 8] });
+      // pas de fitBounds ici → évite le “retour automatique” et le “plan coupé”
     };
 
     const onOrientation = () => {
       const m = mapRef.current;
       if (!m) return;
-      if (isMobile && isInteractingRef.current) {
-        m.invalidateSize(false);
-        return;
-      }
-      onResize();
+      m.invalidateSize(false);
     };
 
     window.addEventListener("resize", onResize);
@@ -792,8 +785,9 @@ const PlanViewerLeaflet = forwardRef(({
       imageLayerRef.current = null;
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
       addBtnControlRef.current = null;
+      didInitialFitRef.current = false;
     };
-  }, [fileUrl, pageIndex, disabled]);
+  }, [fileUrl, pageIndex, disabled, fitStrategy]);
 
   // Redessiner les marqueurs (batch rAF)
   useEffect(() => {
@@ -872,17 +866,23 @@ const PlanViewerLeaflet = forwardRef(({
     const layer = imageLayerRef.current;
     if (!m || !layer) return;
     const b = layer.getBounds();
-    m.scrollWheelZoom?.disable();
+    // pas de scrollWheelZoom toggling ici (source de flash sur certains navigateurs)
     m.invalidateSize(false);
-    const fitZoom = m.getBoundsZoom(b, true);
-    m.setMinZoom(fitZoom);
     m.fitBounds(b, { padding: [8, 8] });
-    setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
-  const viewportH = getViewportHeight();
-  const wrapperHeight = Math.max(320, Math.min( imgSize.h || 720, viewportH - 140 ));
+  // Hauteur STABLE (anti-flash/anti-coupure)
+  // - mobile : 100dvh - marge
+  // - desktop : min(82vh, 900px)
+  const wrapperStyle = useMemo(() => {
+    return {
+      height: isMobile ? "calc(100dvh - 160px)" : "min(82vh, 900px)",
+      touchAction: isMobile ? "none" : undefined,
+      WebkitUserSelect: "none",
+      userSelect: "none",
+    };
+  }, [isMobile]);
 
   return (
     <div className="mt-3 relative">
@@ -892,19 +892,14 @@ const PlanViewerLeaflet = forwardRef(({
       <div
         ref={wrapRef}
         className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
-        style={{
-          height: wrapperHeight,
-          touchAction: isMobile ? "none" : undefined,
-          WebkitUserSelect: "none",
-          userSelect: "none",
-        }}
+        style={wrapperStyle}
       />
       {picker && (
         <div
           className="door-pick"
           style={{
             left: Math.max(8, Math.min((picker.x ?? 8) - 120, (wrapRef.current?.clientWidth || 320) - 180)),
-            top: Math.max(8, Math.min((picker.y ?? 8) - 8, wrapperHeight - 48)),
+            top: Math.max(8, Math.min((picker.y ?? 8) - 8, (wrapRef.current?.clientHeight || 320) - 48)),
           }}
         >
           {picker.items.slice(0, 8).map((it) => (
@@ -1000,8 +995,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-
-// src/pages/Doors.jsx — PARTIE 2/2 (MOBILE ULTRA-FLUID FIX v3)
+// src/pages/Doors.jsx — PARTIE 2/2 (DESKTOP MODAL + MOBILE MODAL, NO RECENTER)
 
 
 // ----------------------------- Page principale ----------------------------- //
@@ -1162,9 +1156,8 @@ function Doors() {
     setEditing(full?.door || door);
     setDrawerOpen(true);
     setDoorParam(door.id);
-    // ⚠️ Ne pas fermer le plan : le Drawer passe au-dessus (z-60).
+    // ⚠️ Le plan reste ouvert : le Drawer passe au-dessus (z-60).
   }
-  // ❌ Suppression de la création globale : plus d’openCreate utilisé via l’en-tête
 
   async function saveDoorBase() {
     if (!editing) return;
@@ -1184,7 +1177,6 @@ function Doors() {
         if (tab === "maps" && selectedPlan) await loadPositions(selectedPlan, planPage);
       }
     } else {
-      // Conserve la création “libre” si jamais appelée depuis ailleurs (non exposée à l’UI)
       try {
         let nameToUse = (payload.name || "").trim();
         let created = null;
@@ -1460,7 +1452,7 @@ function Doors() {
     setPdfReady(false);
   }
 
-  // Modal plein écran pour smartphone
+  // Modal plein écran (desktop + smartphone)
   function PlanModal({ open, onClose, children, title }) {
     useEffect(() => {
       const handler = (e) => { if (e.key === "Escape") onClose?.(); };
@@ -1689,21 +1681,16 @@ function Doors() {
             onPick={openPlan}
           />
 
-          {/* Desktop / tablette : viewer inline */}
-          {!isMobile && selectedPlan && (
-            <div className="bg-white rounded-2xl border shadow-sm p-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="font-semibold">
-                  {selectedPlan.display_name || selectedPlan.logical_name}
-                </div>
-                <div className="flex items-center gap-2">
-                  {/* ➕ retiré ici, car il est désormais DANS la carte */}
-                  <Btn variant="ghost" onClick={closePlan}>Fermer le plan</Btn>
-                </div>
-              </div>
+          {/* 🟦 PC + Mobile : Viewer en MODAL plein écran (plus d’inline) */}
+          <PlanModal
+            open={!!selectedPlan}
+            onClose={closePlan}
+            title={selectedPlan ? (selectedPlan.display_name || selectedPlan.logical_name) : ""}
+          >
+            {selectedPlan && (
               <PlanViewerLeaflet
                 ref={viewerRef}
-                key={selectedPlan?.id || selectedPlan?.logical_name || ""}
+                key={(selectedPlan?.id || selectedPlan?.logical_name || "") + "::modal"}
                 fileUrl={planFileUrl}
                 pageIndex={planPage}
                 points={positions}
@@ -1713,39 +1700,15 @@ function Doors() {
                 onCreatePoint={createDoorAtCenter}
                 unsavedIds={unsavedDoorIds}
                 disabled={false}
+                fitStrategy="once"
               />
-              {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
-            </div>
-          )}
-
-          {/* Mobile : modal plein écran SEULEMENT */}
-          {isMobile && (
-            <PlanModal
-              open={!!selectedPlan}
-              onClose={closePlan}
-              title={selectedPlan ? (selectedPlan.display_name || selectedPlan.logical_name) : ""}
-            >
-              {selectedPlan && (
-                <PlanViewerLeaflet
-                  ref={viewerRef}
-                  key={(selectedPlan?.id || selectedPlan?.logical_name || "") + "::mobile"}
-                  fileUrl={planFileUrl}
-                  pageIndex={planPage}
-                  points={positions}
-                  onReady={handlePdfReady}
-                  onMovePoint={handleMovePoint}
-                  onClickPoint={handleClickPoint}
-                  onCreatePoint={createDoorAtCenter}
-                  unsavedIds={unsavedDoorIds}
-                  disabled={false}
-                />
-              )}
-              {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
-            </PlanModal>
-          )}
+            )}
+            {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
+          </PlanModal>
         </div>
       )}
 
+      {/* Paramètres */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
           <div className="grid md:grid-cols-2 gap-4">
@@ -1796,7 +1759,7 @@ function Doors() {
         </div>
       )}
 
-      {/* Drawer Édition — z-index relevé pour passer au-dessus du modal plan */}
+      {/* Drawer Édition — z-index > modal */}
       {drawerOpen && editing && (
         <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
           <div className="space-y-4">
