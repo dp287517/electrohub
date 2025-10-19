@@ -498,6 +498,8 @@ const PlanViewerLeaflet = forwardRef(({
   // ✅ Nouveaux refs pour corriger le reset mobile
   const interactingRef = useRef(false);
   const roRef = useRef(null);
+  const lastSizeRef = useRef({ width: 0, height: 0 }); // Pour check si size changed
+  const resizeTimeoutRef = useRef(null); // Pour debounce
 
   const ICON_PX = 22;
 
@@ -699,23 +701,45 @@ const PlanViewerLeaflet = forwardRef(({
         }
         drawMarkers(points, viewport.width, viewport.height);
 
-        // ✅ ResizeObserver sur le conteneur (plus fiable sur mobile que window.resize)
+        // ✅ Resize handling : Debounce + check size change + fallback to window.resize on mobile
         if (wrapRef.current && !roRef.current) {
-          roRef.current = new ResizeObserver(() => {
-            const m = mapRef.current;
-            if (!m) return;
-            if (interactingRef.current) {
-              console.log('ResizeObserver: skipped due to interaction'); // Log pour debug
-              return; // jamais pendant un pinch/drag
-            }
-            const center = m.getCenter();
-            const zoom = m.getZoom();
-            console.log('ResizeObserver: before invalidateSize, center:', center, 'zoom:', zoom); // Log pour debug
-            m.invalidateSize(false);
-            m.setView(center, zoom, { animate: false }); // → pas de “reset”
-            console.log('ResizeObserver: after setView, center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug
-          });
-          roRef.current.observe(wrapRef.current);
+          const handleResize = () => {
+            console.log('Resize event triggered (RO or window)'); // Log pour debug trigger
+            if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
+            resizeTimeoutRef.current = setTimeout(() => {
+              const m = mapRef.current;
+              if (!m || !wrapRef.current) return;
+              if (interactingRef.current) {
+                console.log('Resize: skipped due to interaction'); // Log pour debug
+                return;
+              }
+              const newWidth = wrapRef.current.clientWidth;
+              const newHeight = wrapRef.current.clientHeight;
+              console.log('Resize: old size', lastSizeRef.current, 'new size', { width: newWidth, height: newHeight }); // Log sizes
+              if (newWidth === lastSizeRef.current.width && newHeight === lastSizeRef.current.height) {
+                console.log('Resize: skipped, size unchanged'); // Log pour debug no change
+                return;
+              }
+              lastSizeRef.current = { width: newWidth, height: newHeight };
+              const center = m.getCenter();
+              const zoom = m.getZoom();
+              console.log('Resize: before invalidateSize, center:', center, 'zoom:', zoom); // Log pour debug
+              m.invalidateSize(false);
+              m.setView(center, zoom, { animate: false });
+              console.log('Resize: after setView, center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug
+            }, 200); // Debounce 200ms
+          };
+
+          if (useIsMobile()) {
+            // Fallback to window.resize on mobile pour éviter RO over-trigger
+            window.addEventListener('resize', handleResize);
+            window.addEventListener('orientationchange', handleResize);
+            console.log('Using window.resize for mobile'); // Log setup
+          } else {
+            roRef.current = new ResizeObserver(handleResize);
+            roRef.current.observe(wrapRef.current);
+            console.log('Using ResizeObserver for desktop'); // Log setup
+          }
         }
 
         try { await pdf.cleanup(); } catch {}
@@ -731,12 +755,13 @@ const PlanViewerLeaflet = forwardRef(({
 
     return () => {
       aliveRef.current = false;
-      // Nettoyage observer
+      // Nettoyage
+      if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
       try { roRef.current?.disconnect(); } catch {}
       roRef.current = null;
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
 
-      // Important : on ne détruit pas la map si on va réutiliser le viewer avec le même conteneur.
-      // Ici on nettoie tout car ce composant est démonté/re-monté selon l’usage.
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy(); } catch {}
       const map = mapRef.current;
