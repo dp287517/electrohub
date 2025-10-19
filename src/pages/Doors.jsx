@@ -1,4 +1,4 @@
-// src/pages/Doors.jsx — PARTIE 1/2 (DESKTOP MODAL-READY + MOBILE NO-JUMP v4)
+// src/pages/Doors.jsx — PARTIE 1/2 (DESKTOP MODAL-READY + MOBILE NO-JUMP v5)
 
 import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
@@ -27,7 +27,9 @@ const InlineMapStyles = () => (
 
   /* Fond blanc pour éviter le "flash" gris/transparent */
   .leaflet-container { background:#fff; }
-  .leaflet-pane, .leaflet-map-pane { will-change: transform; }
+
+  /* ⚠️ on retire le will-change agressif qui peut déclencher des clignotements */
+  .leaflet-pane, .leaflet-map-pane { /* will-change: transform; */ }
 
   .door-pick {
     position:absolute; z-index:1300;
@@ -425,7 +427,7 @@ function PlanCard({ plan, onRename, onPick }) {
 
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
+      <div ref={obsRef} className="relative aspect-video flex items-center justify-center bg-gray-50">
         {isMobile ? (
           <div className="flex flex-col items-center justify-center text-gray-500">
             <div className="text-4xl leading-none">📄</div>
@@ -509,6 +511,11 @@ const PlanViewerLeaflet = forwardRef(({
 
   // Ajustement initial seulement (jamais pendant l'interaction)
   const didInitialFitRef = useRef(false);
+
+  // >>> nouveau: gestion de rendu hiDPI après zoom (debounce)
+  const hiDpiTimeoutRef = useRef(null);
+  const baseFitZoomRef = useRef(null);
+  const lastRenderedZoomRef = useRef(null);
 
   function makeDoorIcon(status, isUnsaved) {
     if (isUnsaved) {
@@ -626,7 +633,7 @@ const PlanViewerLeaflet = forwardRef(({
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        // rendu bitmap stable, qualité correcte
+        // rendu bitmap initial (qualité correcte), on ajuste ensuite en hiDPI après interaction
         const targetBitmapW = Math.min(4096, Math.max(1536, Math.floor((wrapRef.current.clientWidth || 1024) * dpr)));
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
@@ -643,15 +650,16 @@ const PlanViewerLeaflet = forwardRef(({
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
+        // ⚠️ scrollWheelZoom désactivé au départ pour éviter _leaflet_pos avant view init (cf. issues)
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
-          zoomAnimation: !isMobile,   // pas d’animation sur mobile → moins de flash
+          zoomAnimation: !isMobile,
           fadeAnimation: false,
           markerZoomAnimation: false,
           tap: false,
           touchZoom: isMobile ? "center" : true,
-          scrollWheelZoom: isMobile ? false : true,
+          scrollWheelZoom: false, // <— on activera après le premier fit
           dragging: true,
           preferCanvas: true,
           updateWhenIdle: true,
@@ -679,12 +687,15 @@ const PlanViewerLeaflet = forwardRef(({
         };
         const stopInteractionSoon = () => {
           if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-          interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 350);
+          interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 300);
         };
 
         m.on("zoomstart", startInteraction);
         m.on("movestart", startInteraction);
-        m.on("zoomend", stopInteractionSoon);
+        m.on("zoomend", () => {
+          stopInteractionSoon();
+          scheduleHiDpiRefresh();
+        });
         m.on("moveend", stopInteractionSoon);
 
         const handlePickAt = (containerPt) => {
@@ -718,29 +729,38 @@ const PlanViewerLeaflet = forwardRef(({
         imageLayerRef.current = layer;
         layer.addTo(m);
 
-        await new Promise(requestAnimationFrame);
-        m.invalidateSize(false);
+        // ⚠️ ensures DOM/layout ready before sizing
+        m.whenReady(() => {
+          setTimeout(() => m.invalidateSize(false), 0);
+        });
 
-        // Fit initial seulement si demandé
-        const fitZoom = m.getBoundsZoom(bounds, true);
-        m.options.zoomSnap = 0.1;
-        m.options.zoomDelta = 0.5;
-        m.setMinZoom(fitZoom);
-        m.setMaxZoom(fitZoom + 6);
-        m.setMaxBounds(bounds.pad(0.5));
+        // Fit initial quand l'image est *chargée* → garantit 100% visible + évite _leaflet_pos
+        layer.once("load", () => {
+          const fitZoom = m.getBoundsZoom(bounds, true);
+          baseFitZoomRef.current = fitZoom;
+          m.options.zoomSnap = 0.1;
+          m.options.zoomDelta = 0.5;
+          m.setMinZoom(fitZoom);
+          m.setMaxZoom(fitZoom + 6);
+          m.setMaxBounds(bounds.pad(0.5));
 
-        if (fitStrategy === "once" && !didInitialFitRef.current) {
-          didInitialFitRef.current = true;
-          m.fitBounds(bounds, { padding: [8, 8] });
-        }
+          if (fitStrategy === "once" && !didInitialFitRef.current) {
+            didInitialFitRef.current = true;
+            m.fitBounds(bounds, { padding: [8, 8], animate: false });
+            lastRenderedZoomRef.current = m.getZoom();
+          }
 
-        if (!markersLayerRef.current) {
-          markersLayerRef.current = L.layerGroup().addTo(m);
-        }
-        drawMarkers(points, viewport.width, viewport.height);
+          // ✅ activer la molette seulement après le fit
+          m.scrollWheelZoom.enable();
+          // première passe de markers
+          if (!markersLayerRef.current) {
+            markersLayerRef.current = L.layerGroup().addTo(m);
+          }
+          drawMarkers(points, viewport.width, viewport.height);
+          onReady?.();
+        });
 
         try { await pdf.cleanup(); } catch {}
-        onReady?.();
       } catch (e) {
         if (String(e?.name) === "RenderingCancelledException") return;
         if (String(e?.message || "").includes("Worker was")) return;
@@ -754,7 +774,6 @@ const PlanViewerLeaflet = forwardRef(({
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
       m.invalidateSize(false);
-      // pas de fitBounds ici → évite le “retour automatique” et le “plan coupé”
     };
 
     const onOrientation = () => {
@@ -771,6 +790,7 @@ const PlanViewerLeaflet = forwardRef(({
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onOrientation);
       if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
+      if (hiDpiTimeoutRef.current) clearTimeout(hiDpiTimeoutRef.current);
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy(); } catch {}
       const map = mapRef.current;
@@ -786,6 +806,8 @@ const PlanViewerLeaflet = forwardRef(({
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
       addBtnControlRef.current = null;
       didInitialFitRef.current = false;
+      baseFitZoomRef.current = null;
+      lastRenderedZoomRef.current = null;
     };
   }, [fileUrl, pageIndex, disabled, fitStrategy]);
 
@@ -852,7 +874,7 @@ const PlanViewerLeaflet = forwardRef(({
 
         // relâche le lock un peu après
         if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-        interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 350);
+        interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 300);
       });
 
       mk.addTo(g);
@@ -866,15 +888,59 @@ const PlanViewerLeaflet = forwardRef(({
     const layer = imageLayerRef.current;
     if (!m || !layer) return;
     const b = layer.getBounds();
-    // pas de scrollWheelZoom toggling ici (source de flash sur certains navigateurs)
     m.invalidateSize(false);
     m.fitBounds(b, { padding: [8, 8] });
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
+  // >>> rendu hiDPI différé (qualité en zoom) — sans recenter ni flash
+  async function scheduleHiDpiRefresh() {
+    if (hiDpiTimeoutRef.current) clearTimeout(hiDpiTimeoutRef.current);
+    hiDpiTimeoutRef.current = setTimeout(async () => {
+      if (!mapRef.current || !imageLayerRef.current || !fileUrl) return;
+      if (isInteractingRef.current) return; // attend la fin d’interaction
+      const m = mapRef.current;
+      const curZoom = m.getZoom();
+      const baseFit = baseFitZoomRef.current ?? curZoom;
+      // Si on n’a pas bougé de zoom depuis le dernier rendu, inutile
+      if (lastRenderedZoomRef.current != null && Math.abs(curZoom - lastRenderedZoomRef.current) < 0.001) return;
+
+      try {
+        // calcule une échelle PDF visée : ~1x pour fit, 2x pour +2 niveaux, plafonnée
+        const zoomGain = Math.max(0, curZoom - baseFit);
+        const dpr = window.devicePixelRatio || 1;
+        const scaleMult = Math.min(3, 1 * Math.pow(1.5, zoomGain)) * Math.min(2, dpr);
+        // re-render rapide
+        const task = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
+        const pdf = await task.promise;
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        const baseVp = page.getViewport({ scale: 1 });
+        const newVp = page.getViewport({ scale: scaleMult });
+        const maxSide = Math.min(8192, Math.max(newVp.width, newVp.height)); // garde-fous
+        const clamp = Math.min(8192 / Math.max(baseVp.width, baseVp.height), scaleMult);
+        const vp = page.getViewport({ scale: clamp });
+
+        const c = document.createElement("canvas");
+        c.width = Math.floor(vp.width);
+        c.height = Math.floor(vp.height);
+        const ctx = c.getContext("2d", { alpha: true });
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        const url = c.toDataURL("image/png");
+
+        // swap d’URL sans toucher aux bounds → pas de recentrage
+        imageLayerRef.current.setUrl(url);
+        setImgSize({ w: c.width, h: c.height });
+        lastRenderedZoomRef.current = curZoom;
+
+        try { await pdf.cleanup(); } catch {}
+        try { await task.destroy(); } catch {}
+      } catch (_e) {
+        // silencieux : c’est un upgrade qualité opportuniste
+      }
+    }, 180);
+  }
+
   // Hauteur STABLE (anti-flash/anti-coupure)
-  // - mobile : 100dvh - marge
-  // - desktop : min(82vh, 900px)
   const wrapperStyle = useMemo(() => {
     return {
       height: isMobile ? "calc(100dvh - 160px)" : "min(82vh, 900px)",
