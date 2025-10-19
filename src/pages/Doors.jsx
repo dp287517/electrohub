@@ -1,4 +1,4 @@
-// src/pages/Doors.jsx — PARTIE 1/2 (DESKTOP MODAL-READY + MOBILE NO-JUMP v5)
+// src/pages/Doors.jsx — PARTIE 1/2 (DESKTOP MODAL-READY + MOBILE NO-JUMP v4)
 
 import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
@@ -27,9 +27,7 @@ const InlineMapStyles = () => (
 
   /* Fond blanc pour éviter le "flash" gris/transparent */
   .leaflet-container { background:#fff; }
-
-  /* ⚠️ on retire le will-change agressif qui peut déclencher des clignotements */
-  .leaflet-pane, .leaflet-map-pane { /* will-change: transform; */ }
+  .leaflet-pane, .leaflet-map-pane { will-change: transform; }
 
   .door-pick {
     position:absolute; z-index:1300;
@@ -427,7 +425,7 @@ function PlanCard({ plan, onRename, onPick }) {
 
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div ref={obsRef} className="relative aspect-video flex items-center justify-center bg-gray-50">
+      <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
         {isMobile ? (
           <div className="flex flex-col items-center justify-center text-gray-500">
             <div className="text-4xl leading-none">📄</div>
@@ -501,6 +499,14 @@ const PlanViewerLeaflet = forwardRef(({
 
   const rafDrawRef = useRef(0);
 
+  // 🔒 PDF document/page et verrous anti-concurrence (corrige "Transport destroyed")
+  const pdfDocRef = useRef(null);
+  const pdfPageRef = useRef(null);
+  const hiDpiInFlightRef = useRef(false);
+  const hiDpiTimeoutRef = useRef(null);
+  const baseFitZoomRef = useRef(null);
+  const lastRenderedZoomRef = useRef(null);
+
   const ICON_PX = 22;
 
   const isMobile = useMemo(() => {
@@ -511,11 +517,6 @@ const PlanViewerLeaflet = forwardRef(({
 
   // Ajustement initial seulement (jamais pendant l'interaction)
   const didInitialFitRef = useRef(false);
-
-  // >>> nouveau: gestion de rendu hiDPI après zoom (debounce)
-  const hiDpiTimeoutRef = useRef(null);
-  const baseFitZoomRef = useRef(null);
-  const lastRenderedZoomRef = useRef(null);
 
   function makeDoorIcon(status, isUnsaved) {
     if (isUnsaved) {
@@ -583,6 +584,54 @@ const PlanViewerLeaflet = forwardRef(({
     map.addControl(addBtnControlRef.current);
   }
 
+  // --- hiDPI refresh (réutilise la même page PDF, pas de getDocument concurrent) ---
+  async function scheduleHiDpiRefresh() {
+    if (hiDpiTimeoutRef.current) clearTimeout(hiDpiTimeoutRef.current);
+    hiDpiTimeoutRef.current = setTimeout(async () => {
+      const m = mapRef.current;
+      const layer = imageLayerRef.current;
+      if (!m || !layer || !pdfPageRef.current) return;
+      if (isInteractingRef.current) return;
+      if (hiDpiInFlightRef.current) return;
+
+      const curZoom = m.getZoom();
+      const baseFit = baseFitZoomRef.current ?? curZoom;
+      if (lastRenderedZoomRef.current != null && Math.abs(curZoom - lastRenderedZoomRef.current) < 0.001) return;
+
+      hiDpiInFlightRef.current = true;
+      try {
+        const zoomGain = Math.max(0, curZoom - baseFit);
+        const dpr = window.devicePixelRatio || 1;
+        const scaleMult = Math.min(3, Math.pow(1.5, zoomGain)) * Math.min(2, dpr);
+
+        const page = pdfPageRef.current;
+        const baseVp = page.getViewport({ scale: 1 });
+        const clamp = Math.min(8192 / Math.max(baseVp.width, baseVp.height), scaleMult);
+        const vp = page.getViewport({ scale: clamp });
+
+        const c = document.createElement("canvas");
+        c.width = Math.floor(vp.width);
+        c.height = Math.floor(vp.height);
+        const ctx = c.getContext("2d", { alpha: true });
+
+        const render = page.render({ canvasContext: ctx, viewport: vp });
+        renderTaskRef.current = render;
+        await render.promise;
+
+        if (!mapRef.current || !imageLayerRef.current) return;
+        const url = c.toDataURL("image/png");
+        imageLayerRef.current.setUrl(url);
+        setImgSize({ w: c.width, h: c.height });
+        lastRenderedZoomRef.current = curZoom;
+      } catch {
+        // pas de bruit console : amélioration opportuniste
+      } finally {
+        renderTaskRef.current = null;
+        hiDpiInFlightRef.current = false;
+      }
+    }, 180);
+  }
+
   // >>> INITIALISATION / RENDU PDF
   useEffect(() => {
     if (disabled) return;
@@ -598,12 +647,6 @@ const PlanViewerLeaflet = forwardRef(({
     }
     lastJob.current.key = jobKey;
 
-    const cleanupPdf = async () => {
-      try { renderTaskRef.current?.cancel(); } catch {}
-      try { await loadingTaskRef.current?.destroy(); } catch {}
-      renderTaskRef.current = null;
-      loadingTaskRef.current = null;
-    };
     const cleanupMap = () => {
       const map = mapRef.current;
       if (map) {
@@ -621,21 +664,28 @@ const PlanViewerLeaflet = forwardRef(({
 
     (async () => {
       try {
-        await cleanupPdf();
+        // nettoie seul la carte; on gardera le doc pdf pour la durée de vie du viewer.
         cleanupMap();
 
         const dpr = window.devicePixelRatio || 1;
 
-        loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
-        const pdf = await loadingTaskRef.current.promise;
-        if (cancelled) return;
+        // 🔁 Ouvre/charge le doc une seule fois et le réutilise
+        if (!pdfDocRef.current) {
+          loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
+          pdfDocRef.current = await loadingTaskRef.current.promise;
+          loadingTaskRef.current = null;
+        }
+        if (cancelled || !pdfDocRef.current) return;
 
-        const page = await pdf.getPage(Number(pageIndex) + 1);
+        if (!pdfPageRef.current) {
+          pdfPageRef.current = await pdfDocRef.current.getPage(Number(pageIndex) + 1);
+        }
+        const page = pdfPageRef.current;
         const baseVp = page.getViewport({ scale: 1 });
 
-        // rendu bitmap initial (qualité correcte), on ajuste ensuite en hiDPI après interaction
-        const targetBitmapW = Math.min(4096, Math.max(1536, Math.floor((wrapRef.current.clientWidth || 1024) * dpr)));
-        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        // rendu bitmap initial raisonnable (évite blocage sur plans énormes)
+        const targetBitmapW = Math.min(2400, Math.floor((wrapRef.current.clientWidth || 1024) * dpr));
+        const safeScale = Math.min(1.5, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
         const canvas = document.createElement("canvas");
@@ -650,16 +700,15 @@ const PlanViewerLeaflet = forwardRef(({
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
-        // ⚠️ scrollWheelZoom désactivé au départ pour éviter _leaflet_pos avant view init (cf. issues)
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
-          zoomAnimation: !isMobile,
+          zoomAnimation: !isMobile,   // pas d’animation sur mobile → moins de flash
           fadeAnimation: false,
           markerZoomAnimation: false,
           tap: false,
           touchZoom: isMobile ? "center" : true,
-          scrollWheelZoom: false, // <— on activera après le premier fit
+          scrollWheelZoom: isMobile ? false : true,
           dragging: true,
           preferCanvas: true,
           updateWhenIdle: true,
@@ -687,15 +736,12 @@ const PlanViewerLeaflet = forwardRef(({
         };
         const stopInteractionSoon = () => {
           if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-          interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 300);
+          interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; scheduleHiDpiRefresh(); }, 350);
         };
 
         m.on("zoomstart", startInteraction);
         m.on("movestart", startInteraction);
-        m.on("zoomend", () => {
-          stopInteractionSoon();
-          scheduleHiDpiRefresh();
-        });
+        m.on("zoomend", stopInteractionSoon);
         m.on("moveend", stopInteractionSoon);
 
         const handlePickAt = (containerPt) => {
@@ -729,15 +775,13 @@ const PlanViewerLeaflet = forwardRef(({
         imageLayerRef.current = layer;
         layer.addTo(m);
 
-        // ⚠️ ensures DOM/layout ready before sizing
-        m.whenReady(() => {
-          setTimeout(() => m.invalidateSize(false), 0);
-        });
-
-        // Fit initial quand l'image est *chargée* → garantit 100% visible + évite _leaflet_pos
+        // ⚠️ attend le chargement effectif du bitmap avant fit/invalidate → évite les "flash" & recentering buggé
         layer.once("load", () => {
+          if (!mapRef.current) return;
+          m.invalidateSize(false);
+
+          // Fit initial seulement si demandé
           const fitZoom = m.getBoundsZoom(bounds, true);
-          baseFitZoomRef.current = fitZoom;
           m.options.zoomSnap = 0.1;
           m.options.zoomDelta = 0.5;
           m.setMinZoom(fitZoom);
@@ -746,21 +790,22 @@ const PlanViewerLeaflet = forwardRef(({
 
           if (fitStrategy === "once" && !didInitialFitRef.current) {
             didInitialFitRef.current = true;
-            m.fitBounds(bounds, { padding: [8, 8], animate: false });
-            lastRenderedZoomRef.current = m.getZoom();
+            m.fitBounds(bounds, { padding: [8, 8] });
           }
 
-          // ✅ activer la molette seulement après le fit
-          m.scrollWheelZoom.enable();
-          // première passe de markers
+          baseFitZoomRef.current = m.getZoom();
+          lastRenderedZoomRef.current = null;
+
           if (!markersLayerRef.current) {
             markersLayerRef.current = L.layerGroup().addTo(m);
           }
           drawMarkers(points, viewport.width, viewport.height);
+
+          // première passe hiDPI (silencieuse)
+          scheduleHiDpiRefresh();
           onReady?.();
         });
 
-        try { await pdf.cleanup(); } catch {}
       } catch (e) {
         if (String(e?.name) === "RenderingCancelledException") return;
         if (String(e?.message || "").includes("Worker was")) return;
@@ -774,12 +819,14 @@ const PlanViewerLeaflet = forwardRef(({
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
       m.invalidateSize(false);
+      scheduleHiDpiRefresh();
     };
 
     const onOrientation = () => {
       const m = mapRef.current;
       if (!m) return;
       m.invalidateSize(false);
+      scheduleHiDpiRefresh();
     };
 
     window.addEventListener("resize", onResize);
@@ -790,9 +837,14 @@ const PlanViewerLeaflet = forwardRef(({
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onOrientation);
       if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-      if (hiDpiTimeoutRef.current) clearTimeout(hiDpiTimeoutRef.current);
+
+      // --- cleanup PDF sûr (après avoir annulé les rendus)
       try { renderTaskRef.current?.cancel(); } catch {}
-      try { loadingTaskRef.current?.destroy(); } catch {}
+      renderTaskRef.current = null;
+
+      if (hiDpiTimeoutRef.current) clearTimeout(hiDpiTimeoutRef.current);
+      hiDpiTimeoutRef.current = null;
+
       const map = mapRef.current;
       if (map) {
         try { map.off(); } catch {}
@@ -806,8 +858,14 @@ const PlanViewerLeaflet = forwardRef(({
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
       addBtnControlRef.current = null;
       didInitialFitRef.current = false;
-      baseFitZoomRef.current = null;
-      lastRenderedZoomRef.current = null;
+
+      (async () => {
+        // on libère les refs doc/page après avoir stoppé tout rendu
+        try { pdfPageRef.current = null; } catch {}
+        try { if (pdfDocRef.current?.destroy) await pdfDocRef.current.destroy(); } catch {}
+        pdfDocRef.current = null;
+        loadingTaskRef.current = null;
+      })();
     };
   }, [fileUrl, pageIndex, disabled, fitStrategy]);
 
@@ -874,7 +932,7 @@ const PlanViewerLeaflet = forwardRef(({
 
         // relâche le lock un peu après
         if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-        interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 300);
+        interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; scheduleHiDpiRefresh(); }, 350);
       });
 
       mk.addTo(g);
@@ -890,57 +948,15 @@ const PlanViewerLeaflet = forwardRef(({
     const b = layer.getBounds();
     m.invalidateSize(false);
     m.fitBounds(b, { padding: [8, 8] });
+    baseFitZoomRef.current = m.getZoom();
+    lastRenderedZoomRef.current = null;
+    scheduleHiDpiRefresh();
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
-  // >>> rendu hiDPI différé (qualité en zoom) — sans recenter ni flash
-  async function scheduleHiDpiRefresh() {
-    if (hiDpiTimeoutRef.current) clearTimeout(hiDpiTimeoutRef.current);
-    hiDpiTimeoutRef.current = setTimeout(async () => {
-      if (!mapRef.current || !imageLayerRef.current || !fileUrl) return;
-      if (isInteractingRef.current) return; // attend la fin d’interaction
-      const m = mapRef.current;
-      const curZoom = m.getZoom();
-      const baseFit = baseFitZoomRef.current ?? curZoom;
-      // Si on n’a pas bougé de zoom depuis le dernier rendu, inutile
-      if (lastRenderedZoomRef.current != null && Math.abs(curZoom - lastRenderedZoomRef.current) < 0.001) return;
-
-      try {
-        // calcule une échelle PDF visée : ~1x pour fit, 2x pour +2 niveaux, plafonnée
-        const zoomGain = Math.max(0, curZoom - baseFit);
-        const dpr = window.devicePixelRatio || 1;
-        const scaleMult = Math.min(3, 1 * Math.pow(1.5, zoomGain)) * Math.min(2, dpr);
-        // re-render rapide
-        const task = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
-        const pdf = await task.promise;
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-        const baseVp = page.getViewport({ scale: 1 });
-        const newVp = page.getViewport({ scale: scaleMult });
-        const maxSide = Math.min(8192, Math.max(newVp.width, newVp.height)); // garde-fous
-        const clamp = Math.min(8192 / Math.max(baseVp.width, baseVp.height), scaleMult);
-        const vp = page.getViewport({ scale: clamp });
-
-        const c = document.createElement("canvas");
-        c.width = Math.floor(vp.width);
-        c.height = Math.floor(vp.height);
-        const ctx = c.getContext("2d", { alpha: true });
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
-        const url = c.toDataURL("image/png");
-
-        // swap d’URL sans toucher aux bounds → pas de recentrage
-        imageLayerRef.current.setUrl(url);
-        setImgSize({ w: c.width, h: c.height });
-        lastRenderedZoomRef.current = curZoom;
-
-        try { await pdf.cleanup(); } catch {}
-        try { await task.destroy(); } catch {}
-      } catch (_e) {
-        // silencieux : c’est un upgrade qualité opportuniste
-      }
-    }, 180);
-  }
-
   // Hauteur STABLE (anti-flash/anti-coupure)
+  // - mobile : 100dvh - marge
+  // - desktop : min(82vh, 900px)
   const wrapperStyle = useMemo(() => {
     return {
       height: isMobile ? "calc(100dvh - 160px)" : "min(82vh, 900px)",
@@ -1061,6 +1077,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
+// --- FIN PARTIE 1/2 ---
 // src/pages/Doors.jsx — PARTIE 2/2 (DESKTOP MODAL + MOBILE MODAL, NO RECENTER)
 
 
@@ -1363,6 +1380,7 @@ function Doors() {
       setFilesVersion((v) => v + 1);
       setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } finally {
+      setUploading=false; // eslint-disable-line no-self-assign
       setUploading(false);
     }
   }
