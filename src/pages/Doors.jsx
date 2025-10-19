@@ -495,12 +495,6 @@ const PlanViewerLeaflet = forwardRef(({
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
-  // ✅ Nouveaux refs pour corriger le reset mobile
-  const interactingRef = useRef(false);
-  const roRef = useRef(null);
-  const lastSizeRef = useRef({ width: 0, height: 0 }); // Pour check si size changed
-  const resizeTimeoutRef = useRef(null); // Pour debounce
-
   const ICON_PX = 22;
 
   function makeDoorIcon(status, isUnsaved) {
@@ -593,6 +587,20 @@ const PlanViewerLeaflet = forwardRef(({
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
     };
+    const cleanupMap = () => {
+      const map = mapRef.current;
+      if (map) {
+        try { map.off(); } catch {}
+        try { map.stop?.(); } catch {}
+        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
+        try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
+        try { map.remove(); } catch {}
+      }
+      mapRef.current = null;
+      imageLayerRef.current = null;
+      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
+      addBtnControlRef.current = null;
+    };
 
     (async () => {
       try {
@@ -637,11 +645,10 @@ const PlanViewerLeaflet = forwardRef(({
             touchZoom: true,
             tap: true,
             preferCanvas: true,
-            maxBoundsViscosity: 1.0, // Ajout pour rendre les bounds solides et éviter le snap retardé
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           ensureAddButton(m);
-          // Sélection d’un marqueur proche
+          // Select marqueur proche
           m.on("click", (e) => {
             if (!aliveRef.current) return;
             const clicked = e.containerPoint;
@@ -656,19 +663,7 @@ const PlanViewerLeaflet = forwardRef(({
             else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
             else setPicker(null);
           });
-          // ⛳️ Flag d’interaction pour bloquer tout recentrage automatique
-          m.on("zoomstart movestart", () => {
-            console.log('zoomstart or movestart: interaction started'); // Log pour debug
-            setPicker(null);
-            interactingRef.current = true;
-          });
-          m.on("zoomend moveend", () => {
-            console.log('zoomend or moveend: interaction ended, center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug snap
-            setTimeout(() => { 
-              interactingRef.current = false; 
-              console.log('interaction flag reset after timeout');
-            }, 200);
-          });
+          m.on("zoomstart movestart", () => setPicker(null));
           mapRef.current = m;
         }
 
@@ -685,7 +680,6 @@ const PlanViewerLeaflet = forwardRef(({
 
         await new Promise(requestAnimationFrame);
         map.invalidateSize(false);
-        console.log('invalidateSize called after image add'); // Log pour debug
 
         const fitZoom = map.getBoundsZoom(bounds, true);
         map.options.zoomSnap = 0.1;
@@ -694,54 +688,13 @@ const PlanViewerLeaflet = forwardRef(({
         map.setMaxZoom(fitZoom + 6);
         map.setMaxBounds(bounds.pad(0.5));
         map.fitBounds(bounds, { padding: [8, 8] });
-        console.log('fitBounds called, center:', map.getCenter(), 'zoom:', map.getZoom()); // Log pour debug initial view
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
         }
         drawMarkers(points, viewport.width, viewport.height);
 
-        // ✅ Resize handling : Debounce + check size change + fallback to window.resize on mobile
-        if (wrapRef.current && !roRef.current) {
-          const handleResize = () => {
-            console.log('Resize event triggered (RO or window)'); // Log pour debug trigger
-            if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-            resizeTimeoutRef.current = setTimeout(() => {
-              const m = mapRef.current;
-              if (!m || !wrapRef.current) return;
-              if (interactingRef.current) {
-                console.log('Resize: skipped due to interaction'); // Log pour debug
-                return;
-              }
-              const newWidth = wrapRef.current.clientWidth;
-              const newHeight = wrapRef.current.clientHeight;
-              console.log('Resize: old size', lastSizeRef.current, 'new size', { width: newWidth, height: newHeight }); // Log sizes
-              if (newWidth === lastSizeRef.current.width && newHeight === lastSizeRef.current.height) {
-                console.log('Resize: skipped, size unchanged'); // Log pour debug no change
-                return;
-              }
-              lastSizeRef.current = { width: newWidth, height: newHeight };
-              const center = m.getCenter();
-              const zoom = m.getZoom();
-              console.log('Resize: before invalidateSize, center:', center, 'zoom:', zoom); // Log pour debug
-              m.invalidateSize(false);
-              m.setView(center, zoom, { animate: false });
-              console.log('Resize: after setView, center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug
-            }, 200); // Debounce 200ms
-          };
-
-          if (useIsMobile()) {
-            // Fallback to window.resize on mobile pour éviter RO over-trigger
-            window.addEventListener('resize', handleResize);
-            window.addEventListener('orientationchange', handleResize);
-            console.log('Using window.resize for mobile'); // Log setup
-          } else {
-            roRef.current = new ResizeObserver(handleResize);
-            roRef.current.observe(wrapRef.current);
-            console.log('Using ResizeObserver for desktop'); // Log setup
-          }
-        }
-
+        setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
         try { await pdf.cleanup(); } catch {}
         onReady?.();
       } catch (e) {
@@ -753,15 +706,24 @@ const PlanViewerLeaflet = forwardRef(({
       }
     })();
 
-    return () => {
-      aliveRef.current = false;
-      // Nettoyage
-      if (resizeTimeoutRef.current) clearTimeout(resizeTimeoutRef.current);
-      try { roRef.current?.disconnect(); } catch {}
-      roRef.current = null;
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
+    const onResize = () => {
+      const m = mapRef.current;
+      const layer = imageLayerRef.current;
+      if (!m || !layer) return;
+      const b = layer.getBounds();
+      m.invalidateSize(false);
+      m.fitBounds(b, { padding: [8, 8] });
+    };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
 
+    return () => {
+      cancelled = true;
+      aliveRef.current = false;
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      // Important : on ne détruit pas la map si on va réutiliser le viewer avec le même conteneur.
+      // Ici on nettoie tout car ce composant est démonté/re-monté selon l’usage.
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy(); } catch {}
       const map = mapRef.current;
@@ -850,7 +812,6 @@ const PlanViewerLeaflet = forwardRef(({
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
-    console.log('adjust called, new center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug manual adjust
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
@@ -1183,7 +1144,7 @@ function Doors() {
                 building: payload.building,
                 floor: payload.floor,
                 location: payload.location,
-              status: editing.status || STATUS.A_FAIRE,
+                status: editing.status || STATUS.A_FAIRE,
               });
               setToast(`Nom déjà pris. Créé comme « ${created?.door?.name} » ✅`);
             } else {
