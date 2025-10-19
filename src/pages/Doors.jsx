@@ -1,4 +1,4 @@
-// src/pages/Doors.jsx — PARTIE 1/2 (DESKTOP MODAL-READY + MOBILE NO-JUMP v5, container-safe)
+// src/pages/Doors.jsx — PARTIE 1/2 (DESKTOP MODAL-READY + MOBILE NO-JUMP v6 — fixes anti-flash/anti-recenter)
 
 import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
@@ -498,6 +498,9 @@ const PlanViewerLeaflet = forwardRef(({
   const renderTaskRef = useRef(null);
 
   const rafDrawRef = useRef(0);
+  const rafInitRef = useRef(0);
+  const rafInit2Ref = useRef(0);
+  const resizeRafRef = useRef(0);
 
   const ICON_PX = 22;
 
@@ -507,7 +510,6 @@ const PlanViewerLeaflet = forwardRef(({
     return (window.innerWidth < 640) || !!mm;
   }, []);
 
-  // Ajustement initial seulement (jamais pendant l'interaction)
   const didInitialFitRef = useRef(false);
 
   function makeDoorIcon(status, isUnsaved) {
@@ -576,23 +578,6 @@ const PlanViewerLeaflet = forwardRef(({
     map.addControl(addBtnControlRef.current);
   }
 
-  /** Attente jusqu’à ce que le conteneur soit présent, connecté et dimensionné */
-  const waitForContainerReady = useCallback(async (el, { maxFrames = 90 } = {}) => {
-    let frames = 0;
-    // rAF loop pour attendre que le DOM soit peint et que le modal soit visible
-    while (aliveRef.current) {
-      if (el && el.isConnected) {
-        const cw = el.clientWidth || 0;
-        const ch = el.clientHeight || 0;
-        if (cw >= 16 && ch >= 16) return true;
-      }
-      frames += 1;
-      if (frames > maxFrames) return false;
-      await new Promise((r) => requestAnimationFrame(r));
-    }
-    return false;
-  }, []);
-
   // >>> INITIALISATION / RENDU PDF
   useEffect(() => {
     if (disabled) return;
@@ -601,15 +586,20 @@ const PlanViewerLeaflet = forwardRef(({
     let cancelled = false;
     aliveRef.current = true;
 
-    const containerEl = wrapRef.current;
-    if (!containerEl) return; // pas encore monté : on repassera au prochain render
-
-    const jobKey = `${fileUrl}::${pageIndex}`;
-    if (lastJob.current.key === jobKey && mapRef.current) {
+    const keyNow = `${fileUrl}::${pageIndex}`;
+    if (lastJob.current.key === keyNow && mapRef.current && imageLayerRef.current) {
       onReady?.();
       return;
     }
-    lastJob.current.key = jobKey;
+    lastJob.current.key = keyNow;
+
+    const clearTimers = () => {
+      if (interactionTimeoutRef.current) { clearTimeout(interactionTimeoutRef.current); interactionTimeoutRef.current = null; }
+      if (rafDrawRef.current) { cancelAnimationFrame(rafDrawRef.current); rafDrawRef.current = 0; }
+      if (rafInitRef.current) { cancelAnimationFrame(rafInitRef.current); rafInitRef.current = 0; }
+      if (rafInit2Ref.current) { cancelAnimationFrame(rafInit2Ref.current); rafInit2Ref.current = 0; }
+      if (resizeRafRef.current) { cancelAnimationFrame(resizeRafRef.current); resizeRafRef.current = 0; }
+    };
 
     const cleanupPdf = async () => {
       try { renderTaskRef.current?.cancel(); } catch {}
@@ -618,46 +608,49 @@ const PlanViewerLeaflet = forwardRef(({
       loadingTaskRef.current = null;
     };
     const cleanupMap = () => {
-      const map = mapRef.current;
-      if (map) {
-        try { map.off(); } catch {}
-        try { map.stop?.(); } catch {}
-        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-        try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
-        try { map.remove(); } catch {}
+      const m = mapRef.current;
+      if (m) {
+        try { m.off(); } catch {}
+        try { m._stop?.(); } catch {}
+        try { m.stop?.(); } catch {}
+        try { m.eachLayer((l) => { try { m.removeLayer(l); } catch {} }); } catch {}
+        try { addBtnControlRef.current && m.removeControl(addBtnControlRef.current); } catch {}
+        try { m.remove(); } catch {}
       }
       mapRef.current = null;
       imageLayerRef.current = null;
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
       addBtnControlRef.current = null;
+      didInitialFitRef.current = false;
     };
 
     (async () => {
       try {
+        clearTimers();
         await cleanupPdf();
         cleanupMap();
 
-        // 🔒 Attendre que le conteneur soit réellement prêt (évite clientWidth null/0)
-        const ready = await waitForContainerReady(containerEl);
-        if (!ready || cancelled || !aliveRef.current) return;
+        // ⛔️ S’assure que le conteneur existe et est mesurable
+        const ensureWrap = () => wrapRef.current && wrapRef.current.clientWidth > 0 && wrapRef.current.clientHeight > 0;
+        await new Promise((ok) => rafInitRef.current = requestAnimationFrame(ok));
+        if (!ensureWrap() || cancelled) return;
+        await new Promise((ok) => rafInit2Ref.current = requestAnimationFrame(ok));
+        if (!ensureWrap() || cancelled) return;
 
         const dpr = window.devicePixelRatio || 1;
 
         loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTaskRef.current.promise;
-        if (cancelled || !aliveRef.current) return;
+        if (cancelled) return;
 
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        // rendu bitmap stable, qualité correcte
-        const containerWidth = Math.max(320, containerEl.clientWidth || 1024);
-        const targetBitmapW = Math.min(4096, Math.max(1536, Math.floor(containerWidth * dpr)));
-        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
-        const viewport = page.getViewport({ scale: safeScale });
-
-        // Cas extrême: si viewport retourné est invalide → abandon
-        if (!Number.isFinite(viewport.width) || viewport.width <= 0) return;
+        // rendu bitmap stable (pas surdimensionné → évite scroll jank)
+        const cssW = Math.max(640, wrapRef.current?.clientWidth || 1024);
+        const targetBitmapW = Math.min(4096, Math.max(1536, Math.floor(cssW * dpr)));
+        const scale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        const viewport = page.getViewport({ scale });
 
         const canvas = document.createElement("canvas");
         canvas.width  = Math.floor(viewport.width);
@@ -666,41 +659,48 @@ const PlanViewerLeaflet = forwardRef(({
         const renderTask = page.render({ canvasContext: ctx, viewport });
         renderTaskRef.current = renderTask;
         await renderTask.promise;
-        if (cancelled || !aliveRef.current) return;
+        if (cancelled) return;
 
         const dataUrl = canvas.toDataURL("image/png");
-        setImgSize({ w: canvas.width, h: canvas.height });
+        const width = canvas.width, height = canvas.height;
+        setImgSize({ w: width, h: height });
 
-        // Revalider le conteneur (il peut disparaître si modal se ferme)
-        if (!containerEl || !containerEl.isConnected) return;
-
-        const m = L.map(containerEl, {
+        // ——— MAP sans animation (anti-flash / anti-race)
+        const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
-          zoomAnimation: !isMobile,
+          zoomAnimation: false,
           fadeAnimation: false,
           markerZoomAnimation: false,
           tap: false,
-          touchZoom: isMobile ? "center" : true,
-          scrollWheelZoom: isMobile ? false : true,
+          touchZoom: "center",
+          scrollWheelZoom: "center",
           dragging: true,
           preferCanvas: true,
           updateWhenIdle: true,
+          updateWhenZooming: false,
           inertia: true,
-          wheelPxPerZoomLevel: isMobile ? 180 : 120,
+          wheelPxPerZoomLevel: 120,
+          wheelDebounceTime: 60,
           bounceAtZoomLimits: false,
+          keyboard: false,
         });
 
-        // Limites visqueuses (pas de “rebond-retour” brusque)
-        m.options.maxBoundsViscosity = 1.0;
+        // limites et zooms
+        const bounds = L.latLngBounds([[0, 0], [height, width]]);
+        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
+        imageLayerRef.current = layer;
+        layer.addTo(m);
 
-        try {
-          if (isMobile) {
-            L.DomEvent.disableScrollPropagation(containerEl);
-            L.DomEvent.disableClickPropagation(containerEl);
-          }
-        } catch {}
+        // Min/Max zoom calculés AVANT tout move
+        const fitZoom = m.getBoundsZoom(bounds, true);
+        m.options.zoomSnap = 0;
+        m.options.zoomDelta = 0.5;
+        m.setMinZoom(fitZoom);
+        m.setMaxZoom(fitZoom + 6);
+        m.setMaxBounds(bounds.pad(0.0)); // pas de pad → pas de “rebond” visuel
 
+        // UI
         L.control.zoom({ position: "topright" }).addTo(m);
         ensureAddButton(m);
 
@@ -710,16 +710,16 @@ const PlanViewerLeaflet = forwardRef(({
         };
         const stopInteractionSoon = () => {
           if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-          interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 350);
+          interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 250);
         };
-
         m.on("zoomstart", startInteraction);
         m.on("movestart", startInteraction);
         m.on("zoomend", stopInteractionSoon);
         m.on("moveend", stopInteractionSoon);
 
+        // Sélection
         const handlePickAt = (containerPt) => {
-          if (!aliveRef.current) return;
+          if (!aliveRef.current || !mapRef.current?._loaded) return;
           const clicked = containerPt;
           const near = [];
           const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
@@ -744,33 +744,20 @@ const PlanViewerLeaflet = forwardRef(({
 
         mapRef.current = m;
 
-        const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
-        imageLayerRef.current = layer;
-        layer.addTo(m);
-
-        // Invalidate à froid puis à chaud (deux passes) → évite les 0px
+        // Premier paint, on fixe la vue **sans animation**
         await new Promise(requestAnimationFrame);
+        if (!aliveRef.current) return;
         m.invalidateSize(false);
-        setTimeout(() => { try { m.invalidateSize(false); } catch {} }, 50);
-
-        // Fit initial seulement si demandé
-        const fitZoom = m.getBoundsZoom(bounds, true);
-        m.options.zoomSnap = 0.1;
-        m.options.zoomDelta = 0.5;
-        m.setMinZoom(fitZoom);
-        m.setMaxZoom(fitZoom + 6);
-        m.setMaxBounds(bounds.pad(0.5));
-
         if (fitStrategy === "once" && !didInitialFitRef.current) {
           didInitialFitRef.current = true;
-          m.fitBounds(bounds, { padding: [8, 8] });
+          const center = bounds.getCenter();
+          m.setView(center, fitZoom, { animate: false });
         }
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(m);
         }
-        drawMarkers(points, viewport.width, viewport.height);
+        drawMarkers(points, width, height);
 
         try { await pdf.cleanup(); } catch {}
         onReady?.();
@@ -781,47 +768,45 @@ const PlanViewerLeaflet = forwardRef(({
       }
     })();
 
-    // 👉 Resize/orientation : on ne refit JAMAIS (on invalide seulement)
+    // 👉 Resize/orientation : **jamais** pendant interaction, debounce
     const onResize = () => {
-      const m = mapRef.current;
-      const layer = imageLayerRef.current;
-      if (!m || !layer) return;
-      try { m.invalidateSize(false); } catch {}
+      if (!mapRef.current || !imageLayerRef.current) return;
+      if (isInteractingRef.current) return;
+      if (resizeRafRef.current) cancelAnimationFrame(resizeRafRef.current);
+      resizeRafRef.current = requestAnimationFrame(() => {
+        const m = mapRef.current; if (!m) return;
+        m.invalidateSize(false);
+      });
     };
 
-    const onOrientation = () => {
-      const m = mapRef.current;
-      if (!m) return;
-      try { m.invalidateSize(false); } catch {}
-    };
+    const onOrientation = onResize;
 
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onOrientation);
 
     return () => {
-      cancelled = true;
       aliveRef.current = false;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onOrientation);
-      if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
+      clearTimers();
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy(); } catch {}
-      const map = mapRef.current;
-      if (map) {
-        try { map.off(); } catch {}
-        try { map.stop?.(); } catch {}
-        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-        try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
-        try { map.remove(); } catch {}
+      const m = mapRef.current;
+      if (m) {
+        try { m.off(); } catch {}
+        try { m._stop?.(); } catch {}
+        try { m.stop?.(); } catch {}
+        try { m.eachLayer((l) => { try { m.removeLayer(l); } catch {} }); } catch {}
+        try { addBtnControlRef.current && m.removeControl(addBtnControlRef.current); } catch {}
+        try { m.remove(); } catch {}
       }
       mapRef.current = null;
       imageLayerRef.current = null;
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
       addBtnControlRef.current = null;
       didInitialFitRef.current = false;
-      if (rafDrawRef.current) { try { cancelAnimationFrame(rafDrawRef.current); } catch {} rafDrawRef.current = 0; }
     };
-  }, [fileUrl, pageIndex, disabled, fitStrategy, waitForContainerReady, isMobile]);
+  }, [fileUrl, pageIndex, disabled, fitStrategy]);
 
   // Redessiner les marqueurs (batch rAF)
   useEffect(() => {
@@ -884,9 +869,8 @@ const PlanViewerLeaflet = forwardRef(({
         const yf = Math.round(yFrac * 1e6) / 1e6;
         onMovePoint(p.door_id, { x: xf, y: yf });
 
-        // relâche le lock un peu après
         if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-        interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 350);
+        interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 250);
       });
 
       mk.addTo(g);
@@ -900,18 +884,22 @@ const PlanViewerLeaflet = forwardRef(({
     const layer = imageLayerRef.current;
     if (!m || !layer) return;
     const b = layer.getBounds();
+    if (!m._loaded) return;
+    isInteractingRef.current = true;
     m.invalidateSize(false);
-    m.fitBounds(b, { padding: [8, 8] });
+    const fitZoom = m.getBoundsZoom(b, true);
+    m.setMinZoom(fitZoom);
+    m.setMaxZoom(fitZoom + 6);
+    m.setView(b.getCenter(), fitZoom, { animate: false });
+    if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
+    interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 200);
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
-  // Hauteur STABLE (anti-flash/anti-coupure)
-  // - mobile : 100dvh - marge
-  // - desktop : min(82vh, 900px)
+  // Hauteur STABLE
   const wrapperStyle = useMemo(() => {
     return {
       height: isMobile ? "calc(100dvh - 160px)" : "min(82vh, 900px)",
-      minHeight: isMobile ? "300px" : "420px",
       touchAction: isMobile ? "none" : undefined,
       WebkitUserSelect: "none",
       userSelect: "none",
@@ -1029,8 +1017,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-// src/pages/Doors.jsx — PARTIE 2/2 (DESKTOP MODAL + MOBILE MODAL, NO RECENTER — v5 alignée)
-
+// (fin PARTIE 1/2)
 
 // ----------------------------- Page principale ----------------------------- //
 function Doors() {
