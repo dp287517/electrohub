@@ -1,12 +1,4 @@
-// src/pages/Doors.jsx — PARTIE 1/2 (FIX)
-// 👉 Corrections majeures :
-// - Rendu PDF stable (anti “Worker was destroyed”, anti “Rendering cancelled” en boucle)
-// - Pas de double viewer sur mobile : le viewer peut être “désactivé” via prop `disabled` (utilisé en PARTIE 2)
-// - Fit mobile fiable (portrait/paysage) et recadrage automatique sans flash
-// - Clignotement des marqueurs EN_COURS (orange) et EN_RETARD (rouge)
-// - Bouton ➕ intégré directement dans la carte Leaflet (et style “door-marker--blue” pour nouvelle porte)
-// - Icônes fixes (pas d’élasticité au zoom), ancre centrée
-// - Aucune dépendance exotique (pas de GridLayer custom → fini l’erreur “W(...) is not a constructor”)
+// src/pages/Doors.jsx — PARTIE 1/2 (FIX + LOGS)
 
 import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
@@ -481,14 +473,6 @@ const PlanViewerLeaflet = forwardRef(({
   unsavedIds,      // Set<string> → marqueur bleu pour nouvelles portes
   disabled = false // si true, on n’instancie pas la carte (évite double viewer en mobile)
 }, ref) => {
-  // === LOG helper (massif) ===
-  const t0 = useRef(performance.now());
-  const DBG = (...args) => {
-    const dt = (performance.now() - t0.current).toFixed(1);
-    // eslint-disable-next-line no-console
-    console.log("[LEAFLET]", `${dt}ms`, ...args);
-  };
-
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const imageLayerRef = useRef(null);
@@ -503,14 +487,19 @@ const PlanViewerLeaflet = forwardRef(({
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
-  // ✅ Empêche les « reset de vue » intempestifs (fit unique à l’initialisation)
+  // ✅ Correctifs vue persistante
   const initialFitDoneRef = useRef(false);
-  const userInteractedRef = useRef(false);
+  const userViewTouchedRef = useRef(false);
+
+  const t0 = useRef(performance.now());
+  const log = (msg, extra) => {
+    const dt = (performance.now() - t0.current).toFixed(1);
+    console.log("[LEAFLET]", `${dt}ms`, msg, extra ?? "");
+  };
 
   const ICON_PX = 22;
 
   function makeDoorIcon(status, isUnsaved) {
-    // BLEU si nouvelle porte non enregistrée
     if (isUnsaved) {
       const s = ICON_PX;
       const html = `<div class="door-marker--blue" style="
@@ -566,7 +555,6 @@ const PlanViewerLeaflet = forwardRef(({
         a.textContent = "+";
         L.DomEvent.on(a, "click", (ev) => {
           L.DomEvent.stop(ev);
-          DBG("UI [+] create door at center clicked");
           onCreatePoint?.();
         });
         return container;
@@ -576,28 +564,24 @@ const PlanViewerLeaflet = forwardRef(({
     });
     addBtnControlRef.current = new AddCtrl();
     map.addControl(addBtnControlRef.current);
-    DBG("Add control mounted");
+    log("Add control mounted");
   }
 
   // >>> INITIALISATION / RENDU PDF
   useEffect(() => {
-    if (disabled) { DBG("Viewer disabled → skip init"); return; }
-    if (!fileUrl || !wrapRef.current) { DBG("No fileUrl or wrapper → skip init"); return; }
+    if (disabled) return;          // ❌ pas d’instanciation si désactivé
+    if (!fileUrl || !wrapRef.current) return;
 
     let cancelled = false;
     aliveRef.current = true;
+    t0.current = performance.now();
 
     const jobKey = `${fileUrl}::${pageIndex}`;
     if (lastJob.current.key === jobKey) {
-      DBG("Same jobKey detected → skip re-render, call onReady");
       onReady?.();
       return;
     }
     lastJob.current.key = jobKey;
-
-    // reset flags
-    initialFitDoneRef.current = false;
-    userInteractedRef.current = false;
 
     const cleanupPdf = async () => {
       try { renderTaskRef.current?.cancel(); } catch {}
@@ -618,16 +602,19 @@ const PlanViewerLeaflet = forwardRef(({
       imageLayerRef.current = null;
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
       addBtnControlRef.current = null;
+      initialFitDoneRef.current = false;
+      userViewTouchedRef.current = false;
+      log("Viewer unmounted & cleaned");
     };
 
     (async () => {
       try {
-        DBG("PDF load start", { fileUrl, pageIndex });
-        await cleanupPdf(); // 🧹
-
+        log("PDF load start", { fileUrl, pageIndex });
+        await cleanupPdf(); // 🧹 annule proprement l’éventuel rendu précédent
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = window.devicePixelRatio || 1;
 
+        // PDF open
         loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTaskRef.current.promise;
         if (cancelled) return;
@@ -638,20 +625,20 @@ const PlanViewerLeaflet = forwardRef(({
         const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
-        DBG("PDF page ready", { baseW: baseVp.width, baseH: baseVp.height, scale: safeScale, bmpW: viewport.width, bmpH: viewport.height });
+        log("PDF page ready", { baseW: baseVp.width, baseH: baseVp.height, scale: safeScale, bmpW: viewport.width, bmpH: viewport.height });
 
         const canvas = document.createElement("canvas");
         canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
-        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
 
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
         await renderTaskRef.current.promise;
         if (cancelled) return;
 
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
-        DBG("PDF rendered to image", { w: canvas.width, h: canvas.height });
+        log("PDF rendered to image", { w: canvas.width, h: canvas.height });
 
         // Map init (une seule fois)
         if (!mapRef.current) {
@@ -669,17 +656,9 @@ const PlanViewerLeaflet = forwardRef(({
           L.control.zoom({ position: "topright" }).addTo(m);
           ensureAddButton(m);
 
-          // === LOGS d'interaction
-          m.on("zoomstart", () => { userInteractedRef.current = true; DBG("zoomstart"); });
-          m.on("zoomend",   () => DBG("zoomend",   { z: m.getZoom() }));
-          m.on("movestart", () => { userInteractedRef.current = true; DBG("movestart"); });
-          m.on("moveend",   () => DBG("moveend",   { center: m.getCenter() }));
-          m.on("resize",    (e) => DBG("leaflet resize", { oldSize: e.oldSize, newSize: e.newSize }));
-          m.on("unload",    () => DBG("map unload"));
           m.on("click", (e) => {
             if (!aliveRef.current) return;
             const clicked = e.containerPoint;
-            DBG("map click", { containerPoint: clicked });
             const near = [];
             const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
             markersLayerRef.current?.eachLayer((mk) => {
@@ -687,14 +666,17 @@ const PlanViewerLeaflet = forwardRef(({
               const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
               if (dist <= pickRadius) near.push(mk.__meta);
             });
-            if (near.length === 1 && onClickPoint) { DBG("map click → single near, open", near[0]); onClickPoint(near[0]); }
-            else if (near.length > 1) { DBG("map click → multi near", near.length); setPicker({ x: clicked.x, y: clicked.y, items: near }); }
-            else { DBG("map click → none near"); setPicker(null); }
+            if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
+            else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
+            else setPicker(null);
           });
-          m.on("zoomstart movestart", () => setPicker(null));
+          m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; log("zoomstart"); });
+          m.on("movestart",  () => { setPicker(null); userViewTouchedRef.current = true; log("movestart"); });
+          m.on("zoomend",    () => { log("zoomend", { z: m.getZoom() }); });
+          m.on("moveend",    () => { log("moveend", { center: m.getCenter() }); });
 
           mapRef.current = m;
-          DBG("Map created");
+          log("Map created");
         }
 
         const map = mapRef.current;
@@ -707,25 +689,20 @@ const PlanViewerLeaflet = forwardRef(({
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
-        DBG("Image layer added", { bounds });
+        log("Image layer added", { bounds: "Q" });
 
         await new Promise(requestAnimationFrame);
         map.invalidateSize(false);
 
-        // ✅ Ne faire le fit qu'une seule fois au tout début (évite les resets à chaque resize)
-        if (!initialFitDoneRef.current) {
-          const fitZoom = map.getBoundsZoom(bounds, true);
-          map.options.zoomSnap = 0.1;
-          map.options.zoomDelta = 0.5;
-          map.setMinZoom(fitZoom - 1);
-          map.setMaxZoom(fitZoom + 6);
-          map.setMaxBounds(bounds.pad(0.5));
-          map.fitBounds(bounds, { padding: [8, 8] });
-          initialFitDoneRef.current = true;
-          DBG("Initial fitBounds done", { fitZoom });
-        } else {
-          DBG("Skip initial fit (already done)");
-        }
+        const fitZoom = map.getBoundsZoom(bounds, true);
+        map.options.zoomSnap = 0.1;
+        map.options.zoomDelta = 0.5;
+        map.setMinZoom(fitZoom - 1);
+        map.setMaxZoom(fitZoom + 6);
+        map.setMaxBounds(bounds.pad(0.5));
+        map.fitBounds(bounds, { padding: [8, 8] });
+        initialFitDoneRef.current = true;
+        log("Initial fitBounds done", { fitZoom });
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
@@ -735,25 +712,36 @@ const PlanViewerLeaflet = forwardRef(({
         setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
         try { await pdf.cleanup(); } catch {}
         onReady?.();
-        DBG("Viewer ready");
+        log("Viewer ready");
       } catch (e) {
-        if (String(e?.name) === "RenderingCancelledException") { DBG("PDF render cancelled"); return; }
+        if (String(e?.name) === "RenderingCancelledException") return;
         const msg = String(e?.message || "");
-        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) { DBG("PDF worker ended"); return; }
-        console.error("[LEAFLET] init error", e);
+        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) {
+          log("PDF worker ended");
+          return;
+        }
+        console.error("Leaflet viewer error", e);
       }
     })();
 
-    // ⚠️ Important : sur resize/orientationchange, on **n’effectue plus de fitBounds auto**
-    // on ne fait qu’un invalidateSize pour recalculer la taille sans toucher au zoom/centre.
     const onResize = () => {
       const m = mapRef.current;
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
       const b = layer.getBounds();
+      const keepCenter = m.getCenter();
+      const keepZoom = m.getZoom();
       m.invalidateSize(false);
-      DBG("window resize/orientation → invalidateSize only", { zoom: m.getZoom(), center: m.getCenter(), bounds: b });
-      // Pas de m.fitBounds(b) ici → évite les « reset de vue » pendant le pinch/rotate
+
+      if (!initialFitDoneRef.current) {
+        m.fitBounds(b, { padding: [8, 8] });
+        initialFitDoneRef.current = true;
+        log("resize → first fit");
+      } else {
+        // ✅ on conserve la vue utilisateur
+        m.setView(keepCenter, keepZoom, { animate: false });
+        log("resize → keep view", { z: keepZoom, center: keepCenter });
+      }
     };
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
@@ -765,26 +753,14 @@ const PlanViewerLeaflet = forwardRef(({
       window.removeEventListener("orientationchange", onResize);
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy(); } catch {}
-      const map = mapRef.current;
-      if (map) {
-        try { map.off(); } catch {}
-        try { map.stop?.(); } catch {}
-        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-        try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
-        try { map.remove(); } catch {}
-      }
-      mapRef.current = null;
-      imageLayerRef.current = null;
-      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
-      addBtnControlRef.current = null;
-      DBG("Viewer unmounted & cleaned");
+      cleanupMap();
     };
-  }, [fileUrl, pageIndex, disabled]); // 👈 disabled contrôle l’instanciation
+  }, [fileUrl, pageIndex, disabled]);
 
   // Redessiner les marqueurs
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
-    DBG("points changed → redraw", { count: (points || []).length, imgSize });
+    log("points changed → redraw", { count: (points || []).length, imgSize });
     drawMarkers(points, imgSize.w, imgSize.h);
   }, [points, imgSize, unsavedIds]);
 
@@ -823,15 +799,9 @@ const PlanViewerLeaflet = forwardRef(({
 
       mk.on("click", () => {
         setPicker(null);
-        DBG("marker click", mk.__meta);
         onClickPoint?.(mk.__meta);
       });
 
-      mk.on("dragstart", () => DBG("marker dragstart", { id: p.door_id }));
-      mk.on("drag", () => {
-        const ll = mk.getLatLng();
-        DBG("marker drag", { lat: ll.lat, lng: ll.lng });
-      });
       mk.on("dragend", () => {
         if (!onMovePoint) return;
         const ll = mk.getLatLng(); // CRS.Simple → lat=y, lng=x
@@ -839,16 +809,16 @@ const PlanViewerLeaflet = forwardRef(({
         const yFrac = Math.min(1, Math.max(0, ll.lat / h));
         const xf = Math.round(xFrac * 1e6) / 1e6;
         const yf = Math.round(yFrac * 1e6) / 1e6;
-        DBG("marker dragend → save", { id: p.door_id, x: xf, y: yf });
         onMovePoint(p.door_id, { x: xf, y: yf });
       });
 
       mk.addTo(g);
     });
-    DBG("markers drawn", { count: list?.length || 0 });
+
+    log("markers drawn", { count: g.getLayers().length });
   }
 
-  const onPickDoor = (d) => { setPicker(null); DBG("picker select", d); onClickPoint?.(d); };
+  const onPickDoor = (d) => { setPicker(null); onClickPoint?.(d); };
 
   const adjust = () => {
     const m = mapRef.current;
@@ -860,8 +830,9 @@ const PlanViewerLeaflet = forwardRef(({
     const fitZoom = m.getBoundsZoom(b, true);
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
+    initialFitDoneRef.current = true;
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
-    DBG("manual adjust", { fitZoom, center: m.getCenter() });
+    log("Ajuster clicked → fitBounds", { fitZoom });
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
@@ -977,8 +948,9 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-// src/pages/Doors.jsx — PARTIE 2/2 (FIX)
-// src/pages/Doors.jsx — PARTIE 2/2 (FIX)
+
+// src/pages/Doors.jsx — PARTIE 2/2 (à suivre)
+// src/pages/Doors.jsx — PARTIE 2/2 (FIX + LOGS)
 
 
 // ----------------------------- Page principale ----------------------------- //
@@ -1030,6 +1002,9 @@ function Doors() {
 
   const isMobile = useIsMobile();
 
+  // 🔒 Figer le mode d’affichage du viewer à l’ouverture du plan
+  const [planUIMode, setPlanUIMode] = useState(null); // 'inline' | 'modal' | null
+
   /* ----------------------------- URL helpers ----------------------------- */
   function getDoorParam() {
     try { return new URLSearchParams(window.location.search).get("door"); }
@@ -1044,7 +1019,6 @@ function Doors() {
     } catch {}
   }
   function closeDrawerAndClearParam() {
-    console.log("[UI] drawer close");
     setDrawerOpen(false);
     setEditing(null);
     setDoorParam(null);
@@ -1089,7 +1063,6 @@ function Doors() {
       if (full?.door?.id) {
         setEditing(full.door);
         setDrawerOpen(true);
-        console.log("[UI] deep-link open drawer", full.door.id);
       } else {
         setDoorParam(null);
       }
@@ -1141,7 +1114,6 @@ function Doors() {
     setEditing(full?.door || door);
     setDrawerOpen(true);
     setDoorParam(door.id);
-    console.log("[UI] open drawer from click", door.id);
   }
   function openCreate() {
     setEditing({
@@ -1150,7 +1122,6 @@ function Doors() {
       current_check: null, door_state: null,
     });
     setDrawerOpen(true);
-    console.log("[UI] open drawer create");
   }
   async function saveDoorBase() {
     if (!editing) return;
@@ -1388,12 +1359,7 @@ function Doors() {
   async function createDoorAtCenter() {
     if (!stableSelectedPlan) return;
     try {
-      const basePayload = {
-        building: "",
-        floor: "",
-        location: "",
-        status: STATUS.A_FAIRE,
-      };
+      const basePayload = { building: "", floor: "", location: "", status: STATUS.A_FAIRE };
       const created = await createDoorWithUniqueName(basePayload);
       const id = created?.door?.id;
       if (!id) throw new Error("Réponse inattendue de l'API (pas d'ID).");
@@ -1444,15 +1410,26 @@ function Doors() {
     setPdfReady(false);
     const stableUrl = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
     setPlanFileUrl(stableUrl);
+    // 🔒 Fige le mode d'affichage pendant que le plan est ouvert
+    try {
+      const coarse = window.matchMedia?.("(pointer: coarse)")?.matches || false;
+      const smallW = (window.innerWidth || 0) < 640;
+      const mode = (coarse || smallW) ? "modal" : "inline";
+      setPlanUIMode(mode);
+      console.log("[UI] planUIMode =", mode);
+    } catch {
+      setPlanUIMode("inline");
+    }
   }
   function closePlan() {
     console.log("[UI] close plan");
     setSelectedPlan(null);
     setPlanFileUrl(null);
     setPdfReady(false);
+    setPlanUIMode(null);
   }
 
-  // Modal plein écran pour smartphone
+  // Modal plein écran pour smartphone (z plus élevé que Drawer)
   function PlanModal({ open, onClose, children, title }) {
     useEffect(() => {
       const handler = (e) => { if (e.key === "Escape") onClose?.(); };
@@ -1461,7 +1438,7 @@ function Doors() {
     }, [onClose]);
     if (!open) return null;
     return (
-      <div className="fixed inset-0 z-50">
+      <div className="fixed inset-0 z-[5000]">
         <div className="absolute inset-0 bg-black/40" onClick={onClose} />
         <div className="absolute inset-0 bg-white shadow-2xl flex flex-col">
           <div className="p-3 border-b flex items-center justify-between">
@@ -1489,12 +1466,6 @@ function Doors() {
     </div>
   );
 
-  // 🔒 Lock mobile pendant qu’un plan est ouvert sur appareil tactile (pointer:coarse)
-  const isCoarsePointer = (typeof window !== "undefined" && window.matchMedia)
-    ? window.matchMedia("(pointer: coarse)").matches
-    : false;
-  const mobilePlanLock = !!selectedPlan && isCoarsePointer;
-
   /* ----------------------------- RENDER ----------------------------- */
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
@@ -1508,8 +1479,7 @@ function Doors() {
           <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
             {filtersOpen ? "Masquer les filtres" : "Filtres"}
           </Btn>
-          {/* Le bouton "➕ Nouvelle porte" global reste pour la liste (pas pour la carte) */}
-          <Btn variant="subtle" onClick={openCreate}>➕ Nouvelle porte</Btn>
+          {/* (supprimé) ➕ Nouvelle porte — on utilise le bouton dans Leaflet */}
         </div>
       </header>
 
@@ -1689,7 +1659,7 @@ function Doors() {
           />
 
           {/* Desktop / tablette : viewer inline */}
-          {!((isMobile || mobilePlanLock)) && selectedPlan && (
+          {planUIMode === "inline" && selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="font-semibold">
@@ -1717,8 +1687,8 @@ function Doors() {
             </div>
           )}
 
-          {/* Mobile (ou lock tactile) : modal plein écran SEULEMENT */}
-          {(isMobile || mobilePlanLock) && (
+          {/* Mobile : modal plein écran SEULEMENT */}
+          {planUIMode === "modal" && (
             <PlanModal
               open={!!selectedPlan}
               onClose={closePlan}
@@ -1795,7 +1765,7 @@ function Doors() {
         </div>
       )}
 
-      {/* Drawer Édition — z-index élevé pour passer au-dessus du modal Plan */}
+      {/* Drawer Édition */}
       {drawerOpen && editing && (
         <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
           <div className="space-y-4">
@@ -1969,7 +1939,6 @@ function Drawer({ title, children, onClose }) {
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
   return (
-    // ⬆️ z-index surélevé pour passer devant le modal du plan (z-50)
     <div className="fixed inset-0 z-[6000]" ref={ref}>
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[640px] bg-white shadow-2xl p-4 overflow-y-auto">
