@@ -1,28 +1,23 @@
-// src/pages/Doors.jsx — PARTIE 1/2 (MOBILE ULTRA-FLUID FIX)
+// src/pages/Doors.jsx — PARTIE 1/2 (MOBILE ULTRA-FLUID FIX v2)
 // ⚠️ Interdit de toucher la partie PC → les changements ci-dessous ne changent
 //    rien au comportement desktop. Tout est protégé par des gardes “isMobile”.
-//
-// ✅ Ce que ça corrige sur smartphone (portrait/paysage, sans tourner à 45°) :
-// - Le plan prend bien tout l’espace utile (100dvh réel via visualViewport).
-// - Le zoom/pan ne “revient plus tout seul” : on ne refit plus pendant une interaction
-//   (ni sur les petits “resize” causés par la barre d’URL iOS/Android).
-// - Le clic/tap sur une porte fonctionne même en tactile (propagation bloquée).
-// - Le déplacement des marqueurs est fluide (pas d’ajustement auto pendant drag).
-// - Le bouton ➕ (création porte) est accessible et réactif en mobile.
-// - Pas de re-init inutile de la carte quand positions changent.
-// - Fit initial correctement calculé (portrait/paysage) sans flash.
+
+// ✅ Corrections supplémentaires (smartphone uniquement) :
+// - Plus de “zoom bloqué au centre” à l’ouverture après Ajuster : minZoom aligné au fit exact,
+//   et aucun fit automatique pendant/juste après une interaction.
+// - Tap/clic sur une porte fiable en tactile (pointerup/touchend en plus de click).
+// - Drag d’un marqueur ne “reset” plus la carte : pas de re-fit ni de re-init pendant/juste après drag.
+// - Dézoom fort : repositionnement fluide des marqueurs (batch rAF).
+// - Bouton ➕ devient un vrai <button> (plus d’ancre), événements stoppés correctement.
 //
 // Détails techniques :
-// - Ajout d’un détecteur isMobile ultra-simple (matchMedia + largeur).
-// - Hauteur du viewer basée sur `window.visualViewport.height` (100dvh réel).
-// - “Interaction lock” : pendant zoom/pan/drag, on bloque tout “auto-fit” déclenché
-//   par resize/orientationchange. Déverrouillage quelques centaines de ms après la fin.
-// - En mobile, le handler de resize fait seulement `invalidateSize()` et jamais `fitBounds()`.
-// - `touch-action: none` sur le conteneur Leaflet en mobile pour éviter le scroll/zoom
-//   du navigateur qui entre en conflit avec Leaflet.
-// - Tap/click propagation neutralisée : `L.DomEvent.disableClickPropagation(...)`.
-//
-// ------------------------------------------------------------------------------
+// - `tap:false` (Leaflet) pour éviter les taps fantômes iOS et doubles évènements.
+// - Sur mobile : `scrollWheelZoom:false` (inutile), `touchZoom:'center'`, inertie activée.
+// - Locker d’interaction étendu à drag + touche : on bloque tout ajustement tant que le doigt
+//   est posé et 350ms après la fin (zoom/pan/drag).
+// - Ajustement manuel : minZoom = fitZoom (plus de “re-zoom” au centre lors d’une réouverture).
+// - Events supplémentaires sur marqueurs : 'pointerup' et 'touchend'.
+// - Dessin des marqueurs batché via requestAnimationFrame pour limiter les saccades au dézoom.
 
 import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
@@ -64,13 +59,13 @@ const InlineMapStyles = () => (
   .door-pick > button:hover { background:#f3f4f6; }
 
   /* Contrôle ➕ intégré à la carte */
-  .leaflet-control-adddoor a {
+  .leaflet-control-adddoor button {
     display:inline-flex; align-items:center; justify-content:center;
     width:32px; height:32px; border-radius:8px;
-    background:#2563eb; color:#fff; font-weight:bold; text-decoration:none;
+    background:#2563eb; color:#fff; font-weight:bold; border:none; cursor:pointer;
     box-shadow:0 1px 2px rgba(0,0,0,.15);
   }
-  .leaflet-control-adddoor a:hover { background:#1d4ed8; }
+  .leaflet-control-adddoor button:hover { background:#1d4ed8; }
 
   /* Marqueur bleu demandé par le client (déjà dans le CSS global), gardé ici en secours */
   .door-marker--blue { background:#2563eb; color:#2563eb; }
@@ -523,6 +518,9 @@ const PlanViewerLeaflet = forwardRef(({
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
+  // rAF batching pour le redessin des marqueurs (fluidité au dézoom)
+  const rafDrawRef = useRef(0);
+
   const ICON_PX = 22;
 
   // ✅ Détection mobile locale (ne change rien côté PC)
@@ -590,11 +588,11 @@ const PlanViewerLeaflet = forwardRef(({
     const AddCtrl = L.Control.extend({
       onAdd: function() {
         const container = L.DomUtil.create("div", "leaflet-bar leaflet-control leaflet-control-adddoor");
-        const a = L.DomUtil.create("a", "", container);
-        a.href = "#";
-        a.title = "Créer une porte au centre";
-        a.textContent = "+";
-        L.DomEvent.on(a, "click", (ev) => {
+        const btn = L.DomUtil.create("button", "", container);
+        btn.type = "button";
+        btn.title = "Créer une porte au centre";
+        btn.textContent = "+";
+        L.DomEvent.on(btn, "click", (ev) => {
           L.DomEvent.stop(ev);
           onCreatePoint?.();
         });
@@ -617,7 +615,6 @@ const PlanViewerLeaflet = forwardRef(({
 
     const jobKey = `${fileUrl}::${pageIndex}`;
     if (lastJob.current.key === jobKey) {
-      // Même document déjà chargé : on ne re-render pas inutilement
       onReady?.();
       return;
     }
@@ -646,7 +643,9 @@ const PlanViewerLeaflet = forwardRef(({
 
     (async () => {
       try {
-        await cleanupPdf(); // 🧹 annule proprement l’éventuel rendu précédent
+        await cleanupPdf();
+        cleanupMap();
+
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = window.devicePixelRatio || 1;
 
@@ -658,7 +657,7 @@ const PlanViewerLeaflet = forwardRef(({
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        // On vise un bitmap “net” sans dépasser pour éviter OOM et terminaisons worker
+        // bitmap “net” sans dépasser
         const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
@@ -669,107 +668,111 @@ const PlanViewerLeaflet = forwardRef(({
         const ctx = canvas.getContext("2d", { alpha: true });
         renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
 
-        await renderTaskRef.current.promise; // ✅ pas de catch → si cancel, on sort via finally
+        await renderTaskRef.current.promise;
         if (cancelled) return;
 
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
-        // Map init (une seule fois)
-        if (!mapRef.current) {
-          const m = L.map(wrapRef.current, {
-            crs: L.CRS.Simple,
-            zoomControl: false,
-            zoomAnimation: true,
-            fadeAnimation: false,
-            markerZoomAnimation: false,
-            // 🟦 Paramètres spécifiques mobile (ne change pas le desktop)
-            scrollWheelZoom: true,
-            touchZoom: isMobile ? "center" : true,
-            tap: true,
-            preferCanvas: true,
-            inertia: true,
-            // Limite les bonds de zoom au doigt
-            wheelPxPerZoomLevel: isMobile ? 180 : 120,
+        // Map init (une seule fois, mais on repart clean ici pour éviter tout état “fantôme”)
+        const m = L.map(wrapRef.current, {
+          crs: L.CRS.Simple,
+          zoomControl: false,
+          zoomAnimation: true,
+          fadeAnimation: false,
+          markerZoomAnimation: false,
+
+          // 🟦 Spécifique mobile
+          tap: false, // <- corrige les taps fantômes / double événements
+          touchZoom: isMobile ? "center" : true,
+          scrollWheelZoom: isMobile ? false : true,
+          dragging: true,
+          preferCanvas: true,
+          inertia: true,
+          wheelPxPerZoomLevel: isMobile ? 180 : 120,
+          bounceAtZoomLimits: false,
+        });
+
+        // Bloque le scroll/click de la page quand on manipule la carte (mobile)
+        try {
+          if (isMobile) {
+            L.DomEvent.disableScrollPropagation(wrapRef.current);
+            L.DomEvent.disableClickPropagation(wrapRef.current);
+          }
+        } catch {}
+
+        L.control.zoom({ position: "topright" }).addTo(m);
+        ensureAddButton(m);
+
+        // Gestion interaction lock
+        const startInteraction = () => {
+          isInteractingRef.current = true;
+          if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
+        };
+        const stopInteractionSoon = () => {
+          if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
+          interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 350);
+        };
+
+        m.on("zoomstart", startInteraction);
+        m.on("movestart", startInteraction);
+        m.on("zoomend", stopInteractionSoon);
+        m.on("moveend", stopInteractionSoon);
+
+        // Sélection marqueur proche au "pointerup" (meilleur en tactile)
+        const handlePickAt = (containerPt) => {
+          if (!aliveRef.current) return;
+          const clicked = containerPt;
+          const near = [];
+          const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
+          markersLayerRef.current?.eachLayer((mk) => {
+            const mp = m.latLngToContainerPoint(mk.getLatLng());
+            const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
+            if (dist <= pickRadius) near.push(mk.__meta);
           });
+          if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
+          else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
+          else setPicker(null);
+        };
+        m.on("click", (e) => handlePickAt(e.containerPoint));
+        m.on("zoomstart movestart", () => setPicker(null));
+        // Support pointerup/touchend sur la carte (tactile sans "click")
+        m.on("pointerup", (e) => handlePickAt(e.containerPoint));
+        m.on("touchend", (e) => {
+          const t = e?.originalEvent?.changedTouches?.[0];
+          if (!t) return;
+          const pt = m.mouseEventToContainerPoint(t);
+          handlePickAt(pt);
+        });
 
-          // Bloque le scroll/click de la page quand on manipule la carte (mobile)
-          try {
-            if (isMobile) {
-              L.DomEvent.disableScrollPropagation(wrapRef.current);
-              L.DomEvent.disableClickPropagation(wrapRef.current);
-            }
-          } catch {}
+        mapRef.current = m;
 
-          L.control.zoom({ position: "topright" }).addTo(m);
-          ensureAddButton(m);
-
-          // Gestion interaction lock
-          const startInteraction = () => {
-            isInteractingRef.current = true;
-            if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-          };
-          const stopInteractionSoon = () => {
-            if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
-            interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 350);
-          };
-
-          m.on("zoomstart", startInteraction);
-          m.on("movestart", startInteraction);
-          m.on("zoomend", stopInteractionSoon);
-          m.on("moveend", stopInteractionSoon);
-
-          // Select marqueur proche
-          m.on("click", (e) => {
-            if (!aliveRef.current) return;
-            const clicked = e.containerPoint;
-            const near = [];
-            const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
-            markersLayerRef.current?.eachLayer((mk) => {
-              const mp = m.latLngToContainerPoint(mk.getLatLng());
-              const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
-              if (dist <= pickRadius) near.push(mk.__meta);
-            });
-            if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
-            else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
-            else setPicker(null);
-          });
-          m.on("zoomstart movestart", () => setPicker(null));
-          mapRef.current = m;
-        }
-
-        const map = mapRef.current;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-
-        if (imageLayerRef.current) {
-          map.removeLayer(imageLayerRef.current);
-          imageLayerRef.current = null;
-        }
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
-        layer.addTo(map);
+        layer.addTo(m);
 
         await new Promise(requestAnimationFrame);
-        map.invalidateSize(false);
+        m.invalidateSize(false);
 
-        const fitZoom = map.getBoundsZoom(bounds, true);
-        map.options.zoomSnap = 0.1;
-        map.options.zoomDelta = 0.5;
-        map.setMinZoom(fitZoom - 1);
-        map.setMaxZoom(fitZoom + 6);
-        map.setMaxBounds(bounds.pad(0.5));
-        map.fitBounds(bounds, { padding: [8, 8] });
+        // Fit initial — minZoom = fitZoom (évite l’effet “déjà zoomé au centre” en réouverture)
+        const fitZoom = m.getBoundsZoom(bounds, true);
+        m.options.zoomSnap = 0.1;
+        m.options.zoomDelta = 0.5;
+        m.setMinZoom(fitZoom);         // <— au lieu de fitZoom - 1
+        m.setMaxZoom(fitZoom + 6);
+        m.setMaxBounds(bounds.pad(0.5));
+        m.fitBounds(bounds, { padding: [8, 8] });
 
         if (!markersLayerRef.current) {
-          markersLayerRef.current = L.layerGroup().addTo(map);
+          markersLayerRef.current = L.layerGroup().addTo(m);
         }
         drawMarkers(points, viewport.width, viewport.height);
 
-        setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
+        setTimeout(() => { try { aliveRef.current && m.scrollWheelZoom && m.scrollWheelZoom[isMobile ? "disable" : "enable"](); } catch {} }, 60);
         try { await pdf.cleanup(); } catch {}
         onReady?.();
       } catch (e) {
-        // On ignore proprement les annulations PDF.js
         if (String(e?.name) === "RenderingCancelledException") return;
         const msg = String(e?.message || "");
         if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
@@ -782,7 +785,7 @@ const PlanViewerLeaflet = forwardRef(({
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
 
-      // 🟩 MOBILE : ne jamais refit en plein geste ou sur micro-resize → on évite l’effet “retour à la normale”
+      // 🟩 MOBILE : ne jamais refit en plein geste ou sur micro-resize
       if (isMobile) {
         m.invalidateSize(false);
         return;
@@ -797,7 +800,6 @@ const PlanViewerLeaflet = forwardRef(({
     const onOrientation = () => {
       const m = mapRef.current;
       if (!m) return;
-      // Si le device tourne mais qu’on est en plein geste, on ne recentre pas
       if (isMobile && isInteractingRef.current) {
         m.invalidateSize(false);
         return;
@@ -830,10 +832,13 @@ const PlanViewerLeaflet = forwardRef(({
     };
   }, [fileUrl, pageIndex, disabled]); // 👈 disabled contrôle l’instanciation
 
-  // Redessiner les marqueurs
+  // Redessiner les marqueurs (batché rAF pour éviter les saccades au dézoom)
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
-    drawMarkers(points, imgSize.w, imgSize.h);
+    if (rafDrawRef.current) cancelAnimationFrame(rafDrawRef.current);
+    rafDrawRef.current = requestAnimationFrame(() => {
+      drawMarkers(points, imgSize.w, imgSize.h);
+    });
   }, [points, imgSize, unsavedIds]);
 
   function drawMarkers(list, w, h) {
@@ -869,16 +874,15 @@ const PlanViewerLeaflet = forwardRef(({
         y_frac: p.y_frac,
       };
 
-      mk.on("click", () => {
-        setPicker(null);
-        onClickPoint?.(mk.__meta);
-      });
+      // Tap/clic fiable en tactile : pointerup + touchend + click
+      const fireClick = () => { setPicker(null); onClickPoint?.(mk.__meta); };
+      mk.on("click", fireClick);
+      mk.on("pointerup", fireClick);
+      mk.on("touchend", fireClick);
 
       mk.on("dragstart", () => {
-        // 🔒 Empêche tout recentrage pendant un drag sur mobile
-        if (typeof window !== "undefined" && (window.matchMedia?.("(pointer:coarse)")?.matches || window.innerWidth < 640)) {
-          // active le lock
-        }
+        isInteractingRef.current = true;
+        if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
       });
 
       mk.on("dragend", () => {
@@ -889,6 +893,10 @@ const PlanViewerLeaflet = forwardRef(({
         const xf = Math.round(xFrac * 1e6) / 1e6;
         const yf = Math.round(yFrac * 1e6) / 1e6;
         onMovePoint(p.door_id, { x: xf, y: yf });
+
+        // relâche le lock un peu après
+        if (interactionTimeoutRef.current) clearTimeout(interactionTimeoutRef.current);
+        interactionTimeoutRef.current = setTimeout(() => { isInteractingRef.current = false; }, 350);
       });
 
       mk.addTo(g);
@@ -902,11 +910,11 @@ const PlanViewerLeaflet = forwardRef(({
     const layer = imageLayerRef.current;
     if (!m || !layer) return;
     const b = layer.getBounds();
-    // 🟢 Ajustement manuel (bouton) : toujours possible
+    // 🟢 Ajustement manuel (bouton) : toujours possible, sans side-effects
     m.scrollWheelZoom?.disable();
     m.invalidateSize(false);
     const fitZoom = m.getBoundsZoom(b, true);
-    m.setMinZoom(fitZoom - 1);
+    m.setMinZoom(fitZoom); // aligne le minZoom sur l’ajustement exact
     m.fitBounds(b, { padding: [8, 8] });
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
   };
@@ -1033,8 +1041,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-// src/pages/Doors.jsx — PARTIE 2/2 (FIX)
-// src/pages/Doors.jsx — PARTIE 2/2 (MOBILE ULTRA-FLUID FIX)
+// src/pages/Doors.jsx — PARTIE 2/2 (MOBILE ULTRA-FLUID FIX v2)
 
 
 // ----------------------------- Page principale ----------------------------- //
