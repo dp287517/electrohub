@@ -928,6 +928,7 @@ function MonthCalendar({ events = [], onDayClick }) {
   );
 }
 // src/pages/Doors.jsx — PARTIE 2/2 (FIX)
+// src/pages/Doors.jsx — PARTIE 2/2 (FIX)
 
 
 // ----------------------------- Page principale ----------------------------- //
@@ -1144,7 +1145,7 @@ function Doors() {
                 building: payload.building,
                 floor: payload.floor,
                 location: payload.location,
-                status: editing.status || STATUS.A_FAIRE,
+              status: editing.status || STATUS.A_FAIRE,
               });
               setToast(`Nom déjà pris. Créé comme « ${created?.door?.name} » ✅`);
             } else {
