@@ -635,6 +635,7 @@ const PlanViewerLeaflet = forwardRef(({
             touchZoom: true,
             tap: true,
             preferCanvas: true,
+            maxBoundsViscosity: 1.0, // Ajout pour rendre les bounds solides et éviter le snap retardé
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           ensureAddButton(m);
@@ -655,11 +656,16 @@ const PlanViewerLeaflet = forwardRef(({
           });
           // ⛳️ Flag d’interaction pour bloquer tout recentrage automatique
           m.on("zoomstart movestart", () => {
+            console.log('zoomstart or movestart: interaction started'); // Log pour debug
             setPicker(null);
             interactingRef.current = true;
           });
           m.on("zoomend moveend", () => {
-            setTimeout(() => { interactingRef.current = false; }, 200);
+            console.log('zoomend or moveend: interaction ended, center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug snap
+            setTimeout(() => { 
+              interactingRef.current = false; 
+              console.log('interaction flag reset after timeout');
+            }, 200);
           });
           mapRef.current = m;
         }
@@ -677,6 +683,7 @@ const PlanViewerLeaflet = forwardRef(({
 
         await new Promise(requestAnimationFrame);
         map.invalidateSize(false);
+        console.log('invalidateSize called after image add'); // Log pour debug
 
         const fitZoom = map.getBoundsZoom(bounds, true);
         map.options.zoomSnap = 0.1;
@@ -685,6 +692,7 @@ const PlanViewerLeaflet = forwardRef(({
         map.setMaxZoom(fitZoom + 6);
         map.setMaxBounds(bounds.pad(0.5));
         map.fitBounds(bounds, { padding: [8, 8] });
+        console.log('fitBounds called, center:', map.getCenter(), 'zoom:', map.getZoom()); // Log pour debug initial view
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
@@ -696,11 +704,16 @@ const PlanViewerLeaflet = forwardRef(({
           roRef.current = new ResizeObserver(() => {
             const m = mapRef.current;
             if (!m) return;
-            if (interactingRef.current) return; // jamais pendant un pinch/drag
+            if (interactingRef.current) {
+              console.log('ResizeObserver: skipped due to interaction'); // Log pour debug
+              return; // jamais pendant un pinch/drag
+            }
             const center = m.getCenter();
             const zoom = m.getZoom();
+            console.log('ResizeObserver: before invalidateSize, center:', center, 'zoom:', zoom); // Log pour debug
             m.invalidateSize(false);
             m.setView(center, zoom, { animate: false }); // → pas de “reset”
+            console.log('ResizeObserver: after setView, center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug
           });
           roRef.current.observe(wrapRef.current);
         }
@@ -812,6 +825,7 @@ const PlanViewerLeaflet = forwardRef(({
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
+    console.log('adjust called, new center:', m.getCenter(), 'zoom:', m.getZoom()); // Log pour debug manual adjust
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
