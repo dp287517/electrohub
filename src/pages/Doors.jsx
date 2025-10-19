@@ -481,6 +481,14 @@ const PlanViewerLeaflet = forwardRef(({
   unsavedIds,      // Set<string> → marqueur bleu pour nouvelles portes
   disabled = false // si true, on n’instancie pas la carte (évite double viewer en mobile)
 }, ref) => {
+  // === LOG helper (massif) ===
+  const t0 = useRef(performance.now());
+  const DBG = (...args) => {
+    const dt = (performance.now() - t0.current).toFixed(1);
+    // eslint-disable-next-line no-console
+    console.log("[LEAFLET]", `${dt}ms`, ...args);
+  };
+
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const imageLayerRef = useRef(null);
@@ -494,6 +502,10 @@ const PlanViewerLeaflet = forwardRef(({
   const lastJob = useRef({ key: null });
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
+
+  // ✅ Empêche les « reset de vue » intempestifs (fit unique à l’initialisation)
+  const initialFitDoneRef = useRef(false);
+  const userInteractedRef = useRef(false);
 
   const ICON_PX = 22;
 
@@ -554,6 +566,7 @@ const PlanViewerLeaflet = forwardRef(({
         a.textContent = "+";
         L.DomEvent.on(a, "click", (ev) => {
           L.DomEvent.stop(ev);
+          DBG("UI [+] create door at center clicked");
           onCreatePoint?.();
         });
         return container;
@@ -563,23 +576,28 @@ const PlanViewerLeaflet = forwardRef(({
     });
     addBtnControlRef.current = new AddCtrl();
     map.addControl(addBtnControlRef.current);
+    DBG("Add control mounted");
   }
 
   // >>> INITIALISATION / RENDU PDF
   useEffect(() => {
-    if (disabled) return;          // ❌ pas d’instanciation si désactivé (mobile avec modal)
-    if (!fileUrl || !wrapRef.current) return;
+    if (disabled) { DBG("Viewer disabled → skip init"); return; }
+    if (!fileUrl || !wrapRef.current) { DBG("No fileUrl or wrapper → skip init"); return; }
 
     let cancelled = false;
     aliveRef.current = true;
 
     const jobKey = `${fileUrl}::${pageIndex}`;
     if (lastJob.current.key === jobKey) {
-      // Même document déjà chargé : on ne re-render pas inutilement
+      DBG("Same jobKey detected → skip re-render, call onReady");
       onReady?.();
       return;
     }
     lastJob.current.key = jobKey;
+
+    // reset flags
+    initialFitDoneRef.current = false;
+    userInteractedRef.current = false;
 
     const cleanupPdf = async () => {
       try { renderTaskRef.current?.cancel(); } catch {}
@@ -604,11 +622,12 @@ const PlanViewerLeaflet = forwardRef(({
 
     (async () => {
       try {
-        await cleanupPdf(); // 🧹 annule proprement l’éventuel rendu précédent
+        DBG("PDF load start", { fileUrl, pageIndex });
+        await cleanupPdf(); // 🧹
+
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = window.devicePixelRatio || 1;
 
-        // PDF open
         loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTaskRef.current.promise;
         if (cancelled) return;
@@ -616,10 +635,10 @@ const PlanViewerLeaflet = forwardRef(({
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        // On vise un bitmap “net” sans dépasser pour éviter OOM et terminaisons worker
         const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
         const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
+        DBG("PDF page ready", { baseW: baseVp.width, baseH: baseVp.height, scale: safeScale, bmpW: viewport.width, bmpH: viewport.height });
 
         const canvas = document.createElement("canvas");
         canvas.width  = Math.floor(viewport.width);
@@ -627,11 +646,12 @@ const PlanViewerLeaflet = forwardRef(({
         const ctx = canvas.getContext("2d", { alpha: true });
         renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
 
-        await renderTaskRef.current.promise; // ✅ pas de catch → si cancel, on sort via finally
+        await renderTaskRef.current.promise;
         if (cancelled) return;
 
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
+        DBG("PDF rendered to image", { w: canvas.width, h: canvas.height });
 
         // Map init (une seule fois)
         if (!mapRef.current) {
@@ -648,10 +668,18 @@ const PlanViewerLeaflet = forwardRef(({
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           ensureAddButton(m);
-          // Select marqueur proche
+
+          // === LOGS d'interaction
+          m.on("zoomstart", () => { userInteractedRef.current = true; DBG("zoomstart"); });
+          m.on("zoomend",   () => DBG("zoomend",   { z: m.getZoom() }));
+          m.on("movestart", () => { userInteractedRef.current = true; DBG("movestart"); });
+          m.on("moveend",   () => DBG("moveend",   { center: m.getCenter() }));
+          m.on("resize",    (e) => DBG("leaflet resize", { oldSize: e.oldSize, newSize: e.newSize }));
+          m.on("unload",    () => DBG("map unload"));
           m.on("click", (e) => {
             if (!aliveRef.current) return;
             const clicked = e.containerPoint;
+            DBG("map click", { containerPoint: clicked });
             const near = [];
             const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
             markersLayerRef.current?.eachLayer((mk) => {
@@ -659,12 +687,14 @@ const PlanViewerLeaflet = forwardRef(({
               const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
               if (dist <= pickRadius) near.push(mk.__meta);
             });
-            if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
-            else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
-            else setPicker(null);
+            if (near.length === 1 && onClickPoint) { DBG("map click → single near, open", near[0]); onClickPoint(near[0]); }
+            else if (near.length > 1) { DBG("map click → multi near", near.length); setPicker({ x: clicked.x, y: clicked.y, items: near }); }
+            else { DBG("map click → none near"); setPicker(null); }
           });
           m.on("zoomstart movestart", () => setPicker(null));
+
           mapRef.current = m;
+          DBG("Map created");
         }
 
         const map = mapRef.current;
@@ -677,17 +707,25 @@ const PlanViewerLeaflet = forwardRef(({
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
+        DBG("Image layer added", { bounds });
 
         await new Promise(requestAnimationFrame);
         map.invalidateSize(false);
 
-        const fitZoom = map.getBoundsZoom(bounds, true);
-        map.options.zoomSnap = 0.1;
-        map.options.zoomDelta = 0.5;
-        map.setMinZoom(fitZoom - 1);
-        map.setMaxZoom(fitZoom + 6);
-        map.setMaxBounds(bounds.pad(0.5));
-        map.fitBounds(bounds, { padding: [8, 8] });
+        // ✅ Ne faire le fit qu'une seule fois au tout début (évite les resets à chaque resize)
+        if (!initialFitDoneRef.current) {
+          const fitZoom = map.getBoundsZoom(bounds, true);
+          map.options.zoomSnap = 0.1;
+          map.options.zoomDelta = 0.5;
+          map.setMinZoom(fitZoom - 1);
+          map.setMaxZoom(fitZoom + 6);
+          map.setMaxBounds(bounds.pad(0.5));
+          map.fitBounds(bounds, { padding: [8, 8] });
+          initialFitDoneRef.current = true;
+          DBG("Initial fitBounds done", { fitZoom });
+        } else {
+          DBG("Skip initial fit (already done)");
+        }
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
@@ -697,22 +735,25 @@ const PlanViewerLeaflet = forwardRef(({
         setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
         try { await pdf.cleanup(); } catch {}
         onReady?.();
+        DBG("Viewer ready");
       } catch (e) {
-        // On ignore proprement les annulations PDF.js
-        if (String(e?.name) === "RenderingCancelledException") return;
+        if (String(e?.name) === "RenderingCancelledException") { DBG("PDF render cancelled"); return; }
         const msg = String(e?.message || "");
-        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
-        console.error("Leaflet viewer error", e);
+        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) { DBG("PDF worker ended"); return; }
+        console.error("[LEAFLET] init error", e);
       }
     })();
 
+    // ⚠️ Important : sur resize/orientationchange, on **n’effectue plus de fitBounds auto**
+    // on ne fait qu’un invalidateSize pour recalculer la taille sans toucher au zoom/centre.
     const onResize = () => {
       const m = mapRef.current;
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
       const b = layer.getBounds();
       m.invalidateSize(false);
-      m.fitBounds(b, { padding: [8, 8] });
+      DBG("window resize/orientation → invalidateSize only", { zoom: m.getZoom(), center: m.getCenter(), bounds: b });
+      // Pas de m.fitBounds(b) ici → évite les « reset de vue » pendant le pinch/rotate
     };
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
@@ -722,8 +763,6 @@ const PlanViewerLeaflet = forwardRef(({
       aliveRef.current = false;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onResize);
-      // Important : on ne détruit pas la map si on va réutiliser le viewer avec le même conteneur.
-      // Ici on nettoie tout car ce composant est démonté/re-monté selon l’usage.
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy(); } catch {}
       const map = mapRef.current;
@@ -738,12 +777,14 @@ const PlanViewerLeaflet = forwardRef(({
       imageLayerRef.current = null;
       if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
       addBtnControlRef.current = null;
+      DBG("Viewer unmounted & cleaned");
     };
   }, [fileUrl, pageIndex, disabled]); // 👈 disabled contrôle l’instanciation
 
   // Redessiner les marqueurs
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
+    DBG("points changed → redraw", { count: (points || []).length, imgSize });
     drawMarkers(points, imgSize.w, imgSize.h);
   }, [points, imgSize, unsavedIds]);
 
@@ -782,9 +823,15 @@ const PlanViewerLeaflet = forwardRef(({
 
       mk.on("click", () => {
         setPicker(null);
+        DBG("marker click", mk.__meta);
         onClickPoint?.(mk.__meta);
       });
 
+      mk.on("dragstart", () => DBG("marker dragstart", { id: p.door_id }));
+      mk.on("drag", () => {
+        const ll = mk.getLatLng();
+        DBG("marker drag", { lat: ll.lat, lng: ll.lng });
+      });
       mk.on("dragend", () => {
         if (!onMovePoint) return;
         const ll = mk.getLatLng(); // CRS.Simple → lat=y, lng=x
@@ -792,14 +839,16 @@ const PlanViewerLeaflet = forwardRef(({
         const yFrac = Math.min(1, Math.max(0, ll.lat / h));
         const xf = Math.round(xFrac * 1e6) / 1e6;
         const yf = Math.round(yFrac * 1e6) / 1e6;
+        DBG("marker dragend → save", { id: p.door_id, x: xf, y: yf });
         onMovePoint(p.door_id, { x: xf, y: yf });
       });
 
       mk.addTo(g);
     });
+    DBG("markers drawn", { count: list?.length || 0 });
   }
 
-  const onPickDoor = (d) => { setPicker(null); onClickPoint?.(d); };
+  const onPickDoor = (d) => { setPicker(null); DBG("picker select", d); onClickPoint?.(d); };
 
   const adjust = () => {
     const m = mapRef.current;
@@ -812,6 +861,7 @@ const PlanViewerLeaflet = forwardRef(({
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
+    DBG("manual adjust", { fitZoom, center: m.getCenter() });
   };
   useImperativeHandle(ref, () => ({ adjust }));
 
@@ -928,6 +978,7 @@ function MonthCalendar({ events = [], onDayClick }) {
   );
 }
 // src/pages/Doors.jsx — PARTIE 2/2 (FIX)
+// src/pages/Doors.jsx — PARTIE 2/2 (FIX)
 
 
 // ----------------------------- Page principale ----------------------------- //
@@ -993,6 +1044,7 @@ function Doors() {
     } catch {}
   }
   function closeDrawerAndClearParam() {
+    console.log("[UI] drawer close");
     setDrawerOpen(false);
     setEditing(null);
     setDoorParam(null);
@@ -1037,6 +1089,7 @@ function Doors() {
       if (full?.door?.id) {
         setEditing(full.door);
         setDrawerOpen(true);
+        console.log("[UI] deep-link open drawer", full.door.id);
       } else {
         setDoorParam(null);
       }
@@ -1088,6 +1141,7 @@ function Doors() {
     setEditing(full?.door || door);
     setDrawerOpen(true);
     setDoorParam(door.id);
+    console.log("[UI] open drawer from click", door.id);
   }
   function openCreate() {
     setEditing({
@@ -1096,6 +1150,7 @@ function Doors() {
       current_check: null, door_state: null,
     });
     setDrawerOpen(true);
+    console.log("[UI] open drawer create");
   }
   async function saveDoorBase() {
     if (!editing) return;
@@ -1384,12 +1439,14 @@ function Doors() {
 
   // Ouvrir/fermer plan
   function openPlan(plan) {
+    console.log("[UI] open plan", plan?.id || plan?.logical_name);
     setSelectedPlan(plan);
     setPdfReady(false);
     const stableUrl = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
     setPlanFileUrl(stableUrl);
   }
   function closePlan() {
+    console.log("[UI] close plan");
     setSelectedPlan(null);
     setPlanFileUrl(null);
     setPdfReady(false);
@@ -1431,6 +1488,12 @@ function Doors() {
       </div>
     </div>
   );
+
+  // 🔒 Lock mobile pendant qu’un plan est ouvert sur appareil tactile (pointer:coarse)
+  const isCoarsePointer = (typeof window !== "undefined" && window.matchMedia)
+    ? window.matchMedia("(pointer: coarse)").matches
+    : false;
+  const mobilePlanLock = !!selectedPlan && isCoarsePointer;
 
   /* ----------------------------- RENDER ----------------------------- */
   return (
@@ -1626,7 +1689,7 @@ function Doors() {
           />
 
           {/* Desktop / tablette : viewer inline */}
-          {!isMobile && selectedPlan && (
+          {!((isMobile || mobilePlanLock)) && selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <div className="font-semibold">
@@ -1654,8 +1717,8 @@ function Doors() {
             </div>
           )}
 
-          {/* Mobile : modal plein écran SEULEMENT */}
-          {isMobile && (
+          {/* Mobile (ou lock tactile) : modal plein écran SEULEMENT */}
+          {(isMobile || mobilePlanLock) && (
             <PlanModal
               open={!!selectedPlan}
               onClose={closePlan}
@@ -1732,7 +1795,7 @@ function Doors() {
         </div>
       )}
 
-      {/* Drawer Édition */}
+      {/* Drawer Édition — z-index élevé pour passer au-dessus du modal Plan */}
       {drawerOpen && editing && (
         <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
           <div className="space-y-4">
@@ -1906,7 +1969,8 @@ function Drawer({ title, children, onClose }) {
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
   return (
-    <div className="fixed inset-0 z-40" ref={ref}>
+    // ⬆️ z-index surélevé pour passer devant le modal du plan (z-50)
+    <div className="fixed inset-0 z-[6000]" ref={ref}>
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[640px] bg-white shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
