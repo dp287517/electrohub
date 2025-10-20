@@ -949,8 +949,7 @@ function MonthCalendar({ events = [], onDayClick }) {
   );
 }
 
-// src/pages/Doors.jsx — PARTIE 2/2 (à suivre)
-// src/pages/Doors.jsx — PARTIE 2/2 (FIX + LOGS)
+// src/pages/Doors.jsx — PARTIE 2/2 (FIX + LOGS, modal CSS no-remount)
 
 
 // ----------------------------- Page principale ----------------------------- //
@@ -1429,32 +1428,6 @@ function Doors() {
     setPlanUIMode(null);
   }
 
-  // Modal plein écran pour smartphone (z plus élevé que Drawer)
-  function PlanModal({ open, onClose, children, title }) {
-    useEffect(() => {
-      const handler = (e) => { if (e.key === "Escape") onClose?.(); };
-      document.addEventListener("keydown", handler);
-      return () => document.removeEventListener("keydown", handler);
-    }, [onClose]);
-    if (!open) return null;
-    return (
-      <div className="fixed inset-0 z-[5000]">
-        <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-        <div className="absolute inset-0 bg-white shadow-2xl flex flex-col">
-          <div className="p-3 border-b flex items-center justify-between">
-            <div className="font-semibold truncate pr-3">{title}</div>
-            <div className="flex items-center gap-2">
-              <Btn variant="ghost" onClick={onClose}>Fermer</Btn>
-            </div>
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden p-2">
-            {children}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
@@ -1658,46 +1631,28 @@ function Doors() {
             onPick={openPlan}
           />
 
-          {/* Desktop / tablette : viewer inline */}
-          {planUIMode === "inline" && selectedPlan && (
-            <div className="bg-white rounded-2xl border shadow-sm p-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="font-semibold">
+          {/* Un seul viewer. En mode 'modal', on le passe en plein écran par CSS (z-index < Drawer). */}
+          {selectedPlan && (
+            <div
+              className={
+                planUIMode === "modal"
+                  ? "fixed inset-0 z-[5000] bg-white p-2"
+                  : "bg-white rounded-2xl border shadow-sm p-3"
+              }
+            >
+              <div className={`flex items-center justify-between gap-3 flex-wrap ${planUIMode === "modal" ? "pb-2 border-b" : ""}`}>
+                <div className="font-semibold truncate pr-3">
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* ➕ retiré ici, car il est désormais DANS la carte */}
                   <Btn variant="ghost" onClick={closePlan}>Fermer le plan</Btn>
                 </div>
               </div>
-              <PlanViewerLeaflet
-                ref={viewerRef}
-                key={selectedPlan?.id || selectedPlan?.logical_name || ""}
-                fileUrl={planFileUrl}
-                pageIndex={planPage}
-                points={positions}
-                onReady={handlePdfReady}
-                onMovePoint={handleMovePoint}
-                onClickPoint={handleClickPoint}
-                onCreatePoint={createDoorAtCenter}
-                unsavedIds={unsavedDoorIds}
-                disabled={false}
-              />
-              {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
-            </div>
-          )}
 
-          {/* Mobile : modal plein écran SEULEMENT */}
-          {planUIMode === "modal" && (
-            <PlanModal
-              open={!!selectedPlan}
-              onClose={closePlan}
-              title={selectedPlan ? (selectedPlan.display_name || selectedPlan.logical_name) : ""}
-            >
-              {selectedPlan && (
+              <div className={planUIMode === "modal" ? "pt-2" : ""}>
                 <PlanViewerLeaflet
                   ref={viewerRef}
-                  key={(selectedPlan?.id || selectedPlan?.logical_name || "") + "::mobile"}
+                  key={selectedPlan?.id || selectedPlan?.logical_name || ""}
                   fileUrl={planFileUrl}
                   pageIndex={planPage}
                   points={positions}
@@ -1708,9 +1663,10 @@ function Doors() {
                   unsavedIds={unsavedDoorIds}
                   disabled={false}
                 />
-              )}
+              </div>
+
               {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
-            </PlanModal>
+            </div>
           )}
         </div>
       )}
@@ -1765,7 +1721,7 @@ function Doors() {
         </div>
       )}
 
-      {/* Drawer Édition */}
+      {/* Drawer Édition (z-index au-dessus du viewer plein écran) */}
       {drawerOpen && editing && (
         <Drawer title={`Porte • ${editing.name || "nouvelle"}`} onClose={closeDrawerAndClearParam}>
           <div className="space-y-4">
