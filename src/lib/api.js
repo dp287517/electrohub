@@ -472,4 +472,139 @@ export const api = {
     setPosition: (doorId, payload) =>
       put(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, payload),
   },
+
+  /* ======================================================================
+     =====================  ATEX (NOUVEAU)  ================================
+     ====================================================================== */
+
+  /** --- ATEX (équipements + analytics + pièces jointes) --- */
+  atex: {
+    // CRUD équipements
+    listEquipments: (params) => get(`/api/atex/equipments`, params),
+    getEquipment: (id) => get(`/api/atex/equipments/${encodeURIComponent(id)}`),
+    createEquipment: (payload) => post(`/api/atex/equipments`, payload),
+    updateEquipment: (id, payload) => put(`/api/atex/equipments/${encodeURIComponent(id)}`, payload),
+    removeEquipment: (id) => del(`/api/atex/equipments/${encodeURIComponent(id)}`),
+
+    // Attachments (liste / upload / delete + URL download)
+    listAttachments: (equipmentId) =>
+      get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/attachments`),
+
+    uploadAttachments: (equipmentId, files = []) => {
+      const fd = new FormData();
+      files.forEach((f) => fd.append("files", f));
+      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/attachments`, fd);
+    },
+
+    deleteAttachment: (attachmentId) =>
+      del(`/api/atex/attachments/${encodeURIComponent(attachmentId)}`),
+
+    attachmentDownloadUrl: (attachmentId, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/atex/attachments/${encodeURIComponent(attachmentId)}/download`, bust),
+
+    // Suggests + Analytics
+    suggests: () => get(`/api/atex/suggests`),
+    analytics: () => get(`/api/atex/analytics`),
+
+    // Export JSON (backend renvoie { data, columns })
+    exportJSON: () => get(`/api/atex/export`),
+
+    // Import: simple helper (le front peut boucler et appeler createEquipment)
+    importRows: (rows = []) => post(`/api/atex/import`, { rows }),
+
+    // Photo -> extraction (OCR / LLM)
+    analyzePhoto: (file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/atex/photo-analysis`, fd);
+    },
+
+    // Sous-équipements (créés à partir des zones dessinées)
+    // Deux variantes: directe avec zone_id, ou générique
+    createSubEquipmentFromZone: ({ zone_id, label, zone_gas = null, zone_dust = null, parent_equipment_id = null }) =>
+      post(`/api/atex/zones/${encodeURIComponent(zone_id)}/subequipments`, {
+        label, zone_gas, zone_dust, parent_equipment_id,
+      }),
+
+    // Également un endpoint générique (si le backend l’offre)
+    createSubEquipment: (payload) => post(`/api/atex/subequipments`, payload),
+
+    // Pins (position d’un équipement sur plan)
+    setPin: (equipmentId, payload /* { plan_id/logical_name, page_index, x, y, rotation? } */) =>
+      put(`/api/atex/maps/pins/${encodeURIComponent(equipmentId)}`, payload),
+    listPins: (params /* { id|logical_name, page_index } */) =>
+      get(`/api/atex/maps/pins`, params),
+    pendingPins: (params /* non positionnés */) =>
+      get(`/api/atex/maps/pending-pins`, params),
+  },
+
+  /** --- ATEX MAPS (Plans & zones sur la même page que la liste) --- */
+  atexMaps: {
+    // Import ZIP multi-plans (PDF) — identique à Doors côté usage
+    uploadZip: (file) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      fd.append("zip", file);
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
+      return upload(`/api/atex/maps/uploadZip`, fd);
+    },
+
+    // Liste des plans (avec id UUID + logical_name éventuel)
+    listPlans: () => get(`/api/atex/maps/plans`),
+
+    // Renommage affichage (optionnel si backend prévu)
+    renamePlan: (idOrLogical, display_name) =>
+      put(`/api/atex/maps/plan/${encodeURIComponent(idOrLogical)}/rename`, { display_name }),
+
+    // URL fichier PDF d’un plan
+    planFileUrlById: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(id)}/file`, bust),
+    planFileUrlByLogical: (logical_name, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
+    planFileUrlAuto: (planOrKey, { bust = true } = {}) => {
+      if (typeof planOrKey === "string") {
+        return isUuid(planOrKey)
+          ? withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(planOrKey)}/file`, bust)
+          : withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(planOrKey)}/file`, bust);
+      }
+      const key = planOrKey?.id || planOrKey?.logical_name || "";
+      return isUuid(key)
+        ? withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(key)}/file`, bust)
+        : withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(key)}/file`, bust);
+    },
+
+    /* ================= ZONES (rect/polygon/circle) ================= */
+    // Lecture des zones d’un plan/page
+    listZones: (params /* { id|logical_name, page_index } */) =>
+      get(`/api/atex/maps/zones`, params),
+
+    // Création / MAJ / suppression
+    createZone: (payload /* {plan_id|logical_name, page_index, type, points|{x,y,w,h}|{cx,cy,r}, meta:{label, zone_gas, zone_dust} } */) =>
+      post(`/api/atex/maps/zones`, payload),
+
+    updateZone: (zoneId, payload) =>
+      put(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}`, payload),
+
+    removeZone: (zoneId) =>
+      del(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}`),
+
+    // Lier une zone à un équipement parent (facultatif si fait via subEquipment)
+    linkZoneToEquipment: (zoneId, equipmentId) =>
+      post(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}/link`, { equipment_id: equipmentId }),
+
+    // Créer un sous-équipement directement depuis une zone (raccourci)
+    createSubEquipmentFromZone: (zoneId, payload /* {label, zone_gas, zone_dust, parent_equipment_id} */) =>
+      post(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}/subequipment`, payload),
+
+    /* ================= PINS (positions d’équipements) ============== */
+    pins: (params /* { id|logical_name, page_index } */) =>
+      get(`/api/atex/maps/pins`, params),
+
+    setPin: (equipmentId, payload /* { plan_id|logical_name, page_index, x, y, rotation? } */) =>
+      put(`/api/atex/maps/pins/${encodeURIComponent(equipmentId)}`, payload),
+
+    pendingPins: (params /* { plan_id|logical_name, page_index } */) =>
+      get(`/api/atex/maps/pending-pins`, params),
+  },
 };
