@@ -491,7 +491,7 @@ export const atexMaps = {
     const logical = typeof plan === 'string' ? plan : plan?.logical_name;
     return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical)}/file`;
   },
-  // 👉 Image rasterisée de la page (pour Leaflet ImageOverlay). On forcera page 0 côté UI.
+  // 👉 Image rasterisée de la page (pour Leaflet ImageOverlay). Utilisée en PARTIE 2.
   planPageImageUrl(logical_name, page_index = 0) {
     return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical_name)}/page/${page_index}.png`;
   },
@@ -515,7 +515,7 @@ export const atexMaps = {
   },
   async createSubarea({ logical_name, page_index = 0, name, shape_type, geometry, zone_gas = null, zone_dust = null }) {
     // shape_type = 'rect' | 'circle' | 'poly'
-    // geometry en FRACTIONS [0..1] (voir /apply)
+    // geometry en FRACTIONS [0..1]
     return post(`${API_BASE}/api/atex/maps/subareas`, {
       logical_name, page_index, name, shape_type, geometry, zone_gas, zone_dust
     });
@@ -562,7 +562,6 @@ export const atexMaps = {
 
 /* -------------------------------------------------------
    Helpers géométrie côté front (display ↔ fractions)
-   (utiles en PARTIE 2/2 pour sérialiser les shapes)
 ------------------------------------------------------- */
 
 // Convertit un rectangle en px display → fractions [0..1]
@@ -584,7 +583,7 @@ export function circleDisplayToFrac({ cx, cy, x, y }, W, H) {
   return {
     cx: +(cx / Math.max(1, W)).toFixed(6),
     cy: +(cy / Math.max(1, H)).toFixed(6),
-    r: +((r / Math.max(1, Math.max(W, H))).toFixed(6)) // rayon sur plus grand côté (cohérent pour apply)
+    r: +((r / Math.max(1, Math.max(W, H))).toFixed(6)) // rayon sur plus grand côté
   };
 }
 // Path libre → poly (liste de points) en fractions
@@ -598,8 +597,7 @@ export function pathDisplayToFrac(points, W, H) {
 }
 
 /* -------------------------------------------------------
-   Exemples d’affichage de KPI/cartes/Form fields
-   (réutilisés en PARTIE 2/2)
+   Exemples d’affichage de KPI/cartes/Form fields (UI)
 ------------------------------------------------------- */
 
 export function Modal({ children, onClose, title, wide = false }) {
@@ -647,11 +645,12 @@ export function Field({ label, children, cols = 1 }) {
 }
 
 /* -------------------------------------------------------
-   Leaflet helpers (icônes, légende) — utilisés en PARTIE 2
+   Leaflet helpers (icônes, légende) — **sans react-leaflet**
+   → utilisables dans la PARTIE 2 avec Leaflet “vanilla”
 ------------------------------------------------------- */
 
-// Astuce icônes Leaflet (si nécessaire selon bundler)
-// À appeler une seule fois au montage de l’app (inoffensif si répété).
+// 1) Icônes par défaut Leaflet (patch chemins d’assets)
+// À appeler une seule fois au montage; inoffensif si rappelé.
 export async function ensureLeafletDefaultIcons() {
   try {
     const L = (await import('leaflet')).default;
@@ -664,86 +663,69 @@ export async function ensureLeafletDefaultIcons() {
   }
 }
 
-// Items de légende par défaut (représentation visuelle de la carte)
+// 2) Items de légende par défaut (représentation visuelle)
 export const LEAFLET_LEGEND_ITEMS = [
   { swatch: 'bg-emerald-500', label: 'Equipment position' },
-  { swatch: 'bg-blue-500', label: 'Zone (drawn)' },
+  { swatch: 'bg-blue-500', label: 'Zone (saved)' },
   { swatch: 'bg-amber-500', label: 'Drawing preview' }
 ];
 
-// Composant React-Leaflet pour insérer une légende (bottomright)
-export function LegendControl({ title = 'Legend', items = LEAFLET_LEGEND_ITEMS }) {
-  // import tardif pour éviter coût si onglet Plans non ouvert
-  const [ready, setReady] = useState(false);
-  const mapRef = useRef(null);
-
-  useEffect(() => {
-    let ctrl;
-    (async () => {
-      const { useMap } = await import('react-leaflet');
-      const L = (await import('leaflet')).default;
-      setReady(true);
-
-      // petit hack : attendre que useMap soit dispo dans ce scope
-      setTimeout(() => {
-        try {
-          // eslint-disable-next-line react-hooks/rules-of-hooks
-          const map = useMap(); // sera résolu quand le composant est rendu dans le <MapContainer>
-          mapRef.current = map;
-
-          ctrl = L.control({ position: 'bottomright' });
-          ctrl.onAdd = () => {
-            const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar shadow rounded-lg overflow-hidden');
-            div.style.background = 'white';
-            div.style.padding = '8px 10px';
-            div.style.minWidth = '160px';
-            div.innerHTML = `
-              <div style="font-weight:600;margin-bottom:6px;">${title}</div>
-              ${items
-                .map(
-                  it => `
-                <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-                  <span class="${it.swatch}" style="display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1)"></span>
-                  <span style="font-size:12px;color:#374151">${it.label}</span>
-                </div>`
-                )
-                .join('')}
-            `;
-            return div;
-          };
-          ctrl.addTo(map);
-        } catch {
-          // noop
-        }
-      }, 0);
-    })();
-
-    return () => {
-      try {
-        if (ctrl && mapRef.current) {
-          ctrl.remove();
-        }
-      } catch {
-        // noop
-      }
-    };
-  }, [title, items]);
-
-  // rien à rendre, contrôle injecté dans Leaflet
-  return ready ? null : null;
+// 3) Fabrique un contrôle Leaflet (impératif)
+export async function createLegendControl({ position = 'bottomright', title = 'Legend', items = LEAFLET_LEGEND_ITEMS } = {}) {
+  const L = (await import('leaflet')).default;
+  const ctrl = L.control({ position });
+  ctrl.onAdd = () => {
+    const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar shadow rounded-lg overflow-hidden');
+    div.style.background = 'white';
+    div.style.padding = '8px 10px';
+    div.style.minWidth = '160px';
+    div.innerHTML = `
+      <div style="font-weight:600;margin-bottom:6px;">${title}</div>
+      ${items
+        .map(
+          it => `
+        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+          <span class="${it.swatch}" style="display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1)"></span>
+          <span style="font-size:12px;color:#374151">${it.label}</span>
+        </div>`
+        )
+        .join('')}
+    `;
+    return div;
+  };
+  return ctrl;
 }
 
+// 4) Attache (et retourne) le contrôle à une instance de carte Leaflet
+export async function attachLegendToMap(map, opts) {
+  const ctrl = await createLegendControl(opts);
+  ctrl.addTo(map);
+  return ctrl;
+}
+
+// 5) Utilitaire pour détacher proprement
+export function detachControl(map, ctrl) {
+  try { map?.removeControl?.(ctrl); } catch { /* noop */ }
+}
+
+/* ===== Fin PARTIE 1/2 =====
+   La PARTIE 2/2 ajoutera:
+   - La page principale (onglets Controls/Assessment/Import + Plans & Positions)
+   - L’implémentation de la carte Leaflet “vanilla” (L.map, L.imageOverlay, L.layerGroup, etc.)
+   - L’utilisation d’ensureLeafletDefaultIcons() et attachLegendToMap()
+*/
 /* =======================================================
-   Petits composants MODALES pour Equipments
+   PARTIE 2/2 — Page principale + Leaflet “vanilla”
+   (colle tout ceci à la fin de PARTIE 1/2, même fichier)
 ======================================================= */
 
+/* ========== Modale Edit/New Equipment ========== */
 function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, uniques, notify }) {
   const [photoLoading, setPhotoLoading] = useState(false);
-  const [modalAttachments, setModalAttachments] = useState([]);
 
   return (
     <Modal
-      onClose={() => { onClose(); setModalAttachments([]); }}
+      onClose={() => { onClose(); }}
       title={editItem.id ? 'Edit Equipment' : 'New Equipment'}
       wide
     >
@@ -762,32 +744,32 @@ function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, u
 
         <Field label="Building">
           <input className="input w-full" list="buildings" value={editItem.building || ''} onChange={e => setEditItem({ ...editItem, building: e.target.value })} />
-          <datalist id="buildings">{uniques.buildings.map(b => <option key={b} value={b} />)}</datalist>
+          <datalist id="buildings">{(uniques.buildings || []).map(b => <option key={b} value={b} />)}</datalist>
         </Field>
 
         <Field label="Room">
           <input className="input w-full" list="rooms" value={editItem.room || ''} onChange={e => setEditItem({ ...editItem, room: e.target.value })} />
-          <datalist id="rooms">{uniques.rooms.map(r => <option key={r} value={r} />)}</datalist>
+          <datalist id="rooms">{(uniques.rooms || []).map(r => <option key={r} value={r} />)}</datalist>
         </Field>
 
         <Field label="Component Type">
           <input className="input w-full" list="types" value={editItem.component_type || ''} onChange={e => setEditItem({ ...editItem, component_type: e.target.value })} />
-          <datalist id="types">{uniques.types.map(t => <option key={t} value={t} />)}</datalist>
+          <datalist id="types">{(uniques.types || []).map(t => <option key={t} value={t} />)}</datalist>
         </Field>
 
         <Field label="Manufacturer">
           <input className="input w-full" list="mans" value={editItem.manufacturer || ''} onChange={e => setEditItem({ ...editItem, manufacturer: e.target.value })} />
-          <datalist id="mans">{uniques.manufacturers.map(m => <option key={m} value={m} />)}</datalist>
+          <datalist id="mans">{(uniques.manufacturers || []).map(m => <option key={m} value={m} />)}</datalist>
         </Field>
 
         <Field label="Manufacturer Ref">
           <input className="input w-full" list="refs" value={editItem.manufacturer_ref || ''} onChange={e => setEditItem({ ...editItem, manufacturer_ref: e.target.value })} />
-          <datalist id="refs">{uniques.refs.map(r => <option key={r} value={r} />)}</datalist>
+          <datalist id="refs">{(uniques.refs || []).map(r => <option key={r} value={r} />)}</datalist>
         </Field>
 
         <Field label="ATEX Marking" cols={2}>
           <input className="input w-full" list="atexrefs" value={editItem.atex_ref || ''} onChange={e => setEditItem({ ...editItem, atex_ref: e.target.value })} />
-          <datalist id="atexrefs">{uniques.atex_refs.map(r => <option key={r} value={r} />)}</datalist>
+          <datalist id="atexrefs">{(uniques.atex_refs || []).map(r => <option key={r} value={r} />)}</datalist>
         </Field>
 
         <Field label="Gas Zone">
@@ -841,7 +823,7 @@ function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, u
             className="input text-sm w-full bg-white text-gray-900 border-gray-300"
             disabled={photoLoading}
             onChange={async e => {
-              const file = e.target.files[0];
+              const file = e.target.files?.[0];
               if (!file) return;
               setPhotoLoading(true);
               const formData = new FormData();
@@ -894,10 +876,7 @@ function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, u
   );
 }
 
-/* =======================================================
-   PLANS & POSITIONS (Leaflet ImageOverlay + drawing tools)
-======================================================= */
-
+/* ========== Plans & Positions — Leaflet VANILLA ========== */
 function PlansPane({ notify }) {
   // Plans
   const [plans, setPlans] = useState([]);
@@ -917,7 +896,7 @@ function PlansPane({ notify }) {
   const [polyDrawing, setPolyDrawing] = useState(false);
 
   // Creation modal for subarea
-  const [pendingShape, setPendingShape] = useState(null); // {type, geomFrac}
+  const [pendingShape, setPendingShape] = useState(null); // {type:'rect-final'|'circle-final'|'poly-final', geomFrac, draft?}
   const [draftName, setDraftName] = useState('');
   const [draftGas, setDraftGas] = useState('');
   const [draftDust, setDraftDust] = useState('');
@@ -929,16 +908,24 @@ function PlansPane({ notify }) {
   const [imgSize, setImgSize] = useState({ w: 2000, h: 1400 }); // fallback
   const imageUrl = selected ? atexMaps.planPageImageUrl(selected.logical_name, pageIndex) : null;
 
-  function bounds() {
-    // y = [0..h], x = [0..w]
-    return [[0, 0], [imgSize.h, imgSize.w]];
-  }
+  // Leaflet refs
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const LRef = useRef(null);
+  const overlayRef = useRef(null);
+  const subareasLayerRef = useRef(null);
+  const positionsLayerRef = useRef(null);
+  const previewLayerRef = useRef(null);
+  const legendCtrlRef = useRef(null);
+
+  // compute bounds with CRS.Simple (y first, x second)
+  const getBounds = () => [[0, 0], [imgSize.h, imgSize.w]];
 
   function fracToDisplayRect(geom, W, H) {
     return [
       [geom.y * H, geom.x * W],
       [(geom.y + geom.h) * H, (geom.x + geom.w) * W]
-    ]; // [[y1,x1],[y2,x2]]
+    ];
   }
   function fracToDisplayCircle(geom, W, H) {
     return {
@@ -948,6 +935,175 @@ function PlansPane({ notify }) {
   }
   function fracToDisplayPoly(geom, W, H) {
     return (geom?.points || []).map(p => [p.y * H, p.x * W]);
+  }
+
+  async function ensureMap() {
+    if (mapRef.current) return mapRef.current;
+    const L = (await import('leaflet')).default;
+    LRef.current = L;
+
+    const map = L.map(containerRef.current, {
+      crs: L.CRS.Simple,
+      center: [imgSize.h / 2, imgSize.w / 2],
+      zoom: 0,
+      minZoom: -2,
+      maxZoom: 4,
+      zoomControl: true,
+      attributionControl: false,
+      doubleClickZoom: false
+    });
+
+    // layers
+    subareasLayerRef.current = L.layerGroup().addTo(map);
+    positionsLayerRef.current = L.layerGroup().addTo(map);
+    previewLayerRef.current = L.layerGroup().addTo(map);
+
+    // default icons
+    await ensureLeafletDefaultIcons();
+
+    // legend
+    legendCtrlRef.current = await attachLegendToMap(map, {
+      title: 'Legend',
+      items: [
+        { swatch: 'bg-emerald-500', label: 'Equipment position' },
+        { swatch: 'bg-blue-500', label: 'Zone (saved)' },
+        { swatch: 'bg-amber-500', label: 'Drawing preview' }
+      ]
+    });
+
+    // interaction for drawing
+    map.on('mousedown', (e) => {
+      if (tool === 'rect') {
+        const { latlng } = e;
+        setPendingShape({ type: 'rect', draft: { x0: latlng.lng, y0: latlng.lat, x1: latlng.lng, y1: latlng.lat } });
+      } else if (tool === 'circle') {
+        const { latlng } = e;
+        setPendingShape({ type: 'circle', draft: { cx: latlng.lng, cy: latlng.lat, x: latlng.lng, y: latlng.lat } });
+      } else if (tool === 'poly') {
+        setPolyDrawing(true);
+        setPolyPoints(prev => [...prev, { x: e.latlng.lng, y: e.latlng.lat }]);
+      } else if (tool === 'place' && selected && selectedEquip) {
+        const xf = +(e.latlng.lng / Math.max(1, imgSize.w)).toFixed(6);
+        const yf = +(e.latlng.lat / Math.max(1, imgSize.h)).toFixed(6);
+        atexMaps.setPosition(selectedEquip.id, {
+          logical_name: selected.logical_name,
+          page_index: pageIndex,
+          x_frac: xf,
+          y_frac: yf
+        }).then(() => {
+          notify(`Placed #${selectedEquip.id}`);
+          setSelectedEquip(null);
+          reloadPageData();
+        }).catch(err => {
+          console.error(err);
+          notify('Failed to place equipment', 'error');
+        });
+      }
+    });
+
+    map.on('mousemove', (e) => {
+      const L = LRef.current;
+      if (!pendingShape || !L) return;
+      if (pendingShape.type === 'rect') {
+        setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x1: e.latlng.lng, y1: e.latlng.lat } }));
+      } else if (pendingShape.type === 'circle') {
+        setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x: e.latlng.lng, y: e.latlng.lat } }));
+      }
+      // preview layer redraw
+      drawPreview();
+    });
+
+    map.on('mouseup', () => {
+      const L = LRef.current;
+      if (!pendingShape || !L) return;
+      const W = imgSize.w, H = imgSize.h;
+      if (pendingShape.type === 'rect') {
+        const { x0, y0, x1, y1 } = pendingShape.draft;
+        const geomFrac = rectDisplayToFrac({ x0, y0, x1, y1 }, W, H);
+        setPendingShape({ type: 'rect-final', geomFrac });
+      } else if (pendingShape.type === 'circle') {
+        const { cx, cy, x, y } = pendingShape.draft;
+        const geomFrac = circleDisplayToFrac({ cx, cy, x, y }, W, H);
+        setPendingShape({ type: 'circle-final', geomFrac });
+      }
+      clearPreview();
+    });
+
+    map.on('dblclick', () => {
+      if (tool === 'poly' && polyDrawing && polyPoints.length >= 3) {
+        const W = imgSize.w, H = imgSize.h;
+        const geomFrac = pathDisplayToFrac(polyPoints.map(p => ({ x: p.x, y: p.y })), W, H);
+        setPolyDrawing(false);
+        setPolyPoints([]);
+        setPendingShape({ type: 'poly-final', geomFrac });
+        clearPreview();
+      }
+    });
+
+    mapRef.current = map;
+    return map;
+  }
+
+  function clearOverlay() {
+    try { overlayRef.current?.remove?.(); } catch {}
+    overlayRef.current = null;
+  }
+  function clearPreview() {
+    const L = LRef.current;
+    if (!L || !previewLayerRef.current) return;
+    previewLayerRef.current.clearLayers();
+  }
+  function drawPreview() {
+    const L = LRef.current;
+    if (!L || !previewLayerRef.current) return;
+    previewLayerRef.current.clearLayers();
+    if (!pendingShape) return;
+
+    if (pendingShape.type === 'rect') {
+      const { x0, y0, x1, y1 } = pendingShape.draft || {};
+      const b = [
+        [Math.min(y0, y1), Math.min(x0, x1)],
+        [Math.max(y0, y1), Math.max(x0, x1)]
+      ];
+      L.rectangle(b, { color: '#f59e0b', weight: 2 }).addTo(previewLayerRef.current);
+    }
+    if (pendingShape.type === 'circle') {
+      const { cx, cy, x, y } = pendingShape.draft || {};
+      const r = Math.hypot((x - cx), (y - cy));
+      L.circle([cy, cx], { radius: r, color: '#f59e0b', weight: 2 }).addTo(previewLayerRef.current);
+    }
+    if (polyDrawing && polyPoints.length) {
+      L.polygon(polyPoints.map(p => [p.y, p.x]), { color: '#f59e0b', weight: 2 }).addTo(previewLayerRef.current);
+    }
+  }
+
+  function drawSubareas() {
+    const L = LRef.current;
+    if (!L || !subareasLayerRef.current) return;
+    subareasLayerRef.current.clearLayers();
+    subareas.forEach(sa => {
+      if (sa.shape_type === 'rect') {
+        const b = fracToDisplayRect(sa.geometry || {}, imgSize.w, imgSize.h);
+        L.rectangle(b, { color: '#3b82f6', weight: 2 }).addTo(subareasLayerRef.current);
+      } else if (sa.shape_type === 'circle') {
+        const c = fracToDisplayCircle(sa.geometry || {}, imgSize.w, imgSize.h);
+        L.circle(c.center, { radius: c.r, color: '#3b82f6', weight: 2 }).addTo(subareasLayerRef.current);
+      } else if (sa.shape_type === 'poly') {
+        const pts = fracToDisplayPoly(sa.geometry || {}, imgSize.w, imgSize.h);
+        L.polygon(pts, { color: '#3b82f6', weight: 2 }).addTo(subareasLayerRef.current);
+      }
+    });
+  }
+
+  function drawPositions() {
+    const L = LRef.current;
+    if (!L || !positionsLayerRef.current) return;
+    positionsLayerRef.current.clearLayers();
+    positions.forEach(p => {
+      const x = p.x_frac * imgSize.w;
+      const y = p.y_frac * imgSize.h;
+      L.marker([y, x], { title: `#${p.equipment_id} ${p.component_type}` }).addTo(positionsLayerRef.current);
+    });
   }
 
   async function reloadPlans() {
@@ -1000,72 +1156,51 @@ function PlansPane({ notify }) {
     img.src = imageUrl;
   }, [imageUrl]);
 
-  useEffect(() => { ensureLeafletDefaultIcons(); }, []);
+  // (re)create map + overlay when selected/page or image size changes
+  useEffect(() => {
+    (async () => {
+      if (!selected) return;
 
-  // Map interaction hook (click/drag)
-  function DrawingEvents() {
-    useMapEvents({
-      mousedown(e) {
-        if (tool === 'rect') {
-          const { latlng } = e; // lat=Y, lng=X (in CRS.Simple)
-          setPendingShape({ type: 'rect', draft: { x0: latlng.lng, y0: latlng.lat, x1: latlng.lng, y1: latlng.lat } });
-        } else if (tool === 'circle') {
-          const { latlng } = e;
-          setPendingShape({ type: 'circle', draft: { cx: latlng.lng, cy: latlng.lat, x: latlng.lng, y: latlng.lat } });
-        } else if (tool === 'poly') {
-          setPolyDrawing(true);
-          setPolyPoints(prev => [...prev, { x: e.latlng.lng, y: e.latlng.lat }]);
-        } else if (tool === 'place' && selected && selectedEquip) {
-          const xf = +(e.latlng.lng / Math.max(1, imgSize.w)).toFixed(6);
-          const yf = +(e.latlng.lat / Math.max(1, imgSize.h)).toFixed(6);
-          atexMaps.setPosition(selectedEquip.id, {
-            logical_name: selected.logical_name,
-            page_index: pageIndex,
-            x_frac: xf,
-            y_frac: yf
-          }).then(() => {
-            notify(`Placed #${selectedEquip.id}`);
-            setSelectedEquip(null);
-            reloadPageData();
-          }).catch(err => {
-            console.error(err);
-            notify('Failed to place equipment', 'error');
-          });
-        }
-      },
-      mousemove(e) {
-        if (!pendingShape) return;
-        if (pendingShape.type === 'rect') {
-          setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x1: e.latlng.lng, y1: e.latlng.lat } }));
-        } else if (pendingShape.type === 'circle') {
-          setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x: e.latlng.lng, y: e.latlng.lat } }));
-        }
-      },
-      mouseup() {
-        if (!pendingShape) return;
-        const W = imgSize.w, H = imgSize.h;
-        if (pendingShape.type === 'rect') {
-          const { x0, y0, x1, y1 } = pendingShape.draft;
-          const geomFrac = rectDisplayToFrac({ x0, y0, x1, y1 }, W, H);
-          setPendingShape({ type: 'rect-final', geomFrac });
-        } else if (pendingShape.type === 'circle') {
-          const { cx, cy, x, y } = pendingShape.draft;
-          const geomFrac = circleDisplayToFrac({ cx, cy, x, y }, W, H);
-          setPendingShape({ type: 'circle-final', geomFrac });
-        }
-      },
-      dblclick() {
-        if (tool === 'poly' && polyDrawing && polyPoints.length >= 3) {
-          const W = imgSize.w, H = imgSize.h;
-          const geomFrac = pathDisplayToFrac(polyPoints.map(p => ({ x: p.x, y: p.y })), W, H);
-          setPolyDrawing(false);
-          setPolyPoints([]);
-          setPendingShape({ type: 'poly-final', geomFrac });
-        }
+      const map = await ensureMap();
+      const L = LRef.current;
+      if (!L) return;
+
+      // overlay
+      clearOverlay();
+      if (imageUrl) {
+        overlayRef.current = L.imageOverlay(imageUrl, getBounds()).addTo(map);
       }
-    });
-    return null;
-  }
+
+      // bounds
+      map.setMaxBounds(getBounds());
+      map.fitBounds(getBounds(), { animate: false });
+
+      // redraw layers with new sizing
+      drawSubareas();
+      drawPositions();
+      clearPreview();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.logical_name, pageIndex, imgSize.w, imgSize.h, imageUrl]);
+
+  // redraw subareas/positions whenever data changes
+  useEffect(() => { drawSubareas(); }, [subareas]);
+  useEffect(() => { drawPositions(); }, [positions]);
+
+  // cleanup on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        const map = mapRef.current;
+        if (map) {
+          if (legendCtrlRef.current) detachControl(map, legendCtrlRef.current);
+          map.off();
+          map.remove();
+        }
+      } catch {}
+      mapRef.current = null;
+    };
+  }, []);
 
   async function createSubareaFromPending() {
     if (!pendingShape || !selected) return;
@@ -1131,28 +1266,6 @@ function PlansPane({ notify }) {
     }
   }
 
-  // Preview layers from pendingShape/poly
-  const previewLayers = (() => {
-    const layers = [];
-    if (pendingShape?.type === 'rect') {
-      const { x0, y0, x1, y1 } = pendingShape.draft || {};
-      const b = [
-        [Math.min(y0, y1), Math.min(x0, x1)],
-        [Math.max(y0, y1), Math.max(x0, x1)]
-      ];
-      layers.push(<Rectangle key="rect-prev" bounds={b} pathOptions={{ color: '#f59e0b' }} />);
-    }
-    if (pendingShape?.type === 'circle') {
-      const { cx, cy, x, y } = pendingShape.draft || {};
-      const r = Math.hypot((x - cx), (y - cy));
-      layers.push(<LCircle key="circle-prev" center={[cy, cx]} radius={r} pathOptions={{ color: '#f59e0b' }} />);
-    }
-    if (polyDrawing && polyPoints.length) {
-      layers.push(<Polygon key="poly-prev" positions={polyPoints.map(p => [p.y, p.x])} pathOptions={{ color: '#f59e0b' }} />);
-    }
-    return layers;
-  })();
-
   return (
     <div className="space-y-4">
       {/* Barre d’actions Plans */}
@@ -1217,7 +1330,12 @@ function PlansPane({ notify }) {
                     'px-3 py-1.5 text-sm border-r last:border-r-0',
                     tool === t ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
                   )}
-                  onClick={() => { setTool(t); if (t !== 'poly') { setPolyDrawing(false); setPolyPoints([]); } setPendingShape(null); }}
+                  onClick={() => {
+                    setTool(t);
+                    if (t !== 'poly') { setPolyDrawing(false); setPolyPoints([]); }
+                    setPendingShape(null);
+                    clearPreview();
+                  }}
                 >
                   {t}
                 </button>
@@ -1245,60 +1363,7 @@ function PlansPane({ notify }) {
       {/* Leaflet viewer */}
       <div className="relative bg-white rounded-lg shadow overflow-hidden">
         {selected ? (
-          <MapContainer
-            crs={CRS.Simple}
-            bounds={bounds()}
-            maxBounds={bounds()}
-            style={{ height: '70vh', width: '100%' }}
-            doubleClickZoom={false}
-          >
-            {/* Image du plan */}
-            {imageUrl && (
-              <ImageOverlay url={imageUrl} bounds={bounds()} />
-            )}
-
-            {/* Subareas existants */}
-            {subareas.map(sa => {
-              if (sa.shape_type === 'rect') {
-                const b = fracToDisplayRect(sa.geometry || {}, imgSize.w, imgSize.h);
-                return <Rectangle key={sa.id} bounds={b} pathOptions={{ color: '#3b82f6', weight: 2 }} />;
-              }
-              if (sa.shape_type === 'circle') {
-                const c = fracToDisplayCircle(sa.geometry || {}, imgSize.w, imgSize.h);
-                return <LCircle key={sa.id} center={c.center} radius={c.r} pathOptions={{ color: '#3b82f6', weight: 2 }} />;
-              }
-              if (sa.shape_type === 'poly') {
-                const pts = fracToDisplayPoly(sa.geometry || {}, imgSize.w, imgSize.h);
-                return <Polygon key={sa.id} positions={pts} pathOptions={{ color: '#3b82f6', weight: 2 }} />;
-              }
-              return null;
-            })}
-
-            {/* Positions */}
-            {positions.map(p => {
-              const x = p.x_frac * imgSize.w;
-              const y = p.y_frac * imgSize.h;
-              return (
-                <Marker key={p.equipment_id} position={[y, x]} title={`#${p.equipment_id} ${p.component_type}`} />
-              );
-            })}
-
-            {/* Preview en cours de dessin */}
-            {previewLayers}
-
-            {/* Légende (Leaflet) */}
-            <LegendControl
-              title="Legend"
-              items={[
-                { swatch: 'bg-emerald-500', label: 'Equipment position' },
-                { swatch: 'bg-blue-500', label: 'Zone (saved)' },
-                { swatch: 'bg-amber-500', label: 'Drawing preview' }
-              ]}
-            />
-
-            {/* Écoute des interactions de dessin/placement */}
-            <DrawingEvents />
-          </MapContainer>
+          <div ref={containerRef} style={{ height: '70vh', width: '100%' }} />
         ) : (
           <div className="h-[70vh] flex items-center justify-center text-sm text-gray-500 bg-gray-50">
             Select a plan to display the map.
@@ -1415,9 +1480,7 @@ function PlansPane({ notify }) {
   );
 }
 
-/* =======================================================
-   Onglet Controls / Assessment / Import + CRUD Equipments
-======================================================= */
+/* ========== Onglets Controls / Assessment / Import + CRUD ========== */
 
 export default function Atex() {
   // Onglets
@@ -1458,6 +1521,7 @@ export default function Atex() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   // État modales
+  the;
   const [editItem, setEditItem] = useState(null);
   const [showDelete, setShowDelete] = useState(null);
   const [showAttach, setShowAttach] = useState(null);
