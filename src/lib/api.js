@@ -331,7 +331,7 @@ export const api = {
     previewUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`, bust),
   },
 
-  /** --- DOORS (Portes coupe-feu) — MIS À JOUR POUR server_doors.js --- */
+  /** --- DOORS (Portes coupe-feu) --- */
   doors: {
     // CRUD portes
     list: (params) => get("/api/doors/doors", params),
@@ -340,7 +340,7 @@ export const api = {
     update: (id, payload) => put(`/api/doors/doors/${encodeURIComponent(id)}`, payload),
     remove: (id) => del(`/api/doors/doors/${encodeURIComponent(id)}`),
 
-    // Photo vignette (upload + URL) — ajoute identité aussi dans le FormData (fallback backend)
+    // Photo vignette
     uploadPhoto: (id, file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -352,7 +352,7 @@ export const api = {
     photoUrl: (id, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`, bust),
 
-    // Fichiers attachés à la porte — ajoute identité également (aligné Doors.jsx)
+    // Fichiers attachés
     listFiles: (id) => get(`/api/doors/doors/${encodeURIComponent(id)}/files`),
     uploadFile: (id, file) => {
       const { email, name } = getIdentity();
@@ -364,7 +364,7 @@ export const api = {
     },
     deleteFile: (fileId) => del(`/api/doors/files/${encodeURIComponent(fileId)}`),
 
-    // Checklists (workflow) — injecte _user (JSON) et user_email/name (multipart)
+    // Checklists
     startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, { _user: getIdentity() }),
     saveCheck: (doorId, checkId, payload = {}) => {
       if (payload?.files?.length) {
@@ -401,13 +401,12 @@ export const api = {
     alerts: () => get(`/api/doors/alerts`),
   },
 
-  /** --- DOORS MAPS (Plans PDF + positions) — logical_name & UUID --- */
+  /** --- DOORS MAPS (Plans PDF + positions) --- */
   doorsMaps: {
     uploadZip: (file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("zip", file);
-      // (pas requis par le backend, mais on aligne avec le reste)
       if (email) fd.append("user_email", email);
       if (name)  fd.append("user_name",  name);
       return upload(`/api/doors/maps/uploadZip`, fd);
@@ -418,22 +417,13 @@ export const api = {
     renamePlan: (logical_name, display_name) =>
       put(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, { display_name }),
 
-    /** Flux PDF (backend: /plan/:logical/file) */
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
-
-    /** 🔁 MAJ: par ID/UUID -> nouvelle route native */
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(id)}/file`, bust),
-
-    /** Compat (ancienne route) au cas où */
     planFileUrlCompatById: (id, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(id)}/file`, bust),
 
-    /**
-     * Helper AUTO: accepte soit un objet plan {id, logical_name},
-     * soit une simple string (UUID ou logical_name).
-     */
     planFileUrlAuto: (plan, { bust = true } = {}) => {
       if (typeof plan === "string") {
         return isUuid(plan)
@@ -447,15 +437,10 @@ export const api = {
       return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, bust);
     },
 
-    /** Positions — lecture/écriture */
     positions: (logical_name, page_index = 0) =>
       get(`/api/doors/maps/positions`, { logical_name, page_index }),
-
-    // 🆕 Lecture par UUID
     positionsById: (id, page_index = 0) =>
       get(`/api/doors/maps/positions`, { id, page_index }),
-
-    // 🆕 Auto: détecte logical_name ou UUID
     positionsAuto: (planOrKey, page_index = 0) => {
       const key =
         typeof planOrKey === "string"
@@ -464,29 +449,31 @@ export const api = {
       if (isUuid(key)) return get(`/api/doors/maps/positions`, { id: key, page_index });
       return get(`/api/doors/maps/positions`, { logical_name: key, page_index });
     },
-
-    // 🆕 Portes non positionnées
     pendingPositions: (logical_name, page_index = 0) =>
       get(`/api/doors/maps/pending-positions`, { logical_name, page_index }),
-
     setPosition: (doorId, payload) =>
       put(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, payload),
   },
 
   /* ======================================================================
-     =====================  ATEX (NOUVEAU)  ================================
+     =====================  ATEX (NOUVEAU corrigé)  ========================
      ====================================================================== */
 
   /** --- ATEX (équipements + analytics + pièces jointes) --- */
   atex: {
     // CRUD équipements
     listEquipments: (params) => get(`/api/atex/equipments`, params),
-    getEquipment: (id) => get(`/api/atex/equipments/${encodeURIComponent(id)}`),
+
+    // ⚠️ Pas d’endpoint GET /api/atex/equipments/:id côté backend actuel
+    getEquipment: async (_id) => {
+      throw new Error("GET /api/atex/equipments/:id n'est pas exposé par le backend.");
+    },
+
     createEquipment: (payload) => post(`/api/atex/equipments`, payload),
     updateEquipment: (id, payload) => put(`/api/atex/equipments/${encodeURIComponent(id)}`, payload),
     removeEquipment: (id) => del(`/api/atex/equipments/${encodeURIComponent(id)}`),
 
-    // Attachments (liste / upload / delete + URL download)
+    // Attachments
     listAttachments: (equipmentId) =>
       get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/attachments`),
 
@@ -502,109 +489,113 @@ export const api = {
     attachmentDownloadUrl: (attachmentId, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/atex/attachments/${encodeURIComponent(attachmentId)}/download`, bust),
 
-    // Suggests + Analytics
+    // Photo principale (GET/POST)
+    photoUrl: (equipmentId, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/atex/equipments/${encodeURIComponent(equipmentId)}/photo`, bust),
+    uploadPhoto: (equipmentId, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/photo`, fd);
+    },
+
+    // Suggests / Analytics / Export
     suggests: () => get(`/api/atex/suggests`),
     analytics: () => get(`/api/atex/analytics`),
-
-    // Export JSON (backend renvoie { data, columns })
     exportJSON: () => get(`/api/atex/export`),
 
-    // Import: simple helper (le front peut boucler et appeler createEquipment)
-    importRows: (rows = []) => post(`/api/atex/import`, { rows }),
-
-    // Photo -> extraction (OCR / LLM)
+    // OCR/LLM photo (single + batch)
     analyzePhoto: (file) => {
       const fd = new FormData();
       fd.append("photo", file);
       return upload(`/api/atex/photo-analysis`, fd);
     },
+    analyzePhotoBatch: (files = []) => {
+      const fd = new FormData();
+      files.forEach((f) => fd.append("files", f));
+      return upload(`/api/atex/photo-analysis/batch`, fd);
+    },
 
-    // Sous-équipements (créés à partir des zones dessinées)
-    // Deux variantes: directe avec zone_id, ou générique
-    createSubEquipmentFromZone: ({ zone_id, label, zone_gas = null, zone_dust = null, parent_equipment_id = null }) =>
-      post(`/api/atex/zones/${encodeURIComponent(zone_id)}/subequipments`, {
-        label, zone_gas, zone_dust, parent_equipment_id,
-      }),
-
-    // Également un endpoint générique (si le backend l’offre)
-    createSubEquipment: (payload) => post(`/api/atex/subequipments`, payload),
-
-    // Pins (position d’un équipement sur plan)
-    setPin: (equipmentId, payload /* { plan_id/logical_name, page_index, x, y, rotation? } */) =>
-      put(`/api/atex/maps/pins/${encodeURIComponent(equipmentId)}`, payload),
-    listPins: (params /* { id|logical_name, page_index } */) =>
-      get(`/api/atex/maps/pins`, params),
-    pendingPins: (params /* non positionnés */) =>
-      get(`/api/atex/maps/pending-pins`, params),
+    // IA compliance
+    aiAnalyze: (equipmentId) => post(`/api/atex/ai/${encodeURIComponent(equipmentId)}`, {}),
   },
 
-  /** --- ATEX MAPS (Plans & zones sur la même page que la liste) --- */
+  /** --- ATEX MAPS (Plans PDF + positions + zones “subareas”) --- */
   atexMaps: {
-    // Import ZIP multi-plans (PDF) — identique à Doors côté usage
+    // Upload ZIP multi-PDF — champ "file" (route: /upload-zip)
     uploadZip: (file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
-      fd.append("zip", file);
+      fd.append("file", file); // IMPORTANT: "file"
       if (email) fd.append("user_email", email);
       if (name)  fd.append("user_name",  name);
-      return upload(`/api/atex/maps/uploadZip`, fd);
+      return upload(`/api/atex/maps/upload-zip`, fd);
     },
 
-    // Liste des plans (avec id UUID + logical_name éventuel)
+    // Plans
     listPlans: () => get(`/api/atex/maps/plans`),
 
-    // Renommage affichage (optionnel si backend prévu)
-    renamePlan: (idOrLogical, display_name) =>
-      put(`/api/atex/maps/plan/${encodeURIComponent(idOrLogical)}/rename`, { display_name }),
+    // Rename (display_name) — route: /api/atex/maps/rename/:logical
+    renamePlan: (logical_name, display_name) =>
+      put(`/api/atex/maps/rename/${encodeURIComponent(logical_name)}`, { display_name }),
 
-    // URL fichier PDF d’un plan
-    planFileUrlById: (id, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(id)}/file`, bust),
-    planFileUrlByLogical: (logical_name, { bust = true } = {}) =>
+    // Fichier PDF du plan (par logical_name uniquement)
+    planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
-    planFileUrlAuto: (planOrKey, { bust = true } = {}) => {
-      if (typeof planOrKey === "string") {
-        return isUuid(planOrKey)
-          ? withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(planOrKey)}/file`, bust)
-          : withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(planOrKey)}/file`, bust);
-      }
-      const key = planOrKey?.id || planOrKey?.logical_name || "";
-      return isUuid(key)
-        ? withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(key)}/file`, bust)
-        : withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(key)}/file`, bust);
-    },
 
-    /* ================= ZONES (rect/polygon/circle) ================= */
-    // Lecture des zones d’un plan/page
-    listZones: (params /* { id|logical_name, page_index } */) =>
-      get(`/api/atex/maps/zones`, params),
+    // Positions d’équipements
+    positions: (logical_name, page_index = 0) =>
+      get(`/api/atex/maps/positions`, { logical_name, page_index }),
 
-    // Création / MAJ / suppression
-    createZone: (payload /* {plan_id|logical_name, page_index, type, points|{x,y,w,h}|{cx,cy,r}, meta:{label, zone_gas, zone_dust} } */) =>
-      post(`/api/atex/maps/zones`, payload),
+    setPosition: (equipmentId, { logical_name, page_index = 0, x_frac, y_frac }) =>
+      put(`/api/atex/maps/positions/${encodeURIComponent(equipmentId)}`, {
+        logical_name,
+        page_index,
+        x_frac,
+        y_frac,
+      }),
 
-    updateZone: (zoneId, payload) =>
-      put(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}`, payload),
+    // Équipements sans position (pour le plan/page)
+    unplaced: (logical_name, page_index = 0) =>
+      get(`/api/atex/maps/unplaced`, { logical_name, page_index }),
 
-    removeZone: (zoneId) =>
-      del(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}`),
+    // Résumé (placed/unplaced)
+    summary: (logical_name, page_index = 0) =>
+      get(`/api/atex/maps/summary`, { logical_name, page_index }),
 
-    // Lier une zone à un équipement parent (facultatif si fait via subEquipment)
-    linkZoneToEquipment: (zoneId, equipmentId) =>
-      post(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}/link`, { equipment_id: equipmentId }),
+    // Copier les positions d’un plan vers un autre
+    reassignPositions: ({ from_logical, to_logical, page_index = 0 }) =>
+      post(`/api/atex/maps/positions/reassign`, { from_logical, to_logical, page_index }),
 
-    // Créer un sous-équipement directement depuis une zone (raccourci)
-    createSubEquipmentFromZone: (zoneId, payload /* {label, zone_gas, zone_dust, parent_equipment_id} */) =>
-      post(`/api/atex/maps/zones/${encodeURIComponent(zoneId)}/subequipment`, payload),
+    /* ================== ZONES dessinées (subareas) ================== */
+    listSubareas: (logical_name, page_index = 0) =>
+      get(`/api/atex/maps/subareas`, { logical_name, page_index }),
 
-    /* ================= PINS (positions d’équipements) ============== */
-    pins: (params /* { id|logical_name, page_index } */) =>
-      get(`/api/atex/maps/pins`, params),
+    createSubarea: ({
+      logical_name,
+      page_index = 0,
+      name,
+      shape_type,  // 'rect' | 'poly' | 'circle'
+      geometry,    // rect:{x,y,w,h} | circle:{cx,cy,r} | poly:{points:[{x,y}]}
+      zone_gas = null,   // 0,1,2 | null
+      zone_dust = null,  // 20,21,22 | null
+    }) => post(`/api/atex/maps/subareas`, {
+      logical_name,
+      page_index,
+      name,
+      shape_type,
+      geometry,
+      zone_gas,
+      zone_dust,
+    }),
 
-    setPin: (equipmentId, payload /* { plan_id|logical_name, page_index, x, y, rotation? } */) =>
-      put(`/api/atex/maps/pins/${encodeURIComponent(equipmentId)}`, payload),
+    updateSubarea: (id, patch) =>
+      put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, patch),
 
-    pendingPins: (params /* { plan_id|logical_name, page_index } */) =>
-      get(`/api/atex/maps/pending-pins`, params),
+    deleteSubarea: (id) =>
+      del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
+
+    // Appliquer les zones (met à jour zone_gas/zone_dust/status des équipements positionnés)
+    applySubareas: (logical_name, page_index = 0) =>
+      post(`/api/atex/maps/subareas/apply`, { logical_name, page_index }),
   },
 };
