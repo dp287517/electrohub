@@ -1,0 +1,222 @@
+/* =====================================================
+   ATEX MAP — styles globaux (PDF viewer + overlay)
+   Coller tel quel dans: src/styles/atex-map.css
+===================================================== */
+
+:root{
+  --atex-blue: #2563eb;           /* blue-600 */
+  --atex-blue-50: #eff6ff;
+  --atex-gray-50:#f9fafb;
+  --atex-gray-100:#f3f4f6;
+  --atex-gray-200:#e5e7eb;
+  --atex-gray-300:#d1d5db;
+  --atex-gray-500:#6b7280;
+  --atex-gray-700:#374151;
+  --atex-shadow: 0 10px 30px rgba(0,0,0,.12);
+  --atex-shadow-soft: 0 6px 20px rgba(0,0,0,.10);
+}
+
+/* ====== Layout carte ====== */
+.atex-map {
+  display:grid;
+  grid-template-rows: auto 1fr;
+  gap:.75rem;
+}
+
+.atex-map__head {
+  display:flex; align-items:center; justify-content:space-between;
+  gap:.75rem; flex-wrap:wrap;
+}
+
+.atex-map__canvas-wrap {
+  position:relative;
+  width:100%;
+  background: var(--atex-gray-50);
+  border:1px solid var(--atex-gray-200);
+  border-radius: .9rem;
+  overflow:hidden;
+  box-shadow: var(--atex-shadow-soft);
+  min-height: 420px;
+}
+
+/* PDF (iframe / object / canvas PDF.js) */
+.atex-pdf {
+  width:100%; height:100%;
+  display:block; background:white;
+}
+
+/* calque overlay interactif (positions + zones) */
+.atex-overlay {
+  position:absolute; inset:0; pointer-events:auto;
+}
+
+/* ====== Toolbar ====== */
+.atex-toolbar {
+  position:absolute; left:12px; top:12px; z-index:6;
+  display:flex; gap:.5rem; flex-wrap:wrap;
+}
+.atex-tool {
+  display:inline-flex; align-items:center; gap:.5rem;
+  padding:.45rem .7rem; background:#fff; border:1px solid var(--atex-gray-200);
+  border-radius:.6rem; box-shadow: var(--atex-shadow-soft);
+  font-size:13px; color:var(--atex-gray-700);
+  user-select:none;
+}
+.atex-tool svg { width:16px; height:16px; opacity:.9; }
+.atex-tool:hover { background: #fff; border-color: var(--atex-gray-300); }
+.atex-tool[aria-pressed="true"] {
+  background: var(--atex-blue-50);
+  border-color: var(--atex-blue);
+  color: #1e3a8a; /* blue-900 */
+}
+
+/* hint en bas à gauche */
+.atex-hint {
+  position:absolute; left:12px; bottom:12px; z-index:5;
+  background:#fff; border:1px solid var(--atex-gray-200);
+  border-radius:.6rem; box-shadow: var(--atex-shadow-soft);
+  padding:.4rem .6rem; font-size:12px; color:var(--atex-gray-700);
+  opacity:.9;
+}
+
+/* ====== Zones dessinées (rect/poly/circle) ====== */
+.atex-zone {
+  position:absolute;
+  border:2px dashed var(--atex-blue);
+  background: rgba(37,99,235,.06);
+  border-radius:.4rem;
+  box-shadow: var(--atex-shadow-soft);
+}
+.atex-zone--poly {
+  border:none; border-radius:0; background:transparent; /* rempli via <svg> optionnel */
+}
+.atex-zone__label {
+  position:absolute; left:8px; top:6px;
+  padding:.15rem .4rem; font-size:11px; line-height:1;
+  background: rgba(255,255,255,.9);
+  border:1px solid var(--atex-gray-200);
+  border-radius:.4rem;
+  box-shadow: 0 2px 6px rgba(0,0,0,.08);
+  color:#111827;
+}
+
+/* sélection (toutes formes) */
+.atex-selected {
+  outline: 3px solid rgba(59,130,246,.35);
+  outline-offset: 1px;
+}
+
+/* ====== Édition: vertices / edges / cercle ====== */
+.atex-vertex {
+  position:absolute; width:10px; height:10px;
+  margin:-5px 0 0 -5px; border:2px solid #fff; border-radius:50%;
+  background:#111827;
+  box-shadow:0 1px 3px rgba(0,0,0,.3);
+  cursor:grab;
+}
+.atex-vertex:active { cursor:grabbing; }
+
+.atex-edge {
+  position:absolute; background:#111827; opacity:.6;
+  transform-origin:0 50%; height:2px; pointer-events:none;
+}
+
+.atex-circle {
+  position:absolute; border:2px dashed var(--atex-blue);
+  background: rgba(37,99,235,.08); border-radius:50%;
+  box-shadow: var(--atex-shadow-soft);
+}
+
+/* ====== Pins/markers équipements ====== */
+.equip-pin {
+  position:absolute; transform: translate(-50%, -100%);
+  padding:.2rem .4rem; border-radius:.4rem;
+  background:#111827; color:#fff; font-size:11px; line-height:1;
+  white-space:nowrap; box-shadow: var(--atex-shadow-soft);
+}
+.equip-pin::after {
+  content:""; position:absolute; left:50%; bottom:-6px; transform: translateX(-50%);
+  width:0; height:0; border-left:6px solid transparent; border-right:6px solid transparent;
+  border-top:6px solid #111827;
+}
+
+/* ====== États & badges ====== */
+.eq-badge { 
+  display:inline-flex; align-items:center; gap:.35rem;
+  padding:.15rem .45rem; border-radius:.5rem; font-size:11px; line-height:1;
+  box-shadow: var(--atex-shadow-soft);
+}
+
+/* ====== Palette états + zones ====== */
+:root{
+  /* Gaz */
+  --g0: #0ea5e9;  --g0-bg: rgba(14,165,233,.14); /* sky-500 */
+  --g1: #8b5cf6;  --g1-bg: rgba(139,92,246,.14); /* violet-500 */
+  --g2: #f97316;  --g2-bg: rgba(249,115,22,.14); /* orange-500 */
+
+  /* Poussière */
+  --d20: #22c55e; --d20-bg: rgba(34,197,94,.14);  /* green-500 */
+  --d21: #eab308; --d21-bg: rgba(234,179,8,.16);  /* yellow-500 */
+  --d22: #ef4444; --d22-bg: rgba(239,68,68,.14);  /* red-500 */
+
+  /* Conformité */
+  --ok: #10b981;      --ok-bg: rgba(16,185,129,.12);   /* emerald-500 */
+  --nok: #ef4444;     --nok-bg: rgba(239,68,68,.12);   /* red-500 */
+  --review: #f59e0b;  --review-bg: rgba(245,158,11,.12); /* amber-500 */
+}
+
+/* Zones — variantes (à cumuler avec .atex-zone) */
+.atex-zone--g0 { border-color: var(--g0);  background: var(--g0-bg); }
+.atex-zone--g1 { border-color: var(--g1);  background: var(--g1-bg); }
+.atex-zone--g2 { border-color: var(--g2);  background: var(--g2-bg); }
+.atex-zone--d20{ border-color: var(--d20); background: var(--d20-bg); }
+.atex-zone--d21{ border-color: var(--d21); background: var(--d21-bg); }
+.atex-zone--d22{ border-color: var(--d22); background: var(--d22-bg); }
+
+/* Badges états (pour légendes / info bulles) */
+.eq-badge--ok    { color:#065f46; background:var(--ok-bg); border:1px solid var(--ok); }
+.eq-badge--nok   { color:#7f1d1d; background:var(--nok-bg); border:1px solid var(--nok); }
+.eq-badge--review{ color:#78350f; background:var(--review-bg); border:1px solid var(--review); }
+
+/* Pins colorés selon statut */
+.equip-pin--ok    { background: var(--ok); }
+.equip-pin--ok::after { border-top-color: var(--ok); }
+.equip-pin--nok   { background: var(--nok); }
+.equip-pin--nok::after { border-top-color: var(--nok); }
+.equip-pin--review{ background: var(--review); }
+.equip-pin--review::after { border-top-color: var(--review); }
+
+/* ====== Légende ====== */
+.atex-legend {
+  position:absolute; right:12px; bottom:12px; z-index:5;
+  background:#fff; border:1px solid var(--atex-gray-200);
+  border-radius:.9rem; padding:.7rem .9rem; box-shadow: var(--atex-shadow);
+  min-width: 240px;
+}
+.atex-legend h4 {
+  font-size:12px; font-weight:700; color:var(--atex-gray-700); margin:0 0 .45rem 0;
+}
+.atex-legend .section { margin:.45rem 0; }
+.atex-legend .row { display:flex; align-items:center; gap:.6rem; margin:.25rem 0; font-size:12px; color:#111827; }
+.atex-legend .swatch {
+  width:16px; height:16px; border-radius:.35rem; border:1px solid rgba(0,0,0,.1);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+}
+
+/* swatches Gaz */
+.atex-legend .swatch.g0  { background: var(--g0-bg);  border-color: var(--g0); }
+.atex-legend .swatch.g1  { background: var(--g1-bg);  border-color: var(--g1); }
+.atex-legend .swatch.g2  { background: var(--g2-bg);  border-color: var(--g2); }
+/* swatches Dust */
+.atex-legend .swatch.d20 { background: var(--d20-bg); border-color: var(--d20); }
+.atex-legend .swatch.d21 { background: var(--d21-bg); border-color: var(--d21); }
+.atex-legend .swatch.d22 { background: var(--d22-bg); border-color: var(--d22); }
+
+/* étiquettes état */
+.atex-legend .badges { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.25rem; }
+
+/* ====== Sélecteurs utilitaires ====== */
+.atex-hidden { display:none !important; }
+.atex-noselect { user-select:none; -webkit-user-select:none; }
+.atex-grab { cursor:grab; }
+.atex-grabbing { cursor:grabbing; }
