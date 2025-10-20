@@ -1,46 +1,36 @@
-// Atex.jsx — PARTIE 1/2
-// Helpers + UI components + ADAPTER atexMaps (compat backend /api/atex/maps/*)
-// La page principale (onglets Controls/Assessment/Import + Plans & Positions) arrive en PARTIE 2/2.
+// Atex.jsx — PARTIE 1/2 (refonte)
+// Helpers + UI components + atexMaps (plans via endpoints Doors, fallback Atex)
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { get, post, put, del, upload, API_BASE } from '../lib/api.js'; // utilisé aussi en PARTIE 2/2
-import * as XLSX from 'xlsx'; // utilisé en PARTIE 2/2 (export/import)
+import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
+import * as XLSX from 'xlsx';
 import '../styles/atex-map.css';
 
 /* -------------------------------------------------------
    Constantes
 ------------------------------------------------------- */
-
-// Garder en phase avec SignUp si tu ajoutes des sites
 export const SITE_OPTIONS = ['Nyon', 'Levice', 'Aprilia'];
 
 export const GAS_ZONES = ['0', '1', '2'];
 export const DUST_ZONES = ['20', '21', '22'];
 
-// Backend stocke FR, UI affiche EN (comme avant)
 export const STATUS_MAP_DISPLAY = {
   'Conforme': 'Compliant',
   'Non conforme': 'Non-compliant',
   'À vérifier': 'To review'
 };
-
 export const STATUS_OPTIONS_UI = ['Compliant', 'Non-compliant', 'To review'];
 export const STATUS_MAP_TO_FR = {
   'Compliant': 'Conforme',
   'Non-compliant': 'Non conforme',
   'To review': 'À vérifier'
 };
-
-// Formes supportées par le backend /maps/subareas
 export const SHAPE_TYPES = ['rect', 'circle', 'poly'];
 
 /* -------------------------------------------------------
    Utils
 ------------------------------------------------------- */
-
-export function classNames(...a) {
-  return a.filter(Boolean).join(' ');
-}
+export function classNames(...a) { return a.filter(Boolean).join(' '); }
 
 export function formatDate(d) {
   if (!d) return '—';
@@ -58,9 +48,7 @@ export function daysUntil(d) {
 
 export function useOutsideClose(ref, onClose) {
   useEffect(() => {
-    function handler(e) {
-      if (ref.current && !ref.current.contains(e.target)) onClose?.();
-    }
+    function handler(e) { if (ref.current && !ref.current.contains(e.target)) onClose?.(); }
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [ref, onClose]);
@@ -78,7 +66,6 @@ export function useDebouncedValue(value, delay = 300) {
 /* -------------------------------------------------------
    Petits composants UI
 ------------------------------------------------------- */
-
 export function Tag({ children, tone = 'default', className = '' }) {
   const toneClass = {
     default: 'bg-gray-100 text-gray-800',
@@ -88,9 +75,7 @@ export function Tag({ children, tone = 'default', className = '' }) {
     info: 'bg-blue-100 text-blue-800'
   }[tone] || 'bg-gray-100 text-gray-800';
   return (
-    <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', toneClass, className)}>
-      {children}
-    </span>
+    <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', toneClass, className)}>{children}</span>
   );
 }
 
@@ -104,24 +89,18 @@ export function Spinner({ className = '' }) {
 }
 
 export function Button({ children, variant = 'primary', className = '', ...props }) {
-  const base =
-    'inline-flex items-center justify-center rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors';
+  const base = 'inline-flex items-center justify-center rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors';
   const styles = {
     primary: 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-600 px-4 py-2',
-    ghost: 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 px-3 py-2',
-    danger: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-600 px-4 py-2'
+    ghost:   'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 px-3 py-2',
+    danger:  'bg-red-600 text-white hover:bg-red-700 focus:ring-red-600 px-4 py-2'
   }[variant];
-  return (
-    <button className={classNames(base, styles, className)} {...props}>
-      {children}
-    </button>
-  );
+  return <button className={classNames(base, styles, className)} {...props}>{children}</button>;
 }
 
 /* -------------------------------------------------------
    Filtres compacts (MultiSelect / Segmented)
 ------------------------------------------------------- */
-
 export function MultiSelect({ label, values, setValues, options }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -133,23 +112,13 @@ export function MultiSelect({ label, values, setValues, options }) {
     return s ? options.filter(o => String(o).toLowerCase().includes(s)) : options;
   }, [options, search]);
 
-  function toggle(v) {
-    setValues(prev => (prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]));
-  }
-  function clearAll() {
-    setValues([]);
-    setSearch('');
-  }
+  function toggle(v) { setValues(prev => (prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])); }
+  function clearAll() { setValues([]); setSearch(''); }
   const labelText = values.length ? `${label} · ${values.length}` : label;
 
   return (
     <div className="relative" ref={wrapRef}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="h-9 px-3 rounded-md border border-gray-300 bg-white text-sm flex items-center gap-2 hover:border-gray-400"
-        title={label}
-      >
+      <button type="button" onClick={() => setOpen(o => !o)} className="h-9 px-3 rounded-md border border-gray-300 bg-white text-sm flex items-center gap-2 hover:border-gray-400" title={label}>
         <span className="truncate max-w-[10rem]">{labelText}</span>
         <svg className="w-4 h-4 opacity-60" viewBox="0 0 20 20" fill="currentColor">
           <path d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" />
@@ -158,35 +127,20 @@ export function MultiSelect({ label, values, setValues, options }) {
       {open && (
         <div className="absolute z-20 mt-2 w-72 rounded-xl border border-gray-200 bg-white shadow-lg p-3 sm:w-64">
           <div className="flex items-center gap-2">
-            <input
-              className="input h-9 flex-1"
-              placeholder={`Search ${label.toLowerCase()}...`}
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-            />
-            <button className="text-xs text-gray-600 hover:text-gray-900" onClick={clearAll} type="button">
-              Clear
-            </button>
+            <input className="input h-9 flex-1" placeholder={`Search ${label.toLowerCase()}...`} value={search} onChange={e => setSearch(e.target.value)} />
+            <button className="text-xs text-gray-600 hover:text-gray-900" onClick={clearAll} type="button">Clear</button>
           </div>
           <div className="max-h-56 overflow-auto mt-2 pr-1">
-            {filtered.length ? (
-              filtered.map(v => (
-                <label key={v} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-50 cursor-pointer">
-                  <input type="checkbox" checked={values.includes(v)} onChange={() => toggle(v)} />
-                  <span className="text-sm truncate">{v}</span>
-                </label>
-              ))
-            ) : (
-              <div className="text-sm text-gray-500 py-2 px-1">No results</div>
-            )}
+            {filtered.length ? filtered.map(v => (
+              <label key={v} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-50 cursor-pointer">
+                <input type="checkbox" checked={values.includes(v)} onChange={() => toggle(v)} />
+                <span className="text-sm truncate">{v}</span>
+              </label>
+            )) : <div className="text-sm text-gray-500 py-2 px-1">No results</div>}
           </div>
           {!!values.length && (
             <div className="flex flex-wrap gap-1 mt-2">
-              {values.map(v => (
-                <span key={v} className="px-2 py-0.5 rounded bg-gray-100 text-xs">
-                  {v}
-                </span>
-              ))}
+              {values.map(v => <span key={v} className="px-2 py-0.5 rounded bg-gray-100 text-xs">{v}</span>)}
             </div>
           )}
         </div>
@@ -196,23 +150,15 @@ export function MultiSelect({ label, values, setValues, options }) {
 }
 
 export function Segmented({ label, values, setValues, options }) {
-  function toggle(v) {
-    setValues(prev => (prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]));
-  }
+  function toggle(v) { setValues(prev => (prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])); }
   return (
     <div className="flex items-center gap-2">
       <span className="text-sm text-gray-600">{label}</span>
       <div className="flex rounded-md border border-gray-300 overflow-hidden">
         {options.map(v => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => toggle(v)}
-            className={classNames(
-              'px-2.5 h-8 text-sm border-r last:border-r-0',
-              values.includes(v) ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
-            )}
-          >
+          <button key={v} type="button" onClick={() => toggle(v)}
+                  className={classNames('px-2.5 h-8 text-sm border-r last:border-r-0',
+                    values.includes(v) ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50')}>
             {v}
           </button>
         ))}
@@ -224,7 +170,6 @@ export function Segmented({ label, values, setValues, options }) {
 /* -------------------------------------------------------
    Barre de filtres
 ------------------------------------------------------- */
-
 export function FilterBar({
   q, setQ,
   fBuilding, setFBuilding,
@@ -252,12 +197,8 @@ export function FilterBar({
               <path d="M10 2a8 8 0 105.293 14.293l4.707 4.707 1.414-1.414-4.707-4.707A8 8 0 0010 2zm0 2a6 6 0 110 12A6 6 0 0110 4z" />
             </svg>
           </div>
-          <Button variant="primary" className="h-9 w-full sm:w-auto" onClick={onSearch}>
-            Search
-          </Button>
-          <Button variant="ghost" className="h-9 w-full sm:w-auto" onClick={onReset} type="button">
-            Reset
-          </Button>
+          <Button variant="primary" className="h-9 w-full sm:w-auto" onClick={onSearch}>Search</Button>
+          <Button variant="ghost" className="h-9 w-full sm:w-auto" onClick={onReset} type="button">Reset</Button>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -265,7 +206,6 @@ export function FilterBar({
           <MultiSelect label="Room" values={fRoom} setValues={setFRoom} options={uniques.rooms} />
           <MultiSelect label="Type" values={fType} setValues={setFType} options={uniques.types} />
           <MultiSelect label="Manufacturer" values={fManufacturer} setValues={setFManufacturer} options={uniques.manufacturers} />
-          {/* UI en EN → convertira plus tard en FR côté requêtes si besoin */}
           <MultiSelect label="Status" values={fStatus} setValues={setFStatus} options={STATUS_OPTIONS_UI} />
           <Segmented label="Gas" values={fGas} setValues={setFGas} options={GAS_ZONES} />
           <Segmented label="Dust" values={fDust} setValues={setFDust} options={DUST_ZONES} />
@@ -278,10 +218,8 @@ export function FilterBar({
 /* -------------------------------------------------------
    Charts simples (SVG)
 ------------------------------------------------------- */
-
 export function SimpleBarChart({ data, title, yLabel = 'Count' }) {
   const maxValue = Math.max(...data.map(d => Number(d.value) || 0), 1);
-
   return (
     <div className="bg-white p-4 rounded-lg shadow">
       <h3 className="text-lg font-medium mb-3">{title}</h3>
@@ -289,10 +227,7 @@ export function SimpleBarChart({ data, title, yLabel = 'Count' }) {
         {data.map((item, i) => (
           <div key={i} className="flex items-center gap-2">
             <div className="flex-1 bg-gray-100 rounded-full h-3">
-              <div
-                className="bg-blue-500 h-3 rounded-full"
-                style={{ width: `${(Number(item.value) / maxValue) * 100}%` }}
-              />
+              <div className="bg-blue-500 h-3 rounded-full" style={{ width: `${(Number(item.value) / maxValue) * 100}%` }} />
             </div>
             <span className="text-sm font-medium text-gray-700 w-12">{item.value}</span>
             <span className="text-sm text-gray-600 min-w-0 truncate">{item.label}</span>
@@ -328,23 +263,14 @@ export function DoughnutChart({ data, title }) {
             const x2 = 100 + centerRadius * Math.cos(segment.endAngle - Math.PI / 2);
             const y2 = 100 + centerRadius * Math.sin(segment.endAngle - Math.PI / 2);
             const largeArc = segment.endAngle - segment.startAngle > Math.PI ? 1 : 0;
-
             return (
-              <path
-                key={i}
+              <path key={i}
                 d={`M ${x1} ${y1} A ${centerRadius} ${centerRadius} 0 ${largeArc} 1 ${x2} ${y2} L 100 100 Z`}
-                fill={colors[i % colors.length]}
-                stroke="white"
-                strokeWidth="1"
-              />
+                fill={colors[i % colors.length]} stroke="white" strokeWidth="1" />
             );
           })}
-          <text x="100" y="95" textAnchor="middle" className="font-bold text-lg" fill="#374151">
-            {total}
-          </text>
-          <text x="100" y="115" textAnchor="middle" className="text-xs" fill="#6B7280">
-            Total
-          </text>
+          <text x="100" y="95" textAnchor="middle" className="font-bold text-lg" fill="#374151">{total}</text>
+          <text x="100" y="115" textAnchor="middle" className="text-xs" fill="#6B7280">Total</text>
         </svg>
       </div>
       <div className="mt-4 space-y-1">
@@ -364,7 +290,6 @@ export function DoughnutChart({ data, title }) {
 /* -------------------------------------------------------
    Helpers statut
 ------------------------------------------------------- */
-
 export function getStatusColor(status) {
   return {
     'Conforme': 'bg-green-100 text-green-800',
@@ -372,15 +297,11 @@ export function getStatusColor(status) {
     'À vérifier': 'bg-yellow-100 text-yellow-800'
   }[status] || 'bg-gray-100 text-gray-800';
 }
-
-export function getStatusDisplay(status) {
-  return STATUS_MAP_DISPLAY[status] || status;
-}
+export function getStatusDisplay(status) { return STATUS_MAP_DISPLAY[status] || status; }
 
 /* -------------------------------------------------------
    Toast simple
 ------------------------------------------------------- */
-
 export function useToast() {
   const [toast, setToast] = useState(null);
   const notify = (msg, type = 'success') => {
@@ -390,44 +311,27 @@ export function useToast() {
   return {
     toast,
     notify,
-    ToastEl: () =>
-      toast ? (
-        <div
-          className={classNames(
-            'fixed bottom-4 right-4 px-4 py-2 rounded-lg shadow-lg text-sm text-white',
-            toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'
-          )}
-        >
-          {toast.msg}
-        </div>
-      ) : null
+    ToastEl: () => toast ? (
+      <div className={classNames(
+        'fixed bottom-4 right-4 px-4 py-2 rounded-lg shadow-lg text-sm text-white',
+        toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'
+      )}>{toast.msg}</div>
+    ) : null
   };
 }
 
 /* -------------------------------------------------------
    Pagination compacte
 ------------------------------------------------------- */
-
 export function Pager({ page, setPage, pageSize, total }) {
   const from = (page - 1) * pageSize + 1;
   const to = Math.min(page * pageSize, total);
   return (
     <div className="px-4 py-3 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div className="text-sm text-gray-500">
-        Showing {total ? from : 0} to {to} of {total} entries
-      </div>
+      <div className="text-sm text-gray-500">Showing {total ? from : 0} to {to} of {total} entries</div>
       <div className="flex gap-2">
-        <Button variant="ghost" className="px-3 py-1" disabled={page === 1} onClick={() => setPage(p => p - 1)}>
-          Previous
-        </Button>
-        <Button
-          variant="ghost"
-          className="px-3 py-1"
-          disabled={page * pageSize >= total}
-          onClick={() => setPage(p => p + 1)}
-        >
-          Next
-        </Button>
+        <Button variant="ghost" className="px-3 py-1" disabled={page === 1} onClick={() => setPage(p => p - 1)}>Previous</Button>
+        <Button variant="ghost" className="px-3 py-1" disabled={page * pageSize >= total} onClick={() => setPage(p => p + 1)}>Next</Button>
       </div>
     </div>
   );
@@ -436,26 +340,19 @@ export function Pager({ page, setPage, pageSize, total }) {
 /* -------------------------------------------------------
    Sous-composants locaux (table sorting)
 ------------------------------------------------------- */
-
 export function Th({ label, sortKey, sort, setSort }) {
   const active = sort.by === sortKey;
   const dirIcon =
-    active && sort.dir === 'asc'
-      ? 'M5 15l7-7 7 7'
-      : active && sort.dir === 'desc'
-      ? 'M19 9l-7 7-7-7'
-      : null;
+    active && sort.dir === 'asc' ? 'M5 15l7-7 7 7' :
+    active && sort.dir === 'desc' ? 'M19 9l-7 7-7-7' : null;
 
   return (
     <th className="px-4 py-2 text-left font-medium">
       <button
         className="inline-flex items-center gap-1 text-gray-700 hover:text-gray-900"
         onClick={() => {
-          if (active) {
-            setSort({ by: sortKey, dir: sort.dir === 'asc' ? 'desc' : 'asc' });
-          } else {
-            setSort({ by: sortKey, dir: 'asc' });
-          }
+          if (active) setSort({ by: sortKey, dir: sort.dir === 'asc' ? 'desc' : 'asc' });
+          else setSort({ by: sortKey, dir: 'asc' });
         }}
       >
         {label}
@@ -470,65 +367,91 @@ export function Th({ label, sortKey, sort, setSort }) {
 }
 
 /* -------------------------------------------------------
-   ADAPTER "Doors-like" pour /api/atex/maps/*
-   (Plans PDF, subareas, positions, import ZIP, etc.)
+   atexMaps — **Plans via endpoints Doors** (fallback Atex)
+   - listPlans / renamePlan / uploadZip / planFileUrlAuto → /api/doors/maps/*
+   - subareas & positions restent sous /api/atex/maps/*
 ------------------------------------------------------- */
+async function tryGet(url) {
+  try { return await get(url); } catch (e) { return { __error: e }; }
+}
+async function tryPut(url, body) {
+  try { return await put(url, body); } catch (e) { return { __error: e }; }
+}
+async function tryUpload(url, fd) {
+  try { return await upload(url, fd); } catch (e) { return { __error: e }; }
+}
 
 export const atexMaps = {
-  // ---- Plans ----
+  // ---- Plans (Doors-first) ----
   async listPlans() {
-    const r = await get(`${API_BASE}/api/atex/maps/plans`);
-    // Normalise l’objet côté front
-    return (r?.plans || []).map(p => ({
-      id: p.id,                       // UUID
-      logical_name: p.logical_name,   // clé serveur
+    // Doors
+    let r = await tryGet(`${API_BASE}/api/doors/maps/plans`);
+    if (!r?.plans && r?.__error) {
+      // Fallback Atex
+      r = await tryGet(`${API_BASE}/api/atex/maps/plans`);
+    }
+    const plans = r?.plans || [];
+    return plans.map(p => ({
+      id: p.id,
+      logical_name: p.logical_name,
       display_name: p.display_name || p.logical_name,
       page_count: p.page_count ?? 1,
       created_at: p.created_at
     }));
   },
-  planFileUrlAuto(plan) {
+
+  // URL PDF unique (à utiliser avec PDF.js dans la PARTIE 2/2)
+  planFileUrlAuto(plan, { bust = false } = {}) {
     const logical = typeof plan === 'string' ? plan : plan?.logical_name;
-    return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical)}/file`;
+    const base = `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical)}/file`;
+    return bust ? `${base}?b=${Date.now()}` : base;
   },
-  // 👉 Image rasterisée de la page (pour Leaflet ImageOverlay). Utilisée en PARTIE 2.
+
+  // (déprécié) Ancien raster PNG — on ne l'utilisera plus en PARTIE 2/2
   planPageImageUrl(logical_name, page_index = 0) {
     return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical_name)}/page/${page_index}.png`;
   },
+
   async renamePlan(logical_name, newDisplayName) {
-    await put(`${API_BASE}/api/atex/maps/rename/${encodeURIComponent(logical_name)}`, {
+    // Doors-first
+    let r = await tryPut(`${API_BASE}/api/doors/maps/rename/${encodeURIComponent(logical_name)}`, {
       display_name: newDisplayName || null
     });
+    if (r?.__error) {
+      // Fallback Atex
+      r = await tryPut(`${API_BASE}/api/atex/maps/rename/${encodeURIComponent(logical_name)}`, {
+        display_name: newDisplayName || null
+      });
+    }
+    if (r?.__error) throw r.__error;
     return true;
   },
-  // Pas d’API delete plan côté backend → on ne l’expose pas côté front.
+
   async uploadZip(file) {
     const fd = new FormData();
     fd.append('file', file);
-    return upload(`${API_BASE}/api/atex/maps/upload-zip`, fd);
+    // Doors-first
+    let r = await tryUpload(`${API_BASE}/api/doors/maps/upload-zip`, fd);
+    if (r?.__error) {
+      // Fallback Atex
+      r = await tryUpload(`${API_BASE}/api/atex/maps/upload-zip`, fd);
+    }
+    if (r?.__error) throw r.__error;
+    return r;
   },
 
-  // ---- Subareas (zones dessinées) ----
+  // ---- Subareas (dessins) ----
   async getSubareas(logical_name, page_index = 0) {
     const r = await get(`${API_BASE}/api/atex/maps/subareas?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
     return r?.items || [];
   },
   async createSubarea({ logical_name, page_index = 0, name, shape_type, geometry, zone_gas = null, zone_dust = null }) {
-    // shape_type = 'rect' | 'circle' | 'poly'
-    // geometry en FRACTIONS [0..1]
-    return post(`${API_BASE}/api/atex/maps/subareas`, {
-      logical_name, page_index, name, shape_type, geometry, zone_gas, zone_dust
-    });
+    return post(`${API_BASE}/api/atex/maps/subareas`, { logical_name, page_index, name, shape_type, geometry, zone_gas, zone_dust });
   },
-  async updateSubarea(id, patch) {
-    return put(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`, patch);
-  },
-  async deleteSubarea(id) {
-    return del(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`);
-  },
-  async applySubareas(logical_name, page_index = 0) {
-    return post(`${API_BASE}/api/atex/maps/subareas/apply`, { logical_name, page_index });
-  },
+  async updateSubarea(id, patch) { return put(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`, patch); }
+  ,
+  async deleteSubarea(id) { return del(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`); },
+  async applySubareas(logical_name, page_index = 0) { return post(`${API_BASE}/api/atex/maps/subareas/apply`, { logical_name, page_index }); },
 
   // ---- Positions (équipements sur plan) ----
   async getPositions(logical_name, page_index = 0) {
@@ -536,9 +459,7 @@ export const atexMaps = {
     return r?.items || [];
   },
   async setPosition(equipmentId, { logical_name, page_index = 0, x_frac, y_frac }) {
-    return put(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(equipmentId)}`, {
-      logical_name, page_index, x_frac, y_frac
-    });
+    return put(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(equipmentId)}`, { logical_name, page_index, x_frac, y_frac });
   },
   async listUnplaced(logical_name, page_index = 0) {
     const r = await get(`${API_BASE}/api/atex/maps/unplaced?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
@@ -548,9 +469,7 @@ export const atexMaps = {
     return post(`${API_BASE}/api/atex/maps/equipments`, payload);
   },
   async clonePosition(sourceEquipmentId, { logical_name, page_index = 0, x_frac = null, y_frac = null }) {
-    return post(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(sourceEquipmentId)}/clone`, {
-      logical_name, page_index, x_frac, y_frac
-    });
+    return post(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(sourceEquipmentId)}/clone`, { logical_name, page_index, x_frac, y_frac });
   },
   async summary(logical_name, page_index = 0) {
     return get(`${API_BASE}/api/atex/maps/summary?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
@@ -563,8 +482,6 @@ export const atexMaps = {
 /* -------------------------------------------------------
    Helpers géométrie côté front (display ↔ fractions)
 ------------------------------------------------------- */
-
-// Convertit un rectangle en px display → fractions [0..1]
 export function rectDisplayToFrac({ x0, y0, x1, y1 }, W, H) {
   const left = Math.min(x0, x1), top = Math.min(y0, y1);
   const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
@@ -575,18 +492,15 @@ export function rectDisplayToFrac({ x0, y0, x1, y1 }, W, H) {
     h: +(h / Math.max(1, H)).toFixed(6)
   };
 }
-// Cercle display → fractions
 export function circleDisplayToFrac({ cx, cy, x, y }, W, H) {
-  const rx = Math.abs(x - cx);
-  const ry = Math.abs(y - cy);
+  const rx = Math.abs(x - cx), ry = Math.abs(y - cy);
   const r = (rx + ry) / 2;
   return {
     cx: +(cx / Math.max(1, W)).toFixed(6),
     cy: +(cy / Math.max(1, H)).toFixed(6),
-    r: +((r / Math.max(1, Math.max(W, H))).toFixed(6)) // rayon sur plus grand côté
+    r: +((r / Math.max(1, Math.max(W, H))).toFixed(6))
   };
 }
-// Path libre → poly (liste de points) en fractions
 export function pathDisplayToFrac(points, W, H) {
   return {
     points: (points || []).map(p => ({
@@ -597,18 +511,13 @@ export function pathDisplayToFrac(points, W, H) {
 }
 
 /* -------------------------------------------------------
-   Exemples d’affichage de KPI/cartes/Form fields (UI)
+   Exemples d’UI générique (modale, KPI, Field)
 ------------------------------------------------------- */
-
 export function Modal({ children, onClose, title, wide = false }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div
-        className={classNames(
-          'bg-white rounded-2xl shadow-2xl w-full max-h-[90vh] overflow-y-auto',
-          wide ? 'max-w-4xl sm:max-w-2xl' : 'max-w-md'
-        )}
-      >
+      <div className={classNames('bg-white rounded-2xl shadow-2xl w-full max-h-[90vh] overflow-y-auto',
+        wide ? 'max-w-4xl sm:max-w-2xl' : 'max-w-md')}>
         <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-gray-100">
           <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
           <button className="p-1 rounded-lg hover:bg-gray-200" onClick={onClose}>
@@ -622,7 +531,6 @@ export function Modal({ children, onClose, title, wide = false }) {
     </div>
   );
 }
-
 export function KpiCard({ title, value, tone = 'blue', sub }) {
   const border = { blue: 'border-blue-500', green: 'border-green-500', red: 'border-red-500' }[tone];
   const text = { blue: 'text-blue-600', green: 'text-green-600', red: 'text-red-600' }[tone];
@@ -634,7 +542,6 @@ export function KpiCard({ title, value, tone = 'blue', sub }) {
     </div>
   );
 }
-
 export function Field({ label, children, cols = 1 }) {
   return (
     <div className={cols === 2 ? 'col-span-1 sm:col-span-2' : ''}>
@@ -645,12 +552,8 @@ export function Field({ label, children, cols = 1 }) {
 }
 
 /* -------------------------------------------------------
-   Leaflet helpers (icônes, légende) — **sans react-leaflet**
-   → utilisables dans la PARTIE 2 avec Leaflet “vanilla”
+   Leaflet helpers (icônes, légende) — sans react-leaflet
 ------------------------------------------------------- */
-
-// 1) Icônes par défaut Leaflet (patch chemins d’assets)
-// À appeler une seule fois au montage; inoffensif si rappelé.
 export async function ensureLeafletDefaultIcons() {
   try {
     const L = (await import('leaflet')).default;
@@ -658,19 +561,15 @@ export async function ensureLeafletDefaultIcons() {
     const iconRetinaUrl = (await import('leaflet/dist/images/marker-icon-2x.png')).default;
     const shadowUrl = (await import('leaflet/dist/images/marker-shadow.png')).default;
     L.Icon.Default.mergeOptions({ iconUrl, iconRetinaUrl, shadowUrl });
-  } catch {
-    // ignore si Leaflet pas encore chargé
-  }
+  } catch { /* noop */ }
 }
 
-// 2) Items de légende par défaut (représentation visuelle)
 export const LEAFLET_LEGEND_ITEMS = [
   { swatch: 'bg-emerald-500', label: 'Equipment position' },
   { swatch: 'bg-blue-500', label: 'Zone (saved)' },
   { swatch: 'bg-amber-500', label: 'Drawing preview' }
 ];
 
-// 3) Fabrique un contrôle Leaflet (impératif)
 export async function createLegendControl({ position = 'bottomright', title = 'Legend', items = LEAFLET_LEGEND_ITEMS } = {}) {
   const L = (await import('leaflet')).default;
   const ctrl = L.control({ position });
@@ -681,43 +580,64 @@ export async function createLegendControl({ position = 'bottomright', title = 'L
     div.style.minWidth = '160px';
     div.innerHTML = `
       <div style="font-weight:600;margin-bottom:6px;">${title}</div>
-      ${items
-        .map(
-          it => `
+      ${items.map(it => `
         <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
           <span class="${it.swatch}" style="display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1)"></span>
           <span style="font-size:12px;color:#374151">${it.label}</span>
-        </div>`
-        )
-        .join('')}
+        </div>`).join('')}
     `;
     return div;
   };
   return ctrl;
 }
-
-// 4) Attache (et retourne) le contrôle à une instance de carte Leaflet
-export async function attachLegendToMap(map, opts) {
-  const ctrl = await createLegendControl(opts);
-  ctrl.addTo(map);
-  return ctrl;
-}
-
-// 5) Utilitaire pour détacher proprement
-export function detachControl(map, ctrl) {
-  try { map?.removeControl?.(ctrl); } catch { /* noop */ }
-}
+export async function attachLegendToMap(map, opts) { const ctrl = await createLegendControl(opts); ctrl.addTo(map); return ctrl; }
+export function detachControl(map, ctrl) { try { map?.removeControl?.(ctrl); } catch {} }
 
 /* ===== Fin PARTIE 1/2 =====
    La PARTIE 2/2 ajoutera:
    - La page principale (onglets Controls/Assessment/Import + Plans & Positions)
-   - L’implémentation de la carte Leaflet “vanilla” (L.map, L.imageOverlay, L.layerGroup, etc.)
-   - L’utilisation d’ensureLeafletDefaultIcons() et attachLegendToMap()
+   - Le viewer Leaflet basé sur PDF.js (utilise atexMaps.planFileUrlAuto)
+   - Bouton ➕ dans Leaflet pour créer directement sur le plan
+   - Plus de toolbar “move/rect/circle/poly/place” moche ; on passe à des actions propres
 */
 /* =======================================================
    PARTIE 2/2 — Page principale + Leaflet “vanilla”
-   (colle tout ceci à la fin de PARTIE 1/2, même fichier)
+   - Plans PDF rendus via PDF.js → ImageOverlay Leaflet (CRS.Simple)
+   - Subareas (rect/circle/poly), placement d’équipements, import ZIP
+   - Onglets Controls / Assessment / Import / Plans
 ======================================================= */
+
+// --- PDF.js (render PDF page → dataURL) -----------------
+let pdfLib = null;
+async function loadPdfLib() {
+  if (pdfLib) return pdfLib;
+  const lib = await import('pdfjs-dist/build/pdf.mjs');
+  const worker = await import('pdfjs-dist/build/pdf.worker.mjs');
+  // @ts-ignore
+  lib.GlobalWorkerOptions.workerSrc = worker;
+  pdfLib = lib;
+  return lib;
+}
+
+async function renderPdfPageToDataURL(pdfUrl, pageNum = 1, { targetWidth = 2000 } = {}) {
+  const pdfjs = await loadPdfLib();
+  const loadingTask = pdfjs.getDocument(pdfUrl);
+  const pdf = await loadingTask.promise;
+  const page = await pdf.getPage(pageNum);
+
+  const viewport = page.getViewport({ scale: 1 });
+  const scale = targetWidth / viewport.width;
+  const scaledVp = page.getViewport({ scale });
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: false });
+  canvas.width = Math.round(scaledVp.width);
+  canvas.height = Math.round(scaledVp.height);
+
+  await page.render({ canvasContext: ctx, viewport: scaledVp }).promise;
+  const url = canvas.toDataURL('image/png');
+  return { url, w: canvas.width, h: canvas.height };
+}
 
 /* ========== Modale Edit/New Equipment ========== */
 function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, uniques, notify }) {
@@ -876,7 +796,7 @@ function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, u
   );
 }
 
-/* ========== Plans & Positions — Leaflet VANILLA ========== */
+/* ========== Plans & Positions — Leaflet VANILLA (PDF.js) ========== */
 function PlansPane({ notify }) {
   // Plans
   const [plans, setPlans] = useState([]);
@@ -906,7 +826,7 @@ function PlansPane({ notify }) {
 
   // Image size for CRS.Simple
   const [imgSize, setImgSize] = useState({ w: 2000, h: 1400 }); // fallback
-  const imageUrl = selected ? atexMaps.planPageImageUrl(selected.logical_name, pageIndex) : null;
+  const [imageUrl, setImageUrl] = useState(null); // dataURL PNG (rendue depuis PDF)
 
   // Leaflet refs
   const containerRef = useRef(null);
@@ -1009,7 +929,6 @@ function PlansPane({ notify }) {
       } else if (pendingShape.type === 'circle') {
         setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x: e.latlng.lng, y: e.latlng.lat } }));
       }
-      // preview layer redraw
       drawPreview();
     });
 
@@ -1148,18 +1067,32 @@ function PlansPane({ notify }) {
   useEffect(() => { reloadPlans(); }, []);
   useEffect(() => { reloadPageData(); }, [selected?.logical_name, pageIndex]);
 
-  // charge dimensions d'image
+  // Render PDF page → dataURL (w/ fallback old PNG endpoint)
   useEffect(() => {
-    if (!imageUrl) return;
-    const img = new Image();
-    img.onload = () => setImgSize({ w: img.width || 2000, h: img.height || 1400 });
-    img.src = imageUrl;
-  }, [imageUrl]);
+    let abort = false;
+    (async () => {
+      if (!selected) { setImageUrl(null); return; }
+      const pdfUrl = atexMaps.planFileUrlAuto(selected.logical_name);
+      try {
+        const { url, w, h } = await renderPdfPageToDataURL(pdfUrl, pageIndex + 1, { targetWidth: 2000 });
+        if (!abort) { setImageUrl(url); setImgSize({ w, h }); }
+      } catch (e) {
+        console.warn('PDF render failed, fallback PNG:', e);
+        const pngUrl = `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(selected.logical_name)}/page/${pageIndex}.png`;
+        // try load natural size
+        const img = new Image();
+        img.onload = () => { if (!abort) { setImageUrl(pngUrl); setImgSize({ w: img.width || 2000, h: img.height || 1400 }); } };
+        img.onerror = () => { if (!abort) setImageUrl(null); };
+        img.src = pngUrl;
+      }
+    })();
+    return () => { abort = true; };
+  }, [selected?.logical_name, pageIndex]);
 
   // (re)create map + overlay when selected/page or image size changes
   useEffect(() => {
     (async () => {
-      if (!selected) return;
+      if (!selected || !imageUrl) return;
 
       const map = await ensureMap();
       const L = LRef.current;
@@ -1167,9 +1100,7 @@ function PlansPane({ notify }) {
 
       // overlay
       clearOverlay();
-      if (imageUrl) {
-        overlayRef.current = L.imageOverlay(imageUrl, getBounds()).addTo(map);
-      }
+      overlayRef.current = L.imageOverlay(imageUrl, getBounds()).addTo(map);
 
       // bounds
       map.setMaxBounds(getBounds());
@@ -1363,7 +1294,10 @@ function PlansPane({ notify }) {
       {/* Leaflet viewer */}
       <div className="relative bg-white rounded-lg shadow overflow-hidden">
         {selected ? (
-          <div ref={containerRef} style={{ height: '70vh', width: '100%' }} />
+          imageUrl ? <div ref={containerRef} style={{ height: '70vh', width: '100%' }} /> :
+          <div className="h-[70vh] flex items-center justify-center text-sm text-gray-500 bg-gray-50">
+            Rendering PDF page…
+          </div>
         ) : (
           <div className="h-[70vh] flex items-center justify-center text-sm text-gray-500 bg-gray-50">
             Select a plan to display the map.
@@ -1528,8 +1462,6 @@ export default function Atex() {
   // Pièces jointes
   const [attachments, setAttachments] = useState([]);
 
-  // UI
-  const [showFilters, setShowFilters] = useState(false);
   const { notify, ToastEl } = useToast();
 
   // ------ Chargements liste & analytics ------
@@ -1822,38 +1754,33 @@ export default function Atex() {
             <h2 className="text-2xl font-semibold">ATEX Equipment Controls</h2>
             <button
               className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
-              onClick={() => setShowFilters(!showFilters)}
+              onClick={() => {}}
             >
-              {showFilters ? 'Hide Filters' : 'Show Filters'}
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={showFilters ? 'M19 9l-7 7-7-7' : 'M5 15l7-7 7 7'} />
-              </svg>
+              {/* Toggle filtrage via la FilterBar juste en dessous si souhaité */}
             </button>
           </div>
 
-          {showFilters && (
-            <FilterBar
-              q={q}
-              setQ={setQ}
-              fBuilding={fBuilding}
-              setFBuilding={setFBuilding}
-              fRoom={fRoom}
-              setFRoom={setFRoom}
-              fType={fType}
-              setFType={setFType}
-              fManufacturer={fManufacturer}
-              setFManufacturer={setFManufacturer}
-              fStatus={fStatus}
-              setFStatus={setFStatus}
-              fGas={fGas}
-              setFGas={setFGas}
-              fDust={fDust}
-              setFDust={setFDust}
-              uniques={uniques}
-              onSearch={loadData}
-              onReset={onReset}
-            />
-          )}
+          <FilterBar
+            q={q}
+            setQ={setQ}
+            fBuilding={fBuilding}
+            setFBuilding={setFBuilding}
+            fRoom={fRoom}
+            setFRoom={setFRoom}
+            fType={fType}
+            setFType={setFType}
+            fManufacturer={fManufacturer}
+            setFManufacturer={setFManufacturer}
+            fStatus={fStatus}
+            setFStatus={setFStatus}
+            fGas={fGas}
+            setFGas={setFGas}
+            fDust={fDust}
+            setFDust={setFDust}
+            uniques={uniques}
+            onSearch={loadData}
+            onReset={onReset}
+          />
 
           <div className="bg-white rounded-lg shadow overflow-x-auto">
             <table className="min-w-full text-sm">
