@@ -1,15 +1,47 @@
-// server_atex_full_part1.js
+// server_atex.js
+// Backend ATEX aligné "Doors-style" pour l'import ZIP (disk + pdf.js), BLOB en DB.
+// Compatible 100% avec ta DB Neon et le front livré (parties 1/2 + 2/2).
+
 import express from 'express';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 import pg from 'pg';
 import multer from 'multer';
-import AdmZip from 'adm-zip'; // npm i adm-zip
 
+// ==== FICHIERS / ZIP / PDF (pattern Doors) ====
+import fs from 'fs';
+import fsp from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import StreamZip from 'node-stream-zip';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
+import crypto from 'crypto';
+
+function resolvePdfWorker() {
+  try { return require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs'); }
+  catch { return require.resolve('pdfjs-dist/build/pdf.worker.mjs'); }
+}
+pdfjsLib.GlobalWorkerOptions.workerSrc = resolvePdfWorker();
+const pdfjsPkgDir = path.dirname(require.resolve('pdfjs-dist/package.json'));
+const PDF_STANDARD_FONTS = path.join(pdfjsPkgDir, 'standard_fonts/');
+
+// Dossiers temporaires (extraction ZIP)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_ROOT = path.join(process.cwd(), 'uploads', 'atex');
+const MAPS_TMP_DIR = path.join(DATA_ROOT, 'maps_tmp');
+await fsp.mkdir(MAPS_TMP_DIR, { recursive: true });
+
+// ==== App / Pool ====
 dotenv.config();
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.NEON_DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL || process.env.DATABASE_URL,
+  ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
+});
 
 const app = express();
 app.use(helmet());
@@ -162,7 +194,7 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS atex_positions_by_plan_page ON atex_positions(plan_logical_name,page_index);
 
-    -- Zones dessinées (sera géré en PARTIE 2/2)
+    -- Zones dessinées
     CREATE TABLE IF NOT EXISTS atex_subareas (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       plan_logical_name TEXT NOT NULL REFERENCES atex_plans(logical_name) ON DELETE CASCADE,
@@ -176,7 +208,7 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS atex_subareas_by_plan ON atex_subareas(plan_logical_name,page_index);
 
-    -- Tags (sera géré en PARTIE 2/2)
+    -- Tags
     CREATE TABLE IF NOT EXISTS atex_tags (
       id BIGSERIAL PRIMARY KEY,
       tag TEXT NOT NULL UNIQUE
@@ -214,12 +246,12 @@ ensureSchema().catch(e => console.error('[ATEX SCHEMA] error:', e.message));
 // -----------------------------------------------------
 // Health
 // -----------------------------------------------------
-app.get('/api/atex/health', (req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/api/atex/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
 // -----------------------------------------------------
 // SUGGESTS
 // -----------------------------------------------------
-app.get('/api/atex/suggests', async (req, res) => {
+app.get('/api/atex/suggests', async (_req, res) => {
   try {
     const fields = ['building', 'room', 'component_type', 'manufacturer', 'manufacturer_ref', 'atex_ref'];
     const out = {};
@@ -557,7 +589,7 @@ app.post('/api/atex/photo-analysis/batch', uploadMem.array('files', 8), async (r
 // -----------------------------------------------------
 // Analytics & Export
 // -----------------------------------------------------
-app.get('/api/atex/analytics', async (req, res) => {
+app.get('/api/atex/analytics', async (_req, res) => {
   try {
     const now = new Date();
     const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000);
@@ -627,7 +659,7 @@ app.get('/api/atex/analytics', async (req, res) => {
   }
 });
 
-app.get('/api/atex/export', async (req, res) => {
+app.get('/api/atex/export', async (_req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT 
@@ -677,7 +709,7 @@ app.get('/api/atex/export', async (req, res) => {
 });
 
 // -----------------------------------------------------
-// MAPS ATEX — plans & positions (base viewer Leaflet)
+// MAPS ATEX — plans & positions (base viewer)
 // -----------------------------------------------------
 
 // 1) Liste plans
@@ -707,41 +739,81 @@ app.put('/api/atex/maps/rename/:logical', async (req, res) => {
   }
 });
 
-// 3) Upload ZIP de plans (écrasement NON destructif des positions)
-const uploadZip = multer({ storage: multer.memoryStorage(), limits: { fileSize: 150 * 1024 * 1024 } });
+// 3) Upload ZIP de plans (disk, pdf.js) — écrasement NON destructif des positions
+const uploadZip = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, MAPS_TMP_DIR),
+    filename: (_req, file, cb) =>
+      cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, '_')}`),
+  }),
+  limits: { fileSize: 300 * 1024 * 1024 },
+});
+
+async function pdfPageCountFromFile(absPath) {
+  const data = new Uint8Array(await fsp.readFile(absPath));
+  const doc = await pdfjsLib.getDocument({ data, standardFontDataUrl: PDF_STANDARD_FONTS }).promise;
+  const n = doc.numPages || 1;
+  await doc.cleanup();
+  return n;
+}
+
 app.post('/api/atex/maps/upload-zip', uploadZip.single('file'), async (req, res) => {
+  const zipPath = req.file?.path;
+  if (!zipPath) return res.status(400).json({ error: 'No ZIP file' });
+
+  const zip = new StreamZip.async({ file: zipPath, storeEntries: true });
+  const imported = [];
   try {
-    if (!req.file) return res.status(400).json({ error: 'No ZIP file' });
-    const zip = new AdmZip(req.file.buffer);
-    const entries = zip.getEntries().filter(e => !e.isDirectory && e.entryName.toLowerCase().endsWith('.pdf'));
-    if (!entries.length) return res.status(400).json({ error: 'ZIP must contain at least one PDF' });
+    const entries = await zip.entries();
+    const pdfs = Object.values(entries).filter(e => !e.isDirectory && /\.pdf$/i.test(e.name));
+    if (!pdfs.length) return res.status(400).json({ error: 'ZIP must contain at least one PDF' });
 
-    const done = [];
-    for (const ent of entries) {
-      const filename = ent.entryName.split('/').pop();
+    for (const entry of pdfs) {
+      // extrait chaque PDF vers un tmp file
+      const tmpOut = path.join(MAPS_TMP_DIR, `${crypto.randomUUID()}.pdf`);
+      await zip.extract(entry.name, tmpOut);
+
+      // logical_name = nom de fichier sans .pdf
+      const filename = path.basename(entry.name);
       const logical = filename.replace(/\.pdf$/i, '');
-      const data = ent.getData(); // Buffer
-      const size = data.length;
 
+      // compte pages & lit le BLOB
+      const page_count = await pdfPageCountFromFile(tmpOut).catch(() => 1);
+      const buf = await fsp.readFile(tmpOut);
+
+      // upsert plan (nom + page_count) — garde display_name si déjà défini
       await pool.query(`
         INSERT INTO atex_plans (logical_name, display_name, page_count)
         VALUES ($1, $2, $3)
-        ON CONFLICT (logical_name) DO UPDATE SET display_name=EXCLUDED.display_name
-      `, [logical, logical, 1]);
+        ON CONFLICT (logical_name) DO UPDATE
+          SET display_name = COALESCE(atex_plans.display_name, EXCLUDED.display_name),
+              page_count   = EXCLUDED.page_count
+      `, [logical, logical, page_count]);
 
+      // upsert fichier en BLOB dans atex_plan_files
       await pool.query(`
         INSERT INTO atex_plan_files (logical_name, filename, mimetype, size, data)
         VALUES ($1,$2,'application/pdf',$3,$4)
         ON CONFLICT (logical_name) DO UPDATE
-          SET filename=EXCLUDED.filename, size=EXCLUDED.size, data=EXCLUDED.data, updated_at=now()
-      `, [logical, filename, size, data]);
+          SET filename=EXCLUDED.filename,
+              size=EXCLUDED.size,
+              data=EXCLUDED.data,
+              updated_at=now()
+      `, [logical, filename, buf.length, buf]);
 
-      done.push({ logical_name: logical, filename, size });
+      imported.push({ logical_name: logical, filename, page_count, size: buf.length });
+
+      // nettoyage du tmp
+      try { await fsp.unlink(tmpOut); } catch {}
     }
-    res.json({ ok: true, imported: done.length, details: done });
+
+    res.json({ ok: true, imported: imported.length, details: imported });
   } catch (e) {
     console.error('[MAPS upload-zip] error:', e?.message);
     res.status(500).json({ error: 'Upload ZIP failed', details: e.message });
+  } finally {
+    await zip.close().catch(() => {});
+    try { fs.rmSync(zipPath, { force: true }); } catch {}
   }
 });
 
@@ -893,8 +965,7 @@ Equipment:
 });
 
 // ==============================
-// server_atex_full_part2.js
-// (= suite du fichier part1)
+// PARTIE 2 — Subareas / géométrie
 // ==============================
 
 // ---------- Helpers géométrie (point in shape) ----------
@@ -1296,4 +1367,3 @@ const port = process.env.ATEX_PORT || 3001;
 app.listen(port, () => console.log(`ATEX service listening on :${port}`));
 
 export default app;
-
