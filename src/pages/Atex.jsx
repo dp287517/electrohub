@@ -732,31 +732,6 @@ export function LegendControl({ title = 'Legend', items = LEAFLET_LEGEND_ITEMS }
   // rien à rendre, contrôle injecté dans Leaflet
   return ready ? null : null;
 }
-// Atex.jsx — PARTIE 2/2
-// Page principale (Onglets Controls / Assessment / Import + Plans & Positions Leaflet)
-
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  SITE_OPTIONS, GAS_ZONES, DUST_ZONES,
-  STATUS_OPTIONS_UI, STATUS_MAP_TO_FR, STATUS_MAP_DISPLAY,
-  classNames, formatDate, daysUntil,
-  useOutsideClose, useDebouncedValue,
-  Tag, Spinner, Button, MultiSelect, Segmented, FilterBar,
-  SimpleBarChart, DoughnutChart,
-  getStatusColor, getStatusDisplay,
-  useToast, Pager, Th,
-  atexMaps,
-  rectDisplayToFrac, circleDisplayToFrac, pathDisplayToFrac,
-  Modal, KpiCard, Field,
-  ensureLeafletDefaultIcons, LegendControl, LEAFLET_LEGEND_ITEMS
-} from './Atex.jsx'; // <-- importe depuis PARTIE 1 (même fichier ou index barreled)
-
-import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
-import * as XLSX from 'xlsx';
-
-// Leaflet
-import { MapContainer, ImageOverlay, Rectangle, Circle as LCircle, Polygon, Marker, useMapEvents } from 'react-leaflet';
-import L, { CRS } from 'leaflet';
 
 /* =======================================================
    Petits composants MODALES pour Equipments
