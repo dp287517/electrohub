@@ -491,6 +491,10 @@ export const atexMaps = {
     const logical = typeof plan === 'string' ? plan : plan?.logical_name;
     return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical)}/file`;
   },
+  // 👉 Image rasterisée de la page (pour Leaflet ImageOverlay). On forcera page 0 côté UI.
+  planPageImageUrl(logical_name, page_index = 0) {
+    return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical_name)}/page/${page_index}.png`;
+  },
   async renamePlan(logical_name, newDisplayName) {
     await put(`${API_BASE}/api/atex/maps/rename/${encodeURIComponent(logical_name)}`, {
       display_name: newDisplayName || null
@@ -641,7 +645,118 @@ export function Field({ label, children, cols = 1 }) {
     </div>
   );
 }
+
+/* -------------------------------------------------------
+   Leaflet helpers (icônes, légende) — utilisés en PARTIE 2
+------------------------------------------------------- */
+
+// Astuce icônes Leaflet (si nécessaire selon bundler)
+// À appeler une seule fois au montage de l’app (inoffensif si répété).
+export async function ensureLeafletDefaultIcons() {
+  try {
+    const L = (await import('leaflet')).default;
+    const iconUrl = (await import('leaflet/dist/images/marker-icon.png')).default;
+    const iconRetinaUrl = (await import('leaflet/dist/images/marker-icon-2x.png')).default;
+    const shadowUrl = (await import('leaflet/dist/images/marker-shadow.png')).default;
+    L.Icon.Default.mergeOptions({ iconUrl, iconRetinaUrl, shadowUrl });
+  } catch {
+    // ignore si Leaflet pas encore chargé
+  }
+}
+
+// Items de légende par défaut (représentation visuelle de la carte)
+export const LEAFLET_LEGEND_ITEMS = [
+  { swatch: 'bg-emerald-500', label: 'Equipment position' },
+  { swatch: 'bg-blue-500', label: 'Zone (drawn)' },
+  { swatch: 'bg-amber-500', label: 'Drawing preview' }
+];
+
+// Composant React-Leaflet pour insérer une légende (bottomright)
+export function LegendControl({ title = 'Legend', items = LEAFLET_LEGEND_ITEMS }) {
+  // import tardif pour éviter coût si onglet Plans non ouvert
+  const [ready, setReady] = useState(false);
+  const mapRef = useRef(null);
+
+  useEffect(() => {
+    let ctrl;
+    (async () => {
+      const { useMap } = await import('react-leaflet');
+      const L = (await import('leaflet')).default;
+      setReady(true);
+
+      // petit hack : attendre que useMap soit dispo dans ce scope
+      setTimeout(() => {
+        try {
+          // eslint-disable-next-line react-hooks/rules-of-hooks
+          const map = useMap(); // sera résolu quand le composant est rendu dans le <MapContainer>
+          mapRef.current = map;
+
+          ctrl = L.control({ position: 'bottomright' });
+          ctrl.onAdd = () => {
+            const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar shadow rounded-lg overflow-hidden');
+            div.style.background = 'white';
+            div.style.padding = '8px 10px';
+            div.style.minWidth = '160px';
+            div.innerHTML = `
+              <div style="font-weight:600;margin-bottom:6px;">${title}</div>
+              ${items
+                .map(
+                  it => `
+                <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
+                  <span class="${it.swatch}" style="display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1)"></span>
+                  <span style="font-size:12px;color:#374151">${it.label}</span>
+                </div>`
+                )
+                .join('')}
+            `;
+            return div;
+          };
+          ctrl.addTo(map);
+        } catch {
+          // noop
+        }
+      }, 0);
+    })();
+
+    return () => {
+      try {
+        if (ctrl && mapRef.current) {
+          ctrl.remove();
+        }
+      } catch {
+        // noop
+      }
+    };
+  }, [title, items]);
+
+  // rien à rendre, contrôle injecté dans Leaflet
+  return ready ? null : null;
+}
 // Atex.jsx — PARTIE 2/2
+// Page principale (Onglets Controls / Assessment / Import + Plans & Positions Leaflet)
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  SITE_OPTIONS, GAS_ZONES, DUST_ZONES,
+  STATUS_OPTIONS_UI, STATUS_MAP_TO_FR, STATUS_MAP_DISPLAY,
+  classNames, formatDate, daysUntil,
+  useOutsideClose, useDebouncedValue,
+  Tag, Spinner, Button, MultiSelect, Segmented, FilterBar,
+  SimpleBarChart, DoughnutChart,
+  getStatusColor, getStatusDisplay,
+  useToast, Pager, Th,
+  atexMaps,
+  rectDisplayToFrac, circleDisplayToFrac, pathDisplayToFrac,
+  Modal, KpiCard, Field,
+  ensureLeafletDefaultIcons, LegendControl, LEAFLET_LEGEND_ITEMS
+} from './Atex.jsx'; // <-- importe depuis PARTIE 1 (même fichier ou index barreled)
+
+import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
+import * as XLSX from 'xlsx';
+
+// Leaflet
+import { MapContainer, ImageOverlay, Rectangle, Circle as LCircle, Polygon, Marker, useMapEvents } from 'react-leaflet';
+import L, { CRS } from 'leaflet';
 
 /* =======================================================
    Petits composants MODALES pour Equipments
@@ -739,7 +854,7 @@ function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, u
           />
         </Field>
 
-        {/* Bloc Analyse photo + pièces jointes (upload dans onSave si besoin) */}
+        {/* Bloc Analyse photo */}
         <div className="col-span-1 sm:col-span-2 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
           <label className="block text-sm font-medium mb-2">Upload Photo for Auto-Fill</label>
           <p className="text-xs text-gray-500 mb-2">
@@ -795,7 +910,7 @@ function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, u
         <Button
           variant="primary"
           disabled={loading || !editItem.building || !editItem.room || !editItem.component_type}
-          onClick={() => onSave({ attachments: [] /* géré à part si tu veux ajouter ici */ })}
+          onClick={() => onSave({ attachments: [] })}
         >
           {loading ? 'Saving...' : editItem.id ? 'Update' : 'Create'}
         </Button>
@@ -805,7 +920,7 @@ function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, u
 }
 
 /* =======================================================
-   PLANS & POSITIONS (PDF viewer + overlay + drawing tools)
+   PLANS & POSITIONS (Leaflet ImageOverlay + drawing tools)
 ======================================================= */
 
 function PlansPane({ notify }) {
@@ -823,14 +938,6 @@ function PlansPane({ notify }) {
 
   // Drawing tool
   const [tool, setTool] = useState('move'); // move | rect | circle | poly | place
-  const overlayRef = useRef(null);
-  const wrapperRef = useRef(null);
-
-  // rect
-  const [dragRect, setDragRect] = useState(null); // {x0,y0,x1,y1}
-  // circle
-  const [dragCircle, setDragCircle] = useState(null); // {cx,cy,x,y}
-  // poly
   const [polyPoints, setPolyPoints] = useState([]); // [{x,y}, ...]
   const [polyDrawing, setPolyDrawing] = useState(false);
 
@@ -843,9 +950,29 @@ function PlansPane({ notify }) {
   // place selected equipment
   const [selectedEquip, setSelectedEquip] = useState(null);
 
-  function fileUrl() {
-    if (!selected) return null;
-    return atexMaps.planFileUrlAuto(selected.logical_name);
+  // Image size for CRS.Simple
+  const [imgSize, setImgSize] = useState({ w: 2000, h: 1400 }); // fallback
+  const imageUrl = selected ? atexMaps.planPageImageUrl(selected.logical_name, pageIndex) : null;
+
+  function bounds() {
+    // y = [0..h], x = [0..w]
+    return [[0, 0], [imgSize.h, imgSize.w]];
+  }
+
+  function fracToDisplayRect(geom, W, H) {
+    return [
+      [geom.y * H, geom.x * W],
+      [(geom.y + geom.h) * H, (geom.x + geom.w) * W]
+    ]; // [[y1,x1],[y2,x2]]
+  }
+  function fracToDisplayCircle(geom, W, H) {
+    return {
+      center: [geom.cy * H, geom.cx * W],
+      r: geom.r * Math.max(W, H)
+    };
+  }
+  function fracToDisplayPoly(geom, W, H) {
+    return (geom?.points || []).map(p => [p.y * H, p.x * W]);
   }
 
   async function reloadPlans() {
@@ -855,11 +982,7 @@ function PlansPane({ notify }) {
       setPlans(p);
       if (selected) {
         const found = p.find(x => x.logical_name === selected.logical_name);
-        if (!found) {
-          setSelected(null);
-        } else {
-          setSelected(found);
-        }
+        setSelected(found || null);
       }
     } catch (e) {
       console.error(e);
@@ -894,107 +1017,90 @@ function PlansPane({ notify }) {
   useEffect(() => { reloadPlans(); }, []);
   useEffect(() => { reloadPageData(); }, [selected?.logical_name, pageIndex]);
 
-  // ---------- Overlay size helpers ----------
-  function getOverlaySize() {
-    const el = overlayRef.current;
-    if (!el) return { W: 1, H: 1, rect: { left: 0, top: 0 } };
-    const r = el.getBoundingClientRect();
-    return { W: r.width, H: r.height, rect: r };
-  }
+  // charge dimensions d'image
+  useEffect(() => {
+    if (!imageUrl) return;
+    const img = new Image();
+    img.onload = () => setImgSize({ w: img.width || 2000, h: img.height || 1400 });
+    img.src = imageUrl;
+  }, [imageUrl]);
 
-  // ---------- Drawing handlers ----------
-  function onOverlayMouseDown(e) {
-    if (!overlayRef.current) return;
-    const { rect } = getOverlaySize();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+  useEffect(() => { ensureLeafletDefaultIcons(); }, []);
 
-    if (tool === 'rect') {
-      setDragRect({ x0: x, y0: y, x1: x, y1: y });
-    } else if (tool === 'circle') {
-      setDragCircle({ cx: x, cy: y, x, y });
-    } else if (tool === 'poly') {
-      if (!polyDrawing) {
-        setPolyDrawing(true);
-        setPolyPoints([{ x, y }]);
-      } else {
-        setPolyPoints(prev => [...prev, { x, y }]);
+  // Map interaction hook (click/drag)
+  function DrawingEvents() {
+    useMapEvents({
+      mousedown(e) {
+        if (tool === 'rect') {
+          const { latlng } = e; // lat=Y, lng=X (in CRS.Simple)
+          setPendingShape({ type: 'rect', draft: { x0: latlng.lng, y0: latlng.lat, x1: latlng.lng, y1: latlng.lat } });
+        } else if (tool === 'circle') {
+          const { latlng } = e;
+          setPendingShape({ type: 'circle', draft: { cx: latlng.lng, cy: latlng.lat, x: latlng.lng, y: latlng.lat } });
+        } else if (tool === 'poly') {
+          setPolyDrawing(true);
+          setPolyPoints(prev => [...prev, { x: e.latlng.lng, y: e.latlng.lat }]);
+        } else if (tool === 'place' && selected && selectedEquip) {
+          const xf = +(e.latlng.lng / Math.max(1, imgSize.w)).toFixed(6);
+          const yf = +(e.latlng.lat / Math.max(1, imgSize.h)).toFixed(6);
+          atexMaps.setPosition(selectedEquip.id, {
+            logical_name: selected.logical_name,
+            page_index: pageIndex,
+            x_frac: xf,
+            y_frac: yf
+          }).then(() => {
+            notify(`Placed #${selectedEquip.id}`);
+            setSelectedEquip(null);
+            reloadPageData();
+          }).catch(err => {
+            console.error(err);
+            notify('Failed to place equipment', 'error');
+          });
+        }
+      },
+      mousemove(e) {
+        if (!pendingShape) return;
+        if (pendingShape.type === 'rect') {
+          setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x1: e.latlng.lng, y1: e.latlng.lat } }));
+        } else if (pendingShape.type === 'circle') {
+          setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x: e.latlng.lng, y: e.latlng.lat } }));
+        }
+      },
+      mouseup() {
+        if (!pendingShape) return;
+        const W = imgSize.w, H = imgSize.h;
+        if (pendingShape.type === 'rect') {
+          const { x0, y0, x1, y1 } = pendingShape.draft;
+          const geomFrac = rectDisplayToFrac({ x0, y0, x1, y1 }, W, H);
+          setPendingShape({ type: 'rect-final', geomFrac });
+        } else if (pendingShape.type === 'circle') {
+          const { cx, cy, x, y } = pendingShape.draft;
+          const geomFrac = circleDisplayToFrac({ cx, cy, x, y }, W, H);
+          setPendingShape({ type: 'circle-final', geomFrac });
+        }
+      },
+      dblclick() {
+        if (tool === 'poly' && polyDrawing && polyPoints.length >= 3) {
+          const W = imgSize.w, H = imgSize.h;
+          const geomFrac = pathDisplayToFrac(polyPoints.map(p => ({ x: p.x, y: p.y })), W, H);
+          setPolyDrawing(false);
+          setPolyPoints([]);
+          setPendingShape({ type: 'poly-final', geomFrac });
+        }
       }
-    } else if (tool === 'place' && selectedEquip) {
-      const { W, H } = getOverlaySize();
-      const xf = +(x / Math.max(1, W)).toFixed(6);
-      const yf = +(y / Math.max(1, H)).toFixed(6);
-      atexMaps.setPosition(selectedEquip.id, {
-        logical_name: selected.logical_name,
-        page_index: pageIndex,
-        x_frac: xf,
-        y_frac: yf
-      }).then(() => {
-        notify(`Placed #${selectedEquip.id}`);
-        setSelectedEquip(null);
-        reloadPageData();
-      }).catch(err => {
-        console.error(err);
-        notify('Failed to place equipment', 'error');
-      });
-    }
-  }
-
-  function onOverlayMouseMove(e) {
-    if (!overlayRef.current) return;
-    const { rect } = getOverlaySize();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    if (dragRect) {
-      setDragRect(prev => ({ ...prev, x1: x, y1: y }));
-    }
-    if (dragCircle) {
-      setDragCircle(prev => ({ ...prev, x, y }));
-    }
-  }
-
-  function finishRect() {
-    if (!dragRect) return;
-    const { W, H } = getOverlaySize();
-    const geomFrac = rectDisplayToFrac(dragRect, W, H);
-    setDragRect(null);
-    setPendingShape({ type: 'rect', geomFrac });
-  }
-
-  function finishCircle() {
-    if (!dragCircle) return;
-    const { W, H } = getOverlaySize();
-    const geomFrac = circleDisplayToFrac(dragCircle, W, H);
-    setDragCircle(null);
-    setPendingShape({ type: 'circle', geomFrac });
-  }
-
-  function onOverlayMouseUp() {
-    if (dragRect) finishRect();
-    if (dragCircle) finishCircle();
-  }
-
-  function cancelPoly() {
-    setPolyDrawing(false);
-    setPolyPoints([]);
-  }
-  function finishPoly() {
-    const { W, H } = getOverlaySize();
-    const geomFrac = pathDisplayToFrac(polyPoints, W, H);
-    cancelPoly();
-    if ((geomFrac.points || []).length >= 3) {
-      setPendingShape({ type: 'poly', geomFrac });
-    }
+    });
+    return null;
   }
 
   async function createSubareaFromPending() {
     if (!pendingShape || !selected) return;
+    const type = pendingShape.type.replace('-final', '');
     try {
       await atexMaps.createSubarea({
         logical_name: selected.logical_name,
         page_index: pageIndex,
-        name: draftName || pendingShape.type.toUpperCase(),
-        shape_type: pendingShape.type,
+        name: draftName || type.toUpperCase(),
+        shape_type: type,
         geometry: pendingShape.geomFrac,
         zone_gas: draftGas === '' ? null : Number(draftGas),
         zone_dust: draftDust === '' ? null : Number(draftDust)
@@ -1009,26 +1115,6 @@ function PlansPane({ notify }) {
     }
   }
 
-  function fracToDisplayRect(geom, W, H) {
-    return {
-      left: geom.x * W,
-      top: geom.y * H,
-      width: geom.w * W,
-      height: geom.h * H
-    };
-  }
-  function fracToDisplayCircle(geom, W, H) {
-    return {
-      cx: geom.cx * W,
-      cy: geom.cy * H,
-      r: geom.r * Math.max(W, H)
-    };
-  }
-  function fracToDisplayPoly(geom, W, H) {
-    return (geom?.points || []).map(p => ({ x: p.x * W, y: p.y * H }));
-  }
-
-  // ---------- UI helpers ----------
   async function uploadZip(e) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1069,6 +1155,28 @@ function PlansPane({ notify }) {
       notify('Rename failed', 'error');
     }
   }
+
+  // Preview layers from pendingShape/poly
+  const previewLayers = (() => {
+    const layers = [];
+    if (pendingShape?.type === 'rect') {
+      const { x0, y0, x1, y1 } = pendingShape.draft || {};
+      const b = [
+        [Math.min(y0, y1), Math.min(x0, x1)],
+        [Math.max(y0, y1), Math.max(x0, x1)]
+      ];
+      layers.push(<Rectangle key="rect-prev" bounds={b} pathOptions={{ color: '#f59e0b' }} />);
+    }
+    if (pendingShape?.type === 'circle') {
+      const { cx, cy, x, y } = pendingShape.draft || {};
+      const r = Math.hypot((x - cx), (y - cy));
+      layers.push(<LCircle key="circle-prev" center={[cy, cx]} radius={r} pathOptions={{ color: '#f59e0b' }} />);
+    }
+    if (polyDrawing && polyPoints.length) {
+      layers.push(<Polygon key="poly-prev" positions={polyPoints.map(p => [p.y, p.x])} pathOptions={{ color: '#f59e0b' }} />);
+    }
+    return layers;
+  })();
 
   return (
     <div className="space-y-4">
@@ -1134,7 +1242,7 @@ function PlansPane({ notify }) {
                     'px-3 py-1.5 text-sm border-r last:border-r-0',
                     tool === t ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
                   )}
-                  onClick={() => { setTool(t); if (t !== 'poly') cancelPoly(); }}
+                  onClick={() => { setTool(t); if (t !== 'poly') { setPolyDrawing(false); setPolyPoints([]); } setPendingShape(null); }}
                 >
                   {t}
                 </button>
@@ -1159,135 +1267,68 @@ function PlansPane({ notify }) {
         </div>
       </div>
 
-      {/* Viewer + overlay */}
-      <div ref={wrapperRef} className="relative bg-white rounded-lg shadow overflow-hidden">
-        {/* PDF viewer (désactivé aux interactions pour laisser l’overlay capter la souris) */}
-        <object
-          data={fileUrl() || ''}
-          type="application/pdf"
-          className="w-full h-[70vh] pointer-events-none select-none bg-gray-50"
-          aria-label="Plan PDF"
-        >
-          <div className="p-6 text-sm text-gray-600">
-            Unable to display PDF in this browser. <a className="text-blue-600" href={fileUrl() || '#'}>Open PDF</a>
-          </div>
-        </object>
+      {/* Leaflet viewer */}
+      <div className="relative bg-white rounded-lg shadow overflow-hidden">
+        {selected ? (
+          <MapContainer
+            crs={CRS.Simple}
+            bounds={bounds()}
+            maxBounds={bounds()}
+            style={{ height: '70vh', width: '100%' }}
+            doubleClickZoom={false}
+          >
+            {/* Image du plan */}
+            {imageUrl && (
+              <ImageOverlay url={imageUrl} bounds={bounds()} />
+            )}
 
-        {/* Overlay (capture clicks + dessine shapes + positions) */}
-        <div
-          ref={overlayRef}
-          className={classNames(
-            'absolute inset-0',
-            tool === 'move' ? 'cursor-default' :
-            tool === 'rect' ? 'cursor-crosshair' :
-            tool === 'circle' ? 'cursor-crosshair' :
-            tool === 'poly' ? 'cursor-crosshair' :
-            tool === 'place' ? 'cursor-cell' : 'cursor-default'
-          )}
-          onMouseDown={onOverlayMouseDown}
-          onMouseMove={onOverlayMouseMove}
-          onMouseUp={onOverlayMouseUp}
-          onDoubleClick={() => { if (tool === 'poly' && polyDrawing) finishPoly(); }}
-        >
-          {/* SHAPES existantes */}
-          {selected && subareas.map(sa => {
-            const { W, H } = getOverlaySize();
-            if (sa.shape_type === 'rect') {
-              const d = fracToDisplayRect(sa.geometry || {}, W, H);
-              return (
-                <div
-                  key={sa.id}
-                  className="absolute border-2 border-blue-500/80 bg-blue-500/10 rounded"
-                  style={{ left: d.left, top: d.top, width: d.width, height: d.height }}
-                  title={`${sa.name} — Gas:${sa.zone_gas ?? '—'} Dust:${sa.zone_dust ?? '—'}`}
-                >
-                  <div className="absolute -top-2 left-0 text-[10px] bg-blue-600 text-white px-1 rounded">{sa.name}</div>
-                </div>
-              );
-            }
-            if (sa.shape_type === 'circle') {
-              const c = fracToDisplayCircle(sa.geometry || {}, W, H);
-              return (
-                <svg key={sa.id} className="absolute inset-0 w-full h-full pointer-events-none">
-                  <circle cx={c.cx} cy={c.cy} r={c.r} fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.8)" strokeWidth="2" />
-                  <text x={c.cx} y={c.cy - c.r - 4} textAnchor="middle" fontSize="10" fill="white"
-                        style={{ paintOrder: 'stroke', stroke: 'rgba(37,99,235,1)', strokeWidth: 3 }}>{sa.name}</text>
-                </svg>
-              );
-            }
-            if (sa.shape_type === 'poly') {
-              const pts = fracToDisplayPoly(sa.geometry || {}, W, H);
-              const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ') + ' Z';
-              return (
-                <svg key={sa.id} className="absolute inset-0 w-full h-full pointer-events-none">
-                  <path d={d} fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.8)" strokeWidth="2" />
-                </svg>
-              );
-            }
-            return null;
-          })}
+            {/* Subareas existants */}
+            {subareas.map(sa => {
+              if (sa.shape_type === 'rect') {
+                const b = fracToDisplayRect(sa.geometry || {}, imgSize.w, imgSize.h);
+                return <Rectangle key={sa.id} bounds={b} pathOptions={{ color: '#3b82f6', weight: 2 }} />;
+              }
+              if (sa.shape_type === 'circle') {
+                const c = fracToDisplayCircle(sa.geometry || {}, imgSize.w, imgSize.h);
+                return <LCircle key={sa.id} center={c.center} radius={c.r} pathOptions={{ color: '#3b82f6', weight: 2 }} />;
+              }
+              if (sa.shape_type === 'poly') {
+                const pts = fracToDisplayPoly(sa.geometry || {}, imgSize.w, imgSize.h);
+                return <Polygon key={sa.id} positions={pts} pathOptions={{ color: '#3b82f6', weight: 2 }} />;
+              }
+              return null;
+            })}
 
-          {/* POSITIONS */}
-          {selected && positions.map(p => {
-            const { W, H } = getOverlaySize();
-            const x = p.x_frac * W;
-            const y = p.y_frac * H;
-            return (
-              <div key={p.equipment_id} style={{ position: 'absolute', left: x - 6, top: y - 6 }}>
-                <div className="w-3 h-3 rounded-full bg-emerald-500 border border-white shadow" title={`#${p.equipment_id} ${p.component_type}`} />
-              </div>
-            );
-          })}
+            {/* Positions */}
+            {positions.map(p => {
+              const x = p.x_frac * imgSize.w;
+              const y = p.y_frac * imgSize.h;
+              return (
+                <Marker key={p.equipment_id} position={[y, x]} title={`#${p.equipment_id} ${p.component_type}`} />
+              );
+            })}
 
-          {/* Dragging preview */}
-          {dragRect && (
-            <div
-              className="absolute border-2 border-amber-500 bg-amber-400/10 rounded"
-              style={{
-                left: Math.min(dragRect.x0, dragRect.x1),
-                top: Math.min(dragRect.y0, dragRect.y1),
-                width: Math.abs(dragRect.x1 - dragRect.x0),
-                height: Math.abs(dragRect.y1 - dragRect.y0)
-              }}
+            {/* Preview en cours de dessin */}
+            {previewLayers}
+
+            {/* Légende (Leaflet) */}
+            <LegendControl
+              title="Legend"
+              items={[
+                { swatch: 'bg-emerald-500', label: 'Equipment position' },
+                { swatch: 'bg-blue-500', label: 'Zone (saved)' },
+                { swatch: 'bg-amber-500', label: 'Drawing preview' }
+              ]}
             />
-          )}
-          {dragCircle && (
-            <svg className="absolute inset-0 w-full h-full pointer-events-none">
-              <circle
-                cx={dragCircle.cx}
-                cy={dragCircle.cy}
-                r={Math.hypot(dragCircle.x - dragCircle.cx, dragCircle.y - dragCircle.cy)}
-                fill="rgba(245,158,11,0.1)"
-                stroke="rgba(245,158,11,0.9)"
-                strokeWidth="2"
-              />
-            </svg>
-          )}
-          {polyDrawing && polyPoints.length > 0 && (
-            <svg className="absolute inset-0 w-full h-full pointer-events-none">
-              <polyline
-                points={polyPoints.map(p => `${p.x},${p.y}`).join(' ')}
-                fill="none" stroke="rgba(245,158,11,0.9)" strokeWidth="2"
-              />
-            </svg>
-          )}
-        </div>
 
-        {/* Footer aide dessin */}
-        <div className="px-4 py-2 text-xs text-gray-500 border-t bg-gray-50 flex items-center justify-between">
-          <div>
-            Tool: <b>{tool}</b>. {tool === 'rect' && 'Click-drag to draw a rectangle.'}
-            {tool === 'circle' && ' Click-drag to set radius.'}
-            {tool === 'poly' && ' Click to add points, double-click to close.'}
-            {tool === 'place' && ' Choose an unplaced equipment, then click to place.'}
+            {/* Écoute des interactions de dessin/placement */}
+            <DrawingEvents />
+          </MapContainer>
+        ) : (
+          <div className="h-[70vh] flex items-center justify-center text-sm text-gray-500 bg-gray-50">
+            Select a plan to display the map.
           </div>
-          {polyDrawing && (
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" onClick={cancelPoly}>Cancel poly</Button>
-              <Button onClick={finishPoly} disabled={polyPoints.length < 3}>Close polygon</Button>
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Liste des subareas + actions */}
@@ -1370,8 +1411,8 @@ function PlansPane({ notify }) {
       )}
 
       {/* Dialog création subarea */}
-      {pendingShape && (
-        <Modal title={`Create zone (${pendingShape.type})`} onClose={() => setPendingShape(null)}>
+      {(pendingShape?.type?.endsWith('-final')) && (
+        <Modal title={`Create zone (${pendingShape.type.replace('-final','')})`} onClose={() => setPendingShape(null)}>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Field label="Name">
               <input className="input w-full" value={draftName} onChange={e => setDraftName(e.target.value)} placeholder="Label…" />
