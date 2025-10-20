@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
 import * as XLSX from 'xlsx';
+import '../styles/atex-map.css';
 
 /* -------------------------------------------------------
    Constantes
