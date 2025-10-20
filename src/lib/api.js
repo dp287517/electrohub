@@ -456,146 +456,163 @@ export const api = {
   },
 
   /* ======================================================================
-     =====================  ATEX (NOUVEAU corrigé)  ========================
+     =====================  ATEX (corrigé uniquement)  =====================
      ====================================================================== */
 
-  /** --- ATEX (équipements + analytics + pièces jointes) --- */
+  /** --- ATEX (équipements, fichiers, contrôles, IA) --- */
   atex: {
-    // CRUD équipements
+    // Equipements
     listEquipments: (params) => get(`/api/atex/equipments`, params),
-
-    // ⚠️ Pas d’endpoint GET /api/atex/equipments/:id côté backend actuel
-    getEquipment: async (_id) => {
-      throw new Error("GET /api/atex/equipments/:id n'est pas exposé par le backend.");
-    },
-
+    getEquipment:   (id) => get(`/api/atex/equipments/${encodeURIComponent(id)}`),
     createEquipment: (payload) => post(`/api/atex/equipments`, payload),
     updateEquipment: (id, payload) => put(`/api/atex/equipments/${encodeURIComponent(id)}`, payload),
     removeEquipment: (id) => del(`/api/atex/equipments/${encodeURIComponent(id)}`),
 
-    // Attachments
-    listAttachments: (equipmentId) =>
-      get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/attachments`),
-
-    uploadAttachments: (equipmentId, files = []) => {
-      const fd = new FormData();
-      files.forEach((f) => fd.append("files", f));
-      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/attachments`, fd);
-    },
-
-    deleteAttachment: (attachmentId) =>
-      del(`/api/atex/attachments/${encodeURIComponent(attachmentId)}`),
-
-    attachmentDownloadUrl: (attachmentId, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/attachments/${encodeURIComponent(attachmentId)}/download`, bust),
-
-    // Photo principale (GET/POST)
+    // Photo principale
     photoUrl: (equipmentId, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/atex/equipments/${encodeURIComponent(equipmentId)}/photo`, bust),
     uploadPhoto: (equipmentId, file) => {
+      const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("photo", file);
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
       return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/photo`, fd);
     },
 
-    // Suggests / Analytics / Export
-    suggests: () => get(`/api/atex/suggests`),
-    analytics: () => get(`/api/atex/analytics`),
-    exportJSON: () => get(`/api/atex/export`),
-
-    // OCR/LLM photo (single + batch)
-    analyzePhoto: (file) => {
+    // Pièces jointes
+    listFiles: (equipmentId) =>
+      get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`),
+    uploadFiles: (equipmentId, files = []) => {
+      const { email, name } = getIdentity();
       const fd = new FormData();
-      fd.append("photo", file);
-      return upload(`/api/atex/photo-analysis`, fd);
+      (files || []).forEach((f) => fd.append("files", f)); // champ "files" côté backend
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
+      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`, fd);
     },
-    analyzePhotoBatch: (files = []) => {
-      const fd = new FormData();
-      files.forEach((f) => fd.append("files", f));
-      return upload(`/api/atex/photo-analysis/batch`, fd);
-    },
+    deleteFile: (fileId) => del(`/api/atex/files/${encodeURIComponent(fileId)}`),
 
-    // IA compliance
-    aiAnalyze: (equipmentId) => post(`/api/atex/ai/${encodeURIComponent(equipmentId)}`, {}),
+    // Contrôles (checklists)
+    startCheck: (equipmentId) =>
+      post(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks`, { _user: getIdentity() }),
+    saveCheck: (equipmentId, checkId, payload = {}) => {
+      if (payload?.files?.length) {
+        const { email, name } = getIdentity();
+        const fd = new FormData();
+        if (payload.items) fd.append("items", JSON.stringify(payload.items));
+        if (payload.close) fd.append("close", "true");
+        if (email) fd.append("user_email", email);
+        if (name)  fd.append("user_name",  name);
+        (payload.files || []).forEach((f) => fd.append("files", f)); // champ "files"
+        // NB: backend accepte PUT multipart
+        return put(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, fd);
+      }
+      return put(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, {
+        ...payload,
+        _user: getIdentity(),
+      });
+    },
+    listHistory: (equipmentId) =>
+      get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/history`),
+
+    // Calendrier & paramètres
+    calendar:    () => get(`/api/atex/calendar`),
+    settingsGet: () => get(`/api/atex/settings`),
+    settingsSet: (payload) => put(`/api/atex/settings`, payload),
+
+    // IA extraction (plusieurs photos) & conformité
+    extractFromPhotos: (files = []) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      (files || []).forEach((f) => fd.append("files", f)); // champ "files"
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
+      return upload(`/api/atex/extract`, fd);
+    },
+    assessConformity: ({ atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = {}) =>
+      post(`/api/atex/assess`, { atex_mark_gas, atex_mark_dust, target_gas, target_dust }),
   },
 
-  /** --- ATEX MAPS (Plans PDF + positions + zones “subareas”) --- */
+  /** --- ATEX MAPS (Plans PDF + positions + sous-zones) --- */
   atexMaps: {
-    // Upload ZIP multi-PDF — champ "file" (route: /upload-zip)
+    // Upload ZIP (champ "zip")
     uploadZip: (file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
-      fd.append("file", file); // IMPORTANT: "file"
+      fd.append("zip", file);
       if (email) fd.append("user_email", email);
       if (name)  fd.append("user_name",  name);
-      return upload(`/api/atex/maps/upload-zip`, fd);
+      return upload(`/api/atex/maps/uploadZip`, fd);
     },
 
     // Plans
-    listPlans: () => get(`/api/atex/maps/plans`),
-
-    // Rename (display_name) — route: /api/atex/maps/rename/:logical
+    listPlans: () => get(`/api/atex/maps/listPlans`),
     renamePlan: (logical_name, display_name) =>
-      put(`/api/atex/maps/rename/${encodeURIComponent(logical_name)}`, { display_name }),
+      put(`/api/atex/maps/renamePlan`, { logical_name, display_name }),
 
-    // Fichier PDF du plan (par logical_name uniquement)
+    // Fichier PDF du plan (par logical_name)
     planFileUrl: (logical_name, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
+      withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
 
-    // Positions d’équipements
+    // Helper: auto depuis string|plan
+    planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const logical = typeof plan === "string" ? plan : (plan?.logical_name || plan?.id || "");
+      return withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical)}`, bust);
+    },
+
+    // Positions
     positions: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/positions`, { logical_name, page_index }),
+    positionsAuto: (planOrKey, page_index = 0) => {
+      const key =
+        typeof planOrKey === "string"
+          ? planOrKey
+          : planOrKey?.logical_name || planOrKey?.id || "";
+      return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
+    },
+    // setPosition utilise le body attendu par le backend (equipment_id + logical_name + page_index + x_frac + y_frac)
+    setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
+      post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }).then(r => r),
 
-    setPosition: (equipmentId, { logical_name, page_index = 0, x_frac, y_frac }) =>
-      put(`/api/atex/maps/positions/${encodeURIComponent(equipmentId)}`, {
-        logical_name,
-        page_index,
-        x_frac,
-        y_frac,
-      }),
-
-    // Équipements sans position (pour le plan/page)
-    unplaced: (logical_name, page_index = 0) =>
-      get(`/api/atex/maps/unplaced`, { logical_name, page_index }),
-
-    // Résumé (placed/unplaced)
-    summary: (logical_name, page_index = 0) =>
-      get(`/api/atex/maps/summary`, { logical_name, page_index }),
-
-    // Copier les positions d’un plan vers un autre
-    reassignPositions: ({ from_logical, to_logical, page_index = 0 }) =>
-      post(`/api/atex/maps/positions/reassign`, { from_logical, to_logical, page_index }),
-
-    /* ================== ZONES dessinées (subareas) ================== */
+    /* ================== Sous-zones (subareas) ================== */
     listSubareas: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/subareas`, { logical_name, page_index }),
 
     createSubarea: ({
       logical_name,
       page_index = 0,
-      name,
-      shape_type,  // 'rect' | 'poly' | 'circle'
-      geometry,    // rect:{x,y,w,h} | circle:{cx,cy,r} | poly:{points:[{x,y}]}
+      name = "",
+      // unified input → backend attend: kind + coords
+      shape_type,   // 'rect' | 'circle' | 'poly'
+      geometry = {},// rect:{x1,y1,x2,y2} | circle:{cx,cy,r} | poly:{points:[[x,y],...]}
       zone_gas = null,   // 0,1,2 | null
       zone_dust = null,  // 20,21,22 | null
-    }) => post(`/api/atex/maps/subareas`, {
-      logical_name,
-      page_index,
-      name,
-      shape_type,
-      geometry,
-      zone_gas,
-      zone_dust,
-    }),
+      plan_id = null,
+    }) => {
+      const payload = { logical_name, plan_id, page_index, name, zoning_gas: zone_gas, zoning_dust: zone_dust };
 
-    updateSubarea: (id, patch) =>
-      put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, patch),
+      if (shape_type === "rect") {
+        const { x1, y1, x2, y2 } = geometry || {};
+        return post(`/api/atex/maps/subareas`, { ...payload, kind: "rect", x1, y1, x2, y2 });
+      }
+      if (shape_type === "circle") {
+        const { cx, cy, r } = geometry || {};
+        return post(`/api/atex/maps/subareas`, { ...payload, kind: "circle", cx, cy, r });
+      }
+      // default poly
+      const pts = (geometry?.points || []).map((p) => Array.isArray(p) ? p : [p.x, p.y]);
+      return post(`/api/atex/maps/subareas`, { ...payload, kind: "poly", points: pts });
+    },
+
+    updateSubarea: (id, patch = {}) =>
+      put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, {
+        name: patch.name ?? null,
+        zoning_gas: patch.zone_gas ?? patch.zoning_gas ?? null,
+        zoning_dust: patch.zone_dust ?? patch.zoning_dust ?? null,
+      }),
 
     deleteSubarea: (id) =>
       del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
-
-    // Appliquer les zones (met à jour zone_gas/zone_dust/status des équipements positionnés)
-    applySubareas: (logical_name, page_index = 0) =>
-      post(`/api/atex/maps/subareas/apply`, { logical_name, page_index }),
   },
 };
