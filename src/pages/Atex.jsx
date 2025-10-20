@@ -642,25 +642,6 @@ export function Field({ label, children, cols = 1 }) {
   );
 }
 // Atex.jsx — PARTIE 2/2
-// Écran principal (onglets Controls / Assessment / Import + Plans & Positions)
-// Compatible 100% avec ton backend actuel (/api/atex/* et /api/atex/maps/*)
-
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
-import * as XLSX from 'xlsx';
-
-import {
-  // constants / helpers / ui (depuis PARTIE 1/2)
-  SITE_OPTIONS, GAS_ZONES, DUST_ZONES, STATUS_MAP_DISPLAY, STATUS_OPTIONS_UI, STATUS_MAP_TO_FR,
-  SHAPE_TYPES,
-  classNames, formatDate, daysUntil, useOutsideClose, useDebouncedValue,
-  Tag, Spinner, Button, MultiSelect, Segmented, FilterBar,
-  SimpleBarChart, DoughnutChart,
-  getStatusColor, getStatusDisplay, useToast, Pager, Th,
-  atexMaps,
-  rectDisplayToFrac, circleDisplayToFrac, pathDisplayToFrac,
-  Modal, KpiCard, Field
-} from './Atex.jsx'; // <-- importe ta PARTIE 1/2
 
 /* =======================================================
    Petits composants MODALES pour Equipments
