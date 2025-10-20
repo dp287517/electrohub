@@ -15,7 +15,7 @@ import { fileURLToPath } from "url";
 import pg from "pg";
 import crypto from "crypto";
 import archiver from "archiver";
-import AdmZip from "adm-zip";
+import StreamZip from "node-stream-zip"; // ⬅️ remplace AdmZip
 import PDFDocument from "pdfkit";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
@@ -614,7 +614,7 @@ app.get("/api/atex/calendar", async (_req, res) => {
       WHERE next_check_date IS NOT NULL
       ORDER BY next_check_date ASC
     `);
-    const events = (rows || []).map((r) => ({
+  const events = (rows || []).map((r) => ({
       date: r.date,
       equipment_id: r.equipment_id,
       equipment_name: r.equipment_name,
@@ -634,38 +634,41 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
     const zipPath = req.file?.path;
     if (!zipPath) return res.status(400).json({ ok: false, error: "zip missing" });
 
-    const z = new AdmZip(zipPath);
-    const entries = z.getEntries().filter((e) => e.entryName.toLowerCase().endsWith(".pdf"));
+    // ⬇️ Remplacement AdmZip → node-stream-zip (async)
+    const zip = new StreamZip.async({ file: zipPath });
     const imported = [];
+    try {
+      const entries = await zip.entries();
+      for (const [entryName, entry] of Object.entries(entries)) {
+        if (entry.isDirectory) continue;
+        if (!entryName.toLowerCase().endsWith(".pdf")) continue;
 
-    for (const entry of entries) {
-      const base = path.basename(entry.entryName, ".pdf");
-      // logique Doors: logical_name et version (auto-incr si déjà présent)
-      const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
-      const version = Number(Date.now()); // simple version horodatée
+        const base = path.basename(entryName, ".pdf");
+        const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
+        const version = Number(Date.now()); // version horodatée (même logique que l’actuel)
 
-      const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
-      await fsp.writeFile(dest, entry.getData());
+        const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
+        const buf = await zip.entryData(entry);
+        await fsp.writeFile(dest, buf);
 
-      // page_count (lazy: 1 si non déterminé)
-      let page_count = 1;
-      try {
-        // si besoin, on calcule ailleurs; ici on stocke brut
-      } catch {}
+        let page_count = 1; // (inchangé : lazy 1)
+        await pool.query(
+          `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [logical, version, path.basename(dest), dest, page_count]
+        );
 
-      await pool.query(
-        `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count)
-         VALUES ($1,$2,$3,$4,$5)`,
-        [logical, version, path.basename(dest), dest, page_count]
-      );
+        await pool.query(
+          `INSERT INTO atex_plan_names (logical_name, display_name) VALUES ($1,$2)
+           ON CONFLICT (logical_name) DO NOTHING`,
+          [logical, base]
+        );
 
-      await pool.query(
-        `INSERT INTO atex_plan_names (logical_name, display_name) VALUES ($1,$2)
-         ON CONFLICT (logical_name) DO NOTHING`,
-        [logical, base]
-      );
-
-      imported.push({ logical_name: logical, version, page_count });
+        imported.push({ logical_name: logical, version, page_count });
+      }
+    } finally {
+      await zip.close().catch(() => {});
+      // (on ne change rien d’autre : pas de suppression forcée du zip si tu ne l’avais pas)
     }
 
     res.json({ ok: true, imported });
