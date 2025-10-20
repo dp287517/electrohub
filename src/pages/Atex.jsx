@@ -1,128 +1,11 @@
 // Atex.jsx — PARTIE 1/2
-// Helpers + UI components (réutilisables)
+// Helpers + UI components + ADAPTER atexMaps (compat backend /api/atex/maps/*)
 // La page principale (onglets Controls/Assessment/Import + Plans & Positions) arrive en PARTIE 2/2.
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, put, del, upload, API_BASE } from '../lib/api.js'; // utilisé aussi en PARTIE 2/2
 import * as XLSX from 'xlsx'; // utilisé en PARTIE 2/2 (export/import)
 import '../styles/atex-map.css';
-
-/* -------------------------------------------------------
-   Adapter "Doors-like" pour les plans ATEX
-   (mêmes primitives que Doors.jsx côté front)
-------------------------------------------------------- */
-
-export const atexMaps = {
-  /**
-   * Upload d’un ZIP de plans (PDF)
-   * @param {File} fileZip
-   */
-  async uploadZip(fileZip) {
-    const fd = new FormData();
-    fd.append('file', fileZip);
-    // Convention : endpoint d’import ZIP ATEX
-    return upload(`${API_BASE}/api/atex/plans/import-zip`, fd);
-  },
-
-  /**
-   * Liste des plans (aligné Doors : id, logical_name, display_name)
-   * BE peut retourner tout autre payload → mapping ici.
-   */
-  async listPlans() {
-    const list = await get(`${API_BASE}/api/atex/plans`);
-    // Mapping souple : on normalise { id, logical_name, display_name, meta }
-    return (list || []).map(p => ({
-      id: p.id,
-      logical_name: p.logical_name || p.name || `plan_${p.id}`,
-      display_name: p.display_name || p.name || p.logical_name || `Plan #${p.id}`,
-      building: p.building ?? null,
-      room: p.room ?? null,
-      // meta optionnel (première page, pageCount si le BE l’expose)
-      ...('meta' in p ? { meta: p.meta } : {})
-    }));
-  },
-
-  /**
-   * URL de téléchargement/lecture du fichier PDF du plan
-   * (comme Doors: planFileUrlAuto(plan))
-   */
-  planFileUrlAuto(plan) {
-    // Convention : GET /file renvoie le PDF
-    return `${API_BASE}/api/atex/plans/${plan.id}/file`;
-  },
-
-  /**
-   * Renommer un plan (display_name)
-   */
-  async renamePlan(planId, newName) {
-    return put(`${API_BASE}/api/atex/plans/${planId}`, { display_name: newName });
-  },
-
-  /**
-   * Supprimer un plan
-   */
-  async deletePlan(planId) {
-    return del(`${API_BASE}/api/atex/plans/${planId}`);
-  }
-};
-
-/* -------------------------------------------------------
-   Pdf.js utils (miniatures & rendu)
-------------------------------------------------------- */
-
-// Lazy init du worker pdf.js pour éviter les warnings bundler.
-let _pdfjsReady = false;
-async function ensurePdfjsWorker() {
-  if (_pdfjsReady) return (await import('pdfjs-dist')).getDocument;
-  const pdfjsLib = await import('pdfjs-dist');
-  const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = worker && worker.default ? worker.default : worker;
-  _pdfjsReady = true;
-  return pdfjsLib.getDocument;
-}
-
-/**
- * Rendu miniature de la 1ère page d’un PDF dans un <canvas>.
- * Props:
- *   src (string URL), width (px), height (px, optionnel), onReady, onError
- */
-export function PdfThumb({ src, width = 180, height, className = '' , onReady, onError }) {
-  const canvasRef = useRef(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const getDocument = await ensurePdfjsWorker();
-        const loadingTask = getDocument(src);
-        const pdf = await loadingTask.promise;
-        if (cancelled) return;
-
-        const page = await pdf.getPage(1);
-        const viewport = page.getViewport({ scale: 1.0 });
-
-        const scale = width / viewport.width;
-        const vp = page.getViewport({ scale });
-
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        canvas.width = vp.width;
-        canvas.height = height ? height : vp.height;
-
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
-        onReady?.();
-      } catch (e) {
-        console.error('PdfThumb render error', e);
-        onError?.(e);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [src, width, height, onReady, onError]);
-
-  return <canvas ref={canvasRef} className={classNames('rounded-md shadow-sm bg-white', className)} />;
-}
 
 /* -------------------------------------------------------
    Constantes
@@ -147,6 +30,9 @@ export const STATUS_MAP_TO_FR = {
   'Non-compliant': 'Non conforme',
   'To review': 'À vérifier'
 };
+
+// Formes supportées par le backend /maps/subareas
+export const SHAPE_TYPES = ['rect', 'circle', 'poly'];
 
 /* -------------------------------------------------------
    Utils
@@ -336,7 +222,7 @@ export function Segmented({ label, values, setValues, options }) {
 }
 
 /* -------------------------------------------------------
-   Barre de filtres (compose MultiSelect + Segmented)
+   Barre de filtres
 ------------------------------------------------------- */
 
 export function FilterBar({
@@ -547,10 +433,9 @@ export function Pager({ page, setPage, pageSize, total }) {
   );
 }
 
-/* ------------------------------------------
-   Sous-composants locaux partagés
-   (utilisés aussi par la PARTIE 2/2)
-------------------------------------------- */
+/* -------------------------------------------------------
+   Sous-composants locaux (table sorting)
+------------------------------------------------------- */
 
 export function Th({ label, sortKey, sort, setSort }) {
   const active = sort.by === sortKey;
@@ -583,6 +468,135 @@ export function Th({ label, sortKey, sort, setSort }) {
     </th>
   );
 }
+
+/* -------------------------------------------------------
+   ADAPTER "Doors-like" pour /api/atex/maps/*
+   (Plans PDF, subareas, positions, import ZIP, etc.)
+------------------------------------------------------- */
+
+export const atexMaps = {
+  // ---- Plans ----
+  async listPlans() {
+    const r = await get(`${API_BASE}/api/atex/maps/plans`);
+    // Normalise l’objet côté front
+    return (r?.plans || []).map(p => ({
+      id: p.id,                       // UUID
+      logical_name: p.logical_name,   // clé serveur
+      display_name: p.display_name || p.logical_name,
+      page_count: p.page_count ?? 1,
+      created_at: p.created_at
+    }));
+  },
+  planFileUrlAuto(plan) {
+    const logical = typeof plan === 'string' ? plan : plan?.logical_name;
+    return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical)}/file`;
+  },
+  async renamePlan(logical_name, newDisplayName) {
+    await put(`${API_BASE}/api/atex/maps/rename/${encodeURIComponent(logical_name)}`, {
+      display_name: newDisplayName || null
+    });
+    return true;
+  },
+  // Pas d’API delete plan côté backend → on ne l’expose pas côté front.
+  async uploadZip(file) {
+    const fd = new FormData();
+    fd.append('file', file);
+    return upload(`${API_BASE}/api/atex/maps/upload-zip`, fd);
+  },
+
+  // ---- Subareas (zones dessinées) ----
+  async getSubareas(logical_name, page_index = 0) {
+    const r = await get(`${API_BASE}/api/atex/maps/subareas?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
+    return r?.items || [];
+  },
+  async createSubarea({ logical_name, page_index = 0, name, shape_type, geometry, zone_gas = null, zone_dust = null }) {
+    // shape_type = 'rect' | 'circle' | 'poly'
+    // geometry en FRACTIONS [0..1] (voir /apply)
+    return post(`${API_BASE}/api/atex/maps/subareas`, {
+      logical_name, page_index, name, shape_type, geometry, zone_gas, zone_dust
+    });
+  },
+  async updateSubarea(id, patch) {
+    return put(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`, patch);
+  },
+  async deleteSubarea(id) {
+    return del(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`);
+  },
+  async applySubareas(logical_name, page_index = 0) {
+    return post(`${API_BASE}/api/atex/maps/subareas/apply`, { logical_name, page_index });
+  },
+
+  // ---- Positions (équipements sur plan) ----
+  async getPositions(logical_name, page_index = 0) {
+    const r = await get(`${API_BASE}/api/atex/maps/positions?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
+    return r?.items || [];
+  },
+  async setPosition(equipmentId, { logical_name, page_index = 0, x_frac, y_frac }) {
+    return put(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(equipmentId)}`, {
+      logical_name, page_index, x_frac, y_frac
+    });
+  },
+  async listUnplaced(logical_name, page_index = 0) {
+    const r = await get(`${API_BASE}/api/atex/maps/unplaced?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
+    return r?.items || [];
+  },
+  async createOnMap(payload /* {logical_name, page_index, x_frac, y_frac, ...fields} */) {
+    return post(`${API_BASE}/api/atex/maps/equipments`, payload);
+  },
+  async clonePosition(sourceEquipmentId, { logical_name, page_index = 0, x_frac = null, y_frac = null }) {
+    return post(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(sourceEquipmentId)}/clone`, {
+      logical_name, page_index, x_frac, y_frac
+    });
+  },
+  async summary(logical_name, page_index = 0) {
+    return get(`${API_BASE}/api/atex/maps/summary?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
+  },
+  async reassignPositions(from_logical, to_logical, page_index = 0) {
+    return post(`${API_BASE}/api/atex/maps/positions/reassign`, { from_logical, to_logical, page_index });
+  }
+};
+
+/* -------------------------------------------------------
+   Helpers géométrie côté front (display ↔ fractions)
+   (utiles en PARTIE 2/2 pour sérialiser les shapes)
+------------------------------------------------------- */
+
+// Convertit un rectangle en px display → fractions [0..1]
+export function rectDisplayToFrac({ x0, y0, x1, y1 }, W, H) {
+  const left = Math.min(x0, x1), top = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  return {
+    x: +(left / Math.max(1, W)).toFixed(6),
+    y: +(top / Math.max(1, H)).toFixed(6),
+    w: +(w / Math.max(1, W)).toFixed(6),
+    h: +(h / Math.max(1, H)).toFixed(6)
+  };
+}
+// Cercle display → fractions
+export function circleDisplayToFrac({ cx, cy, x, y }, W, H) {
+  const rx = Math.abs(x - cx);
+  const ry = Math.abs(y - cy);
+  const r = (rx + ry) / 2;
+  return {
+    cx: +(cx / Math.max(1, W)).toFixed(6),
+    cy: +(cy / Math.max(1, H)).toFixed(6),
+    r: +((r / Math.max(1, Math.max(W, H))).toFixed(6)) // rayon sur plus grand côté (cohérent pour apply)
+  };
+}
+// Path libre → poly (liste de points) en fractions
+export function pathDisplayToFrac(points, W, H) {
+  return {
+    points: (points || []).map(p => ({
+      x: +(p.x / Math.max(1, W)).toFixed(6),
+      y: +(p.y / Math.max(1, H)).toFixed(6)
+    }))
+  };
+}
+
+/* -------------------------------------------------------
+   Exemples d’affichage de KPI/cartes/Form fields
+   (réutilisés en PARTIE 2/2)
+------------------------------------------------------- */
 
 export function Modal({ children, onClose, title, wide = false }) {
   return (
@@ -627,534 +641,792 @@ export function Field({ label, children, cols = 1 }) {
     </div>
   );
 }
-
-/* ---------------------------
-   Plans — version "Doors-like"
-   (Header d’import ZIP + liste avec miniatures PDF)
----------------------------- */
-
-export function PlansHeader({ onUploadZip, onRefresh, busy = false }) {
-  const inputRef = useRef(null);
-
-  const handleZip = useCallback(async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      await onUploadZip?.(file);
-      onRefresh?.();
-    } finally {
-      // reset le champ pour permettre un ré-upload du même fichier
-      e.target.value = '';
-    }
-  }, [onUploadZip, onRefresh]);
-
-  return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="text-lg font-semibold">Plans</div>
-      <div className="flex gap-2 flex-wrap">
-        <Button
-          variant="ghost"
-          className="relative"
-          onClick={() => inputRef.current?.click()}
-          disabled={busy}
-          title="Importer un ZIP de plans (PDF)"
-        >
-          📦 Import ZIP de plans
-        </Button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".zip"
-          className="hidden"
-          onChange={handleZip}
-        />
-        <Button variant="ghost" onClick={onRefresh} disabled={busy}>
-          {busy ? 'Loading…' : 'Refresh'}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-export function PlanCard({ plan, fileUrl, onSelect, onRename, onDelete }) {
-  const [renaming, setRenaming] = useState(false);
-  const [name, setName] = useState(plan.display_name || '');
-  const [thumbReady, setThumbReady] = useState(false);
-
-  return (
-    <div className="border rounded-lg p-3 bg-white shadow-sm hover:shadow transition">
-      <button className="w-full text-left" onClick={() => onSelect?.(plan)}>
-        <div className="aspect-[4/3] w-full overflow-hidden rounded-md bg-gray-50 flex items-center justify-center">
-          <PdfThumb
-            src={fileUrl}
-            width={280}
-            className={classNames('max-w-full', thumbReady ? '' : 'opacity-60')}
-            onReady={() => setThumbReady(true)}
-          />
-        </div>
-        <div className="mt-2 font-medium truncate">{plan.display_name}</div>
-        <div className="text-xs text-gray-500 truncate">
-          {plan.building || '—'} · {plan.room || '—'}
-        </div>
-      </button>
-
-      <div className="mt-2 flex items-center gap-2">
-        {!renaming ? (
-          <>
-            <Button variant="ghost" onClick={() => setRenaming(true)}>Rename</Button>
-            <Button variant="ghost" onClick={() => onDelete?.(plan)} className="text-red-600">Delete</Button>
-          </>
-        ) : (
-          <div className="flex items-center gap-2 w-full">
-            <input
-              className="input flex-1"
-              value={name}
-              onChange={e => setName(e.target.value)}
-            />
-            <Button
-              variant="primary"
-              onClick={() => { onRename?.(plan, name); setRenaming(false); }}
-            >
-              Save
-            </Button>
-            <Button variant="ghost" onClick={() => { setName(plan.display_name || ''); setRenaming(false); }}>
-              Cancel
-            </Button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export function PlanListDoorsLike({ plans, onSelect, onRefresh, onRename, onDelete, onUploadZip, busy }) {
-  return (
-    <div className="bg-white rounded-lg shadow p-4">
-      <PlansHeader onUploadZip={onUploadZip} onRefresh={onRefresh} busy={busy} />
-      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-        {(plans || []).length === 0 ? (
-          <div className="text-sm text-gray-500">No plans yet. Import a ZIP to get started.</div>
-        ) : (
-          plans.map(p => (
-            <PlanCard
-              key={p.id}
-              plan={p}
-              fileUrl={atexMaps.planFileUrlAuto(p)}
-              onSelect={onSelect}
-              onRename={onRename}
-              onDelete={onDelete}
-            />
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
 // Atex.jsx — PARTIE 2/2
-// Page principale (onglets Controls/Assessment/Import + Plans & Positions)
-// → S'appuie sur les composants et l'adapter définis dans la PARTIE 1/2.
+// Écran principal (onglets Controls / Assessment / Import + Plans & Positions)
+// Compatible 100% avec ton backend actuel (/api/atex/* et /api/atex/maps/*)
 
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
 import * as XLSX from 'xlsx';
+
 import {
-  classNames, formatDate, daysUntil, useToast, Button, Modal, Field, KpiCard,
-  FilterBar, Pager, getStatusColor, getStatusDisplay,
-  GAS_ZONES, DUST_ZONES, SITE_OPTIONS, STATUS_OPTIONS_UI, STATUS_MAP_TO_FR,
-  Th, atexMaps
-} from './Atex.jsx';
+  // constants / helpers / ui (depuis PARTIE 1/2)
+  SITE_OPTIONS, GAS_ZONES, DUST_ZONES, STATUS_MAP_DISPLAY, STATUS_OPTIONS_UI, STATUS_MAP_TO_FR,
+  SHAPE_TYPES,
+  classNames, formatDate, daysUntil, useOutsideClose, useDebouncedValue,
+  Tag, Spinner, Button, MultiSelect, Segmented, FilterBar,
+  SimpleBarChart, DoughnutChart,
+  getStatusColor, getStatusDisplay, useToast, Pager, Th,
+  atexMaps,
+  rectDisplayToFrac, circleDisplayToFrac, pathDisplayToFrac,
+  Modal, KpiCard, Field
+} from './Atex.jsx'; // <-- importe ta PARTIE 1/2
 
-/* -------------------------------------------------------
-   Zone form (métadonnées après dessin)
-------------------------------------------------------- */
+/* =======================================================
+   Petits composants MODALES pour Equipments
+======================================================= */
 
-function ZoneFormInline({ onCancel, onCreate }) {
-  const [label, setLabel] = useState('');
-  const [componentType, setComponentType] = useState('');
-  const [zoneGas, setZoneGas] = useState('');
-  const [zoneDust, setZoneDust] = useState('');
-  const [parentId, setParentId] = useState('');
+function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, uniques, notify }) {
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const [modalAttachments, setModalAttachments] = useState([]);
 
   return (
-    <div className="bg-white rounded-lg shadow p-3 border">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Field label="Label">
-          <input className="input w-full" value={label} onChange={e => setLabel(e.target.value)} />
+    <Modal
+      onClose={() => { onClose(); setModalAttachments([]); }}
+      title={editItem.id ? 'Edit Equipment' : 'New Equipment'}
+      wide
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Site</label>
+          <select
+            className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
+            value={editItem.site || ''}
+            onChange={e => setEditItem({ ...editItem, site: e.target.value })}
+          >
+            <option value="">Select site</option>
+            {SITE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+
+        <Field label="Building">
+          <input className="input w-full" list="buildings" value={editItem.building || ''} onChange={e => setEditItem({ ...editItem, building: e.target.value })} />
+          <datalist id="buildings">{uniques.buildings.map(b => <option key={b} value={b} />)}</datalist>
         </Field>
+
+        <Field label="Room">
+          <input className="input w-full" list="rooms" value={editItem.room || ''} onChange={e => setEditItem({ ...editItem, room: e.target.value })} />
+          <datalist id="rooms">{uniques.rooms.map(r => <option key={r} value={r} />)}</datalist>
+        </Field>
+
         <Field label="Component Type">
-          <input className="input w-full" value={componentType} onChange={e => setComponentType(e.target.value)} />
+          <input className="input w-full" list="types" value={editItem.component_type || ''} onChange={e => setEditItem({ ...editItem, component_type: e.target.value })} />
+          <datalist id="types">{uniques.types.map(t => <option key={t} value={t} />)}</datalist>
         </Field>
-        <div className="hidden sm:block" />
+
+        <Field label="Manufacturer">
+          <input className="input w-full" list="mans" value={editItem.manufacturer || ''} onChange={e => setEditItem({ ...editItem, manufacturer: e.target.value })} />
+          <datalist id="mans">{uniques.manufacturers.map(m => <option key={m} value={m} />)}</datalist>
+        </Field>
+
+        <Field label="Manufacturer Ref">
+          <input className="input w-full" list="refs" value={editItem.manufacturer_ref || ''} onChange={e => setEditItem({ ...editItem, manufacturer_ref: e.target.value })} />
+          <datalist id="refs">{uniques.refs.map(r => <option key={r} value={r} />)}</datalist>
+        </Field>
+
+        <Field label="ATEX Marking" cols={2}>
+          <input className="input w-full" list="atexrefs" value={editItem.atex_ref || ''} onChange={e => setEditItem({ ...editItem, atex_ref: e.target.value })} />
+          <datalist id="atexrefs">{uniques.atex_refs.map(r => <option key={r} value={r} />)}</datalist>
+        </Field>
+
         <Field label="Gas Zone">
-          <select className="input w-full" value={zoneGas} onChange={e => setZoneGas(e.target.value)}>
+          <select
+            className="input w-full"
+            value={editItem.zone_gas ?? ''}
+            onChange={e => setEditItem({ ...editItem, zone_gas: e.target.value ? Number(e.target.value) : null })}
+          >
             <option value="">—</option>
             {GAS_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
           </select>
         </Field>
+
         <Field label="Dust Zone">
-          <select className="input w-full" value={zoneDust} onChange={e => setZoneDust(e.target.value)}>
+          <select
+            className="input w-full"
+            value={editItem.zone_dust ?? ''}
+            onChange={e => setEditItem({ ...editItem, zone_dust: e.target.value ? Number(e.target.value) : null })}
+          >
             <option value="">—</option>
             {DUST_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
           </select>
         </Field>
-        <Field label="Parent Equipment ID (optional)">
+
+        <Field label="Last Inspection">
+          <input type="date" className="input w-full" value={editItem.last_control || ''} onChange={e => setEditItem({ ...editItem, last_control: e.target.value || null })} />
+        </Field>
+
+        <Field label="Next Inspection">
+          <input type="date" className="input w-full" value={editItem.next_control || ''} onChange={e => setEditItem({ ...editItem, next_control: e.target.value || null })} />
+        </Field>
+
+        <Field label="Frequency (months)">
           <input
+            type="number"
             className="input w-full"
-            value={parentId}
-            onChange={e => setParentId(e.target.value)}
-            placeholder="e.g. 123"
+            value={editItem.frequency_months || ''}
+            onChange={e => setEditItem({ ...editItem, frequency_months: e.target.value ? Number(e.target.value) : null })}
+          />
+        </Field>
+
+        {/* Bloc Analyse photo + pièces jointes (upload dans onSave si besoin) */}
+        <div className="col-span-1 sm:col-span-2 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
+          <label className="block text-sm font-medium mb-2">Upload Photo for Auto-Fill</label>
+          <p className="text-xs text-gray-500 mb-2">
+            Upload a clear photo of the equipment label to automatically fill Manufacturer, Mfr Ref, and ATEX Marking.
+          </p>
+          <input
+            type="file"
+            accept="image/*"
+            className="input text-sm w-full bg-white text-gray-900 border-gray-300"
+            disabled={photoLoading}
+            onChange={async e => {
+              const file = e.target.files[0];
+              if (!file) return;
+              setPhotoLoading(true);
+              const formData = new FormData();
+              formData.append('photo', file);
+              try {
+                const analysis = await upload(`${API_BASE}/api/atex/photo-analysis`, formData);
+                setEditItem(prev => ({
+                  ...prev,
+                  manufacturer: analysis.manufacturer || prev.manufacturer,
+                  manufacturer_ref: analysis.manufacturer_ref || prev.manufacturer_ref,
+                  atex_ref: analysis.atex_ref || prev.atex_ref
+                }));
+                notify('Photo analyzed successfully! Fields updated.', 'success');
+              } catch (err) {
+                console.error('Photo analysis failed:', err);
+                notify('Failed to analyze photo. Try a clearer image.', 'error');
+              } finally {
+                setPhotoLoading(false);
+                e.target.value = '';
+              }
+            }}
+          />
+          {photoLoading && (
+            <div className="mt-2 flex items-center gap-2 text-sm text-blue-600">
+              <Spinner className="h-4 w-4" /> Analyzing photo...
+            </div>
+          )}
+        </div>
+
+        <Field label="Comments" cols={2}>
+          <textarea
+            className="input w-full min-h-[100px]"
+            value={editItem.comments || ''}
+            onChange={e => setEditItem({ ...editItem, comments: e.target.value || null })}
           />
         </Field>
       </div>
 
-      <div className="flex items-center justify-end gap-2 mt-3">
-        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+      <div className="flex justify-end gap-2 mt-6">
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
         <Button
-          onClick={() =>
-            onCreate({
-              label,
-              component_type: componentType,
-              zone_gas: zoneGas ? Number(zoneGas) : null,
-              zone_dust: zoneDust ? Number(zoneDust) : null,
-              parent_id: parentId ? Number(parentId) : null
-            })
-          }
-          disabled={!componentType}
+          variant="primary"
+          disabled={loading || !editItem.building || !editItem.room || !editItem.component_type}
+          onClick={() => onSave({ attachments: [] /* géré à part si tu veux ajouter ici */ })}
         >
-          Create
+          {loading ? 'Saving...' : editItem.id ? 'Update' : 'Create'}
         </Button>
       </div>
-    </div>
+    </Modal>
   );
 }
 
-/* -------------------------------------------------------
-   PDF Viewer + Annotation (rect / circle / freehand)
-------------------------------------------------------- */
+/* =======================================================
+   PLANS & POSITIONS (PDF viewer + overlay + drawing tools)
+======================================================= */
 
-function PdfPlanViewer({
-  plan, zones, onCreateZone, onDeleteZone, notify
-}) {
-  const canvasRef = useRef(null);
+function PlansPane({ notify }) {
+  // Plans
+  const [plans, setPlans] = useState([]);
+  const [loadingPlans, setLoadingPlans] = useState(false);
+  const [selected, setSelected] = useState(null); // {logical_name, display_name, page_count}
+  const [pageIndex, setPageIndex] = useState(0);
+
+  // Subareas & positions
+  const [subareas, setSubareas] = useState([]);
+  const [positions, setPositions] = useState([]);
+  const [unplaced, setUnplaced] = useState([]);
+  const [summary, setSummary] = useState({ placed: 0, unplaced: 0 });
+
+  // Drawing tool
+  const [tool, setTool] = useState('move'); // move | rect | circle | poly | place
   const overlayRef = useRef(null);
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [renderSize, setRenderSize] = useState({ w: 0, h: 0 });
-  const [scaleNatToDisp, setScaleNatToDisp] = useState({ kx: 1, ky: 1 }); // natural → display
-  const [tool, setTool] = useState('select'); // 'select' | 'rect' | 'circle' | 'path'
-  const [draft, setDraft] = useState(null);   // {kind, data...} in display coords
-  const [pendingShape, setPendingShape] = useState(null); // shape in NATURAL coords waiting for metadata
-  const [hoverId, setHoverId] = useState(null);
+  const wrapperRef = useRef(null);
 
-  const fileUrl = plan ? atexMaps.planFileUrlAuto(plan) : null;
+  // rect
+  const [dragRect, setDragRect] = useState(null); // {x0,y0,x1,y1}
+  // circle
+  const [dragCircle, setDragCircle] = useState(null); // {cx,cy,x,y}
+  // poly
+  const [polyPoints, setPolyPoints] = useState([]); // [{x,y}, ...]
+  const [polyDrawing, setPolyDrawing] = useState(false);
 
-  // Render page 1 of PDF to canvas; compute scale factors
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      if (!plan || !canvasRef.current) return;
-      setPdfLoading(true);
-      try {
-        const { default: pdfjsLib } = await import('pdfjs-dist');
-        const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs');
-        pdfjsLib.GlobalWorkerOptions.workerSrc = worker.default || worker;
+  // Creation modal for subarea
+  const [pendingShape, setPendingShape] = useState(null); // {type, geomFrac}
+  const [draftName, setDraftName] = useState('');
+  const [draftGas, setDraftGas] = useState('');
+  const [draftDust, setDraftDust] = useState('');
 
-        const loadingTask = pdfjsLib.getDocument(fileUrl);
-        const pdf = await loadingTask.promise;
-        if (cancelled) return;
+  // place selected equipment
+  const [selectedEquip, setSelectedEquip] = useState(null);
 
-        const page = await pdf.getPage(1);
+  function fileUrl() {
+    if (!selected) return null;
+    return atexMaps.planFileUrlAuto(selected.logical_name);
+  }
 
-        const containerW = canvasRef.current.parentElement.clientWidth || 800;
-        const unscaled = page.getViewport({ scale: 1 });
-        const scale = containerW / unscaled.width;
-        const viewport = page.getViewport({ scale });
-
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-
-        setRenderSize({ w: canvas.width, h: canvas.height });
-        setScaleNatToDisp({ kx: canvas.width / unscaled.width, ky: canvas.height / unscaled.height });
-
-        await page.render({ canvasContext: ctx, viewport }).promise;
-      } catch (e) {
-        console.error('PDF render error', e);
-        notify?.('Failed to render PDF', 'error');
-      } finally {
-        if (!cancelled) setPdfLoading(false);
+  async function reloadPlans() {
+    setLoadingPlans(true);
+    try {
+      const p = await atexMaps.listPlans();
+      setPlans(p);
+      if (selected) {
+        const found = p.find(x => x.logical_name === selected.logical_name);
+        if (!found) {
+          setSelected(null);
+        } else {
+          setSelected(found);
+        }
       }
+    } catch (e) {
+      console.error(e);
+      notify('Failed to load plans', 'error');
+    } finally {
+      setLoadingPlans(false);
     }
-    load();
-    return () => { cancelled = true; };
-  }, [plan, fileUrl, notify]);
-
-  // Convert display coords → natural coords (PDF units at scale 1)
-  function toNaturalRect(d) {
-    const kx = scaleNatToDisp.kx, ky = scaleNatToDisp.ky;
-    const x = Math.min(d.x0, d.x1) / kx;
-    const y = Math.min(d.y0, d.y1) / ky;
-    const w = Math.abs(d.x1 - d.x0) / kx;
-    const h = Math.abs(d.y1 - d.y0) / ky;
-    return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) };
-  }
-  function toNaturalCircle(d) {
-    const kx = scaleNatToDisp.kx, ky = scaleNatToDisp.ky;
-    const cx = d.cx / kx;
-    const cy = d.cy / ky;
-    const rx = Math.abs(d.x - d.cx) / kx;
-    const ry = Math.abs(d.y - d.cy) / ky;
-    // cercle (on prend le rayon moyen)
-    const r = Math.round((rx + ry) / 2);
-    return { cx: Math.round(cx), cy: Math.round(cy), r };
-  }
-  function toNaturalPath(pointsDisp) {
-    const kx = scaleNatToDisp.kx, ky = scaleNatToDisp.ky;
-    return pointsDisp.map(p => ({ x: Math.round(p.x / kx), y: Math.round(p.y / ky) }));
   }
 
-  // Display helpers: natural → display (for existing zones)
-  function rectDisplay(z) {
-    return {
-      left: Math.round(z.shape.x * scaleNatToDisp.kx),
-      top: Math.round(z.shape.y * scaleNatToDisp.ky),
-      width: Math.round(z.shape.w * scaleNatToDisp.kx),
-      height: Math.round(z.shape.h * scaleNatToDisp.ky)
-    };
-  }
-  function circleDisplay(z) {
-    return {
-      cx: Math.round(z.shape.cx * scaleNatToDisp.kx),
-      cy: Math.round(z.shape.cy * scaleNatToDisp.ky),
-      r: Math.round(z.shape.r * Math.max(scaleNatToDisp.kx, scaleNatToDisp.ky))
-    };
-  }
-  function pathDisplay(z) {
-    return (z.shape.points || []).map(p => ({
-      x: Math.round(p.x * scaleNatToDisp.kx),
-      y: Math.round(p.y * scaleNatToDisp.ky)
-    }));
+  async function reloadPageData() {
+    if (!selected) {
+      setSubareas([]); setPositions([]); setUnplaced([]); setSummary({ placed: 0, unplaced: 0 });
+      return;
+    }
+    try {
+      const [sas, pos, unp, sum] = await Promise.all([
+        atexMaps.getSubareas(selected.logical_name, pageIndex),
+        atexMaps.getPositions(selected.logical_name, pageIndex),
+        atexMaps.listUnplaced(selected.logical_name, pageIndex),
+        atexMaps.summary(selected.logical_name, pageIndex)
+      ]);
+      setSubareas(sas);
+      setPositions(pos);
+      setUnplaced(unp);
+      setSummary(sum || { placed: 0, unplaced: 0 });
+    } catch (e) {
+      console.error(e);
+      notify('Failed to load page data', 'error');
+    }
   }
 
-  // Mouse interactions on overlay (SVG)
-  function onMouseDown(e) {
-    if (tool === 'select') return;
-    const box = overlayRef.current.getBoundingClientRect();
-    const x = e.clientX - box.left;
-    const y = e.clientY - box.top;
+  useEffect(() => { reloadPlans(); }, []);
+  useEffect(() => { reloadPageData(); }, [selected?.logical_name, pageIndex]);
+
+  // ---------- Overlay size helpers ----------
+  function getOverlaySize() {
+    const el = overlayRef.current;
+    if (!el) return { W: 1, H: 1, rect: { left: 0, top: 0 } };
+    const r = el.getBoundingClientRect();
+    return { W: r.width, H: r.height, rect: r };
+  }
+
+  // ---------- Drawing handlers ----------
+  function onOverlayMouseDown(e) {
+    if (!overlayRef.current) return;
+    const { rect } = getOverlaySize();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
     if (tool === 'rect') {
-      setDraft({ kind: 'rect', x0: x, y0: y, x1: x, y1: y });
+      setDragRect({ x0: x, y0: y, x1: x, y1: y });
     } else if (tool === 'circle') {
-      setDraft({ kind: 'circle', cx: x, cy: y, x, y });
-    } else if (tool === 'path') {
-      setDraft({ kind: 'path', points: [{ x, y }] });
+      setDragCircle({ cx: x, cy: y, x, y });
+    } else if (tool === 'poly') {
+      if (!polyDrawing) {
+        setPolyDrawing(true);
+        setPolyPoints([{ x, y }]);
+      } else {
+        setPolyPoints(prev => [...prev, { x, y }]);
+      }
+    } else if (tool === 'place' && selectedEquip) {
+      const { W, H } = getOverlaySize();
+      const xf = +(x / Math.max(1, W)).toFixed(6);
+      const yf = +(y / Math.max(1, H)).toFixed(6);
+      atexMaps.setPosition(selectedEquip.id, {
+        logical_name: selected.logical_name,
+        page_index: pageIndex,
+        x_frac: xf,
+        y_frac: yf
+      }).then(() => {
+        notify(`Placed #${selectedEquip.id}`);
+        setSelectedEquip(null);
+        reloadPageData();
+      }).catch(err => {
+        console.error(err);
+        notify('Failed to place equipment', 'error');
+      });
     }
   }
 
-  function onMouseMove(e) {
-    if (!draft) return;
-    const box = overlayRef.current.getBoundingClientRect();
-    const x = e.clientX - box.left;
-    const y = e.clientY - box.top;
-
-    setDraft(prev => {
-      if (!prev) return prev;
-      if (prev.kind === 'rect') return { ...prev, x1: x, y1: y };
-      if (prev.kind === 'circle') return { ...prev, x, y };
-      if (prev.kind === 'path') return { ...prev, points: [...prev.points, { x, y }] };
-      return prev;
-    });
+  function onOverlayMouseMove(e) {
+    if (!overlayRef.current) return;
+    const { rect } = getOverlaySize();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (dragRect) {
+      setDragRect(prev => ({ ...prev, x1: x, y1: y }));
+    }
+    if (dragCircle) {
+      setDragCircle(prev => ({ ...prev, x, y }));
+    }
   }
 
-  function onMouseUp() {
-    if (!draft) return;
-    // Convert draft (display) → natural and open metadata form
-    let shape = null;
-    if (draft.kind === 'rect') {
-      const r = toNaturalRect(draft);
-      if (r.w > 10 && r.h > 10) shape = { kind: 'rect', ...r };
-    } else if (draft.kind === 'circle') {
-      const c = toNaturalCircle(draft);
-      if (c.r > 6) shape = { kind: 'circle', ...c };
-    } else if (draft.kind === 'path') {
-      const pts = toNaturalPath(draft.points || []);
-      if (pts.length > 3) shape = { kind: 'path', points: pts };
+  function finishRect() {
+    if (!dragRect) return;
+    const { W, H } = getOverlaySize();
+    const geomFrac = rectDisplayToFrac(dragRect, W, H);
+    setDragRect(null);
+    setPendingShape({ type: 'rect', geomFrac });
+  }
+
+  function finishCircle() {
+    if (!dragCircle) return;
+    const { W, H } = getOverlaySize();
+    const geomFrac = circleDisplayToFrac(dragCircle, W, H);
+    setDragCircle(null);
+    setPendingShape({ type: 'circle', geomFrac });
+  }
+
+  function onOverlayMouseUp() {
+    if (dragRect) finishRect();
+    if (dragCircle) finishCircle();
+  }
+
+  function cancelPoly() {
+    setPolyDrawing(false);
+    setPolyPoints([]);
+  }
+  function finishPoly() {
+    const { W, H } = getOverlaySize();
+    const geomFrac = pathDisplayToFrac(polyPoints, W, H);
+    cancelPoly();
+    if ((geomFrac.points || []).length >= 3) {
+      setPendingShape({ type: 'poly', geomFrac });
     }
-    setDraft(null);
-    if (shape) setPendingShape(shape);
+  }
+
+  async function createSubareaFromPending() {
+    if (!pendingShape || !selected) return;
+    try {
+      await atexMaps.createSubarea({
+        logical_name: selected.logical_name,
+        page_index: pageIndex,
+        name: draftName || pendingShape.type.toUpperCase(),
+        shape_type: pendingShape.type,
+        geometry: pendingShape.geomFrac,
+        zone_gas: draftGas === '' ? null : Number(draftGas),
+        zone_dust: draftDust === '' ? null : Number(draftDust)
+      });
+      setPendingShape(null);
+      setDraftName(''); setDraftGas(''); setDraftDust('');
+      notify('Zone created');
+      reloadPageData();
+    } catch (e) {
+      console.error(e);
+      notify('Failed to create zone', 'error');
+    }
+  }
+
+  function fracToDisplayRect(geom, W, H) {
+    return {
+      left: geom.x * W,
+      top: geom.y * H,
+      width: geom.w * W,
+      height: geom.h * H
+    };
+  }
+  function fracToDisplayCircle(geom, W, H) {
+    return {
+      cx: geom.cx * W,
+      cy: geom.cy * H,
+      r: geom.r * Math.max(W, H)
+    };
+  }
+  function fracToDisplayPoly(geom, W, H) {
+    return (geom?.points || []).map(p => ({ x: p.x * W, y: p.y * H }));
+  }
+
+  // ---------- UI helpers ----------
+  async function uploadZip(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await atexMaps.uploadZip(file);
+      notify('ZIP imported');
+      await reloadPlans();
+    } catch (e2) {
+      console.error(e2);
+      notify('ZIP import failed', 'error');
+    } finally {
+      e.target.value = '';
+    }
+  }
+
+  async function applyZones() {
+    if (!selected) return;
+    try {
+      const r = await atexMaps.applySubareas(selected.logical_name, pageIndex);
+      notify(`Applied to ${r.updated}/${r.total}`);
+      reloadPageData();
+    } catch (e) {
+      console.error(e);
+      notify('Apply failed', 'error');
+    }
+  }
+
+  async function renamePlan() {
+    if (!selected) return;
+    const name = prompt('New display name', selected.display_name || selected.logical_name);
+    if (name == null) return;
+    try {
+      await atexMaps.renamePlan(selected.logical_name, name);
+      notify('Plan renamed');
+      reloadPlans();
+    } catch (e) {
+      console.error(e);
+      notify('Rename failed', 'error');
+    }
   }
 
   return (
-    <div className="bg-white rounded-lg shadow overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-gray-50">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-gray-600">Tool:</span>
-          {['select','rect','circle','path'].map(t => (
-            <button
-              key={t}
-              type="button"
-              className={classNames(
-                'px-2 py-1 rounded border',
-                tool === t ? 'bg-gray-800 text-white border-gray-800' : 'bg-white hover:bg-gray-50'
-              )}
-              onClick={() => setTool(t)}
-              title={t === 'path' ? 'Freehand' : t.charAt(0).toUpperCase() + t.slice(1)}
-            >
-              {t === 'select' ? 'Select' : t === 'rect' ? 'Rect' : t === 'circle' ? 'Circle' : 'Freehand'}
-            </button>
-          ))}
-        </div>
-        <div className="text-sm text-gray-600 truncate">
-          {plan?.display_name} {plan?.building ? `· ${plan.building}` : ''} {plan?.room ? `· ${plan.room}` : ''}
+    <div className="space-y-4">
+      {/* Barre d’actions Plans */}
+      <div className="bg-white rounded-lg shadow p-4">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="min-w-[16rem]">
+              <label className="block text-xs font-medium text-gray-500 mb-1">Plan</label>
+              <select
+                className="input w-full"
+                value={selected?.logical_name || ''}
+                onChange={e => {
+                  const sel = plans.find(p => p.logical_name === e.target.value) || null;
+                  setSelected(sel); setPageIndex(0);
+                }}
+              >
+                <option value="">— Select a plan —</option>
+                {plans.map(p => (
+                  <option key={p.logical_name} value={p.logical_name}>
+                    {p.display_name} ({p.page_count}p)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Page</label>
+              <select
+                className="input"
+                value={pageIndex}
+                onChange={e => setPageIndex(Number(e.target.value))}
+                disabled={!selected}
+              >
+                {(selected ? Array.from({ length: selected.page_count || 1 }, (_, i) => i) : [0]).map(i => (
+                  <option key={i} value={i}>Page {i + 1}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-end gap-2">
+              <Button variant="ghost" onClick={reloadPlans} disabled={loadingPlans}>
+                {loadingPlans ? 'Loading...' : 'Refresh'}
+              </Button>
+              <Button variant="ghost" onClick={renamePlan} disabled={!selected}>
+                Rename
+              </Button>
+              <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
+                <input type="file" accept=".zip" className="hidden" onChange={uploadZip} />
+                <span className="px-3 py-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50">Import ZIP(PDF)</span>
+              </label>
+              <Button onClick={applyZones} disabled={!selected}>Apply zones → equipments</Button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="text-sm text-gray-500">Placed: <b>{summary.placed}</b> · Unplaced: <b>{summary.unplaced}</b></div>
+            <div className="flex rounded-md border overflow-hidden">
+              {['move', 'rect', 'circle', 'poly', 'place'].map(t => (
+                <button
+                  key={t}
+                  className={classNames(
+                    'px-3 py-1.5 text-sm border-r last:border-r-0',
+                    tool === t ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
+                  )}
+                  onClick={() => { setTool(t); if (t !== 'poly') cancelPoly(); }}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            {tool === 'place' && (
+              <select
+                className="input"
+                value={selectedEquip?.id || ''}
+                onChange={e => {
+                  const id = Number(e.target.value) || null;
+                  setSelectedEquip(id ? unplaced.find(u => u.id === id) || null : null);
+                }}
+              >
+                <option value="">Select unplaced equipment…</option>
+                {unplaced.map(u => (
+                  <option key={u.id} value={u.id}>#{u.id} · {u.component_type} · {u.building}/{u.room}</option>
+                ))}
+              </select>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* PDF Canvas */}
-      <div className="relative w-full overflow-auto">
-        {!plan ? (
-          <div className="h-[24rem] flex items-center justify-center text-gray-500">
-            Select a plan to view and annotate.
+      {/* Viewer + overlay */}
+      <div ref={wrapperRef} className="relative bg-white rounded-lg shadow overflow-hidden">
+        {/* PDF viewer (désactivé aux interactions pour laisser l’overlay capter la souris) */}
+        <object
+          data={fileUrl() || ''}
+          type="application/pdf"
+          className="w-full h-[70vh] pointer-events-none select-none bg-gray-50"
+          aria-label="Plan PDF"
+        >
+          <div className="p-6 text-sm text-gray-600">
+            Unable to display PDF in this browser. <a className="text-blue-600" href={fileUrl() || '#'}>Open PDF</a>
           </div>
-        ) : (
-          <div className="relative">
-            <canvas ref={canvasRef} className="block max-w-full h-auto" />
-            {/* Overlay for zones + drawing */}
-            <svg
-              ref={overlayRef}
-              width={renderSize.w}
-              height={renderSize.h}
-              className="absolute left-0 top-0"
-              onMouseDown={onMouseDown}
-              onMouseMove={onMouseMove}
-              onMouseUp={onMouseUp}
-            >
-              {/* Existing zones */}
-              {(zones || []).map(z => {
-                const isHover = hoverId === z.id;
-                const common = { stroke: isHover ? '#ef4444' : '#2563eb', fillOpacity: 0.12, strokeWidth: 2, fill: isHover ? '#ef4444' : '#2563eb' };
-                if (z.shape?.kind === 'rect') {
-                  const d = rectDisplay(z);
-                  return (
-                    <g key={z.id}>
-                      <rect
-                        x={d.left} y={d.top} width={d.width} height={d.height}
-                        {...common} />
-                      <title>{z.label || `Zone #${z.id}`}</title>
-                      <text x={d.left + 4} y={Math.max(10, d.top + 12)} fontSize="10" fill="#fff" style={{ paintOrder: 'stroke' }}>
-                        {z.label || `#${z.id}`}
-                      </text>
-                      <rect
-                        x={d.left} y={d.top} width={d.width} height={d.height}
-                        fill="transparent"
-                        onMouseEnter={() => setHoverId(z.id)}
-                        onMouseLeave={() => setHoverId(null)}
-                        onClick={(e) => { e.stopPropagation(); if (confirm('Delete this zone?')) onDeleteZone?.(z); }}
-                      />
-                    </g>
-                  );
-                }
-                if (z.shape?.kind === 'circle') {
-                  const c = circleDisplay(z);
-                  return (
-                    <g key={z.id}>
-                      <circle cx={c.cx} cy={c.cy} r={c.r} {...common} />
-                      <title>{z.label || `Zone #${z.id}`}</title>
-                      <circle
-                        cx={c.cx} cy={c.cy} r={c.r}
-                        fill="transparent"
-                        onMouseEnter={() => setHoverId(z.id)}
-                        onMouseLeave={() => setHoverId(null)}
-                        onClick={(e) => { e.stopPropagation(); if (confirm('Delete this zone?')) onDeleteZone?.(z); }}
-                      />
-                    </g>
-                  );
-                }
-                // path (polyline freehand)
-                const pts = pathDisplay(z);
-                return (
-                  <g key={z.id}>
-                    <polyline
-                      points={pts.map(p => `${p.x},${p.y}`).join(' ')}
-                      {...common}
-                      fill="none"
-                    />
-                    <title>{z.label || `Zone #${z.id}`}</title>
-                    <polyline
-                      points={pts.map(p => `${p.x},${p.y}`).join(' ')}
-                      fill="transparent"
-                      stroke="transparent"
-                      strokeWidth={12}
-                      onMouseEnter={() => setHoverId(z.id)}
-                      onMouseLeave={() => setHoverId(null)}
-                      onClick={(e) => { e.stopPropagation(); if (confirm('Delete this zone?')) onDeleteZone?.(z); }}
-                    />
-                  </g>
-                );
-              })}
+        </object>
 
-              {/* Draft shape (during drawing) */}
-              {draft && draft.kind === 'rect' && (
-                <rect
-                  x={Math.min(draft.x0, draft.x1)}
-                  y={Math.min(draft.y0, draft.y1)}
-                  width={Math.abs(draft.x1 - draft.x0)}
-                  height={Math.abs(draft.y1 - draft.y0)}
-                  stroke="#f59e0b"
-                  fill="#f59e0b"
-                  fillOpacity="0.12"
-                  strokeWidth="2"
-                />
-              )}
-              {draft && draft.kind === 'circle' && (
-                <circle
-                  cx={draft.cx}
-                  cy={draft.cy}
-                  r={Math.hypot(draft.x - draft.cx, draft.y - draft.cy)}
-                  stroke="#f59e0b"
-                  fill="#f59e0b"
-                  fillOpacity="0.12"
-                  strokeWidth="2"
-                />
-              )}
-              {draft && draft.kind === 'path' && (
-                <polyline
-                  points={(draft.points || []).map(p => `${p.x},${p.y}`).join(' ')}
-                  stroke="#f59e0b"
-                  fill="none"
-                  strokeWidth="2"
-                />
-              )}
+        {/* Overlay (capture clicks + dessine shapes + positions) */}
+        <div
+          ref={overlayRef}
+          className={classNames(
+            'absolute inset-0',
+            tool === 'move' ? 'cursor-default' :
+            tool === 'rect' ? 'cursor-crosshair' :
+            tool === 'circle' ? 'cursor-crosshair' :
+            tool === 'poly' ? 'cursor-crosshair' :
+            tool === 'place' ? 'cursor-cell' : 'cursor-default'
+          )}
+          onMouseDown={onOverlayMouseDown}
+          onMouseMove={onOverlayMouseMove}
+          onMouseUp={onOverlayMouseUp}
+          onDoubleClick={() => { if (tool === 'poly' && polyDrawing) finishPoly(); }}
+        >
+          {/* SHAPES existantes */}
+          {selected && subareas.map(sa => {
+            const { W, H } = getOverlaySize();
+            if (sa.shape_type === 'rect') {
+              const d = fracToDisplayRect(sa.geometry || {}, W, H);
+              return (
+                <div
+                  key={sa.id}
+                  className="absolute border-2 border-blue-500/80 bg-blue-500/10 rounded"
+                  style={{ left: d.left, top: d.top, width: d.width, height: d.height }}
+                  title={`${sa.name} — Gas:${sa.zone_gas ?? '—'} Dust:${sa.zone_dust ?? '—'}`}
+                >
+                  <div className="absolute -top-2 left-0 text-[10px] bg-blue-600 text-white px-1 rounded">{sa.name}</div>
+                </div>
+              );
+            }
+            if (sa.shape_type === 'circle') {
+              const c = fracToDisplayCircle(sa.geometry || {}, W, H);
+              return (
+                <svg key={sa.id} className="absolute inset-0 w-full h-full pointer-events-none">
+                  <circle cx={c.cx} cy={c.cy} r={c.r} fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.8)" strokeWidth="2" />
+                  <text x={c.cx} y={c.cy - c.r - 4} textAnchor="middle" fontSize="10" fill="white"
+                        style={{ paintOrder: 'stroke', stroke: 'rgba(37,99,235,1)', strokeWidth: 3 }}>{sa.name}</text>
+                </svg>
+              );
+            }
+            if (sa.shape_type === 'poly') {
+              const pts = fracToDisplayPoly(sa.geometry || {}, W, H);
+              const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ') + ' Z';
+              return (
+                <svg key={sa.id} className="absolute inset-0 w-full h-full pointer-events-none">
+                  <path d={d} fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.8)" strokeWidth="2" />
+                </svg>
+              );
+            }
+            return null;
+          })}
+
+          {/* POSITIONS */}
+          {selected && positions.map(p => {
+            const { W, H } = getOverlaySize();
+            const x = p.x_frac * W;
+            const y = p.y_frac * H;
+            return (
+              <div key={p.equipment_id} style={{ position: 'absolute', left: x - 6, top: y - 6 }}>
+                <div className="w-3 h-3 rounded-full bg-emerald-500 border border-white shadow" title={`#${p.equipment_id} ${p.component_type}`} />
+              </div>
+            );
+          })}
+
+          {/* Dragging preview */}
+          {dragRect && (
+            <div
+              className="absolute border-2 border-amber-500 bg-amber-400/10 rounded"
+              style={{
+                left: Math.min(dragRect.x0, dragRect.x1),
+                top: Math.min(dragRect.y0, dragRect.y1),
+                width: Math.abs(dragRect.x1 - dragRect.x0),
+                height: Math.abs(dragRect.y1 - dragRect.y0)
+              }}
+            />
+          )}
+          {dragCircle && (
+            <svg className="absolute inset-0 w-full h-full pointer-events-none">
+              <circle
+                cx={dragCircle.cx}
+                cy={dragCircle.cy}
+                r={Math.hypot(dragCircle.x - dragCircle.cx, dragCircle.y - dragCircle.cy)}
+                fill="rgba(245,158,11,0.1)"
+                stroke="rgba(245,158,11,0.9)"
+                strokeWidth="2"
+              />
             </svg>
+          )}
+          {polyDrawing && polyPoints.length > 0 && (
+            <svg className="absolute inset-0 w-full h-full pointer-events-none">
+              <polyline
+                points={polyPoints.map(p => `${p.x},${p.y}`).join(' ')}
+                fill="none" stroke="rgba(245,158,11,0.9)" strokeWidth="2"
+              />
+            </svg>
+          )}
+        </div>
+
+        {/* Footer aide dessin */}
+        <div className="px-4 py-2 text-xs text-gray-500 border-t bg-gray-50 flex items-center justify-between">
+          <div>
+            Tool: <b>{tool}</b>. {tool === 'rect' && 'Click-drag to draw a rectangle.'}
+            {tool === 'circle' && ' Click-drag to set radius.'}
+            {tool === 'poly' && ' Click to add points, double-click to close.'}
+            {tool === 'place' && ' Choose an unplaced equipment, then click to place.'}
           </div>
-        )}
+          {polyDrawing && (
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" onClick={cancelPoly}>Cancel poly</Button>
+              <Button onClick={finishPoly} disabled={polyPoints.length < 3}>Close polygon</Button>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Métadonnées de la zone à créer */}
-      {pendingShape && (
-        <div className="border-t p-3">
-          <ZoneFormInline
-            onCancel={() => setPendingShape(null)}
-            onCreate={(payload) => {
-              onCreateZone?.(pendingShape, payload);
-              setPendingShape(null);
-            }}
-          />
+      {/* Liste des subareas + actions */}
+      {selected && (
+        <div className="bg-white rounded-lg shadow p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-medium">Zones (subareas)</h3>
+          </div>
+          {subareas.length === 0 ? (
+            <div className="text-sm text-gray-500">No subareas on this page.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Name</th>
+                    <th className="px-3 py-2 text-left">Shape</th>
+                    <th className="px-3 py-2 text-left">Gas</th>
+                    <th className="px-3 py-2 text-left">Dust</th>
+                    <th className="px-3 py-2 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subareas.map(sa => (
+                    <tr key={sa.id} className="border-t">
+                      <td className="px-3 py-2">{sa.name}</td>
+                      <td className="px-3 py-2">{sa.shape_type}</td>
+                      <td className="px-3 py-2">{sa.zone_gas ?? '—'}</td>
+                      <td className="px-3 py-2">{sa.zone_dust ?? '—'}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          className="text-blue-600 hover:text-blue-800 mr-2"
+                          onClick={async () => {
+                            const name = prompt('Rename zone', sa.name);
+                            if (name == null) return;
+                            try {
+                              await atexMaps.updateSubarea(sa.id, { name });
+                              notify('Zone renamed'); reloadPageData();
+                            } catch (e) { console.error(e); notify('Rename failed', 'error'); }
+                          }}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          className="text-blue-600 hover:text-blue-800 mr-2"
+                          onClick={async () => {
+                            const zg = prompt('Gas zone (0/1/2 or empty)', sa.zone_gas ?? '');
+                            const zd = prompt('Dust zone (20/21/22 or empty)', sa.zone_dust ?? '');
+                            try {
+                              await atexMaps.updateSubarea(sa.id, {
+                                zone_gas: zg === '' ? '' : Number(zg),
+                                zone_dust: zd === '' ? '' : Number(zd)
+                              });
+                              notify('Zones updated'); reloadPageData();
+                            } catch (e) { console.error(e); notify('Update failed', 'error'); }
+                          }}
+                        >
+                          Set zones
+                        </button>
+                        <button
+                          className="text-red-600 hover:text-red-800"
+                          onClick={async () => {
+                            if (!confirm('Delete this zone?')) return;
+                            try {
+                              await atexMaps.deleteSubarea(sa.id);
+                              notify('Zone deleted'); reloadPageData();
+                            } catch (e) { console.error(e); notify('Delete failed', 'error'); }
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
+      )}
+
+      {/* Dialog création subarea */}
+      {pendingShape && (
+        <Modal title={`Create zone (${pendingShape.type})`} onClose={() => setPendingShape(null)}>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Field label="Name">
+              <input className="input w-full" value={draftName} onChange={e => setDraftName(e.target.value)} placeholder="Label…" />
+            </Field>
+            <Field label="Gas Zone">
+              <select className="input w-full" value={draftGas} onChange={e => setDraftGas(e.target.value)}>
+                <option value="">—</option>
+                {GAS_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
+              </select>
+            </Field>
+            <Field label="Dust Zone">
+              <select className="input w-full" value={draftDust} onChange={e => setDraftDust(e.target.value)}>
+                <option value="">—</option>
+                {DUST_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setPendingShape(null)}>Cancel</Button>
+            <Button onClick={createSubareaFromPending} disabled={!draftName}>Create</Button>
+          </div>
+        </Modal>
       )}
     </div>
   );
 }
 
 /* =======================================================
-   PAGE PRINCIPALE
+   Onglet Controls / Assessment / Import + CRUD Equipments
 ======================================================= */
 
 export default function Atex() {
   // Onglets
   const [tab, setTab] = useState('controls');
 
-  // ====== Liste & filtres (équipements) ======
+  // Liste & filtres
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -1195,119 +1467,10 @@ export default function Atex() {
 
   // Pièces jointes
   const [attachments, setAttachments] = useState([]);
-  const [modalAttachments, setModalAttachments] = useState([]);
 
   // UI
   const [showFilters, setShowFilters] = useState(false);
-  const [photoLoading, setPhotoLoading] = useState(false);
   const { notify, ToastEl } = useToast();
-
-  // ======== PLANS (Doors-like) =========
-  const [plans, setPlans] = useState([]);
-  const [plansBusy, setPlansBusy] = useState(false);
-  const [selectedPlan, setSelectedPlan] = useState(null);
-  const [planZones, setPlanZones] = useState([]);
-
-  // --- Plans API ---
-  const refreshPlans = useCallback(async () => {
-    setPlansBusy(true);
-    try {
-      const list = await atexMaps.listPlans();
-      setPlans(list);
-      // Si le plan sélectionné a disparu, on reset
-      if (selectedPlan && !list.some(p => p.id === selectedPlan.id)) {
-        setSelectedPlan(null);
-        setPlanZones([]);
-      }
-    } catch (e) {
-      console.error('listPlans failed', e);
-      notify('Failed to load plans', 'error');
-    } finally {
-      setPlansBusy(false);
-    }
-  }, [notify, selectedPlan]);
-
-  const openPlan = useCallback(async (p) => {
-    setSelectedPlan(p);
-    try {
-      const z = await get(`${API_BASE}/api/atex/plans/${p.id}/zones`);
-      setPlanZones(z || []);
-    } catch (e) {
-      console.error('load zones failed', e);
-      notify('Failed to load plan zones', 'error');
-    }
-  }, [notify]);
-
-  const uploadZip = useCallback(async (fileZip) => {
-    setPlansBusy(true);
-    try {
-      await atexMaps.uploadZip(fileZip);
-      notify('ZIP uploaded. Parsing...', 'success');
-      await refreshPlans();
-    } catch (e) {
-      console.error('uploadZip failed', e);
-      notify('Failed to import ZIP', 'error');
-    } finally {
-      setPlansBusy(false);
-    }
-  }, [notify, refreshPlans]);
-
-  const renamePlan = useCallback(async (plan, name) => {
-    try {
-      await atexMaps.renamePlan(plan.id, name);
-      notify('Plan renamed', 'success');
-      await refreshPlans();
-    } catch (e) {
-      console.error('renamePlan failed', e);
-      notify('Failed to rename plan', 'error');
-    }
-  }, [notify, refreshPlans]);
-
-  const deletePlan = useCallback(async (plan) => {
-    if (!confirm(`Delete plan "${plan.display_name}" ?`)) return;
-    try {
-      await atexMaps.deletePlan(plan.id);
-      notify('Plan deleted', 'success');
-      await refreshPlans();
-    } catch (e) {
-      console.error('deletePlan failed', e);
-      notify('Failed to delete plan', 'error');
-    }
-  }, [notify, refreshPlans]);
-
-  // Zones API
-  const createPlanZone = useCallback(async (shape, payload) => {
-    if (!selectedPlan) return;
-    const body = {
-      shape: { ...shape }, // {kind:'rect'|'circle'|'path', ...}
-      label: payload.label,
-      zone_gas: payload.zone_gas,
-      zone_dust: payload.zone_dust,
-      parent_id: payload.parent_id,
-      component_type: payload.component_type
-    };
-    try {
-      const created = await post(`${API_BASE}/api/atex/plans/${selectedPlan.id}/zones`, body);
-      setPlanZones(prev => [...prev, { ...created.zone, sub_id: created?.sub_equipment?.id }]);
-      notify('Zone created', 'success');
-    } catch (e) {
-      console.error('createPlanZone failed', e);
-      notify('Failed to create zone', 'error');
-    }
-  }, [notify, selectedPlan]);
-
-  const deletePlanZone = useCallback(async (z) => {
-    try {
-      await del(`${API_BASE}/api/atex/plan-zones/${z.id}`);
-      setPlanZones(prev => prev.filter(x => x.id !== z.id));
-      notify('Zone deleted', 'success');
-    } catch (e) {
-      console.error('deletePlanZone failed', e);
-      notify('Failed to delete zone', 'error');
-    }
-  }, [notify]);
-
-  useEffect(() => { refreshPlans(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ------ Chargements liste & analytics ------
   async function loadSuggests() {
@@ -1373,9 +1536,6 @@ export default function Atex() {
     try {
       const data = await get(`${API_BASE}/api/atex/equipments/${id}/attachments`);
       setAttachments(data || []);
-      if (editItem && editItem.id === id) {
-        setModalAttachments(data.map(a => ({ ...a, file: null })) || []);
-      }
     } catch (e) {
       console.error('Load attachments failed:', e);
       notify('Failed to load attachments', 'error');
@@ -1391,28 +1551,14 @@ export default function Atex() {
         zone_gas: editItem.zone_gas === '' ? null : editItem.zone_gas,
         zone_dust: editItem.zone_dust === '' ? null : editItem.zone_dust
       };
-      let equipmentId = editItem.id;
       if (editItem.id) {
         await put(`${API_BASE}/api/atex/equipments/${editItem.id}`, payload);
         notify('Equipment updated successfully', 'success');
       } else {
-        const response = await post(`${API_BASE}/api/atex/equipments`, payload);
-        equipmentId = response.id;
+        await post(`${API_BASE}/api/atex/equipments`, payload);
         notify('Equipment created successfully', 'success');
       }
-
-      if (modalAttachments.length > 0) {
-        const formData = new FormData();
-        modalAttachments.forEach(a => {
-          if (a.file) formData.append('files', a.file);
-        });
-        if ([...formData.keys()].length) {
-          await upload(`${API_BASE}/api/atex/equipments/${equipmentId}/attachments`, formData);
-        }
-      }
-
       setEditItem(null);
-      setModalAttachments([]);
       await loadData();
     } catch (e) {
       console.error('Save failed:', e);
@@ -1460,9 +1606,6 @@ export default function Atex() {
       await del(`${API_BASE}/api/atex/attachments/${attId}`);
       notify('Attachment deleted successfully', 'success');
       await loadAttachments(id);
-      if (editItem && editItem.id === id) {
-        setModalAttachments(prev => prev.filter(x => x.id !== attId));
-      }
     } catch (e) {
       console.error('Delete attachment failed:', e);
       notify('Failed to delete attachment', 'error');
@@ -1541,7 +1684,6 @@ export default function Atex() {
       comments: row.comments || '',
       frequency_months: row.frequency_months || 36
     });
-    loadAttachments(row.id);
   }
 
   function onReset() {
@@ -1557,6 +1699,7 @@ export default function Atex() {
     setSort({ by: 'id', dir: 'desc' });
   }
 
+  // Mount + refresh à chaque changement de filtres/tri/page
   useEffect(() => {
     loadData();
     loadSuggests();
@@ -1569,7 +1712,7 @@ export default function Atex() {
       {/* Header + actions */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex gap-2 flex-wrap">
-          {['controls', 'assessment', 'import'].map(k => (
+          {['controls', 'assessment', 'import', 'plans'].map(k => (
             <button
               key={k}
               className={classNames(
@@ -1578,7 +1721,7 @@ export default function Atex() {
               )}
               onClick={() => setTab(k)}
             >
-              {k === 'controls' ? 'Controls' : k === 'assessment' ? 'Assessment' : 'Import/Export'}
+              {k === 'controls' ? 'Controls' : k === 'assessment' ? 'Assessment' : k === 'import' ? 'Import/Export' : 'Plans & Positions'}
             </button>
           ))}
         </div>
@@ -1718,136 +1861,6 @@ export default function Atex() {
 
             <Pager page={page} setPage={setPage} pageSize={pageSize} total={total} />
           </div>
-
-          {/* ===== Plans & Positions (Doors-like + annotations) ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-[22rem_1fr] gap-4">
-            <div className="space-y-4">
-              {/* En-tête + Import ZIP + cartes avec miniatures PDF */}
-              <div className="bg-white rounded-lg shadow p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="text-lg font-semibold">Plans</div>
-                  <div className="flex gap-2 flex-wrap">
-                    <Button
-                      variant="ghost"
-                      onClick={async () => {
-                        // input file (zip) on the fly
-                        const i = document.createElement('input');
-                        i.type = 'file';
-                        i.accept = '.zip';
-                        i.onchange = async (e) => {
-                          const f = e.target.files?.[0];
-                          if (f) await uploadZip(f);
-                        };
-                        i.click();
-                      }}
-                      disabled={plansBusy}
-                    >
-                      📦 Import ZIP
-                    </Button>
-                    <Button variant="ghost" onClick={refreshPlans} disabled={plansBusy}>
-                      {plansBusy ? 'Loading…' : 'Refresh'}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-2 max-h-[60vh] overflow-auto pr-1">
-                  {plans.length === 0 ? (
-                    <div className="text-sm text-gray-500">No plans yet. Import a ZIP to get started.</div>
-                  ) : (
-                    plans.map(p => (
-                      <div
-                        key={p.id}
-                        className={classNames(
-                          'p-2 rounded border flex items-center justify-between',
-                          selectedPlan?.id === p.id ? 'border-blue-500 bg-blue-50' : 'border-gray-200'
-                        )}
-                      >
-                        <button
-                          className="text-left flex-1"
-                          onClick={() => openPlan(p)}
-                          title={`${p.building || ''} ${p.room || ''}`}
-                        >
-                          <div className="font-medium">{p.display_name || p.logical_name || `Plan #${p.id}`}</div>
-                          <div className="text-xs text-gray-500">
-                            {p.building || '—'} · {p.room || '—'}
-                          </div>
-                        </button>
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="text-xs text-gray-700 hover:text-gray-900"
-                            onClick={async () => {
-                              const n = prompt('New name', p.display_name || p.logical_name || '');
-                              if (n && n.trim()) await renamePlan(p, n.trim());
-                            }}
-                          >
-                            Rename
-                          </button>
-                          <button
-                            className="text-xs text-red-600 hover:text-red-800"
-                            onClick={() => deletePlan(p)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <PdfPlanViewer
-                plan={selectedPlan}
-                zones={planZones}
-                onCreateZone={createPlanZone}
-                onDeleteZone={deletePlanZone}
-                notify={notify}
-              />
-            </div>
-          </div>
-
-          {/* Modale Delete */}
-          {showDelete && (
-            <Modal onClose={() => setShowDelete(null)} title="Confirm Delete">
-              <p className="text-sm text-gray-600 mb-6">Are you sure you want to delete equipment #{showDelete}?</p>
-              <div className="flex justify-end gap-2">
-                <Button variant="ghost" onClick={() => setShowDelete(null)}>Cancel</Button>
-                <Button variant="danger" onClick={() => deleteItem(showDelete)}>Delete</Button>
-              </div>
-            </Modal>
-          )}
-
-          {/* Modale Attach */}
-          {showAttach && (
-            <Modal onClose={() => setShowAttach(null)} title={`Attachments for #${showAttach}`}>
-              <input
-                type="file"
-                multiple
-                className="input mb-4 w-full"
-                onChange={e => uploadAttachmentsAction(showAttach, Array.from(e.target.files))}
-              />
-              {attachments.length === 0 ? (
-                <p className="text-sm text-gray-500">No attachments</p>
-              ) : (
-                <ul className="space-y-2">
-                  {attachments.map(a => (
-                    <li key={a.id} className="flex items-center justify-between text-sm">
-                      <a
-                        href={`${API_BASE}/api/atex/attachments/${a.id}/download`}
-                        className="text-blue-600 hover:text-blue-800 truncate"
-                      >
-                        {a.filename}
-                      </a>
-                      <button className="text-red-600 hover:text-red-800" onClick={() => deleteAttachment(showAttach, a.id)}>
-                        Delete
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </Modal>
-          )}
         </div>
       )}
 
@@ -1945,8 +1958,98 @@ export default function Atex() {
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Les charts simples restent importés depuis PARTIE 1/2 si besoin */}
+                <DoughnutChart
+                  data={[
+                    { label: 'Compliant', value: Number(analytics.stats.compliant || 0) },
+                    { label: 'Non-compliant', value: Number(analytics.stats.non_compliant || 0) },
+                    { label: 'To review', value: Number(analytics.stats.to_review || 0) }
+                  ]}
+                  title="Compliance Status Distribution"
+                />
+                <SimpleBarChart
+                  data={(analytics.byType || []).map(item => ({
+                    label: (item.component_type || '').slice(0, 20) + ((item.component_type || '').length > 20 ? '...' : ''),
+                    value: parseInt(item.count, 10) || 0
+                  }))}
+                  title="Top Equipment Types"
+                />
+                <SimpleBarChart
+                  data={[
+                    { label: 'Overdue', value: Number(analytics.stats.overdue || 0) },
+                    { label: 'Due 90 days', value: Number(analytics.stats.due_90_days || 0) },
+                    { label: 'Future', value: Number(analytics.stats.future || 0) }
+                  ]}
+                  title="Inspection Timeline"
+                />
+                <SimpleBarChart
+                  data={(analytics.complianceByZone || []).map(item => ({
+                    label: `Zone ${item.zone}`,
+                    value: parseInt(item.compliant, 10) || 0
+                  }))}
+                  title="Compliant Equipment by Gas Zone"
+                  yLabel="Compliant Count"
+                />
               </div>
+
+              {(analytics.riskEquipment || []).length > 0 && (
+                <div className="bg-white rounded-lg shadow overflow-x-auto">
+                  <div className="px-6 py-4 border-b bg-gray-50">
+                    <h3 className="text-lg font-medium">High Priority Equipment ({analytics.riskEquipment.length})</h3>
+                    <p className="text-sm text-gray-600">Overdue inspections and due within next 90 days</p>
+                  </div>
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left font-medium">ID</th>
+                        <th className="px-4 py-2 text-left font-medium">Equipment</th>
+                        <th className="px-4 py-2 text-left font-medium">Location</th>
+                        <th className="px-4 py-2 text-left font-medium">Zones</th>
+                        <th className="px-4 py-2 text-left font-medium">Status</th>
+                        <th className="px-4 py-2 text-left font-medium">Next Inspection</th>
+                        <th className="px-4 py-2 text-left font-medium">Days</th>
+                        <th className="px-4 py-2 text-left font-medium">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analytics.riskEquipment.map(r => {
+                        const dleft = daysUntil(r.next_control);
+                        const risk = dleft < 0 ? 'High' : 'Medium';
+                        const riskColor = risk === 'High' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800';
+                        return (
+                          <tr key={r.id} className="border-t">
+                            <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
+                            <td className="px-4 py-2">{r.component_type}</td>
+                            <td className="px-4 py-2">
+                              <div>{r.building}</div>
+                              <div className="text-xs text-gray-500">Room {r.room}</div>
+                            </td>
+                            <td className="px-4 py-2">
+                              <div className="text-xs">Gas: {r.zone_gas ?? '—'}</div>
+                              <div className="text-xs">Dust: {r.zone_dust ?? '—'}</div>
+                            </td>
+                            <td className="px-4 py-2">
+                              <span className={classNames('px-2 py-1 rounded text-xs', getStatusColor(r.status))}>
+                                {getStatusDisplay(r.status)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2">{formatDate(r.next_control)}</td>
+                            <td className="px-4 py-2">
+                              <span className={classNames('px-2 py-1 rounded text-xs', riskColor)}>
+                                {dleft < 0 ? `${Math.abs(dleft)} days late` : `${dleft} days`}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2">
+                              <button className="text-blue-600 hover:text-blue-800 text-xs font-medium" onClick={() => setTab('controls')}>
+                                View
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </>
           ) : (
             <div className="text-center py-12 text-gray-500">Loading analytics...</div>
@@ -1954,184 +2057,62 @@ export default function Atex() {
         </div>
       )}
 
-      {/* Modale Edit/New */}
-      {editItem && (
-        <Modal
-          onClose={() => { setEditItem(null); setModalAttachments([]); }}
-          title={editItem.id ? 'Edit Equipment' : 'New Equipment'}
-          wide
-        >
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Site</label>
-              <select
-                className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
-                value={editItem.site || ''}
-                onChange={e => setEditItem({ ...editItem, site: e.target.value })}
-              >
-                <option value="">Select site</option>
-                {SITE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
+      {/* Onglet Plans */}
+      {tab === 'plans' && <PlansPane notify={notify} />}
 
-            <Field label="Building">
-              <input className="input w-full" value={editItem.building || ''} onChange={e => setEditItem({ ...editItem, building: e.target.value })} />
-            </Field>
-
-            <Field label="Room">
-              <input className="input w-full" value={editItem.room || ''} onChange={e => setEditItem({ ...editItem, room: e.target.value })} />
-            </Field>
-
-            <Field label="Component Type">
-              <input className="input w-full" value={editItem.component_type || ''} onChange={e => setEditItem({ ...editItem, component_type: e.target.value })} />
-            </Field>
-
-            <Field label="Manufacturer">
-              <input className="input w-full" value={editItem.manufacturer || ''} onChange={e => setEditItem({ ...editItem, manufacturer: e.target.value })} />
-            </Field>
-
-            <Field label="Manufacturer Ref">
-              <input className="input w-full" value={editItem.manufacturer_ref || ''} onChange={e => setEditItem({ ...editItem, manufacturer_ref: e.target.value })} />
-            </Field>
-
-            <Field label="ATEX Marking" cols={2}>
-              <input className="input w-full" value={editItem.atex_ref || ''} onChange={e => setEditItem({ ...editItem, atex_ref: e.target.value })} />
-            </Field>
-
-            <Field label="Gas Zone">
-              <select
-                className="input w-full"
-                value={editItem.zone_gas ?? ''}
-                onChange={e => setEditItem({ ...editItem, zone_gas: e.target.value ? Number(e.target.value) : null })}
-              >
-                <option value="">—</option>
-                {GAS_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-              </select>
-            </Field>
-
-            <Field label="Dust Zone">
-              <select
-                className="input w-full"
-                value={editItem.zone_dust ?? ''}
-                onChange={e => setEditItem({ ...editItem, zone_dust: e.target.value ? Number(e.target.value) : null })}
-              >
-                <option value="">—</option>
-                {DUST_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-              </select>
-            </Field>
-
-            <Field label="Last Inspection">
-              <input type="date" className="input w-full" value={editItem.last_control || ''} onChange={e => setEditItem({ ...editItem, last_control: e.target.value || null })} />
-            </Field>
-
-            <Field label="Next Inspection">
-              <input type="date" className="input w-full" value={editItem.next_control || ''} onChange={e => setEditItem({ ...editItem, next_control: e.target.value || null })} />
-            </Field>
-
-            <Field label="Frequency (months)">
-              <input
-                type="number"
-                className="input w-full"
-                value={editItem.frequency_months || ''}
-                onChange={e => setEditItem({ ...editItem, frequency_months: e.target.value ? Number(e.target.value) : null })}
-              />
-            </Field>
-
-            {/* Analyse photo + pièces jointes */}
-            <div className="col-span-1 sm:col-span-2 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-              <label className="block text-sm font-medium mb-2">Upload Photo for Auto-Fill</label>
-              <p className="text-xs text-gray-500 mb-2">
-                Upload a clear photo of the equipment label to automatically fill Manufacturer, Mfr Ref, and ATEX Marking.
-              </p>
-              <input
-                type="file"
-                accept="image/*"
-                className="input text-sm w-full bg-white text-gray-900 border-gray-300"
-                disabled={photoLoading}
-                onChange={async e => {
-                  const file = e.target.files[0];
-                  if (!file) return;
-                  setPhotoLoading(true);
-                  const formData = new FormData();
-                  formData.append('photo', file);
-                  try {
-                    const analysis = await upload(`${API_BASE}/api/atex/photo-analysis`, formData);
-                    setEditItem(prev => ({
-                      ...prev,
-                      manufacturer: analysis.manufacturer || prev.manufacturer,
-                      manufacturer_ref: analysis.manufacturer_ref || prev.manufacturer_ref,
-                      atex_ref: analysis.atex_ref || prev.atex_ref
-                    }));
-                    notify('Photo analyzed successfully! Fields updated.', 'success');
-                  } catch (err) {
-                    console.error('Photo analysis failed:', err);
-                    notify('Failed to analyze photo. Try a clearer image.', 'error');
-                  } finally {
-                    setPhotoLoading(false);
-                    e.target.value = '';
-                  }
-                }}
-              />
-            </div>
-
-            <div className="col-span-1 sm:col-span-2 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-              <label className="block text-sm font-medium mb-2">Attachments</label>
-              <p className="text-xs text-gray-500 mb-2">Upload files to attach to this equipment.</p>
-              <input
-                type="file"
-                multiple
-                className="input text-sm w-full bg-white text-gray-900 border-gray-300"
-                onChange={e => {
-                  const files = Array.from(e.target.files);
-                  if (files.length === 0) return;
-                  setModalAttachments(prev => [
-                    ...prev,
-                    ...files.map(f => ({ file: f, filename: f.name, id: `temp-${Math.random().toString(36).slice(2)}` }))
-                  ]);
-                  e.target.value = '';
-                }}
-              />
-              {modalAttachments.length === 0 ? (
-                <p className="text-sm text-gray-500 mt-2">No attachments</p>
-              ) : (
-                <ul className="space-y-2 mt-2">
-                  {modalAttachments.map(a => (
-                    <li key={a.id} className="flex items-center justify-between text-sm">
-                      <span className="text-blue-600 truncate">{a.filename}</span>
-                      <button
-                        className="text-red-600 hover:text-red-800"
-                        onClick={() => setModalAttachments(prev => prev.filter(x => x.id !== a.id))}
-                      >
-                        Remove
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <Field label="Comments" cols={2}>
-              <textarea
-                className="input w-full min-h-[100px]"
-                value={editItem.comments || ''}
-                onChange={e => setEditItem({ ...editItem, comments: e.target.value || null })}
-              />
-            </Field>
-          </div>
-
-          <div className="flex justify-end gap-2 mt-6">
-            <Button variant="ghost" onClick={() => { setEditItem(null); setModalAttachments([]); }}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={loading || !editItem.building || !editItem.room || !editItem.component_type}
-              onClick={saveItem}
-            >
-              {loading ? 'Saving...' : editItem.id ? 'Update' : 'Create'}
-            </Button>
+      {/* Modale Delete */}
+      {showDelete && (
+        <Modal onClose={() => setShowDelete(null)} title="Confirm Delete">
+          <p className="text-sm text-gray-600 mb-6">Are you sure you want to delete equipment #{showDelete}?</p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setShowDelete(null)}>Cancel</Button>
+            <Button variant="danger" onClick={() => deleteItem(showDelete)}>Delete</Button>
           </div>
         </Modal>
+      )}
+
+      {/* Modale Attach */}
+      {showAttach && (
+        <Modal onClose={() => setShowAttach(null)} title={`Attachments for #${showAttach}`}>
+          <input
+            type="file"
+            multiple
+            className="input mb-4 w-full"
+            onChange={e => uploadAttachmentsAction(showAttach, Array.from(e.target.files))}
+          />
+          {attachments.length === 0 ? (
+            <p className="text-sm text-gray-500">No attachments</p>
+          ) : (
+            <ul className="space-y-2">
+              {attachments.map(a => (
+                <li key={a.id} className="flex items-center justify-between text-sm">
+                  <a
+                    href={`${API_BASE}/api/atex/attachments/${a.id}/download`}
+                    className="text-blue-600 hover:text-blue-800 truncate"
+                  >
+                    {a.filename}
+                  </a>
+                  <button className="text-red-600 hover:text-red-800" onClick={() => deleteAttachment(showAttach, a.id)}>
+                    Delete
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Modal>
+      )}
+
+      {/* Modale Edit/New */}
+      {editItem && (
+        <EditEquipmentModal
+          editItem={editItem}
+          setEditItem={setEditItem}
+          loading={loading}
+          onSave={saveItem}
+          onClose={() => setEditItem(null)}
+          uniques={uniques}
+          notify={notify}
+        />
       )}
 
       <ToastEl />
