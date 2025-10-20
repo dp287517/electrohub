@@ -1521,7 +1521,6 @@ export default function Atex() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
   // État modales
-  the;
   const [editItem, setEditItem] = useState(null);
   const [showDelete, setShowDelete] = useState(null);
   const [showAttach, setShowAttach] = useState(null);
@@ -1678,7 +1677,7 @@ export default function Atex() {
   // ------ Import / Export ------
   async function exportToExcel() {
     try {
-      const { data } = await get(`${API_BASE}/api/atex/export`);
+      const data = await get(`${API_BASE}/api/atex/export`);
       const ws = XLSX.utils.json_to_sheet(data);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'ATEX Equipment');
