@@ -1,2108 +1,1078 @@
-// Atex.jsx — PARTIE 1/2 (refonte)
-// Helpers + UI components + atexMaps (plans via endpoints Doors, fallback Atex)
+// src/pages/Atex.jsx
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import dayjs from "dayjs";
+import "dayjs/locale/fr";
+dayjs.locale("fr");
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { get, post, put, del, upload, API_BASE } from '../lib/api.js';
-import * as XLSX from 'xlsx';
-import '../styles/atex-map.css';
+import "../styles/atex-map.css"; // 👉 à créer (on repartira de doors-map.css)
+import { api } from "../lib/api.js"; // 👉 endpoints ATEX / ATEX MAPS déjà présents
 
-/* -------------------------------------------------------
-   Constantes
-------------------------------------------------------- */
-export const SITE_OPTIONS = ['Nyon', 'Levice', 'Aprilia'];
+// (ONGLET PLANS) rendu carte/plan externalisé comme demandé
+// → sera fourni au step suivant
+import AtexMap from "./Atex-map.jsx";
 
-export const GAS_ZONES = ['0', '1', '2'];
-export const DUST_ZONES = ['20', '21', '22'];
-
-export const STATUS_MAP_DISPLAY = {
-  'Conforme': 'Compliant',
-  'Non conforme': 'Non-compliant',
-  'À vérifier': 'To review'
-};
-export const STATUS_OPTIONS_UI = ['Compliant', 'Non-compliant', 'To review'];
-export const STATUS_MAP_TO_FR = {
-  'Compliant': 'Conforme',
-  'Non-compliant': 'Non conforme',
-  'To review': 'À vérifier'
-};
-export const SHAPE_TYPES = ['rect', 'circle', 'poly'];
-
-/* -------------------------------------------------------
-   Utils
-------------------------------------------------------- */
-export function classNames(...a) { return a.filter(Boolean).join(' '); }
-
-export function formatDate(d) {
-  if (!d) return '—';
-  const dt = new Date(d);
-  if (isNaN(dt)) return String(d);
-  return dt.toISOString().slice(0, 10);
-}
-
-export function daysUntil(d) {
-  if (!d) return null;
-  const target = new Date(d);
-  const now = new Date();
-  return Math.ceil((target - now) / (1000 * 60 * 60 * 24));
-}
-
-export function useOutsideClose(ref, onClose) {
-  useEffect(() => {
-    function handler(e) { if (ref.current && !ref.current.contains(e.target)) onClose?.(); }
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [ref, onClose]);
-}
-
-export function useDebouncedValue(value, delay = 300) {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
-  return v;
-}
-
-/* -------------------------------------------------------
-   Petits composants UI
-------------------------------------------------------- */
-export function Tag({ children, tone = 'default', className = '' }) {
-  const toneClass = {
-    default: 'bg-gray-100 text-gray-800',
-    ok: 'bg-green-100 text-green-800',
-    warn: 'bg-yellow-100 text-yellow-800',
-    danger: 'bg-red-100 text-red-800',
-    info: 'bg-blue-100 text-blue-800'
-  }[tone] || 'bg-gray-100 text-gray-800';
-  return (
-    <span className={classNames('px-2 py-0.5 rounded text-xs font-medium', toneClass, className)}>{children}</span>
-  );
-}
-
-export function Spinner({ className = '' }) {
-  return (
-    <svg className={classNames('animate-spin h-5 w-5 text-blue-600', className)} viewBox="0 0 24 24" fill="none">
-      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V1.5C5.648 1.5 1.5 5.648 1.5 12H4z" />
-    </svg>
-  );
-}
-
-export function Button({ children, variant = 'primary', className = '', ...props }) {
-  const base = 'inline-flex items-center justify-center rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors';
-  const styles = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-600 px-4 py-2',
-    ghost:   'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50 px-3 py-2',
-    danger:  'bg-red-600 text-white hover:bg-red-700 focus:ring-red-600 px-4 py-2'
-  }[variant];
-  return <button className={classNames(base, styles, className)} {...props}>{children}</button>;
-}
-
-/* -------------------------------------------------------
-   Filtres compacts (MultiSelect / Segmented)
-------------------------------------------------------- */
-export function MultiSelect({ label, values, setValues, options }) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const wrapRef = useRef(null);
-  useOutsideClose(wrapRef, () => setOpen(false));
-
-  const filtered = useMemo(() => {
-    const s = search.trim().toLowerCase();
-    return s ? options.filter(o => String(o).toLowerCase().includes(s)) : options;
-  }, [options, search]);
-
-  function toggle(v) { setValues(prev => (prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])); }
-  function clearAll() { setValues([]); setSearch(''); }
-  const labelText = values.length ? `${label} · ${values.length}` : label;
-
-  return (
-    <div className="relative" ref={wrapRef}>
-      <button type="button" onClick={() => setOpen(o => !o)} className="h-9 px-3 rounded-md border border-gray-300 bg-white text-sm flex items-center gap-2 hover:border-gray-400" title={label}>
-        <span className="truncate max-w-[10rem]">{labelText}</span>
-        <svg className="w-4 h-4 opacity-60" viewBox="0 0 20 20" fill="currentColor">
-          <path d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" />
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute z-20 mt-2 w-72 rounded-xl border border-gray-200 bg-white shadow-lg p-3 sm:w-64">
-          <div className="flex items-center gap-2">
-            <input className="input h-9 flex-1" placeholder={`Search ${label.toLowerCase()}...`} value={search} onChange={e => setSearch(e.target.value)} />
-            <button className="text-xs text-gray-600 hover:text-gray-900" onClick={clearAll} type="button">Clear</button>
-          </div>
-          <div className="max-h-56 overflow-auto mt-2 pr-1">
-            {filtered.length ? filtered.map(v => (
-              <label key={v} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-gray-50 cursor-pointer">
-                <input type="checkbox" checked={values.includes(v)} onChange={() => toggle(v)} />
-                <span className="text-sm truncate">{v}</span>
-              </label>
-            )) : <div className="text-sm text-gray-500 py-2 px-1">No results</div>}
-          </div>
-          {!!values.length && (
-            <div className="flex flex-wrap gap-1 mt-2">
-              {values.map(v => <span key={v} className="px-2 py-0.5 rounded bg-gray-100 text-xs">{v}</span>)}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function Segmented({ label, values, setValues, options }) {
-  function toggle(v) { setValues(prev => (prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v])); }
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-sm text-gray-600">{label}</span>
-      <div className="flex rounded-md border border-gray-300 overflow-hidden">
-        {options.map(v => (
-          <button key={v} type="button" onClick={() => toggle(v)}
-                  className={classNames('px-2.5 h-8 text-sm border-r last:border-r-0',
-                    values.includes(v) ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50')}>
-            {v}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------
-   Barre de filtres
-------------------------------------------------------- */
-export function FilterBar({
-  q, setQ,
-  fBuilding, setFBuilding,
-  fRoom, setFRoom,
-  fType, setFType,
-  fManufacturer, setFManufacturer,
-  fStatus, setFStatus,
-  fGas, setFGas,
-  fDust, setFDust,
-  uniques,
-  onSearch, onReset
-}) {
-  return (
-    <div className="card p-4">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative w-full sm:w-72">
-            <input
-              className="h-9 w-full rounded-md border border-gray-300 bg-white pl-9 pr-3 text-sm"
-              placeholder="Search text (building, room, ref...)"
-              value={q}
-              onChange={e => setQ(e.target.value)}
-            />
-            <svg className="absolute left-2 top-2.5 w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M10 2a8 8 0 105.293 14.293l4.707 4.707 1.414-1.414-4.707-4.707A8 8 0 0010 2zm0 2a6 6 0 110 12A6 6 0 0110 4z" />
-            </svg>
-          </div>
-          <Button variant="primary" className="h-9 w-full sm:w-auto" onClick={onSearch}>Search</Button>
-          <Button variant="ghost" className="h-9 w-full sm:w-auto" onClick={onReset} type="button">Reset</Button>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <MultiSelect label="Building" values={fBuilding} setValues={setFBuilding} options={uniques.buildings} />
-          <MultiSelect label="Room" values={fRoom} setValues={setFRoom} options={uniques.rooms} />
-          <MultiSelect label="Type" values={fType} setValues={setFType} options={uniques.types} />
-          <MultiSelect label="Manufacturer" values={fManufacturer} setValues={setFManufacturer} options={uniques.manufacturers} />
-          <MultiSelect label="Status" values={fStatus} setValues={setFStatus} options={STATUS_OPTIONS_UI} />
-          <Segmented label="Gas" values={fGas} setValues={setFGas} options={GAS_ZONES} />
-          <Segmented label="Dust" values={fDust} setValues={setFDust} options={DUST_ZONES} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------
-   Charts simples (SVG)
-------------------------------------------------------- */
-export function SimpleBarChart({ data, title, yLabel = 'Count' }) {
-  const maxValue = Math.max(...data.map(d => Number(d.value) || 0), 1);
-  return (
-    <div className="bg-white p-4 rounded-lg shadow">
-      <h3 className="text-lg font-medium mb-3">{title}</h3>
-      <div className="space-y-2">
-        {data.map((item, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className="flex-1 bg-gray-100 rounded-full h-3">
-              <div className="bg-blue-500 h-3 rounded-full" style={{ width: `${(Number(item.value) / maxValue) * 100}%` }} />
-            </div>
-            <span className="text-sm font-medium text-gray-700 w-12">{item.value}</span>
-            <span className="text-sm text-gray-600 min-w-0 truncate">{item.label}</span>
-          </div>
-        ))}
-      </div>
-      <p className="text-xs text-gray-500 mt-2">{yLabel}</p>
-    </div>
-  );
-}
-
-export function DoughnutChart({ data, title }) {
-  const total = Math.max(0, data.reduce((sum, item) => sum + (Number(item.value) || 0), 0));
-  const centerRadius = 60;
-  const colors = ['#10B981', '#EF4444', '#F59E0B', '#3B82F6', '#8B5CF6'];
-
-  const cumulativeAngles = data.reduce((acc, item, i) => {
-    const startAngle = acc[i - 1]?.endAngle || 0;
-    const endAngle = total === 0 ? startAngle : startAngle + (Number(item.value) / total) * 2 * Math.PI;
-    acc[i] = { startAngle, endAngle, ...item };
-    return acc;
-  }, []);
-
-  return (
-    <div className="bg-white p-4 rounded-lg shadow">
-      <h3 className="text-lg font-medium mb-3">{title}</h3>
-      <div className="relative flex justify-center">
-        <svg width="200" height="200" viewBox="0 0 200 200">
-          <circle cx="100" cy="100" r={centerRadius} fill="white" stroke="white" strokeWidth="2" />
-          {cumulativeAngles.map((segment, i) => {
-            const x1 = 100 + centerRadius * Math.cos(segment.startAngle - Math.PI / 2);
-            const y1 = 100 + centerRadius * Math.sin(segment.startAngle - Math.PI / 2);
-            const x2 = 100 + centerRadius * Math.cos(segment.endAngle - Math.PI / 2);
-            const y2 = 100 + centerRadius * Math.sin(segment.endAngle - Math.PI / 2);
-            const largeArc = segment.endAngle - segment.startAngle > Math.PI ? 1 : 0;
-            return (
-              <path key={i}
-                d={`M ${x1} ${y1} A ${centerRadius} ${centerRadius} 0 ${largeArc} 1 ${x2} ${y2} L 100 100 Z`}
-                fill={colors[i % colors.length]} stroke="white" strokeWidth="1" />
-            );
-          })}
-          <text x="100" y="95" textAnchor="middle" className="font-bold text-lg" fill="#374151">{total}</text>
-          <text x="100" y="115" textAnchor="middle" className="text-xs" fill="#6B7280">Total</text>
-        </svg>
-      </div>
-      <div className="mt-4 space-y-1">
-        {data.map((item, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: colors[i % colors.length] }} />
-            <span className="text-sm">
-              {item.label}: {item.value} {total ? `(${Math.round((Number(item.value) / total) * 100)}%)` : ''}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------
-   Helpers statut
-------------------------------------------------------- */
-export function getStatusColor(status) {
-  return {
-    'Conforme': 'bg-green-100 text-green-800',
-    'Non conforme': 'bg-red-100 text-red-800',
-    'À vérifier': 'bg-yellow-100 text-yellow-800'
-  }[status] || 'bg-gray-100 text-gray-800';
-}
-export function getStatusDisplay(status) { return STATUS_MAP_DISPLAY[status] || status; }
-
-/* -------------------------------------------------------
-   Toast simple
-------------------------------------------------------- */
-export function useToast() {
-  const [toast, setToast] = useState(null);
-  const notify = (msg, type = 'success') => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 3000);
+/* ----------------------------- Utils identiques à Doors ----------------------------- */
+function Btn({ children, variant = "primary", className = "", ...p }) {
+  const map = {
+    primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
+    ghost: "bg-white text-black border hover:bg-gray-50",
+    danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
+    success: "bg-emerald-600 text-white hover:bg-emerald-700",
+    subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
+    warn: "bg-amber-500 text-white hover:bg-amber-600",
   };
-  return {
-    toast,
-    notify,
-    ToastEl: () => toast ? (
-      <div className={classNames(
-        'fixed bottom-4 right-4 px-4 py-2 rounded-lg shadow-lg text-sm text-white',
-        toast.type === 'success' ? 'bg-green-500' : 'bg-red-500'
-      )}>{toast.msg}</div>
-    ) : null
-  };
-}
-
-/* -------------------------------------------------------
-   Pagination compacte
-------------------------------------------------------- */
-export function Pager({ page, setPage, pageSize, total }) {
-  const from = (page - 1) * pageSize + 1;
-  const to = Math.min(page * pageSize, total);
   return (
-    <div className="px-4 py-3 border-t flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-      <div className="text-sm text-gray-500">Showing {total ? from : 0} to {to} of {total} entries</div>
-      <div className="flex gap-2">
-        <Button variant="ghost" className="px-3 py-1" disabled={page === 1} onClick={() => setPage(p => p - 1)}>Previous</Button>
-        <Button variant="ghost" className="px-3 py-1" disabled={page * pageSize >= total} onClick={() => setPage(p => p + 1)}>Next</Button>
-      </div>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------
-   Sous-composants locaux (table sorting)
-------------------------------------------------------- */
-export function Th({ label, sortKey, sort, setSort }) {
-  const active = sort.by === sortKey;
-  const dirIcon =
-    active && sort.dir === 'asc' ? 'M5 15l7-7 7 7' :
-    active && sort.dir === 'desc' ? 'M19 9l-7 7-7-7' : null;
-
-  return (
-    <th className="px-4 py-2 text-left font-medium">
-      <button
-        className="inline-flex items-center gap-1 text-gray-700 hover:text-gray-900"
-        onClick={() => {
-          if (active) setSort({ by: sortKey, dir: sort.dir === 'asc' ? 'desc' : 'asc' });
-          else setSort({ by: sortKey, dir: 'asc' });
-        }}
-      >
-        {label}
-        {dirIcon && (
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={dirIcon} />
-          </svg>
-        )}
-      </button>
-    </th>
-  );
-}
-
-/* -------------------------------------------------------
-   atexMaps — **Plans via endpoints Doors** (fallback Atex)
-   - listPlans / renamePlan / uploadZip / planFileUrlAuto → /api/doors/maps/*
-   - subareas & positions restent sous /api/atex/maps/*
-------------------------------------------------------- */
-async function tryGet(url) {
-  try { return await get(url); } catch (e) { return { __error: e }; }
-}
-async function tryPut(url, body) {
-  try { return await put(url, body); } catch (e) { return { __error: e }; }
-}
-async function tryUpload(url, fd) {
-  try { return await upload(url, fd); } catch (e) { return { __error: e }; }
-}
-
-export const atexMaps = {
-  // ---- Plans (Doors-first) ----
-  async listPlans() {
-    // Doors
-    let r = await tryGet(`${API_BASE}/api/doors/maps/plans`);
-    if (!r?.plans && r?.__error) {
-      // Fallback Atex
-      r = await tryGet(`${API_BASE}/api/atex/maps/plans`);
-    }
-    const plans = r?.plans || [];
-    return plans.map(p => ({
-      id: p.id,
-      logical_name: p.logical_name,
-      display_name: p.display_name || p.logical_name,
-      page_count: p.page_count ?? 1,
-      created_at: p.created_at
-    }));
-  },
-
-  // URL PDF unique (à utiliser avec PDF.js dans la PARTIE 2/2)
-  planFileUrlAuto(plan, { bust = false } = {}) {
-    const logical = typeof plan === 'string' ? plan : plan?.logical_name;
-    const base = `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical)}/file`;
-    return bust ? `${base}?b=${Date.now()}` : base;
-  },
-
-  // (déprécié) Ancien raster PNG — on ne l'utilisera plus en PARTIE 2/2
-  planPageImageUrl(logical_name, page_index = 0) {
-    return `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(logical_name)}/page/${page_index}.png`;
-  },
-
-  async renamePlan(logical_name, newDisplayName) {
-    // Doors-first
-    let r = await tryPut(`${API_BASE}/api/doors/maps/rename/${encodeURIComponent(logical_name)}`, {
-      display_name: newDisplayName || null
-    });
-    if (r?.__error) {
-      // Fallback Atex
-      r = await tryPut(`${API_BASE}/api/atex/maps/rename/${encodeURIComponent(logical_name)}`, {
-        display_name: newDisplayName || null
-      });
-    }
-    if (r?.__error) throw r.__error;
-    return true;
-  },
-
-  async uploadZip(file) {
-    const fd = new FormData();
-    fd.append('file', file);
-    // Doors-first
-    let r = await tryUpload(`${API_BASE}/api/doors/maps/upload-zip`, fd);
-    if (r?.__error) {
-      // Fallback Atex
-      r = await tryUpload(`${API_BASE}/api/atex/maps/upload-zip`, fd);
-    }
-    if (r?.__error) throw r.__error;
-    return r;
-  },
-
-  // ---- Subareas (dessins) ----
-  async getSubareas(logical_name, page_index = 0) {
-    const r = await get(`${API_BASE}/api/atex/maps/subareas?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
-    return r?.items || [];
-  },
-  async createSubarea({ logical_name, page_index = 0, name, shape_type, geometry, zone_gas = null, zone_dust = null }) {
-    return post(`${API_BASE}/api/atex/maps/subareas`, { logical_name, page_index, name, shape_type, geometry, zone_gas, zone_dust });
-  },
-  async updateSubarea(id, patch) { return put(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`, patch); }
-  ,
-  async deleteSubarea(id) { return del(`${API_BASE}/api/atex/maps/subareas/${encodeURIComponent(id)}`); },
-  async applySubareas(logical_name, page_index = 0) { return post(`${API_BASE}/api/atex/maps/subareas/apply`, { logical_name, page_index }); },
-
-  // ---- Positions (équipements sur plan) ----
-  async getPositions(logical_name, page_index = 0) {
-    const r = await get(`${API_BASE}/api/atex/maps/positions?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
-    return r?.items || [];
-  },
-  async setPosition(equipmentId, { logical_name, page_index = 0, x_frac, y_frac }) {
-    return put(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(equipmentId)}`, { logical_name, page_index, x_frac, y_frac });
-  },
-  async listUnplaced(logical_name, page_index = 0) {
-    const r = await get(`${API_BASE}/api/atex/maps/unplaced?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
-    return r?.items || [];
-  },
-  async createOnMap(payload /* {logical_name, page_index, x_frac, y_frac, ...fields} */) {
-    return post(`${API_BASE}/api/atex/maps/equipments`, payload);
-  },
-  async clonePosition(sourceEquipmentId, { logical_name, page_index = 0, x_frac = null, y_frac = null }) {
-    return post(`${API_BASE}/api/atex/maps/positions/${encodeURIComponent(sourceEquipmentId)}/clone`, { logical_name, page_index, x_frac, y_frac });
-  },
-  async summary(logical_name, page_index = 0) {
-    return get(`${API_BASE}/api/atex/maps/summary?logical_name=${encodeURIComponent(logical_name)}&page_index=${page_index}`);
-  },
-  async reassignPositions(from_logical, to_logical, page_index = 0) {
-    return post(`${API_BASE}/api/atex/maps/positions/reassign`, { from_logical, to_logical, page_index });
-  }
-};
-
-/* -------------------------------------------------------
-   Helpers géométrie côté front (display ↔ fractions)
-------------------------------------------------------- */
-export function rectDisplayToFrac({ x0, y0, x1, y1 }, W, H) {
-  const left = Math.min(x0, x1), top = Math.min(y0, y1);
-  const w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
-  return {
-    x: +(left / Math.max(1, W)).toFixed(6),
-    y: +(top / Math.max(1, H)).toFixed(6),
-    w: +(w / Math.max(1, W)).toFixed(6),
-    h: +(h / Math.max(1, H)).toFixed(6)
-  };
-}
-export function circleDisplayToFrac({ cx, cy, x, y }, W, H) {
-  const rx = Math.abs(x - cx), ry = Math.abs(y - cy);
-  const r = (rx + ry) / 2;
-  return {
-    cx: +(cx / Math.max(1, W)).toFixed(6),
-    cy: +(cy / Math.max(1, H)).toFixed(6),
-    r: +((r / Math.max(1, Math.max(W, H))).toFixed(6))
-  };
-}
-export function pathDisplayToFrac(points, W, H) {
-  return {
-    points: (points || []).map(p => ({
-      x: +(p.x / Math.max(1, W)).toFixed(6),
-      y: +(p.y / Math.max(1, H)).toFixed(6)
-    }))
-  };
-}
-
-/* -------------------------------------------------------
-   Exemples d’UI générique (modale, KPI, Field)
-------------------------------------------------------- */
-export function Modal({ children, onClose, title, wide = false }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className={classNames('bg-white rounded-2xl shadow-2xl w-full max-h-[90vh] overflow-y-auto',
-        wide ? 'max-w-4xl sm:max-w-2xl' : 'max-w-md')}>
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-gray-100">
-          <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
-          <button className="p-1 rounded-lg hover:bg-gray-200" onClick={onClose}>
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <div className="p-6">{children}</div>
-      </div>
-    </div>
-  );
-}
-export function KpiCard({ title, value, tone = 'blue', sub }) {
-  const border = { blue: 'border-blue-500', green: 'border-green-500', red: 'border-red-500' }[tone];
-  const text = { blue: 'text-blue-600', green: 'text-green-600', red: 'text-red-600' }[tone];
-  return (
-    <div className={classNames('bg-white p-6 rounded-lg shadow border-l-4', border)}>
-      <h3 className="text-lg font-medium text-gray-900">{title}</h3>
-      <p className={classNames('text-3xl font-bold mt-1', text)}>{value}</p>
-      {sub && <p className="text-sm text-gray-500 mt-1">{sub}</p>}
-    </div>
-  );
-}
-export function Field({ label, children, cols = 1 }) {
-  return (
-    <div className={cols === 2 ? 'col-span-1 sm:col-span-2' : ''}>
-      <label className="block text-sm font-medium mb-1">{label}</label>
-      {children}
-    </div>
-  );
-}
-
-/* -------------------------------------------------------
-   Leaflet helpers (icônes, légende) — sans react-leaflet
-------------------------------------------------------- */
-export async function ensureLeafletDefaultIcons() {
-  try {
-    const L = (await import('leaflet')).default;
-    const iconUrl = (await import('leaflet/dist/images/marker-icon.png')).default;
-    const iconRetinaUrl = (await import('leaflet/dist/images/marker-icon-2x.png')).default;
-    const shadowUrl = (await import('leaflet/dist/images/marker-shadow.png')).default;
-    L.Icon.Default.mergeOptions({ iconUrl, iconRetinaUrl, shadowUrl });
-  } catch { /* noop */ }
-}
-
-export const LEAFLET_LEGEND_ITEMS = [
-  { swatch: 'bg-emerald-500', label: 'Equipment position' },
-  { swatch: 'bg-blue-500', label: 'Zone (saved)' },
-  { swatch: 'bg-amber-500', label: 'Drawing preview' }
-];
-
-export async function createLegendControl({ position = 'bottomright', title = 'Legend', items = LEAFLET_LEGEND_ITEMS } = {}) {
-  const L = (await import('leaflet')).default;
-  const ctrl = L.control({ position });
-  ctrl.onAdd = () => {
-    const div = L.DomUtil.create('div', 'leaflet-control leaflet-bar shadow rounded-lg overflow-hidden');
-    div.style.background = 'white';
-    div.style.padding = '8px 10px';
-    div.style.minWidth = '160px';
-    div.innerHTML = `
-      <div style="font-weight:600;margin-bottom:6px;">${title}</div>
-      ${items.map(it => `
-        <div style="display:flex;align-items:center;gap:8px;margin:4px 0;">
-          <span class="${it.swatch}" style="display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid rgba(0,0,0,.1)"></span>
-          <span style="font-size:12px;color:#374151">${it.label}</span>
-        </div>`).join('')}
-    `;
-    return div;
-  };
-  return ctrl;
-}
-export async function attachLegendToMap(map, opts) { const ctrl = await createLegendControl(opts); ctrl.addTo(map); return ctrl; }
-export function detachControl(map, ctrl) { try { map?.removeControl?.(ctrl); } catch {} }
-
-/* ===== Fin PARTIE 1/2 =====
-   La PARTIE 2/2 ajoutera:
-   - La page principale (onglets Controls/Assessment/Import + Plans & Positions)
-   - Le viewer Leaflet basé sur PDF.js (utilise atexMaps.planFileUrlAuto)
-   - Bouton ➕ dans Leaflet pour créer directement sur le plan
-   - Plus de toolbar “move/rect/circle/poly/place” moche ; on passe à des actions propres
-*/
-/* =======================================================
-   PARTIE 2/2 — Page principale + Leaflet “vanilla”
-   - Plans PDF rendus via PDF.js → ImageOverlay Leaflet (CRS.Simple)
-   - Subareas (rect/circle/poly), placement d’équipements, import ZIP
-   - Onglets Controls / Assessment / Import / Plans
-======================================================= */
-
-// --- PDF.js (render PDF page → dataURL) -----------------
-let pdfLib = null;
-async function loadPdfLib() {
-  if (pdfLib) return pdfLib;
-  const lib = await import('pdfjs-dist/build/pdf.mjs');
-  const worker = await import('pdfjs-dist/build/pdf.worker.mjs');
-  // @ts-ignore
-  lib.GlobalWorkerOptions.workerSrc = worker;
-  pdfLib = lib;
-  return lib;
-}
-
-async function renderPdfPageToDataURL(pdfUrl, pageNum = 1, { targetWidth = 2000 } = {}) {
-  const pdfjs = await loadPdfLib();
-  const loadingTask = pdfjs.getDocument(pdfUrl);
-  const pdf = await loadingTask.promise;
-  const page = await pdf.getPage(pageNum);
-
-  const viewport = page.getViewport({ scale: 1 });
-  const scale = targetWidth / viewport.width;
-  const scaledVp = page.getViewport({ scale });
-
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d', { willReadFrequently: false });
-  canvas.width = Math.round(scaledVp.width);
-  canvas.height = Math.round(scaledVp.height);
-
-  await page.render({ canvasContext: ctx, viewport: scaledVp }).promise;
-  const url = canvas.toDataURL('image/png');
-  return { url, w: canvas.width, h: canvas.height };
-}
-
-/* ========== Modale Edit/New Equipment ========== */
-function EditEquipmentModal({ editItem, setEditItem, loading, onSave, onClose, uniques, notify }) {
-  const [photoLoading, setPhotoLoading] = useState(false);
-
-  return (
-    <Modal
-      onClose={() => { onClose(); }}
-      title={editItem.id ? 'Edit Equipment' : 'New Equipment'}
-      wide
+    <button
+      className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`}
+      {...p}
     >
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium mb-1">Site</label>
-          <select
-            className="input w-full bg-white text-gray-900 border-gray-300 focus:ring-blue-500"
-            value={editItem.site || ''}
-            onChange={e => setEditItem({ ...editItem, site: e.target.value })}
-          >
-            <option value="">Select site</option>
-            {SITE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-
-        <Field label="Building">
-          <input className="input w-full" list="buildings" value={editItem.building || ''} onChange={e => setEditItem({ ...editItem, building: e.target.value })} />
-          <datalist id="buildings">{(uniques.buildings || []).map(b => <option key={b} value={b} />)}</datalist>
-        </Field>
-
-        <Field label="Room">
-          <input className="input w-full" list="rooms" value={editItem.room || ''} onChange={e => setEditItem({ ...editItem, room: e.target.value })} />
-          <datalist id="rooms">{(uniques.rooms || []).map(r => <option key={r} value={r} />)}</datalist>
-        </Field>
-
-        <Field label="Component Type">
-          <input className="input w-full" list="types" value={editItem.component_type || ''} onChange={e => setEditItem({ ...editItem, component_type: e.target.value })} />
-          <datalist id="types">{(uniques.types || []).map(t => <option key={t} value={t} />)}</datalist>
-        </Field>
-
-        <Field label="Manufacturer">
-          <input className="input w-full" list="mans" value={editItem.manufacturer || ''} onChange={e => setEditItem({ ...editItem, manufacturer: e.target.value })} />
-          <datalist id="mans">{(uniques.manufacturers || []).map(m => <option key={m} value={m} />)}</datalist>
-        </Field>
-
-        <Field label="Manufacturer Ref">
-          <input className="input w-full" list="refs" value={editItem.manufacturer_ref || ''} onChange={e => setEditItem({ ...editItem, manufacturer_ref: e.target.value })} />
-          <datalist id="refs">{(uniques.refs || []).map(r => <option key={r} value={r} />)}</datalist>
-        </Field>
-
-        <Field label="ATEX Marking" cols={2}>
-          <input className="input w-full" list="atexrefs" value={editItem.atex_ref || ''} onChange={e => setEditItem({ ...editItem, atex_ref: e.target.value })} />
-          <datalist id="atexrefs">{(uniques.atex_refs || []).map(r => <option key={r} value={r} />)}</datalist>
-        </Field>
-
-        <Field label="Gas Zone">
-          <select
-            className="input w-full"
-            value={editItem.zone_gas ?? ''}
-            onChange={e => setEditItem({ ...editItem, zone_gas: e.target.value ? Number(e.target.value) : null })}
-          >
-            <option value="">—</option>
-            {GAS_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-          </select>
-        </Field>
-
-        <Field label="Dust Zone">
-          <select
-            className="input w-full"
-            value={editItem.zone_dust ?? ''}
-            onChange={e => setEditItem({ ...editItem, zone_dust: e.target.value ? Number(e.target.value) : null })}
-          >
-            <option value="">—</option>
-            {DUST_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-          </select>
-        </Field>
-
-        <Field label="Last Inspection">
-          <input type="date" className="input w-full" value={editItem.last_control || ''} onChange={e => setEditItem({ ...editItem, last_control: e.target.value || null })} />
-        </Field>
-
-        <Field label="Next Inspection">
-          <input type="date" className="input w-full" value={editItem.next_control || ''} onChange={e => setEditItem({ ...editItem, next_control: e.target.value || null })} />
-        </Field>
-
-        <Field label="Frequency (months)">
-          <input
-            type="number"
-            className="input w-full"
-            value={editItem.frequency_months || ''}
-            onChange={e => setEditItem({ ...editItem, frequency_months: e.target.value ? Number(e.target.value) : null })}
-          />
-        </Field>
-
-        {/* Bloc Analyse photo */}
-        <div className="col-span-1 sm:col-span-2 p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-          <label className="block text-sm font-medium mb-2">Upload Photo for Auto-Fill</label>
-          <p className="text-xs text-gray-500 mb-2">
-            Upload a clear photo of the equipment label to automatically fill Manufacturer, Mfr Ref, and ATEX Marking.
-          </p>
-          <input
-            type="file"
-            accept="image/*"
-            className="input text-sm w-full bg-white text-gray-900 border-gray-300"
-            disabled={photoLoading}
-            onChange={async e => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              setPhotoLoading(true);
-              const formData = new FormData();
-              formData.append('photo', file);
-              try {
-                const analysis = await upload(`${API_BASE}/api/atex/photo-analysis`, formData);
-                setEditItem(prev => ({
-                  ...prev,
-                  manufacturer: analysis.manufacturer || prev.manufacturer,
-                  manufacturer_ref: analysis.manufacturer_ref || prev.manufacturer_ref,
-                  atex_ref: analysis.atex_ref || prev.atex_ref
-                }));
-                notify('Photo analyzed successfully! Fields updated.', 'success');
-              } catch (err) {
-                console.error('Photo analysis failed:', err);
-                notify('Failed to analyze photo. Try a clearer image.', 'error');
-              } finally {
-                setPhotoLoading(false);
-                e.target.value = '';
-              }
-            }}
-          />
-          {photoLoading && (
-            <div className="mt-2 flex items-center gap-2 text-sm text-blue-600">
-              <Spinner className="h-4 w-4" /> Analyzing photo...
-            </div>
-          )}
-        </div>
-
-        <Field label="Comments" cols={2}>
-          <textarea
-            className="input w-full min-h-[100px]"
-            value={editItem.comments || ''}
-            onChange={e => setEditItem({ ...editItem, comments: e.target.value || null })}
-          />
-        </Field>
-      </div>
-
-      <div className="flex justify-end gap-2 mt-6">
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button
-          variant="primary"
-          disabled={loading || !editItem.building || !editItem.room || !editItem.component_type}
-          onClick={() => onSave({ attachments: [] })}
-        >
-          {loading ? 'Saving...' : editItem.id ? 'Update' : 'Create'}
-        </Button>
-      </div>
-    </Modal>
+      {children}
+    </button>
   );
 }
-
-/* ========== Plans & Positions — Leaflet VANILLA (PDF.js) ========== */
-function PlansPane({ notify }) {
-  // Plans
-  const [plans, setPlans] = useState([]);
-  const [loadingPlans, setLoadingPlans] = useState(false);
-  const [selected, setSelected] = useState(null); // {logical_name, display_name, page_count}
-  const [pageIndex, setPageIndex] = useState(0);
-
-  // Subareas & positions
-  const [subareas, setSubareas] = useState([]);
-  const [positions, setPositions] = useState([]);
-  const [unplaced, setUnplaced] = useState([]);
-  const [summary, setSummary] = useState({ placed: 0, unplaced: 0 });
-
-  // Drawing tool
-  const [tool, setTool] = useState('move'); // move | rect | circle | poly | place
-  const [polyPoints, setPolyPoints] = useState([]); // [{x,y}, ...]
-  const [polyDrawing, setPolyDrawing] = useState(false);
-
-  // Creation modal for subarea
-  const [pendingShape, setPendingShape] = useState(null); // {type:'rect-final'|'circle-final'|'poly-final', geomFrac, draft?}
-  const [draftName, setDraftName] = useState('');
-  const [draftGas, setDraftGas] = useState('');
-  const [draftDust, setDraftDust] = useState('');
-
-  // place selected equipment
-  const [selectedEquip, setSelectedEquip] = useState(null);
-
-  // Image size for CRS.Simple
-  const [imgSize, setImgSize] = useState({ w: 2000, h: 1400 }); // fallback
-  const [imageUrl, setImageUrl] = useState(null); // dataURL PNG (rendue depuis PDF)
-
-  // Leaflet refs
-  const containerRef = useRef(null);
-  const mapRef = useRef(null);
-  const LRef = useRef(null);
-  const overlayRef = useRef(null);
-  const subareasLayerRef = useRef(null);
-  const positionsLayerRef = useRef(null);
-  const previewLayerRef = useRef(null);
-  const legendCtrlRef = useRef(null);
-
-  // compute bounds with CRS.Simple (y first, x second)
-  const getBounds = () => [[0, 0], [imgSize.h, imgSize.w]];
-
-  function fracToDisplayRect(geom, W, H) {
-    return [
-      [geom.y * H, geom.x * W],
-      [(geom.y + geom.h) * H, (geom.x + geom.w) * W]
-    ];
-  }
-  function fracToDisplayCircle(geom, W, H) {
-    return {
-      center: [geom.cy * H, geom.cx * W],
-      r: geom.r * Math.max(W, H)
-    };
-  }
-  function fracToDisplayPoly(geom, W, H) {
-    return (geom?.points || []).map(p => [p.y * H, p.x * W]);
-  }
-
-  async function ensureMap() {
-    if (mapRef.current) return mapRef.current;
-    const L = (await import('leaflet')).default;
-    LRef.current = L;
-
-    const map = L.map(containerRef.current, {
-      crs: L.CRS.Simple,
-      center: [imgSize.h / 2, imgSize.w / 2],
-      zoom: 0,
-      minZoom: -2,
-      maxZoom: 4,
-      zoomControl: true,
-      attributionControl: false,
-      doubleClickZoom: false
-    });
-
-    // layers
-    subareasLayerRef.current = L.layerGroup().addTo(map);
-    positionsLayerRef.current = L.layerGroup().addTo(map);
-    previewLayerRef.current = L.layerGroup().addTo(map);
-
-    // default icons
-    await ensureLeafletDefaultIcons();
-
-    // legend
-    legendCtrlRef.current = await attachLegendToMap(map, {
-      title: 'Legend',
-      items: [
-        { swatch: 'bg-emerald-500', label: 'Equipment position' },
-        { swatch: 'bg-blue-500', label: 'Zone (saved)' },
-        { swatch: 'bg-amber-500', label: 'Drawing preview' }
-      ]
-    });
-
-    // interaction for drawing
-    map.on('mousedown', (e) => {
-      if (tool === 'rect') {
-        const { latlng } = e;
-        setPendingShape({ type: 'rect', draft: { x0: latlng.lng, y0: latlng.lat, x1: latlng.lng, y1: latlng.lat } });
-      } else if (tool === 'circle') {
-        const { latlng } = e;
-        setPendingShape({ type: 'circle', draft: { cx: latlng.lng, cy: latlng.lat, x: latlng.lng, y: latlng.lat } });
-      } else if (tool === 'poly') {
-        setPolyDrawing(true);
-        setPolyPoints(prev => [...prev, { x: e.latlng.lng, y: e.latlng.lat }]);
-      } else if (tool === 'place' && selected && selectedEquip) {
-        const xf = +(e.latlng.lng / Math.max(1, imgSize.w)).toFixed(6);
-        const yf = +(e.latlng.lat / Math.max(1, imgSize.h)).toFixed(6);
-        atexMaps.setPosition(selectedEquip.id, {
-          logical_name: selected.logical_name,
-          page_index: pageIndex,
-          x_frac: xf,
-          y_frac: yf
-        }).then(() => {
-          notify(`Placed #${selectedEquip.id}`);
-          setSelectedEquip(null);
-          reloadPageData();
-        }).catch(err => {
-          console.error(err);
-          notify('Failed to place equipment', 'error');
-        });
-      }
-    });
-
-    map.on('mousemove', (e) => {
-      const L = LRef.current;
-      if (!pendingShape || !L) return;
-      if (pendingShape.type === 'rect') {
-        setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x1: e.latlng.lng, y1: e.latlng.lat } }));
-      } else if (pendingShape.type === 'circle') {
-        setPendingShape(prev => ({ ...prev, draft: { ...prev.draft, x: e.latlng.lng, y: e.latlng.lat } }));
-      }
-      drawPreview();
-    });
-
-    map.on('mouseup', () => {
-      const L = LRef.current;
-      if (!pendingShape || !L) return;
-      const W = imgSize.w, H = imgSize.h;
-      if (pendingShape.type === 'rect') {
-        const { x0, y0, x1, y1 } = pendingShape.draft;
-        const geomFrac = rectDisplayToFrac({ x0, y0, x1, y1 }, W, H);
-        setPendingShape({ type: 'rect-final', geomFrac });
-      } else if (pendingShape.type === 'circle') {
-        const { cx, cy, x, y } = pendingShape.draft;
-        const geomFrac = circleDisplayToFrac({ cx, cy, x, y }, W, H);
-        setPendingShape({ type: 'circle-final', geomFrac });
-      }
-      clearPreview();
-    });
-
-    map.on('dblclick', () => {
-      if (tool === 'poly' && polyDrawing && polyPoints.length >= 3) {
-        const W = imgSize.w, H = imgSize.h;
-        const geomFrac = pathDisplayToFrac(polyPoints.map(p => ({ x: p.x, y: p.y })), W, H);
-        setPolyDrawing(false);
-        setPolyPoints([]);
-        setPendingShape({ type: 'poly-final', geomFrac });
-        clearPreview();
-      }
-    });
-
-    mapRef.current = map;
-    return map;
-  }
-
-  function clearOverlay() {
-    try { overlayRef.current?.remove?.(); } catch {}
-    overlayRef.current = null;
-  }
-  function clearPreview() {
-    const L = LRef.current;
-    if (!L || !previewLayerRef.current) return;
-    previewLayerRef.current.clearLayers();
-  }
-  function drawPreview() {
-    const L = LRef.current;
-    if (!L || !previewLayerRef.current) return;
-    previewLayerRef.current.clearLayers();
-    if (!pendingShape) return;
-
-    if (pendingShape.type === 'rect') {
-      const { x0, y0, x1, y1 } = pendingShape.draft || {};
-      const b = [
-        [Math.min(y0, y1), Math.min(x0, x1)],
-        [Math.max(y0, y1), Math.max(x0, x1)]
-      ];
-      L.rectangle(b, { color: '#f59e0b', weight: 2 }).addTo(previewLayerRef.current);
-    }
-    if (pendingShape.type === 'circle') {
-      const { cx, cy, x, y } = pendingShape.draft || {};
-      const r = Math.hypot((x - cx), (y - cy));
-      L.circle([cy, cx], { radius: r, color: '#f59e0b', weight: 2 }).addTo(previewLayerRef.current);
-    }
-    if (polyDrawing && polyPoints.length) {
-      L.polygon(polyPoints.map(p => [p.y, p.x]), { color: '#f59e0b', weight: 2 }).addTo(previewLayerRef.current);
-    }
-  }
-
-  function drawSubareas() {
-    const L = LRef.current;
-    if (!L || !subareasLayerRef.current) return;
-    subareasLayerRef.current.clearLayers();
-    subareas.forEach(sa => {
-      if (sa.shape_type === 'rect') {
-        const b = fracToDisplayRect(sa.geometry || {}, imgSize.w, imgSize.h);
-        L.rectangle(b, { color: '#3b82f6', weight: 2 }).addTo(subareasLayerRef.current);
-      } else if (sa.shape_type === 'circle') {
-        const c = fracToDisplayCircle(sa.geometry || {}, imgSize.w, imgSize.h);
-        L.circle(c.center, { radius: c.r, color: '#3b82f6', weight: 2 }).addTo(subareasLayerRef.current);
-      } else if (sa.shape_type === 'poly') {
-        const pts = fracToDisplayPoly(sa.geometry || {}, imgSize.w, imgSize.h);
-        L.polygon(pts, { color: '#3b82f6', weight: 2 }).addTo(subareasLayerRef.current);
-      }
-    });
-  }
-
-  function drawPositions() {
-    const L = LRef.current;
-    if (!L || !positionsLayerRef.current) return;
-    positionsLayerRef.current.clearLayers();
-    positions.forEach(p => {
-      const x = p.x_frac * imgSize.w;
-      const y = p.y_frac * imgSize.h;
-      L.marker([y, x], { title: `#${p.equipment_id} ${p.component_type}` }).addTo(positionsLayerRef.current);
-    });
-  }
-
-  async function reloadPlans() {
-    setLoadingPlans(true);
-    try {
-      const p = await atexMaps.listPlans();
-      setPlans(p);
-      if (selected) {
-        const found = p.find(x => x.logical_name === selected.logical_name);
-        setSelected(found || null);
-      }
-    } catch (e) {
-      console.error(e);
-      notify('Failed to load plans', 'error');
-    } finally {
-      setLoadingPlans(false);
-    }
-  }
-
-  async function reloadPageData() {
-    if (!selected) {
-      setSubareas([]); setPositions([]); setUnplaced([]); setSummary({ placed: 0, unplaced: 0 });
-      return;
-    }
-    try {
-      const [sas, pos, unp, sum] = await Promise.all([
-        atexMaps.getSubareas(selected.logical_name, pageIndex),
-        atexMaps.getPositions(selected.logical_name, pageIndex),
-        atexMaps.listUnplaced(selected.logical_name, pageIndex),
-        atexMaps.summary(selected.logical_name, pageIndex)
-      ]);
-      setSubareas(sas);
-      setPositions(pos);
-      setUnplaced(unp);
-      setSummary(sum || { placed: 0, unplaced: 0 });
-    } catch (e) {
-      console.error(e);
-      notify('Failed to load page data', 'error');
-    }
-  }
-
-  useEffect(() => { reloadPlans(); }, []);
-  useEffect(() => { reloadPageData(); }, [selected?.logical_name, pageIndex]);
-
-  // Render PDF page → dataURL (w/ fallback old PNG endpoint)
-  useEffect(() => {
-    let abort = false;
-    (async () => {
-      if (!selected) { setImageUrl(null); return; }
-      const pdfUrl = atexMaps.planFileUrlAuto(selected.logical_name);
-      try {
-        const { url, w, h } = await renderPdfPageToDataURL(pdfUrl, pageIndex + 1, { targetWidth: 2000 });
-        if (!abort) { setImageUrl(url); setImgSize({ w, h }); }
-      } catch (e) {
-        console.warn('PDF render failed, fallback PNG:', e);
-        const pngUrl = `${API_BASE}/api/atex/maps/plan/${encodeURIComponent(selected.logical_name)}/page/${pageIndex}.png`;
-        // try load natural size
-        const img = new Image();
-        img.onload = () => { if (!abort) { setImageUrl(pngUrl); setImgSize({ w: img.width || 2000, h: img.height || 1400 }); } };
-        img.onerror = () => { if (!abort) setImageUrl(null); };
-        img.src = pngUrl;
-      }
-    })();
-    return () => { abort = true; };
-  }, [selected?.logical_name, pageIndex]);
-
-  // (re)create map + overlay when selected/page or image size changes
-  useEffect(() => {
-    (async () => {
-      if (!selected || !imageUrl) return;
-
-      const map = await ensureMap();
-      const L = LRef.current;
-      if (!L) return;
-
-      // overlay
-      clearOverlay();
-      overlayRef.current = L.imageOverlay(imageUrl, getBounds()).addTo(map);
-
-      // bounds
-      map.setMaxBounds(getBounds());
-      map.fitBounds(getBounds(), { animate: false });
-
-      // redraw layers with new sizing
-      drawSubareas();
-      drawPositions();
-      clearPreview();
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.logical_name, pageIndex, imgSize.w, imgSize.h, imageUrl]);
-
-  // redraw subareas/positions whenever data changes
-  useEffect(() => { drawSubareas(); }, [subareas]);
-  useEffect(() => { drawPositions(); }, [positions]);
-
-  // cleanup on unmount
-  useEffect(() => {
-    return () => {
-      try {
-        const map = mapRef.current;
-        if (map) {
-          if (legendCtrlRef.current) detachControl(map, legendCtrlRef.current);
-          map.off();
-          map.remove();
-        }
-      } catch {}
-      mapRef.current = null;
-    };
-  }, []);
-
-  async function createSubareaFromPending() {
-    if (!pendingShape || !selected) return;
-    const type = pendingShape.type.replace('-final', '');
-    try {
-      await atexMaps.createSubarea({
-        logical_name: selected.logical_name,
-        page_index: pageIndex,
-        name: draftName || type.toUpperCase(),
-        shape_type: type,
-        geometry: pendingShape.geomFrac,
-        zone_gas: draftGas === '' ? null : Number(draftGas),
-        zone_dust: draftDust === '' ? null : Number(draftDust)
-      });
-      setPendingShape(null);
-      setDraftName(''); setDraftGas(''); setDraftDust('');
-      notify('Zone created');
-      reloadPageData();
-    } catch (e) {
-      console.error(e);
-      notify('Failed to create zone', 'error');
-    }
-  }
-
-  async function uploadZip(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      await atexMaps.uploadZip(file);
-      notify('ZIP imported');
-      await reloadPlans();
-    } catch (e2) {
-      console.error(e2);
-      notify('ZIP import failed', 'error');
-    } finally {
-      e.target.value = '';
-    }
-  }
-
-  async function applyZones() {
-    if (!selected) return;
-    try {
-      const r = await atexMaps.applySubareas(selected.logical_name, pageIndex);
-      notify(`Applied to ${r.updated}/${r.total}`);
-      reloadPageData();
-    } catch (e) {
-      console.error(e);
-      notify('Apply failed', 'error');
-    }
-  }
-
-  async function renamePlan() {
-    if (!selected) return;
-    const name = prompt('New display name', selected.display_name || selected.logical_name);
-    if (name == null) return;
-    try {
-      await atexMaps.renamePlan(selected.logical_name, name);
-      notify('Plan renamed');
-      reloadPlans();
-    } catch (e) {
-      console.error(e);
-      notify('Rename failed', 'error');
-    }
-  }
-
+function Input({ value, onChange, className = "", ...p }) {
   return (
-    <div className="space-y-4">
-      {/* Barre d’actions Plans */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="min-w-[16rem]">
-              <label className="block text-xs font-medium text-gray-500 mb-1">Plan</label>
-              <select
-                className="input w-full"
-                value={selected?.logical_name || ''}
-                onChange={e => {
-                  const sel = plans.find(p => p.logical_name === e.target.value) || null;
-                  setSelected(sel); setPageIndex(0);
-                }}
-              >
-                <option value="">— Select a plan —</option>
-                {plans.map(p => (
-                  <option key={p.logical_name} value={p.logical_name}>
-                    {p.display_name} ({p.page_count}p)
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Page</label>
-              <select
-                className="input"
-                value={pageIndex}
-                onChange={e => setPageIndex(Number(e.target.value))}
-                disabled={!selected}
-              >
-                {(selected ? Array.from({ length: selected.page_count || 1 }, (_, i) => i) : [0]).map(i => (
-                  <option key={i} value={i}>Page {i + 1}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex items-end gap-2">
-              <Button variant="ghost" onClick={reloadPlans} disabled={loadingPlans}>
-                {loadingPlans ? 'Loading...' : 'Refresh'}
-              </Button>
-              <Button variant="ghost" onClick={renamePlan} disabled={!selected}>
-                Rename
-              </Button>
-              <label className="inline-flex items-center gap-2 text-sm cursor-pointer">
-                <input type="file" accept=".zip" className="hidden" onChange={uploadZip} />
-                <span className="px-3 py-2 rounded-md border border-gray-300 bg-white hover:bg-gray-50">Import ZIP(PDF)</span>
-              </label>
-              <Button onClick={applyZones} disabled={!selected}>Apply zones → equipments</Button>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="text-sm text-gray-500">Placed: <b>{summary.placed}</b> · Unplaced: <b>{summary.unplaced}</b></div>
-            <div className="flex rounded-md border overflow-hidden">
-              {['move', 'rect', 'circle', 'poly', 'place'].map(t => (
-                <button
-                  key={t}
-                  className={classNames(
-                    'px-3 py-1.5 text-sm border-r last:border-r-0',
-                    tool === t ? 'bg-gray-800 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'
-                  )}
-                  onClick={() => {
-                    setTool(t);
-                    if (t !== 'poly') { setPolyDrawing(false); setPolyPoints([]); }
-                    setPendingShape(null);
-                    clearPreview();
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-            {tool === 'place' && (
-              <select
-                className="input"
-                value={selectedEquip?.id || ''}
-                onChange={e => {
-                  const id = Number(e.target.value) || null;
-                  setSelectedEquip(id ? unplaced.find(u => u.id === id) || null : null);
-                }}
-              >
-                <option value="">Select unplaced equipment…</option>
-                {unplaced.map(u => (
-                  <option key={u.id} value={u.id}>#{u.id} · {u.component_type} · {u.building}/{u.room}</option>
-                ))}
-              </select>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Leaflet viewer */}
-      <div className="relative bg-white rounded-lg shadow overflow-hidden">
-        {selected ? (
-          imageUrl ? <div ref={containerRef} style={{ height: '70vh', width: '100%' }} /> :
-          <div className="h-[70vh] flex items-center justify-center text-sm text-gray-500 bg-gray-50">
-            Rendering PDF page…
-          </div>
+    <input
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange?.(e.target.value)}
+      {...p}
+    />
+  );
+}
+function Textarea({ value, onChange, className = "", ...p }) {
+  return (
+    <textarea
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange?.(e.target.value)}
+      {...p}
+    />
+  );
+}
+function Select({ value, onChange, options = [], className = "", placeholder }) {
+  return (
+    <select
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      value={value ?? ""}
+      onChange={(e) => onChange?.(e.target.value)}
+    >
+      {placeholder != null && <option value="">{placeholder}</option>}
+      {options.map((o) =>
+        typeof o === "string" ? (
+          <option key={o} value={o}>
+            {o}
+          </option>
         ) : (
-          <div className="h-[70vh] flex items-center justify-center text-sm text-gray-500 bg-gray-50">
-            Select a plan to display the map.
-          </div>
-        )}
-      </div>
-
-      {/* Liste des subareas + actions */}
-      {selected && (
-        <div className="bg-white rounded-lg shadow p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-medium">Zones (subareas)</h3>
-          </div>
-          {subareas.length === 0 ? (
-            <div className="text-sm text-gray-500">No subareas on this page.</div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Name</th>
-                    <th className="px-3 py-2 text-left">Shape</th>
-                    <th className="px-3 py-2 text-left">Gas</th>
-                    <th className="px-3 py-2 text-left">Dust</th>
-                    <th className="px-3 py-2 text-left">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {subareas.map(sa => (
-                    <tr key={sa.id} className="border-t">
-                      <td className="px-3 py-2">{sa.name}</td>
-                      <td className="px-3 py-2">{sa.shape_type}</td>
-                      <td className="px-3 py-2">{sa.zone_gas ?? '—'}</td>
-                      <td className="px-3 py-2">{sa.zone_dust ?? '—'}</td>
-                      <td className="px-3 py-2">
-                        <button
-                          className="text-blue-600 hover:text-blue-800 mr-2"
-                          onClick={async () => {
-                            const name = prompt('Rename zone', sa.name);
-                            if (name == null) return;
-                            try {
-                              await atexMaps.updateSubarea(sa.id, { name });
-                              notify('Zone renamed'); reloadPageData();
-                            } catch (e) { console.error(e); notify('Rename failed', 'error'); }
-                          }}
-                        >
-                          Rename
-                        </button>
-                        <button
-                          className="text-blue-600 hover:text-blue-800 mr-2"
-                          onClick={async () => {
-                            const zg = prompt('Gas zone (0/1/2 or empty)', sa.zone_gas ?? '');
-                            const zd = prompt('Dust zone (20/21/22 or empty)', sa.zone_dust ?? '');
-                            try {
-                              await atexMaps.updateSubarea(sa.id, {
-                                zone_gas: zg === '' ? '' : Number(zg),
-                                zone_dust: zd === '' ? '' : Number(zd)
-                              });
-                              notify('Zones updated'); reloadPageData();
-                            } catch (e) { console.error(e); notify('Update failed', 'error'); }
-                          }}
-                        >
-                          Set zones
-                        </button>
-                        <button
-                          className="text-red-600 hover:text-red-800"
-                          onClick={async () => {
-                            if (!confirm('Delete this zone?')) return;
-                            try {
-                              await atexMaps.deleteSubarea(sa.id);
-                              notify('Zone deleted'); reloadPageData();
-                            } catch (e) { console.error(e); notify('Delete failed', 'error'); }
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        )
+      )}
+    </select>
+  );
+}
+function Badge({ color = "gray", children, className = "" }) {
+  const map = {
+    gray: "bg-gray-100 text-gray-700",
+    green: "bg-emerald-100 text-emerald-700",
+    orange: "bg-amber-100 text-amber-700",
+    red: "bg-rose-100 text-rose-700",
+    blue: "bg-blue-100 text-blue-700",
+  };
+  return (
+    <span
+      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`}
+    >
+      {children}
+    </span>
+  );
+}
+function Labeled({ label, children }) {
+  return (
+    <label className="text-sm space-y-1">
+      <div className="text-gray-600">{label}</div>
+      {children}
+    </label>
+  );
+}
+function Drawer({ title, children, onClose }) {
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[6000]">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[680px] bg-white shadow-2xl p-4 overflow-y-auto">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">{title}</h3>
+          <Btn variant="ghost" onClick={onClose}>
+            Fermer
+          </Btn>
         </div>
-      )}
-
-      {/* Dialog création subarea */}
-      {(pendingShape?.type?.endsWith('-final')) && (
-        <Modal title={`Create zone (${pendingShape.type.replace('-final','')})`} onClose={() => setPendingShape(null)}>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <Field label="Name">
-              <input className="input w-full" value={draftName} onChange={e => setDraftName(e.target.value)} placeholder="Label…" />
-            </Field>
-            <Field label="Gas Zone">
-              <select className="input w-full" value={draftGas} onChange={e => setDraftGas(e.target.value)}>
-                <option value="">—</option>
-                {GAS_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-              </select>
-            </Field>
-            <Field label="Dust Zone">
-              <select className="input w-full" value={draftDust} onChange={e => setDraftDust(e.target.value)}>
-                <option value="">—</option>
-                {DUST_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
-              </select>
-            </Field>
-          </div>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" onClick={() => setPendingShape(null)}>Cancel</Button>
-            <Button onClick={createSubareaFromPending} disabled={!draftName}>Create</Button>
-          </div>
-        </Modal>
-      )}
+        {children}
+      </div>
+    </div>
+  );
+}
+function Toast({ text, onClose }) {
+  useEffect(() => {
+    if (!text) return;
+    const t = setTimeout(() => onClose?.(), 4000);
+    return () => clearTimeout(t);
+  }, [text, onClose]);
+  if (!text) return null;
+  return (
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2000]">
+      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>
     </div>
   );
 }
 
-/* ========== Onglets Controls / Assessment / Import + CRUD ========== */
+/* ----------------------------- Status (mêmes couleurs/comportements) ----------------------------- */
+const STATUS = {
+  A_FAIRE: "a_faire",
+  EN_COURS: "en_cours_30",
+  EN_RETARD: "en_retard",
+  FAIT: "fait",
+};
+function statusColor(s) {
+  if (s === STATUS.A_FAIRE) return "green";
+  if (s === STATUS.EN_COURS) return "orange";
+  if (s === STATUS.EN_RETARD) return "red";
+  if (s === STATUS.FAIT) return "blue";
+  return "gray";
+}
+function statusLabel(s) {
+  if (s === STATUS.A_FAIRE) return "À faire";
+  if (s === STATUS.EN_COURS) return "En cours (<30j)";
+  if (s === STATUS.EN_RETARD) return "En retard";
+  if (s === STATUS.FAIT) return "Fait";
+  return s || "—";
+}
 
+/* ----------------------------- Mini calendrier (identique Doors) ----------------------------- */
+function MonthCalendar({ events = [], onDayClick }) {
+  const [cursor, setCursor] = useState(() => dayjs().startOf("month"));
+  const start = cursor.startOf("week");
+  const end = cursor.endOf("month").endOf("week");
+  const days = [];
+  let d = start;
+  while (d.isBefore(end)) {
+    days.push(d);
+    d = d.add(1, "day");
+  }
+  const map = new Map();
+  for (const e of events) {
+    const k = dayjs(e.date).format("YYYY-MM-DD");
+    const arr = map.get(k) || [];
+    arr.push(e);
+    map.set(k, arr);
+  }
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-semibold">{cursor.format("MMMM YYYY")}</div>
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={() => setCursor(cursor.subtract(1, "month"))}>
+            ◀
+          </Btn>
+          <Btn variant="ghost" onClick={() => setCursor(dayjs().startOf("month"))}>
+            Aujourd’hui
+          </Btn>
+          <Btn variant="ghost" onClick={() => setCursor(cursor.add(1, "month"))}>
+            ▶
+          </Btn>
+        </div>
+      </div>
+      <div className="grid grid-cols-7 gap-1 text-xs text-gray-600 mb-1">
+        {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
+          <div key={l} className="px-2 py-1">
+            {l}
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-1">
+        {days.map((day) => {
+          const key = day.format("YYYY-MM-DD");
+          const es = map.get(key) || [];
+          const isCurMonth = day.month() === cursor.month();
+          return (
+            <button
+              key={key}
+              onClick={() => onDayClick?.({ date: key, events: es })}
+              className={`border rounded-lg p-2 text-left min-h-[64px] ${
+                isCurMonth ? "bg-white" : "bg-gray-50 text-gray-500"
+              }`}
+            >
+              <div className="text-[11px] mb-1">{day.format("D")}</div>
+              <div className="flex flex-wrap gap-1">
+                {es.slice(0, 3).map((ev, i) => (
+                  <span
+                    key={i}
+                    className="px-1 rounded bg-blue-100 text-blue-700 text-[10px]"
+                  >
+                    {ev.name || ev.equipment_name || ev.equipment_id}
+                  </span>
+                ))}
+                {es.length > 3 && (
+                  <span className="text-[10px] text-gray-500">+{es.length - 3}</span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ----------------------------- Page principale ATEX ----------------------------- */
 export default function Atex() {
   // Onglets
-  const [tab, setTab] = useState('controls');
+  const [tab, setTab] = useState("controls"); // controls | calendar | plans | settings (optionnel)
 
-  // Liste & filtres
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Liste équipements
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  const [q, setQ] = useState('');
-  const [fBuilding, setFBuilding] = useState([]);
-  const [fRoom, setFRoom] = useState([]);
-  const [fType, setFType] = useState([]);
-  const [fManufacturer, setFManufacturer] = useState([]);
-  const [fStatus, setFStatus] = useState([]); // UI (EN), converti vers FR côté API
-  const [fGas, setFGas] = useState([]);
-  const [fDust, setFDust] = useState([]);
+  // Filtres (mêmes patterns que Doors)
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("");
+  const [building, setBuilding] = useState("");
+  const [zone, setZone] = useState(""); // équiv. floor/zone
+  const [compliance, setCompliance] = useState(""); // conforme / non_conforme / na
 
-  const [sort, setSort] = useState({ by: 'id', dir: 'desc' });
+  // Edition
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
 
-  // Pagination locale
-  const [page, setPage] = useState(1);
-  const [pageSize] = useState(100);
-  const [total, setTotal] = useState(0);
+  // Calendrier
+  const [calendar, setCalendar] = useState({ events: [] });
 
-  // Uniques (suggests)
-  const [uniques, setUniques] = useState({
-    buildings: [],
-    rooms: [],
-    types: [],
-    manufacturers: [],
-    refs: [],
-    atex_refs: []
-  });
+  // Toast
+  const [toast, setToast] = useState("");
 
-  // Analytics
-  const [analytics, setAnalytics] = useState(null);
-  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  // Plans (ZIP, cards, viewer → délégué à AtexMap)
+  const [plans, setPlans] = useState([]);
+  const [mapsLoading, setMapsLoading] = useState(false);
+  const [selectedPlan, setSelectedPlan] = useState(null);
 
-  // État modales
-  const [editItem, setEditItem] = useState(null);
-  const [showDelete, setShowDelete] = useState(null);
-  const [showAttach, setShowAttach] = useState(null);
-
-  // Pièces jointes
-  const [attachments, setAttachments] = useState([]);
-
-  const { notify, ToastEl } = useToast();
-
-  // ------ Chargements liste & analytics ------
-  async function loadSuggests() {
-    try {
-      const data = await get(`${API_BASE}/api/atex/suggests`);
-      setUniques({
-        buildings: data.building || [],
-        rooms: data.room || [],
-        types: data.component_type || [],
-        manufacturers: data.manufacturer || [],
-        refs: data.manufacturer_ref || [],
-        atex_refs: data.atex_ref || []
-      });
-    } catch (e) {
-      console.error('Load suggests failed:', e);
-    }
-  }
-
-  async function loadAnalytics() {
-    setAnalyticsLoading(true);
-    try {
-      const data = await get(`${API_BASE}/api/atex/analytics`);
-      setAnalytics(data);
-    } catch (e) {
-      console.error('Load analytics failed:', e);
-      notify('Failed to load analytics', 'error');
-    } finally {
-      setAnalyticsLoading(false);
-    }
-  }
-
-  async function loadData() {
+  /* ----------------------------- Helpers ----------------------------- */
+  async function reload() {
     setLoading(true);
     try {
-      const statusFr = fStatus.map(s => STATUS_MAP_TO_FR[s] || s);
-      const params = new URLSearchParams({
+      const res = await api.atex.listEquipments({
         q,
-        building: fBuilding,
-        room: fRoom,
-        component_type: fType,
-        manufacturer: fManufacturer,
-        status: statusFr,
-        zone_gas: fGas,
-        zone_dust: fDust,
-        sort: sort.by,
-        dir: sort.dir,
-        page,
-        pageSize
-      }).toString();
-
-      const data = await get(`${API_BASE}/api/atex/equipments?${params}`);
-      setRows(data || []);
-      setTotal(data?.length || 0);
+        status,
+        building,
+        zone,
+        compliance,
+      });
+      setItems(Array.isArray(res?.items) ? res.items : []);
     } catch (e) {
-      console.error('Load data failed:', e);
-      notify('Failed to load equipment data', 'error');
+      console.error(e);
+      setItems([]);
     } finally {
       setLoading(false);
     }
   }
 
-  async function loadAttachments(id) {
+  async function reloadCalendar() {
+    // Si le backend ATEX expose un calendrier, on l’utiliserait.
+    // À défaut, on reconstruit localement depuis listEquipments (prochain contrôle).
     try {
-      const data = await get(`${API_BASE}/api/atex/equipments/${id}/attachments`);
-      setAttachments(data || []);
-    } catch (e) {
-      console.error('Load attachments failed:', e);
-      notify('Failed to load attachments', 'error');
-    }
-  }
-
-  // ------ CRUD ------
-  async function saveItem() {
-    setLoading(true);
-    try {
-      const payload = {
-        ...editItem,
-        zone_gas: editItem.zone_gas === '' ? null : editItem.zone_gas,
-        zone_dust: editItem.zone_dust === '' ? null : editItem.zone_dust
-      };
-      if (editItem.id) {
-        await put(`${API_BASE}/api/atex/equipments/${editItem.id}`, payload);
-        notify('Equipment updated successfully', 'success');
-      } else {
-        await post(`${API_BASE}/api/atex/equipments`, payload);
-        notify('Equipment created successfully', 'success');
+      const res = await api.atex.analytics().catch(() => null);
+      if (Array.isArray(res?.calendar)) {
+        setCalendar({ events: res.calendar });
+        return;
       }
-      setEditItem(null);
-      await loadData();
-    } catch (e) {
-      console.error('Save failed:', e);
-      notify(`Failed to save equipment: ${e.message}`, 'error');
-    } finally {
-      setLoading(false);
-    }
+    } catch {}
+    // Fallback: à partir des items présents
+    const evts = (items || [])
+      .filter((it) => it?.next_check_date)
+      .map((it) => ({
+        date: dayjs(it.next_check_date).format("YYYY-MM-DD"),
+        equipment_id: it.id,
+        name: it.name,
+      }));
+    setCalendar({ events: evts });
   }
 
-  async function deleteItem(id) {
-    setLoading(true);
-    try {
-      await del(`${API_BASE}/api/atex/equipments/${id}`);
-      notify('Equipment deleted successfully', 'success');
-      setShowDelete(null);
-      await loadData();
-    } catch (e) {
-      console.error('Delete failed:', e);
-      notify('Failed to delete equipment', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // ------ Pièces jointes ------
-  async function uploadAttachmentsAction(id, files) {
-    setLoading(true);
-    try {
-      const formData = new FormData();
-      files.forEach(f => formData.append('files', f));
-      await upload(`${API_BASE}/api/atex/equipments/${id}/attachments`, formData);
-      notify('Attachments uploaded successfully', 'success');
-      await loadAttachments(id);
-    } catch (e) {
-      console.error('Upload attachments failed:', e);
-      notify('Failed to upload attachments', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function deleteAttachment(id, attId) {
-    setLoading(true);
-    try {
-      await del(`${API_BASE}/api/atex/attachments/${attId}`);
-      notify('Attachment deleted successfully', 'success');
-      await loadAttachments(id);
-    } catch (e) {
-      console.error('Delete attachment failed:', e);
-      notify('Failed to delete attachment', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // ------ Import / Export ------
-  async function exportToExcel() {
-    try {
-      const data = await get(`${API_BASE}/api/atex/export`);
-      const ws = XLSX.utils.json_to_sheet(data);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'ATEX Equipment');
-      XLSX.writeFile(wb, 'atex_equipment.xlsx');
-    } catch (e) {
-      console.error('Export failed:', e);
-      notify('Failed to export data', 'error');
-    }
-  }
-
-  async function importFromExcel(e) {
-    setLoading(true);
-    try {
-      const file = e.target.files[0];
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf);
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws);
-
-      for (const row of json) {
-        await post(`${API_BASE}/api/atex/equipments`, {
-          site: row.site || null,
-          building: row.building || '',
-          room: row.room || '',
-          component_type: row.component_type || '',
-          manufacturer: row.manufacturer || null,
-          manufacturer_ref: row.manufacturer_ref || null,
-          atex_ref: row.atex_ref || null,
-          zone_gas: row.zone_gas ? Number(row.zone_gas) : null,
-          zone_dust: row.zone_dust ? Number(row.zone_dust) : null,
-          last_control: row.last_control || null,
-          next_control: row.next_control || null,
-          comments: row.comments || null,
-          frequency_months: row.frequency_months ? Number(row.frequency_months) : 36
-        });
-      }
-
-      notify('Data imported successfully', 'success');
-      await loadData();
-    } catch (e) {
-      console.error('Import failed:', e);
-      notify('Failed to import data', 'error');
-    } finally {
-      setLoading(false);
-      e.target.value = '';
-    }
-  }
-
-  // ------ UI helpers ------
-  function onEdit(row) {
-    setEditItem({
-      id: row.id,
-      site: row.site || '',
-      building: row.building || '',
-      room: row.room || '',
-      component_type: row.component_type || '',
-      manufacturer: row.manufacturer || '',
-      manufacturer_ref: row.manufacturer_ref || '',
-      atex_ref: row.atex_ref || '',
-      zone_gas: row.zone_gas ?? '',
-      zone_dust: row.zone_dust ?? '',
-      last_control: row.last_control ? row.last_control.split('T')[0] : '',
-      next_control: row.next_control ? row.next_control.split('T')[0] : '',
-      comments: row.comments || '',
-      frequency_months: row.frequency_months || 36
-    });
-  }
-
-  function onReset() {
-    setQ('');
-    setFBuilding([]);
-    setFRoom([]);
-    setFType([]);
-    setFManufacturer([]);
-    setFStatus([]);
-    setFGas([]);
-    setFDust([]);
-    setPage(1);
-    setSort({ by: 'id', dir: 'desc' });
-  }
-
-  // Mount + refresh à chaque changement de filtres/tri/page
   useEffect(() => {
-    loadData();
-    loadSuggests();
-    loadAnalytics();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, fBuilding, fRoom, fType, fManufacturer, fStatus, fGas, fDust, sort.by, sort.dir, page]);
+    reload();
+  }, []);
+  useEffect(() => {
+    const t = setTimeout(reload, 350);
+    return () => clearTimeout(t);
+  }, [q, status, building, zone, compliance]);
+  useEffect(() => {
+    reloadCalendar();
+  }, [items]);
+
+  function openEdit(equipment) {
+    setEditing(equipment);
+    setDrawerOpen(true);
+  }
+  function closeEdit() {
+    setEditing(null);
+    setDrawerOpen(false);
+  }
+
+  async function saveBase() {
+    if (!editing) return;
+    const payload = {
+      name: editing.name || "",
+      building: editing.building || "",
+      zone: editing.zone || "",
+      equipment: editing.equipment || "",
+      sub_equipment: editing.sub_equipment || "",
+      type: editing.type || "",
+      manufacturer: editing.manufacturer || "",
+      manufacturer_ref: editing.manufacturer_ref || "",
+      atex_marking: editing.atex_marking || "",
+      zoning_gas: editing.zoning_gas ?? null, // 0/1/2 ou null
+      zoning_dust: editing.zoning_dust ?? null, // 20/21/22 ou null
+      comment: editing.comment || "",
+      status: editing.status || STATUS.A_FAIRE,
+      // dates si présentes
+      installation_date: editing.installation_date || null,
+      next_check_date: editing.next_check_date || null,
+    };
+    try {
+      if (editing.id) {
+        await api.atex.updateEquipment(editing.id, payload);
+      } else {
+        const created = await api.atex.createEquipment(payload);
+        if (created?.id) {
+          setEditing({ ...(editing || {}), id: created.id });
+        }
+      }
+      await reload();
+      setToast("Fiche enregistrée ✅");
+    } catch (e) {
+      console.error(e);
+      setToast("Erreur enregistrement");
+    }
+  }
+
+  async function deleteEquipment() {
+    if (!editing?.id) return;
+    const ok = window.confirm(
+      "Supprimer définitivement cet équipement ATEX ? Cette action est irréversible."
+    );
+    if (!ok) return;
+    await api.atex.removeEquipment(editing.id);
+    closeEdit();
+    await reload();
+  }
+
+  /* ----------------------------- Photos / pièces jointes ----------------------------- */
+  async function uploadMainPhoto(file) {
+    if (!editing?.id || !file) return;
+    await api.atex.uploadPhoto(editing.id, file);
+    setEditing({ ...editing }); // rerender
+    await reload();
+    setToast("Photo mise à jour ✅");
+  }
+  async function uploadAttachments(files) {
+    if (!editing?.id || !files?.length) return;
+    await api.atex.uploadAttachments(editing.id, files);
+    setEditing({ ...editing }); // rerender
+    setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
+  }
+
+  /* ----------------------------- IA : analyse de photos / conformité ----------------------------- */
+  async function analyzeFromPhotos(files) {
+    if (!files?.length) return;
+    try {
+      const res = await api.atex.analyzePhotoBatch(Array.from(files));
+      // Le backend renvoie idéalement { manufacturer, manufacturer_ref, atex_marking, type } fusion d’images
+      const s = res || {};
+      setEditing((x) => ({
+        ...(x || {}),
+        manufacturer: x?.manufacturer || s.manufacturer || "",
+        manufacturer_ref: x?.manufacturer_ref || s.manufacturer_ref || "",
+        atex_marking: x?.atex_marking || s.atex_marking || "",
+        type: x?.type || s.type || "",
+      }));
+      setToast("Analyse photos terminée ✅");
+    } catch (e) {
+      console.error(e);
+      setToast("Analyse photos indisponible");
+    }
+  }
+  async function analyzeCompliance() {
+    if (!editing?.id) return;
+    try {
+      const res = await api.atex.aiAnalyze(editing.id);
+      // Idéalement, le backend met à jour l’équipement avec compliance_state + messages
+      await reload();
+      setToast(res?.message || "Analyse conformité OK ✅");
+    } catch (e) {
+      console.error(e);
+      setToast("Analyse conformité indisponible");
+    }
+  }
+
+  /* ----------------------------- Rappels planifiés (90j, puis 36 mois) ----------------------------- */
+  function ensureNextCheckFromInstall(editingLocal) {
+    const it = editingLocal || editing;
+    if (!it) return;
+    // règle : inspection à J+90 après installation, puis tous les 36 mois, avec alerte J-90
+    // Ici côté UI on pré-remplit si vide. La logique serveur peut prévaloir.
+    if (it.installation_date && !it.next_check_date) {
+      const next = dayjs(it.installation_date).add(90, "day");
+      setEditing({ ...it, next_check_date: next.format("YYYY-MM-DD") });
+    }
+  }
+
+  /* ----------------------------- Plans (cards + zip) ----------------------------- */
+  async function loadPlans() {
+    setMapsLoading(true);
+    try {
+      const r = await api.atexMaps.listPlans();
+      setPlans(Array.isArray(r?.plans) ? r.plans : []);
+    } finally {
+      setMapsLoading(false);
+    }
+  }
+  useEffect(() => {
+    if (tab === "plans") loadPlans();
+  }, [tab]);
+
+  /* ----------------------------- UI ----------------------------- */
+  const StickyTabs = () => (
+    <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
+      <div className="flex flex-wrap gap-2">
+        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>
+          📋 Contrôles
+        </Btn>
+        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
+          📅 Calendrier
+        </Btn>
+        <Btn variant={tab === "plans" ? "primary" : "ghost"} onClick={() => setTab("plans")}>
+          🗺️ Plans
+        </Btn>
+        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>
+          ⚙️ Paramètres
+        </Btn>
+      </div>
+    </div>
+  );
 
   return (
-    <section className="p-4 sm:p-6 space-y-6 max-w-full">
-      {/* Header + actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex gap-2 flex-wrap">
-          {['controls', 'assessment', 'import', 'plans'].map(k => (
-            <button
-              key={k}
-              className={classNames(
-                'px-4 py-2 text-sm font-medium rounded-lg',
-                tab === k ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              )}
-              onClick={() => setTab(k)}
-            >
-              {k === 'controls' ? 'Controls' : k === 'assessment' ? 'Assessment' : k === 'import' ? 'Import/Export' : 'Plans & Positions'}
-            </button>
-          ))}
+    <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
+      <Toast text={toast} onClose={() => setToast("")} />
+
+      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Équipements ATEX</h1>
         </div>
-        <Button
-          variant="primary"
-          className="flex items-center gap-2 w-full sm:w-auto"
-          onClick={() =>
-            setEditItem({
-              id: null,
-              site: '',
-              building: '',
-              room: '',
-              component_type: '',
-              manufacturer: '',
-              manufacturer_ref: '',
-              atex_ref: '',
-              zone_gas: '',
-              zone_dust: '',
-              last_control: '',
-              next_control: '',
-              comments: '',
-              frequency_months: 36
-            })
-          }
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          New Equipment
-        </Button>
-      </div>
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
+            {filtersOpen ? "Masquer les filtres" : "Filtres"}
+          </Btn>
+        </div>
+      </header>
 
-      {/* Onglet Controls */}
-      {tab === 'controls' && (
-        <div className="space-y-6">
-          {/* Filtres + Table */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <h2 className="text-2xl font-semibold">ATEX Equipment Controls</h2>
-            <button
-              className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
-              onClick={() => {}}
-            >
-              {/* Toggle filtrage via la FilterBar juste en dessous si souhaité */}
-            </button>
+      <StickyTabs />
+
+      {filtersOpen && (
+        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
+          <div className="grid md:grid-cols-5 gap-3">
+            <Input value={q} onChange={setQ} placeholder="Recherche (nom / marquage / ref…)" />
+            <Select
+              value={status}
+              onChange={setStatus}
+              options={[
+                { value: "", label: "Tous statuts" },
+                { value: STATUS.A_FAIRE, label: "À faire (vert)" },
+                { value: STATUS.EN_COURS, label: "En cours <30j (orange)" },
+                { value: STATUS.EN_RETARD, label: "En retard (rouge)" },
+                { value: STATUS.FAIT, label: "Fait (hist.)" },
+              ]}
+              placeholder="Tous statuts"
+            />
+            <Input value={building} onChange={setBuilding} placeholder="Bâtiment" />
+            <Input value={zone} onChange={setZone} placeholder="Zone / Étage" />
+            <Select
+              value={compliance}
+              onChange={setCompliance}
+              options={[
+                { value: "", label: "Tous états de conformité" },
+                { value: "conforme", label: "Conforme" },
+                { value: "non_conforme", label: "Non conforme" },
+                { value: "na", label: "N/A" },
+              ]}
+              placeholder="Conformité"
+            />
           </div>
+          <div className="flex gap-2">
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                setQ("");
+                setStatus("");
+                setBuilding("");
+                setZone("");
+                setCompliance("");
+              }}
+            >
+              Réinitialiser
+            </Btn>
+          </div>
+          <div className="text-xs text-gray-500">Recherche automatique activée.</div>
+        </div>
+      )}
 
-          <FilterBar
-            q={q}
-            setQ={setQ}
-            fBuilding={fBuilding}
-            setFBuilding={setFBuilding}
-            fRoom={fRoom}
-            setFRoom={setFRoom}
-            fType={fType}
-            setFType={setFType}
-            fManufacturer={fManufacturer}
-            setFManufacturer={setFManufacturer}
-            fStatus={fStatus}
-            setFStatus={setFStatus}
-            fGas={fGas}
-            setFGas={setFGas}
-            fDust={fDust}
-            setFDust={setFDust}
-            uniques={uniques}
-            onSearch={loadData}
-            onReset={onReset}
-          />
-
-          <div className="bg-white rounded-lg shadow overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <Th label="ID" sortKey="id" sort={sort} setSort={setSort} />
-                  <Th label="Equipment" sortKey="component_type" sort={sort} setSort={setSort} />
-                  <Th label="Location" sortKey="building" sort={sort} setSort={setSort} />
-                  <Th label="Manufacturer" sortKey="manufacturer" sort={sort} setSort={setSort} />
-                  <Th label="ATEX" sortKey="atex_ref" sort={sort} setSort={setSort} />
-                  <th className="px-4 py-2 text-left font-medium">Zones</th>
-                  <Th label="Status" sortKey="status" sort={sort} setSort={setSort} />
-                  <Th label="Next Inspection" sortKey="next_control" sort={sort} setSort={setSort} />
-                  <th className="px-4 py-2 text-left font-medium">Actions</th>
+      {/* --------- Onglet Contrôles (tableau identique Doors) --------- */}
+      {tab === "controls" && (
+        <div className="bg-white rounded-2xl border shadow-sm">
+          <div className="hidden sm:block overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-[12px] z-20 bg-gray-50/90 backdrop-blur supports-[backdrop-filter]:bg-gray-50/70">
+                <tr className="text-left border-b">
+                  <th className="px-4 py-3 font-semibold text-gray-700">Équipement</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Localisation</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Conformité</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Statut</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Prochain contrôle</th>
+                  <th className="px-4 py-3 font-semibold text-gray-700">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {loading ? (
+                {loading && (
                   <tr>
-                    <td colSpan="9" className="text-center py-4 text-gray-500">Loading...</td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">
+                      Chargement…
+                    </td>
                   </tr>
-                ) : rows.length === 0 ? (
+                )}
+                {!loading && items.length === 0 && (
                   <tr>
-                    <td colSpan="9" className="text-center py-4 text-gray-500">No equipment found</td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">
+                      Aucun équipement.
+                    </td>
                   </tr>
-                ) : (
-                  rows.map(r => (
-                    <tr key={r.id} className="border-t">
-                      <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
-                      <td className="px-4 py-2">{r.component_type}</td>
-                      <td className="px-4 py-2">
-                        <div>{r.building}</div>
-                        <div className="text-xs text-gray-500">Room {r.room}</div>
+                )}
+                {!loading &&
+                  items.map((it, idx) => (
+                    <tr
+                      key={it.id}
+                      className={`border-b hover:bg-gray-50 ${
+                        idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"
+                      }`}
+                    >
+                      <td className="px-4 py-3 min-w-[260px]">
+                        <div className="flex items-center gap-3">
+                          <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
+                            {it.photo_url ? (
+                              <img
+                                src={api.atex.photoUrl(it.id)}
+                                alt={it.name}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <span className="text-[10px] text-gray-500 p-1 text-center">
+                                Photo à
+                                <br />
+                                prendre
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            className="text-blue-700 font-medium hover:underline"
+                            onClick={() => openEdit(it)}
+                          >
+                            {it.name || it.type || "Équipement"}
+                          </button>
+                        </div>
                       </td>
-                      <td className="px-4 py-2">
-                        {r.manufacturer || '—'}
-                        {r.manufacturer_ref && <div className="text-xs text-gray-500">{r.manufacturer_ref}</div>}
+                      <td className="px-4 py-3">
+                        {(it.building || "—") +
+                          " • " +
+                          (it.zone || "—") +
+                          (it.equipment ? ` • ${it.equipment}` : "") +
+                          (it.sub_equipment ? ` • ${it.sub_equipment}` : "")}
                       </td>
-                      <td className="px-4 py-2 font-mono text-xs">{r.atex_ref || '—'}</td>
-                      <td className="px-4 py-2">
-                        <div className="text-xs">Gas: {r.zone_gas ?? '—'}</div>
-                        <div className="text-xs">Dust: {r.zone_dust ?? '—'}</div>
+                      <td className="px-4 py-3">
+                        {it.compliance_state === "conforme" ? (
+                          <Badge color="green">Conforme</Badge>
+                        ) : it.compliance_state === "non_conforme" ? (
+                          <Badge color="red">Non conforme</Badge>
+                        ) : (
+                          <Badge>—</Badge>
+                        )}
                       </td>
-                      <td className="px-4 py-2">
-                        <span className={classNames('px-2 py-1 rounded text-xs', getStatusColor(r.status))}>
-                          {getStatusDisplay(r.status)}
-                        </span>
+                      <td className="px-4 py-3">
+                        <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
                       </td>
-                      <td className="px-4 py-2">{formatDate(r.next_control)}</td>
-                      <td className="px-4 py-2 flex gap-2 flex-wrap">
-                        <button className="text-blue-600 hover:text-blue-800 text-xs font-medium" onClick={() => onEdit(r)}>Edit</button>
-                        <button className="text-red-600 hover:text-red-800 text-xs font-medium" onClick={() => setShowDelete(r.id)}>Delete</button>
-                        <button
-                          className="text-blue-600 hover:text-blue-800 text-xs font-medium"
-                          onClick={() => { setShowAttach(r.id); loadAttachments(r.id); }}
-                        >
-                          Attach
-                        </button>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {it.next_check_date
+                          ? dayjs(it.next_check_date).format("DD/MM/YYYY")
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <Btn variant="ghost" onClick={() => openEdit(it)}>
+                            Ouvrir
+                          </Btn>
+                        </div>
                       </td>
                     </tr>
-                  ))
-                )}
+                  ))}
               </tbody>
             </table>
-
-            <Pager page={page} setPage={setPage} pageSize={pageSize} total={total} />
-          </div>
-        </div>
-      )}
-
-      {/* Onglet Import/Export */}
-      {tab === 'import' && (
-        <div className="space-y-6">
-          <h2 className="text-2xl font-semibold">Import/Export Data</h2>
-          <div className="bg-white rounded-lg shadow p-6 space-y-4">
-            <div>
-              <h3 className="text-lg font-medium mb-2">Excel Template Instructions</h3>
-              <p className="text-gray-700 mb-4">Use the following column order in your Excel file (first row headers):</p>
-              <div className="overflow-x-auto">
-                <table className="min-w-full bg-white border">
-                  <thead>
-                    <tr className="bg-gray-50">
-                      <th className="px-4 py-2 text-left border">Column</th>
-                      <th className="px-4 py-2 text-left border">Example</th>
-                      <th className="px-4 py-2 text-left border">Required</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {[
-                      ['site', 'Nyon', 'No'],
-                      ['building', '20', 'Yes'],
-                      ['room', '112', 'Yes'],
-                      ['component_type', 'Compressor', 'Yes'],
-                      ['manufacturer', 'Schneider', 'No'],
-                      ['manufacturer_ref', '218143RT', 'No'],
-                      ['atex_ref', 'II 2G Ex ib IIC T4 Gb', 'No'],
-                      ['zone_gas', '2', 'No'],
-                      ['zone_dust', '21', 'No'],
-                      ['comments', 'Installed 2023', 'No'],
-                      ['last_control', '2025-09-19', 'No'],
-                      ['frequency_months', '36', 'No'],
-                      ['next_control', '2028-09-19', 'No']
-                    ].map(([c, ex, req]) => (
-                      <tr key={c}>
-                        <td className="px-4 py-2 border">{c}</td>
-                        <td className="px-4 py-2 border">{ex}</td>
-                        <td className="px-4 py-2 border">{req}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="text-xs text-gray-500 mt-3">Dates in YYYY-MM-DD format. Numbers for zones (0,1,2 for gas; 20,21,22 for dust).</p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Button variant="primary" className="w-full" onClick={exportToExcel}>
-                <svg className="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                Export Current Equipment Data
-              </Button>
-              <div>
-                <label className="block text-sm font-medium mb-1">Import Equipment Data</label>
-                <input className="input w-full" type="file" accept=".xlsx,.xls" onChange={importFromExcel} />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Onglet Assessment */}
-      {tab === 'assessment' && (
-        <div className="space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <h2 className="text-2xl font-semibold">Assessment & Analytics</h2>
-            <div className="text-sm text-gray-500">
-              Updated: {analytics?.generatedAt ? new Date(analytics.generatedAt).toLocaleString() : 'Loading...'}
-            </div>
           </div>
 
-          {analyticsLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {[...Array(3)].map((_, i) => (
-                <div key={i} className="bg-white p-4 rounded-lg shadow animate-pulse">
-                  <div className="h-4 bg-gray-200 rounded w-1/2 mb-2"></div>
-                  <div className="h-8 bg-gray-200 rounded w-1/4"></div>
-                </div>
-              ))}
-            </div>
-          ) : analytics ? (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <KpiCard title="Total Equipment" value={analytics.stats.total} tone="blue" />
-                <KpiCard
-                  title="Compliant"
-                  value={analytics.stats.compliant}
-                  tone="green"
-                  sub={`${Math.round((analytics.stats.compliant / Math.max(1, analytics.stats.total)) * 100)}% compliance rate`}
-                />
-                <KpiCard title="Overdue Inspections" value={analytics.stats.overdue} tone="red" sub="Immediate action required" />
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <DoughnutChart
-                  data={[
-                    { label: 'Compliant', value: Number(analytics.stats.compliant || 0) },
-                    { label: 'Non-compliant', value: Number(analytics.stats.non_compliant || 0) },
-                    { label: 'To review', value: Number(analytics.stats.to_review || 0) }
-                  ]}
-                  title="Compliance Status Distribution"
-                />
-                <SimpleBarChart
-                  data={(analytics.byType || []).map(item => ({
-                    label: (item.component_type || '').slice(0, 20) + ((item.component_type || '').length > 20 ? '...' : ''),
-                    value: parseInt(item.count, 10) || 0
-                  }))}
-                  title="Top Equipment Types"
-                />
-                <SimpleBarChart
-                  data={[
-                    { label: 'Overdue', value: Number(analytics.stats.overdue || 0) },
-                    { label: 'Due 90 days', value: Number(analytics.stats.due_90_days || 0) },
-                    { label: 'Future', value: Number(analytics.stats.future || 0) }
-                  ]}
-                  title="Inspection Timeline"
-                />
-                <SimpleBarChart
-                  data={(analytics.complianceByZone || []).map(item => ({
-                    label: `Zone ${item.zone}`,
-                    value: parseInt(item.compliant, 10) || 0
-                  }))}
-                  title="Compliant Equipment by Gas Zone"
-                  yLabel="Compliant Count"
-                />
-              </div>
-
-              {(analytics.riskEquipment || []).length > 0 && (
-                <div className="bg-white rounded-lg shadow overflow-x-auto">
-                  <div className="px-6 py-4 border-b bg-gray-50">
-                    <h3 className="text-lg font-medium">High Priority Equipment ({analytics.riskEquipment.length})</h3>
-                    <p className="text-sm text-gray-600">Overdue inspections and due within next 90 days</p>
+          {/* Mobile cards (simple et fidèle) */}
+          <div className="sm:hidden divide-y">
+            {loading && <div className="p-4 text-gray-500">Chargement…</div>}
+            {!loading && items.length === 0 && (
+              <div className="p-4 text-gray-500">Aucun équipement.</div>
+            )}
+            {!loading &&
+              items.map((it) => (
+                <div key={it.id} className="p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
+                        {it.photo_url ? (
+                          <img
+                            src={api.atex.photoUrl(it.id)}
+                            alt={it.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <span className="text-[11px] text-gray-500 p-1 text-center">
+                            Photo à
+                            <br />
+                            prendre
+                          </span>
+                        )}
+                      </div>
+                      <div>
+                        <button
+                          className="text-blue-700 font-semibold hover:underline"
+                          onClick={() => openEdit(it)}
+                        >
+                          {it.name || it.type || "Équipement"}
+                        </button>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {it.building || "—"} • {it.zone || "—"}{" "}
+                          {it.equipment ? `• ${it.equipment}` : ""}{" "}
+                          {it.sub_equipment ? `• ${it.sub_equipment}` : ""}
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          {it.compliance_state === "conforme" ? (
+                            <Badge color="green">Conforme</Badge>
+                          ) : it.compliance_state === "non_conforme" ? (
+                            <Badge color="red">Non conforme</Badge>
+                          ) : (
+                            <Badge>—</Badge>
+                          )}
+                          <span className="text-xs text-gray-500">
+                            Prochain contrôle:{" "}
+                            {it.next_check_date
+                              ? dayjs(it.next_check_date).format("DD/MM/YYYY")
+                              : "—"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
                   </div>
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-4 py-2 text-left font-medium">ID</th>
-                        <th className="px-4 py-2 text-left font-medium">Equipment</th>
-                        <th className="px-4 py-2 text-left font-medium">Location</th>
-                        <th className="px-4 py-2 text-left font-medium">Zones</th>
-                        <th className="px-4 py-2 text-left font-medium">Status</th>
-                        <th className="px-4 py-2 text-left font-medium">Next Inspection</th>
-                        <th className="px-4 py-2 text-left font-medium">Days</th>
-                        <th className="px-4 py-2 text-left font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {analytics.riskEquipment.map(r => {
-                        const dleft = daysUntil(r.next_control);
-                        const risk = dleft < 0 ? 'High' : 'Medium';
-                        const riskColor = risk === 'High' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800';
-                        return (
-                          <tr key={r.id} className="border-t">
-                            <td className="px-4 py-2 font-mono text-sm">#{r.id}</td>
-                            <td className="px-4 py-2">{r.component_type}</td>
-                            <td className="px-4 py-2">
-                              <div>{r.building}</div>
-                              <div className="text-xs text-gray-500">Room {r.room}</div>
-                            </td>
-                            <td className="px-4 py-2">
-                              <div className="text-xs">Gas: {r.zone_gas ?? '—'}</div>
-                              <div className="text-xs">Dust: {r.zone_dust ?? '—'}</div>
-                            </td>
-                            <td className="px-4 py-2">
-                              <span className={classNames('px-2 py-1 rounded text-xs', getStatusColor(r.status))}>
-                                {getStatusDisplay(r.status)}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2">{formatDate(r.next_control)}</td>
-                            <td className="px-4 py-2">
-                              <span className={classNames('px-2 py-1 rounded text-xs', riskColor)}>
-                                {dleft < 0 ? `${Math.abs(dleft)} days late` : `${dleft} days`}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2">
-                              <button className="text-blue-600 hover:text-blue-800 text-xs font-medium" onClick={() => setTab('controls')}>
-                                View
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                  <div className="mt-3 flex gap-2">
+                    <Btn variant="ghost" onClick={() => openEdit(it)}>
+                      Ouvrir
+                    </Btn>
+                  </div>
                 </div>
-              )}
-            </>
-          ) : (
-            <div className="text-center py-12 text-gray-500">Loading analytics...</div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* --------- Onglet Calendrier --------- */}
+      {tab === "calendar" && (
+        <div className="bg-white rounded-2xl border shadow-sm p-4">
+          <MonthCalendar
+            events={calendar.events}
+            onDayClick={({ events }) => {
+              const first = events?.[0];
+              if (!first?.equipment_id) return;
+              const it = items.find((x) => x.id === first.equipment_id);
+              if (it) openEdit(it);
+            }}
+          />
+        </div>
+      )}
+
+      {/* --------- Onglet Plans (ZIP identique + cards + viewer délégué) --------- */}
+      {tab === "plans" && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
+            <div className="font-semibold">Plans PDF</div>
+            <AtexZipImport
+              disabled={mapsLoading}
+              onDone={async () => {
+                setToast("Plans importés ✅");
+                await loadPlans();
+              }}
+            />
+          </div>
+
+          <PlanCards
+            plans={plans}
+            onRename={async (plan, name) => {
+              await api.atexMaps.renamePlan(plan.logical_name, name);
+              await loadPlans();
+            }}
+            onPick={setSelectedPlan}
+          />
+
+          {selectedPlan && (
+            <div className="bg-white rounded-2xl border shadow-sm p-3">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="font-semibold truncate pr-3">
+                  {selectedPlan.display_name || selectedPlan.logical_name}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>
+                    Fermer le plan
+                  </Btn>
+                </div>
+              </div>
+
+              {/* 👉 Toute la logique carte/dessins/plus bouton est dans Atex-map.jsx */}
+              <AtexMap plan={selectedPlan} onOpenEquipment={openEdit} />
+            </div>
           )}
         </div>
       )}
 
-      {/* Onglet Plans */}
-      {tab === 'plans' && <PlansPane notify={notify} />}
-
-      {/* Modale Delete */}
-      {showDelete && (
-        <Modal onClose={() => setShowDelete(null)} title="Confirm Delete">
-          <p className="text-sm text-gray-600 mb-6">Are you sure you want to delete equipment #{showDelete}?</p>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setShowDelete(null)}>Cancel</Button>
-            <Button variant="danger" onClick={() => deleteItem(showDelete)}>Delete</Button>
+      {/* --------- Onglet Paramètres (optionnel pour gabarits/checklist) --------- */}
+      {tab === "settings" && (
+        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-2">
+          <div className="text-sm text-gray-600">
+            Paramétrage ATEX (placeholder). On peut y mettre des gabarits ou préférences.
           </div>
-        </Modal>
+        </div>
       )}
 
-      {/* Modale Attach */}
-      {showAttach && (
-        <Modal onClose={() => setShowAttach(null)} title={`Attachments for #${showAttach}`}>
-          <input
-            type="file"
-            multiple
-            className="input mb-4 w-full"
-            onChange={e => uploadAttachmentsAction(showAttach, Array.from(e.target.files))}
-          />
-          {attachments.length === 0 ? (
-            <p className="text-sm text-gray-500">No attachments</p>
-          ) : (
-            <ul className="space-y-2">
-              {attachments.map(a => (
-                <li key={a.id} className="flex items-center justify-between text-sm">
-                  <a
-                    href={`${API_BASE}/api/atex/attachments/${a.id}/download`}
-                    className="text-blue-600 hover:text-blue-800 truncate"
-                  >
-                    {a.filename}
-                  </a>
-                  <button className="text-red-600 hover:text-red-800" onClick={() => deleteAttachment(showAttach, a.id)}>
-                    Delete
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Modal>
-      )}
+      {/* --------- Drawer Édition --------- */}
+      {drawerOpen && editing && (
+        <Drawer title={`ATEX • ${editing.name || "nouvel équipement"}`} onClose={closeEdit}>
+          <div className="space-y-4">
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Labeled label="Nom">
+                <Input
+                  value={editing.name || ""}
+                  onChange={(v) => setEditing({ ...editing, name: v })}
+                />
+              </Labeled>
+              <Labeled label="Type (interrupteur, luminaire, etc.)">
+                <Input
+                  value={editing.type || ""}
+                  onChange={(v) => setEditing({ ...editing, type: v })}
+                />
+              </Labeled>
+              <Labeled label="Fabricant">
+                <Input
+                  value={editing.manufacturer || ""}
+                  onChange={(v) => setEditing({ ...editing, manufacturer: v })}
+                />
+              </Labeled>
+              <Labeled label="Référence fabricant">
+                <Input
+                  value={editing.manufacturer_ref || ""}
+                  onChange={(v) => setEditing({ ...editing, manufacturer_ref: v })}
+                />
+              </Labeled>
+              <Labeled label="Marquage ATEX">
+                <Input
+                  value={editing.atex_marking || ""}
+                  onChange={(v) => setEditing({ ...editing, atex_marking: v })}
+                />
+              </Labeled>
+            </div>
 
-      {/* Modale Edit/New */}
-      {editItem && (
-        <EditEquipmentModal
-          editItem={editItem}
-          setEditItem={setEditItem}
-          loading={loading}
-          onSave={saveItem}
-          onClose={() => setEditItem(null)}
-          uniques={uniques}
-          notify={notify}
-        />
-      )}
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Labeled label="Bâtiment">
+                <Input
+                  value={editing.building || ""}
+                  onChange={(v) => setEditing({ ...editing, building: v })}
+                />
+              </Labeled>
+              <Labeled label="Zone (plan)">
+                <Input
+                  value={editing.zone || ""}
+                  onChange={(v) => setEditing({ ...editing, zone: v })}
+                />
+              </Labeled>
+              <Labeled label="Équipement (macro)">
+                <Input
+                  value={editing.equipment || ""}
+                  onChange={(v) => setEditing({ ...editing, equipment: v })}
+                />
+              </Labeled>
+              <Labeled label="Sous-Équipement (depuis zones tracées)">
+                <Input
+                  value={editing.sub_equipment || ""}
+                  onChange={(v) => setEditing({ ...editing, sub_equipment: v })}
+                />
+              </Labeled>
+            </div>
 
-      <ToastEl />
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Labeled label="Zonage gaz (0 / 1 / 2)">
+                <Input
+                  value={editing.zoning_gas ?? ""}
+                  onChange={(v) =>
+                    setEditing({ ...editing, zoning_gas: v === "" ? null : Number(v) })
+                  }
+                />
+              </Labeled>
+              <Labeled label="Zonage poussière (20 / 21 / 22)">
+                <Input
+                  value={editing.zoning_dust ?? ""}
+                  onChange={(v) =>
+                    setEditing({ ...editing, zoning_dust: v === "" ? null : Number(v) })
+                  }
+                />
+              </Labeled>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Labeled label="Date d’installation">
+                <Input
+                  type="date"
+                  value={editing.installation_date || ""}
+                  onChange={(v) => {
+                    const next = { ...editing, installation_date: v };
+                    setEditing(next);
+                    ensureNextCheckFromInstall(next);
+                  }}
+                />
+              </Labeled>
+              <Labeled label="Prochain contrôle">
+                <Input
+                  type="date"
+                  value={editing.next_check_date || ""}
+                  onChange={(v) => setEditing({ ...editing, next_check_date: v })}
+                />
+              </Labeled>
+            </div>
+
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Statut</span>
+                <Badge color={statusColor(editing.status)}>{statusLabel(editing.status)}</Badge>
+                <span className="text-sm text-gray-600">• Conformité</span>
+                {editing.compliance_state === "conforme" ? (
+                  <Badge color="green">Conforme</Badge>
+                ) : editing.compliance_state === "non_conforme" ? (
+                  <Badge color="red">Non conforme</Badge>
+                ) : (
+                  <Badge>—</Badge>
+                )}
+              </div>
+              <div className="text-sm text-gray-600">
+                Alerte: 90 jours avant la date de contrôle
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Btn variant="ghost" onClick={saveBase}>
+                Enregistrer la fiche
+              </Btn>
+              {editing?.id && (
+                <Btn variant="danger" onClick={deleteEquipment}>
+                  Supprimer
+                </Btn>
+              )}
+            </div>
+
+            {/* Photos & pièces jointes */}
+            {editing?.id && (
+              <>
+                <div className="border rounded-2xl p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="font-semibold">Photo principale</div>
+                    <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => e.target.files?.[0] && uploadMainPhoto(e.target.files[0])}
+                      />
+                      Mettre à jour
+                    </label>
+                  </div>
+                  <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
+                    {editing.photo_url ? (
+                      <img
+                        src={api.atex.photoUrl(editing.id)}
+                        alt="photo"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="border rounded-2xl p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="font-semibold">Pièces jointes & photos</div>
+                    <div className="flex items-center gap-2">
+                      <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
+                        <input
+                          type="file"
+                          className="hidden"
+                          multiple
+                          onChange={(e) =>
+                            e.target.files?.length && uploadAttachments(Array.from(e.target.files))
+                          }
+                        />
+                        Ajouter
+                      </label>
+                      <label className="px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
+                        />
+                        Analyser (IA)
+                      </label>
+                      <Btn variant="subtle" onClick={analyzeCompliance}>
+                        Vérifier conformité (IA)
+                      </Btn>
+                    </div>
+                  </div>
+                  {/* La liste des pièces jointes peut être appelée si besoin depuis api.atex.listAttachments(editing.id) */}
+                  <div className="text-xs text-gray-500">
+                    Glisser-déposer supporté dans l’onglet Plans lors de la création in situ.
+                  </div>
+                </div>
+              </>
+            )}
+
+            <div className="border rounded-2xl p-3">
+              <div className="font-semibold mb-2">Commentaire</div>
+              <Textarea
+                rows={3}
+                value={editing.comment || ""}
+                onChange={(v) => setEditing({ ...editing, comment: v })}
+                placeholder="Notes libres…"
+              />
+            </div>
+          </div>
+        </Drawer>
+      )}
     </section>
+  );
+}
+
+/* ----------------------------- Sous-composants locaux ----------------------------- */
+
+function AtexZipImport({ disabled, onDone }) {
+  const inputRef = useRef(null);
+  return (
+    <div className="flex items-center gap-2">
+      <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={disabled}>
+        📦 Import ZIP de plans
+      </Btn>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          if (f) {
+            await api.atexMaps.uploadZip(f);
+            onDone?.();
+          }
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
+function PlanCards({ plans = [], onRename, onPick }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
+      {plans.map((p) => (
+        <PlanCard key={p.id || p.logical_name} plan={p} onRename={onRename} onPick={onPick} />
+      ))}
+    </div>
+  );
+}
+
+function PlanCard({ plan, onRename, onPick }) {
+  const [edit, setEdit] = useState(false);
+  const [name, setName] = useState(plan.display_name || plan.logical_name || "");
+  return (
+    <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
+      <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
+        <div className="flex flex-col items-center justify-center text-gray-500">
+          <div className="text-4xl leading-none">📄</div>
+          <div className="text-[11px] mt-1">PDF</div>
+        </div>
+        <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
+          {name}
+        </div>
+      </div>
+      <div className="p-3">
+        {!edit ? (
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-medium truncate" title={name}>
+              {name || "—"}
+            </div>
+            <div className="flex items-center gap-1">
+              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>
+                ✏️
+              </Btn>
+              <Btn variant="subtle" onClick={() => onPick(plan)}>
+                Ouvrir
+              </Btn>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input value={name} onChange={setName} />
+            <Btn
+              variant="subtle"
+              onClick={async () => {
+                await onRename(plan, (name || "").trim());
+                setEdit(false);
+              }}
+            >
+              OK
+            </Btn>
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                setName(plan.display_name || plan.logical_name || "");
+                setEdit(false);
+              }}
+            >
+              Annuler
+            </Btn>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
