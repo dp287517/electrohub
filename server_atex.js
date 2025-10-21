@@ -551,7 +551,9 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
         if (entry.isDirectory) continue;
         if (!entryName.toLowerCase().endsWith(".pdf")) continue;
 
-        const base = path.basename(entryName, ".pdf");
+        // ✅ Correction: retirer l'extension de manière robuste (PDF/Pdf/pdf, etc.)
+        const { name: baseName } = path.parse(entryName);
+        const base = baseName; // nom sans extension
         const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
         const version = Math.floor(Date.now() / 1000); // int seconds
 
@@ -692,12 +694,14 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
 // ---- ALIAS compat: /api/atex/maps/plan/:logical/file
 app.get("/api/atex/maps/plan/:logical/file", async (req, res) => {
   req.query.logical_name = req.params.logical;
+  req.url = "/api/atex/maps/planFile";            // ✅ redirige vers la route canonique
   return app._router.handle(req, res);
 });
 
 // ---- ALIAS compat: /api/atex/maps/plan-id/:id/file
 app.get("/api/atex/maps/plan-id/:id/file", async (req, res) => {
   req.query.id = req.params.id;
+  req.url = "/api/atex/maps/planFile";            // ✅ redirige vers la route canonique
   return app._router.handle(req, res);
 });
 
