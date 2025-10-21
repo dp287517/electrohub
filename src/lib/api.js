@@ -551,14 +551,23 @@ export const api = {
     renamePlan: (logical_name, display_name) =>
       put(`/api/atex/maps/renamePlan`, { logical_name, display_name }),
 
-    // Fichier PDF du plan (par logical_name)
+    // Fichier PDF du plan
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
+    // ✅ par ID (UUID)
+    planFileUrlById: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`, bust),
 
-    // Helper: auto depuis string|plan
+    // Helper: auto depuis string|plan (détecte UUID)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
-      const logical = typeof plan === "string" ? plan : (plan?.logical_name || plan?.id || "");
-      return withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical)}`, bust);
+      const key =
+        typeof plan === "string"
+          ? plan
+          : (plan?.id || plan?.logical_name || "");
+      const url = isUuid(key)
+        ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
+        : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(key)}`;
+      return withBust(url, bust);
     },
 
     // Positions
@@ -579,30 +588,35 @@ export const api = {
     listSubareas: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/subareas`, { logical_name, page_index }),
 
-    createSubarea: ({
-      logical_name,
-      page_index = 0,
-      name = "",
-      // unified input → backend attend: kind + coords
-      shape_type,   // 'rect' | 'circle' | 'poly'
-      geometry = {},// rect:{x1,y1,x2,y2} | circle:{cx,cy,r} | poly:{points:[[x,y],...]}
-      zone_gas = null,   // 0,1,2 | null
-      zone_dust = null,  // 20,21,22 | null
-      plan_id = null,
-    }) => {
-      const payload = { logical_name, plan_id, page_index, name, zoning_gas: zone_gas, zoning_dust: zone_dust };
+    // ✅ Compat: accepte le format brut {kind, x1..|cx..|points..} OU le format unifié (shape_type + geometry + zone_*)
+    createSubarea: (payload) => {
+      // chemin 1: payload brut déjà utilisé côté front (AtexMap.jsx)
+      if (payload?.kind) {
+        return post(`/api/atex/maps/subareas`, payload);
+      }
+      // chemin 2: API unifiée
+      const {
+        logical_name,
+        page_index = 0,
+        name = "",
+        shape_type,   // 'rect' | 'circle' | 'poly'
+        geometry = {},// rect:{x1,y1,x2,y2} | circle:{cx,cy,r} | poly:{points:[[x,y],...]}
+        zone_gas = null,   // 0,1,2 | null
+        zone_dust = null,  // 20,21,22 | null
+        plan_id = null,
+      } = payload || {};
+      const base = { logical_name, plan_id, page_index, name, zoning_gas: zone_gas, zoning_dust: zone_dust };
 
       if (shape_type === "rect") {
         const { x1, y1, x2, y2 } = geometry || {};
-        return post(`/api/atex/maps/subareas`, { ...payload, kind: "rect", x1, y1, x2, y2 });
+        return post(`/api/atex/maps/subareas`, { ...base, kind: "rect", x1, y1, x2, y2 });
       }
       if (shape_type === "circle") {
         const { cx, cy, r } = geometry || {};
-        return post(`/api/atex/maps/subareas`, { ...payload, kind: "circle", cx, cy, r });
+        return post(`/api/atex/maps/subareas`, { ...base, kind: "circle", cx, cy, r });
       }
-      // default poly
       const pts = (geometry?.points || []).map((p) => Array.isArray(p) ? p : [p.x, p.y]);
-      return post(`/api/atex/maps/subareas`, { ...payload, kind: "poly", points: pts });
+      return post(`/api/atex/maps/subareas`, { ...base, kind: "poly", points: pts });
     },
 
     updateSubarea: (id, patch = {}) =>
