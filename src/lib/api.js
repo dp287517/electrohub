@@ -491,6 +491,16 @@ export const api = {
       if (name)  fd.append("user_name",  name);
       return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`, fd);
     },
+    // ✅ Alias pour compat Front : même sémantique que controls.uploadAttachments
+    uploadAttachments: (equipmentId, files = [], label) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      (Array.isArray(files) ? files : [files]).forEach((f) => fd.append("files", f));
+      if (label) fd.append("label", label);
+      if (email) fd.append("user_email", email);
+      if (name)  fd.append("user_name",  name);
+      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`, fd);
+    },
     deleteFile: (fileId) => del(`/api/atex/files/${encodeURIComponent(fileId)}`),
 
     // Contrôles (checklists)
@@ -588,13 +598,11 @@ export const api = {
     listSubareas: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/subareas`, { logical_name, page_index }),
 
-    // ✅ Compat: accepte le format brut {kind, x1..|cx..|points..} OU le format unifié (shape_type + geometry + zone_*)
+    // Compat: accepte le format brut {kind, x1..|cx..|points..} OU le format unifié (shape_type + geometry + zone_*)
     createSubarea: (payload) => {
-      // chemin 1: payload brut déjà utilisé côté front (AtexMap.jsx)
       if (payload?.kind) {
         return post(`/api/atex/maps/subareas`, payload);
       }
-      // chemin 2: API unifiée
       const {
         logical_name,
         page_index = 0,
@@ -619,12 +627,33 @@ export const api = {
       return post(`/api/atex/maps/subareas`, { ...base, kind: "poly", points: pts });
     },
 
-    updateSubarea: (id, patch = {}) =>
-      put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, {
-        name: patch.name ?? null,
-        zoning_gas: patch.zone_gas ?? patch.zoning_gas ?? null,
-        zoning_dust: patch.zone_dust ?? patch.zoning_dust ?? null,
-      }),
+    // ✅ Mise à jour: accepte aussi la géométrie (kind + coords) en plus du nom/zoning
+    updateSubarea: (id, patch = {}) => {
+      const body = {};
+      if (patch.name !== undefined) body.name = patch.name;
+      if (patch.zone_gas !== undefined) body.zoning_gas = patch.zone_gas;
+      if (patch.zoning_gas !== undefined) body.zoning_gas = patch.zoning_gas;
+      if (patch.zone_dust !== undefined) body.zoning_dust = patch.zone_dust;
+      if (patch.zoning_dust !== undefined) body.zoning_dust = patch.zoning_dust;
+
+      // Géométrie (optionnelle)
+      if (patch.kind) body.kind = patch.kind;
+      if (["rect", "circle", "poly"].includes(patch.kind)) {
+        if (patch.kind === "rect") {
+          if (patch.x1 !== undefined) body.x1 = patch.x1;
+          if (patch.y1 !== undefined) body.y1 = patch.y1;
+          if (patch.x2 !== undefined) body.x2 = patch.x2;
+          if (patch.y2 !== undefined) body.y2 = patch.y2;
+        } else if (patch.kind === "circle") {
+          if (patch.cx !== undefined) body.cx = patch.cx;
+          if (patch.cy !== undefined) body.cy = patch.cy;
+          if (patch.r  !== undefined) body.r  = patch.r;
+        } else if (patch.kind === "poly") {
+          if (patch.points !== undefined) body.points = patch.points;
+        }
+      }
+      return put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, body);
+    },
 
     deleteSubarea: (id) =>
       del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
