@@ -44,7 +44,7 @@ function Textarea({ value, onChange, className = "", ...p }) {
     <textarea
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
       value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value))}
+      onChange={(e) => onChange?.(e.target.value)}
       {...p}
     />
   );
@@ -54,7 +54,7 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
     <select
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
       value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value))}
+      onChange={(e) => onChange?.(e.target.value)}
     >
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
