@@ -21,7 +21,7 @@
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji;
 }
 
-/* ----------- Bouton ➕ création équipement ----------- */
+/* ----------- Bouton ➕ création équipement (Leaflet control hérité) ----------- */
 .leaflet-control-addatex a {
   display: inline-flex;
   align-items: center;
@@ -93,29 +93,7 @@
   font-size: 12px; color: #374151;
 }
 
-/* ----------- Couleurs de zones (remplissages) -----------
-   Gaz:  Zone 0 / 1 / 2
-   Poussière: Zone 20 / 21 / 22
-   Palette: gaz = bleu/vert d’eau ; poussière = ambre/rose ; mix = hachuré.
----------------------------------------------------------- */
-
-/* Gaz — plein */
-.zone-gas-0 { background: #1f77b4; }
-.zone-gas-1 { background: #2ca02c; }
-.zone-gas-2 { background: #17becf; }
-
-/* Poussière — plein */
-.zone-dust-20 { background: #d97706; }
-.zone-dust-21 { background: #eab308; }
-.zone-dust-22 { background: #f59e0b; }
-
-/* Bordures par défaut des zones dessinées */
-.atex-zone-outline {
-  stroke: rgba(0,0,0,.35);
-  stroke-width: 1.2px;
-}
-
-/* Polygones/rectangles/cercles — styles Leaflet (path SVG) */
+/* ----------- Couleurs de zones (remplissages) ----------- */
 .leaflet-overlay-pane .atex-subarea-gas-0 { fill: #1f77b4; fill-opacity: .18; stroke: #1f77b4; }
 .leaflet-overlay-pane .atex-subarea-gas-1 { fill: #2ca02c; fill-opacity: .18; stroke: #2ca02c; }
 .leaflet-overlay-pane .atex-subarea-gas-2 { fill: #17becf; fill-opacity: .18; stroke: #17becf; }
@@ -218,4 +196,62 @@
   }
   .atex-legend__label { font-size: 11px; }
   .leaflet-control-zoom { transform: translateY(4px); }
+}
+
+/* =========================
+   AJOUT — toolbar crayon
+   ========================= */
+.atex-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 5000;
+}
+
+.btn-plus,
+.btn-pencil {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  background: #ffffffdd;
+  box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 36px;
+}
+
+.btn-plus:hover,
+.btn-pencil:hover { background: #fff; }
+
+.btn-pencil-wrap { position: relative; }
+
+.draw-menu {
+  position: absolute;
+  top: 40px; /* sous le crayon */
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffffee;
+  border: 1px solid #e6e6e6;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+}
+
+.draw-menu > button {
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.draw-menu > button:hover {
+  background: #f6f6f6;
 }
