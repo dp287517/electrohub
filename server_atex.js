@@ -634,7 +634,7 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
     const zipPath = req.file?.path;
     if (!zipPath) return res.status(400).json({ ok: false, error: "zip missing" });
 
-    // ⬇️ Remplacement AdmZip → node-stream-zip (async)
+    // ↙️ node-stream-zip (async)
     const zip = new StreamZip.async({ file: zipPath });
     const imported = [];
     try {
@@ -645,13 +645,16 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
 
         const base = path.basename(entryName, ".pdf");
         const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
-        const version = Number(Date.now()); // version horodatée (même logique que l’actuel)
+
+        // ✅ version int 32 bits (secondes) — évite l’overflow INTEGER
+        const version = Math.floor(Date.now() / 1000);
 
         const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
         const buf = await zip.entryData(entry);
         await fsp.writeFile(dest, buf);
 
-        let page_count = 1; // (inchangé : lazy 1)
+        const page_count = 1; // lazy
+
         await pool.query(
           `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count)
            VALUES ($1,$2,$3,$4,$5)`,
@@ -668,7 +671,6 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
       }
     } finally {
       await zip.close().catch(() => {});
-      // (on ne change rien d’autre : pas de suppression forcée du zip si tu ne l’avais pas)
     }
 
     res.json({ ok: true, imported });
