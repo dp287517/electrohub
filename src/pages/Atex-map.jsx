@@ -277,7 +277,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
   // édition géométrie
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
 
-  const planKey = useMemo(() => plan?.id || plan?.logical_name || "", [plan]);
+  // ✅ on privilégie logical_name pour la clé (fix rechargement subareas)
+  const planKey = useMemo(() => plan?.logical_name || plan?.id || "", [plan]);
 
   const fileUrl = useMemo(() => {
     if (!plan) return null;
@@ -316,12 +317,12 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         const baseVp = page.getViewport({ scale: 1 });
 
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-        const dpr = window.devicePixelRatio || 1;
 
-        // 🔎 Qualité bien plus élevée
-        const qualityBoost = 2.75; // ~2.5-3x
-        const targetBitmapW = Math.min(8192, Math.max(1600, Math.floor(containerW * dpr * qualityBoost)));
-        const safeScale = Math.min(4.0, Math.max(0.75, targetBitmapW / baseVp.width));
+        // 🔎 Qualité très élevée (cap + scale plus grands)
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const qualityBoost = 3.5; // ↑ fort boost
+        const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
+        const safeScale = Math.min(6.0, Math.max(0.75, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
         const canvas = document.createElement("canvas");
@@ -329,7 +330,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
         ctx.imageSmoothingEnabled = true;
-        await page.render({ canvasContext: ctx, viewport }).promise;
+        await page.render({ canvasContext: ctx, viewport, intent: "display" }).promise;
 
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
@@ -365,7 +366,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         // fond image
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
         baseLayerRef.current = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 }).addTo(m);
-        m.fitBounds(bounds, { padding: [8, 8] });
+        m.fitBounds(bounds, { padding: [10, 10] });
         const fitZoom = m.getZoom();
         m.setMinZoom(fitZoom - 2);
         m.setMaxZoom(fitZoom + 8); // 🔼 plus de zoom
@@ -412,8 +413,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       cancelled = true;
       cleanupMap();
     };
+    // ⚠️ ne pas inclure legendVisible en dépendance pour éviter re-init
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileUrl, pageIndex, legendVisible]);
+  }, [fileUrl, pageIndex]);
 
   /* ----------------------------- Chargements ----------------------------- */
   async function reloadAll() {
@@ -599,7 +601,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       });
       h.addTo(lay);
 
-      h.on("mousedown", (e) => {
+      h.on("mousedown", () => {
         const m = mapRef.current;
         if (!m) return;
         m.dragging.disable();
@@ -827,7 +829,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
 
     let startPt = null;
     let tempLayer = null;
-    const mode = drawing; // ⚠️ capture du mode au début (fix “disparaît”)
+    const mode = drawing; // ⚠️ capture du mode au début (évite le “disparaît”)
 
     const onDown = (e) => {
       startPt = e.latlng;
@@ -992,8 +994,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
 
   /* ----------------------------- RENDER ----------------------------- */
   const viewerHeight = Math.max(
-    420, // 🔼 plus haut par défaut
-    Math.min(imgSize.h || 960, (typeof window !== "undefined" ? window.innerHeight : 900) - 160)
+    520, // 🔼 plus haut par défaut
+    Math.min(imgSize.h || 1200, (typeof window !== "undefined" ? window.innerHeight : 1000) - 140)
   );
 
   // aide: bascule légende
