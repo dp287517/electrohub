@@ -258,6 +258,19 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
   const [editorInit, setEditorInit] = useState({});
   const [loading, setLoading] = useState(false);
 
+  // --- AJOUT: menu crayon + état d'ouverture
+  const [drawMenu, setDrawMenu] = useState(false);
+  const setDrawMode = (mode) => {
+    if (mode === "rect") setDrawing(DRAW_RECT);
+    else if (mode === "circle") setDrawing(DRAW_CIRCLE);
+    else if (mode === "poly") setDrawing(DRAW_POLY);
+    else setDrawing(DRAW_NONE);
+  };
+  const onAddEquipment = () => createEquipmentAtCenter();
+
+  // --- AJOUT: stockage des zones (zoning_gas / zoning_dust) renvoyées par setPosition
+  const [zonesByEquip, setZonesByEquip] = useState(() => ({})); // { [equipmentId]: { zoning_gas, zoning_dust } }
+
   const planKey = useMemo(() => plan?.id || plan?.logical_name || "", [plan]);
 
   // URL PDF plan
@@ -363,7 +376,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
           setEditorPos(null);
           if (drawing === DRAW_POLY) {
             const pt = e.latlng; // simple CRS → lat=y, lng=x
-            setPolyTemp((arr) => [...arr, [pt.lng, pt.lat]]);
+            setPolyTemp((arr) => [...arr, [pt.lng / imgSize.w, pt.lat / imgSize.h]]); // stocke en fractions
             drawPolyTemp();
           }
         });
@@ -410,9 +423,24 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
             x: Number(it.x_frac ?? it.x ?? 0),
             y: Number(it.y_frac ?? it.y ?? 0),
             status: it.status || "a_faire",
+            zoning_gas: it.zoning_gas ?? null,
+            zoning_dust: it.zoning_dust ?? null,
           }))
         : [];
       setPositions(list);
+      // alimente zonesByEquip si présent
+      setZonesByEquip((prev) => {
+        const next = { ...prev };
+        for (const it of list) {
+          if (it?.id != null) {
+            next[it.id] = {
+              zoning_gas: it.zoning_gas ?? (prev[it.id]?.zoning_gas ?? null),
+              zoning_dust: it.zoning_dust ?? (prev[it.id]?.zoning_dust ?? null),
+            };
+          }
+        }
+        return next;
+      });
       drawMarkers(list);
     } catch (e) {
       console.error(e);
@@ -457,13 +485,23 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         const xFrac = Math.min(1, Math.max(0, ll.lng / imgSize.w));
         const yFrac = Math.min(1, Math.max(0, ll.lat / imgSize.h));
         try {
-          await api.atexMaps.setPosition(p.id, {
+          const resp = await api.atexMaps.setPosition(p.id, {
             logical_name: plan?.logical_name,
             plan_id: plan?.id,
             page_index: pageIndex,
             x_frac: Math.round(xFrac * 1e6) / 1e6,
             y_frac: Math.round(yFrac * 1e6) / 1e6,
           });
+          // --- AJOUT: stocke zones renvoyées
+          if (resp?.zones) {
+            setZonesByEquip((prev) => ({
+              ...prev,
+              [p.id]: {
+                zoning_gas: resp.zones?.zoning_gas ?? null,
+                zoning_dust: resp.zones?.zoning_dust ?? null,
+              },
+            }));
+          }
           await loadPositions();
         } catch (e) {
           console.error(e);
@@ -471,7 +509,15 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       });
 
       mk.on("click", () => {
-        onOpenEquipment?.({ id: p.id, name: p.name });
+        // Si fiche rapide un jour, penser à afficher zonesByEquip[p.id] (zoning_gas/zoning_dust) avec "N/A" si null.
+        onOpenEquipment?.({
+          id: p.id,
+          name: p.name,
+          zones: {
+            zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? "N/A",
+            zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? "N/A",
+          },
+        });
       });
 
       mk.addTo(layer);
@@ -487,13 +533,24 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       const id = created?.id || created?.equipment?.id;
       if (!id) throw new Error("Création ATEX: ID manquant");
 
-      await api.atexMaps.setPosition(id, {
+      const resp = await api.atexMaps.setPosition(id, {
         logical_name: plan.logical_name,
         plan_id: plan.id,
         page_index: pageIndex,
         x_frac: 0.5,
         y_frac: 0.5,
       });
+
+      // --- AJOUT: stocke zones renvoyées (peut être null si hors zone)
+      if (resp?.zones) {
+        setZonesByEquip((prev) => ({
+          ...prev,
+          [id]: {
+            zoning_gas: resp.zones?.zoning_gas ?? null,
+            zoning_dust: resp.zones?.zoning_dust ?? null,
+          },
+        }));
+      }
 
       setUnsavedIds((prev) => new Set(prev).add(id));
       await loadPositions();
@@ -723,12 +780,35 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
   /* ----------------------------- Toolbar ----------------------------- */
   return (
     <div className="relative">
-      {/* barre d’outils dessin */}
+      {/* barre d’outils dessin existante */}
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <Btn variant={drawing === DRAW_RECT ? "subtle" : "ghost"} onClick={startRect}>▭ Rect</Btn>
         <Btn variant={drawing === DRAW_CIRCLE ? "subtle" : "ghost"} onClick={startCircle}>◯ Cercle</Btn>
         <Btn variant={drawing === DRAW_POLY ? "subtle" : "ghost"} onClick={startPoly}>△ Polygone</Btn>
         {drawing !== DRAW_NONE && <Btn variant="ghost" onClick={() => { setDrawing(DRAW_NONE); setPolyTemp([]); }}>Annuler dessin</Btn>}
+      </div>
+
+      {/* Toolbar overlay demandée (bouton + et crayon) */}
+      {/* Toolbar */}
+      <div className="atex-toolbar">
+        <button className="btn-plus" onClick={onAddEquipment}>+</button>
+
+        <div className="btn-pencil-wrap">
+          <button
+            className="btn-pencil"
+            onClick={() => setDrawMenu((v) => !v)}
+            title="Dessiner (zones ATEX)"
+          >
+            ✏️
+          </button>
+          {drawMenu && (
+            <div className="draw-menu">
+              <button onClick={() => { setDrawMode("rect"); setDrawMenu(false); }}>Rectangle</button>
+              <button onClick={() => { setDrawMode("poly"); setDrawMenu(false); }}>Polygone</button>
+              <button onClick={() => { setDrawMode("circle"); setDrawMenu(false); }}>Cercle</button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* viewer leaflet */}
