@@ -21,6 +21,11 @@
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
 }
 
+/* Assure un fond neutre derrière les overlays */
+.leaflet-container .leaflet-overlay-pane svg {
+  overflow: visible;
+}
+
 /* ----------- (legacy) Bouton ➕ control — non utilisé désormais ----------- */
 .leaflet-control-addatex a {
   display: inline-flex;
@@ -38,6 +43,13 @@
 .leaflet-control-addatex a:hover { background: #1d4ed8; }
 
 /* ----------- Marqueurs (icônes div) ----------- */
+/* Utilisée par L.divIcon({ className: "atex-marker-inline", ... }) dans Atex-map.jsx */
+.atex-marker-inline {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* jeux d’états (toujours OK si besoin ailleurs) */
 .atex-marker--new,
 .atex-marker--todo,
 .atex-marker--soon,
