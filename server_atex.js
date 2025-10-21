@@ -266,7 +266,8 @@ function eqStatusFromDue(due) {
   const now = new Date();
   const diff = (d - now) / (1000 * 3600 * 24);
   if (diff < 0) return "en_retard";
-  if (diff <= 30) return "en_cours_30";
+  // ✅ élargit la fenêtre d'alerte à 90 jours (on garde la même étiquette pour compat UI)
+  if (diff <= 90) return "en_cours_30";
   return "a_faire";
 }
 function addMonths(date, m) {
@@ -726,7 +727,7 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
       GROUP BY a.logical_name
       ORDER BY a.logical_name ASC
     `);
-    const plans = rows.map((r) => ({
+  const plans = rows.map((r) => ({
       logical_name: r.logical_name,
       id: r.logical_name,
       version: Number(r.version || 1),
@@ -1265,13 +1266,17 @@ app.post("/api/atex/extract", upload.array("files"), async (req, res) => {
 - type
 Réponds en JSON strict.`;
 
+    // ✅ Correction: format d'images pour chat.completions (type:image_url + { image_url:{ url } })
     const content = [
       { role: "system", content: sys },
       {
         role: "user",
         content: [
           { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
-          ...images.map((im) => ({ type: "input_image", image_url: `data:${im.mime};base64,${im.data}` })),
+          ...images.map((im) => ({
+            type: "image_url",
+            image_url: { url: `data:${im.mime};base64,${im.data}` },
+          })),
         ],
       },
     ];
