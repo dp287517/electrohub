@@ -54,6 +54,7 @@ app.use(
       "X-User-Name",
       "Authorization",
       "X-Site",
+      "X-Confirm",
     ],
     exposedHeaders: [],
   })
@@ -219,7 +220,8 @@ async function ensureSchema() {
       name TEXT DEFAULT '',
       zoning_gas INTEGER NULL,
       zoning_dust INTEGER NULL,
-      created_at TIMESTAMP DEFAULT now()
+      created_at TIMESTAMP DEFAULT now(),
+      updated_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_atex_subareas_lookup ON atex_subareas(logical_name, page_index);
   `);
@@ -238,6 +240,20 @@ async function ensureSchema() {
     );
     INSERT INTO atex_settings(id) VALUES (1)
     ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // 🔹 Journaux (création/édition/suppression des zones & opérations admin)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atex_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      ts TIMESTAMP DEFAULT now(),
+      actor_name TEXT,
+      actor_email TEXT,
+      action TEXT NOT NULL,
+      details JSONB DEFAULT '{}'::jsonb
+    );
+    CREATE INDEX IF NOT EXISTS idx_atex_events_action ON atex_events(action);
+    CREATE INDEX IF NOT EXISTS idx_atex_events_time ON atex_events(ts DESC);
   `);
 }
 
@@ -266,6 +282,19 @@ function fileUrlFromPath(p) {
 }
 function isUuid(s = "") {
   return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
+}
+async function logEvent(req, action, details = {}) {
+  const u = getUser(req);
+  try {
+    await pool.query(
+      `INSERT INTO atex_events(actor_name, actor_email, action, details) VALUES($1,$2,$3,$4)`,
+      [u.name || null, u.email || null, action, JSON.stringify(details || {})]
+    );
+  } catch (e) {
+    console.warn("[events] failed to log", action, e.message);
+  }
+  // Console court et structuré
+  console.log(`[atex][${action}]`, { by: u.email || u.name || "anon", ...details });
 }
 
 // ------------------------------
@@ -811,25 +840,26 @@ function pointInPoly(px, py, points) {
 }
 async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
   const { rows } = await pool.query(
-    `SELECT kind, x1,y1,x2,y2,cx,cy,r,points,zoning_gas,zoning_dust
-     FROM atex_subareas WHERE logical_name=$1 AND page_index=$2`,
+    `SELECT id, kind, x1,y1,x2,y2,cx,cy,r,points,zoning_gas,zoning_dust
+     FROM atex_subareas WHERE logical_name=$1 AND page_index=$2
+     ORDER BY created_at ASC`,
     [logical_name, page_index]
   );
   for (const z of rows) {
     if (z.kind === "rect" && pointInRect(x_frac, y_frac, z.x1, z.y1, z.x2, z.y2)) {
-      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust };
+      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id };
     }
     if (z.kind === "circle" && pointInCircle(x_frac, y_frac, z.cx, z.cy, z.r)) {
-      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust };
+      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id };
     }
     if (z.kind === "poly" && Array.isArray(z.points)) {
       const pts = z.points;
       if (pts?.length && pointInPoly(x_frac, y_frac, pts)) {
-        return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust };
+        return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id };
       }
     }
   }
-  return { zoning_gas: null, zoning_dust: null };
+  return { zoning_gas: null, zoning_dust: null, subarea_id: null };
 }
 
 // route “canonique” initiale (PUT)
@@ -889,6 +919,30 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// Recalculer les zonages de tous les équipements d’un plan/page
+app.post("/api/atex/maps/reindexZones", async (req, res) => {
+  try {
+    const { logical_name, page_index = 0 } = req.body || {};
+    if (!logical_name) return res.status(400).json({ ok:false, error:"logical_name required" });
+
+    const { rows: pos } = await pool.query(
+      `SELECT equipment_id, x_frac, y_frac FROM atex_positions WHERE logical_name=$1 AND page_index=$2`,
+      [logical_name, Number(page_index)]
+    );
+    let updated = 0;
+    for (const p of pos) {
+      const z = await detectZonesForPoint(logical_name, Number(page_index), Number(p.x_frac), Number(p.y_frac));
+      await pool.query(
+        `UPDATE atex_equipments SET zoning_gas=$1, zoning_dust=$2, updated_at=now() WHERE id=$3`,
+        [z.zoning_gas, z.zoning_dust, p.equipment_id]
+      );
+      updated++;
+    }
+    await logEvent(req, "zones.reindex", { logical_name, page_index, updated });
+    res.json({ ok:true, updated });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
 // ========================================================================
 // MAPS — Positions (lecture)
 // ========================================================================
@@ -924,7 +978,7 @@ app.get("/api/atex/maps/positions", async (req, res) => {
 });
 
 // ========================================================================
-// MAPS — Subareas (dessin)
+// MAPS — Subareas (dessin) + améliorations (edit geometry / stats / purge)
 // ========================================================================
 app.get("/api/atex/maps/subareas", async (req, res) => {
   try {
@@ -935,6 +989,20 @@ app.get("/api/atex/maps/subareas", async (req, res) => {
       [logical, pageIndex]
     );
     res.json({ items: rows || [] });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// stats: savoir s’il y a des zones et combien
+app.get("/api/atex/maps/subareas/stats", async (req, res) => {
+  try {
+    const logical = String(req.query.logical_name || "");
+    const pageIndex = Number(req.query.page_index || 0);
+    if (!logical) return res.status(400).json({ ok:false, error:"logical_name required" });
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM atex_subareas WHERE logical_name=$1 AND page_index=$2`,
+      [logical, pageIndex]
+    );
+    res.json({ ok:true, count: rows?.[0]?.n ?? 0 });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
@@ -951,6 +1019,7 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
     } = req.body || {};
 
     if (!logical_name || !kind) return res.status(400).json({ ok: false, error: "missing params" });
+    if (!["rect","circle","poly"].includes(kind)) return res.status(400).json({ ok:false, error:"invalid kind" });
 
     const planIdSafe = isUuid(plan_id) ? plan_id : null;
 
@@ -966,26 +1035,105 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
         name, zoning_gas, zoning_dust,
       ]
     );
-    res.json({ subarea: rows[0] });
+    const created = rows[0];
+    await pool.query(`UPDATE atex_subareas SET updated_at=now() WHERE id=$1`, [created.id]);
+    await logEvent(req, "subarea.create", { id: created.id, logical_name, page_index, kind, name, zoning_gas, zoning_dust });
+    res.json({ ok:true, subarea: created, created: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// éditer meta (nom, zonage)
 app.put("/api/atex/maps/subareas/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
     const { name = null, zoning_gas = null, zoning_dust = null } = req.body || {};
     await pool.query(
-      `UPDATE atex_subareas SET name=COALESCE($1,name), zoning_gas=$2, zoning_dust=$3 WHERE id=$4`,
+      `UPDATE atex_subareas SET name=COALESCE($1,name), zoning_gas=$2, zoning_dust=$3, updated_at=now() WHERE id=$4`,
       [name, zoning_gas, zoning_dust, id]
     );
+    await logEvent(req, "subarea.update.meta", { id, name, zoning_gas, zoning_dust });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// 🔹 NOUVEAU : éditer la GÉOMÉTRIE (changer kind et/ou coord.)
+app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const {
+      kind = null,
+      x1 = null, y1 = null, x2 = null, y2 = null,
+      cx = null, cy = null, r = null,
+      points = null,
+    } = req.body || {};
+
+    if (kind && !["rect","circle","poly"].includes(kind))
+      return res.status(400).json({ ok:false, error:"invalid kind" });
+
+    const set = [];
+    const vals = [];
+    let i = 1;
+
+    if (kind) { set.push(`kind=$${i++}`); vals.push(kind); }
+    for (const [k, v] of Object.entries({ x1,y1,x2,y2,cx,cy,r })) {
+      if (v !== undefined) { set.push(`${k}=$${i++}`); vals.push(v); }
+    }
+    if (points !== undefined) {
+      set.push(`points=$${i++}`); vals.push(points ? JSON.stringify(points) : null);
+    }
+    set.push(`updated_at=now()`);
+
+    vals.push(id);
+    await pool.query(`UPDATE atex_subareas SET ${set.join(", ")} WHERE id=$${i}`, vals);
+    await logEvent(req, "subarea.update.geometry", { id, kind, hasPoints: Array.isArray(points) ? points.length : null });
+    res.json({ ok:true });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// supprimer 1 zone
 app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
   try { const id = String(req.params.id);
     await pool.query(`DELETE FROM atex_subareas WHERE id=$1`, [id]);
+    await logEvent(req, "subarea.delete", { id });
     res.json({ ok:true });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// 🔹 NOUVEAU : purge de toutes les zones d’un plan/page (avec garde-fou)
+app.delete("/api/atex/maps/subareas/purge", async (req, res) => {
+  try {
+    const logical = String(req.query.logical_name || "");
+    const pageIndex = Number(req.query.page_index || 0);
+    if (!logical) return res.status(400).json({ ok:false, error:"logical_name required" });
+    if ((req.header("X-Confirm") || "").toLowerCase() !== "purge")
+      return res.status(412).json({ ok:false, error:"missing confirmation header X-Confirm: purge" });
+
+    const { rows } = await pool.query(
+      `DELETE FROM atex_subareas WHERE logical_name=$1 AND page_index=$2 RETURNING id`,
+      [logical, pageIndex]
+    );
+    await logEvent(req, "subarea.purge", { logical_name: logical, page_index: pageIndex, deleted: rows.length });
+    res.json({ ok:true, deleted: rows.length });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// ========================================================================
+// Logs — lecture simple (debug)
+// ========================================================================
+app.get("/api/atex/logs", async (req, res) => {
+  try {
+    const action = (req.query.action || "").toString().trim();
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit || 100)));
+    let rows;
+    if (action) {
+      ({ rows } = await pool.query(
+        `SELECT * FROM atex_events WHERE action=$1 ORDER BY ts DESC LIMIT $2`,
+        [action, limit]
+      ));
+    } else {
+      ({ rows } = await pool.query(`SELECT * FROM atex_events ORDER BY ts DESC LIMIT $1`, [limit]));
+    }
+    res.json({ items: rows || [] });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
