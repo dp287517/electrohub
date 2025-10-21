@@ -71,7 +71,7 @@ function withBust(url, enabled = true) {
   return `${url}${sep}v=${Date.now()}`;
 }
 
-/** UUID checker (pour choisir la bonne route PDF des plans) */
+/** UUID checker */
 function isUuid(s) {
   return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
 }
@@ -80,7 +80,7 @@ function isUuid(s) {
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
   const finalUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
-  const headers = identityHeaders(new Headers(options.headers || {})); // <-- inject identity
+  const headers = identityHeaders(new Headers(options.headers || {}));
   headers.set("X-Site", site);
   if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
@@ -102,15 +102,16 @@ async function jsonFetch(url, options = {}) {
   return ct.includes("application/json") ? res.json() : null;
 }
 
-/** 🔹 Utilitaire bas niveau pour appels JSON "bruts" (multipart S3, etc.) */
+/** 🔹 Utilitaire bas niveau pour appels JSON "bruts" */
 export async function apiBaseFetchJSON(path, options = {}) {
   const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
   const headers = identityHeaders(new Headers(options.headers || {}));
-  // 🔧 ajouter le site comme dans jsonFetch()
   const site = currentSite();
   headers.set("X-Site", site);
 
-  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
   const res = await fetch(finalUrl, { credentials: "include", ...options, headers });
   const ct = res.headers.get("content-type") || "";
   const payload = ct.includes("application/json") ? await res.json() : await res.text();
@@ -121,7 +122,7 @@ export async function apiBaseFetchJSON(path, options = {}) {
   return payload;
 }
 
-/** (Optionnel) Fetch binaire (blob) — pratique pour tester un PDF inline si besoin */
+/** (Optionnel) Fetch binaire (blob) */
 export async function getBlob(path) {
   const site = currentSite();
   const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
@@ -149,10 +150,10 @@ export async function del(path) {
   return jsonFetch(path, { method: "DELETE" });
 }
 export async function upload(path, formData /* FormData */) {
-  // ne pas fixer Content-Type: le browser s’en charge (multipart boundary)
+  // ne pas fixer Content-Type sur FormData
   const site = currentSite();
   const url = `${API_BASE}${path}`;
-  const headers = identityHeaders(new Headers({ "X-Site": site })); // <-- inject identity pour multipart
+  const headers = identityHeaders(new Headers({ "X-Site": site }));
   const res = await fetch(url, { method: "POST", body: formData, credentials: "include", headers });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -164,7 +165,7 @@ export async function upload(path, formData /* FormData */) {
 
 /** Namespaced API */
 export const api = {
-  /** --- AUTH / PROFILE (si utilisés dans l’app) --- */
+  /** --- AUTH / PROFILE (si utilisés) --- */
   auth: {
     me: () => get("/api/auth/me"),
     login: (payload) => post("/api/auth/login", payload),
@@ -189,7 +190,7 @@ export const api = {
       upload(`/api/oibt/periodics/${id}/upload?type=${encodeURIComponent(type)}`, formData),
   },
 
-  /** --- PROJECTS (NOUVEAU) --- */
+  /** --- PROJECTS --- */
   projects: {
     list: (params) => get("/api/projects/projects", params),
     create: (payload) => post("/api/projects/projects", payload),
@@ -214,7 +215,7 @@ export const api = {
     health: () => get(`/api/projects/health`),
   },
 
-  /** --- CONTROLS (MIS À NIVEAU) --- */
+  /** --- CONTROLS --- */
   controls: {
     hierarchyTree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
     hierarchyDebug: () => get("/api/controls/hierarchy/debug"),
@@ -255,7 +256,7 @@ export const api = {
     records: (params) => get("/api/controls/records", params),
   },
 
-  /** --- COMP-EXT (Prestataires externes) — NOUVEAU --- */
+  /** --- COMP-EXT --- */
   compExt: {
     list: (params) => get("/api/comp-ext/vendors", params),
     create: (payload) => post("/api/comp-ext/vendors", payload),
@@ -266,39 +267,30 @@ export const api = {
     stats: () => get("/api/comp-ext/stats"),
   },
 
-  /** --- ASK VEEVA (upload + search/ask + nouveaux endpoints) --- */
+  /** --- ASK VEEVA --- */
   askVeeva: {
-    // Santé / jobs
     health: () => get("/api/ask-veeva/health"),
     job: (id) => get(`/api/ask-veeva/jobs/${id}`),
 
-    // Profil & personnalisation
     me: () => get("/api/ask-veeva/me"),
-    initUser: (payload) => post("/api/ask-veeva/initUser", payload), // {name, role, sector, (opt) email}
+    initUser: (payload) => post("/api/ask-veeva/initUser", payload),
     personalize: () => post("/api/ask-veeva/personalize", {}),
 
-    // Journalisation & feedback
     logEvent: (payload) => post("/api/ask-veeva/logEvent", payload),
     feedback: (payload) => post("/api/ask-veeva/feedback", payload),
 
-    // Synonymes
     updateSynonyms: (payload) => post("/api/ask-veeva/synonyms/update", payload),
 
-    // Recherche / suggestion de documents
     search: (payload) => post("/api/ask-veeva/search", payload),
     findDocs: (q) => get("/api/ask-veeva/find-docs", { q }),
-
-    // Q/R
     ask: (payload) => post("/api/ask-veeva/ask", payload),
 
-    // Pysearch bridge
     pysearch: {
       health: () => get("/api/ask-veeva/pysearch/health"),
       compare: (payload) => post("/api/ask-veeva/pysearch/compare", payload),
       reindex: (payload = {}) => post("/api/ask-veeva/pysearch/reindex", payload),
     },
 
-    // Upload simple (ZIP ou fichier)
     uploadZip: (file) => {
       const fd = new FormData();
       fd.append("zip", file);
@@ -310,13 +302,11 @@ export const api = {
       return upload("/api/ask-veeva/uploadFile", fd);
     },
 
-    // Upload chunké (ZIP splitté côté client)
     chunked: {
       init: ({ filename, size }) => post("/api/ask-veeva/chunked/init", { filename, size }),
       part: (uploadId, partNumber, blob) => {
         const fd = new FormData();
         fd.append("chunk", blob);
-        // NB: query params pour partNumber
         return upload(`/api/ask-veeva/chunked/part?uploadId=${encodeURIComponent(uploadId)}&partNumber=${encodeURIComponent(partNumber)}`, fd);
       },
       complete: ({ uploadId, totalParts, originalName }) =>
@@ -325,22 +315,19 @@ export const api = {
         post("/api/ask-veeva/chunked/abort", { uploadId, upto }),
     },
 
-    // Fichiers / preview
     fileMeta: (id) => get(`/api/ask-veeva/filemeta/${id}`),
     fileUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`, bust),
     previewUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`, bust),
   },
 
-  /** --- DOORS (Portes coupe-feu) --- */
+  /** --- DOORS --- */
   doors: {
-    // CRUD portes
     list: (params) => get("/api/doors/doors", params),
     get:   (id) => get(`/api/doors/doors/${encodeURIComponent(id)}`),
     create: (payload) => post("/api/doors/doors", payload),
     update: (id, payload) => put(`/api/doors/doors/${encodeURIComponent(id)}`, payload),
     remove: (id) => del(`/api/doors/doors/${encodeURIComponent(id)}`),
 
-    // Photo vignette
     uploadPhoto: (id, file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -352,7 +339,6 @@ export const api = {
     photoUrl: (id, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`, bust),
 
-    // Fichiers attachés
     listFiles: (id) => get(`/api/doors/doors/${encodeURIComponent(id)}/files`),
     uploadFile: (id, file) => {
       const { email, name } = getIdentity();
@@ -364,7 +350,6 @@ export const api = {
     },
     deleteFile: (fileId) => del(`/api/doors/files/${encodeURIComponent(fileId)}`),
 
-    // Checklists
     startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, { _user: getIdentity() }),
     saveCheck: (doorId, checkId, payload = {}) => {
       if (payload?.files?.length) {
@@ -384,7 +369,6 @@ export const api = {
     },
     listHistory: (doorId) => get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
 
-    // QR / PDF
     qrUrl: (id, size = 256, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`, bust),
     qrcodesUrl: (id, sizes = "80,120,200", force = false, { bust = false } = {}) =>
@@ -394,14 +378,13 @@ export const api = {
     nonConformitiesPdfUrl: (id, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`, bust),
 
-    // Calendrier / settings / alertes
     calendar: () => get(`/api/doors/calendar`),
     settingsGet: () => get(`/api/doors/settings`),
     settingsSet: (payload) => put(`/api/doors/settings`, payload),
     alerts: () => get(`/api/doors/alerts`),
   },
 
-  /** --- DOORS MAPS (Plans PDF + positions) --- */
+  /** --- DOORS MAPS --- */
   doorsMaps: {
     uploadZip: (file) => {
       const { email, name } = getIdentity();
@@ -413,7 +396,6 @@ export const api = {
     },
 
     listPlans: () => get(`/api/doors/maps/plans`),
-
     renamePlan: (logical_name, display_name) =>
       put(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, { display_name }),
 
@@ -456,7 +438,7 @@ export const api = {
   },
 
   /* ======================================================================
-     =====================  ATEX (corrigé uniquement)  =====================
+     =========================  ATEX (corrigé)  ============================
      ====================================================================== */
 
   /** --- ATEX (équipements, fichiers, contrôles, IA) --- */
@@ -486,12 +468,12 @@ export const api = {
     uploadFiles: (equipmentId, files = []) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
-      (files || []).forEach((f) => fd.append("files", f)); // champ "files" côté backend
+      (files || []).forEach((f) => fd.append("files", f)); // champ "files"
       if (email) fd.append("user_email", email);
       if (name)  fd.append("user_name",  name);
       return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`, fd);
     },
-    // ✅ Alias pour compat Front : même sémantique que controls.uploadAttachments
+    // alias compat front
     uploadAttachments: (equipmentId, files = [], label) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -503,7 +485,7 @@ export const api = {
     },
     deleteFile: (fileId) => del(`/api/atex/files/${encodeURIComponent(fileId)}`),
 
-    // Contrôles (checklists)
+    // Contrôles
     startCheck: (equipmentId) =>
       post(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks`, { _user: getIdentity() }),
     saveCheck: (equipmentId, checkId, payload = {}) => {
@@ -515,7 +497,6 @@ export const api = {
         if (email) fd.append("user_email", email);
         if (name)  fd.append("user_name",  name);
         (payload.files || []).forEach((f) => fd.append("files", f)); // champ "files"
-        // NB: backend accepte PUT multipart
         return put(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, fd);
       }
       return put(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, {
@@ -531,17 +512,21 @@ export const api = {
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
 
-    // IA extraction (plusieurs photos) & conformité
+    // IA extraction & conformité
     extractFromPhotos: (files = []) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
-      (files || []).forEach((f) => fd.append("files", f)); // champ "files"
+      (files || []).forEach((f) => fd.append("files", f));
       if (email) fd.append("user_email", email);
       if (name)  fd.append("user_name",  name);
       return upload(`/api/atex/extract`, fd);
     },
     assessConformity: ({ atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = {}) =>
       post(`/api/atex/assess`, { atex_mark_gas, atex_mark_dust, target_gas, target_dust }),
+
+    // ✅ Alias rétro-compat pour corriger les appels legacy du front
+    analyzePhotoBatch: (files = []) => api.atex.extractFromPhotos(files),
+    aiAnalyze: (payload) => api.atex.assessConformity(payload),
   },
 
   /** --- ATEX MAPS (Plans PDF + positions + sous-zones) --- */
@@ -558,22 +543,20 @@ export const api = {
 
     // Plans
     listPlans: () => get(`/api/atex/maps/listPlans`),
+    // alias back compat (/plans)
+    listPlansCompat: () => get(`/api/atex/maps/plans`),
+
     renamePlan: (logical_name, display_name) =>
       put(`/api/atex/maps/renamePlan`, { logical_name, display_name }),
 
     // Fichier PDF du plan
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
-    // ✅ par ID (UUID)
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`, bust),
-
-    // Helper: auto depuis string|plan (détecte UUID)
+    // Helper auto (string|plan, détecte UUID)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
-      const key =
-        typeof plan === "string"
-          ? plan
-          : (plan?.id || plan?.logical_name || "");
+      const key = typeof plan === "string" ? plan : (plan?.id || plan?.logical_name || "");
       const url = isUuid(key)
         ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
         : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(key)}`;
@@ -584,33 +567,47 @@ export const api = {
     positions: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/positions`, { logical_name, page_index }),
     positionsAuto: (planOrKey, page_index = 0) => {
-      const key =
-        typeof planOrKey === "string"
-          ? planOrKey
-          : planOrKey?.logical_name || planOrKey?.id || "";
+      const key = typeof planOrKey === "string" ? planOrKey : (planOrKey?.logical_name || planOrKey?.id || "");
+      // backend lit par logical_name (avec index)
       return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
     },
-    // setPosition utilise le body attendu par le backend (equipment_id + logical_name + page_index + x_frac + y_frac)
+    // setPosition (POST ou PUT côté backend, on utilise POST alias)
     setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
-      post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }).then(r => r),
+      post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }),
 
     /* ================== Sous-zones (subareas) ================== */
     listSubareas: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/subareas`, { logical_name, page_index }),
 
-    // Compat: accepte le format brut {kind, x1..|cx..|points..} OU le format unifié (shape_type + geometry + zone_*)
+    // Stats (compter les zones sur plan/page)
+    subareasStats: (logical_name, page_index = 0) =>
+      get(`/api/atex/maps/subareas/stats`, { logical_name, page_index }),
+
+    // Recalculer zonages de tous les équipements d’un plan/page
+    reindexZones: (logical_name, page_index = 0) =>
+      post(`/api/atex/maps/reindexZones`, { logical_name, page_index }),
+
+    // Purge complète des zones (nécessite X-Confirm: purge)
+    purgeSubareas: async (logical_name, page_index = 0) => {
+      const site = currentSite();
+      const headers = identityHeaders(new Headers({ "X-Site": site, "X-Confirm": "purge" }));
+      const url = `${API_BASE}/api/atex/maps/subareas/purge?${new URLSearchParams({ logical_name, page_index })}`;
+      const res = await fetch(url, { method: "DELETE", credentials: "include", headers });
+      if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+      return res.json();
+    },
+
     createSubarea: (payload) => {
-      if (payload?.kind) {
-        return post(`/api/atex/maps/subareas`, payload);
-      }
+      if (payload?.kind) return post(`/api/atex/maps/subareas`, payload);
+      // format unifié (compat)
       const {
         logical_name,
         page_index = 0,
         name = "",
-        shape_type,   // 'rect' | 'circle' | 'poly'
-        geometry = {},// rect:{x1,y1,x2,y2} | circle:{cx,cy,r} | poly:{points:[[x,y],...]}
-        zone_gas = null,   // 0,1,2 | null
-        zone_dust = null,  // 20,21,22 | null
+        shape_type,
+        geometry = {},
+        zone_gas = null,
+        zone_dust = null,
         plan_id = null,
       } = payload || {};
       const base = { logical_name, plan_id, page_index, name, zoning_gas: zone_gas, zoning_dust: zone_dust };
@@ -627,7 +624,7 @@ export const api = {
       return post(`/api/atex/maps/subareas`, { ...base, kind: "poly", points: pts });
     },
 
-    // ✅ Mise à jour: accepte aussi la géométrie (kind + coords) en plus du nom/zoning
+    // Mise à jour meta/geom
     updateSubarea: (id, patch = {}) => {
       const body = {};
       if (patch.name !== undefined) body.name = patch.name;
@@ -636,7 +633,6 @@ export const api = {
       if (patch.zone_dust !== undefined) body.zoning_dust = patch.zone_dust;
       if (patch.zoning_dust !== undefined) body.zoning_dust = patch.zoning_dust;
 
-      // Géométrie (optionnelle)
       if (patch.kind) body.kind = patch.kind;
       if (["rect", "circle", "poly"].includes(patch.kind)) {
         if (patch.kind === "rect") {
@@ -655,7 +651,6 @@ export const api = {
       return put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, body);
     },
 
-    deleteSubarea: (id) =>
-      del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
+    deleteSubarea: (id) => del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
   },
 };
