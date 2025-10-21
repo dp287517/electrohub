@@ -43,7 +43,7 @@ for (const d of [DATA_DIR, FILES_DIR, MAPS_DIR, MAPS_INCOMING_DIR]) {
 // ------------------------------
 const app = express();
 app.use(express.json({ limit: "25mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 app.use(
   cors({
     origin: true,
@@ -56,7 +56,7 @@ app.use(
       "X-Site",
       "X-Confirm",
     ],
-    exposedHeaders: [],
+    exposedHeaders: ["Content-Disposition"],
   })
 );
 app.use(
@@ -70,7 +70,7 @@ app.use(
         "worker-src": ["'self'", "blob:"],
         "script-src": ["'self'", "'unsafe-inline'"],
         "style-src": ["'self'", "'unsafe-inline'"],
-        "connect-src": ["'*'"],
+        "connect-src": ["*"],
       },
     },
     crossOriginResourcePolicy: { policy: "cross-origin" },
@@ -346,7 +346,6 @@ app.get("/api/atex/equipments", async (req, res) => {
       .map((r) => ({
         ...r,
         status: eqStatusFromDue(r.next_check_date),
-        // URL stable par id
         photo_url: (r.photo_content && r.photo_content.length) || r.photo_path
           ? `/api/atex/equipments/${r.id}/photo`
           : null,
@@ -497,7 +496,6 @@ app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ try{
   const row = rows?.[0] || null; if(!row) return res.status(404).end();
 
   if (row.photo_content && row.photo_content.length) {
-    // (simple) forcer image/jpeg ; ou détecter via signature si tu veux
     res.type("image/jpeg");
     return res.end(row.photo_content, "binary");
   }
@@ -1323,6 +1321,18 @@ app.post("/api/atex/assess", async (req, res) => {
     try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
     res.json({ ok:true, ...data });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+});
+
+// 🔸 Alias legacy pour éviter les erreurs `is not a function` si front ancien
+app.post("/api/atex/analyzePhotoBatch", (req, res) => {
+  // redirige vers /extract
+  req.url = "/api/atex/extract";
+  return app._router.handle(req, res);
+});
+app.post("/api/atex/aiAnalyze", (req, res) => {
+  // redirige vers /assess
+  req.url = "/api/atex/assess";
+  return app._router.handle(req, res);
 });
 
 // ========================================================================
