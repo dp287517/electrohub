@@ -8,7 +8,6 @@ import "../styles/atex-map.css"; // 👉 à créer (on repartira de doors-map.cs
 import { api } from "../lib/api.js"; // 👉 endpoints ATEX / ATEX MAPS déjà présents
 
 // (ONGLET PLANS) rendu carte/plan externalisé comme demandé
-// → sera fourni au step suivant
 import AtexMap from "./Atex-map.jsx";
 
 /* ----------------------------- Utils identiques à Doors ----------------------------- */
@@ -45,7 +44,7 @@ function Textarea({ value, onChange, className = "", ...p }) {
     <textarea
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
       value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value)}
+      onChange={(e) => onChange?.(e.target.value))}
       {...p}
     />
   );
@@ -55,7 +54,7 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
     <select
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
       value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value)}
+      onChange={(e) => onChange?.(e.target.value))}
     >
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
@@ -81,9 +80,7 @@ function Badge({ color = "gray", children, className = "" }) {
     blue: "bg-blue-100 text-blue-700",
   };
   return (
-    <span
-      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`}
-    >
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`}>
       {children}
     </span>
   );
@@ -110,9 +107,7 @@ function Drawer({ title, children, onClose }) {
       <div className="absolute right-0 top-0 h-full w-full sm:w-[680px] bg-white shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold">{title}</h3>
-          <Btn variant="ghost" onClick={onClose}>
-            Fermer
-          </Btn>
+          <Btn variant="ghost" onClick={onClose}>Fermer</Btn>
         </div>
         {children}
       </div>
@@ -178,22 +173,14 @@ function MonthCalendar({ events = [], onDayClick }) {
       <div className="flex items-center justify-between mb-2">
         <div className="font-semibold">{cursor.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
-          <Btn variant="ghost" onClick={() => setCursor(cursor.subtract(1, "month"))}>
-            ◀
-          </Btn>
-          <Btn variant="ghost" onClick={() => setCursor(dayjs().startOf("month"))}>
-            Aujourd’hui
-          </Btn>
-          <Btn variant="ghost" onClick={() => setCursor(cursor.add(1, "month"))}>
-            ▶
-          </Btn>
+          <Btn variant="ghost" onClick={() => setCursor(cursor.subtract(1, "month"))}>◀</Btn>
+          <Btn variant="ghost" onClick={() => setCursor(dayjs().startOf("month"))}>Aujourd’hui</Btn>
+          <Btn variant="ghost" onClick={() => setCursor(cursor.add(1, "month"))}>▶</Btn>
         </div>
       </div>
       <div className="grid grid-cols-7 gap-1 text-xs text-gray-600 mb-1">
         {["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"].map((l) => (
-          <div key={l} className="px-2 py-1">
-            {l}
-          </div>
+          <div key={l} className="px-2 py-1">{l}</div>
         ))}
       </div>
       <div className="grid grid-cols-7 gap-1">
@@ -205,23 +192,16 @@ function MonthCalendar({ events = [], onDayClick }) {
             <button
               key={key}
               onClick={() => onDayClick?.({ date: key, events: es })}
-              className={`border rounded-lg p-2 text-left min-h-[64px] ${
-                isCurMonth ? "bg-white" : "bg-gray-50 text-gray-500"
-              }`}
+              className={`border rounded-lg p-2 text-left min-h-[64px] ${isCurMonth ? "bg-white" : "bg-gray-50 text-gray-500"}`}
             >
               <div className="text-[11px] mb-1">{day.format("D")}</div>
               <div className="flex flex-wrap gap-1">
                 {es.slice(0, 3).map((ev, i) => (
-                  <span
-                    key={i}
-                    className="px-1 rounded bg-blue-100 text-blue-700 text-[10px]"
-                  >
+                  <span key={i} className="px-1 rounded bg-blue-100 text-blue-700 text-[10px]">
                     {ev.name || ev.equipment_name || ev.equipment_id}
                   </span>
                 ))}
-                {es.length > 3 && (
-                  <span className="text-[10px] text-gray-500">+{es.length - 3}</span>
-                )}
+                {es.length > 3 && <span className="text-[10px] text-gray-500">+{es.length - 3}</span>}
               </div>
             </button>
           );
@@ -284,12 +264,11 @@ export default function Atex() {
   }
 
   async function reloadCalendar() {
-    // Si le backend ATEX expose un calendrier, on l’utiliserait.
-    // À défaut, on reconstruit localement depuis listEquipments (prochain contrôle).
+    // Utilise l’endpoint /api/atex/calendar si dispo (présent côté serveur)
     try {
-      const res = await api.atex.analytics().catch(() => null);
-      if (Array.isArray(res?.calendar)) {
-        setCalendar({ events: res.calendar });
+      const cal = await api.atex.calendar?.();
+      if (Array.isArray(cal?.events)) {
+        setCalendar({ events: cal.events });
         return;
       }
     } catch {}
@@ -335,22 +314,25 @@ export default function Atex() {
       type: editing.type || "",
       manufacturer: editing.manufacturer || "",
       manufacturer_ref: editing.manufacturer_ref || "",
-      atex_marking: editing.atex_marking || "",
-      zoning_gas: editing.zoning_gas ?? null, // 0/1/2 ou null
-      zoning_dust: editing.zoning_dust ?? null, // 20/21/22 ou null
+      atex_mark_gas: editing.atex_mark_gas || null,   // ✅ champs alignés backend
+      atex_mark_dust: editing.atex_mark_dust || null, // ✅
       comment: editing.comment || "",
       status: editing.status || STATUS.A_FAIRE,
-      // dates si présentes
-      installation_date: editing.installation_date || null,
+      // dates si présentes — noms alignés
+      installed_at: editing.installed_at || editing.installation_date || null,
       next_check_date: editing.next_check_date || null,
+      // zonages si modifiés
+      zoning_gas: editing.zoning_gas ?? null,
+      zoning_dust: editing.zoning_dust ?? null,
     };
     try {
       if (editing.id) {
         await api.atex.updateEquipment(editing.id, payload);
       } else {
         const created = await api.atex.createEquipment(payload);
-        if (created?.id) {
-          setEditing({ ...(editing || {}), id: created.id });
+        if (created?.id || created?.equipment?.id) {
+          const id = created.id || created.equipment.id;
+          setEditing({ ...(editing || {}), id });
         }
       }
       await reload();
@@ -363,9 +345,7 @@ export default function Atex() {
 
   async function deleteEquipment() {
     if (!editing?.id) return;
-    const ok = window.confirm(
-      "Supprimer définitivement cet équipement ATEX ? Cette action est irréversible."
-    );
+    const ok = window.confirm("Supprimer définitivement cet équipement ATEX ? Cette action est irréversible.");
     if (!ok) return;
     await api.atex.removeEquipment(editing.id);
     closeEdit();
@@ -391,14 +371,15 @@ export default function Atex() {
   async function analyzeFromPhotos(files) {
     if (!files?.length) return;
     try {
-      const res = await api.atex.analyzePhotoBatch(Array.from(files));
-      // Le backend renvoie idéalement { manufacturer, manufacturer_ref, atex_marking, type } fusion d’images
-      const s = res || {};
+      const res = await api.atex.analyzePhotoBatch(Array.from(files)); // alias → /extract
+      // Backend renvoie { ok, extracted: { manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust, type } }
+      const s = res?.extracted || res || {};
       setEditing((x) => ({
         ...(x || {}),
         manufacturer: x?.manufacturer || s.manufacturer || "",
         manufacturer_ref: x?.manufacturer_ref || s.manufacturer_ref || "",
-        atex_marking: x?.atex_marking || s.atex_marking || "",
+        atex_mark_gas: x?.atex_mark_gas || s.atex_mark_gas || "",
+        atex_mark_dust: x?.atex_mark_dust || s.atex_mark_dust || "",
         type: x?.type || s.type || "",
       }));
       setToast("Analyse photos terminée ✅");
@@ -408,12 +389,18 @@ export default function Atex() {
     }
   }
   async function analyzeCompliance() {
-    if (!editing?.id) return;
+    if (!editing) return;
     try {
-      const res = await api.atex.aiAnalyze(editing.id);
-      // Idéalement, le backend met à jour l’équipement avec compliance_state + messages
+      // Envoie explicitement les champs attendus par /api/atex/assess (alias OK)
+      const body = {
+        atex_mark_gas: editing.atex_mark_gas || "",
+        atex_mark_dust: editing.atex_mark_dust || "",
+        target_gas: editing.zoning_gas ?? null,
+        target_dust: editing.zoning_dust ?? null,
+      };
+      const res = await api.atex.assess?.(body) ?? await api.atex.aiAnalyze?.(body);
       await reload();
-      setToast(res?.message || "Analyse conformité OK ✅");
+      setToast(res?.message || res?.rationale || "Analyse conformité OK ✅");
     } catch (e) {
       console.error(e);
       setToast("Analyse conformité indisponible");
@@ -424,11 +411,11 @@ export default function Atex() {
   function ensureNextCheckFromInstall(editingLocal) {
     const it = editingLocal || editing;
     if (!it) return;
-    // règle : inspection à J+90 après installation, puis tous les 36 mois, avec alerte J-90
-    // Ici côté UI on pré-remplit si vide. La logique serveur peut prévaloir.
-    if (it.installation_date && !it.next_check_date) {
-      const next = dayjs(it.installation_date).add(90, "day");
-      setEditing({ ...it, next_check_date: next.format("YYYY-MM-DD") });
+    // règle : inspection à J+90 après installation, puis serveur gère les périodicités
+    if ((it.installed_at || it.installation_date) && !it.next_check_date) {
+      const base = it.installed_at || it.installation_date;
+      const next = dayjs(base).add(90, "day");
+      setEditing({ ...it, installed_at: base, next_check_date: next.format("YYYY-MM-DD") });
     }
   }
 
@@ -450,18 +437,10 @@ export default function Atex() {
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
-        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>
-          📋 Contrôles
-        </Btn>
-        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
-          📅 Calendrier
-        </Btn>
-        <Btn variant={tab === "plans" ? "primary" : "ghost"} onClick={() => setTab("plans")}>
-          🗺️ Plans
-        </Btn>
-        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>
-          ⚙️ Paramètres
-        </Btn>
+        <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>📋 Contrôles</Btn>
+        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>📅 Calendrier</Btn>
+        <Btn variant={tab === "plans" ? "primary" : "ghost"} onClick={() => setTab("plans")}>🗺️ Plans</Btn>
+        <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>⚙️ Paramètres</Btn>
       </div>
     </div>
   );
@@ -531,7 +510,7 @@ export default function Atex() {
         </div>
       )}
 
-      {/* --------- Onglet Contrôles (tableau identique Doors) --------- */}
+      {/* --------- Onglet Contrôles --------- */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
           <div className="hidden sm:block overflow-x-auto">
@@ -549,47 +528,32 @@ export default function Atex() {
               <tbody>
                 {loading && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">
-                      Chargement…
-                    </td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">Chargement…</td>
                   </tr>
                 )}
                 {!loading && items.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-4 text-gray-500">
-                      Aucun équipement.
-                    </td>
+                    <td colSpan={6} className="px-4 py-4 text-gray-500">Aucun équipement.</td>
                   </tr>
                 )}
                 {!loading &&
                   items.map((it, idx) => (
                     <tr
                       key={it.id}
-                      className={`border-b hover:bg-gray-50 ${
-                        idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"
-                      }`}
+                      className={`border-b hover:bg-gray-50 ${idx % 2 === 1 ? "bg-gray-50/40" : "bg-white"}`}
                     >
                       <td className="px-4 py-3 min-w-[260px]">
                         <div className="flex items-center gap-3">
                           <div className="w-14 h-14 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
                             {it.photo_url ? (
-                              <img
-                                src={api.atex.photoUrl(it.id)}
-                                alt={it.name}
-                                className="w-full h-full object-cover"
-                              />
+                              <img src={api.atex.photoUrl(it.id)} alt={it.name} className="w-full h-full object-cover" />
                             ) : (
                               <span className="text-[10px] text-gray-500 p-1 text-center">
-                                Photo à
-                                <br />
-                                prendre
+                                Photo à<br />prendre
                               </span>
                             )}
                           </div>
-                          <button
-                            className="text-blue-700 font-medium hover:underline"
-                            onClick={() => openEdit(it)}
-                          >
+                          <button className="text-blue-700 font-medium hover:underline" onClick={() => openEdit(it)}>
                             {it.name || it.type || "Équipement"}
                           </button>
                         </div>
@@ -614,15 +578,11 @@ export default function Atex() {
                         <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        {it.next_check_date
-                          ? dayjs(it.next_check_date).format("DD/MM/YYYY")
-                          : "—"}
+                        {it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YYYY") : "—"}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
-                          <Btn variant="ghost" onClick={() => openEdit(it)}>
-                            Ouvrir
-                          </Btn>
+                          <Btn variant="ghost" onClick={() => openEdit(it)}>Ouvrir</Btn>
                         </div>
                       </td>
                     </tr>
@@ -631,12 +591,10 @@ export default function Atex() {
             </table>
           </div>
 
-          {/* Mobile cards (simple et fidèle) */}
+          {/* Mobile cards */}
           <div className="sm:hidden divide-y">
             {loading && <div className="p-4 text-gray-500">Chargement…</div>}
-            {!loading && items.length === 0 && (
-              <div className="p-4 text-gray-500">Aucun équipement.</div>
-            )}
+            {!loading && items.length === 0 && <div className="p-4 text-gray-500">Aucun équipement.</div>}
             {!loading &&
               items.map((it) => (
                 <div key={it.id} className="p-4">
@@ -644,29 +602,19 @@ export default function Atex() {
                     <div className="flex items-start gap-3">
                       <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
                         {it.photo_url ? (
-                          <img
-                            src={api.atex.photoUrl(it.id)}
-                            alt={it.name}
-                            className="w-full h-full object-cover"
-                          />
+                          <img src={api.atex.photoUrl(it.id)} alt={it.name} className="w-full h-full object-cover" />
                         ) : (
                           <span className="text-[11px] text-gray-500 p-1 text-center">
-                            Photo à
-                            <br />
-                            prendre
+                            Photo à<br />prendre
                           </span>
                         )}
                       </div>
                       <div>
-                        <button
-                          className="text-blue-700 font-semibold hover:underline"
-                          onClick={() => openEdit(it)}
-                        >
+                        <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(it)}>
                           {it.name || it.type || "Équipement"}
                         </button>
                         <div className="text-xs text-gray-500 mt-0.5">
-                          {it.building || "—"} • {it.zone || "—"}{" "}
-                          {it.equipment ? `• ${it.equipment}` : ""}{" "}
+                          {it.building || "—"} • {it.zone || "—"} {it.equipment ? `• ${it.equipment}` : ""}{" "}
                           {it.sub_equipment ? `• ${it.sub_equipment}` : ""}
                         </div>
                         <div className="flex items-center gap-2 mt-1">
@@ -678,10 +626,7 @@ export default function Atex() {
                             <Badge>—</Badge>
                           )}
                           <span className="text-xs text-gray-500">
-                            Prochain contrôle:{" "}
-                            {it.next_check_date
-                              ? dayjs(it.next_check_date).format("DD/MM/YYYY")
-                              : "—"}
+                            Prochain contrôle: {it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YYYY") : "—"}
                           </span>
                         </div>
                       </div>
@@ -689,9 +634,7 @@ export default function Atex() {
                     <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
                   </div>
                   <div className="mt-3 flex gap-2">
-                    <Btn variant="ghost" onClick={() => openEdit(it)}>
-                      Ouvrir
-                    </Btn>
+                    <Btn variant="ghost" onClick={() => openEdit(it)}>Ouvrir</Btn>
                   </div>
                 </div>
               ))}
@@ -714,7 +657,7 @@ export default function Atex() {
         </div>
       )}
 
-      {/* --------- Onglet Plans (ZIP identique + cards + viewer délégué) --------- */}
+      {/* --------- Onglet Plans --------- */}
       {tab === "plans" && (
         <div className="space-y-4">
           <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
@@ -744,9 +687,7 @@ export default function Atex() {
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>
-                    Fermer le plan
-                  </Btn>
+                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>Fermer le plan</Btn>
                 </div>
               </div>
 
@@ -757,7 +698,7 @@ export default function Atex() {
         </div>
       )}
 
-      {/* --------- Onglet Paramètres (optionnel pour gabarits/checklist) --------- */}
+      {/* --------- Onglet Paramètres (optionnel) --------- */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-2">
           <div className="text-sm text-gray-600">
@@ -772,61 +713,37 @@ export default function Atex() {
           <div className="space-y-4">
             <div className="grid sm:grid-cols-2 gap-3">
               <Labeled label="Nom">
-                <Input
-                  value={editing.name || ""}
-                  onChange={(v) => setEditing({ ...editing, name: v })}
-                />
+                <Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} />
               </Labeled>
               <Labeled label="Type (interrupteur, luminaire, etc.)">
-                <Input
-                  value={editing.type || ""}
-                  onChange={(v) => setEditing({ ...editing, type: v })}
-                />
+                <Input value={editing.type || ""} onChange={(v) => setEditing({ ...editing, type: v })} />
               </Labeled>
               <Labeled label="Fabricant">
-                <Input
-                  value={editing.manufacturer || ""}
-                  onChange={(v) => setEditing({ ...editing, manufacturer: v })}
-                />
+                <Input value={editing.manufacturer || ""} onChange={(v) => setEditing({ ...editing, manufacturer: v })} />
               </Labeled>
               <Labeled label="Référence fabricant">
-                <Input
-                  value={editing.manufacturer_ref || ""}
-                  onChange={(v) => setEditing({ ...editing, manufacturer_ref: v })}
-                />
+                <Input value={editing.manufacturer_ref || ""} onChange={(v) => setEditing({ ...editing, manufacturer_ref: v })} />
               </Labeled>
-              <Labeled label="Marquage ATEX">
-                <Input
-                  value={editing.atex_marking || ""}
-                  onChange={(v) => setEditing({ ...editing, atex_marking: v })}
-                />
+              <Labeled label="Marquage ATEX (gaz)">
+                <Input value={editing.atex_mark_gas || ""} onChange={(v) => setEditing({ ...editing, atex_mark_gas: v })} />
+              </Labeled>
+              <Labeled label="Marquage ATEX (poussière)">
+                <Input value={editing.atex_mark_dust || ""} onChange={(v) => setEditing({ ...editing, atex_mark_dust: v })} />
               </Labeled>
             </div>
 
             <div className="grid sm:grid-cols-2 gap-3">
               <Labeled label="Bâtiment">
-                <Input
-                  value={editing.building || ""}
-                  onChange={(v) => setEditing({ ...editing, building: v })}
-                />
+                <Input value={editing.building || ""} onChange={(v) => setEditing({ ...editing, building: v })} />
               </Labeled>
               <Labeled label="Zone (plan)">
-                <Input
-                  value={editing.zone || ""}
-                  onChange={(v) => setEditing({ ...editing, zone: v })}
-                />
+                <Input value={editing.zone || ""} onChange={(v) => setEditing({ ...editing, zone: v })} />
               </Labeled>
               <Labeled label="Équipement (macro)">
-                <Input
-                  value={editing.equipment || ""}
-                  onChange={(v) => setEditing({ ...editing, equipment: v })}
-                />
+                <Input value={editing.equipment || ""} onChange={(v) => setEditing({ ...editing, equipment: v })} />
               </Labeled>
               <Labeled label="Sous-Équipement (depuis zones tracées)">
-                <Input
-                  value={editing.sub_equipment || ""}
-                  onChange={(v) => setEditing({ ...editing, sub_equipment: v })}
-                />
+                <Input value={editing.sub_equipment || ""} onChange={(v) => setEditing({ ...editing, sub_equipment: v })} />
               </Labeled>
             </div>
 
@@ -834,17 +751,13 @@ export default function Atex() {
               <Labeled label="Zonage gaz (0 / 1 / 2)">
                 <Input
                   value={editing.zoning_gas ?? ""}
-                  onChange={(v) =>
-                    setEditing({ ...editing, zoning_gas: v === "" ? null : Number(v) })
-                  }
+                  onChange={(v) => setEditing({ ...editing, zoning_gas: v === "" ? null : Number(v) })}
                 />
               </Labeled>
               <Labeled label="Zonage poussière (20 / 21 / 22)">
                 <Input
                   value={editing.zoning_dust ?? ""}
-                  onChange={(v) =>
-                    setEditing({ ...editing, zoning_dust: v === "" ? null : Number(v) })
-                  }
+                  onChange={(v) => setEditing({ ...editing, zoning_dust: v === "" ? null : Number(v) })}
                 />
               </Labeled>
             </div>
@@ -853,9 +766,9 @@ export default function Atex() {
               <Labeled label="Date d’installation">
                 <Input
                   type="date"
-                  value={editing.installation_date || ""}
+                  value={editing.installed_at || editing.installation_date || ""}
                   onChange={(v) => {
-                    const next = { ...editing, installation_date: v };
+                    const next = { ...editing, installed_at: v };
                     setEditing(next);
                     ensureNextCheckFromInstall(next);
                   }}
@@ -883,20 +796,12 @@ export default function Atex() {
                   <Badge>—</Badge>
                 )}
               </div>
-              <div className="text-sm text-gray-600">
-                Alerte: 90 jours avant la date de contrôle
-              </div>
+              <div className="text-sm text-gray-600">Alerte: 90 jours avant la date de contrôle</div>
             </div>
 
             <div className="grid sm:grid-cols-2 gap-3">
-              <Btn variant="ghost" onClick={saveBase}>
-                Enregistrer la fiche
-              </Btn>
-              {editing?.id && (
-                <Btn variant="danger" onClick={deleteEquipment}>
-                  Supprimer
-                </Btn>
-              )}
+              <Btn variant="ghost" onClick={saveBase}>Enregistrer la fiche</Btn>
+              {editing?.id && <Btn variant="danger" onClick={deleteEquipment}>Supprimer</Btn>}
             </div>
 
             {/* Photos & pièces jointes */}
@@ -917,11 +822,7 @@ export default function Atex() {
                   </div>
                   <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
                     {editing.photo_url ? (
-                      <img
-                        src={api.atex.photoUrl(editing.id)}
-                        alt="photo"
-                        className="w-full h-full object-cover"
-                      />
+                      <img src={api.atex.photoUrl(editing.id)} alt="photo" className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
                     )}
@@ -937,9 +838,7 @@ export default function Atex() {
                           type="file"
                           className="hidden"
                           multiple
-                          onChange={(e) =>
-                            e.target.files?.length && uploadAttachments(Array.from(e.target.files))
-                          }
+                          onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files))}
                         />
                         Ajouter
                       </label>
@@ -953,12 +852,9 @@ export default function Atex() {
                         />
                         Analyser (IA)
                       </label>
-                      <Btn variant="subtle" onClick={analyzeCompliance}>
-                        Vérifier conformité (IA)
-                      </Btn>
+                      <Btn variant="subtle" onClick={analyzeCompliance}>Vérifier conformité (IA)</Btn>
                     </div>
                   </div>
-                  {/* La liste des pièces jointes peut être appelée si besoin depuis api.atex.listAttachments(editing.id) */}
                   <div className="text-xs text-gray-500">
                     Glisser-déposer supporté dans l’onglet Plans lors de la création in situ.
                   </div>
@@ -1037,16 +933,10 @@ function PlanCard({ plan, onRename, onPick }) {
       <div className="p-3">
         {!edit ? (
           <div className="flex items-start justify-between gap-2">
-            <div className="font-medium truncate" title={name}>
-              {name || "—"}
-            </div>
+            <div className="font-medium truncate" title={name}>{name || "—"}</div>
             <div className="flex items-center gap-1">
-              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>
-                ✏️
-              </Btn>
-              <Btn variant="subtle" onClick={() => onPick(plan)}>
-                Ouvrir
-              </Btn>
+              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>✏️</Btn>
+              <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
             </div>
           </div>
         ) : (
