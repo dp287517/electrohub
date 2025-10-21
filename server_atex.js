@@ -48,6 +48,14 @@ app.use(
   cors({
     origin: true,
     credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "X-User-Email",
+      "X-User-Name",
+      "Authorization",
+      "X-Site",
+    ],
+    exposedHeaders: [],
   })
 );
 app.use(
@@ -101,6 +109,7 @@ const pool = new Pool({
     process.env.DATABASE_URL ||
     "postgres://postgres:postgres@localhost:5432/postgres",
   max: 10,
+  ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
 
 // ------------------------------
@@ -121,8 +130,8 @@ async function ensureSchema() {
       manufacturer_ref TEXT DEFAULT '',
       atex_mark_gas TEXT DEFAULT NULL,
       atex_mark_dust TEXT DEFAULT NULL,
-      zoning_gas INTEGER NULL,          -- ⬅️ null => N/A
-      zoning_dust INTEGER NULL,         -- ⬅️ null => N/A
+      zoning_gas INTEGER NULL,
+      zoning_dust INTEGER NULL,
       comment TEXT DEFAULT '',
       status TEXT DEFAULT 'a_faire',
       installed_at TIMESTAMP NULL,
@@ -133,9 +142,6 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_eq_next ON atex_equipments(next_check_date);
   `);
-
-  await pool.query(`ALTER TABLE atex_equipments ADD COLUMN IF NOT EXISTS zoning_gas INTEGER NULL;`);
-  await pool.query(`ALTER TABLE atex_equipments ADD COLUMN IF NOT EXISTS zoning_dust INTEGER NULL;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_checks (
@@ -175,7 +181,10 @@ async function ensureSchema() {
       content BYTEA NULL
     );
     CREATE INDEX IF NOT EXISTS idx_atex_plans_logical ON atex_plans(logical_name);
+  `);
+  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
 
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_plan_names (
       logical_name TEXT PRIMARY KEY,
       display_name TEXT NOT NULL
@@ -260,6 +269,15 @@ function isUuid(s = "") {
 }
 
 // ------------------------------
+app.get("/api/atex/health", async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM atex_equipments`);
+    res.json({ ok: true, equipments: rows?.[0]?.n ?? 0, port: PORT });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get("/api/atex/file", async (req, res) => {
   try {
     const p = String(req.query.path || "");
@@ -543,31 +561,45 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
     const zipPath = req.file?.path;
     if (!zipPath) return res.status(400).json({ ok: false, error: "zip missing" });
 
-    const zip = new StreamZip.async({ file: zipPath });
+    const zip = new StreamZip.async({ file: zipPath, storeEntries: true });
     const imported = [];
     try {
       const entries = await zip.entries();
-      for (const [entryName, entry] of Object.entries(entries)) {
-        if (entry.isDirectory) continue;
-        if (!entryName.toLowerCase().endsWith(".pdf")) continue;
+      // Tous les PDF de l'archive
+      const files = Object.values(entries).filter(
+        (e) => !e.isDirectory && /\.pdf$/i.test(e.name)
+      );
 
-        // ✅ Correction: retirer l'extension de manière robuste (PDF/Pdf/pdf, etc.)
-        const { name: baseName } = path.parse(entryName);
-        const base = baseName; // nom sans extension
+      for (const entry of files) {
+        const rawName = entry.name.split("/").pop();
+        const { name: baseName } = path.parse(rawName || entry.name);
+        const base = baseName || "plan";
         const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
-        const version = Math.floor(Date.now() / 1000); // int seconds
+        const version = Math.floor(Date.now() / 1000);
 
         const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
-        const buf = await zip.entryData(entry);
-        await fsp.writeFile(dest, buf);
+        await fsp.mkdir(path.dirname(dest), { recursive: true });
+        await zip.extract(entry.name, dest);
 
+        let buf = null;
+        try { buf = await fsp.readFile(dest); } catch { buf = null; }
+
+        // (Optionnel) compter les pages : ici on garde 1 par défaut pour alléger
         const page_count = 1;
 
-        await pool.query(
-          `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count)
-           VALUES ($1,$2,$3,$4,$5)`,
-          [logical, version, path.basename(dest), dest, page_count]
-        );
+        if (buf) {
+          await pool.query(
+            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, content)
+             VALUES ($1,$2,$3,$4,$5,$6)`,
+            [logical, version, path.basename(dest), dest, page_count, buf]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count)
+             VALUES ($1,$2,$3,$4,$5)`,
+            [logical, version, path.basename(dest), dest, page_count]
+          );
+        }
 
         await pool.query(
           `INSERT INTO atex_plan_names (logical_name, display_name) VALUES ($1,$2)
@@ -579,6 +611,7 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
       }
     } finally {
       await zip.close().catch(()=>{});
+      fs.rmSync(zipPath, { force: true });
     }
 
     res.json({ ok: true, imported });
@@ -590,8 +623,9 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
 app.get("/api/atex/maps/listPlans", async (_req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT a.logical_name, MAX(a.version) AS version,
-             MIN(a.page_count) AS page_count,
+      SELECT a.logical_name,
+             MAX(a.version) AS version,
+             COALESCE(MAX(a.page_count),1) AS page_count,
              (SELECT display_name FROM atex_plan_names n WHERE n.logical_name=a.logical_name LIMIT 1) AS display_name
       FROM atex_plans a
       GROUP BY a.logical_name
@@ -599,12 +633,12 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
     `);
     const plans = rows.map((r) => ({
       logical_name: r.logical_name,
-      id: r.logical_name,
+      id: r.logical_name, // le front accepte logical_name comme id
       version: Number(r.version || 1),
       page_count: Number(r.page_count || 1),
       display_name: r.display_name || r.logical_name,
     }));
-    res.json({ plans });
+    res.json({ plans, items: plans });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
@@ -635,46 +669,54 @@ app.put("/api/atex/maps/rename/:logical", async (req, res) => {
 });
 
 // ========================================================================
-// 🔹 MAPS — Fichier du plan (robuste + alias de compat)
+// 🔹 MAPS — Fichier du plan (robuste + alias + compat Doors)
 // ========================================================================
 app.get("/api/atex/maps/planFile", async (req, res) => {
   try {
     let logical = (req.query.logical_name || "").toString();
     const id = (req.query.id || "").toString();
 
-    // 1) par id direct (si fourni)
-    if (id) {
+    // 1) par id (UUID stocké dans atex_plans.id)
+    if (id && isUuid(id)) {
       const { rows } = await pool.query(
-        `SELECT file_path FROM atex_plans WHERE id=$1 ORDER BY version DESC LIMIT 1`,
+        `SELECT file_path, content FROM atex_plans WHERE id=$1 ORDER BY version DESC LIMIT 1`,
         [id]
       );
-      const fp = rows?.[0]?.file_path || null;
-      if (fp && fs.existsSync(fp)) return res.sendFile(path.resolve(fp));
-      return res.status(404).json({ ok: false, error: "file not found" });
+      const row = rows?.[0] || null;
+      if (row?.content?.length) {
+        res.type("application/pdf");
+        return res.end(row.content, "binary");
+      }
+      const fp = row?.file_path;
+      if (fp && fs.existsSync(fp)) return res.type("application/pdf").sendFile(path.resolve(fp));
+      return res.status(404).send("not_found");
     }
 
     if (!logical) return res.status(400).json({ ok: false, error: "logical_name required" });
 
-    // 2) lookup exact
+    // 2) lookup exact puis caseless
     let rows = (
       await pool.query(
-        `SELECT file_path FROM atex_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
+        `SELECT file_path, content FROM atex_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
         [logical]
       )
     ).rows;
-
-    // 3) lookup insensible à la casse si rien
     if (!rows?.length) {
       rows = (
         await pool.query(
-          `SELECT file_path FROM atex_plans WHERE lower(logical_name)=lower($1) ORDER BY version DESC LIMIT 1`,
+          `SELECT file_path, content FROM atex_plans WHERE lower(logical_name)=lower($1) ORDER BY version DESC LIMIT 1`,
           [logical]
         )
       ).rows;
     }
 
-    // 4) dernier recours : scan FS
-    let fp = rows?.[0]?.file_path || null;
+    // 3) fallback FS
+    let row = rows?.[0] || null;
+    if (row?.content?.length) {
+      res.type("application/pdf");
+      return res.end(row.content, "binary");
+    }
+    let fp = row?.file_path || null;
     if (!fp) {
       const norm = logical.toLowerCase();
       const files = await fsp.readdir(MAPS_DIR);
@@ -684,8 +726,8 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
       if (candidate) fp = path.join(MAPS_DIR, candidate);
     }
 
-    if (!fp || !fs.existsSync(fp)) return res.status(404).json({ ok: false, error: "file not found" });
-    res.sendFile(path.resolve(fp));
+    if (!fp || !fs.existsSync(fp)) return res.status(404).send("not_found");
+    res.type("application/pdf").sendFile(path.resolve(fp));
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -694,14 +736,28 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
 // ---- ALIAS compat: /api/atex/maps/plan/:logical/file
 app.get("/api/atex/maps/plan/:logical/file", async (req, res) => {
   req.query.logical_name = req.params.logical;
-  req.url = "/api/atex/maps/planFile";            // ✅ redirige vers la route canonique
+  req.url = "/api/atex/maps/planFile";
   return app._router.handle(req, res);
 });
 
 // ---- ALIAS compat: /api/atex/maps/plan-id/:id/file
 app.get("/api/atex/maps/plan-id/:id/file", async (req, res) => {
   req.query.id = req.params.id;
-  req.url = "/api/atex/maps/planFile";            // ✅ redirige vers la route canonique
+  req.url = "/api/atex/maps/planFile";
+  return app._router.handle(req, res);
+});
+
+// ---- Compat Doors: /api/doors/maps/plan/:logical/file
+app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
+  req.query.logical_name = req.params.logical;
+  req.url = "/api/atex/maps/planFile";
+  return app._router.handle(req, res);
+});
+
+// ---- Compat Doors: /api/doors/maps/plan-id/:id/file
+app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
+  req.query.id = req.params.id;
+  req.url = "/api/atex/maps/planFile";
   return app._router.handle(req, res);
 });
 
@@ -837,15 +893,15 @@ app.get("/api/atex/maps/positions", async (req, res) => {
       status: r.status,
       building: r.building,
       zone: r.zone,
-      zoning_gas: r.zoning_gas,     // null => N/A
-      zoning_dust: r.zoning_dust,   // null => N/A
+      zoning_gas: r.zoning_gas,
+      zoning_dust: r.zoning_dust,
     }));
     res.json({ items });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
 // ========================================================================
-// MAPS — Subareas (dessin) + sanitisation plan_id
+// MAPS — Subareas (dessin)
 // ========================================================================
 app.get("/api/atex/maps/subareas", async (req, res) => {
   try {
