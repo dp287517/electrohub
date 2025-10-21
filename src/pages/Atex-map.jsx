@@ -313,11 +313,15 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
+        // >>> Rendu PDF fortement upscalé pour une bien meilleure netteté
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-        const dpr = window.devicePixelRatio || 1;
-        // densité un peu plus haute pour netteté au zoom
-        const targetBitmapW = Math.min(5632, Math.max(1280, Math.floor(containerW * (dpr || 1.5))));
-        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        const containerH = Math.max(320, wrapRef.current.clientHeight || 768);
+        const dpr = Math.max(1, (window.devicePixelRatio || 1));
+        const targetBitmapW = Math.min(8192, Math.max(1536, Math.floor(containerW * dpr * 1.75)));
+        const targetBitmapH = Math.min(8192, Math.max(1536, Math.floor(containerH * dpr * 1.75)));
+        const scaleW = targetBitmapW / baseVp.width;
+        const scaleH = targetBitmapH / baseVp.height;
+        const safeScale = Math.min(4.0, Math.max(0.35, Math.min(scaleW, scaleH)));
         const viewport = page.getViewport({ scale: safeScale });
 
         const canvas = document.createElement("canvas");
@@ -340,27 +344,35 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         // contrôle zoom uniquement
         L.control.zoom({ position: "topright" }).addTo(m);
 
-        // ⚠️ PAS de bouton + Leaflet (retiré)
-
         // Légende
         legendRef.current = addLegendControl(m);
 
-        // Création des panes pour l'ordre d'affichage
-        m.createPane("zonesPane");     // formes
-        m.getPane("zonesPane").style.zIndex = 380;
-        m.createPane("markersPane");   // équipements
-        m.getPane("markersPane").style.zIndex = 400;
-        m.createPane("editPane");      // poignées d’édition
-        m.getPane("editPane").style.zIndex = 450;
+        // --- panes pour ordre d’affichage (image sous les zones)
+        m.createPane("atex-base");      // plan image
+        m.getPane("atex-base").style.zIndex = 200;
+        m.createPane("zonesPane");      // formes/labels
+        m.getPane("zonesPane").style.zIndex = 450;
+        m.createPane("markersPane");    // équipements
+        m.getPane("markersPane").style.zIndex = 500;
+        m.createPane("editPane");       // poignées d’édition
+        m.getPane("editPane").style.zIndex = 550;
         setPanesReady(true);
 
         // fond image
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-        baseLayerRef.current = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 }).addTo(m);
+        baseLayerRef.current = L.imageOverlay(dataUrl, bounds, {
+          interactive: false,
+          opacity: 1,
+          pane: "atex-base",
+          zIndex: 200,
+        }).addTo(m);
+
+        // Fit + dézoom agressif
         m.fitBounds(bounds, { padding: [8, 8] });
-        const fitZoom = m.getZoom();
-        m.setMinZoom(fitZoom - 1);
-        m.setMaxZoom(fitZoom + 6);
+        const boundsZoom = m.getBoundsZoom(bounds, true);
+        m.setMinZoom(boundsZoom - 4);
+        m.setMaxZoom(boundsZoom + 8);
+        m.setZoom(Math.max(m.getZoom() - 2, m.getMinZoom()));
         m.setMaxBounds(bounds.pad(0.5));
 
         // calques
@@ -476,6 +488,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         bubblingMouseEvents: false,
         keyboard: false,
         riseOnHover: true,
+        pane: "markersPane",
       });
       mk.__meta = p;
 
@@ -835,11 +848,11 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
     const onDown = (e) => {
       startPt = e.latlng;
       if (drawing === DRAW_CIRCLE) {
-        tempLayer = L.circle(e.latlng, { radius: 1, ...colorForSubarea({}), fillOpacity: 0.12 });
+        tempLayer = L.circle(e.latlng, { radius: 1, ...colorForSubarea({}), fillOpacity: 0.12, pane: "zonesPane" });
         tempLayer.addTo(m);
       }
       if (drawing === DRAW_RECT) {
-        tempLayer = L.rectangle(L.latLngBounds(e.latlng, e.latlng), { ...colorForSubarea({}), fillOpacity: 0.12 });
+        tempLayer = L.rectangle(L.latLngBounds(e.latlng, e.latlng), { ...colorForSubarea({}), fillOpacity: 0.12, pane: "zonesPane" });
         tempLayer.addTo(m);
       }
       m.dragging.disable();
@@ -1038,10 +1051,12 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
               const b = base.getBounds();
               m.scrollWheelZoom?.disable();
               m.invalidateSize(false);
-              const fitZoom = m.getBoundsZoom(b, true);
-              m.setMinZoom(fitZoom - 1);
-              m.setMaxZoom(fitZoom + 6);
+              const boundsZoom = m.getBoundsZoom(b, true);
+              m.setMinZoom(boundsZoom - 4);
+              m.setMaxZoom(boundsZoom + 8);
               m.fitBounds(b, { padding: [8, 8] });
+              // pousse encore un cran en-dessous du fit par défaut
+              m.setZoom(Math.max(m.getZoom() - 2, m.getMinZoom()));
               setTimeout(() => m.scrollWheelZoom?.enable(), 60);
             }}
           >
