@@ -1,5 +1,5 @@
 // ==============================
-// server_atex.jsx — ATEX CMMS microservice (ESM)
+// server_atex.js — ATEX CMMS microservice (ESM)
 // Port: 3001
 // ==============================
 
@@ -565,7 +565,6 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
     const imported = [];
     try {
       const entries = await zip.entries();
-      // Tous les PDF de l'archive
       const files = Object.values(entries).filter(
         (e) => !e.isDirectory && /\.pdf$/i.test(e.name)
       );
@@ -584,7 +583,6 @@ app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) =
         let buf = null;
         try { buf = await fsp.readFile(dest); } catch { buf = null; }
 
-        // (Optionnel) compter les pages : ici on garde 1 par défaut pour alléger
         const page_count = 1;
 
         if (buf) {
@@ -633,7 +631,7 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
     `);
     const plans = rows.map((r) => ({
       logical_name: r.logical_name,
-      id: r.logical_name, // le front accepte logical_name comme id
+      id: r.logical_name,
       version: Number(r.version || 1),
       page_count: Number(r.page_count || 1),
       display_name: r.display_name || r.logical_name,
@@ -676,7 +674,7 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
     let logical = (req.query.logical_name || "").toString();
     const id = (req.query.id || "").toString();
 
-    // 1) par id (UUID stocké dans atex_plans.id)
+    // 1) par id (UUID dans atex_plans.id)
     if (id && isUuid(id)) {
       const { rows } = await pool.query(
         `SELECT file_path, content FROM atex_plans WHERE id=$1 ORDER BY version DESC LIMIT 1`,
@@ -710,7 +708,7 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
       ).rows;
     }
 
-    // 3) fallback FS
+    // 3) servir BLOB ou fallback FS
     let row = rows?.[0] || null;
     if (row?.content?.length) {
       res.type("application/pdf");
@@ -762,6 +760,31 @@ app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
 });
 
 // ========================================================================
+// MAPS — Backfill BLOB content (one-shot maintenance)
+// ========================================================================
+app.post("/api/atex/maps/backfillContent", async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, file_path FROM atex_plans WHERE content IS NULL AND file_path IS NOT NULL`
+    );
+    let updated = 0, missing_files = 0, errors = 0;
+    for (const r of rows) {
+      try {
+        if (!r.file_path || !fs.existsSync(r.file_path)) { missing_files++; continue; }
+        const buf = await fsp.readFile(r.file_path);
+        await pool.query(`UPDATE atex_plans SET content=$1 WHERE id=$2`, [buf, r.id]);
+        updated++;
+      } catch {
+        errors++;
+      }
+    }
+    res.json({ ok: true, updated, missing_files, errors });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ========================================================================
 // MAPS — Positions + affectation des zones
 // ========================================================================
 function pointInRect(px, py, x1, y1, x2, y2) {
@@ -806,7 +829,7 @@ async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
       }
     }
   }
-  return { zoning_gas: null, zoning_dust: null }; // => N/A
+  return { zoning_gas: null, zoning_dust: null };
 }
 
 // route “canonique” initiale (PUT)
