@@ -18,10 +18,10 @@
 }
 
 .leaflet-container {
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
 }
 
-/* ----------- Bouton ➕ création équipement (Leaflet control hérité) ----------- */
+/* ----------- (legacy) Bouton ➕ control — non utilisé désormais ----------- */
 .leaflet-control-addatex a {
   display: inline-flex;
   align-items: center;
@@ -38,26 +38,17 @@
 .leaflet-control-addatex a:hover { background: #1d4ed8; }
 
 /* ----------- Marqueurs (icônes div) ----------- */
-.atex-marker--new {
-  width: 22px; height: 22px; border-radius: 9999px;
-  background: #2563eb; border: 2px solid #93c5fd;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
-}
-.atex-marker--todo {
-  width: 22px; height: 22px; border-radius: 9999px;
-  background: #059669; border: 2px solid #34d399;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
-}
-.atex-marker--soon {
-  width: 22px; height: 22px; border-radius: 9999px;
-  background: #f59e0b; border: 2px solid #fbbf24;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
-}
+.atex-marker--new,
+.atex-marker--todo,
+.atex-marker--soon,
 .atex-marker--late {
   width: 22px; height: 22px; border-radius: 9999px;
-  background: #e11d48; border: 2px solid #fb7185;
   box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
 }
+.atex-marker--new  { background:#2563eb; border:2px solid #93c5fd; }
+.atex-marker--todo { background:#059669; border:2px solid #34d399; }
+.atex-marker--soon { background:#f59e0b; border:2px solid #fbbf24; }
+.atex-marker--late { background:#e11d48; border:2px solid #fb7185; }
 
 /* ----------- Menu pick multi-marqueurs ----------- */
 .atex-pick {
@@ -69,19 +60,18 @@
 .atex-pick > button {
   font-size: 12px; line-height: 1; padding: 6px 8px; border-radius: 999px;
   border: 1px solid #e5e7eb; background: #fff; color: #111827;
+  cursor: pointer;
 }
 .atex-pick > button:hover { background: #f3f4f6; }
 
-/* ----------- Légende zoning ----------- */
+/* ----------- Légende zoning (control bas droite) ----------- */
 .atex-legend {
   position: absolute; right: 8px; bottom: 8px; z-index: 1200;
   background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px;
   box-shadow: 0 10px 20px rgba(0,0,0,.08);
   padding: 8px 10px; min-width: 220px;
 }
-.atex-legend__title {
-  font-size: 12px; font-weight: 600; color: #111827; margin-bottom: 6px;
-}
+.atex-legend__title { font-size: 12px; font-weight: 600; color: #111827; margin-bottom: 6px; }
 .atex-legend__group {
   display: grid; grid-template-columns: 18px 1fr; gap: 8px 8px; align-items: center;
   margin-bottom: 6px;
@@ -89,29 +79,35 @@
 .atex-legend__chip {
   width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15);
 }
-.atex-legend__label {
-  font-size: 12px; color: #374151;
+.atex-legend__label { font-size: 12px; color: #374151; }
+
+/* ----------- Zones: lisibles mais discrètes ----------- */
+/* Tous les vecteurs dans le pane des zones restent fins/transparents */
+.leaflet-pane.zonesPane svg path,
+.leaflet-pane.zonesPane svg polygon,
+.leaflet-pane.zonesPane svg circle,
+.leaflet-pane.zonesPane svg rect {
+  stroke-width: 1 !important;
+  opacity: 0.9;
+  fill-opacity: 0.12 !important; /* pour éviter de cacher le plan */
 }
 
-/* ----------- Couleurs de zones (remplissages) ----------- */
-.leaflet-overlay-pane .atex-subarea-gas-0 { fill: #1f77b4; fill-opacity: .18; stroke: #1f77b4; }
-.leaflet-overlay-pane .atex-subarea-gas-1 { fill: #2ca02c; fill-opacity: .18; stroke: #2ca02c; }
-.leaflet-overlay-pane .atex-subarea-gas-2 { fill: #17becf; fill-opacity: .18; stroke: #17becf; }
+/* Libellé de zone (marker HTML non interactif) */
+.atex-subarea-label {
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+.atex-subarea-label > div {
+  backdrop-filter: blur(2px);
+}
 
-.leaflet-overlay-pane .atex-subarea-dust-20 { fill: #d97706; fill-opacity: .18; stroke: #d97706; }
-.leaflet-overlay-pane .atex-subarea-dust-21 { fill: #eab308; fill-opacity: .18; stroke: #eab308; }
-.leaflet-overlay-pane .atex-subarea-dust-22 { fill: #f59e0b; fill-opacity: .18; stroke: #f59e0b; }
-
-/* Mix gaz + poussière → hachures (pattern CSS via background-image sur DIVs) 
-   Pour les SVG paths, on triche en augmentant l’opacité et la bordure. */
+/* Hachures option mix gaz+poussière si nécessaire */
 .leaflet-overlay-pane .atex-subarea-mix {
   fill-opacity: .22;
-  stroke: #6b7280; /* gris neutre */
+  stroke: #6b7280;
   stroke-dasharray: 4 3;
 }
-
-/* Si vous utilisez des DIV overlays pour sub-areas (ex. avec bounds):
-   appliquez ces classes pour des hachures lisibles. */
 .atex-hatch-mix {
   background:
     repeating-linear-gradient(
@@ -123,10 +119,21 @@
     );
 }
 
+/* ----------- Poignées d’édition (pane dédié) ----------- */
+.leaflet-pane.editPane .leaflet-interactive { cursor: move; }
+.leaflet-pane.editPane svg path,
+.leaflet-pane.editPane svg circle {
+  stroke: #111827;
+  stroke-width: 1;
+  fill: #ffffff;
+  fill-opacity: 1;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.15));
+}
+
 /* ----------- Mini légende des marqueurs (bas de carte) ----------- */
 .atex-legend-markers {
   display: flex; align-items: center; gap: 12px; font-size: 12px; color: #4b5563;
-  margin-top: 8px;
+  margin-top: 8px; flex-wrap: wrap;
 }
 .atex-legend-dot {
   width: 12px; height: 12px; border-radius: 9999px; display: inline-block; margin-right: 6px;
@@ -146,43 +153,34 @@
   font-weight: 600; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* ----------- Leaflet.draw (si activé) harmonisation light ----------- */
+/* ----------- Leaflet.draw (si jamais activé) ----------- */
 .leaflet-draw-toolbar a {
   background: #fff;
   border: 1px solid #e5e7eb;
   box-shadow: 0 1px 1px rgba(0,0,0,.06);
 }
-.leaflet-draw-toolbar a:hover {
-  background: #f9fafb;
-}
+.leaflet-draw-toolbar a:hover { background: #f9fafb; }
 .leaflet-draw-actions a {
   background: #fff; color: #111827; border: 1px solid #e5e7eb;
 }
-.leaflet-draw-actions a:hover {
-  background: #f3f4f6;
-}
+.leaflet-draw-actions a:hover { background: #f3f4f6; }
 
 /* ----------- Modale plein écran (mobile) ----------- */
-.atex-viewer-modal {
-  position: fixed; inset: 0; z-index: 5000;
-  background: #fff; padding: 8px;
-}
-.atex-viewer-modal .leaflet-wrapper {
-  height: calc(100vh - 64px);
-}
+.atex-viewer-modal { position: fixed; inset: 0; z-index: 5000; background: #fff; padding: 8px; }
+.atex-viewer-modal .leaflet-wrapper { height: calc(100vh - 64px); }
 
 /* ----------- Badges / helpers ----------- */
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600;
 }
-.badge--green  { background: #d1fae5; color: #065f46; }
-.badge--amber  { background: #fef3c7; color: #92400e; }
-.badge--red    { background: #ffe4e6; color: #9f1239; }
-.badge--blue   { background: #dbeafe; color: #1e40af; }
-.badge--gray   { background: #f3f4f6; color: #374151; }
+.badge--green { background: #d1fae5; color: #065f46; }
+.badge--amber { background: #fef3c7; color: #92400e; }
+.badge--red { background: #ffe4e6; color: #9f1239; }
+.badge--blue { background: #dbeafe; color: #1e40af; }
+.badge--gray { background: #f3f4f6; color: #374151; }
 
-/* ----------- Tooltips feuille de style (si vous utilisez L.tooltip) ----------- */
+/* ----------- Tooltips (si L.tooltip) ----------- */
 .leaflet-tooltip.atex-tip {
   background: #111827; color: #fff; border: none; border-radius: 6px;
   box-shadow: 0 8px 20px rgba(0,0,0,.18);
@@ -199,7 +197,7 @@
 }
 
 /* =========================
-   AJOUT — toolbar crayon
+   AJOUT — toolbar (plus / crayon / ajuster)
    ========================= */
 .atex-toolbar {
   position: absolute;
@@ -222,6 +220,9 @@
   cursor: pointer;
   font-size: 18px;
   line-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-plus:hover,
@@ -252,6 +253,4 @@
   font-size: 14px;
 }
 
-.draw-menu > button:hover {
-  background: #f6f6f6;
-}
+.draw-menu > button:hover { background: #f6f6f6; }
