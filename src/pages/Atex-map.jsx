@@ -13,8 +13,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
 /* ------------------------------- LOG UTILITIES ------------------------------- */
+// → Logs par défaut ACTIVÉS. Mets localStorage.DEBUG_ATEX = "0" pour couper.
 const DEBUG = () => {
-  try { return String(localStorage.DEBUG_ATEX || localStorage.DEBUG || "") === "1"; } catch { return false; }
+  try { return String(localStorage.DEBUG_ATEX ?? "1") !== "0"; } catch { return true; }
 };
 function log(action, data = {}, level = "info") {
   if (!DEBUG()) return;
@@ -326,12 +327,11 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
     if (!fileUrl || !wrapRef.current) return;
 
     let cancelled = false;
-    let onResize, onMouseMove;
+    let onResize;
     const cleanupMap = () => {
       const m = mapRef.current;
       try { window.removeEventListener("resize", onResize); } catch {}
       try { window.removeEventListener("orientationchange", onResize); } catch {}
-      try { window.removeEventListener("mousemove", onMouseMove); } catch {}
       if (!m) return;
       try { m.off(); } catch {}
       try { m.eachLayer((l) => { try { m.removeLayer(l); } catch {} }); } catch {}
@@ -419,33 +419,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         m.on("zoomend", () => {
           if (DEBUG()) setHud((h) => ({ ...h, zoom: m.getZoom() }));
         });
-        m.on("mousemove", (e) => {
-          if (!DEBUG()) return;
-          const xf = e.latlng.lng / canvas.width;
-          const yf = e.latlng.lat / canvas.height;
-          setHud((h) => ({ ...h, mouse: { x: e.latlng.lng, y: e.latlng.lat, xf, yf } }));
-        });
-
-        m.on("click", (e) => {
-          setEditorPos(null);
-          if (drawing === DRAW_POLY) {
-            const pt = e.latlng; // CRS simple: lat=y, lng=x
-            const xf = pt.lng / canvas.width;
-            const yf = pt.lat / canvas.height;
-            setPolyTemp((prev) => {
-              const next = [...prev, [xf, yf]];
-              drawPolyTemp(next);
-              log("poly add point", { xf, yf, count: next.length });
-              return next;
-            });
-          }
-        });
-        m.on("contextmenu", () => {
-          if (drawing === DRAW_POLY && polyTemp.length >= 3) {
-            log("poly save requested (contextmenu)", { points: polyTemp.length });
-            openSubareaEditorAtCenter(savePolyTemp);
-          }
-        });
 
         // resize
         onResize = () => {
@@ -489,7 +462,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       cleanupMap();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileUrl, pageIndex]);
+  }, [fileUrl, pageIndex, legendVisible]);
 
   /* ----------------------------- Chargements ----------------------------- */
   async function reloadAll() {
@@ -1319,8 +1292,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
             <div className="font-medium">DEBUG HUD</div>
             <div>zoom: {hud.zoom}</div>
             <div>img: {imgSize.w}×{imgSize.h}</div>
-            <div>mouse(lat,lng): {hud.mouse.y.toFixed(2)}, {hud.mouse.x.toFixed(2)}</div>
-            <div>mouse(frac): {hud.mouse.yf.toFixed(4)}, {hud.mouse.xf.toFixed(4)}</div>
             <div>panes zIndex: base:{hud.panes.basePane} zones:{hud.panes.zonesPane} markers:{hud.panes.markersPane} edit:{hud.panes.editPane}</div>
           </div>
         )}
