@@ -75,6 +75,10 @@ function withBust(url, enabled = true) {
 function isUuid(s) {
   return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
 }
+/** Numeric ID checker */
+function isNumericId(s) {
+  return (typeof s === "string" && /^\d+$/.test(s)) || (typeof s === "number" && Number.isInteger(s));
+}
 
 /** Fetch JSON with automatic X-Site + Identity headers */
 async function jsonFetch(url, options = {}) {
@@ -408,11 +412,12 @@ export const api = {
 
     planFileUrlAuto: (plan, { bust = true } = {}) => {
       if (typeof plan === "string") {
-        return isUuid(plan)
-          ? withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust)
-          : withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust);
+        if (isUuid(plan) || isNumericId(plan)) {
+          return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust);
+        }
+        return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust);
       }
-      if (plan && isUuid(plan.id)) {
+      if (plan && (isUuid(plan.id) || isNumericId(plan.id))) {
         return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`, bust);
       }
       const logical = plan?.logical_name || "";
@@ -428,7 +433,7 @@ export const api = {
         typeof planOrKey === "string"
           ? planOrKey
           : planOrKey?.id || planOrKey?.logical_name || "";
-      if (isUuid(key)) return get(`/api/doors/maps/positions`, { id: key, page_index });
+      if (isUuid(key) || isNumericId(key)) return get(`/api/doors/maps/positions`, { id: key, page_index });
       return get(`/api/doors/maps/positions`, { logical_name: key, page_index });
     },
     pendingPositions: (logical_name, page_index = 0) =>
@@ -543,7 +548,7 @@ export const api = {
 
     // Plans
     listPlans: () => get(`/api/atex/maps/listPlans`),
-    // alias back compat
+    // alias back compat (/plans)
     listPlansCompat: () => get(`/api/atex/maps/plans`),
 
     renamePlan: (logical_name, display_name) =>
@@ -554,10 +559,10 @@ export const api = {
       withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
     planFileUrlById: (id, { bust = true } = {}) =>
       withBust(`${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`, bust),
-    // Helper auto (string|plan, détecte UUID)
+    // Helper auto (string|plan, détecte UUID **ou id numérique**)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
       const key = typeof plan === "string" ? plan : (plan?.id || plan?.logical_name || "");
-      const url = isUuid(key)
+      const url = (isUuid(key) || isNumericId(key))
         ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
         : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(key)}`;
       return withBust(url, bust);
@@ -566,24 +571,25 @@ export const api = {
     // Positions
     positions: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/positions`, { logical_name, page_index }),
-    // accepte id OU logical_name
+    // 🔧 fix: accepte id **numérique** OU UUID OU logical_name
     positionsAuto: (planOrKey, page_index = 0) => {
       const key = typeof planOrKey === "string" ? planOrKey : (planOrKey?.id || planOrKey?.logical_name || "");
-      if (isUuid(key)) return get(`/api/atex/maps/positions`, { id: key, page_index });
+      if (isUuid(key) || isNumericId(key)) return get(`/api/atex/maps/positions`, { id: key, page_index });
       return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
     },
-    // setPosition (retourne {zones} côté back)
+    // setPosition (POST alias)
     setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
       post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }),
 
     /* ================== Sous-zones (subareas) ================== */
+    // 🔧 fix: accepte id **numérique** OU UUID, sinon logical_name
     listSubareas: (planKey, page_index = 0) => {
-      const key = planKey || "";
-      if (isUuid(key)) return get(`/api/atex/maps/subareas`, { id: key, page_index });
+      const key = typeof planKey === "string" ? planKey : (planKey?.id || planKey?.logical_name || "");
+      if (isUuid(key) || isNumericId(key)) return get(`/api/atex/maps/subareas`, { id: key, page_index });
       return get(`/api/atex/maps/subareas`, { logical_name: key, page_index });
     },
 
-    // Stats (optionnel)
+    // Stats (compter les zones sur plan/page)
     subareasStats: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/subareas/stats`, { logical_name, page_index }),
 
