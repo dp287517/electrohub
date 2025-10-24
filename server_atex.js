@@ -78,8 +78,10 @@ app.use(
 );
 
 function getUser(req) {
+  console.log("[backend] Entering getUser");
   const name = req.header("X-User-Name") || null;
   const email = req.header("X-User-Email") || null;
+  console.log("[backend] Exiting getUser");
   return { name, email };
 }
 
@@ -98,7 +100,7 @@ const uploadZip = multer({
     destination: (_req, _file, cb) => cb(null, MAPS_INCOMING_DIR),
     filename: (_req, file, cb) =>
       cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`),
-  }),
+  },
   limits: { fileSize: 300 * 1024 * 1024 },
 });
 
@@ -115,6 +117,7 @@ const pool = new Pool({
 
 // ------------------------------
 async function ensureSchema() {
+  console.log("[backend] Entering ensureSchema");
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
 
@@ -262,10 +265,12 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_atex_events_action ON atex_events(action);
     CREATE INDEX IF NOT EXISTS idx_atex_events_time ON atex_events(ts DESC);
   `);
+  console.log("[backend] Exiting ensureSchema");
 }
 
 // ------------------------------
 function eqStatusFromDue(due) {
+  console.log("[backend] Entering eqStatusFromDue");
   if (!due) return "a_faire";
   const d = new Date(due);
   const now = new Date();
@@ -273,25 +278,35 @@ function eqStatusFromDue(due) {
   if (diff < 0) return "en_retard";
   // ✅ fenêtre d'alerte 90 jours
   if (diff <= 90) return "en_cours_30";
+  console.log("[backend] Exiting eqStatusFromDue");
   return "a_faire";
 }
 function addMonths(date, m) {
+  console.log("[backend] Entering addMonths");
   const d = new Date(date);
   d.setMonth(d.getMonth() + m);
+  console.log("[backend] Exiting addMonths");
   return d;
 }
 function addDays(date, n) {
+  console.log("[backend] Entering addDays");
   const d = new Date(date);
   d.setDate(d.getDate() + n);
+  console.log("[backend] Exiting addDays");
   return d;
 }
 function fileUrlFromPath(p) {
+  console.log("[backend] Entering fileUrlFromPath");
+  console.log("[backend] Exiting fileUrlFromPath");
   return `/api/atex/file?path=${encodeURIComponent(p)}`;
 }
 function isUuid(s = "") {
+  console.log("[backend] Entering isUuid");
+  console.log("[backend] Exiting isUuid");
   return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
 }
 async function logEvent(req, action, details = {}) {
+  console.log("[backend] Entering logEvent");
   const u = getUser(req);
   try {
     await pool.query(
@@ -302,10 +317,12 @@ async function logEvent(req, action, details = {}) {
     console.warn("[events] failed to log", action, e.message);
   }
   console.log(`[atex][${action}]`, { by: u.email || u.name || "anon", ...details });
+  console.log("[backend] Exiting logEvent");
 }
 
 // ------------------------------
 app.get("/api/atex/health", async (_req, res) => {
+  console.log("[backend] Request to /api/atex/health");
   try {
     const { rows } = await pool.query(`SELECT COUNT(*)::int AS n FROM atex_equipments`);
     res.json({ ok: true, equipments: rows?.[0]?.n ?? 0, port: PORT });
@@ -315,10 +332,11 @@ app.get("/api/atex/health", async (_req, res) => {
 });
 
 app.get("/api/atex/file", async (req, res) => {
+  console.log("[backend] Request to /api/atex/file");
   try {
     const p = String(req.query.path || "");
     const abs = path.resolve(p);
-    if (!abs.startsWith(DATA_DIR)) return res.status(403).json({ ok: false });
+    if (!abs.startsWith(DATA_DIR) ) return res.status(403).json({ ok: false });
     if (!fs.existsSync(abs)) return res.status(404).json({ ok: false });
     res.sendFile(abs);
   } catch (e) {
@@ -330,6 +348,7 @@ app.get("/api/atex/file", async (req, res) => {
 // ÉQUIPEMENTS
 // ========================================================================
 app.get("/api/atex/equipments", async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments");
   try {
     const q = (req.query.q || "").toString().trim().toLowerCase();
     const status = (req.query.status || "").toString().trim(); // a_faire|en_cours_30|en_retard|fait
@@ -391,6 +410,7 @@ app.get("/api/atex/equipments", async (req, res) => {
 });
 
 app.get("/api/atex/equipments/:id", async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments/:id");
   try {
     const id = String(req.params.id);
     const { rows } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
@@ -407,6 +427,7 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
 });
 
 app.post("/api/atex/equipments", async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments");
   try {
     const {
       name = "",
@@ -460,6 +481,7 @@ app.post("/api/atex/equipments", async (req, res) => {
 });
 
 app.put("/api/atex/equipments/:id", async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments/:id");
   try {
     const id = String(req.params.id);
     const fields = [
@@ -495,6 +517,7 @@ app.put("/api/atex/equipments/:id", async (req, res) => {
 });
 
 app.delete("/api/atex/equipments/:id", async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments/:id");
   try {
     const id = String(req.params.id);
     await pool.query(`DELETE FROM atex_equipments WHERE id=$1`, [id]);
@@ -506,6 +529,7 @@ app.delete("/api/atex/equipments/:id", async (req, res) => {
 
 // Photos / Files
 app.post("/api/atex/equipments/:id/photo", upload.single("photo"), async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments/:id/photo");
   try {
     const id = String(req.params.id);
     const file = req.file;
@@ -527,7 +551,9 @@ app.post("/api/atex/equipments/:id/photo", upload.single("photo"), async (req, r
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
-app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ try{
+app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ 
+  console.log("[backend] Request to /api/atex/equipments/:id/photo");
+  try{
   const id = String(req.params.id);
   const { rows } = await pool.query(`SELECT photo_path, photo_content, photo_mime FROM atex_equipments WHERE id=$1`, [id]);
   const row = rows?.[0] || null; if(!row) return res.status(404).end();
@@ -542,7 +568,9 @@ app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ try{
   res.sendFile(path.resolve(p));
 } catch { res.status(404).end(); }});
 
-app.get("/api/atex/equipments/:id/files", async (req,res)=>{ try{
+app.get("/api/atex/equipments/:id/files", async (req,res)=>{ 
+  console.log("[backend] Request to /api/atex/equipments/:id/files");
+  try{
   const id = String(req.params.id);
   const { rows } = await pool.query(`SELECT * FROM atex_files WHERE equipment_id=$1 ORDER BY uploaded_at DESC`, [id]);
   const files = rows.map((r)=>({
@@ -555,7 +583,9 @@ app.get("/api/atex/equipments/:id/files", async (req,res)=>{ try{
   res.json({ files });
 } catch(e){ res.status(500).json({ ok:false, error:e.message }); }});
 
-app.post("/api/atex/equipments/:id/files", upload.array("files"), async (req,res)=>{ try{
+app.post("/api/atex/equipments/:id/files", upload.array("files"), async (req,res)=>{ 
+  console.log("[backend] Request to /api/atex/equipments/:id/files");
+  try{
   const id = String(req.params.id);
   for (const f of (req.files||[])) {
     let buf = null;
@@ -570,6 +600,7 @@ app.post("/api/atex/equipments/:id/files", upload.array("files"), async (req,res
 } catch(e){ res.status(500).json({ ok:false, error:e.message }); }});
 
 app.get("/api/atex/files/:fileId/download", async (req, res) => {
+  console.log("[backend] Request to /api/atex/files/:fileId/download");
   try {
     const id = String(req.params.fileId);
     const { rows } = await pool.query(
@@ -593,7 +624,9 @@ app.get("/api/atex/files/:fileId/download", async (req, res) => {
   } catch { res.status(500).json({ ok:false }); }
 });
 
-app.delete("/api/atex/files/:fileId", async (req,res)=>{ try{
+app.delete("/api/atex/files/:fileId", async (req,res)=>{ 
+  console.log("[backend] Request to /api/atex/files/:fileId");
+  try{
   const id = String(req.params.fileId);
   const { rows } = await pool.query(`DELETE FROM atex_files WHERE id=$1 RETURNING file_path`, [id]);
   const fp = rows?.[0]?.file_path; if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
@@ -604,10 +637,12 @@ app.delete("/api/atex/files/:fileId", async (req,res)=>{ try{
 // Settings / Checks / Calendar
 // ========================================================================
 app.get("/api/atex/settings", async (_req, res) => {
+  console.log("[backend] Request to /api/atex/settings");
   try { const { rows } = await pool.query(`SELECT * FROM atex_settings WHERE id=1`); res.json(rows?.[0] || {}); }
   catch(e){ res.status(500).json({ ok:false, error:e.message }); }
 });
 app.put("/api/atex/settings", async (req, res) => {
+  console.log("[backend] Request to /api/atex/settings");
   try {
     const { frequency, checklist_template } = req.body || {};
     await pool.query(
@@ -620,6 +655,7 @@ app.put("/api/atex/settings", async (req, res) => {
 });
 
 app.post("/api/atex/equipments/:id/checks", async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments/:id/checks");
   try {
     const id = String(req.params.id);
     const u = getUser(req);
@@ -632,6 +668,7 @@ app.post("/api/atex/equipments/:id/checks", async (req, res) => {
 });
 
 app.put("/api/atex/equipments/:id/checks/:checkId", upload.array("files"), async (req, res) => {
+  console.log("[backend] Request to /api/atex/equipments/:id/checks/:checkId");
   try {
     const id = String(req.params.id);
     const checkId = String(req.params.checkId);
@@ -646,275 +683,8 @@ app.put("/api/atex/equipments/:id/checks/:checkId", upload.array("files"), async
       const values2 = await pool.query(`SELECT items FROM atex_checks WHERE id=$1`, [checkId]);
       const its = values2?.rows?.[0]?.items || [];
       const vals = (its || []).slice(0, 5).map((i) => i?.value).filter(Boolean);
-      const result = vals.includes("non_conforme") ? "non_conforme" : (vals.length ? "conforme" : null);
-
-      const nextDate = addMonths(new Date(), 36);
-      await pool.query(`UPDATE atex_equipments SET next_check_date=$1, updated_at=now() WHERE id=$2`, [nextDate, id]);
-      await pool.query(`UPDATE atex_checks SET status='fait', result=$1, date=now() WHERE id=$2`, [result, checkId]);
-    }
-
-    const { rows: eqR } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
-    const equipment = eqR?.[0] || null;
-    if (equipment) {
-      equipment.photo_url =
-        (equipment.photo_content && equipment.photo_content.length) || equipment.photo_path
-          ? `/api/atex/equipments/${id}/photo`
-          : null;
-    }
-    res.json({ ok:true, equipment });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
-});
-
-app.get("/api/atex/equipments/:id/history", async (req,res)=>{ try{
-  const id = String(req.params.id);
-  const { rows } = await pool.query(`SELECT * FROM atex_checks WHERE equipment_id=$1 ORDER BY date DESC`, [id]);
-  res.json({ checks: rows || [] });
-} catch(e){ res.status(500).json({ ok:false, error:e.message }); }});
-
-app.get("/api/atex/calendar", async (_req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT id as equipment_id, name as equipment_name, next_check_date as date
-      FROM atex_equipments
-      WHERE next_check_date IS NOT NULL
-      ORDER BY next_check_date ASC
-    `);
-    const events = (rows || []).map((r) => ({
-      date: r.date,
-      equipment_id: r.equipment_id,
-      equipment_name: r.equipment_name,
-      status: eqStatusFromDue(r.date),
-    }));
-    res.json({ events });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
-});
-
-// ========================================================================
-// MAPS — Upload ZIP + list + rename + file URL
-// ========================================================================
-app.post("/api/atex/maps/uploadZip", uploadZip.single("zip"), async (req, res) => {
-  try {
-    const zipPath = req.file?.path;
-    if (!zipPath) return res.status(400).json({ ok: false, error: "zip missing" });
-
-    const zip = new StreamZip.async({ file: zipPath, storeEntries: true });
-    const imported = [];
-    try {
-      const entries = await zip.entries();
-      const files = Object.values(entries).filter(
-        (e) => !e.isDirectory && /\.pdf$/i.test(e.name)
-      );
-
-      for (const entry of files) {
-        const rawName = entry.name.split("/").pop();
-        const { name: baseName } = path.parse(rawName || entry.name);
-        const base = baseName || "plan";
-        const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
-        const version = Math.floor(Date.now() / 1000);
-
-        const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
-        await fsp.mkdir(path.dirname(dest), { recursive: true });
-        await zip.extract(entry.name, dest);
-
-        let buf = null;
-        try { buf = await fsp.readFile(dest); } catch { buf = null; }
-
-        const page_count = 1;
-
-        if (buf) {
-          await pool.query(
-            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, content)
-             VALUES ($1,$2,$3,$4,$5,$6)`,
-            [logical, version, path.basename(dest), dest, page_count, buf]
-          );
-        } else {
-          await pool.query(
-            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count)
-             VALUES ($1,$2,$3,$4,$5)`,
-            [logical, version, path.basename(dest), dest, page_count]
-          );
-        }
-
-        await pool.query(
-          `INSERT INTO atex_plan_names (logical_name, display_name) VALUES ($1,$2)
-           ON CONFLICT (logical_name) DO NOTHING`,
-          [logical, base]
-        );
-
-        imported.push({ logical_name: logical, version, page_count });
-      }
-    } finally {
-      await zip.close().catch(()=>{});
-      fs.rmSync(zipPath, { force: true });
-    }
-
-    res.json({ ok: true, imported });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-app.get("/api/atex/maps/listPlans", async (_req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT a.logical_name,
-             MAX(a.version) AS version,
-             COALESCE(MAX(a.page_count),1) AS page_count,
-             (SELECT display_name FROM atex_plan_names n WHERE n.logical_name=a.logical_name LIMIT 1) AS display_name
-      FROM atex_plans a
-      GROUP BY a.logical_name
-      ORDER BY a.logical_name ASC
-    `);
-  const plans = rows.map((r) => ({
-      logical_name: r.logical_name,
-      id: r.logical_name,
-      version: Number(r.version || 1),
-      page_count: Number(r.page_count || 1),
-      display_name: r.display_name || r.logical_name,
-    }));
-    res.json({ plans, items: plans });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
-});
-
-// Alias compat (si l’ancien front appelle encore /plans)
-app.get("/api/atex/maps/plans", (req, res) =>
-  app._router.handle(Object.assign(req, { url: "/api/atex/maps/listPlans" }), res)
-);
-
-app.put("/api/atex/maps/renamePlan", async (req, res) => {
-  try {
-    const { logical_name, display_name } = req.body || {};
-    if (!logical_name) return res.status(400).json({ ok: false, error: "logical_name required" });
-    await pool.query(
-      `INSERT INTO atex_plan_names (logical_name, display_name)
-         VALUES ($1,$2)
-       ON CONFLICT (logical_name) DO UPDATE SET display_name=EXCLUDED.display_name`,
-      [logical_name, String(display_name || "").trim() || logical_name]
-    );
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
-});
-
-// Alias compat: /api/atex/maps/rename/:logical
-app.put("/api/atex/maps/rename/:logical", async (req, res) => {
-  req.body = { ...(req.body || {}), logical_name: req.params.logical };
-  req.url = "/api/atex/maps/renamePlan";
-  return app._router.handle(req, res);
-});
-
-// ========================================================================
-// 🔹 MAPS — Fichier du plan (id OU logical_name, BLOB prioritaire)
-// ========================================================================
-app.get("/api/atex/maps/planFile", async (req, res) => {
-  try {
-    let logical = (req.query.logical_name || "").toString();
-    const id = (req.query.id || "").toString();
-
-    // 1) par id (UUID dans atex_plans.id)
-    if (id && isUuid(id)) {
-      const { rows } = await pool.query(
-        `SELECT file_path, content FROM atex_plans WHERE id=$1 ORDER BY version DESC LIMIT 1`,
-        [id]
-      );
-      const row = rows?.[0] || null;
-      if (row?.content?.length) {
-        res.type("application/pdf");
-        return res.end(row.content, "binary");
-      }
-      const fp = row?.file_path;
-      if (fp && fs.existsSync(fp)) return res.type("application/pdf").sendFile(path.resolve(fp));
-      return res.status(404).send("not_found");
-    }
-
-    if (!logical) return res.status(400).json({ ok: false, error: "logical_name required" });
-
-    // 2) lookup exact puis caseless
-    let rows = (
-      await pool.query(
-        `SELECT file_path, content FROM atex_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
-        [logical]
-      )
-    ).rows;
-    if (!rows?.length) {
-      rows = (
-        await pool.query(
-          `SELECT file_path, content FROM atex_plans WHERE lower(logical_name)=lower($1) ORDER BY version DESC LIMIT 1`,
-          [logical]
-        )
-      ).rows;
-    }
-
-    // 3) servir BLOB ou fallback FS
-    let row = rows?.[0] || null;
-    if (row?.content?.length) {
-      res.type("application/pdf");
-      return res.end(row.content, "binary");
-    }
-    let fp = row?.file_path || null;
-    if (!fp) {
-      const norm = logical.toLowerCase();
-      const files = await fsp.readdir(MAPS_DIR);
-      const candidate = files.find((f) =>
-        f.toLowerCase().startsWith(`${norm}__`) && f.toLowerCase().endsWith(".pdf")
-      );
-      if (candidate) fp = path.join(MAPS_DIR, candidate);
-    }
-
-    if (!fp || !fs.existsSync(fp)) return res.status(404).send("not_found");
-    res.type("application/pdf").sendFile(path.resolve(fp));
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// ---- ALIAS compat: /api/atex/maps/plan/:logical/file
-app.get("/api/atex/maps/plan/:logical/file", async (req, res) => {
-  req.query.logical_name = req.params.logical;
-  req.url = "/api/atex/maps/planFile";
-  return app._router.handle(req, res);
-});
-
-// ---- ALIAS compat: /api/atex/maps/plan-id/:id/file
-app.get("/api/atex/maps/plan-id/:id/file", async (req, res) => {
-  req.query.id = req.params.id;
-  req.url = "/api/atex/maps/planFile";
-  return app._router.handle(req, res);
-});
-
-// ---- Compat Doors: /api/doors/maps/plan/:logical/file
-app.get("/api/doors/maps/plan/:logical/file", async (req, res) => {
-  req.query.logical_name = req.params.logical;
-  req.url = "/api/atex/maps/planFile";
-  return app._router.handle(req, res);
-});
-
-// ---- Compat Doors: /api/doors/maps/plan-id/:id/file
-app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
-  req.query.id = req.params.id;
-  req.url = "/api/atex/maps/planFile";
-  return app._router.handle(req, res);
-});
-
-// ========================================================================
-// MAPS — Backfill BLOB content (maintenance)
-// ========================================================================
-app.post("/api/atex/maps/backfillContent", async (_req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, file_path FROM atex_plans WHERE content IS NULL AND file_path IS NOT NULL`
-    );
-    let updated = 0, missing_files = 0, errors = 0;
-    for (const r of rows) {
-      try {
-        if (!r.file_path || !fs.existsSync(r.file_path)) { missing_files++; continue; }
-        const buf = await fsp.readFile(r.file_path);
-        await pool.query(`UPDATE atex_plans SET content=$1 WHERE id=$2`, [buf, r.id]);
-        updated++;
-      } catch {
-        errors++;
-      }
-    }
-    res.json({ ok: true, updated, missing_files, errors });
+      const result = vals.includes("non_conf...(truncated 6080 characters)... 
+      res.json({ ok: true, updated, missing_files, errors });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -924,17 +694,22 @@ app.post("/api/atex/maps/backfillContent", async (_req, res) => {
 // MAPS — Positions + affectation des zones
 // ========================================================================
 function pointInRect(px, py, x1, y1, x2, y2) {
+  console.log("[backend] Entering pointInRect");
   const minx = Math.min(Number(x1), Number(x2));
   const maxx = Math.max(Number(x1), Number(x2));
   const miny = Math.min(Number(y1), Number(y2));
   const maxy = Math.max(Number(y1), Number(y2));
+  console.log("[backend] Exiting pointInRect");
   return px >= minx && px <= maxx && py >= miny && py <= maxy;
 }
 function pointInCircle(px, py, cx, cy, r) {
+  console.log("[backend] Entering pointInCircle");
   const dx = px - Number(cx), dy = py - Number(cy);
+  console.log("[backend] Exiting pointInCircle");
   return dx*dx + dy*dy <= Number(r)*Number(r);
 }
 function pointInPoly(px, py, points) {
+  console.log("[backend] Entering pointInPoly");
   let inside = false;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
     const xi = Number(points[i][0]), yi = Number(points[i][1]);
@@ -943,9 +718,11 @@ function pointInPoly(px, py, points) {
       (px < (xj - xi) * (py - yi) / ((yj - yi) || 1e-12) + xi);
     if (intersect) inside = !inside;
   }
+  console.log("[backend] Exiting pointInPoly");
   return inside;
 }
 async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
+  console.log("[backend] Entering detectZonesForPoint: logical=" + logical_name + ", page=" + page_index + ", x=" + x_frac + ", y=" + y_frac);
   const { rows } = await pool.query(
     `SELECT id, kind, x1,y1,x2,y2,cx,cy,r,points,zoning_gas,zoning_dust
      FROM atex_subareas WHERE logical_name=$1 AND page_index=$2
@@ -966,11 +743,13 @@ async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
       }
     }
   }
+  console.log("[backend] Exiting detectZonesForPoint");
   return { zoning_gas: null, zoning_dust: null, subarea_id: null };
 }
 
 // route “canonique” initiale (PUT)
 app.put("/api/atex/maps/setPosition", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/setPosition");
   try {
     const { equipment_id, logical_name, plan_id = null, page_index = 0, x_frac, y_frac } = req.body || {};
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null)
@@ -996,12 +775,14 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
 
 // alias pour compat front : POST /api/atex/maps/setPosition
 app.post("/api/atex/maps/setPosition", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/setPosition");
   req.method = "PUT";
   return app._router.handle(req, res);
 });
 
 // alias pour compat lib: PUT /api/atex/maps/positions/:equipmentId
 app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/positions/:equipmentId");
   try {
     const equipment_id = String(req.params.equipmentId);
     const { logical_name, plan_id = null, page_index = 0, x_frac, y_frac } = req.body || {};
@@ -1028,12 +809,14 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
 
 // ✅ alias pratique pour le front: positionsAuto (retour identique à /positions)
 app.get("/api/atex/maps/positionsAuto", (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/positionsAuto");
   req.url = "/api/atex/maps/positions" + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "");
   return app._router.handle(req, res);
 });
 
 // Recalculer les zonages de tous les équipements d’un plan/page
 app.post("/api/atex/maps/reindexZones", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/reindexZones");
   try {
     const { logical_name, page_index = 0 } = req.body || {};
     if (!logical_name) return res.status(400).json({ ok:false, error:"logical_name required" });
@@ -1060,6 +843,7 @@ app.post("/api/atex/maps/reindexZones", async (req, res) => {
 // MAPS — Positions (lecture)
 // ========================================================================
 app.get("/api/atex/maps/positions", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/positions");
   try {
     const logical = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
@@ -1094,6 +878,7 @@ app.get("/api/atex/maps/positions", async (req, res) => {
 // MAPS — Subareas (dessin) + améliorations (edit geometry / stats / purge)
 // ========================================================================
 app.get("/api/atex/maps/subareas", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/subareas");
   try {
     const logical = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
@@ -1107,6 +892,7 @@ app.get("/api/atex/maps/subareas", async (req, res) => {
 
 // stats: savoir s’il y a des zones et combien
 app.get("/api/atex/maps/subareas/stats", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/subareas/stats");
   try {
     const logical = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
@@ -1120,6 +906,7 @@ app.get("/api/atex/maps/subareas/stats", async (req, res) => {
 });
 
 app.post("/api/atex/maps/subareas", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/subareas");
   try {
     const {
       kind,
@@ -1157,6 +944,7 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
 
 // éditer meta (nom, zonage) + (compat) géométrie si fournie
 app.put("/api/atex/maps/subareas/:id", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/subareas/:id");
   try {
     const id = String(req.params.id);
     const body = req.body || {};
@@ -1198,6 +986,7 @@ app.put("/api/atex/maps/subareas/:id", async (req, res) => {
 
 // 🔹 Route dédiée (reste dispo)
 app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/subareas/:id/geometry");
   try {
     const id = String(req.params.id);
     const {
@@ -1232,6 +1021,7 @@ app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
 
 // supprimer 1 zone
 app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/subareas/:id");
   try { const id = String(req.params.id);
     await pool.query(`DELETE FROM atex_subareas WHERE id=$1`, [id]);
     await logEvent(req, "subarea.delete", { id });
@@ -1241,6 +1031,7 @@ app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
 
 // 🔹 NOUVEAU : purge de toutes les zones d’un plan/page (avec garde-fou)
 app.delete("/api/atex/maps/subareas/purge", async (req, res) => {
+  console.log("[backend] Request to /api/atex/maps/subareas/purge");
   try {
     const logical = String(req.query.logical_name || "");
     const pageIndex = Number(req.query.page_index || 0);
@@ -1261,6 +1052,7 @@ app.delete("/api/atex/maps/subareas/purge", async (req, res) => {
 // Logs — lecture simple (debug)
 // ========================================================================
 app.get("/api/atex/logs", async (req, res) => {
+  console.log("[backend] Request to /api/atex/logs");
   try {
     const action = (req.query.action || "").toString().trim();
     const limit = Math.min(500, Math.max(1, Number(req.query.limit || 100)));
@@ -1281,12 +1073,15 @@ app.get("/api/atex/logs", async (req, res) => {
 // IA
 // ========================================================================
 function openaiClient() {
+  console.log("[backend] Entering openaiClient");
   const key = process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_ATEX || process.env.OPENAI_API_KEY_DOORS;
   if (!key) return null;
+  console.log("[backend] Exiting openaiClient");
   return new OpenAI({ apiKey: key });
 }
 
 app.post("/api/atex/extract", upload.array("files"), async (req, res) => {
+  console.log("[backend] Request to /api/atex/extract");
   try {
     const client = openaiClient();
     if (!client) return res.status(501).json({ ok: false, error: "OPENAI_API_KEY missing" });
@@ -1345,6 +1140,7 @@ Réponds en JSON strict.`;
 });
 
 app.post("/api/atex/assess", async (req, res) => {
+  console.log("[backend] Request to /api/atex/assess");
   try {
     const client = openaiClient();
     if (!client) return res.status(501).json({ ok: false, error: "OPENAI_API_KEY missing" });
@@ -1374,10 +1170,12 @@ app.post("/api/atex/assess", async (req, res) => {
 
 // 🔸 Alias legacy
 app.post("/api/atex/analyzePhotoBatch", (req, res) => {
+  console.log("[backend] Request to /api/atex/analyzePhotoBatch");
   req.url = "/api/atex/extract";
   return app._router.handle(req, res);
 });
 app.post("/api/atex/aiAnalyze", (req, res) => {
+  console.log("[backend] Request to /api/atex/aiAnalyze");
   req.url = "/api/atex/assess";
   return app._router.handle(req, res);
 });
