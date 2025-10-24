@@ -43,6 +43,45 @@ function safeJson(obj, max = 1500) {
   }
 }
 
+/* ----------------------------- Identité / headers ---------------------------- */
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+function getIdentity() {
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+  try {
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
+    }
+  } catch {}
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+  }
+  email = email ? String(email).trim() : null;
+  name = name ? String(name).trim() : null;
+  return { email, name };
+}
+function userHeaders() {
+  const { email, name } = getIdentity();
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
+}
+function pdfDocOpts(url) {
+  // ⚠️ On garde un rendu très défini (polices standard pour réduire warnings)
+  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
+}
+
 /* -------------------------------- UI helpers -------------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -75,7 +114,7 @@ function Select({ value, onChange, options = [], placeholder, className = "" }) 
     <select
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
       value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value)}
+      onChange={(e) => onChange?.(e.target.value))}
     >
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
@@ -129,21 +168,6 @@ function makeEquipIcon(status, isUnsaved) {
     iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
     popupAnchor: [0, -Math.round(s / 2)],
   });
-}
-
-/* ----------------------------- PDF helpers ----------------------------- */
-function userHeaders() {
-  const h = {};
-  try {
-    const email = localStorage.getItem("user.email") || localStorage.getItem("email");
-    const name = localStorage.getItem("user.name") || localStorage.getItem("name");
-    if (email) h["X-User-Email"] = email;
-    if (name) h["X-User-Name"] = name;
-  } catch {}
-  return h;
-}
-function pdfDocOpts(url) {
-  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
 
 /* ----------------------------- Dessin: modes ----------------------------- */
@@ -274,6 +298,12 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const legendRef = useRef(null);
   const roRef = useRef(null); // ResizeObserver
 
+  // Anti “double-run” / robustesse PDF
+  const loadingTaskRef = useRef(null);
+  const renderTaskRef = useRef(null);
+  const lastJob = useRef({ key: null });
+  const aliveRef = useRef(true);
+
   // Eviter reload/polling avant carte prête
   const readyRef = useRef(false);
   // Déclenchement initial unique une fois imgSize prêt
@@ -281,10 +311,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
   // ✅ nouvel indicateur: indexation faite pour ce plan/page
   const indexedRef = useRef({ key: "", done: false });
-
-  // 🔒 Verrou/coalescing reloadAll
-  const reloadingRef = useRef(false);
-  const rerunRef = useRef(false);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [positions, setPositions] = useState([]);
@@ -329,26 +355,39 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     try { markersLayerRef.current?.bringToFront?.(); } catch {}
   };
 
-  // --- Polling léger (protégé, single instance, no overlap)
-  const pollRef = useRef(null);
+  // --- Polling léger (protégé par readyRef)
   useEffect(() => {
     if (!planKey) return;
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     const tick = async () => {
-      if (!readyRef.current || reloadingRef.current) return;
+      if (!readyRef.current) return;
       const end = timeStart("reloadAll [poll]");
       try { await reloadAll(); } finally { end(); }
     };
-    pollRef.current = setInterval(tick, 15000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); pollRef.current = null; };
+    const t = setInterval(tick, 15000);
+    return () => clearInterval(t);
   }, [planKey, pageIndex]);
 
-  // --- Init map + render PDF
+  // --- Init map + render PDF (robuste, anti double-run)
   useEffect(() => {
     if (!fileUrl || !wrapRef.current) return;
 
     let cancelled = false;
-    let onResize;
+    aliveRef.current = true;
+
+    const jobKey = `${fileUrl}::${pageIndex}`;
+    if (lastJob.current.key === jobKey) {
+      // même job → ne pas ré-instancier, on redira juste redraw
+      requestAnimationFrame(() => forceRedraw());
+      return;
+    }
+    lastJob.current.key = jobKey;
+
+    const cleanupPdf = async () => {
+      try { renderTaskRef.current?.cancel(); } catch {}
+      try { await loadingTaskRef.current?.destroy?.(); } catch {}
+      renderTaskRef.current = null;
+      loadingTaskRef.current = null;
+    };
     const cleanupMap = () => {
       const m = mapRef.current;
       try { roRef.current?.disconnect?.(); } catch {}
@@ -356,9 +395,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       try { window.removeEventListener("orientationchange", onResize); } catch {}
       if (!m) return;
       try { m.off(); } catch {}
+      try { m.stop?.(); } catch {}
       try { m.eachLayer((l) => { try { m.removeLayer(l); } catch {} }); } catch {}
       try { legendRef.current && m.removeControl(legendRef.current); } catch {}
-      try { m.remove(); } catch {}
+      try { mapRef.current && m.remove(); } catch {}
       mapRef.current = null;
       baseLayerRef.current = null;
       markersLayerRef.current = null;
@@ -370,21 +410,27 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       indexedRef.current = { key: "", done: false };
     };
 
+    let onResize = null;
+
     (async () => {
       const close = timeStart("init map + pdf render");
       try {
         log("init: fileUrl/pageIndex", { fileUrl, pageIndex });
 
-        const loadingTask = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
-        const pdf = await loadingTask.promise;
-        if (cancelled) return;
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-        const baseVp = page.getViewport({ scale: 1 });
+        await cleanupPdf(); // 🧹 éviter toute fuite précédente
 
+        // On garde un bitmap TRÈS fin (lecture détail à fort zoom)
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const qualityBoost = 3.5;
         const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
+
+        loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
+        const pdf = await loadingTaskRef.current.promise;
+        if (cancelled) return;
+
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        const baseVp = page.getViewport({ scale: 1 });
         const safeScale = Math.min(6.0, Math.max(0.75, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
@@ -393,62 +439,87 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
         ctx.imageSmoothingEnabled = true;
-        await page.render({ canvasContext: ctx, viewport, intent: "display" }).promise;
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
+        await renderTaskRef.current.promise;
+        if (cancelled) return;
 
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
         log("pdf render done", { width: canvas.width, height: canvas.height, scale: safeScale });
 
-        const m = L.map(wrapRef.current, {
-          crs: L.CRS.Simple,
-          zoomControl: false,
-          preferCanvas: true,
-          scrollWheelZoom: true,
-          touchZoom: true,
-        });
-        L.control.zoom({ position: "topright" }).addTo(m);
+        // Map init (une seule instance)
+        if (!mapRef.current) {
+          const m = L.map(wrapRef.current, {
+            crs: L.CRS.Simple,
+            zoomControl: false,
+            preferCanvas: true,
+            zoomAnimation: true,
+            markerZoomAnimation: false,
+            scrollWheelZoom: true,
+            touchZoom: true,
+            tap: true,
+          });
+          L.control.zoom({ position: "topright" }).addTo(m);
+          mapRef.current = m;
 
-        m.createPane("basePane");      m.getPane("basePane").style.zIndex = 200;
-        m.createPane("zonesPane");     m.getPane("zonesPane").style.zIndex = 380;
-        m.createPane("markersPane");   m.getPane("markersPane").style.zIndex = 400;
-        m.createPane("editPane");      m.getPane("editPane").style.zIndex = 450;
+          // Panes pour contrôle fin du z-index
+          m.createPane("basePane");    m.getPane("basePane").style.zIndex = 200;
+          m.createPane("zonesPane");   m.getPane("zonesPane").style.zIndex = 380;
+          m.createPane("markersPane"); m.getPane("markersPane").style.zIndex = 400;
+          m.createPane("editPane");    m.getPane("editPane").style.zIndex = 450;
 
-        legendRef.current = addLegendControl(m);
-        try {
-          const el = legendRef.current.getContainer?.();
-          if (el) el.style.display = legendVisible ? "block" : "none";
-        } catch {}
+          legendRef.current = addLegendControl(m);
+          try {
+            const el = legendRef.current?.getContainer?.();
+            if (el) el.style.display = legendVisible ? "block" : "none";
+          } catch {}
 
+          markersLayerRef.current = L.layerGroup({ pane: "markersPane" }).addTo(m);
+          subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
+          editHandlesLayerRef.current = L.layerGroup({ pane: "editPane" }).addTo(m);
+
+          m.on("zoomend", () => { if (DEBUG()) setHud((h) => ({ ...h, zoom: m.getZoom() })); });
+        }
+
+        const m = mapRef.current;
+        // Base image
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
+        if (baseLayerRef.current) {
+          try { m.removeLayer(baseLayerRef.current); } catch {}
+          baseLayerRef.current = null;
+        }
         const base = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
         baseLayerRef.current = base;
 
-        m.fitBounds(bounds, { padding: [10, 10] });
-        const fitZoom = m.getZoom();
+        // Fit initial (avec zoomSnap fin)
+        await new Promise(requestAnimationFrame);
+        m.invalidateSize(false);
+        m.options.zoomSnap = 0.1;
+        m.options.zoomDelta = 0.5;
+        const fitZoom = m.getBoundsZoom(bounds, true);
         m.setMinZoom(fitZoom - 2);
         m.setMaxZoom(fitZoom + 8);
         m.setMaxBounds(bounds.pad(0.5));
+        m.fitBounds(bounds, { padding: [10, 10] });
 
-        markersLayerRef.current = L.layerGroup({ pane: "markersPane" }).addTo(m);
-        subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
-        editHandlesLayerRef.current = L.layerGroup({ pane: "editPane" }).addTo(m);
-
-        m.on("zoomend", () => { if (DEBUG()) setHud((h) => ({ ...h, zoom: m.getZoom() })); });
-
-        onResize = () => { try { m.invalidateSize(false); } catch {} };
+        // Resize observer + window
+        onResize = () => {
+          try {
+            const keepCenter = m.getCenter();
+            const keepZoom = m.getZoom();
+            m.invalidateSize(false);
+            // conserve la vue (pas de “sauts”)
+            m.setView(keepCenter, keepZoom, { animate: false });
+          } catch {}
+        };
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onResize);
-
         try {
-          roRef.current = new ResizeObserver(() => { forceRedraw(); });
+          roRef.current = new ResizeObserver(() => { onResize(); forceRedraw(); });
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        mapRef.current = m;
-
-        requestAnimationFrame(() => forceRedraw());
-        setTimeout(() => forceRedraw(), 80);
-
+        // ready → charge données (zones puis positions)
         const kickstart = async () => {
           if (cancelled || readyRef.current) return;
           readyRef.current = true;
@@ -462,7 +533,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         base.once("load", kickstart);
         m.whenReady(() => setTimeout(kickstart, 0));
 
-        await pdf.cleanup?.();
+        try { await pdf.cleanup?.(); } catch {}
         log("init complete");
       } catch (e) {
         console.error("[AtexMap] init error", e); // eslint-disable-line no-console
@@ -471,8 +542,18 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       }
     })();
 
-    return () => { cleanupMap(); };
-  }, [fileUrl, pageIndex]);
+    return () => {
+      cancelled = true;
+      aliveRef.current = false;
+      try { renderTaskRef.current?.cancel(); } catch {}
+      try { loadingTaskRef.current?.destroy?.(); } catch {}
+      renderTaskRef.current = null;
+      loadingTaskRef.current = null;
+      // nettoie la carte
+      cleanupMap();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileUrl, pageIndex, legendVisible]);
 
   // 🔁 Première peinture de secours si l'image était déjà en cache
   useEffect(() => {
@@ -497,14 +578,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     if (indexedRef.current.done) return;
 
     try {
-      if (plan?.logical_name) {
-        log("reindexZones [once] start", { key });
-        await api.atexMaps.reindexZones?.(plan.logical_name, pageIndex);
-        log("reindexZones [once] done", { key });
-      } else {
-        log("reindexZones skipped (no logical_name)", { key });
-      }
+      log("reindexZones [once] start", { key });
+      await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
       indexedRef.current.done = true;
+      log("reindexZones [once] done", { key });
     } catch (e) {
       // on ne bloque pas l'affichage si l'API n'existe pas
       log("reindexZones [once] error (ignored)", { error: String(e) }, "warn");
@@ -513,28 +590,14 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   }
 
   async function reloadAll() {
-    const endOuter = timeStart("reloadAll");
+    const end = timeStart("reloadAll");
     try {
-      if (reloadingRef.current) {
-        rerunRef.current = true; // coalesce une passe supplémentaire
-        return;
-      }
-      reloadingRef.current = true;
-      do {
-        rerunRef.current = false;
-        const end = timeStart("reloadAll[pass]");
-        try {
-          await ensureIndexedOnce();
-          // Important: subareas avant positions (les positions utilisent les zones renvoyées)
-          await loadSubareas();
-          await loadPositions();
-          forceRedraw();
-        } finally { end(); }
-      } while (rerunRef.current);
-    } finally {
-      reloadingRef.current = false;
-      endOuter();
-    }
+      await ensureIndexedOnce();
+      // Important: subareas avant positions (les positions utilisent les zones renvoyées)
+      await loadSubareas();
+      await loadPositions();
+      forceRedraw();
+    } finally { end(); }
   }
 
   async function enrichStatuses(list) {
@@ -653,7 +716,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     } catch (e) {
       console.error("[ATEX] loadSubareas error", e); // eslint-disable-line no-console
       setSubareasById({});
-      drawSubareas([]);
+      drawSubareas([]); // clear
     } finally { end(); }
   }
 
