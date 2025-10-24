@@ -3,22 +3,59 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
+
 import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css";
 import { api } from "../lib/api.js";
+
 // --- PDF.js worker + logs discrets
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
+
+/* ------------------------------- LOG UTILITIES ------------------------------- */
+const DEBUG = () => {
+  try { return String(localStorage.DEBUG_ATEX || localStorage.DEBUG || "") === "1"; } catch { return false; }
+};
+function log(action, data = {}, level = "info") {
+  if (!DEBUG()) return;
+  const ts = new Date().toISOString();
+  // eslint-disable-next-line no-console
+  console[level](`[ATEX][${ts}] ${action}`, data);
+}
+function timeStart(label) {
+  const id = `${label}#${Math.random().toString(36).slice(2, 7)}`;
+  if (DEBUG()) {
+    // eslint-disable-next-line no-console
+    console.groupCollapsed(`⏱️ ${label} [start]`);
+    // eslint-disable-next-line no-console
+    console.time(id);
+  }
+  return () => {
+    if (DEBUG()) {
+      // eslint-disable-next-line no-console
+      console.timeEnd(id);
+      // eslint-disable-next-line no-console
+      console.groupEnd();
+    }
+  };
+}
+function safeJson(obj, max = 1500) {
+  try {
+    const s = JSON.stringify(obj);
+    return s.length > max ? s.slice(0, max) + "…(truncated)" : s;
+  } catch {
+    return String(obj);
+  }
+}
+
 /* -------------------------------- UI helpers -------------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
-  console.log("[Atex-map.jsx] Entering Btn");
   const map = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
     ghost: "bg-white text-black border hover:bg-gray-50",
     subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
     danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100",
   };
-  console.log("[Atex-map.jsx] Exiting Btn");
   return (
     <button
       className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`}
@@ -29,8 +66,6 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
   );
 }
 function Input({ value, onChange, className = "", ...p }) {
-  console.log("[Atex-map.jsx] Entering Input");
-  console.log("[Atex-map.jsx] Exiting Input");
   return (
     <input
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
@@ -41,8 +76,6 @@ function Input({ value, onChange, className = "", ...p }) {
   );
 }
 function Select({ value, onChange, options = [], placeholder, className = "" }) {
-  console.log("[Atex-map.jsx] Entering Select");
-  console.log("[Atex-map.jsx] Exiting Select");
   return (
     <select
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
@@ -64,6 +97,7 @@ function Select({ value, onChange, options = [], placeholder, className = "" }) 
     </select>
   );
 }
+
 /* ----------------------------- Couleurs (Légende) ----------------------------- */
 const GAS_STROKE = { 0: "#0ea5e9", 1: "#ef4444", 2: "#f59e0b", null: "#6b7280", undefined: "#6b7280" };
 const DUST_FILL = { 20: "#84cc16", 21: "#8b5cf6", 22: "#06b6d4", null: "#e5e7eb", undefined: "#e5e7eb" };
@@ -74,8 +108,8 @@ const STATUS_COLOR = {
   fait: { fill: "#2563eb", border: "#60a5fa" },
 };
 const ICON_PX = 22;
+
 function makeEquipIcon(status, isUnsaved) {
-  console.log("[Atex-map.jsx] Entering makeEquipIcon");
   const s = ICON_PX;
   if (isUnsaved) {
     const html = `<div style="
@@ -83,7 +117,6 @@ function makeEquipIcon(status, isUnsaved) {
       background:#2563eb;border:2px solid #93c5fd;
       box-shadow:0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
     "></div>`;
-    console.log("[Atex-map.jsx] Exiting makeEquipIcon");
     return L.divIcon({
       className: "atex-marker-inline",
       html,
@@ -98,7 +131,6 @@ function makeEquipIcon(status, isUnsaved) {
     background:${map.fill};border:2px solid ${map.border};
     box-shadow:0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
   "></div>`;
-  console.log("[Atex-map.jsx] Exiting makeEquipIcon");
   return L.divIcon({
     className: "atex-marker-inline",
     html,
@@ -107,9 +139,9 @@ function makeEquipIcon(status, isUnsaved) {
     popupAnchor: [0, -Math.round(s / 2)],
   });
 }
+
 /* ----------------------------- PDF helpers ----------------------------- */
 function userHeaders() {
-  console.log("[Atex-map.jsx] Entering userHeaders");
   const h = {};
   try {
     const email = localStorage.getItem("user.email") || localStorage.getItem("email");
@@ -117,33 +149,27 @@ function userHeaders() {
     if (email) h["X-User-Email"] = email;
     if (name) h["X-User-Name"] = name;
   } catch {}
-  console.log("[Atex-map.jsx] Exiting userHeaders");
   return h;
 }
 function pdfDocOpts(url) {
-  console.log("[Atex-map.jsx] Entering pdfDocOpts");
-  console.log("[Atex-map.jsx] Exiting pdfDocOpts");
   return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
+
 /* ----------------------------- Dessin: modes ----------------------------- */
 const DRAW_NONE = "none";
 const DRAW_RECT = "rect";
 const DRAW_CIRCLE = "circle";
 const DRAW_POLY = "poly";
+
 /* ----------------------------- Formulaire SubArea (inline) ----------------------------- */
 function SubAreaEditor({ initial = {}, onSave, onCancel, onStartGeomEdit, allowDelete, onDelete }) {
-  console.log("[Atex-map.jsx] Entering SubAreaEditor");
   const [name, setName] = useState(initial.name || "");
-  console.log("[Atex-map.jsx] State change in SubAreaEditor: " + JSON.stringify(arguments));
   const [gas, setGas] = useState(
     initial.zoning_gas === 0 || initial.zoning_gas === 1 || initial.zoning_gas === 2 ? String(initial.zoning_gas) : ""
   );
-  console.log("[Atex-map.jsx] State change in SubAreaEditor: " + JSON.stringify(arguments));
   const [dust, setDust] = useState(
     initial.zoning_dust === 20 || initial.zoning_dust === 21 || initial.zoning_dust === 22 ? String(initial.zoning_dust) : ""
   );
-  console.log("[Atex-map.jsx] State change in SubAreaEditor: " + JSON.stringify(arguments));
-  console.log("[Atex-map.jsx] Exiting SubAreaEditor");
   return (
     <div className="p-2 rounded-xl border bg-white shadow-lg w-[270px] space-y-2">
       <div className="font-semibold text-sm">Zone ATEX</div>
@@ -207,13 +233,12 @@ function SubAreaEditor({ initial = {}, onSave, onCancel, onStartGeomEdit, allowD
     </div>
   );
 }
+
 /* --------------------------------- LÉGENDE --------------------------------- */
 function addLegendControl(map) {
-  console.log("[Atex-map.jsx] Entering addLegendControl");
   const ctrl = L.Control.extend({
     options: { position: "bottomright" },
     onAdd() {
-      console.log("[Atex-map.jsx] Entering onAdd");
       const el = L.DomUtil.create("div", "leaflet-bar leaflet-control p-2 bg-white rounded-xl shadow atex-legend");
       el.style.maxWidth = "280px";
       el.innerHTML = `
@@ -239,50 +264,44 @@ function addLegendControl(map) {
       `;
       L.DomEvent.disableScrollPropagation(el);
       L.DomEvent.disableClickPropagation(el);
-      console.log("[Atex-map.jsx] Exiting onAdd");
       return el;
     },
   });
   const inst = new ctrl();
   map.addControl(inst);
-  console.log("[Atex-map.jsx] Exiting addLegendControl");
   return inst;
 }
+
 /* ------------------------------- Composant map ------------------------------- */
 export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
-  console.log("[Atex-map.jsx] Entering AtexMap");
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const baseLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
   const subareasLayerRef = useRef(null);
   const legendRef = useRef(null);
+
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
   const [positions, setPositions] = useState([]);
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
   const [unsavedIds, setUnsavedIds] = useState(() => new Set());
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
   const [drawing, setDrawing] = useState(DRAW_NONE);
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
   const [polyTemp, setPolyTemp] = useState([]);
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
-  const [editorPos, setEditorPos] = useState(null); // {screen:{x,y}, shapeId?, onSave?}
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
+  const [editorPos, setEditorPos] = useState(null); // {screen:{x,y}, shapeId?, onSave?, onCancel?}
   const [editorInit, setEditorInit] = useState({});
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
   const [loading, setLoading] = useState(false);
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
+
   const [drawMenu, setDrawMenu] = useState(false);
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
   const [legendVisible, setLegendVisible] = useState(true);
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
+
   const [zonesByEquip, setZonesByEquip] = useState(() => ({})); // { [equipmentId]: { zoning_gas, zoning_dust } }
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
+
   // édition géométrie
   const editHandlesLayerRef = useRef(null);
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
-  console.log("[Atex-map.jsx] State change in AtexMap: " + JSON.stringify(arguments));
+
+  // debug HUD
+  const [hud, setHud] = useState({ zoom: 0, mouse: { x: 0, y: 0, xf: 0, yf: 0 }, panes: {} });
+
   const planKey = useMemo(() => plan?.logical_name || plan?.id || "", [plan]);
   const fileUrl = useMemo(() => {
     if (!plan) return null;
@@ -290,17 +309,29 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
     if (api?.atexMaps?.planFileUrl) return api.atexMaps.planFileUrl(plan);
     return null;
   }, [plan]);
+
+  // --- Polling léger
+  useEffect(() => {
+    if (!planKey) return;
+    const tick = async () => {
+      const end = timeStart("reloadAll [poll]");
+      try { await reloadAll(); } finally { end(); }
+    };
+    const t = setInterval(tick, 15000);
+    return () => clearInterval(t);
+  }, [planKey, pageIndex]);
+
   // --- Init map + render PDF
   useEffect(() => {
-    console.log("[Atex-map.jsx] Entering useEffect");
     if (!fileUrl || !wrapRef.current) return;
+
     let cancelled = false;
-    let onResize;
+    let onResize, onMouseMove;
     const cleanupMap = () => {
-      console.log("[Atex-map.jsx] Entering cleanupMap");
       const m = mapRef.current;
       try { window.removeEventListener("resize", onResize); } catch {}
       try { window.removeEventListener("orientationchange", onResize); } catch {}
+      try { window.removeEventListener("mousemove", onMouseMove); } catch {}
       if (!m) return;
       try { m.off(); } catch {}
       try { m.eachLayer((l) => { try { m.removeLayer(l); } catch {} }); } catch {}
@@ -312,31 +343,37 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       subareasLayerRef.current = null;
       legendRef.current = null;
       editHandlesLayerRef.current = null;
-      console.log("[Atex-map.jsx] Exiting cleanupMap");
     };
+
     (async () => {
-      console.log("[Atex-map.jsx] API call in useEffect: " + JSON.stringify(this));
+      const close = timeStart("init map + pdf render");
       try {
+        log("init: fileUrl/pageIndex", { fileUrl, pageIndex });
+
         const loadingTask = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
         const pdf = await loadingTask.promise;
         if (cancelled) return;
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
+
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const qualityBoost = 3.5;
         const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
         const safeScale = Math.min(6.0, Math.max(0.75, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
+
         const canvas = document.createElement("canvas");
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
         ctx.imageSmoothingEnabled = true;
         await page.render({ canvasContext: ctx, viewport, intent: "display" }).promise;
+
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
-        console.log("[Atex-map.jsx] State change in useEffect: " + JSON.stringify(arguments));
+        log("pdf render done", { width: canvas.width, height: canvas.height, scale: safeScale });
+
         // init map
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
@@ -346,91 +383,132 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
           touchZoom: true,
         });
         L.control.zoom({ position: "topright" }).addTo(m);
+
+        // Panes (avec zIndex explicites)
+        m.createPane("basePane");      // fond (PDF)
+        m.getPane("basePane").style.zIndex = 200;
+        m.createPane("zonesPane");     // formes
+        m.getPane("zonesPane").style.zIndex = 380;
+        m.createPane("markersPane");   // équipements
+        m.getPane("markersPane").style.zIndex = 400;
+        m.createPane("editPane");      // poignées d’édition
+        m.getPane("editPane").style.zIndex = 450;
+
         // Légende
         legendRef.current = addLegendControl(m);
         try {
           const el = legendRef.current.getContainer?.();
           if (el) el.style.display = legendVisible ? "block" : "none";
         } catch {}
-        // Panes
-        m.createPane("pdfPane"); m.getPane("pdfPane").style.zIndex = 250; // FIX: PDF en dessous
-        m.createPane("zonesPane"); // formes
-        m.getPane("zonesPane").style.zIndex = 380;
-        m.createPane("markersPane"); // équipements
-        m.getPane("markersPane").style.zIndex = 400;
-        m.createPane("editPane"); // poignées d’édition
-        m.getPane("editPane").style.zIndex = 450;
-        // fond image
+
+        // fond image dans basePane
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-        baseLayerRef.current = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "pdfPane" }).addTo(m); // FIX: pane PDF
+        baseLayerRef.current = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
         m.fitBounds(bounds, { padding: [10, 10] });
         const fitZoom = m.getZoom();
         m.setMinZoom(fitZoom - 2);
         m.setMaxZoom(fitZoom + 8);
         m.setMaxBounds(bounds.pad(0.5));
+
         // calques
         markersLayerRef.current = L.layerGroup({ pane: "markersPane" }).addTo(m);
         subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
         editHandlesLayerRef.current = L.layerGroup({ pane: "editPane" }).addTo(m);
+
         // interactions map
+        m.on("zoomend", () => {
+          if (DEBUG()) setHud((h) => ({ ...h, zoom: m.getZoom() }));
+        });
+        m.on("mousemove", (e) => {
+          if (!DEBUG()) return;
+          const xf = e.latlng.lng / canvas.width;
+          const yf = e.latlng.lat / canvas.height;
+          setHud((h) => ({ ...h, mouse: { x: e.latlng.lng, y: e.latlng.lat, xf, yf } }));
+        });
+
         m.on("click", (e) => {
-          console.log("[Atex-map.jsx] Map click: " + JSON.stringify(e.latlng));
           setEditorPos(null);
-          console.log("[Atex-map.jsx] State change in useEffect: " + JSON.stringify(arguments));
           if (drawing === DRAW_POLY) {
             const pt = e.latlng; // CRS simple: lat=y, lng=x
             const xf = pt.lng / canvas.width;
-            const yf = pt.lat / canvas.height; // FIX offset: test without flip first
+            const yf = pt.lat / canvas.height;
             setPolyTemp((prev) => {
               const next = [...prev, [xf, yf]];
               drawPolyTemp(next);
+              log("poly add point", { xf, yf, count: next.length });
               return next;
             });
-            console.log("[Atex-map.jsx] State change in useEffect: " + JSON.stringify(arguments));
           }
         });
         m.on("contextmenu", () => {
-          console.log("[Atex-map.jsx] Map contextmenu");
           if (drawing === DRAW_POLY && polyTemp.length >= 3) {
-            console.info("[ATEX] Poly: demande de sauvegarde (clic droit)");
+            log("poly save requested (contextmenu)", { points: polyTemp.length });
             openSubareaEditorAtCenter(savePolyTemp);
           }
         });
+
         // resize
         onResize = () => {
           try { m.invalidateSize(false); } catch {}
         };
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onResize);
+
+        // HUD init + panes order
+        if (DEBUG()) {
+          setHud({
+            zoom: m.getZoom(),
+            mouse: { x: 0, y: 0, xf: 0, yf: 0 },
+            panes: {
+              basePane: m.getPane("basePane")?.style?.zIndex,
+              zonesPane: m.getPane("zonesPane")?.style?.zIndex,
+              markersPane: m.getPane("markersPane")?.style?.zIndex,
+              editPane: m.getPane("editPane")?.style?.zIndex,
+            },
+          });
+        }
+
         mapRef.current = m;
+
+        const endReload = timeStart("initial reloadAll");
         await reloadAll();
-        console.log("[Atex-map.jsx] API call in useEffect: " + JSON.stringify(this));
+        endReload();
+
         await pdf.cleanup?.();
+        log("init complete");
       } catch (e) {
+        // eslint-disable-next-line no-console
         console.error("[AtexMap] init error", e);
+      } finally {
+        close();
       }
     })();
+
     return () => {
       cancelled = true;
       cleanupMap();
     };
-    console.log("[Atex-map.jsx] Exiting useEffect");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileUrl, pageIndex]);
+
   /* ----------------------------- Chargements ----------------------------- */
   async function reloadAll() {
-    console.log("[Atex-map.jsx] Entering reloadAll");
-    console.log("[Atex-map.jsx] API call in reloadAll: " + JSON.stringify(this));
-    await Promise.all([loadPositions(), loadSubareas()]);
-    console.log("[Atex-map.jsx] Exiting reloadAll");
+    const end = timeStart("reloadAll");
+    try {
+      await Promise.all([loadPositions(), loadSubareas()]);
+    } finally {
+      end();
+    }
   }
+
   async function enrichStatuses(list) {
-    console.log("[Atex-map.jsx] Entering enrichStatuses");
     if (!Array.isArray(list) || list.length === 0) return list;
     const byId = Object.fromEntries(list.map((p) => [p.id, p]));
     let updated = false;
+
     try {
       const cal = await api.atex.calendar?.();
-      console.log("[Atex-map.jsx] API call in enrichStatuses: " + JSON.stringify(this));
+      DEBUG() && log("api.atex.calendar response", { len: Array.isArray(cal?.events) ? cal.events.length : 0, raw: safeJson(cal) });
       const events = Array.isArray(cal?.events) ? cal.events : [];
       const now = Date.now();
       for (const ev of events) {
@@ -449,11 +527,14 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
           }
         }
       }
-    } catch {}
+    } catch (e) {
+      log("calendar enrichment error", { error: String(e) }, "warn");
+    }
+
     if (!updated) {
       try {
         const eq = await api.atex.listEquipments?.();
-        console.log("[Atex-map.jsx] API call in enrichStatuses: " + JSON.stringify(this));
+        DEBUG() && log("api.atex.listEquipments response", { len: Array.isArray(eq?.items) ? eq.items.length : 0, raw: safeJson(eq) });
         const items = Array.isArray(eq?.items) ? eq.items : [];
         for (const it of items) {
           const id = it.id;
@@ -462,17 +543,24 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
             updated = true;
           }
         }
-      } catch {}
+      } catch (e) {
+        log("equipments enrichment error", { error: String(e) }, "warn");
+      }
     }
-    console.log("[Atex-map.jsx] Exiting enrichStatuses");
     return Object.values(byId);
   }
+
   async function loadPositions() {
-    console.log("[Atex-map.jsx] Entering loadPositions");
     if (!planKey) return;
+    const end = timeStart("loadPositions");
     try {
-      const r = await api.atexMaps.positionsAuto(planKey, pageIndex).catch(() => ({ items: [] }));
-      console.log("[Atex-map.jsx] API call in loadPositions: " + JSON.stringify(this));
+      DEBUG() && log("api.atexMaps.positionsAuto call", { planKey, pageIndex });
+      const r = await api.atexMaps.positionsAuto(planKey, pageIndex).catch((err) => {
+        log("positionsAuto error (caught, returning empty)", { error: String(err) }, "error");
+        return { items: [] };
+      });
+      DEBUG() && log("positionsAuto response", { raw: safeJson(r) });
+
       const baseList = Array.isArray(r?.items)
         ? r.items.map((it) => ({
             id: it.equipment_id || it.atex_id || it.id,
@@ -485,9 +573,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
           }))
         : [];
       const list = await enrichStatuses(baseList);
-      console.log("[Atex-map.jsx] API call in loadPositions: " + JSON.stringify(this));
+
       setPositions(list);
-      console.log("[Atex-map.jsx] State change in loadPositions: " + JSON.stringify(arguments));
       setZonesByEquip((prev) => {
         const next = { ...prev };
         for (const it of list) {
@@ -500,106 +587,126 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         }
         return next;
       });
-      console.log("[Atex-map.jsx] State change in loadPositions: " + JSON.stringify(arguments));
       drawMarkers(list);
+      log("positions loaded", { count: list.length });
     } catch (e) {
-      console.error(e);
+      // eslint-disable-next-line no-console
+      console.error("[ATEX] loadPositions error", e);
       setPositions([]);
-      console.log("[Atex-map.jsx] State change in loadPositions: " + JSON.stringify(arguments));
       drawMarkers([]);
+    } finally {
+      end();
     }
-    console.log("[Atex-map.jsx] Exiting loadPositions");
   }
+
   async function loadSubareas() {
-    console.log("[Atex-map.jsx] Entering loadSubareas");
     if (!planKey) return;
+    const end = timeStart("loadSubareas");
     try {
-      const r = await api.atexMaps.listSubareas(planKey, pageIndex).catch(() => ({ items: [] }));
-      console.log("[Atex-map.jsx] API call in loadSubareas: " + JSON.stringify(this));
+      DEBUG() && log("api.atexMaps.listSubareas call", { planKey, pageIndex });
+      const r = await api.atexMaps.listSubareas(planKey, pageIndex).catch((err) => {
+        log("listSubareas error (caught, returning empty)", { error: String(err) }, "error");
+        return { items: [] };
+      });
+      DEBUG() && log("listSubareas response", { raw: safeJson(r) });
       const items = Array.isArray(r?.items) ? r.items : [];
       drawSubareas(items);
+      log("subareas drawn", { count: items.length });
     } catch (e) {
-      console.error(e);
+      // eslint-disable-next-line no-console
+      console.error("[ATEX] loadSubareas error", e);
       drawSubareas([]);
+    } finally {
+      end();
     }
-    console.log("[Atex-map.jsx] Exiting loadSubareas");
   }
+
   /* ----------------------------- Markers équipements ----------------------------- */
   function drawMarkers(list) {
-    console.log("[Atex-map.jsx] Entering drawMarkers");
-    const m = mapRef.current;
-    const layer = markersLayerRef.current;
-    if (!m || !layer || !imgSize.w) return;
-    layer.clearLayers();
-    (list || []).forEach((p) => {
-      const latlng = L.latLng(p.y * imgSize.h, p.x * imgSize.w);
-      console.log("[Atex-map.jsx] Marker position: " + JSON.stringify(latlng));
-      const icon = makeEquipIcon(p.status, unsavedIds.has(p.id));
-      const mk = L.marker(latlng, {
-        icon,
-        draggable: true,
-        autoPan: true,
-        bubblingMouseEvents: false,
-        keyboard: false,
-        riseOnHover: true,
-      });
-      mk.__meta = p;
-      mk.on("dragend", async () => {
-        const ll = mk.getLatLng();
-        console.log("[Atex-map.jsx] Dragend position: " + JSON.stringify(ll));
-        const xFrac = Math.min(1, Math.max(0, ll.lng / imgSize.w));
-        const yFrac = Math.min(1, Math.max(0, ll.lat / imgSize.h)); // FIX offset: test 1 - yFrac if flipped
-        try {
-          const resp = await api.atexMaps.setPosition(p.id, {
-            logical_name: plan?.logical_name,
-            plan_id: plan?.id,
-            page_index: pageIndex,
-            x_frac: Math.round(xFrac * 1e6) / 1e6,
-            y_frac: Math.round(yFrac * 1e6) / 1e6, // Change to (1 - yFrac) if offset y
-          });
-          console.log("[Atex-map.jsx] API call in drawMarkers: " + JSON.stringify(this));
-          if (resp?.zones) {
-            setZonesByEquip((prev) => ({
-              ...prev,
-              [p.id]: {
-                zoning_gas: resp.zones?.zoning_gas ?? null,
-                zoning_dust: resp.zones?.zoning_dust ?? null,
-              },
-            }));
-            console.log("[Atex-map.jsx] State change in drawMarkers: " + JSON.stringify(arguments));
-          }
-          await loadPositions();
-          console.log("[Atex-map.jsx] API call in drawMarkers: " + JSON.stringify(this));
-        } catch (e) {
-          console.error(e);
-        }
-      });
-      mk.on("click", () => {
-        console.log("[Atex-map.jsx] Marker click: " + JSON.stringify(p.id));
-        onOpenEquipment?.({
-          id: p.id,
-          name: p.name,
-          zones: {
-            zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null,
-            zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null,
-          },
+    const end = timeStart("drawMarkers");
+    try {
+      const m = mapRef.current;
+      const layer = markersLayerRef.current;
+      if (!m || !layer || !imgSize.w) return;
+      layer.clearLayers();
+
+      (list || []).forEach((p) => {
+        const latlng = L.latLng(p.y * imgSize.h, p.x * imgSize.w);
+        const icon = makeEquipIcon(p.status, unsavedIds.has(p.id));
+        const mk = L.marker(latlng, {
+          icon,
+          draggable: true,
+          autoPan: true,
+          bubblingMouseEvents: false,
+          keyboard: false,
+          riseOnHover: true,
+          pane: "markersPane",
         });
+        mk.__meta = p;
+
+        mk.on("dragstart", () => log("marker dragstart", { id: p.id, at: mk.getLatLng() }));
+        mk.on("drag", () => DEBUG() && log("marker drag", { id: p.id, at: mk.getLatLng() }));
+        mk.on("dragend", async () => {
+          const ll = mk.getLatLng();
+          const xFrac = Math.min(1, Math.max(0, ll.lng / imgSize.w));
+          const yFrac = Math.min(1, Math.max(0, ll.lat / imgSize.h));
+          log("marker dragend -> setPosition", { id: p.id, xFrac, yFrac });
+          try {
+            const resp = await api.atexMaps.setPosition(p.id, {
+              logical_name: plan?.logical_name,
+              plan_id: plan?.id,
+              page_index: pageIndex,
+              x_frac: Math.round(xFrac * 1e6) / 1e6,
+              y_frac: Math.round(yFrac * 1e6) / 1e6,
+            });
+            DEBUG() && log("setPosition response", { raw: safeJson(resp) });
+            if (resp?.zones) {
+              setZonesByEquip((prev) => ({
+                ...prev,
+                [p.id]: {
+                  zoning_gas: resp.zones?.zoning_gas ?? null,
+                  zoning_dust: resp.zones?.zoning_dust ?? null,
+                },
+              }));
+            }
+            await loadPositions();
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error("[ATEX] setPosition error", e);
+          }
+        });
+
+        mk.on("click", () => {
+          log("marker click -> openEquipment", { id: p.id, name: p.name, zones: zonesByEquip[p.id] });
+          onOpenEquipment?.({
+            id: p.id,
+            name: p.name,
+            zones: {
+              zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null,
+              zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null,
+            },
+          });
+        });
+
+        mk.addTo(layer);
       });
-      mk.addTo(layer);
-    });
-    console.log("[Atex-map.jsx] Exiting drawMarkers");
+    } finally {
+      end();
+    }
   }
+
   async function createEquipmentAtCenter() {
-    console.log("[Atex-map.jsx] Entering createEquipmentAtCenter");
     if (!plan) return;
+    const end = timeStart("createEquipmentAtCenter");
     setLoading(true);
-    console.log("[Atex-map.jsx] State change in createEquipmentAtCenter: " + JSON.stringify(arguments));
     try {
       const payload = { name: "", status: "a_faire" };
+      DEBUG() && log("createEquipment payload", payload);
       const created = await api.atex.createEquipment(payload);
-      console.log("[Atex-map.jsx] API call in createEquipmentAtCenter: " + JSON.stringify(this));
+      DEBUG() && log("createEquipment response", { raw: safeJson(created) });
       const id = created?.id || created?.equipment?.id;
       if (!id) throw new Error("Création ATEX: ID manquant");
+
       const resp = await api.atexMaps.setPosition(id, {
         logical_name: plan.logical_name,
         plan_id: plan.id,
@@ -607,69 +714,72 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         x_frac: 0.5,
         y_frac: 0.5,
       });
-      console.log("[Atex-map.jsx] API call in createEquipmentAtCenter: " + JSON.stringify(this));
+      DEBUG() && log("setPosition (new equip) response", { raw: safeJson(resp) });
+
       if (resp?.zones) {
-        setZonesByEquip((prev) => new Set(prev).add(id));
-        console.log("[Atex-map.jsx] State change in createEquipmentAtCenter: " + JSON.stringify(arguments));
+        setZonesByEquip((prev) => ({
+          ...prev,
+          [id]: {
+            zoning_gas: resp.zones?.zoning_gas ?? null,
+            zoning_dust: resp.zones?.zoning_dust ?? null,
+          },
+        }));
       }
+
       setUnsavedIds((prev) => new Set(prev).add(id));
-      console.log("[Atex-map.jsx] State change in createEquipmentAtCenter: " + JSON.stringify(arguments));
       await loadPositions();
-      console.log("[Atex-map.jsx] API call in createEquipmentAtCenter: " + JSON.stringify(this));
-      console.info("[ATEX] Equipment created at center", { id });
+      log("Equipment created at center", { id });
       onOpenEquipment?.({ id, name: created?.equipment?.name || created?.name || "Équipement" });
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       alert("Erreur création équipement");
     } finally {
       setLoading(false);
-      console.log("[Atex-map.jsx] State change in createEquipmentAtCenter: " + JSON.stringify(arguments));
+      end();
     }
-    console.log("[Atex-map.jsx] Exiting createEquipmentAtCenter");
   }
+
   /* ----------------------------- Subareas (zones) ----------------------------- */
   function colorForSubarea(sa) {
-    console.log("[Atex-map.jsx] Entering colorForSubarea");
     const stroke = GAS_STROKE[sa?.zoning_gas ?? null];
     const fill = DUST_FILL[sa?.zoning_dust ?? null];
-    console.log("[Atex-map.jsx] Exiting colorForSubarea");
     return { color: stroke, weight: 1, opacity: 0.9, fillColor: fill, fillOpacity: 0.12, pane: "zonesPane" };
   }
+
   function clearEditHandles() {
-    console.log("[Atex-map.jsx] Entering clearEditHandles");
     const lay = editHandlesLayerRef.current;
     if (!lay) return;
     try { lay.clearLayers(); } catch {}
-    console.log("[Atex-map.jsx] Exiting clearEditHandles");
   }
+
   function mountRectHandles(layer) {
-    console.log("[Atex-map.jsx] Entering mountRectHandles");
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
     const b = layer.getBounds();
     const corners = [b.getSouthWest(), b.getSouthEast(), b.getNorthEast(), b.getNorthWest()];
+
     const updateByCorners = (pts) => {
       const newBounds = L.latLngBounds(pts[0], pts[2]);
       layer.setBounds(newBounds);
     };
+
     corners.forEach((ll, idx) => {
       const h = L.circleMarker(ll, {
         radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false,
       });
       h.addTo(lay);
+
       h.on("mousedown", () => {
-        console.log("[Atex-map.jsx] Handle mousedown");
         m.dragging.disable();
         const onMove = (ev) => {
-          console.log("[Atex-map.jsx] Handle mousemove: " + JSON.stringify(ev.latlng));
           const pos = ev.latlng;
           const pts = [...corners];
           pts[idx] = pos;
           updateByCorners(pts);
         };
         const onUp = () => {
-          console.log("[Atex-map.jsx] Handle mouseup");
           m.dragging.enable();
           m.off("mousemove", onMove);
           m.off("mouseup", onUp);
@@ -678,33 +788,32 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         m.on("mouseup", onUp);
       });
     });
-    console.log("[Atex-map.jsx] Exiting mountRectHandles");
   }
+
   function mountCircleHandles(layer) {
-    console.log("[Atex-map.jsx] Entering mountCircleHandles");
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
     const center = layer.getLatLng();
     const r = layer.getRadius();
     const east = L.latLng(center.lat, center.lng + r);
+
     const centerH = L.circleMarker(center, {
       radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false,
     }).addTo(lay);
+
     const radiusH = L.circleMarker(east, {
       radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false,
     }).addTo(lay);
+
     centerH.on("mousedown", () => {
-      console.log("[Atex-map.jsx] Center handle mousedown");
       m.dragging.disable();
       const onMove = (ev) => {
-        console.log("[Atex-map.jsx] Center handle mousemove: " + JSON.stringify(ev.latlng));
         const c = ev.latlng;
         layer.setLatLng(c);
         radiusH.setLatLng(L.latLng(c.lat, c.lng + r));
       };
       const onUp = () => {
-        console.log("[Atex-map.jsx] Center handle mouseup");
         m.dragging.enable();
         m.off("mousemove", onMove);
         m.off("mouseup", onUp);
@@ -712,18 +821,16 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       m.on("mousemove", onMove);
       m.on("mouseup", onUp);
     });
+
     radiusH.on("mousedown", () => {
-      console.log("[Atex-map.jsx] Radius handle mousedown");
       m.dragging.disable();
       const onMove = (ev) => {
-        console.log("[Atex-map.jsx] Radius handle mousemove: " + JSON.stringify(ev.latlng));
         const c = layer.getLatLng();
         const newR = Math.max(4, m.distance(c, ev.latlng));
         layer.setRadius(newR);
         radiusH.setLatLng(L.latLng(c.lat, c.lng + newR));
       };
       const onUp = () => {
-        console.log("[Atex-map.jsx] Radius handle mouseup");
         m.dragging.enable();
         m.off("mousemove", onMove);
         m.off("mouseup", onUp);
@@ -731,29 +838,27 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       m.on("mousemove", onMove);
       m.on("mouseup", onUp);
     });
-    console.log("[Atex-map.jsx] Exiting mountCircleHandles");
   }
+
   function mountPolyHandles(layer) {
-    console.log("[Atex-map.jsx] Entering mountPolyHandles");
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
+
     const latlngs = layer.getLatLngs()[0] || [];
     latlngs.forEach((ll, idx) => {
       const h = L.circleMarker(ll, {
         radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false,
       }).addTo(lay);
+
       h.on("mousedown", () => {
-        console.log("[Atex-map.jsx] Poly handle mousedown: index " + idx);
         m.dragging.disable();
         const onMove = (ev) => {
-          console.log("[Atex-map.jsx] Poly handle mousemove: " + JSON.stringify(ev.latlng));
           const newLatLngs = layer.getLatLngs()[0].slice();
           newLatLngs[idx] = ev.latlng;
           layer.setLatLngs([newLatLngs]);
         };
         const onUp = () => {
-          console.log("[Atex-map.jsx] Poly handle mouseup");
           m.dragging.enable();
           m.off("mousemove", onMove);
           m.off("mouseup", onUp);
@@ -762,162 +867,172 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         m.on("mouseup", onUp);
       });
     });
-    console.log("[Atex-map.jsx] Exiting mountPolyHandles");
   }
+
   function startGeomEdit(layer, sa) {
-    console.log("[Atex-map.jsx] Entering startGeomEdit: " + JSON.stringify(sa));
+    log("startGeomEdit", { id: sa.id, kind: sa.kind });
     clearEditHandles();
     setGeomEdit({ active: true, kind: sa.kind, shapeId: sa.id, layer });
-    console.log("[Atex-map.jsx] State change in startGeomEdit: " + JSON.stringify(arguments));
-    if (sa.kind === "rect") mountRectHandles(layer);
-    if (sa.kind === "circle") mountCircleHandles(layer);
-    if (sa.kind === "poly") mountPolyHandles(layer);
-    console.log("[Atex-map.jsx] Exiting startGeomEdit");
+    if (sa.kind === "rect") mountRectHandles(layer, sa);
+    if (sa.kind === "circle") mountCircleHandles(layer, sa);
+    if (sa.kind === "poly") mountPolyHandles(layer, sa);
   }
+
   async function saveGeomEdit() {
-    console.log("[Atex-map.jsx] Entering saveGeomEdit");
     if (!geomEdit.active || !geomEdit.layer || !geomEdit.shapeId) return;
+    const end = timeStart("saveGeomEdit");
     const ly = geomEdit.layer;
-    if (geomEdit.kind === "rect") {
-      const b = ly.getBounds();
-      const x1 = Math.min(1, Math.max(0, b.getWest() / imgSize.w));
-      const y1 = Math.min(1, Math.max(0, b.getSouth() / imgSize.h));
-      const x2 = Math.min(1, Math.max(0, b.getEast() / imgSize.w));
-      const y2 = Math.min(1, Math.max(0, b.getNorth() / imgSize.h));
-      console.log("[Atex-map.jsx] Rect save: x1=" + x1 + ", y1=" + y1 + ", x2=" + x2 + ", y2=" + y2);
-      const payload = { kind: "rect", x1, y1, x2, y2 };
-      await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
-      console.log("[Atex-map.jsx] API call in saveGeomEdit: " + JSON.stringify(this));
-    } else if (geomEdit.kind === "circle") {
-      const c = ly.getLatLng();
-      const r = ly.getRadius();
-      const payload = {
-        kind: "circle",
-        cx: c.lng / imgSize.w,
-        cy: c.lat / imgSize.h,
-        r: r / Math.min(imgSize.w, imgSize.h),
-      };
-      console.log("[Atex-map.jsx] Circle save: cx=" + payload.cx + ", cy=" + payload.cy + ", r=" + payload.r);
-      await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
-      console.log("[Atex-map.jsx] API call in saveGeomEdit: " + JSON.stringify(this));
-    } else if (geomEdit.kind === "poly") {
-      const latlngs = ly.getLatLngs()[0] || [];
-      const points = latlngs.map((ll) => [ll.lng / imgSize.w, ll.lat / imgSize.h]);
-      const payload = { kind: "poly", points };
-      console.log("[Atex-map.jsx] Poly save: points=" + JSON.stringify(points));
-      await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
-      console.log("[Atex-map.jsx] API call in saveGeomEdit: " + JSON.stringify(this));
-    }
-    setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-    console.log("[Atex-map.jsx] State change in saveGeomEdit: " + JSON.stringify(arguments));
-    clearEditHandles();
-    await loadSubareas();
-    console.log("[Atex-map.jsx] API call in saveGeomEdit: " + JSON.stringify(this));
+
     try {
-      await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
-      console.log("[Atex-map.jsx] API call in saveGeomEdit: " + JSON.stringify(this));
-    } catch {}
-    await loadPositions();
-    console.log("[Atex-map.jsx] API call in saveGeomEdit: " + JSON.stringify(this));
-    console.log("[Atex-map.jsx] Exiting saveGeomEdit");
+      if (geomEdit.kind === "rect") {
+        const b = ly.getBounds();
+        const payload = {
+          kind: "rect",
+          x1: Math.min(1, Math.max(0, b.getWest() / imgSize.w)),
+          y1: Math.min(1, Math.max(0, b.getSouth() / imgSize.h)),
+          x2: Math.min(1, Math.max(0, b.getEast() / imgSize.w)),
+          y2: Math.min(1, Math.max(0, b.getNorth() / imgSize.h)),
+        };
+        log("updateSubarea(rect) payload", payload);
+        await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
+      } else if (geomEdit.kind === "circle") {
+        const c = ly.getLatLng();
+        const r = ly.getRadius();
+        const payload = {
+          kind: "circle",
+          cx: c.lng / imgSize.w,
+          cy: c.lat / imgSize.h,
+          r: r / Math.min(imgSize.w, imgSize.h),
+        };
+        log("updateSubarea(circle) payload", payload);
+        await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
+      } else if (geomEdit.kind === "poly") {
+        const latlngs = ly.getLatLngs()[0] || [];
+        const points = latlngs.map((ll) => [ll.lng / imgSize.w, ll.lat / imgSize.h]);
+        const payload = { kind: "poly", points };
+        log("updateSubarea(poly) payload", { points: points.length });
+        await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
+      }
+
+      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+      clearEditHandles();
+      await loadSubareas();
+      try {
+        await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
+      } catch (e) {
+        log("reindexZones error (post-edit)", { error: String(e) }, "warn");
+      }
+      await loadPositions();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[ATEX] saveGeomEdit error", e);
+    } finally {
+      end();
+    }
   }
+
   function drawSubareas(items) {
-    console.log("[Atex-map.jsx] Entering drawSubareas: items=" + JSON.stringify(items));
-    const m = mapRef.current;
-    if (!m || !imgSize.w) return;
-    if (!subareasLayerRef.current) subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
-    const g = subareasLayerRef.current;
-    g.clearLayers();
-    clearEditHandles();
-    setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-    console.log("[Atex-map.jsx] State change in drawSubareas: " + JSON.stringify(arguments));
-    (items || []).forEach((sa) => {
-      let layer = null;
-      const style = colorForSubarea(sa);
-      if (sa.kind === "rect") {
-        const x1 = (sa.x1 ?? 0) * imgSize.w, y1 = (sa.y1 ?? 0) * imgSize.h;
-        const x2 = (sa.x2 ?? 0) * imgSize.w, y2 = (sa.y2 ?? 0) * imgSize.h;
-        const b = L.latLngBounds(L.latLng(y1, x1), L.latLng(y2, x2));
-        layer = L.rectangle(b, style);
-      } else if (sa.kind === "circle") {
-        const cx = (sa.cx ?? 0.5) * imgSize.w;
-        const cy = (sa.cy ?? 0.5) * imgSize.h;
-        const r = Math.max(4, (sa.r ?? 0.05) * Math.min(imgSize.w, imgSize.h));
-        layer = L.circle(L.latLng(cy, cx), { radius: r, ...style });
-      } else if (sa.kind === "poly") {
-        const pts = (sa.points || []).map(([xf, yf]) => [yf * imgSize.h, xf * imgSize.w]);
-        layer = L.polygon(pts, style);
-      }
-      if (!layer) return;
-      layer.__meta = sa;
-      layer.addTo(g);
-      layer.on("click", (e) => {
-        console.log("[Atex-map.jsx] Subarea click: " + JSON.stringify(sa.id));
-        setEditorInit({
-          id: sa.id,
-          name: sa.name || "",
-          zoning_gas: sa.zoning_gas ?? null,
-          zoning_dust: sa.zoning_dust ?? null,
-        });
-        console.log("[Atex-map.jsx] State change in drawSubareas: " + JSON.stringify(arguments));
-        setEditorPos({
-          screen: e.originalEvent ? { x: e.originalEvent.clientX, y: e.originalEvent.clientY } : null,
-          shapeId: sa.id,
-          layer,
-          kind: sa.kind,
-        });
-        console.log("[Atex-map.jsx] State change in drawSubareas: " + JSON.stringify(arguments));
-      });
-      if (sa?.name) {
-        const center =
-          layer.getBounds?.().getCenter?.() || layer.getLatLng?.() || null;
-        if (center) {
-          L.marker(center, {
-            interactive: false,
-            pane: "zonesPane",
-            icon: L.divIcon({
-              className: "atex-subarea-label",
-              html: `<div class="px-2 py-1 rounded bg-white/90 border shadow text-[11px]">${sa.name}</div>`,
-            }),
-          }).addTo(g);
+    const end = timeStart("drawSubareas");
+    try {
+      const m = mapRef.current;
+      if (!m || !imgSize.w) return;
+      if (!subareasLayerRef.current) subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
+      const g = subareasLayerRef.current;
+      g.clearLayers();
+      clearEditHandles();
+      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+
+      (items || []).forEach((sa) => {
+        let layer = null;
+        const style = colorForSubarea(sa);
+
+        if (sa.kind === "rect") {
+          const x1 = (sa.x1 ?? 0) * imgSize.w, y1 = (sa.y1 ?? 0) * imgSize.h;
+          const x2 = (sa.x2 ?? 0) * imgSize.w, y2 = (sa.y2 ?? 0) * imgSize.h;
+          const b = L.latLngBounds(L.latLng(y1, x1), L.latLng(y2, x2));
+          layer = L.rectangle(b, style);
+        } else if (sa.kind === "circle") {
+          const cx = (sa.cx ?? 0.5) * imgSize.w;
+          const cy = (sa.cy ?? 0.5) * imgSize.h;
+          const r = Math.max(4, (sa.r ?? 0.05) * Math.min(imgSize.w, imgSize.h));
+          layer = L.circle(L.latLng(cy, cx), { radius: r, ...style });
+        } else if (sa.kind === "poly") {
+          const pts = (sa.points || []).map(([xf, yf]) => [yf * imgSize.h, xf * imgSize.w]);
+          layer = L.polygon(pts, style);
         }
-      }
-    });
-    console.log("[Atex-map.jsx] Exiting drawSubareas");
+        if (!layer) return;
+
+        layer.__meta = sa;
+        layer.addTo(g);
+
+        layer.on("click", (e) => {
+          log("subarea click -> open editor", { id: sa.id, kind: sa.kind, zoning_gas: sa.zoning_gas, zoning_dust: sa.zoning_dust });
+          setEditorInit({
+            id: sa.id,
+            name: sa.name || "",
+            zoning_gas: sa.zoning_gas ?? null,
+            zoning_dust: sa.zoning_dust ?? null,
+          });
+          setEditorPos({
+            screen: e.originalEvent ? { x: e.originalEvent.clientX, y: e.originalEvent.clientY } : null,
+            shapeId: sa.id,
+            layer,
+            kind: sa.kind,
+          });
+        });
+
+        if (sa?.name) {
+          const center =
+            layer.getBounds?.().getCenter?.() || layer.getLatLng?.() || null;
+          if (center) {
+            L.marker(center, {
+              interactive: false,
+              pane: "zonesPane",
+              icon: L.divIcon({
+                className: "atex-subarea-label",
+                html: `<div class="px-2 py-1 rounded bg-white/90 border shadow text-[11px]">${sa.name}</div>`,
+              }),
+            }).addTo(g);
+          }
+        }
+      });
+    } finally {
+      end();
+    }
   }
+
   // --- UI placement de formes (sans leaflet-draw)
   function setDrawMode(mode) {
-    console.log("[Atex-map.jsx] Entering setDrawMode: " + mode);
+    log("setDrawMode", { mode });
     if (mode === "rect") setDrawing(DRAW_RECT);
     else if (mode === "circle") setDrawing(DRAW_CIRCLE);
     else if (mode === "poly") { setPolyTemp([]); setDrawing(DRAW_POLY); }
     else setDrawing(DRAW_NONE);
-    console.log("[Atex-map.jsx] State change in setDrawMode: " + JSON.stringify(arguments));
-    console.log("[Atex-map.jsx] Exiting setDrawMode");
   }
   const onAddEquipment = () => createEquipmentAtCenter();
+
   useEffect(() => {
-    console.log("[Atex-map.jsx] Entering useEffect");
     const m = mapRef.current;
     if (!m || drawing === DRAW_NONE || drawing === DRAW_POLY) return;
+
     let startPt = null;
     let tempLayer = null;
     const mode = drawing;
+
     const onDown = (e) => {
-      console.log("[Atex-map.jsx] Mousedown: " + JSON.stringify(e.latlng));
       startPt = e.latlng;
+      log("draw onDown", { mode, start: startPt });
       if (mode === DRAW_CIRCLE) {
-        tempLayer = L.circle(e.latlng, { radius: 1, ...colorForSubarea({}), fillOpacity: 0.12 });
+        tempLayer = L.circle(e.latlng, { radius: 1, ...colorForSubarea({}), fillOpacity: 0.12, pane: "zonesPane" });
         tempLayer.addTo(m);
       }
       if (mode === DRAW_RECT) {
-        tempLayer = L.rectangle(L.latLngBounds(e.latlng, e.latlng), { ...colorForSubarea({}), fillOpacity: 0.12 });
+        tempLayer = L.rectangle(L.latLngBounds(e.latlng, e.latlng), { ...colorForSubarea({}), fillOpacity: 0.12, pane: "zonesPane" });
         tempLayer.addTo(m);
       }
       m.dragging.disable();
     };
     const onMove = (e) => {
-      console.log("[Atex-map.jsx] Mousemove: " + JSON.stringify(e.latlng));
       if (!startPt || !tempLayer) return;
       if (mode === DRAW_CIRCLE) {
         const r = m.distance(startPt, e.latlng);
@@ -927,72 +1042,81 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       }
     };
     const onUp = () => {
-      console.log("[Atex-map.jsx] Mouseup");
       m.dragging.enable();
       if (!startPt || !tempLayer) {
         setDrawing(DRAW_NONE);
-        console.log("[Atex-map.jsx] State change in useEffect: " + JSON.stringify(arguments));
         return;
       }
-      openSubareaEditorAtCenter(async (meta) => {
-        try {
-          if (mode === DRAW_CIRCLE) {
-            const ll = tempLayer.getLatLng();
-            const r = tempLayer.getRadius();
-            const payload = {
-              kind: "circle",
-              cx: ll.lng / imgSize.w,
-              cy: ll.lat / imgSize.h,
-              r: r / Math.min(imgSize.w, imgSize.h),
-              name: meta.name,
-              zoning_gas: meta.zoning_gas,
-              zoning_dust: meta.zoning_dust,
-              plan_id: plan?.id,
-              logical_name: plan?.logical_name,
-              page_index: pageIndex,
-            };
-            await api.atexMaps.createSubarea(payload);
-            console.log("[Atex-map.jsx] API call in useEffect: " + JSON.stringify(this));
-          } else if (mode === DRAW_RECT) {
-            const b = tempLayer.getBounds();
-            const x1 = Math.min(1, Math.max(0, b.getWest() / imgSize.w));
-            const y1 = Math.min(1, Math.max(0, b.getSouth() / imgSize.h));
-            const x2 = Math.min(1, Math.max(0, b.getEast() / imgSize.w));
-            const y2 = Math.min(1, Math.max(0, b.getNorth() / imgSize.h));
-            const payload = {
-              kind: "rect",
-              x1, y1, x2, y2,
-              name: meta.name,
-              zoning_gas: meta.zoning_gas,
-              zoning_dust: meta.zoning_dust,
-              plan_id: plan?.id,
-              logical_name: plan?.logical_name,
-              page_index: pageIndex,
-            };
-            await api.atexMaps.createSubarea(payload);
-            console.log("[Atex-map.jsx] API call in useEffect: " + JSON.stringify(this));
-          }
-        } catch (e) {
-          console.error("[ATEX] Subarea create failed", e);
-          alert("Erreur création zone");
-        } finally {
-          await loadSubareas();
-          console.log("[Atex-map.jsx] API call in useEffect: " + JSON.stringify(this));
+      log("draw onUp -> open editor", { mode });
+      // Laisser l'aperçu visible jusqu’à validation/annulation
+      openSubareaEditorAtCenter(
+        async (meta) => {
+          const end = timeStart("createSubarea (from tempLayer)");
           try {
-            await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
-            console.log("[Atex-map.jsx] API call in useEffect: " + JSON.stringify(this));
-          } catch {}
-          await loadPositions();
-          console.log("[Atex-map.jsx] API call in useEffect: " + JSON.stringify(this));
+            if (mode === DRAW_CIRCLE) {
+              const ll = tempLayer.getLatLng();
+              const r = tempLayer.getRadius();
+              const payload = {
+                kind: "circle",
+                cx: ll.lng / imgSize.w,
+                cy: ll.lat / imgSize.h,
+                r: r / Math.min(imgSize.w, imgSize.h),
+                name: meta.name,
+                zoning_gas: meta.zoning_gas,
+                zoning_dust: meta.zoning_dust,
+                plan_id: plan?.id,
+                logical_name: plan?.logical_name,
+                page_index: pageIndex,
+              };
+              log("createSubarea(circle) payload", payload);
+              await api.atexMaps.createSubarea(payload);
+            } else if (mode === DRAW_RECT) {
+              const b = tempLayer.getBounds();
+              const payload = {
+                kind: "rect",
+                x1: Math.min(1, Math.max(0, b.getWest() / imgSize.w)),
+                y1: Math.min(1, Math.max(0, b.getSouth() / imgSize.h)),
+                x2: Math.min(1, Math.max(0, b.getEast() / imgSize.w)),
+                y2: Math.min(1, Math.max(0, b.getNorth() / imgSize.h)),
+                name: meta.name,
+                zoning_gas: meta.zoning_gas,
+                zoning_dust: meta.zoning_dust,
+                plan_id: plan?.id,
+                logical_name: plan?.logical_name,
+                page_index: pageIndex,
+              };
+              log("createSubarea(rect) payload", payload);
+              await api.atexMaps.createSubarea(payload);
+            }
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.error("[ATEX] Subarea create failed", e);
+            alert("Erreur création zone");
+          } finally {
+            try { tempLayer && m.removeLayer(tempLayer); } catch {}
+            await loadSubareas();
+            try {
+              await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
+            } catch (e) {
+              log("reindexZones error (after create)", { error: String(e) }, "warn");
+            }
+            await loadPositions();
+            end();
+          }
+        },
+        // onCancel -> retire aussi la couche temporaire
+        () => {
+          log("editor cancel -> remove tempLayer");
+          try { tempLayer && m.removeLayer(tempLayer); } catch {}
         }
-      });
+      );
       setDrawing(DRAW_NONE);
-      console.log("[Atex-map.jsx] State change in useEffect: " + JSON.stringify(arguments));
       m.off("mousedown", onDown);
       m.off("mousemove", onMove);
       m.off("mouseup", onUp);
-      // tempLayer && m.removeLayer(tempLayer); // FIX: keep until save
+      // ⚠️ NE PAS retirer tempLayer ici : on le retire après save/cancel (voir ci-dessus)
     };
+
     m.on("mousedown", onDown);
     m.on("mousemove", onMove);
     m.on("mouseup", onUp);
@@ -1003,10 +1127,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         m.off("mouseup", onUp);
       } catch {}
     };
-    console.log("[Atex-map.jsx] Exiting useEffect");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawing, imgSize, planKey, pageIndex]);
+
   function drawPolyTemp(arr = polyTemp) {
-    console.log("[Atex-map.jsx] Entering drawPolyTemp: " + JSON.stringify(arr));
     const m = mapRef.current;
     if (!m || !subareasLayerRef.current) return;
     const group = subareasLayerRef.current;
@@ -1022,104 +1146,101 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
       poly.__tempPoly = true;
       poly.addTo(group);
     }
-    console.log("[Atex-map.jsx] Exiting drawPolyTemp");
   }
+
   async function savePolyTemp(meta) {
-    console.log("[Atex-map.jsx] Entering savePolyTemp: " + JSON.stringify(meta));
     if (polyTemp.length < 3) return;
-    const payload = {
-      kind: "poly",
-      points: polyTemp,
-      name: meta.name,
-      zoning_gas: meta.zoning_gas,
-      zoning_dust: meta.zoning_dust,
-      plan_id: plan?.id,
-      logical_name: plan?.logical_name,
-      page_index: pageIndex,
-    };
-    await api.atexMaps.createSubarea(payload);
-    console.log("[Atex-map.jsx] API call in savePolyTemp: " + JSON.stringify(this));
-    setPolyTemp([]);
-    console.log("[Atex-map.jsx] State change in savePolyTemp: " + JSON.stringify(arguments));
-    await loadSubareas();
-    console.log("[Atex-map.jsx] API call in savePolyTemp: " + JSON.stringify(this));
+    const end = timeStart("createSubarea(poly)");
     try {
-      await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
-      console.log("[Atex-map.jsx] API call in savePolyTemp: " + JSON.stringify(this));
-    } catch {}
-    await loadPositions();
-    console.log("[Atex-map.jsx] API call in savePolyTemp: " + JSON.stringify(this));
-    console.log("[Atex-map.jsx] Exiting savePolyTemp");
+      const payload = {
+        kind: "poly",
+        points: polyTemp,
+        name: meta.name,
+        zoning_gas: meta.zoning_gas,
+        zoning_dust: meta.zoning_dust,
+        plan_id: plan?.id,
+        logical_name: plan?.logical_name,
+        page_index: pageIndex,
+      };
+      log("createSubarea(poly) payload", { points: polyTemp.length });
+      await api.atexMaps.createSubarea(payload);
+      setPolyTemp([]);
+      await loadSubareas();
+      try {
+        await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
+      } catch (e) {
+        log("reindexZones error (after poly)", { error: String(e) }, "warn");
+      }
+      await loadPositions();
+    } finally {
+      end();
+    }
   }
+
   /* ----------------------------- Editeur popup ----------------------------- */
-  function openSubareaEditorAtCenter(onSave) {
-    console.log("[Atex-map.jsx] Entering openSubareaEditorAtCenter");
+  function openSubareaEditorAtCenter(onSave, onCancelCleanup) {
     const m = mapRef.current;
     if (!m) return;
     const sz = m.getSize();
     setEditorInit({});
-    console.log("[Atex-map.jsx] State change in openSubareaEditorAtCenter: " + JSON.stringify(arguments));
-    setEditorPos({ screen: { x: sz.x / 2, y: sz.y / 2 }, shapeId: null, onSave });
-    console.log("[Atex-map.jsx] State change in openSubareaEditorAtCenter: " + JSON.stringify(arguments));
-    console.log("[Atex-map.jsx] Exiting openSubareaEditorAtCenter");
+    setEditorPos({ screen: { x: sz.x / 2, y: sz.y / 2 }, shapeId: null, onSave, onCancel: onCancelCleanup });
   }
   async function onSaveSubarea(meta) {
-    console.log("[Atex-map.jsx] Entering onSaveSubarea: " + JSON.stringify(meta));
-    if (editorPos?.onSave) {
-      await editorPos.onSave(meta);
-      setEditorPos(null);
-      console.log("[Atex-map.jsx] State change in onSaveSubarea: " + JSON.stringify(arguments));
-      return;
+    const end = timeStart("onSaveSubarea");
+    try {
+      if (editorPos?.onSave) {
+        await editorPos.onSave(meta);
+        setEditorPos(null);
+        return;
+      }
+      if (editorPos?.shapeId) {
+        const payload = { name: meta.name, zoning_gas: meta.zoning_gas, zoning_dust: meta.zoning_dust };
+        log("updateSubarea(meta) payload", payload);
+        await api.atexMaps.updateSubarea(editorPos.shapeId, payload);
+        await loadSubareas();
+        setEditorPos(null);
+        try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); } catch (e) {
+          log("reindexZones error (after meta update)", { error: String(e) }, "warn");
+        }
+        await loadPositions();
+      }
+    } finally {
+      end();
     }
-    if (editorPos?.shapeId) {
-      const payload = { name: meta.name, zoning_gas: meta.zoning_gas, zoning_dust: meta.zoning_dust };
-      await api.atexMaps.updateSubarea(editorPos.shapeId, payload);
-      console.log("[Atex-map.jsx] API call in onSaveSubarea: " + JSON.stringify(this));
-      await loadSubareas();
-      console.log("[Atex-map.jsx] API call in onSaveSubarea: " + JSON.stringify(this));
-      setEditorPos(null);
-      console.log("[Atex-map.jsx] State change in onSaveSubarea: " + JSON.stringify(arguments));
-      try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); } catch {}
-      console.log("[Atex-map.jsx] API call in onSaveSubarea: " + JSON.stringify(this));
-      await loadPositions();
-      console.log("[Atex-map.jsx] API call in onSaveSubarea: " + JSON.stringify(this));
-    }
-    console.log("[Atex-map.jsx] Exiting onSaveSubarea");
   }
   async function onDeleteSubarea() {
-    console.log("[Atex-map.jsx] Entering onDeleteSubarea");
-    if (!editorPos?.shapeId) return setEditorPos(null);
-    const ok = window.confirm("Supprimer cette sous-zone ?");
-    if (!ok) return;
-    await api.atexMaps.deleteSubarea(editorPos.shapeId);
-    console.log("[Atex-map.jsx] API call in onDeleteSubarea: " + JSON.stringify(this));
-    await loadSubareas();
-    console.log("[Atex-map.jsx] API call in onDeleteSubarea: " + JSON.stringify(this));
-    try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); } catch {}
-    console.log("[Atex-map.jsx] API call in onDeleteSubarea: " + JSON.stringify(this));
-    await loadPositions();
-    console.log("[Atex-map.jsx] API call in onDeleteSubarea: " + JSON.stringify(this));
-    setEditorPos(null);
-    console.log("[Atex-map.jsx] State change in onDeleteSubarea: " + JSON.stringify(arguments));
-    console.log("[Atex-map.jsx] Exiting onDeleteSubarea");
+    const end = timeStart("onDeleteSubarea");
+    try {
+      if (!editorPos?.shapeId) return setEditorPos(null);
+      const ok = window.confirm("Supprimer cette sous-zone ?");
+      if (!ok) return;
+      await api.atexMaps.deleteSubarea(editorPos.shapeId);
+      await loadSubareas();
+      try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); } catch (e) {
+        log("reindexZones error (after delete)", { error: String(e) }, "warn");
+      }
+      await loadPositions();
+      setEditorPos(null);
+    } finally {
+      end();
+    }
   }
+
   /* ----------------------------- RENDER ----------------------------- */
   const viewerHeight = Math.max(
     520,
     Math.min(imgSize.h || 1200, (typeof window !== "undefined" ? window.innerHeight : 1000) - 140)
   );
+
   const toggleLegend = () => {
-    console.log("[Atex-map.jsx] Entering toggleLegend");
     setLegendVisible((v) => {
       const next = !v;
       const el = legendRef.current?.getContainer?.();
       if (el) el.style.display = next ? "block" : "none";
       return next;
     });
-    console.log("[Atex-map.jsx] State change in toggleLegend: " + JSON.stringify(arguments));
-    console.log("[Atex-map.jsx] Exiting toggleLegend");
   };
-  console.log("[Atex-map.jsx] Exiting AtexMap");
+
   return (
     <div className="relative">
       {/* viewer leaflet + toolbar intégrée */}
@@ -1132,6 +1253,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
         <div className="atex-toolbar">
           {/* + au centre */}
           <button className="btn-plus" onClick={onAddEquipment} title="Ajouter un équipement au centre">+</button>
+
           {/* Dessiner */}
           <div className="btn-pencil-wrap">
             <button
@@ -1150,6 +1272,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
               </div>
             )}
           </div>
+
           {/* Ajuster */}
           <button
             className="btn-plus"
@@ -1167,10 +1290,12 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
               m.fitBounds(b, { padding: [12, 12] });
               m.setZoom(m.getZoom() - 1);
               setTimeout(() => m.scrollWheelZoom?.enable(), 60);
+              log("adjust view", { fitZoom, finalZoom: m.getZoom() });
             }}
           >
             🗺️
           </button>
+
           {/* Légende: repliable */}
           <button
             className="btn-pencil"
@@ -1179,6 +1304,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
           >
             {legendVisible ? "⮜" : "⮞"}
           </button>
+
           {/* Sauvegarder géométrie */}
           {geomEdit.active && (
             <button className="btn-pencil" title="Sauvegarder la géométrie" onClick={saveGeomEdit}>
@@ -1186,17 +1312,33 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
             </button>
           )}
         </div>
+
+        {/* HUD debug (affiché si DEBUG_ATEX=1) */}
+        {DEBUG() && (
+          <div className="absolute top-2 right-2 bg-white/85 border rounded-lg px-3 py-2 text-[11px] shadow z-[9000] space-y-1">
+            <div className="font-medium">DEBUG HUD</div>
+            <div>zoom: {hud.zoom}</div>
+            <div>img: {imgSize.w}×{imgSize.h}</div>
+            <div>mouse(lat,lng): {hud.mouse.y.toFixed(2)}, {hud.mouse.x.toFixed(2)}</div>
+            <div>mouse(frac): {hud.mouse.yf.toFixed(4)}, {hud.mouse.xf.toFixed(4)}</div>
+            <div>panes zIndex: base:{hud.panes.basePane} zones:{hud.panes.zonesPane} markers:{hud.panes.markersPane} edit:{hud.panes.editPane}</div>
+          </div>
+        )}
       </div>
+
       {/* éditeur inline (position absolue à l’écran) */}
       {editorPos?.screen && (
         <div
-          className="fixed z-[7000] bg-red-100" // FIX: bg pour visibilité
+          className="fixed z-[7000]"
           style={{ left: Math.max(8, editorPos.screen.x - 150), top: Math.max(8, editorPos.screen.y - 10) }}
         >
           <SubAreaEditor
             initial={editorInit}
             onSave={onSaveSubarea}
-            onCancel={() => setEditorPos(null)}
+            onCancel={() => {
+              editorPos?.onCancel?.();
+              setEditorPos(null);
+            }}
             onStartGeomEdit={
               editorPos?.layer && editorPos?.kind
                 ? () => startGeomEdit(editorPos.layer, { id: editorPos.shapeId, kind: editorPos.kind })
@@ -1207,6 +1349,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
           />
         </div>
       )}
+
       {/* légende marqueurs (rappel) */}
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
         <span className="inline-flex items-center gap-1">
@@ -1222,7 +1365,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment }) {
           En retard
         </span>
         <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "#e11d48" }} />
+          <span className="w-3 h-3 rounded-full" style={{ background: "#2563eb" }} />
           Nouvelle (à enregistrer)
         </span>
         <span className="inline-flex items-center gap-1 text-gray-500">• Remplissage = Poussière • Bordure = Gaz</span>
