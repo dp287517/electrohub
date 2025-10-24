@@ -121,8 +121,8 @@ async function ensureSchema() {
       name TEXT NOT NULL,
       building TEXT DEFAULT '',
       zone TEXT DEFAULT '',
-      equipment TEXT DEFAULT '',
-      sub_equipment TEXT DEFAULT '',
+      equipment TEXT DEFAULT '',          -- ← "Équipement (macro)" (nom du plan)
+      sub_equipment TEXT DEFAULT '',      -- ← "Sous-Équipement (depuis zones tracées)" (nom de la forme)
       type TEXT DEFAULT '',
       manufacturer TEXT DEFAULT '',
       manufacturer_ref TEXT DEFAULT '',
@@ -292,6 +292,21 @@ async function logEvent(req, action, details = {}) {
     console.warn("[events] failed to log", action, e.message);
   }
   console.log(`[atex][${action}]`, { by: u.email || u.name || "anon", ...details });
+}
+
+// Helpers pour contexte plan/sous-zone → fiche équipement
+async function getPlanDisplayName(logical_name) {
+  const { rows } = await pool.query(
+    `SELECT display_name FROM atex_plan_names WHERE logical_name=$1 LIMIT 1`,
+    [logical_name]
+  );
+  return rows?.[0]?.display_name || logical_name;
+}
+async function getSubareaNameById(id) {
+  if (!id) return null;
+  const { rows } = await pool.query(`SELECT name FROM atex_subareas WHERE id=$1`, [id]);
+  const nm = (rows?.[0]?.name || "").trim();
+  return nm || null;
 }
 
 // -------------------------------------------------
@@ -892,7 +907,7 @@ app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
 });
 
 // -------------------------------------------------
-// MAPS — Positions & Subareas
+// MAPS — Positions & Subareas (avec auto MAJ fiche équipement)
 function pointInRect(px, py, x1, y1, x2, y2) {
   const minx = Math.min(Number(x1), Number(x2));
   const maxx = Math.max(Number(x1), Number(x2));
@@ -916,27 +931,47 @@ function pointInPoly(px, py, points) {
   return inside;
 }
 async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
+  // On ramène aussi le "name" de la sous-zone pour l'écrire côté fiche
   const { rows } = await pool.query(
-    `SELECT id, kind, x1,y1,x2,y2,cx,cy,r,points,zoning_gas,zoning_dust
+    `SELECT id, kind, x1,y1,x2,y2,cx,cy,r,points,zoning_gas,zoning_dust,name
      FROM atex_subareas WHERE logical_name=$1 AND page_index=$2
      ORDER BY created_at ASC`,
     [logical_name, page_index]
   );
   for (const z of rows) {
     if (z.kind === "rect" && pointInRect(x_frac, y_frac, z.x1, z.y1, z.x2, z.y2)) {
-      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id };
+      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id, subarea_name: (z.name||"").trim()||null };
     }
     if (z.kind === "circle" && pointInCircle(x_frac, y_frac, z.cx, z.cy, z.r)) {
-      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id };
+      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id, subarea_name: (z.name||"").trim()||null };
     }
     if (z.kind === "poly" && Array.isArray(z.points)) {
       const pts = z.points;
       if (pts?.length && pointInPoly(x_frac, y_frac, pts)) {
-        return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id };
+        return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id, subarea_name: (z.name||"").trim()||null };
       }
     }
   }
-  return { zoning_gas: null, zoning_dust: null, subarea_id: null };
+  return { zoning_gas: null, zoning_dust: null, subarea_id: null, subarea_name: null };
+}
+
+async function updateEquipmentContext({ equipment_id, logical_name, zoning_gas, zoning_dust, subarea_id, subarea_name_hint }) {
+  const planDisplay = await getPlanDisplayName(logical_name);
+  const subName = subarea_name_hint || (await getSubareaNameById(subarea_id));
+
+  // MAJ zonage + nom du plan (equipment) + nom de sous-zone (sub_equipment)
+  await pool.query(
+    `UPDATE atex_equipments
+       SET zoning_gas=$1,
+           zoning_dust=$2,
+           equipment=$3,
+           sub_equipment=COALESCE($4, sub_equipment),
+           updated_at=now()
+     WHERE id=$5`,
+    [zoning_gas, zoning_dust, planDisplay, subName || null, equipment_id]
+  );
+
+  return { plan_display_name: planDisplay, subarea_name: subName || null };
 }
 
 app.put("/api/atex/maps/setPosition", async (req, res) => {
@@ -954,12 +989,16 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
     );
 
     const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
-    await pool.query(
-      `UPDATE atex_equipments SET zoning_gas=$1, zoning_dust=$2, updated_at=now() WHERE id=$3`,
-      [zones.zoning_gas, zones.zoning_dust, equipment_id]
-    );
+    const ctx = await updateEquipmentContext({
+      equipment_id,
+      logical_name,
+      zoning_gas: zones.zoning_gas,
+      zoning_dust: zones.zoning_dust,
+      subarea_id: zones.subarea_id,
+      subarea_name_hint: zones.subarea_name || null,
+    });
 
-    res.json({ ok: true, zones });
+    res.json({ ok: true, zones, ...ctx });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 app.post("/api/atex/maps/setPosition", async (req, res) => {
@@ -982,12 +1021,16 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
     );
 
     const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
-    await pool.query(
-      `UPDATE atex_equipments SET zoning_gas=$1, zoning_dust=$2, updated_at=now() WHERE id=$3`,
-      [zones.zoning_gas, zones.zoning_dust, equipment_id]
-    );
+    const ctx = await updateEquipmentContext({
+      equipment_id,
+      logical_name,
+      zoning_gas: zones.zoning_gas,
+      zoning_dust: zones.zoning_dust,
+      subarea_id: zones.subarea_id,
+      subarea_name_hint: zones.subarea_name || null,
+    });
 
-    res.json({ ok: true, zones });
+    res.json({ ok: true, zones, ...ctx });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
@@ -1001,13 +1044,18 @@ app.post("/api/atex/maps/reindexZones", async (req, res) => {
       `SELECT equipment_id, x_frac, y_frac FROM atex_positions WHERE logical_name=$1 AND page_index=$2`,
       [logical_name, Number(page_index)]
     );
+
     let updated = 0;
     for (const p of pos) {
       const z = await detectZonesForPoint(logical_name, Number(page_index), Number(p.x_frac), Number(p.y_frac));
-      await pool.query(
-        `UPDATE atex_equipments SET zoning_gas=$1, zoning_dust=$2, updated_at=now() WHERE id=$3`,
-        [z.zoning_gas, z.zoning_dust, p.equipment_id]
-      );
+      await updateEquipmentContext({
+        equipment_id: p.equipment_id,
+        logical_name,
+        zoning_gas: z.zoning_gas,
+        zoning_dust: z.zoning_dust,
+        subarea_id: z.subarea_id,
+        subarea_name_hint: z.subarea_name || null,
+      });
       updated++;
     }
     await logEvent(req, "zones.reindex", { logical_name, page_index, updated });
@@ -1036,7 +1084,7 @@ app.get("/api/atex/maps/positions", async (req, res) => {
     const { rows } = await pool.query(
       `
       SELECT p.equipment_id, p.x_frac, p.y_frac,
-             e.name, e.building, e.zone, e.status, e.zoning_gas, e.zoning_dust
+             e.name, e.building, e.zone, e.status, e.zoning_gas, e.zoning_dust, e.equipment, e.sub_equipment
       FROM atex_positions p
       JOIN atex_equipments e ON e.id=p.equipment_id
       WHERE p.logical_name=$1 AND p.page_index=$2
@@ -1053,6 +1101,8 @@ app.get("/api/atex/maps/positions", async (req, res) => {
       zone: r.zone,
       zoning_gas: r.zoning_gas,
       zoning_dust: r.zoning_dust,
+      equipment_macro: r.equipment || null,
+      sub_equipment: r.sub_equipment || null,
     }));
     res.json({ items });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
@@ -1362,7 +1412,7 @@ app.post("/api/atex/assess", async (req, res) => {
     let data = {};
     try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
     res.json({ ok:true, ...data });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+  } catch (e) { res.status(500).njson({ ok:false, error:e.message }); }
 });
 
 // Legacy aliases (compat)
