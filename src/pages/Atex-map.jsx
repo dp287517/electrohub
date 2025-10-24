@@ -139,11 +139,9 @@ const STATUS_COLOR = {
 const ICON_PX = 22;
 
 /* ----------------------- Helpers “taille réelle du plan” ---------------------- */
-// Toujours calculer W/H à partir des bounds RÉELS de l’image (CRS.Simple)
-// -> plus d’erreur quand la vue / container change.
 function getPlanDims(baseLayer) {
   if (!baseLayer?.getBounds) return null;
-  const b = baseLayer.getBounds(); // lat: Y, lng: X
+  const b = baseLayer.getBounds();
   const W = Math.max(1, b.getEast() - b.getWest());
   const H = Math.max(1, b.getNorth() - b.getSouth());
   return { W, H, bounds: b };
@@ -339,26 +337,30 @@ export default function AtexMap({
   const lastJob = useRef({ key: null });
 
   // Flags
-  const baseReadyRef = useRef(false); // <-- vrai uniquement quand le calque image (PDF) est posé
+  const baseReadyRef = useRef(false);
   const indexedRef = useRef({ key: "", done: false });
   const draggingRef = useRef(false);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [unsavedIds] = useState(() => new Set());
   const [drawing, setDrawing] = useState(DRAW_NONE);
-  const [polyTemp, setPolyTemp] = useState([]);
+  const [polyTemp, setPolyTemp] = useState([]); // latlngs lors du dessin poly
   const [editorPos, setEditorPos] = useState(null);
   const [editorInit, setEditorInit] = useState({});
   const [legendVisible, setLegendVisible] = useState(true);
 
   const [zonesByEquip, setZonesByEquip] = useState(() => ({}));
   const [subareasById, setSubareasById] = useState(() => ({}));
+  const [lastSubareaId, setLastSubareaId] = useState(null); // ✅ dernière zone créée
 
   const editHandlesLayerRef = useRef(null);
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
 
   const [drawMenu, setDrawMenu] = useState(false);
   const drawMenuRef = useRef(null);
+
+  const [placeOnClick, setPlaceOnClick] = useState(false); // 🎯 mode “placer à la souris”
+  const placeOnClickRef = useRef(false);
 
   const [open, setOpen] = useState(inModal ? !!autoOpenModal : true);
 
@@ -382,14 +384,22 @@ export default function AtexMap({
       if (!drawMenuRef.current) return;
       if (!drawMenuRef.current.contains(e.target)) setDrawMenu(false);
     };
-    const onKey = (e) => { if (e.key === "Escape") { setDrawMenu(false); setDrawing(DRAW_NONE); } };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        setDrawMenu(false);
+        setDrawing(DRAW_NONE);
+        setPlaceOnClick(false);
+        placeOnClickRef.current = false;
+        if (polyTemp.length) setPolyTemp([]);
+      }
+    };
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [drawMenu]);
+  }, [drawMenu, polyTemp.length]);
 
   /* -------------------- Init carte (une fois) + rendu PDF -------------------- */
   useEffect(() => {
@@ -433,7 +443,7 @@ export default function AtexMap({
       try {
         await cleanupPdf();
 
-        // 1) CARTE (sans fitBounds final tant que le PDF n'est pas prêt)
+        // 1) CARTE
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
@@ -460,7 +470,7 @@ export default function AtexMap({
         subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
         editHandlesLayerRef.current = L.layerGroup({ pane: "editPane" }).addTo(m);
 
-        // Provisional bounds juste pour initialiser la vue (pas de data tant que base pas prête)
+        // Provisional bounds
         const PROV_W = 2000, PROV_H = 1400;
         const provBounds = L.latLngBounds([[0, 0], [PROV_H, PROV_W]]);
         await new Promise(requestAnimationFrame);
@@ -488,7 +498,7 @@ export default function AtexMap({
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        // 2) RENDU PDF -> pose de l'image -> fit *une fois* -> chargement data
+        // 2) RENDU PDF -> image -> fit -> data
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -520,14 +530,13 @@ export default function AtexMap({
           await new Promise(requestAnimationFrame);
           m.invalidateSize(false);
 
-          // fitBounds uniquement ici (premier rendu image)
           const fitZoom2 = m.getBoundsZoom(bounds, true);
           m.setMinZoom(fitZoom2 - 2);
           m.setMaxZoom(fitZoom2 + 8);
           m.setMaxBounds(bounds.pad(0.5));
           m.fitBounds(bounds, { padding: [10, 10] });
 
-          baseReadyRef.current = true; // <--- à partir de là on peut dessiner
+          baseReadyRef.current = true;
 
           await reloadAll();
 
@@ -547,7 +556,6 @@ export default function AtexMap({
       loadingTaskRef.current = null;
       cleanupMap();
     };
-    // !!! IMPORTANT: NE PAS dépendre de legendVisible (sinon un toggle recrée la carte)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileUrl, pageIndex, open]);
 
@@ -570,7 +578,7 @@ export default function AtexMap({
   }
 
   async function reloadAll() {
-    if (!baseReadyRef.current || !planKey) return; // <-- ne rien charger tant que l'image n'est pas posée
+    if (!baseReadyRef.current || !planKey) return;
     const end = timeStart("reloadAll");
     try {
       await ensureIndexedOnce();
@@ -640,6 +648,14 @@ export default function AtexMap({
           }))
         : [];
       const list = await enrichStatuses(baseList);
+
+      // cache zones by equip (pour ouverture fiche depuis carte)
+      const zmap = {};
+      for (const p of list) {
+        zmap[p.id] = { zoning_gas: p.zoning_gas ?? null, zoning_dust: p.zoning_dust ?? null };
+      }
+      setZonesByEquip(zmap);
+
       drawMarkers(list);
       log("positions loaded", { count: list.length });
     } catch (e) {
@@ -666,7 +682,7 @@ export default function AtexMap({
     } catch (e) {
       console.error("[ATEX] loadSubareas error", e);
       setSubareasById({});
-      drawSubareas([]); // clear
+      drawSubareas([]);
     } finally { end(); }
   }
 
@@ -681,16 +697,34 @@ export default function AtexMap({
     }
   }
 
-  async function createEquipmentAtCenter() {
+  /* ---------------------- Création équipement (utilitaires) ---------------------- */
+  function centroidFracOfSubarea(sa) {
+    // renvoie {xf,yf} en fractions [0..1] du plan (selon kind)
+    if (!sa) return null;
+    if (sa.kind === "rect") {
+      const xf = ((sa.x1 ?? 0) + (sa.x2 ?? 0)) / 2;
+      const yf = ((sa.y1 ?? 0) + (sa.y2 ?? 0)) / 2;
+      return { xf, yf };
+    }
+    if (sa.kind === "circle") {
+      return { xf: sa.cx ?? 0.5, yf: sa.cy ?? 0.5 };
+    }
+    if (sa.kind === "poly" && Array.isArray(sa.points) && sa.points.length) {
+      // centroïde simple (moyenne)
+      const n = sa.points.length;
+      const sum = sa.points.reduce((acc, [x, y]) => [acc[0] + x, acc[1] + y], [0, 0]);
+      return { xf: sum[0] / n, yf: sum[1] / n };
+    }
+    return null;
+  }
+
+  async function createEquipmentAtFrac(xf, yf, droppedFiles /* optional: FileList|Array<File> */) {
     if (!plan || !baseLayerRef.current) return;
-    const end = timeStart("createEquipmentAtCenter");
+    const end = timeStart("createEquipmentAtFrac");
     try {
       const created = await api.atex.createEquipment({ name: "", status: "a_faire" });
       const id = created?.id || created?.equipment?.id;
       if (!id) throw new Error("Création ATEX: ID manquant");
-
-      const center = baseLayerRef.current.getBounds().getCenter();
-      const { xf, yf } = fromLatLngToFrac(center, baseLayerRef.current);
 
       const resp = await api.atexMaps.setPosition(id, {
         logical_name: plan.logical_name,
@@ -706,14 +740,38 @@ export default function AtexMap({
         try { onZonesApplied?.(id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); } catch {}
       }
 
+      // Upload fichiers déposés (si fournis)
+      if (droppedFiles && droppedFiles.length) {
+        try {
+          await api.atex.uploadAttachments(id, Array.from(droppedFiles));
+        } catch (e) {
+          log("uploadAttachments error", { error: String(e) }, "warn");
+        }
+      }
+
       await reloadAll();
       onOpenEquipment?.({ id, name: created?.equipment?.name || created?.name || "Équipement" });
     } catch (e) {
       console.error(e);
       alert("Erreur création équipement");
-    } finally {
-      end();
+    } finally { end(); }
+  }
+
+  async function createEquipmentAtCenter(droppedFiles) {
+    if (!plan || !baseLayerRef.current) return;
+    // ✅ si on a une "dernière zone créée", placer au centroïde de celle-ci
+    let xf, yf;
+    const last = lastSubareaId ? subareasById[lastSubareaId] : null;
+    if (last) {
+      const c = centroidFracOfSubarea(last);
+      if (c) { xf = c.xf; yf = c.yf; }
     }
+    if (xf == null || yf == null) {
+      const center = baseLayerRef.current.getBounds().getCenter();
+      const frac = fromLatLngToFrac(center, baseLayerRef.current);
+      xf = frac.xf; yf = frac.yf;
+    }
+    await createEquipmentAtFrac(xf, yf, droppedFiles);
   }
 
   function drawMarkers(list) {
@@ -722,7 +780,7 @@ export default function AtexMap({
       const m = mapRef.current;
       const layer = markersLayerRef.current;
       const base = baseLayerRef.current;
-      if (!m || !layer || !base) return; // <-- pas d'image = pas de draw (évite positions erronées)
+      if (!m || !layer || !base) return;
 
       layer.clearLayers();
 
@@ -900,7 +958,7 @@ export default function AtexMap({
     try {
       const m = mapRef.current;
       const base = baseLayerRef.current;
-      if (!m || !base) return; // <-- pas d'image = pas de draw
+      if (!m || !base) return;
       if (!subareasLayerRef.current) subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
       const g = subareasLayerRef.current;
       g.clearLayers();
@@ -966,6 +1024,7 @@ export default function AtexMap({
     else setDrawing(DRAW_NONE);
   }
 
+  // RECT / CIRCLE
   useEffect(() => {
     const m = mapRef.current;
     const base = baseLayerRef.current;
@@ -1007,6 +1066,7 @@ export default function AtexMap({
             if (!dims) return;
             const { W, H, bounds } = dims;
 
+            let created = null;
             if (mode === DRAW_CIRCLE) {
               const ll = tempLayer.getLatLng();
               const r = tempLayer.getRadius();
@@ -1018,7 +1078,7 @@ export default function AtexMap({
                 name: meta.name, zoning_gas: meta.zoning_gas, zoning_dust: meta.zoning_dust,
                 plan_id: plan?.id, logical_name: plan?.logical_name, page_index: pageIndex,
               };
-              await api.atexMaps.createSubarea(payload);
+              created = await api.atexMaps.createSubarea(payload);
             } else if (mode === DRAW_RECT) {
               const b = tempLayer.getBounds();
               const payload = {
@@ -1030,8 +1090,10 @@ export default function AtexMap({
                 name: meta.name, zoning_gas: meta.zoning_gas, zoning_dust: meta.zoning_dust,
                 plan_id: plan?.id, logical_name: plan?.logical_name, page_index: pageIndex,
               };
-              await api.atexMaps.createSubarea(payload);
+              created = await api.atexMaps.createSubarea(payload);
             }
+            const zid = created?.id || created?.subarea?.id;
+            if (zid) setLastSubareaId(zid); // ✅ mémorise dernière zone créée
           } catch (e) {
             console.error("[ATEX] Subarea create failed", e);
             alert("Erreur création zone");
@@ -1056,6 +1118,73 @@ export default function AtexMap({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawing, planKey, pageIndex]);
+
+  // POLY
+  useEffect(() => {
+    const m = mapRef.current;
+    const base = baseLayerRef.current;
+    if (!m || !base || drawing !== DRAW_POLY) return;
+
+    let tempPoly = null;
+    const style = { ...colorForSubarea({}), fillOpacity: 0.12, pane: "zonesPane" };
+
+    const redraw = () => {
+      if (tempPoly) { try { m.removeLayer(tempPoly); } catch {} tempPoly = null; }
+      if (polyTemp.length >= 1) {
+        tempPoly = L.polygon(polyTemp, style).addTo(m);
+      }
+    };
+
+    const onClick = (e) => {
+      setPolyTemp((old) => [...old, e.latlng]);
+    };
+    const onDblClick = () => {
+      if (polyTemp.length < 3) return;
+      // ouvrir éditeur puis créer
+      openSubareaEditorAtCenter(
+        async (meta) => {
+          const end = timeStart("createSubarea (poly)");
+          try {
+            const { W, H, bounds } = getPlanDims(base);
+            const points = polyTemp.map((ll) => [(ll.lng - bounds.getWest()) / W, (ll.lat - bounds.getSouth()) / H]);
+            const created = await api.atexMaps.createSubarea({
+              kind: "poly",
+              points,
+              name: meta.name,
+              zoning_gas: meta.zoning_gas,
+              zoning_dust: meta.zoning_dust,
+              plan_id: plan?.id,
+              logical_name: plan?.logical_name,
+              page_index: pageIndex,
+            });
+            const zid = created?.id || created?.subarea?.id;
+            if (zid) setLastSubareaId(zid); // ✅ mémorise dernière zone créée
+          } catch (e) {
+            console.error("[ATEX] Subarea poly create failed", e);
+            alert("Erreur création polygone");
+          } finally {
+            setPolyTemp([]);
+            try { tempPoly && m.removeLayer(tempPoly); } catch {}
+            await reloadAll();
+            end();
+          }
+        },
+        () => { setPolyTemp([]); try { tempPoly && m.removeLayer(tempPoly); } catch {} }
+      );
+      setDrawMenu(false);
+      setDrawing(DRAW_NONE);
+    };
+
+    const onMove = () => redraw();
+
+    m.on("click", onClick);
+    m.on("mousemove", onMove);
+    m.on("dblclick", onDblClick);
+    return () => {
+      try { m.off("click", onClick); m.off("mousemove", onMove); m.off("dblclick", onDblClick); } catch {}
+      try { tempPoly && m.removeLayer(tempPoly); } catch {}
+    };
+  }, [drawing, polyTemp, planKey, pageIndex]);
 
   function openSubareaEditorAtCenter(onSave, onCancelCleanup) {
     const m = mapRef.current;
@@ -1091,6 +1220,56 @@ export default function AtexMap({
     } finally { end(); }
   }
 
+  /* ----------------------------- DnD: création + upload ----------------------------- */
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+
+    const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
+
+    const onDrop = async (e) => {
+      prevent(e);
+      if (!baseLayerRef.current) return;
+      const files = e.dataTransfer?.files;
+      // position du drop -> latlng
+      let xf = null, yf = null;
+      try {
+        const rect = el.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        const m = mapRef.current;
+        const ll = m?.containerPointToLatLng?.([px, py]);
+        if (ll) {
+          const frac = fromLatLngToFrac(ll, baseLayerRef.current);
+          xf = frac.xf; yf = frac.yf;
+        }
+      } catch {}
+      // sinon, fallback centre (ou dernière zone)
+      if (xf == null || yf == null) {
+        const last = lastSubareaId ? subareasById[lastSubareaId] : null;
+        const c = last ? centroidFracOfSubarea(last) : null;
+        if (c) { xf = c.xf; yf = c.yf; }
+      }
+      if (xf == null || yf == null) {
+        const center = baseLayerRef.current.getBounds().getCenter();
+        const frac = fromLatLngToFrac(center, baseLayerRef.current);
+        xf = frac.xf; yf = frac.yf;
+      }
+      await createEquipmentAtFrac(xf, yf, files);
+    };
+
+    el.addEventListener("dragenter", prevent);
+    el.addEventListener("dragover", prevent);
+    el.addEventListener("dragleave", prevent);
+    el.addEventListener("drop", onDrop);
+    return () => {
+      el.removeEventListener("dragenter", prevent);
+      el.removeEventListener("dragover", prevent);
+      el.removeEventListener("dragleave", prevent);
+      el.removeEventListener("drop", onDrop);
+    };
+  }, [lastSubareaId, subareasById]);
+
   /* ----------------------------- RENDER ----------------------------- */
   const viewerHeight = Math.min((typeof window !== "undefined" ? window.innerHeight : 900) - 140, (imgSize.h || 900));
 
@@ -1098,12 +1277,11 @@ export default function AtexMap({
     setLegendVisible((v) => {
       const next = !v;
       const el = legendRef.current?.getContainer?.();
-      if (el) el.style.display = next ? "block" : "none"; // <-- aucun re-render de la carte
+      if (el) el.style.display = next ? "block" : "none";
       return next;
     });
   };
 
-  // Editor clamp
   const editorStyle = editorPos?.screen
     ? {
         left: Math.max(8, Math.min((editorPos.screen.x || 0) - 150, (typeof window !== "undefined" ? window.innerWidth : 1200) - 300)),
@@ -1119,8 +1297,23 @@ export default function AtexMap({
     >
       {/* Toolbar */}
       <div className="atex-toolbar">
-        <button className="btn-plus" onClick={() => createEquipmentAtCenter()} title="Ajouter un équipement au centre">+</button>
+        {/* ➕ au centre (ou centroïde de la dernière zone) */}
+        <button className="btn-plus" onClick={() => createEquipmentAtCenter()} title="Ajouter un équipement (centre / dernière zone)">+</button>
 
+        {/* 🎯 placer à la souris */}
+        <button
+          className={`btn-pencil ${placeOnClick ? "active" : ""}`}
+          title={placeOnClick ? "Cliquer sur le plan pour placer un équipement (actif)" : "Placer un équipement à la souris"}
+          onClick={() => {
+            const next = !placeOnClick;
+            setPlaceOnClick(next);
+            placeOnClickRef.current = next;
+          }}
+        >
+          🎯
+        </button>
+
+        {/* ✏️ Dessin zones */}
         <div className="btn-pencil-wrap" ref={drawMenuRef}>
           <button className="btn-pencil" onClick={() => setDrawMenu((v) => !v)} title="Dessiner (zones ATEX)">✏️</button>
           {drawMenu && (
@@ -1133,6 +1326,18 @@ export default function AtexMap({
           )}
         </div>
 
+        {/* Fin polygone */}
+        {drawing === DRAW_POLY && (
+          <button className="btn-pencil" title="Terminer le polygone" onClick={() => {
+            const m = mapRef.current;
+            if (!m || polyTemp.length < 3) return;
+            // simuler double-clic
+            const ev = new MouseEvent("dblclick");
+            m.getContainer().dispatchEvent(ev);
+          }}>✔️</button>
+        )}
+
+        {/* Ajuster la vue */}
         <button
           className="btn-plus"
           title="Ajuster le plan (dézoome un peu)"
@@ -1167,8 +1372,35 @@ export default function AtexMap({
           {legendVisible ? "⮜" : "⮞"}
         </button>
       </div>
+
+      {/* Overlay aide modes */}
+      {placeOnClick && (
+        <div className="absolute left-3 top-3 z-[5000] px-2 py-1 text-[11px] rounded bg-amber-50 border border-amber-200 text-amber-800 shadow">
+          Mode “placer à la souris” : cliquez sur le plan pour créer un équipement.
+        </div>
+      )}
+      {drawing === DRAW_POLY && (
+        <div className="absolute left-3 top-3 z-[5000] px-2 py-1 text-[11px] rounded bg-blue-50 border border-blue-200 text-blue-800 shadow">
+          Mode polygone : cliquez pour ajouter des sommets, puis “✔️ Terminer polygone”.
+        </div>
+      )}
     </div>
   );
+
+  // click sur la carte pour “placer à la souris”
+  useEffect(() => {
+    const m = mapRef.current;
+    const base = baseLayerRef.current;
+    if (!m || !base) return;
+    const onClick = async (e) => {
+      if (!placeOnClickRef.current || draggingRef.current) return;
+      const { xf, yf } = fromLatLngToFrac(e.latlng, base);
+      await createEquipmentAtFrac(xf, yf);
+    };
+    m.on("click", onClick);
+    return () => { try { m.off("click", onClick); } catch {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planKey, pageIndex]);
 
   const EditorPopover = editorPos?.screen ? (
     <div className="fixed z-[7000]" style={editorStyle}>
@@ -1219,7 +1451,7 @@ export default function AtexMap({
     );
   }
 
-  // --- Modal plein écran (PC & mobile)
+  // --- Modal plein écran
   return (
     <>
       {!open && (
