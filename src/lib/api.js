@@ -543,7 +543,7 @@ export const api = {
 
     // Plans
     listPlans: () => get(`/api/atex/maps/listPlans`),
-    // alias back compat (/plans)
+    // alias back compat
     listPlansCompat: () => get(`/api/atex/maps/plans`),
 
     renamePlan: (logical_name, display_name) =>
@@ -566,25 +566,24 @@ export const api = {
     // Positions
     positions: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/positions`, { logical_name, page_index }),
-    // 🔧 fix: accepte id OU logical_name
+    // accepte id OU logical_name
     positionsAuto: (planOrKey, page_index = 0) => {
       const key = typeof planOrKey === "string" ? planOrKey : (planOrKey?.id || planOrKey?.logical_name || "");
       if (isUuid(key)) return get(`/api/atex/maps/positions`, { id: key, page_index });
       return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
     },
-    // setPosition (POST alias)
+    // setPosition (retourne {zones} côté back)
     setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
       post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }),
 
     /* ================== Sous-zones (subareas) ================== */
-    // 🔧 fix: accepte id OU logical_name, comme ton composant
     listSubareas: (planKey, page_index = 0) => {
       const key = planKey || "";
       if (isUuid(key)) return get(`/api/atex/maps/subareas`, { id: key, page_index });
       return get(`/api/atex/maps/subareas`, { logical_name: key, page_index });
     },
 
-    // Stats (compter les zones sur plan/page)
+    // Stats (optionnel)
     subareasStats: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/subareas/stats`, { logical_name, page_index }),
 
