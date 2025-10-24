@@ -517,8 +517,9 @@ export const api = {
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
 
-    // IA extraction & conformité
+    // IA extraction (multi-photos) & conformité
     extractFromPhotos: (files = []) => {
+      // ✅ multi-fichiers via champ "files" → /api/atex/extract (backend agrège toutes les images)
       const { email, name } = getIdentity();
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
@@ -528,6 +529,10 @@ export const api = {
     },
     assessConformity: ({ atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = {}) =>
       post(`/api/atex/assess`, { atex_mark_gas, atex_mark_dust, target_gas, target_dust }),
+
+    // ✅ Appliquer la décision IA sur la fiche (enregistre un check "fait" sans modifier l’échéance)
+    applyCompliance: (equipmentId, { decision = null, rationale = "" } = {}) =>
+      post(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/compliance`, { decision, rationale }),
 
     // ✅ Alias rétro-compat pour corriger les appels legacy du front
     analyzePhotoBatch: (files = []) => api.atex.extractFromPhotos(files),
@@ -577,7 +582,7 @@ export const api = {
       if (isUuid(key) || isNumericId(key)) return get(`/api/atex/maps/positions`, { id: key, page_index });
       return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
     },
-    // setPosition (POST alias)
+    // setPosition (POST alias côté serveur)
     setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
       post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }),
 
