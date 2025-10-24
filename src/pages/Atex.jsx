@@ -267,8 +267,7 @@ export default function Atex() {
       });
       setItems(Array.isArray(res?.items) ? res.items : []);
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setItems([]);
     } finally {
       setLoading(false);
@@ -313,8 +312,7 @@ export default function Atex() {
         : [];
       setFiles(arr);
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setFiles([]);
     }
   }
@@ -386,8 +384,7 @@ export default function Atex() {
       await reload();
       setToast("Fiche enregistrée ✅");
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setToast("Erreur enregistrement");
     }
   }
@@ -404,8 +401,7 @@ export default function Atex() {
       setMapRefreshTick((t) => t + 1);
       setToast("Équipement supprimé ✅");
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setToast("Suppression impossible");
     }
   }
@@ -419,8 +415,7 @@ export default function Atex() {
       await reload();
       setToast("Photo mise à jour ✅");
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setToast("Échec upload photo");
     }
   }
@@ -431,8 +426,7 @@ export default function Atex() {
       await reloadFiles(editing.id);
       setToast(filesArr.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setToast("Échec upload fichiers");
     }
   }
@@ -454,8 +448,7 @@ export default function Atex() {
       }));
       setToast("Analyse photos terminée ✅");
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setToast("Analyse photos indisponible");
     }
   }
@@ -474,8 +467,7 @@ export default function Atex() {
       await reload();
       setToast(res?.message || res?.rationale || "Analyse conformité OK ✅");
     } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error(e);
+      console.error(e); // eslint-disable-line no-console
       setToast("Analyse conformité indisponible");
     }
   }
@@ -502,6 +494,23 @@ export default function Atex() {
     }
   }
   useEffect(() => { if (tab === "plans") loadPlans(); }, [tab]);
+
+  /* ---------- Optimistic zone merge helper (UI instantanée) ---------- */
+  function applyZonesLocally(id, zones) {
+    if (!id) return;
+    setItems((old) =>
+      (old || []).map((it) =>
+        it.id === id
+          ? { ...it, zoning_gas: zones?.zoning_gas ?? it.zoning_gas, zoning_dust: zones?.zoning_dust ?? it.zoning_dust }
+          : it
+      )
+    );
+    setEditing((cur) =>
+      cur && cur.id === id
+        ? { ...cur, zoning_gas: zones?.zoning_gas ?? cur.zoning_gas, zoning_dust: zones?.zoning_dust ?? cur.zoning_dust }
+        : cur
+    );
+  }
 
   /* ----------------------------- UI ----------------------------- */
   const StickyTabs = () => (
@@ -766,21 +775,19 @@ export default function Atex() {
                 key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
                 plan={selectedPlan}
                 onOpenEquipment={openEdit}
-                // Optionnel : si la carte signale que des zonages ont été appliqués
-                onZonesApplied={(id, zones) => {
-                  if (!id) return;
-                  setItems((old) =>
-                    (old || []).map((it) =>
-                      it.id === id
-                        ? { ...it, zoning_gas: zones?.zoning_gas ?? it.zoning_gas, zoning_dust: zones?.zoning_dust ?? it.zoning_dust }
-                        : it
-                    )
-                  );
-                  setEditing((cur) =>
-                    cur && cur.id === id
-                      ? { ...cur, zoning_gas: zones?.zoning_gas ?? cur.zoning_gas, zoning_dust: zones?.zoning_dust ?? cur.zoning_dust }
-                      : cur
-                  );
+                /* ⬇️ Quand la carte applique un zonage (et met à jour equipment/sub_equipment côté back),
+                      on met à jour l’UI immédiatement + on re-fetch pour récupérer aussi equipment/sub_equipment. */
+                onZonesApplied={async (id, zones) => {
+                  applyZonesLocally(id, zones); // optimiste pour zoning_*
+                  // 🔄 recharge liste et détail pour refléter equipment/sub_equipment poussés par la carte
+                  await reload();
+                  if (editing?.id === id) {
+                    try {
+                      const res = await api.atex.getEquipment(id);
+                      const fresh = mergeZones(res?.equipment || {});
+                      setEditing((cur) => ({ ...(cur || {}), ...fresh }));
+                    } catch {}
+                  }
                 }}
               />
             </div>
