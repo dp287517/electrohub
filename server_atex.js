@@ -333,7 +333,7 @@ app.get("/api/atex/file", async (req, res) => {
 });
 
 // -------------------------------------------------
-// EQUIPEMENTS
+/** EQUIPEMENTS **/
 app.get("/api/atex/equipments", async (req, res) => {
   try {
     const q = (req.query.q || "").toString().trim().toLowerCase();
@@ -457,8 +457,9 @@ app.post("/api/atex/equipments", async (req, res) => {
       installed_at = null,
     } = req.body || {};
 
+    // 36 mois après l'installation (ou maintenant si non fourni)
     const installDate = installed_at ? new Date(installed_at) : new Date();
-    const firstDue = addDays(installDate, 90);
+    const firstDue = addMonths(installDate, 36);
 
     const { rows } = await pool.query(
       `
@@ -931,11 +932,11 @@ function pointInPoly(px, py, points) {
   return inside;
 }
 async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
-  // On ramène aussi le "name" de la sous-zone pour l'écrire côté fiche
+  // Priorité à la DERNIÈRE forme créée (DESC)
   const { rows } = await pool.query(
     `SELECT id, kind, x1,y1,x2,y2,cx,cy,r,points,zoning_gas,zoning_dust,name
      FROM atex_subareas WHERE logical_name=$1 AND page_index=$2
-     ORDER BY created_at ASC`,
+     ORDER BY created_at DESC`,
     [logical_name, page_index]
   );
   for (const z of rows) {
@@ -1126,6 +1127,7 @@ app.get("/api/atex/maps/subareas", async (req, res) => {
 
     if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
 
+    // Gardé en ASC pour l'affichage (ordre de création), la priorité de sélection est gérée côté detectZonesForPoint (DESC)
     const { rows } = await pool.query(
       `SELECT * FROM atex_subareas WHERE logical_name=$1 AND page_index=$2 ORDER BY created_at ASC`,
       [logical, pageIndex]
@@ -1412,7 +1414,56 @@ app.post("/api/atex/assess", async (req, res) => {
     let data = {};
     try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
     res.json({ ok:true, ...data });
-  } catch (e) { res.status(500).njson({ ok:false, error:e.message }); }
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); } // <- fix .json
+});
+
+// ✅ Endpoint dédié pour "appliquer" la conformité IA à une fiche (sans toucher à l'échéance)
+app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const { decision = null, rationale = "" } = req.body || {};
+    if (!["conforme", "non_conforme", "indetermine", null].includes(decision))
+      return res.status(400).json({ ok:false, error:"invalid decision" });
+
+    const u = getUser(req);
+    const { rows } = await pool.query(
+      `INSERT INTO atex_checks(equipment_id, status, date, items, result, user_name, user_email, files)
+       VALUES($1,'fait',now(),$2,$3,$4,$5,'[]'::jsonb)
+       RETURNING *`,
+      [
+        id,
+        JSON.stringify([{ label: "Vérification IA", value: decision, rationale }]),
+        decision === "indetermine" ? null : decision,
+        u.name || "",
+        u.email || "",
+      ]
+    );
+
+    // Retourner la fiche avec état de conformité recalculé
+    const { rows: eqR } = await pool.query(
+      `
+      SELECT e.*,
+             (SELECT result FROM atex_checks c
+              WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
+              ORDER BY c.date DESC NULLS LAST
+              LIMIT 1) AS last_result
+      FROM atex_equipments e WHERE e.id=$1
+      `,
+      [id]
+    );
+    const eq = eqR?.[0] || null;
+    if (eq) {
+      eq.photo_url =
+        (eq.photo_content && eq.photo_content.length) || eq.photo_path
+          ? `/api/atex/equipments/${id}/photo`
+          : null;
+      eq.compliance_state =
+        eq.last_result === "conforme" ? "conforme" :
+        eq.last_result === "non_conforme" ? "non_conforme" : "na";
+    }
+
+    res.json({ ok:true, check: rows[0], equipment: eq });
+  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
 // Legacy aliases (compat)
