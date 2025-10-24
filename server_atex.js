@@ -13,10 +13,10 @@ import fsp from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
-import crypto from "crypto";
-import archiver from "archiver";
+// import crypto from "crypto"; // (non utilisé)
+// import archiver from "archiver"; // (non utilisé)
+// import PDFDocument from "pdfkit"; // (non utilisé)
 import StreamZip from "node-stream-zip";
-import PDFDocument from "pdfkit";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 
@@ -139,11 +139,16 @@ async function ensureSchema() {
       next_check_date DATE NULL,
       photo_path TEXT DEFAULT NULL,
       photo_content BYTEA NULL,
+      photo_mime TEXT NULL,
       created_at TIMESTAMP DEFAULT now(),
       updated_at TIMESTAMP DEFAULT now()
     );
     CREATE INDEX IF NOT EXISTS idx_atex_eq_next ON atex_equipments(next_check_date);
+    CREATE INDEX IF NOT EXISTS idx_atex_eq_status ON atex_equipments(status);
+    CREATE INDEX IF NOT EXISTS idx_atex_eq_building ON atex_equipments(lower(building));
+    CREATE INDEX IF NOT EXISTS idx_atex_eq_zone ON atex_equipments(lower(zone));
   `);
+  await pool.query(`ALTER TABLE atex_equipments ADD COLUMN IF NOT EXISTS photo_mime TEXT;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_checks (
@@ -244,7 +249,7 @@ async function ensureSchema() {
     ON CONFLICT (id) DO NOTHING;
   `);
 
-  // 🔹 Journaux (création/édition/suppression des zones & opérations admin)
+  // 🔹 Journaux
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -266,7 +271,7 @@ function eqStatusFromDue(due) {
   const now = new Date();
   const diff = (d - now) / (1000 * 3600 * 24);
   if (diff < 0) return "en_retard";
-  // ✅ élargit la fenêtre d'alerte à 90 jours (on garde la même étiquette pour compat UI)
+  // ✅ fenêtre d'alerte 90 jours
   if (diff <= 90) return "en_cours_30";
   return "a_faire";
 }
@@ -327,30 +332,58 @@ app.get("/api/atex/file", async (req, res) => {
 app.get("/api/atex/equipments", async (req, res) => {
   try {
     const q = (req.query.q || "").toString().trim().toLowerCase();
-    const { rows } = await pool.query(
-      `
-      SELECT e.*, 
-             COALESCE((SELECT MAX(date) FROM atex_checks c WHERE c.equipment_id=e.id), NULL) AS last_check_date
+    const status = (req.query.status || "").toString().trim(); // a_faire|en_cours_30|en_retard|fait
+    const building = (req.query.building || "").toString().trim().toLowerCase();
+    const zone = (req.query.zone || "").toString().trim().toLowerCase();
+    const compliance = (req.query.compliance || "").toString().trim(); // conforme|non_conforme|na
+
+    // dernier résultat de contrôle par équipement (join latéral)
+    const { rows } = await pool.query(`
+      SELECT e.*,
+             lc.result AS last_check_result,
+             lc.date   AS last_check_date
       FROM atex_equipments e
+      LEFT JOIN LATERAL (
+        SELECT c.result, c.date
+        FROM atex_checks c
+        WHERE c.equipment_id = e.id
+        ORDER BY c.date DESC
+        LIMIT 1
+      ) lc ON TRUE
       ORDER BY e.created_at DESC
-      `
-    );
+    `);
+
     const items = rows
-      .filter((r) => {
-        if (!q) return true;
-        const hay = [r.name, r.building, r.zone, r.equipment, r.sub_equipment, r.type]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(q);
+      .map((r) => {
+        const compliance_state =
+          r.last_check_result === "conforme" ? "conforme" :
+          r.last_check_result === "non_conforme" ? "non_conforme" : "na";
+
+        return {
+          ...r,
+          compliance_state,
+          status: eqStatusFromDue(r.next_check_date),
+          photo_url:
+            (r.photo_content && r.photo_content.length) || r.photo_path
+              ? `/api/atex/equipments/${r.id}/photo`
+              : null,
+        };
       })
-      .map((r) => ({
-        ...r,
-        status: eqStatusFromDue(r.next_check_date),
-        photo_url: (r.photo_content && r.photo_content.length) || r.photo_path
-          ? `/api/atex/equipments/${r.id}/photo`
-          : null,
-      }));
+      .filter((r) => {
+        if (q) {
+          const hay = [
+            r.name, r.building, r.zone, r.equipment, r.sub_equipment, r.type,
+            r.manufacturer, r.manufacturer_ref, r.atex_mark_gas, r.atex_mark_dust
+          ].filter(Boolean).join(" ").toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        if (building && !(r.building || "").toLowerCase().includes(building)) return false;
+        if (zone && !(r.zone || "").toLowerCase().includes(zone)) return false;
+        if (status && r.status !== status) return false;
+        if (compliance && r.compliance_state !== compliance) return false;
+        return true;
+      });
+
     res.json({ items });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -363,9 +396,10 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
     const { rows } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
     const eq = rows?.[0] || null;
     if (!eq) return res.status(404).json({ ok: false, error: "not found" });
-    eq.photo_url = (eq.photo_content && eq.photo_content.length) || eq.photo_path
-      ? `/api/atex/equipments/${id}/photo`
-      : null;
+    eq.photo_url =
+      (eq.photo_content && eq.photo_content.length) || eq.photo_path
+        ? `/api/atex/equipments/${id}/photo`
+        : null;
     res.json({ equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -449,9 +483,10 @@ app.put("/api/atex/equipments/:id", async (req, res) => {
     const { rows } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
     const eq = rows?.[0] || null;
     if (eq) {
-      eq.photo_url = (eq.photo_content && eq.photo_content.length) || eq.photo_path
-        ? `/api/atex/equipments/${id}/photo`
-        : null;
+      eq.photo_url =
+        (eq.photo_content && eq.photo_content.length) || eq.photo_path
+          ? `/api/atex/equipments/${id}/photo`
+          : null;
     }
     res.json({ equipment: eq });
   } catch (e) {
@@ -483,9 +518,10 @@ app.post("/api/atex/equipments/:id/photo", upload.single("photo"), async (req, r
       `UPDATE atex_equipments
          SET photo_path=$1,
              photo_content=COALESCE($2, photo_content),
+             photo_mime=$3,
              updated_at=now()
-       WHERE id=$3`,
-      [file.path, buf, id]
+       WHERE id=$4`,
+      [file.path, buf, file.mimetype || null, id]
     );
     res.json({ ok:true, url:`/api/atex/equipments/${id}/photo` });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
@@ -493,15 +529,16 @@ app.post("/api/atex/equipments/:id/photo", upload.single("photo"), async (req, r
 
 app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ try{
   const id = String(req.params.id);
-  const { rows } = await pool.query(`SELECT photo_path, photo_content FROM atex_equipments WHERE id=$1`, [id]);
+  const { rows } = await pool.query(`SELECT photo_path, photo_content, photo_mime FROM atex_equipments WHERE id=$1`, [id]);
   const row = rows?.[0] || null; if(!row) return res.status(404).end();
 
   if (row.photo_content && row.photo_content.length) {
-    res.type("image/jpeg");
+    if (row.photo_mime) res.type(row.photo_mime); else res.type("image/jpeg");
     return res.end(row.photo_content, "binary");
   }
   const p = row.photo_path || null; if(!p) return res.status(404).end();
   if (!fs.existsSync(p)) return res.status(404).end();
+  if (row.photo_mime) res.type(row.photo_mime);
   res.sendFile(path.resolve(p));
 } catch { res.status(404).end(); }});
 
@@ -619,9 +656,10 @@ app.put("/api/atex/equipments/:id/checks/:checkId", upload.array("files"), async
     const { rows: eqR } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
     const equipment = eqR?.[0] || null;
     if (equipment) {
-      equipment.photo_url = (equipment.photo_content && equipment.photo_content.length) || equipment.photo_path
-        ? `/api/atex/equipments/${id}/photo`
-        : null;
+      equipment.photo_url =
+        (equipment.photo_content && equipment.photo_content.length) || equipment.photo_path
+          ? `/api/atex/equipments/${id}/photo`
+          : null;
     }
     res.json({ ok:true, equipment });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
@@ -988,6 +1026,12 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// ✅ alias pratique pour le front: positionsAuto (retour identique à /positions)
+app.get("/api/atex/maps/positionsAuto", (req, res) => {
+  req.url = "/api/atex/maps/positions" + (req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "");
+  return app._router.handle(req, res);
+});
+
 // Recalculer les zonages de tous les équipements d’un plan/page
 app.post("/api/atex/maps/reindexZones", async (req, res) => {
   try {
@@ -1266,7 +1310,7 @@ app.post("/api/atex/extract", upload.array("files"), async (req, res) => {
 - type
 Réponds en JSON strict.`;
 
-    // ✅ Correction: format d'images pour chat.completions (type:image_url + { image_url:{ url } })
+    // ✅ format images pour chat.completions
     const content = [
       { role: "system", content: sys },
       {
@@ -1328,14 +1372,12 @@ app.post("/api/atex/assess", async (req, res) => {
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
-// 🔸 Alias legacy pour éviter les erreurs `is not a function` si front ancien
+// 🔸 Alias legacy
 app.post("/api/atex/analyzePhotoBatch", (req, res) => {
-  // redirige vers /extract
   req.url = "/api/atex/extract";
   return app._router.handle(req, res);
 });
 app.post("/api/atex/aiAnalyze", (req, res) => {
-  // redirige vers /assess
   req.url = "/api/atex/assess";
   return app._router.handle(req, res);
 });
