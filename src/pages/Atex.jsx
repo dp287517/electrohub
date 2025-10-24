@@ -59,7 +59,7 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
   console.log("[Atex.jsx] Exiting Select");
   return (
     <select
-      className=`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`
+      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
       value={value ?? ""}
       onChange={(e) => onChange?.(e.target.value)}
     >
@@ -89,7 +89,7 @@ function Badge({ color = "gray", children, className = "" }) {
   };
   console.log("[Atex.jsx] Exiting Badge");
   return (
-    <span className=`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`}>
       {children}
     </span>
   );
