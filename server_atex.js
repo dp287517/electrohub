@@ -327,7 +327,6 @@ app.get("/api/atex/equipments", async (req, res) => {
     const zone = (req.query.zone || "").toString().trim().toLowerCase();
     const compliance = (req.query.compliance || "").toString().trim(); // "conforme" | "non_conforme" | "na" | ""
 
-    // on remonte aussi le dernier "result" pour en déduire compliance_state
     const { rows } = await pool.query(
       `
       SELECT e.*,
@@ -378,19 +377,14 @@ app.get("/api/atex/equipments", async (req, res) => {
       };
     });
 
-    // Texte libre
     if (q) items = items.filter((it) => it.__hay.includes(q));
-    // Building / zone
     if (building) items = items.filter((it) => (it.building || "").toLowerCase().includes(building));
     if (zone) items = items.filter((it) => (it.zone || "").toLowerCase().includes(zone));
-    // Statut (calculé)
     if (statusFilter) items = items.filter((it) => it.status === statusFilter);
-    // Conformité (dérivée)
     if (compliance === "conforme") items = items.filter((it) => it.compliance_state === "conforme");
     if (compliance === "non_conforme") items = items.filter((it) => it.compliance_state === "non_conforme");
     if (compliance === "na") items = items.filter((it) => it.compliance_state === "na");
 
-    // cleanup
     items = items.map(({ __hay, ...x }) => x);
 
     res.json({ items });
@@ -775,20 +769,19 @@ app.post("/api/atex/maps/uploadZip", multerZip.single("zip"), async (req, res) =
   }
 });
 
+// ⚙️ listPlans => id = UUID de la dernière version
 app.get("/api/atex/maps/listPlans", async (_req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT a.logical_name,
-             MAX(a.version) AS version,
-             COALESCE(MAX(a.page_count),1) AS page_count,
-             (SELECT display_name FROM atex_plan_names n WHERE n.logical_name=a.logical_name LIMIT 1) AS display_name
-      FROM atex_plans a
-      GROUP BY a.logical_name
-      ORDER BY a.logical_name ASC
+      SELECT DISTINCT ON (p.logical_name)
+             p.id, p.logical_name, p.version, COALESCE(p.page_count,1) AS page_count,
+             (SELECT display_name FROM atex_plan_names n WHERE n.logical_name=p.logical_name LIMIT 1) AS display_name
+      FROM atex_plans p
+      ORDER BY p.logical_name, p.version DESC
     `);
     const plans = rows.map((r) => ({
+      id: r.id, // UUID
       logical_name: r.logical_name,
-      id: r.logical_name,
       version: Number(r.version || 1),
       page_count: Number(r.page_count || 1),
       display_name: r.display_name || r.logical_name,
@@ -998,6 +991,7 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// 🔧 Reindex (front l'appelle après modif des sous-zones)
 app.post("/api/atex/maps/reindexZones", async (req, res) => {
   try {
     const { logical_name, page_index = 0 } = req.body || {};
@@ -1021,11 +1015,23 @@ app.post("/api/atex/maps/reindexZones", async (req, res) => {
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
+// ✅ Positions — accepte id (UUID) OU logical_name
 app.get("/api/atex/maps/positions", async (req, res) => {
   try {
-    const logical = String(req.query.logical_name || "");
+    let logical = (req.query.logical_name || "").toString().trim();
+    const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
-    if (!logical) return res.status(400).json({ ok: false, error: "logical_name required" });
+
+    if (!logical && id) {
+      if (isUuid(id)) {
+        const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
+        logical = rows?.[0]?.logical_name || "";
+      } else {
+        // si "id" n'est pas un UUID, on le traite comme logical_name
+        logical = id;
+      }
+    }
+    if (!logical) return res.status(400).json({ ok: false, error: "logical_name or id required" });
 
     const { rows } = await pool.query(
       `
@@ -1052,11 +1058,24 @@ app.get("/api/atex/maps/positions", async (req, res) => {
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
 
-// Subareas
+// ✅ Subareas — accepte id (UUID) OU logical_name
 app.get("/api/atex/maps/subareas", async (req, res) => {
   try {
-    const logical = String(req.query.logical_name || "");
+    let logical = (req.query.logical_name || "").toString().trim();
+    const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
+
+    if (!logical && id) {
+      if (isUuid(id)) {
+        const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
+        logical = rows?.[0]?.logical_name || "";
+      } else {
+        logical = id;
+      }
+    }
+
+    if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
+
     const { rows } = await pool.query(
       `SELECT * FROM atex_subareas WHERE logical_name=$1 AND page_index=$2 ORDER BY created_at ASC`,
       [logical, pageIndex]
@@ -1064,11 +1083,24 @@ app.get("/api/atex/maps/subareas", async (req, res) => {
     res.json({ items: rows || [] });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.get("/api/atex/maps/subareas/stats", async (req, res) => {
   try {
-    const logical = String(req.query.logical_name || "");
+    let logical = (req.query.logical_name || "").toString().trim();
+    const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
-    if (!logical) return res.status(400).json({ ok:false, error:"logical_name required" });
+
+    if (!logical && id) {
+      if (isUuid(id)) {
+        const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
+        logical = rows?.[0]?.logical_name || "";
+      } else {
+        logical = id;
+      }
+    }
+
+    if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
+
     const { rows } = await pool.query(
       `SELECT COUNT(*)::int AS n FROM atex_subareas WHERE logical_name=$1 AND page_index=$2`,
       [logical, pageIndex]
@@ -1076,6 +1108,7 @@ app.get("/api/atex/maps/subareas/stats", async (req, res) => {
     res.json({ ok:true, count: rows?.[0]?.n ?? 0 });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.post("/api/atex/maps/subareas", async (req, res) => {
   try {
     const {
@@ -1111,6 +1144,7 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
     res.json({ ok:true, subarea: created, created: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.put("/api/atex/maps/subareas/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -1148,6 +1182,7 @@ app.put("/api/atex/maps/subareas/:id", async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -1180,6 +1215,7 @@ app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
     res.json({ ok:true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
   try { const id = String(req.params.id);
     await pool.query(`DELETE FROM atex_subareas WHERE id=$1`, [id]);
@@ -1187,11 +1223,24 @@ app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
     res.json({ ok:true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
+// ✅ purge — accepte id OU logical_name
 app.delete("/api/atex/maps/subareas/purge", async (req, res) => {
   try {
-    const logical = String(req.query.logical_name || "");
+    let logical = (req.query.logical_name || "").toString().trim();
+    const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
-    if (!logical) return res.status(400).json({ ok:false, error:"logical_name required" });
+
+    if (!logical && id) {
+      if (isUuid(id)) {
+        const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
+        logical = rows?.[0]?.logical_name || "";
+      } else {
+        logical = id;
+      }
+    }
+
+    if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
     if ((req.header("X-Confirm") || "").toLowerCase() !== "purge")
       return res.status(412).json({ ok:false, error:"missing confirmation header X-Confirm: purge" });
 
