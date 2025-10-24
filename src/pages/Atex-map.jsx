@@ -276,8 +276,11 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
   // Eviter reload/polling avant carte prête
   const readyRef = useRef(false);
-  // Déclenchement initial unique
+  // Déclenchement initial unique une fois imgSize prêt
   const firstPaintRef = useRef(false);
+
+  // ✅ nouvel indicateur: indexation faite pour ce plan/page
+  const indexedRef = useRef({ key: "", done: false });
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [positions, setPositions] = useState([]);
@@ -291,8 +294,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const [drawMenu, setDrawMenu] = useState(false);
   const [legendVisible, setLegendVisible] = useState(true);
 
-  const [zonesByEquip, setZonesByEquip] = useState(() => ({})); // { [equipmentId]: { zoning_gas, zoning_dust } }
-  const [subareasById, setSubareasById] = useState(() => ({})); // cache id -> subarea
+  const [zonesByEquip, setZonesByEquip] = useState(() => ({}));
+  const [subareasById, setSubareasById] = useState(() => ({}));
 
   const editHandlesLayerRef = useRef(null);
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
@@ -358,6 +361,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       editHandlesLayerRef.current = null;
       readyRef.current = false;
       firstPaintRef.current = false;
+      indexedRef.current = { key: "", done: false };
     };
 
     (async () => {
@@ -429,7 +433,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onResize);
 
-        // ✅ Observe la taille réelle du conteneur (affichage, dock, split…)
         try {
           roRef.current = new ResizeObserver(() => { forceRedraw(); });
           roRef.current.observe(wrapRef.current);
@@ -437,16 +440,13 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
         mapRef.current = m;
 
-        // Forcer la prise en compte de la taille (plusieurs passes)
         requestAnimationFrame(() => forceRedraw());
         setTimeout(() => forceRedraw(), 80);
 
-        // Déclenchement initial robuste : au load du fond ET quand la map est "ready"
         const kickstart = async () => {
           if (cancelled || readyRef.current) return;
           readyRef.current = true;
           forceRedraw();
-          // 🔥 Premier rendu tout de suite, fini le "rien ne s'affiche"
           if (!firstPaintRef.current) {
             firstPaintRef.current = true;
             const end = timeStart("reloadAll [firstPaint]");
@@ -465,11 +465,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       }
     })();
 
-    return () => { cancelled = true; cleanupMap(); };
-    // IMPORTANT: ne pas dépendre de legendVisible ici
+    return () => { cleanupMap(); };
   }, [fileUrl, pageIndex]);
 
-  // (Garde-fou si jamais l'image est déjà en cache et que l'event 'load' ne déclenche pas)
+  // 🔁 Première peinture de secours si l'image était déjà en cache
   useEffect(() => {
     if (!mapRef.current) return;
     if (!readyRef.current) return;
@@ -482,11 +481,34 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     })();
   }, [imgSize.w, imgSize.h, planKey, pageIndex]);
 
-  /* ----------------------------- Chargements ----------------------------- */
+  /* ----------------------------- Chargements + INDEX ----------------------------- */
+  async function ensureIndexedOnce() {
+    const key = `${plan?.logical_name || ""}::${pageIndex}`;
+    if (!key) return;
+    if (indexedRef.current.key !== key) {
+      indexedRef.current = { key, done: false };
+    }
+    if (indexedRef.current.done) return;
+
+    try {
+      log("reindexZones [once] start", { key });
+      await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
+      indexedRef.current.done = true;
+      log("reindexZones [once] done", { key });
+    } catch (e) {
+      // on ne bloque pas l'affichage si l'API n'existe pas
+      log("reindexZones [once] error (ignored)", { error: String(e) }, "warn");
+      indexedRef.current.done = true; // éviter de spammer
+    }
+  }
+
   async function reloadAll() {
     const end = timeStart("reloadAll");
     try {
-      await Promise.all([loadPositions(), loadSubareas()]);
+      await ensureIndexedOnce();
+      // Important: subareas avant positions (les positions utilisent les zones renvoyées)
+      await loadSubareas();
+      await loadPositions();
       forceRedraw();
     } finally { end(); }
   }
@@ -626,7 +648,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     }
   }
 
-  // ✅ Création d’un équipement au centre
+  // Création au centre
   async function createEquipmentAtCenter() {
     if (!plan) return;
     const end = timeStart("createEquipmentAtCenter");
@@ -662,7 +684,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       }
 
       setUnsavedIds((prev) => new Set(prev).add(id));
-      await loadPositions();
+      await reloadAll(); // recharge tout (positions + zones)
       onOpenEquipment?.({ id, name: created?.equipment?.name || created?.name || "Équipement" });
     } catch (e) {
       console.error(e); // eslint-disable-line no-console
@@ -726,7 +748,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
                 catch (e) { log("onZonesApplied(dragend) error", { error: String(e) }, "warn"); }
               }
             }
-            await loadPositions();
+            await reloadAll();
           } catch (e) {
             console.error("[ATEX] setPosition error", e); // eslint-disable-line no-console
           }
@@ -928,10 +950,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       clearEditHandles();
-      await loadSubareas();
-      try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); }
-      catch (e) { log("reindexZones error (post-edit)", { error: String(e) }, "warn"); }
-      await loadPositions();
+      await reloadAll();
     } catch (e) {
       console.error("[ATEX] saveGeomEdit error", e); // eslint-disable-line no-console
     } finally { end(); }
@@ -1098,10 +1117,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
             alert("Erreur création zone");
           } finally {
             try { tempLayer && m.removeLayer(tempLayer); } catch {}
-            await loadSubareas();
-            try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); }
-            catch (e) { log("reindexZones error (after create)", { error: String(e) }, "warn"); }
-            await loadPositions();
+            await reloadAll();
             end();
           }
         },
@@ -1159,10 +1175,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       log("createSubarea(poly) payload", { points: polyTemp.length });
       await api.atexMaps.createSubarea(payload);
       setPolyTemp([]);
-      await loadSubareas();
-      try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); }
-      catch (e) { log("reindexZones error (after poly)", { error: String(e) }, "warn"); }
-      await loadPositions();
+      await reloadAll();
     } finally { end(); }
   }
 
@@ -1186,11 +1199,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         const payload = { name: meta.name, zoning_gas: meta.zoning_gas, zoning_dust: meta.zoning_dust };
         log("updateSubarea(meta) payload", payload);
         await api.atexMaps.updateSubarea(editorPos.shapeId, payload);
-        await loadSubareas();
         setEditorPos(null);
-        try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); }
-        catch (e) { log("reindexZones error (after meta update)", { error: String(e) }, "warn"); }
-        await loadPositions();
+        await reloadAll();
       }
     } finally { end(); }
   }
@@ -1201,11 +1211,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       const ok = window.confirm("Supprimer cette sous-zone ?");
       if (!ok) return;
       await api.atexMaps.deleteSubarea(editorPos.shapeId);
-      await loadSubareas();
-      try { await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex); }
-      catch (e) { log("reindexZones error (after delete)", { error: String(e) }, "warn"); }
-      await loadPositions();
       setEditorPos(null);
+      await reloadAll();
     } finally { end(); }
   }
 
