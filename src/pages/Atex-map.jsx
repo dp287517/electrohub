@@ -265,7 +265,6 @@ function addLegendControl(map) {
 }
 
 /* ------------------------------- Composant map ------------------------------- */
-// ⬇️ Ajout du callback onZonesApplied (optionnel)
 export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesApplied }) {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
@@ -288,6 +287,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
   const [zonesByEquip, setZonesByEquip] = useState(() => ({})); // { [equipmentId]: { zoning_gas, zoning_dust } }
 
+  // ⚠️ NEW: cache des sous-zones par id => name
+  const [subareasById, setSubareasById] = useState(() => ({})); // { [subareaId]: { name, ... } }
+
   // édition géométrie
   const editHandlesLayerRef = useRef(null);
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
@@ -296,6 +298,13 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const [hud, setHud] = useState({ zoom: 0, mouse: { x: 0, y: 0, xf: 0, yf: 0 }, panes: {} });
 
   const planKey = useMemo(() => plan?.logical_name || plan?.id || "", [plan]);
+
+  // Nom d’affichage du plan (macro)
+  const planDisplayName = useMemo(
+    () => (plan?.display_name || plan?.logical_name || plan?.id || "").toString(),
+    [plan]
+  );
+
   const fileUrl = useMemo(() => {
     if (!plan) return null;
     if (api?.atexMaps?.planFileUrlAuto) return api.atexMaps.planFileUrlAuto(plan, { bust: true });
@@ -521,7 +530,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         return next;
       });
 
-      // ⬇️ NEW: informe le parent des zonages courants (utile après reindex)
       if (typeof onZonesApplied === "function") {
         try {
           list.forEach((it) => {
@@ -551,12 +559,36 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         return { items: [] };
       });
       const items = Array.isArray(r?.items) ? r.items : [];
+
+      // ⚠️ NEW: construire le cache id -> subarea
+      const byId = {};
+      for (const sa of items) if (sa?.id) byId[sa.id] = sa;
+      setSubareasById(byId);
+
       drawSubareas(items);
       log("subareas drawn", { count: items.length });
     } catch (e) {
       console.error("[ATEX] loadSubareas error", e); // eslint-disable-line no-console
+      setSubareasById({});
       drawSubareas([]);
     } finally { end(); }
+  }
+
+  /* ----------------------------- Helpers MAJ macro/sub ----------------------------- */
+  async function updateEquipmentMacroAndSub(equipmentId, subareaId) {
+    try {
+      const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
+      const patch = {
+        // "Équipement (macro)" = nom du plan d'affichage (ex: CP-BECOMIX-PID-001)
+        equipment: planDisplayName || "",
+        // "Sous-Équipement (depuis zones tracées)" = nom de la forme
+        sub_equipment: subName || "",
+      };
+      log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
+      await api.atex.updateEquipment(equipmentId, patch);
+    } catch (e) {
+      log("updateEquipmentMacroAndSub error", { error: String(e) }, "warn");
+    }
   }
 
   /* ----------------------------- Markers équipements ----------------------------- */
@@ -606,7 +638,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
                   zoning_dust: resp.zones?.zoning_dust ?? null,
                 },
               }));
-              // ⬇️ NEW: informe immédiatement le parent pour MAJ des champs
+              // ✅ MAJ fiche: equipment (macro) + sub_equipment (nom forme)
+              await updateEquipmentMacroAndSub(p.id, resp.zones?.subarea_id || null);
+
+              // callback parent
               if (typeof onZonesApplied === "function") {
                 try { onZonesApplied(p.id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); }
                 catch (e) { log("onZonesApplied(dragend) error", { error: String(e) }, "warn"); }
@@ -661,7 +696,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
             zoning_dust: resp.zones?.zoning_dust ?? null,
           },
         }));
-        // ⬇️ NEW: informe le parent pour affichage immédiat
+        // ✅ MAJ fiche: equipment (macro) + sub_equipment dès la création
+        await updateEquipmentMacroAndSub(id, resp.zones?.subarea_id || null);
+
+        // callback parent pour affichage immédiat
         if (typeof onZonesApplied === "function") {
           try { onZonesApplied(id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); }
           catch (e) { log("onZonesApplied(new) error", { error: String(e) }, "warn"); }
