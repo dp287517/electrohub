@@ -276,7 +276,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
   // Eviter reload/polling avant carte prête
   const readyRef = useRef(false);
-  // Déclenchement initial unique une fois imgSize prêt
+  // Déclenchement initial unique
   const firstPaintRef = useRef(false);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -446,7 +446,12 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
           if (cancelled || readyRef.current) return;
           readyRef.current = true;
           forceRedraw();
-          // Ne pas lancer reloadAll ici si imgSize n'est pas encore reflété -> l'effet ci-dessous s'en charge
+          // 🔥 Premier rendu tout de suite, fini le "rien ne s'affiche"
+          if (!firstPaintRef.current) {
+            firstPaintRef.current = true;
+            const end = timeStart("reloadAll [firstPaint]");
+            try { await reloadAll(); } finally { end(); forceRedraw(); }
+          }
         };
         base.once("load", kickstart);
         m.whenReady(() => setTimeout(kickstart, 0));
@@ -464,7 +469,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     // IMPORTANT: ne pas dépendre de legendVisible ici
   }, [fileUrl, pageIndex]);
 
-  // 🔁 Première peinture garantie quand la carte est prête ET qu'on connaît la taille image
+  // (Garde-fou si jamais l'image est déjà en cache et que l'event 'load' ne déclenche pas)
   useEffect(() => {
     if (!mapRef.current) return;
     if (!readyRef.current) return;
@@ -472,7 +477,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     if (firstPaintRef.current) return;
     firstPaintRef.current = true;
     (async () => {
-      const end = timeStart("reloadAll [firstPaint]");
+      const end = timeStart("reloadAll [firstPaint-fallback]");
       try { await reloadAll(); } finally { end(); forceRedraw(); }
     })();
   }, [imgSize.w, imgSize.h, planKey, pageIndex]);
@@ -606,7 +611,22 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     } finally { end(); }
   }
 
-  // ✅ Restauré : création d’un équipement au centre, + MAJ zones/macro/sub
+  /* ----------------------- MAJ macro/sub sur l’équipement ----------------------- */
+  async function updateEquipmentMacroAndSub(equipmentId, subareaId) {
+    try {
+      const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
+      const patch = {
+        equipment: planDisplayName || "",
+        sub_equipment: subName || "",
+      };
+      log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
+      await api.atex.updateEquipment(equipmentId, patch);
+    } catch (e) {
+      log("updateEquipmentMacroAndSub error", { error: String(e) }, "warn");
+    }
+  }
+
+  // ✅ Création d’un équipement au centre
   async function createEquipmentAtCenter() {
     if (!plan) return;
     const end = timeStart("createEquipmentAtCenter");
@@ -996,7 +1016,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     else if (mode === "poly") { setPolyTemp([]); setDrawing(DRAW_POLY); }
     else setDrawing(DRAW_NONE);
   }
-  const onAddEquipment = () => createEquipmentAtCenter();
 
   useEffect(() => {
     const m = mapRef.current;
