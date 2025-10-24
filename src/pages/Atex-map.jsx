@@ -282,6 +282,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   // ✅ nouvel indicateur: indexation faite pour ce plan/page
   const indexedRef = useRef({ key: "", done: false });
 
+  // 🔒 Verrou/coalescing reloadAll
+  const reloadingRef = useRef(false);
+  const rerunRef = useRef(false);
+
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [positions, setPositions] = useState([]);
   const [unsavedIds, setUnsavedIds] = useState(() => new Set());
@@ -325,16 +329,18 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     try { markersLayerRef.current?.bringToFront?.(); } catch {}
   };
 
-  // --- Polling léger (protégé par readyRef)
+  // --- Polling léger (protégé, single instance, no overlap)
+  const pollRef = useRef(null);
   useEffect(() => {
     if (!planKey) return;
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     const tick = async () => {
-      if (!readyRef.current) return;
+      if (!readyRef.current || reloadingRef.current) return;
       const end = timeStart("reloadAll [poll]");
       try { await reloadAll(); } finally { end(); }
     };
-    const t = setInterval(tick, 15000);
-    return () => clearInterval(t);
+    pollRef.current = setInterval(tick, 15000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); pollRef.current = null; };
   }, [planKey, pageIndex]);
 
   // --- Init map + render PDF
@@ -491,10 +497,14 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     if (indexedRef.current.done) return;
 
     try {
-      log("reindexZones [once] start", { key });
-      await api.atexMaps.reindexZones?.(plan?.logical_name, pageIndex);
+      if (plan?.logical_name) {
+        log("reindexZones [once] start", { key });
+        await api.atexMaps.reindexZones?.(plan.logical_name, pageIndex);
+        log("reindexZones [once] done", { key });
+      } else {
+        log("reindexZones skipped (no logical_name)", { key });
+      }
       indexedRef.current.done = true;
-      log("reindexZones [once] done", { key });
     } catch (e) {
       // on ne bloque pas l'affichage si l'API n'existe pas
       log("reindexZones [once] error (ignored)", { error: String(e) }, "warn");
@@ -503,14 +513,28 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   }
 
   async function reloadAll() {
-    const end = timeStart("reloadAll");
+    const endOuter = timeStart("reloadAll");
     try {
-      await ensureIndexedOnce();
-      // Important: subareas avant positions (les positions utilisent les zones renvoyées)
-      await loadSubareas();
-      await loadPositions();
-      forceRedraw();
-    } finally { end(); }
+      if (reloadingRef.current) {
+        rerunRef.current = true; // coalesce une passe supplémentaire
+        return;
+      }
+      reloadingRef.current = true;
+      do {
+        rerunRef.current = false;
+        const end = timeStart("reloadAll[pass]");
+        try {
+          await ensureIndexedOnce();
+          // Important: subareas avant positions (les positions utilisent les zones renvoyées)
+          await loadSubareas();
+          await loadPositions();
+          forceRedraw();
+        } finally { end(); }
+      } while (rerunRef.current);
+    } finally {
+      reloadingRef.current = false;
+      endOuter();
+    }
   }
 
   async function enrichStatuses(list) {
