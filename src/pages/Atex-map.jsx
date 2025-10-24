@@ -273,6 +273,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const subareasLayerRef = useRef(null);
   const legendRef = useRef(null);
 
+  // NEW: garde pour éviter reload/polling avant que la carte soit prête
+  const readyRef = useRef(false);
+
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [positions, setPositions] = useState([]);
   const [unsavedIds, setUnsavedIds] = useState(() => new Set());
@@ -297,7 +300,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   // debug HUD
   const [hud, setHud] = useState({ zoom: 0, mouse: { x: 0, y: 0, xf: 0, yf: 0 }, panes: {} });
 
-  const planKey = useMemo(() => plan?.logical_name || plan?.id || "", [plan]);
+  const planKey = useMemo(() => plan?.id || plan?.logical_name || "", [plan]);
 
   // Nom d’affichage du plan (macro)
   const planDisplayName = useMemo(
@@ -312,10 +315,11 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     return null;
   }, [plan]);
 
-  // --- Polling léger
+  // --- Polling léger (protégé par readyRef)
   useEffect(() => {
     if (!planKey) return;
     const tick = async () => {
+      if (!readyRef.current) return; // 👈 évite un reload avant que la map/layers soient prêts
       const end = timeStart("reloadAll [poll]");
       try { await reloadAll(); } finally { end(); }
     };
@@ -344,6 +348,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       subareasLayerRef.current = null;
       legendRef.current = null;
       editHandlesLayerRef.current = null;
+      readyRef.current = false; // reset readiness on teardown
     };
 
     (async () => {
@@ -427,6 +432,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         }
 
         mapRef.current = m;
+
+        // ✅ la carte et les calques existent -> autorise le polling/reload
+        readyRef.current = true;
 
         const endReload = timeStart("initial reloadAll");
         await reloadAll();
