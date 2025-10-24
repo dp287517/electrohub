@@ -401,7 +401,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         } catch {}
 
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-        baseLayerRef.current = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
+        const base = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
+        baseLayerRef.current = base;
+
         m.fitBounds(bounds, { padding: [10, 10] });
         const fitZoom = m.getZoom();
         m.setMinZoom(fitZoom - 2);
@@ -418,27 +420,20 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onResize);
 
-        if (DEBUG()) {
-          setHud({
-            zoom: m.getZoom(),
-            mouse: { x: 0, y: 0, xf: 0, yf: 0 },
-            panes: {
-              basePane: m.getPane("basePane")?.style?.zIndex,
-              zonesPane: m.getPane("zonesPane")?.style?.zIndex,
-              markersPane: m.getPane("markersPane")?.style?.zIndex,
-              editPane: m.getPane("editPane")?.style?.zIndex,
-            },
-          });
-        }
-
         mapRef.current = m;
 
-        // ✅ la carte et les calques existent -> autorise le polling/reload
-        readyRef.current = true;
+        // Forcer un recalcul de taille juste après mount (RAF + petit délai)
+        requestAnimationFrame(() => { try { m.invalidateSize(true); } catch {} });
+        setTimeout(() => { try { m.invalidateSize(true); } catch {} }, 60);
 
-        const endReload = timeStart("initial reloadAll");
-        await reloadAll();
-        endReload();
+        // ⚠️ Ne pas déclencher reloadAll tant que le fond n'est pas chargé
+        base.once("load", async () => {
+          if (cancelled) return;
+          try { m.invalidateSize(true); } catch {}
+          readyRef.current = true;
+          const endReload = timeStart("initial reloadAll");
+          try { await reloadAll(); } finally { endReload(); }
+        });
 
         await pdf.cleanup?.();
         log("init complete");
@@ -450,8 +445,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     })();
 
     return () => { cancelled = true; cleanupMap(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileUrl, pageIndex, legendVisible]);
+    // ⛔ IMPORTANT: on retire legendVisible pour ne pas réinitialiser la map à chaque toggle
+  }, [fileUrl, pageIndex]);
 
   /* ----------------------------- Chargements ----------------------------- */
   async function reloadAll() {
