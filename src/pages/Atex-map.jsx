@@ -272,8 +272,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const markersLayerRef = useRef(null);
   const subareasLayerRef = useRef(null);
   const legendRef = useRef(null);
+  const roRef = useRef(null); // ResizeObserver
 
-  // NEW: garde pour éviter reload/polling avant que la carte soit prête
+  // Eviter reload/polling avant carte prête
   const readyRef = useRef(false);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
@@ -289,20 +290,14 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const [legendVisible, setLegendVisible] = useState(true);
 
   const [zonesByEquip, setZonesByEquip] = useState(() => ({})); // { [equipmentId]: { zoning_gas, zoning_dust } }
+  const [subareasById, setSubareasById] = useState(() => ({})); // cache id -> subarea
 
-  // ⚠️ NEW: cache des sous-zones par id => name
-  const [subareasById, setSubareasById] = useState(() => ({})); // { [subareaId]: { name, ... } }
-
-  // édition géométrie
   const editHandlesLayerRef = useRef(null);
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
 
-  // debug HUD
   const [hud, setHud] = useState({ zoom: 0, mouse: { x: 0, y: 0, xf: 0, yf: 0 }, panes: {} });
 
   const planKey = useMemo(() => plan?.id || plan?.logical_name || "", [plan]);
-
-  // Nom d’affichage du plan (macro)
   const planDisplayName = useMemo(
     () => (plan?.display_name || plan?.logical_name || plan?.id || "").toString(),
     [plan]
@@ -315,11 +310,21 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     return null;
   }, [plan]);
 
+  // Petite utilité pour forcer Leaflet à tout rafraîchir proprement
+  const forceRedraw = () => {
+    const m = mapRef.current;
+    if (!m) return;
+    try { m.invalidateSize(true); } catch {}
+    try { baseLayerRef.current?.redraw?.(); } catch {}
+    try { subareasLayerRef.current?.bringToFront?.(); } catch {}
+    try { markersLayerRef.current?.bringToFront?.(); } catch {}
+  };
+
   // --- Polling léger (protégé par readyRef)
   useEffect(() => {
     if (!planKey) return;
     const tick = async () => {
-      if (!readyRef.current) return; // 👈 évite un reload avant que la map/layers soient prêts
+      if (!readyRef.current) return;
       const end = timeStart("reloadAll [poll]");
       try { await reloadAll(); } finally { end(); }
     };
@@ -335,6 +340,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     let onResize;
     const cleanupMap = () => {
       const m = mapRef.current;
+      try { roRef.current?.disconnect?.(); } catch {}
       try { window.removeEventListener("resize", onResize); } catch {}
       try { window.removeEventListener("orientationchange", onResize); } catch {}
       if (!m) return;
@@ -348,7 +354,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       subareasLayerRef.current = null;
       legendRef.current = null;
       editHandlesLayerRef.current = null;
-      readyRef.current = false; // reset readiness on teardown
+      readyRef.current = false;
     };
 
     (async () => {
@@ -420,20 +426,28 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         window.addEventListener("resize", onResize);
         window.addEventListener("orientationchange", onResize);
 
+        // ✅ Observe la taille réelle du conteneur (affichage, dock, split…)
+        try {
+          roRef.current = new ResizeObserver(() => { forceRedraw(); });
+          roRef.current.observe(wrapRef.current);
+        } catch {}
+
         mapRef.current = m;
 
-        // Forcer un recalcul de taille juste après mount (RAF + petit délai)
-        requestAnimationFrame(() => { try { m.invalidateSize(true); } catch {} });
-        setTimeout(() => { try { m.invalidateSize(true); } catch {} }, 60);
+        // Forcer la prise en compte de la taille (plusieurs passes)
+        requestAnimationFrame(() => forceRedraw());
+        setTimeout(() => forceRedraw(), 80);
 
-        // ⚠️ Ne pas déclencher reloadAll tant que le fond n'est pas chargé
-        base.once("load", async () => {
-          if (cancelled) return;
-          try { m.invalidateSize(true); } catch {}
+        // Déclenchement initial robuste : au load du fond ET quand la map est "ready"
+        const kickstart = async () => {
+          if (cancelled || readyRef.current) return;
           readyRef.current = true;
+          forceRedraw();
           const endReload = timeStart("initial reloadAll");
           try { await reloadAll(); } finally { endReload(); }
-        });
+        };
+        base.once("load", kickstart);
+        m.whenReady(() => setTimeout(kickstart, 0));
 
         await pdf.cleanup?.();
         log("init complete");
@@ -445,7 +459,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     })();
 
     return () => { cancelled = true; cleanupMap(); };
-    // ⛔ IMPORTANT: on retire legendVisible pour ne pas réinitialiser la map à chaque toggle
+    // IMPORTANT: ne pas dépendre de legendVisible ici
   }, [fileUrl, pageIndex]);
 
   /* ----------------------------- Chargements ----------------------------- */
@@ -453,6 +467,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     const end = timeStart("reloadAll");
     try {
       await Promise.all([loadPositions(), loadSubareas()]);
+      forceRedraw();
     } finally { end(); }
   }
 
@@ -563,7 +578,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       });
       const items = Array.isArray(r?.items) ? r.items : [];
 
-      // ⚠️ NEW: construire le cache id -> subarea
       const byId = {};
       for (const sa of items) if (sa?.id) byId[sa.id] = sa;
       setSubareasById(byId);
@@ -577,14 +591,11 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     } finally { end(); }
   }
 
-  /* ----------------------------- Helpers MAJ macro/sub ----------------------------- */
   async function updateEquipmentMacroAndSub(equipmentId, subareaId) {
     try {
       const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
       const patch = {
-        // "Équipement (macro)" = nom du plan d'affichage (ex: CP-BECOMIX-PID-001)
         equipment: planDisplayName || "",
-        // "Sous-Équipement (depuis zones tracées)" = nom de la forme
         sub_equipment: subName || "",
       };
       log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
@@ -641,10 +652,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
                   zoning_dust: resp.zones?.zoning_dust ?? null,
                 },
               }));
-              // ✅ MAJ fiche: equipment (macro) + sub_equipment (nom forme)
               await updateEquipmentMacroAndSub(p.id, resp.zones?.subarea_id || null);
-
-              // callback parent
               if (typeof onZonesApplied === "function") {
                 try { onZonesApplied(p.id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); }
                 catch (e) { log("onZonesApplied(dragend) error", { error: String(e) }, "warn"); }
@@ -670,55 +678,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
         mk.addTo(layer);
       });
+
+      layer.bringToFront?.();
+      forceRedraw();
     } finally { end(); }
-  }
-
-  async function createEquipmentAtCenter() {
-    if (!plan) return;
-    const end = timeStart("createEquipmentAtCenter");
-    setLoading(true);
-    try {
-      const created = await api.atex.createEquipment({ name: "", status: "a_faire" });
-      const id = created?.id || created?.equipment?.id;
-      if (!id) throw new Error("Création ATEX: ID manquant");
-
-      const resp = await api.atexMaps.setPosition(id, {
-        logical_name: plan.logical_name,
-        plan_id: plan.id,
-        page_index: pageIndex,
-        x_frac: 0.5,
-        y_frac: 0.5,
-      });
-      log("setPosition (new equip) response", { raw: safeJson(resp) });
-
-      if (resp?.zones) {
-        setZonesByEquip((prev) => ({
-          ...prev,
-          [id]: {
-            zoning_gas: resp.zones?.zoning_gas ?? null,
-            zoning_dust: resp.zones?.zoning_dust ?? null,
-          },
-        }));
-        // ✅ MAJ fiche: equipment (macro) + sub_equipment dès la création
-        await updateEquipmentMacroAndSub(id, resp.zones?.subarea_id || null);
-
-        // callback parent pour affichage immédiat
-        if (typeof onZonesApplied === "function") {
-          try { onZonesApplied(id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); }
-          catch (e) { log("onZonesApplied(new) error", { error: String(e) }, "warn"); }
-        }
-      }
-
-      setUnsavedIds((prev) => new Set(prev).add(id));
-      await loadPositions();
-      onOpenEquipment?.({ id, name: created?.equipment?.name || created?.name || "Équipement" });
-    } catch (e) {
-      console.error(e); // eslint-disable-line no-console
-      alert("Erreur création équipement");
-    } finally {
-      setLoading(false);
-      end();
-    }
   }
 
   /* ----------------------------- Subareas (zones) ----------------------------- */
@@ -970,6 +933,10 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
           }
         }
       });
+
+      g.bringToFront?.();
+      markersLayerRef.current?.bringToFront?.();
+      forceRedraw();
     } finally { end(); }
   }
 
@@ -1186,6 +1153,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       const next = !v;
       const el = legendRef.current?.getContainer?.();
       if (el) el.style.display = next ? "block" : "none";
+      // Pas de re-init map ici
       return next;
     });
   };
@@ -1234,6 +1202,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
               m.setZoom(m.getZoom() - 1);
               setTimeout(() => m.scrollWheelZoom?.enable(), 60);
               log("adjust view", { fitZoom, finalZoom: m.getZoom() });
+              forceRedraw();
             }}
           >
             🗺️
