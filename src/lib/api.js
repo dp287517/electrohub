@@ -571,7 +571,7 @@ export const api = {
       // backend lit par logical_name (avec index)
       return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
     },
-    // setPosition (POST ou PUT côté backend, on utilise POST alias)
+    // setPosition (POST alias)
     setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
       post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }),
 
