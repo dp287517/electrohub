@@ -11,6 +11,7 @@ import AtexMap from "./Atex-map.jsx";
 
 /* ----------------------------- Utils ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
+  console.log("[Atex.jsx] Entering Btn");
   const map = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
     ghost: "bg-white text-black border hover:bg-gray-50",
@@ -19,6 +20,7 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
     subtle: "bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100",
     warn: "bg-amber-500 text-white hover:bg-amber-600",
   };
+  console.log("[Atex.jsx] Exiting Btn");
   return (
     <button
       className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`}
@@ -29,6 +31,8 @@ function Btn({ children, variant = "primary", className = "", ...p }) {
   );
 }
 function Input({ value, onChange, className = "", ...p }) {
+  console.log("[Atex.jsx] Entering Input");
+  console.log("[Atex.jsx] Exiting Input");
   return (
     <input
       className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black placeholder-black ${className}`}
@@ -39,9 +43,11 @@ function Input({ value, onChange, className = "", ...p }) {
   );
 }
 function Textarea({ value, onChange, className = "", ...p }) {
+  console.log("[Atex.jsx] Entering Textarea");
+  console.log("[Atex.jsx] Exiting Textarea");
   return (
     <textarea
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      className=`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`
       value={value ?? ""}
       onChange={(e) => onChange?.(e.target.value)}
       {...p}
@@ -49,9 +55,11 @@ function Textarea({ value, onChange, className = "", ...p }) {
   );
 }
 function Select({ value, onChange, options = [], className = "", placeholder }) {
+  console.log("[Atex.jsx] Entering Select");
+  console.log("[Atex.jsx] Exiting Select");
   return (
     <select
-      className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`}
+      className=`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-blue-100 bg-white text-black ${className}`
       value={value ?? ""}
       onChange={(e) => onChange?.(e.target.value)}
     >
@@ -71,6 +79,7 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
   );
 }
 function Badge({ color = "gray", children, className = "" }) {
+  console.log("[Atex.jsx] Entering Badge");
   const map = {
     gray: "bg-gray-100 text-gray-700",
     green: "bg-emerald-100 text-emerald-700",
@@ -78,13 +87,16 @@ function Badge({ color = "gray", children, className = "" }) {
     red: "bg-rose-100 text-rose-700",
     blue: "bg-blue-100 text-blue-700",
   };
+  console.log("[Atex.jsx] Exiting Badge");
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`}>
+    <span className=`px-2 py-0.5 rounded-full text-xs font-semibold ${map[color] || map.gray} ${className}`>
       {children}
     </span>
   );
 }
 function Labeled({ label, children }) {
+  console.log("[Atex.jsx] Entering Labeled");
+  console.log("[Atex.jsx] Exiting Labeled");
   return (
     <label className="text-sm space-y-1">
       <div className="text-gray-600">{label}</div>
@@ -93,6 +105,7 @@ function Labeled({ label, children }) {
   );
 }
 function Drawer({ title, children, onClose }) {
+  console.log("[Atex.jsx] Entering Drawer");
   useEffect(() => {
     const handler = (e) => {
       if (e.key === "Escape") onClose?.();
@@ -100,6 +113,7 @@ function Drawer({ title, children, onClose }) {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
+  console.log("[Atex.jsx] Exiting Drawer");
   return (
     <div className="fixed inset-0 z-[6000]">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
@@ -114,12 +128,14 @@ function Drawer({ title, children, onClose }) {
   );
 }
 function Toast({ text, onClose }) {
+  console.log("[Atex.jsx] Entering Toast");
   useEffect(() => {
     if (!text) return;
     const t = setTimeout(() => onClose?.(), 4000);
     return () => clearTimeout(t);
   }, [text, onClose]);
   if (!text) return null;
+  console.log("[Atex.jsx] Exiting Toast");
   return (
     <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2000]">
       <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>
@@ -129,8 +145,10 @@ function Toast({ text, onClose }) {
 
 /* ---- Dates pour <input type="date"> ---- */
 function asDateInput(v) {
+  console.log("[Atex.jsx] Entering asDateInput");
   if (!v) return "";
   const d = dayjs(v);
+  console.log("[Atex.jsx] Exiting asDateInput");
   return d.isValid() ? d.format("YYYY-MM-DD") : "";
 }
 
@@ -142,23 +160,29 @@ const STATUS = {
   FAIT: "fait",
 };
 function statusColor(s) {
+  console.log("[Atex.jsx] Entering statusColor");
   if (s === STATUS.A_FAIRE) return "green";
   if (s === STATUS.EN_COURS) return "orange";
   if (s === STATUS.EN_RETARD) return "red";
   if (s === STATUS.FAIT) return "blue";
+  console.log("[Atex.jsx] Exiting statusColor");
   return "gray";
 }
 function statusLabel(s) {
+  console.log("[Atex.jsx] Entering statusLabel");
   if (s === STATUS.A_FAIRE) return "À faire";
   if (s === STATUS.EN_COURS) return "En cours (<30j)";
   if (s === STATUS.EN_RETARD) return "En retard";
   if (s === STATUS.FAIT) return "Fait";
+  console.log("[Atex.jsx] Exiting statusLabel");
   return s || "—";
 }
 
 /* ----------------------------- Mini calendrier ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
+  console.log("[Atex.jsx] Entering MonthCalendar");
   const [cursor, setCursor] = useState(() => dayjs().startOf("month"));
+  console.log("[Atex.jsx] State change in MonthCalendar: " + JSON.stringify(arguments));
   const start = cursor.startOf("week");
   const end = cursor.endOf("month").endOf("week");
   const days = [];
@@ -174,6 +198,7 @@ function MonthCalendar({ events = [], onDayClick }) {
     arr.push(e);
     map.set(k, arr);
   }
+  console.log("[Atex.jsx] Exiting MonthCalendar");
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
@@ -219,42 +244,54 @@ function MonthCalendar({ events = [], onDayClick }) {
 
 /* ----------------------------- Page principale ATEX ----------------------------- */
 export default function Atex() {
+  console.log("[Atex.jsx] Entering Atex");
   // Onglets
   const [tab, setTab] = useState("controls");
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   // Liste équipements
   const [items, setItems] = useState([]);
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [loading, setLoading] = useState(false);
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [q, setQ] = useState("");
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [status, setStatus] = useState("");
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [building, setBuilding] = useState("");
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [zone, setZone] = useState("");
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [compliance, setCompliance] = useState("");
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   // Édition
   const [drawerOpen, setDrawerOpen] = useState(false);
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [editing, setEditing] = useState(null);
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   // PJ list
   const [files, setFiles] = useState([]);
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   // Calendrier
   const [calendar, setCalendar] = useState({ events: [] });
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   // Toast
   const [toast, setToast] = useState("");
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   // Plans
   const [plans, setPlans] = useState([]);
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [mapsLoading, setMapsLoading] = useState(false);
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   const [selectedPlan, setSelectedPlan] = useState(null);
-
+  console.log("[Atex.jsx] State change in Atex: " + JSON.stringify(arguments));
   /* ----------------------------- Helpers ----------------------------- */
   async function reload() {
+    console.log("[Atex.jsx] Entering reload");
     setLoading(true);
+    console.log("[Atex.jsx] State change in reload: " + JSON.stringify(arguments));
     try {
       const res = await api.atex.listEquipments({
         q,
@@ -263,20 +300,28 @@ export default function Atex() {
         zone,
         compliance,
       });
+      console.log("[Atex.jsx] API call in reload: " + JSON.stringify(this));
       setItems(Array.isArray(res?.items) ? res.items : []);
+      console.log("[Atex.jsx] State change in reload: " + JSON.stringify(arguments));
     } catch (e) {
       console.error(e);
       setItems([]);
+      console.log("[Atex.jsx] State change in reload: " + JSON.stringify(arguments));
     } finally {
       setLoading(false);
+      console.log("[Atex.jsx] State change in reload: " + JSON.stringify(arguments));
     }
+    console.log("[Atex.jsx] Exiting reload");
   }
 
   async function reloadCalendar() {
+    console.log("[Atex.jsx] Entering reloadCalendar");
     try {
       const cal = await api.atex.calendar?.();
+      console.log("[Atex.jsx] API call in reloadCalendar: " + JSON.stringify(this));
       if (Array.isArray(cal?.events)) {
         setCalendar({ events: cal.events });
+        console.log("[Atex.jsx] State change in reloadCalendar: " + JSON.stringify(arguments));
         return;
       }
     } catch {}
@@ -288,16 +333,23 @@ export default function Atex() {
         name: it.name,
       }));
     setCalendar({ events: evts });
+    console.log("[Atex.jsx] State change in reloadCalendar: " + JSON.stringify(arguments));
+    console.log("[Atex.jsx] Exiting reloadCalendar");
   }
 
   async function reloadFiles(equipId) {
+    console.log("[Atex.jsx] Entering reloadFiles: " + equipId);
     if (!equipId) return;
     try {
       const res = await api.atex.listFiles(equipId).catch(() => ({ items: [] }));
+      console.log("[Atex.jsx] API call in reloadFiles: " + JSON.stringify(this));
       setFiles(Array.isArray(res?.items) ? res.items : []);
+      console.log("[Atex.jsx] State change in reloadFiles: " + JSON.stringify(arguments));
     } catch {
       setFiles([]);
+      console.log("[Atex.jsx] State change in reloadFiles: " + JSON.stringify(arguments));
     }
+    console.log("[Atex.jsx] Exiting reloadFiles");
   }
 
   useEffect(() => {
@@ -312,6 +364,7 @@ export default function Atex() {
   }, [items]);
 
   function openEdit(equipment) {
+    console.log("[Atex.jsx] Entering openEdit: " + JSON.stringify(equipment));
     // propager zonages issus du plan si fournis via onOpenEquipment({ zones: {...} })
     const merged = {
       ...equipment,
@@ -319,16 +372,25 @@ export default function Atex() {
       zoning_dust: equipment?.zones?.zoning_dust ?? equipment?.zoning_dust ?? null,
     };
     setEditing(merged);
+    console.log("[Atex.jsx] State change in openEdit: " + JSON.stringify(arguments));
     setDrawerOpen(true);
+    console.log("[Atex.jsx] State change in openEdit: " + JSON.stringify(arguments));
     if (merged?.id) reloadFiles(merged.id);
+    console.log("[Atex.jsx] Exiting openEdit");
   }
   function closeEdit() {
+    console.log("[Atex.jsx] Entering closeEdit");
     setEditing(null);
+    console.log("[Atex.jsx] State change in closeEdit: " + JSON.stringify(arguments));
     setFiles([]);
+    console.log("[Atex.jsx] State change in closeEdit: " + JSON.stringify(arguments));
     setDrawerOpen(false);
+    console.log("[Atex.jsx] State change in closeEdit: " + JSON.stringify(arguments));
+    console.log("[Atex.jsx] Exiting closeEdit");
   }
 
   async function saveBase() {
+    console.log("[Atex.jsx] Entering saveBase");
     if (!editing) return;
     const payload = {
       name: editing.name || "",
@@ -351,49 +413,71 @@ export default function Atex() {
     try {
       if (editing.id) {
         await api.atex.updateEquipment(editing.id, payload);
+        console.log("[Atex.jsx] API call in saveBase: " + JSON.stringify(this));
       } else {
         const created = await api.atex.createEquipment(payload);
+        console.log("[Atex.jsx] API call in saveBase: " + JSON.stringify(this));
         const id = created?.id || created?.equipment?.id;
         if (id) setEditing({ ...(editing || {}), id });
+        console.log("[Atex.jsx] State change in saveBase: " + JSON.stringify(arguments));
       }
       await reload();
+      console.log("[Atex.jsx] API call in saveBase: " + JSON.stringify(this));
       setToast("Fiche enregistrée ✅");
+      console.log("[Atex.jsx] State change in saveBase: " + JSON.stringify(arguments));
     } catch (e) {
       console.error(e);
       setToast("Erreur enregistrement");
+      console.log("[Atex.jsx] State change in saveBase: " + JSON.stringify(arguments));
     }
+    console.log("[Atex.jsx] Exiting saveBase");
   }
 
   async function deleteEquipment() {
+    console.log("[Atex.jsx] Entering deleteEquipment");
     if (!editing?.id) return;
     const ok = window.confirm("Supprimer définitivement cet équipement ATEX ? Cette action est irréversible.");
     if (!ok) return;
     await api.atex.removeEquipment(editing.id);
+    console.log("[Atex.jsx] API call in deleteEquipment: " + JSON.stringify(this));
     closeEdit();
     await reload();
+    console.log("[Atex.jsx] API call in deleteEquipment: " + JSON.stringify(this));
+    console.log("[Atex.jsx] Exiting deleteEquipment");
   }
 
   /* ----------------------------- Photos / pièces jointes ----------------------------- */
   async function uploadMainPhoto(file) {
+    console.log("[Atex.jsx] Entering uploadMainPhoto");
     if (!editing?.id || !file) return;
     await api.atex.uploadPhoto(editing.id, file);
+    console.log("[Atex.jsx] API call in uploadMainPhoto: " + JSON.stringify(this));
     await reloadFiles(editing.id);
     await reload();
+    console.log("[Atex.jsx] API call in uploadMainPhoto: " + JSON.stringify(this));
     setToast("Photo mise à jour ✅");
+    console.log("[Atex.jsx] State change in uploadMainPhoto: " + JSON.stringify(arguments));
+    console.log("[Atex.jsx] Exiting uploadMainPhoto");
   }
   async function uploadAttachments(filesArr) {
+    console.log("[Atex.jsx] Entering uploadAttachments");
     if (!editing?.id || !filesArr?.length) return;
     await api.atex.uploadAttachments(editing.id, filesArr);
+    console.log("[Atex.jsx] API call in uploadAttachments: " + JSON.stringify(this));
     await reloadFiles(editing.id);
     setToast(filesArr.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
+    console.log("[Atex.jsx] State change in uploadAttachments: " + JSON.stringify(arguments));
+    console.log("[Atex.jsx] Exiting uploadAttachments");
   }
 
   /* ----------------------------- IA ----------------------------- */
   async function analyzeFromPhotos(filesLike) {
+    console.log("[Atex.jsx] Entering analyzeFromPhotos");
     const list = Array.from(filesLike || []);
     if (!list.length) return;
     try {
       const res = await api.atex.analyzePhotoBatch(list);
+      console.log("[Atex.jsx] API call in analyzeFromPhotos: " + JSON.stringify(this));
       const s = res?.extracted || res || {};
       setEditing((x) => ({
         ...(x || {}),
@@ -403,13 +487,18 @@ export default function Atex() {
         atex_mark_dust: x?.atex_mark_dust || s.atex_mark_dust || "",
         type: x?.type || s.type || "",
       }));
+      console.log("[Atex.jsx] State change in analyzeFromPhotos: " + JSON.stringify(arguments));
       setToast("Analyse photos terminée ✅");
+      console.log("[Atex.jsx] State change in analyzeFromPhotos: " + JSON.stringify(arguments));
     } catch (e) {
       console.error(e);
       setToast("Analyse photos indisponible");
+      console.log("[Atex.jsx] State change in analyzeFromPhotos: " + JSON.stringify(arguments));
     }
+    console.log("[Atex.jsx] Exiting analyzeFromPhotos");
   }
   async function analyzeCompliance() {
+    console.log("[Atex.jsx] Entering analyzeCompliance");
     if (!editing) return;
     try {
       const body = {
@@ -421,34 +510,48 @@ export default function Atex() {
       const res =
         (api.atex.assessConformity && (await api.atex.assessConformity(body))) ||
         (api.atex.aiAnalyze && (await api.atex.aiAnalyze(body)));
+      console.log("[Atex.jsx] API call in analyzeCompliance: " + JSON.stringify(this));
       await reload();
+      console.log("[Atex.jsx] API call in analyzeCompliance: " + JSON.stringify(this));
       setToast(res?.message || res?.rationale || "Analyse conformité OK ✅");
+      console.log("[Atex.jsx] State change in analyzeCompliance: " + JSON.stringify(arguments));
     } catch (e) {
       console.error(e);
       setToast("Analyse conformité indisponible");
+      console.log("[Atex.jsx] State change in analyzeCompliance: " + JSON.stringify(arguments));
     }
+    console.log("[Atex.jsx] Exiting analyzeCompliance");
   }
 
   /* ----------------------------- Rappels planifiés ----------------------------- */
   function ensureNextCheckFromInstall(editingLocal) {
+    console.log("[Atex.jsx] Entering ensureNextCheckFromInstall");
     const it = editingLocal || editing;
     if (!it) return;
     if ((it.installed_at || it.installation_date) && !it.next_check_date) {
       const base = it.installed_at || it.installation_date;
       const next = dayjs(base).add(90, "day");
       setEditing({ ...it, installed_at: base, next_check_date: next.format("YYYY-MM-DD") });
+      console.log("[Atex.jsx] State change in ensureNextCheckFromInstall: " + JSON.stringify(arguments));
     }
+    console.log("[Atex.jsx] Exiting ensureNextCheckFromInstall");
   }
 
   /* ----------------------------- Plans ----------------------------- */
   async function loadPlans() {
+    console.log("[Atex.jsx] Entering loadPlans");
     setMapsLoading(true);
+    console.log("[Atex.jsx] State change in loadPlans: " + JSON.stringify(arguments));
     try {
       const r = await api.atexMaps.listPlans();
+      console.log("[Atex.jsx] API call in loadPlans: " + JSON.stringify(this));
       setPlans(Array.isArray(r?.plans) ? r.plans : []);
+      console.log("[Atex.jsx] State change in loadPlans: " + JSON.stringify(arguments));
     } finally {
       setMapsLoading(false);
+      console.log("[Atex.jsx] State change in loadPlans: " + JSON.stringify(arguments));
     }
+    console.log("[Atex.jsx] Exiting loadPlans");
   }
   useEffect(() => {
     if (tab === "plans") loadPlans();
@@ -466,6 +569,7 @@ export default function Atex() {
     </div>
   );
 
+  console.log("[Atex.jsx] Exiting Atex");
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
@@ -712,6 +816,22 @@ export default function Atex() {
                 </div>
               </div>
 
+              {/* FIX: Ajout bâtiment/zone pour plan */}
+              <div className="mt-4 space-y-2">
+                <Labeled label="Bâtiment du plan">
+                  <Input value={selectedPlan.building || ""} onChange={(v) => {
+                    const newName = `Bâtiment: ${v} - Zone: ${selectedPlan.zone || ""}`;
+                    api.atexMaps.renamePlan(selectedPlan.logical_name, newName);
+                  }} />
+                </Labeled>
+                <Labeled label="Zone du plan">
+                  <Input value={selectedPlan.zone || ""} onChange={(v) => {
+                    const newName = `Bâtiment: ${selectedPlan.building || ""} - Zone: ${v}`;
+                    api.atexMaps.renamePlan(selectedPlan.logical_name, newName);
+                  }} />
+                </Labeled>
+              </div>
+
               <AtexMap plan={selectedPlan} onOpenEquipment={openEdit} />
             </div>
           )}
@@ -947,7 +1067,9 @@ export default function Atex() {
 /* ----------------------------- Sous-composants locaux ----------------------------- */
 
 function AtexZipImport({ disabled, onDone }) {
+  console.log("[Atex.jsx] Entering AtexZipImport");
   const inputRef = useRef(null);
+  console.log("[Atex.jsx] Exiting AtexZipImport");
   return (
     <div className="flex items-center gap-2">
       <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={disabled}>
@@ -972,6 +1094,8 @@ function AtexZipImport({ disabled, onDone }) {
 }
 
 function PlanCards({ plans = [], onRename, onPick }) {
+  console.log("[Atex.jsx] Entering PlanCards");
+  console.log("[Atex.jsx] Exiting PlanCards");
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
       {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
@@ -983,8 +1107,12 @@ function PlanCards({ plans = [], onRename, onPick }) {
 }
 
 function PlanCard({ plan, onRename, onPick }) {
+  console.log("[Atex.jsx] Entering PlanCard");
   const [edit, setEdit] = useState(false);
+  console.log("[Atex.jsx] State change in PlanCard: " + JSON.stringify(arguments));
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
+  console.log("[Atex.jsx] State change in PlanCard: " + JSON.stringify(arguments));
+  console.log("[Atex.jsx] Exiting PlanCard");
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
