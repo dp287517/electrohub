@@ -245,6 +245,9 @@ export default function Atex() {
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
 
+  // Tick de rafraîchissement carte (force remount)
+  const [mapRefreshTick, setMapRefreshTick] = useState(0);
+
   /* ----------------------------- Helpers ----------------------------- */
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
@@ -295,7 +298,6 @@ export default function Atex() {
     if (!equipId) return;
     try {
       const res = await api.atex.listFiles(equipId).catch(() => ({}));
-      // backend: { files: [{ id, original_name, mime, download_url, inline_url }] }
       const arr = Array.isArray(res?.files)
         ? res.files.map((f) => ({
             id: f.id,
@@ -307,7 +309,7 @@ export default function Atex() {
               `${API_BASE}/api/atex/files/${encodeURIComponent(f.id)}/download`,
           }))
         : Array.isArray(res?.items)
-        ? res.items // compat si le client normalise déjà
+        ? res.items
         : [];
       setFiles(arr);
     } catch (e) {
@@ -324,15 +326,28 @@ export default function Atex() {
   }, [q, status, building, zone, compliance]);
   useEffect(() => { reloadCalendar(); }, [items]);
 
-  function openEdit(equipment) {
-    const merged = {
-      ...equipment,
-      zoning_gas: equipment?.zones?.zoning_gas ?? equipment?.zoning_gas ?? null,
-      zoning_dust: equipment?.zones?.zoning_dust ?? equipment?.zoning_dust ?? null,
-    };
-    setEditing(merged);
+  // Merge helper: tient compte d'un éventuel champ zones.*, sinon zoning_*
+  const mergeZones = (raw) => ({
+    ...raw,
+    zoning_gas: raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null,
+    zoning_dust: raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null,
+  });
+
+  async function openEdit(equipment) {
+    const base = mergeZones(equipment || {});
+    setEditing(base);
     setDrawerOpen(true);
-    if (merged?.id) reloadFiles(merged.id);
+    if (base?.id) {
+      // 🔄 recharge frais depuis le serveur pour refléter setPosition et autres mises à jour
+      api.atex
+        .getEquipment(base.id)
+        .then((res) => {
+          const fresh = mergeZones(res?.equipment || {});
+          setEditing((cur) => ({ ...(cur || {}), ...fresh }));
+        })
+        .catch(() => {});
+      reloadFiles(base.id);
+    }
   }
   function closeEdit() {
     setEditing(null);
@@ -385,6 +400,8 @@ export default function Atex() {
       await api.atex.removeEquipment(editing.id);
       closeEdit();
       await reload();
+      // 🔁 force un petit remount de la carte si un plan est ouvert
+      setMapRefreshTick((t) => t + 1);
       setToast("Équipement supprimé ✅");
     } catch (e) {
       // eslint-disable-next-line no-console
@@ -744,7 +761,28 @@ export default function Atex() {
                 </div>
               </div>
 
-              <AtexMap plan={selectedPlan} onOpenEquipment={openEdit} />
+              {/* key incluant un tick pour forcer le remount si nécessaire */}
+              <AtexMap
+                key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
+                plan={selectedPlan}
+                onOpenEquipment={openEdit}
+                // Optionnel : si la carte signale que des zonages ont été appliqués
+                onZonesApplied={(id, zones) => {
+                  if (!id) return;
+                  setItems((old) =>
+                    (old || []).map((it) =>
+                      it.id === id
+                        ? { ...it, zoning_gas: zones?.zoning_gas ?? it.zoning_gas, zoning_dust: zones?.zoning_dust ?? it.zoning_dust }
+                        : it
+                    )
+                  );
+                  setEditing((cur) =>
+                    cur && cur.id === id
+                      ? { ...cur, zoning_gas: zones?.zoning_gas ?? cur.zoning_gas, zoning_dust: zones?.zoning_dust ?? cur.zoning_dust }
+                      : cur
+                  );
+                }}
+              />
             </div>
           )}
         </div>
@@ -919,7 +957,7 @@ export default function Atex() {
                         type="file"
                         className="hidden"
                         multiple
-                        onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files))}
+                        onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files)) }
                       />
                       Ajouter
                     </label>
