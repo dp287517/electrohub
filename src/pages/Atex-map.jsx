@@ -184,6 +184,7 @@ function SubAreaEditor({ initial = {}, onSave, onCancel, onStartGeomEdit, allowD
   const [dust, setDust] = useState(
     initial.zoning_dust === 20 || initial.zoning_dust === 21 || initial.zoning_dust === 22 ? String(initial.zoning_dust) : ""
   );
+
   return (
     <div className="p-2 rounded-xl border bg-white shadow-lg w-[270px] space-y-2">
       <div className="font-semibold text-sm">Zone ATEX</div>
@@ -288,7 +289,18 @@ function addLegendControl(map) {
 }
 
 /* ------------------------------- Composant map ------------------------------- */
-export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesApplied }) {
+export default function AtexMap({
+  plan,
+  pageIndex = 0,
+  onOpenEquipment,
+  onZonesApplied,
+  /** ouvre dans un modal plein écran */
+  inModal = true,
+  /** si inModal, est-ce qu’on ouvre direct ? */
+  autoOpenModal = true,
+  /** titre du modal */
+  title = "Plan ATEX",
+}) {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const baseLayerRef = useRef(null);
@@ -308,7 +320,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const indexedRef = useRef({ key: "", done: false });
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
-  const [unsavedIds, setUnsavedIds] = useState(() => new Set());
+  const [unsavedIds] = useState(() => new Set());
   const [drawing, setDrawing] = useState(DRAW_NONE);
   const [polyTemp, setPolyTemp] = useState([]);
   const [editorPos, setEditorPos] = useState(null);
@@ -322,6 +334,16 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
 
   const [hud, setHud] = useState({ zoom: 0, mouse: { x: 0, y: 0, xf: 0, yf: 0 }, panes: {} });
+
+  // Menu “Dessiner”
+  const [drawMenu, setDrawMenu] = useState(false);
+  const drawMenuRef = useRef(null);
+
+  // Drag lock (évite clear/redraw pendant drag → bug Leaflet _leaflet_pos)
+  const draggingRef = useRef(false);
+
+  // Modal
+  const [open, setOpen] = useState(inModal ? !!autoOpenModal : true);
 
   const planKey = useMemo(() => plan?.id || plan?.logical_name || "", [plan]);
   const planDisplayName = useMemo(
@@ -345,11 +367,29 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     try { markersLayerRef.current?.bringToFront?.(); } catch {}
   };
 
+  /* ------------------------------- Outside click menu ------------------------------- */
+  useEffect(() => {
+    if (!drawMenu) return;
+    const onDocClick = (e) => {
+      if (!drawMenuRef.current) return;
+      if (!drawMenuRef.current.contains(e.target)) setDrawMenu(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { setDrawMenu(false); setDrawing(DRAW_NONE); }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [drawMenu]);
+
   /* ------------------------------- Poll léger ------------------------------- */
   useEffect(() => {
     if (!planKey) return;
     const tick = async () => {
-      if (!readyRef.current) return;
+      if (!readyRef.current || draggingRef.current) return;
       const end = timeStart("reloadAll [poll]");
       try { await reloadAll(); } finally { end(); }
     };
@@ -359,9 +399,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
   /* -------------------- Init carte IMMÉDIATE + rendu PDF -------------------- */
   useEffect(() => {
-    if (!wrapRef.current) return;
-
-    let cancelled = false;
+    if (!wrapRef.current || !open) return;
 
     const jobKey = `${fileUrl || "no-pdf"}::${pageIndex}`;
     if (lastJob.current.key === jobKey) {
@@ -370,7 +408,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     }
     lastJob.current.key = jobKey;
 
-    // Nettoyages
     const cleanupPdf = async () => {
       try { renderTaskRef.current?.cancel(); } catch {}
       try { await loadingTaskRef.current?.destroy?.(); } catch {}
@@ -421,7 +458,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
           L.control.zoom({ position: "topright" }).addTo(m);
           mapRef.current = m;
 
-          // Panes
           m.createPane("basePane");    m.getPane("basePane").style.zIndex = 200;
           m.createPane("zonesPane");   m.getPane("zonesPane").style.zIndex = 380;
           m.createPane("markersPane"); m.getPane("markersPane").style.zIndex = 400;
@@ -439,7 +475,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
           m.on("zoomend", () => { if (DEBUG()) setHud((h) => ({ ...h, zoom: m.getZoom() })); });
 
-          // Bounds provisoires → on rend la carte opérationnelle tout de suite
           const PROV_W = 2000, PROV_H = 1400;
           const provBounds = L.latLngBounds([[0, 0], [PROV_H, PROV_W]]);
           await new Promise(requestAnimationFrame);
@@ -452,7 +487,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
           m.setMaxBounds(provBounds.pad(0.5));
           m.fitBounds(provBounds, { padding: [10, 10] });
 
-          // Resize observer
           onResize = () => {
             try {
               const keepCenter = m.getCenter();
@@ -468,7 +502,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
             roRef.current.observe(wrapRef.current);
           } catch {}
 
-          // ✅ carte prête tout de suite
+          // Carte prête immédiatement
           if (!readyRef.current) {
             readyRef.current = true;
             const end = timeStart("reloadAll [firstPaint-provisional]");
@@ -476,24 +510,13 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
           }
         }
 
-        /* 2) RENDU PDF (peut arriver après, on remplace la base) */
-        if (!fileUrl) return; // pas de PDF pour ce plan
+        /* 2) RENDU PDF */
+        if (!fileUrl) return;
 
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const qualityBoost = 3.5;
         const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
-
-        let kicked = false;
-        const watchdog = setTimeout(() => {
-          // Si jamais le PDF traîne, on force un redraw/charge (déjà fait, mais garde un filet)
-          if (!firstPaintRef.current) {
-            firstPaintRef.current = true;
-            const end = timeStart("reloadAll [watchdog]");
-            reloadAll().finally(end);
-          }
-          kicked = true;
-        }, 1200);
 
         loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
         const pdf = await loadingTaskRef.current.promise;
@@ -514,30 +537,24 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         setImgSize({ w: canvas.width, h: canvas.height });
         log("pdf render done", { width: canvas.width, height: canvas.height, scale: safeScale });
 
-        clearTimeout(watchdog);
-
         const m = mapRef.current;
         if (m) {
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-          // remplace/pose la base
           if (baseLayerRef.current) {
             try { m.removeLayer(baseLayerRef.current); } catch {}
             baseLayerRef.current = null;
           }
           baseLayerRef.current = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
 
-          // ajuste vue (sans casser ce qui est déjà affiché)
           await new Promise(requestAnimationFrame);
           m.invalidateSize(false);
           const fitZoom2 = m.getBoundsZoom(bounds, true);
           m.setMinZoom(fitZoom2 - 2);
           m.setMaxZoom(fitZoom2 + 8);
           m.setMaxBounds(bounds.pad(0.5));
-          if (!kicked) {
-            // si on n’a pas eu besoin du watchdog, on recentre proprement
-            m.fitBounds(bounds, { padding: [10, 10] });
-          }
-          // Une dernière passe de data (inoffensive si déjà chargé)
+          m.fitBounds(bounds, { padding: [10, 10] }); // recale proprement
+
+          // redraw data avec les nouvelles dimensions
           const end = timeStart("reloadAll [after-pdf]");
           try { await reloadAll(); } finally { end(); }
         }
@@ -552,7 +569,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     })();
 
     return () => {
-      cancelled = true;
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy?.(); } catch {}
       renderTaskRef.current = null;
@@ -560,7 +576,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       cleanupMap();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileUrl, pageIndex, legendVisible]);
+  }, [fileUrl, pageIndex, legendVisible, open]);
 
   /* ----------------------------- Chargements + INDEX ----------------------------- */
   async function ensureIndexedOnce() {
@@ -758,8 +774,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     try {
       const m = mapRef.current;
       const layer = markersLayerRef.current;
-      const W = imgSize.w || 2000, H = imgSize.h || 1400; // utilise les dims provisoires si PDF pas prêt
+      const W = imgSize.w || 2000, H = imgSize.h || 1400;
       if (!m || !layer) return;
+
       layer.clearLayers();
 
       (list || []).forEach((p) => {
@@ -776,7 +793,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         });
         mk.__meta = p;
 
-        mk.on("dragstart", () => log("marker dragstart", { id: p.id, at: mk.getLatLng() }));
+        mk.on("dragstart", () => { draggingRef.current = true; log("marker dragstart", { id: p.id, at: mk.getLatLng() }); });
         mk.on("drag", () => DEBUG() && log("marker drag", { id: p.id, at: mk.getLatLng() }));
         mk.on("dragend", async () => {
           const ll = mk.getLatLng();
@@ -806,6 +823,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
             await reloadAll();
           } catch (e) {
             console.error("[ATEX] setPosition error", e);
+          } finally {
+            draggingRef.current = false;
           }
         });
 
@@ -848,8 +867,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     const corners = [b.getSouthWest(), b.getSouthEast(), b.getNorthEast(), b.getNorthWest()];
     const updateByCorners = (pts) => layer.setBounds(L.latLngBounds(pts[0], pts[2]));
     corners.forEach((ll, idx) => {
-      const h = L.circleMarker(ll, { radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false });
-      h.addTo(lay);
+      const h = L.circleMarker(ll, { radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false }).addTo(lay);
       h.on("mousedown", () => {
         m.dragging.disable();
         const onMove = (ev) => { const pts = [...corners]; pts[idx] = ev.latlng; updateByCorners(pts); };
@@ -1078,6 +1096,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         },
         () => { try { tempLayer && m.removeLayer(tempLayer); } catch {} }
       );
+      setDrawMenu(false);
       setDrawing(DRAW_NONE);
       m.off("mousedown", onDown); m.off("mousemove", onMove); m.off("mouseup", onUp);
     };
@@ -1130,7 +1149,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     if (!m) return;
     const sz = m.getSize();
     setEditorInit({});
-    setEditorPos({ screen: { x: sz.x / 2, y: sz.y / 2 }, shapeId: null, onSave, onCancel: onCancelCleanup });
+    setEditorPos({ screen: { x: sz.x / 2, y: 80 }, shapeId: null, onSave, onCancel: onCancelCleanup });
   }
   async function onSaveSubarea(meta) {
     const end = timeStart("onSaveSubarea");
@@ -1160,9 +1179,9 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
   }
 
   /* ----------------------------- RENDER ----------------------------- */
-  const viewerHeight = Math.max(
-    520,
-    Math.min(imgSize.h || 900, (typeof window !== "undefined" ? window.innerHeight : 1000) - 140)
+  const viewerHeight = Math.min(
+    (typeof window !== "undefined" ? window.innerHeight : 900) - 140,
+    (imgSize.h || 900)
   );
 
   const toggleLegend = () => {
@@ -1174,101 +1193,164 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     });
   };
 
-  return (
-    <div className="relative">
-      <div
-        ref={wrapRef}
-        className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
-        style={{ height: viewerHeight }}
-      >
-        {/* Toolbar */}
-        <div className="atex-toolbar">
-          <button className="btn-plus" onClick={() => createEquipmentAtCenter()} title="Ajouter un équipement au centre">+</button>
-          <div className="btn-pencil-wrap">
-            <button className="btn-pencil" onClick={() => setDrawMenu((v) => !v)} title="Dessiner (zones ATEX)">✏️</button>
-            {true /* petit menu simple inline, pas besoin d’état séparé ici */ && (
-              <div className="draw-menu">
-                <button onClick={() => { setDrawMode("rect"); }}>Rectangle</button>
-                <button onClick={() => { setDrawMode("poly"); }}>Polygone</button>
-                <button onClick={() => { setDrawMode("circle"); }}>Cercle</button>
-                <button onClick={() => { setDrawMode("none"); }}>Annuler</button>
-              </div>
-            )}
-          </div>
-          <button
-            className="btn-plus"
-            title="Ajuster le plan (dézoome un peu)"
-            onClick={() => {
-              const m = mapRef.current;
-              const base = baseLayerRef.current;
-              if (!m) return;
-              const b = base?.getBounds?.() || L.latLngBounds([[0,0],[imgSize.h || 1400, imgSize.w || 2000]]);
-              m.scrollWheelZoom?.disable();
-              m.invalidateSize(false);
-              const fitZoom = m.getBoundsZoom(b, true);
-              m.setMinZoom(fitZoom - 2);
-              m.setMaxZoom(fitZoom + 8);
-              m.fitBounds(b, { padding: [12, 12] });
-              m.setZoom(m.getZoom() - 1);
-              setTimeout(() => m.scrollWheelZoom?.enable(), 60);
-              log("adjust view", { fitZoom, finalZoom: m.getZoom() });
-              forceRedraw();
-            }}
-          >
-            🗺️
-          </button>
-          {geomEdit.active && (
-            <button className="btn-pencil" title="Sauvegarder la géométrie" onClick={saveGeomEdit}>💾</button>
+  // Editor clamp (reste visible dans le viewport)
+  const editorStyle = editorPos?.screen
+    ? {
+        left: Math.max(8, Math.min((editorPos.screen.x || 0) - 150, (typeof window !== "undefined" ? window.innerWidth : 1200) - 300)),
+        top: Math.max(8, Math.min((editorPos.screen.y || 0) - 10, (typeof window !== "undefined" ? window.innerHeight : 800) - 260)),
+      }
+    : {};
+
+  const MapInner = (
+    <div
+      ref={wrapRef}
+      className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
+      style={{ height: Math.max(520, viewerHeight) }}
+    >
+      {/* Toolbar */}
+      <div className="atex-toolbar">
+        <button className="btn-plus" onClick={() => createEquipmentAtCenter()} title="Ajouter un équipement au centre">+</button>
+
+        <div className="btn-pencil-wrap" ref={drawMenuRef}>
+          <button className="btn-pencil" onClick={() => setDrawMenu((v) => !v)} title="Dessiner (zones ATEX)">✏️</button>
+          {drawMenu && (
+            <div className="draw-menu">
+              <button onClick={() => { setDrawMode("rect"); setDrawMenu(false); }}>Rectangle</button>
+              <button onClick={() => { setDrawMode("poly"); setDrawMenu(false); }}>Polygone</button>
+              <button onClick={() => { setDrawMode("circle"); setDrawMenu(false); }}>Cercle</button>
+              <button onClick={() => { setDrawMode("none"); setDrawMenu(false); }}>Annuler</button>
+            </div>
           )}
-          <button
-            className="btn-pencil"
-            title={legendVisible ? "Cacher la légende" : "Afficher la légende"}
-            onClick={toggleLegend}
-          >
-            {legendVisible ? "⮜" : "⮞"}
-          </button>
         </div>
+
+        <button
+          className="btn-plus"
+          title="Ajuster le plan (dézoome un peu)"
+          onClick={() => {
+            const m = mapRef.current;
+            const base = baseLayerRef.current;
+            if (!m) return;
+            const b = base?.getBounds?.() || L.latLngBounds([[0,0],[imgSize.h || 1400, imgSize.w || 2000]]);
+            m.scrollWheelZoom?.disable();
+            m.invalidateSize(false);
+            const fitZoom = m.getBoundsZoom(b, true);
+            m.setMinZoom(fitZoom - 2);
+            m.setMaxZoom(fitZoom + 8);
+            m.fitBounds(b, { padding: [12, 12] });
+            m.setZoom(m.getZoom() - 1);
+            setTimeout(() => m.scrollWheelZoom?.enable(), 60);
+            log("adjust view", { fitZoom, finalZoom: m.getZoom() });
+            forceRedraw();
+          }}
+        >
+          🗺️
+        </button>
+
+        {geomEdit.active && (
+          <button className="btn-pencil" title="Sauvegarder la géométrie" onClick={saveGeomEdit}>💾</button>
+        )}
+
+        <button
+          className="btn-pencil"
+          title={legendVisible ? "Cacher la légende" : "Afficher la légende"}
+          onClick={toggleLegend}
+        >
+          {legendVisible ? "⮜" : "⮞"}
+        </button>
       </div>
 
-      {editorPos?.screen && (
-        <div
-          className="fixed z-[7000]"
-          style={{ left: Math.max(8, editorPos.screen.x - 150), top: Math.max(8, editorPos.screen.y - 10) }}
-        >
-          <SubAreaEditor
-            initial={editorInit}
-            onSave={onSaveSubarea}
-            onCancel={() => { editorPos?.onCancel?.(); setEditorPos(null); }}
-            onStartGeomEdit={
-              editorPos?.layer && editorPos?.kind
-                ? () => startGeomEdit(editorPos.layer, { id: editorPos.shapeId, kind: editorPos.kind })
-                : undefined
-            }
-            allowDelete={!!editorPos?.shapeId}
-            onDelete={onDeleteSubarea}
-          />
+      {/* HUD debug */}
+      {DEBUG() && (
+        <div className="absolute top-2 right-2 bg-white/85 border rounded-lg px-3 py-2 text-[11px] shadow z-[9000] space-y-1">
+          <div className="font-medium">DEBUG HUD</div>
+          <div>zoom: {hud.zoom}</div>
+          <div>img: {imgSize.w}×{imgSize.h}</div>
         </div>
       )}
-
-      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "#059669" }} />
-          À faire
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full blink-orange" style={{ background: "#f59e0b" }} />
-          ≤90j
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} />
-          En retard
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="w-3 h-3 rounded-full" style={{ background: "#2563eb" }} />
-          Nouvelle (à enregistrer)
-        </span>
-        <span className="inline-flex items-center gap-1 text-gray-500">• Remplissage = Poussière • Bordure = Gaz</span>
-      </div>
     </div>
+  );
+
+  const EditorPopover = editorPos?.screen ? (
+    <div className="fixed z-[7000]" style={editorStyle}>
+      <SubAreaEditor
+        initial={editorInit}
+        onSave={onSaveSubarea}
+        onCancel={() => { editorPos?.onCancel?.(); setEditorPos(null); }}
+        onStartGeomEdit={
+          editorPos?.layer && editorPos?.kind
+            ? () => startGeomEdit(editorPos.layer, { id: editorPos.shapeId, kind: editorPos.kind })
+            : undefined
+        }
+        allowDelete={!!editorPos?.shapeId}
+        onDelete={onDeleteSubarea}
+      />
+    </div>
+  ) : null;
+
+  const MarkerLegend = (
+    <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
+      <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded-full" style={{ background: "#059669" }} />
+        À faire
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded-full blink-orange" style={{ background: "#f59e0b" }} />
+        ≤90j
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} />
+        En retard
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="w-3 h-3 rounded-full" style={{ background: "#2563eb" }} />
+        Nouvelle (à enregistrer)
+      </span>
+      <span className="inline-flex items-center gap-1 text-gray-500">• Remplissage = Poussière • Bordure = Gaz</span>
+    </div>
+  );
+
+  if (!inModal) {
+    return (
+      <div className="relative">
+        {MapInner}
+        {EditorPopover}
+        {MarkerLegend}
+      </div>
+    );
+  }
+
+  // --- Modal plein écran (PC & mobile)
+  return (
+    <>
+      {!open && (
+        <Btn className="mt-2" onClick={() => setOpen(true)}>Ouvrir le plan</Btn>
+      )}
+
+      {open && (
+        <div className="fixed inset-0 z-[6000] flex flex-col">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+
+          {/* Dialog */}
+          <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
+            <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b">
+                <div className="font-semibold">{title}{planDisplayName ? ` — ${planDisplayName}` : ""}</div>
+                <div className="flex items-center gap-2">
+                  <Btn variant="ghost" onClick={() => setOpen(false)}>Fermer</Btn>
+                </div>
+              </div>
+
+              <div className="p-3 md:p-4 overflow-auto flex-1">
+                {MapInner}
+                {MarkerLegend}
+              </div>
+            </div>
+          </div>
+
+          {EditorPopover}
+        </div>
+      )}
+    </>
   );
 }
