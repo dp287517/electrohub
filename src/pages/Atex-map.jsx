@@ -519,8 +519,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
           roRef.current.observe(wrapRef.current);
         } catch {}
 
-        // ready → charge données (zones puis positions)
-        const kickstart = async () => {
+        // --- ✅ KICKSTART ROBUSTE : on déclenche tout de suite, sans attendre 'load'
+        const kickstartNow = async () => {
           if (cancelled || readyRef.current) return;
           readyRef.current = true;
           forceRedraw();
@@ -530,8 +530,17 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
             try { await reloadAll(); } finally { end(); forceRedraw(); }
           }
         };
-        base.once("load", kickstart);
-        m.whenReady(() => setTimeout(kickstart, 0));
+
+        // 1) Lance immédiatement
+        kickstartNow();
+
+        // 2) Garde des fallbacks inoffensifs
+        base.once?.("load", kickstartNow);
+        m.whenReady?.(() => setTimeout(kickstartNow, 0));
+
+        // 3) Derniers filets (cache/dataURL silencieux)
+        setTimeout(kickstartNow, 200);
+        setTimeout(kickstartNow, 800);
 
         try { await pdf.cleanup?.(); } catch {}
         log("init complete");
