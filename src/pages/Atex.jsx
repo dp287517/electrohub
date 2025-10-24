@@ -4,13 +4,12 @@ import dayjs from "dayjs";
 import "dayjs/locale/fr";
 dayjs.locale("fr");
 
-import "../styles/atex-map.css"; // 👉 à créer (on repartira de doors-map.css)
-import { api } from "../lib/api.js"; // 👉 endpoints ATEX / ATEX MAPS déjà présents
+import "../styles/atex-map.css";
+import { api, API_BASE } from "../lib/api.js";
 
-// (ONGLET PLANS) rendu carte/plan externalisé comme demandé
 import AtexMap from "./Atex-map.jsx";
 
-/* ----------------------------- Utils identiques à Doors ----------------------------- */
+/* ----------------------------- Utils ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
@@ -128,7 +127,14 @@ function Toast({ text, onClose }) {
   );
 }
 
-/* ----------------------------- Status (mêmes couleurs/comportements) ----------------------------- */
+/* ---- Dates pour <input type="date"> ---- */
+function asDateInput(v) {
+  if (!v) return "";
+  const d = dayjs(v);
+  return d.isValid() ? d.format("YYYY-MM-DD") : "";
+}
+
+/* ----------------------------- Status ----------------------------- */
 const STATUS = {
   A_FAIRE: "a_faire",
   EN_COURS: "en_cours_30",
@@ -150,7 +156,7 @@ function statusLabel(s) {
   return s || "—";
 }
 
-/* ----------------------------- Mini calendrier (identique Doors) ----------------------------- */
+/* ----------------------------- Mini calendrier ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [cursor, setCursor] = useState(() => dayjs().startOf("month"));
   const start = cursor.startOf("week");
@@ -214,23 +220,26 @@ function MonthCalendar({ events = [], onDayClick }) {
 /* ----------------------------- Page principale ATEX ----------------------------- */
 export default function Atex() {
   // Onglets
-  const [tab, setTab] = useState("controls"); // controls | calendar | plans | settings (optionnel)
+  const [tab, setTab] = useState("controls");
 
   // Liste équipements
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Filtres (mêmes patterns que Doors)
+  // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [building, setBuilding] = useState("");
-  const [zone, setZone] = useState(""); // équiv. floor/zone
-  const [compliance, setCompliance] = useState(""); // conforme / non_conforme / na
+  const [zone, setZone] = useState("");
+  const [compliance, setCompliance] = useState("");
 
-  // Edition
+  // Édition
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+
+  // PJ list
+  const [files, setFiles] = useState([]);
 
   // Calendrier
   const [calendar, setCalendar] = useState({ events: [] });
@@ -238,7 +247,7 @@ export default function Atex() {
   // Toast
   const [toast, setToast] = useState("");
 
-  // Plans (ZIP, cards, viewer → délégué à AtexMap)
+  // Plans
   const [plans, setPlans] = useState([]);
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -264,7 +273,6 @@ export default function Atex() {
   }
 
   async function reloadCalendar() {
-    // Utilise l’endpoint /api/atex/calendar si dispo (présent côté serveur)
     try {
       const cal = await api.atex.calendar?.();
       if (Array.isArray(cal?.events)) {
@@ -272,7 +280,6 @@ export default function Atex() {
         return;
       }
     } catch {}
-    // Fallback: à partir des items présents
     const evts = (items || [])
       .filter((it) => it?.next_check_date)
       .map((it) => ({
@@ -281,6 +288,16 @@ export default function Atex() {
         name: it.name,
       }));
     setCalendar({ events: evts });
+  }
+
+  async function reloadFiles(equipId) {
+    if (!equipId) return;
+    try {
+      const res = await api.atex.listFiles(equipId).catch(() => ({ items: [] }));
+      setFiles(Array.isArray(res?.items) ? res.items : []);
+    } catch {
+      setFiles([]);
+    }
   }
 
   useEffect(() => {
@@ -295,11 +312,19 @@ export default function Atex() {
   }, [items]);
 
   function openEdit(equipment) {
-    setEditing(equipment);
+    // propager zonages issus du plan si fournis via onOpenEquipment({ zones: {...} })
+    const merged = {
+      ...equipment,
+      zoning_gas: equipment?.zones?.zoning_gas ?? equipment?.zoning_gas ?? null,
+      zoning_dust: equipment?.zones?.zoning_dust ?? equipment?.zoning_dust ?? null,
+    };
+    setEditing(merged);
     setDrawerOpen(true);
+    if (merged?.id) reloadFiles(merged.id);
   }
   function closeEdit() {
     setEditing(null);
+    setFiles([]);
     setDrawerOpen(false);
   }
 
@@ -314,14 +339,12 @@ export default function Atex() {
       type: editing.type || "",
       manufacturer: editing.manufacturer || "",
       manufacturer_ref: editing.manufacturer_ref || "",
-      atex_mark_gas: editing.atex_mark_gas || null,   // ✅ champs alignés backend
-      atex_mark_dust: editing.atex_mark_dust || null, // ✅
+      atex_mark_gas: editing.atex_mark_gas || null,
+      atex_mark_dust: editing.atex_mark_dust || null,
       comment: editing.comment || "",
       status: editing.status || STATUS.A_FAIRE,
-      // dates si présentes — noms alignés
       installed_at: editing.installed_at || editing.installation_date || null,
       next_check_date: editing.next_check_date || null,
-      // zonages si modifiés
       zoning_gas: editing.zoning_gas ?? null,
       zoning_dust: editing.zoning_dust ?? null,
     };
@@ -330,10 +353,8 @@ export default function Atex() {
         await api.atex.updateEquipment(editing.id, payload);
       } else {
         const created = await api.atex.createEquipment(payload);
-        if (created?.id || created?.equipment?.id) {
-          const id = created.id || created.equipment.id;
-          setEditing({ ...(editing || {}), id });
-        }
+        const id = created?.id || created?.equipment?.id;
+        if (id) setEditing({ ...(editing || {}), id });
       }
       await reload();
       setToast("Fiche enregistrée ✅");
@@ -356,23 +377,23 @@ export default function Atex() {
   async function uploadMainPhoto(file) {
     if (!editing?.id || !file) return;
     await api.atex.uploadPhoto(editing.id, file);
-    setEditing({ ...editing }); // rerender
+    await reloadFiles(editing.id);
     await reload();
     setToast("Photo mise à jour ✅");
   }
-  async function uploadAttachments(files) {
-    if (!editing?.id || !files?.length) return;
-    await api.atex.uploadAttachments(editing.id, files);
-    setEditing({ ...editing }); // rerender
-    setToast(files.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
+  async function uploadAttachments(filesArr) {
+    if (!editing?.id || !filesArr?.length) return;
+    await api.atex.uploadAttachments(editing.id, filesArr);
+    await reloadFiles(editing.id);
+    setToast(filesArr.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
   }
 
-  /* ----------------------------- IA : analyse de photos / conformité ----------------------------- */
-  async function analyzeFromPhotos(files) {
-    if (!files?.length) return;
+  /* ----------------------------- IA ----------------------------- */
+  async function analyzeFromPhotos(filesLike) {
+    const list = Array.from(filesLike || []);
+    if (!list.length) return;
     try {
-      const res = await api.atex.analyzePhotoBatch(Array.from(files)); // alias → /extract
-      // Backend renvoie { ok, extracted: { manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust, type } }
+      const res = await api.atex.analyzePhotoBatch(list);
       const s = res?.extracted || res || {};
       setEditing((x) => ({
         ...(x || {}),
@@ -391,14 +412,15 @@ export default function Atex() {
   async function analyzeCompliance() {
     if (!editing) return;
     try {
-      // Envoie explicitement les champs attendus par /api/atex/assess (alias OK)
       const body = {
         atex_mark_gas: editing.atex_mark_gas || "",
         atex_mark_dust: editing.atex_mark_dust || "",
         target_gas: editing.zoning_gas ?? null,
         target_dust: editing.zoning_dust ?? null,
       };
-      const res = await api.atex.assess?.(body) ?? await api.atex.aiAnalyze?.(body);
+      const res =
+        (api.atex.assessConformity && (await api.atex.assessConformity(body))) ||
+        (api.atex.aiAnalyze && (await api.atex.aiAnalyze(body)));
       await reload();
       setToast(res?.message || res?.rationale || "Analyse conformité OK ✅");
     } catch (e) {
@@ -407,11 +429,10 @@ export default function Atex() {
     }
   }
 
-  /* ----------------------------- Rappels planifiés (90j, puis 36 mois) ----------------------------- */
+  /* ----------------------------- Rappels planifiés ----------------------------- */
   function ensureNextCheckFromInstall(editingLocal) {
     const it = editingLocal || editing;
     if (!it) return;
-    // règle : inspection à J+90 après installation, puis serveur gère les périodicités
     if ((it.installed_at || it.installation_date) && !it.next_check_date) {
       const base = it.installed_at || it.installation_date;
       const next = dayjs(base).add(90, "day");
@@ -419,7 +440,7 @@ export default function Atex() {
     }
   }
 
-  /* ----------------------------- Plans (cards + zip) ----------------------------- */
+  /* ----------------------------- Plans ----------------------------- */
   async function loadPlans() {
     setMapsLoading(true);
     try {
@@ -691,14 +712,13 @@ export default function Atex() {
                 </div>
               </div>
 
-              {/* 👉 Toute la logique carte/dessins/plus bouton est dans Atex-map.jsx */}
               <AtexMap plan={selectedPlan} onOpenEquipment={openEdit} />
             </div>
           )}
         </div>
       )}
 
-      {/* --------- Onglet Paramètres (optionnel) --------- */}
+      {/* --------- Onglet Paramètres --------- */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-2">
           <div className="text-sm text-gray-600">
@@ -711,6 +731,31 @@ export default function Atex() {
       {drawerOpen && editing && (
         <Drawer title={`ATEX • ${editing.name || "nouvel équipement"}`} onClose={closeEdit}>
           <div className="space-y-4">
+
+            {/* 🔥 Ajout & Analyse IA tout en haut de la fiche */}
+            <div className="border rounded-2xl p-3 bg-white">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="font-semibold">Ajout & Analyse IA</div>
+                <div className="flex items-center gap-2">
+                  <label className="px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
+                    />
+                    Analyser des photos (IA)
+                  </label>
+                  <Btn variant="subtle" onClick={analyzeCompliance}>Vérifier conformité (IA)</Btn>
+                </div>
+              </div>
+              <div className="text-xs text-gray-500 mt-2">
+                Conseils : photo nette de la plaque (gaz/poussière). Le zonage vient des zones du plan, pas de la plaque.
+              </div>
+            </div>
+
+            {/* Métadonnées principales */}
             <div className="grid sm:grid-cols-2 gap-3">
               <Labeled label="Nom">
                 <Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} />
@@ -751,12 +796,14 @@ export default function Atex() {
               <Labeled label="Zonage gaz (0 / 1 / 2)">
                 <Input
                   value={editing.zoning_gas ?? ""}
+                  placeholder={editing.zones?.zoning_gas ?? ""}
                   onChange={(v) => setEditing({ ...editing, zoning_gas: v === "" ? null : Number(v) })}
                 />
               </Labeled>
               <Labeled label="Zonage poussière (20 / 21 / 22)">
                 <Input
                   value={editing.zoning_dust ?? ""}
+                  placeholder={editing.zones?.zoning_dust ?? ""}
                   onChange={(v) => setEditing({ ...editing, zoning_dust: v === "" ? null : Number(v) })}
                 />
               </Labeled>
@@ -766,7 +813,7 @@ export default function Atex() {
               <Labeled label="Date d’installation">
                 <Input
                   type="date"
-                  value={editing.installed_at || editing.installation_date || ""}
+                  value={asDateInput(editing.installed_at || editing.installation_date)}
                   onChange={(v) => {
                     const next = { ...editing, installed_at: v };
                     setEditing(next);
@@ -777,7 +824,7 @@ export default function Atex() {
               <Labeled label="Prochain contrôle">
                 <Input
                   type="date"
-                  value={editing.next_check_date || ""}
+                  value={asDateInput(editing.next_check_date)}
                   onChange={(v) => setEditing({ ...editing, next_check_date: v })}
                 />
               </Labeled>
@@ -804,62 +851,81 @@ export default function Atex() {
               {editing?.id && <Btn variant="danger" onClick={deleteEquipment}>Supprimer</Btn>}
             </div>
 
-            {/* Photos & pièces jointes */}
+            {/* Photo principale */}
             {editing?.id && (
-              <>
-                <div className="border rounded-2xl p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="font-semibold">Photo principale</div>
+              <div className="border rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-semibold">Photo principale</div>
+                  <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => e.target.files?.[0] && uploadMainPhoto(e.target.files[0])}
+                    />
+                    Mettre à jour
+                  </label>
+                </div>
+                <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
+                  {editing.photo_url ? (
+                    <img src={api.atex.photoUrl(editing.id)} alt="photo" className="w-full h-full object-cover" />
+                  ) : (
+                    <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Pièces jointes & photos (CONSERVÉ ICI) */}
+            {editing?.id && (
+              <div className="border rounded-2xl p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-semibold">Pièces jointes & photos</div>
+                  <div className="flex items-center gap-2">
                     <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
                       <input
                         type="file"
-                        accept="image/*"
                         className="hidden"
-                        onChange={(e) => e.target.files?.[0] && uploadMainPhoto(e.target.files[0])}
+                        multiple
+                        onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files))}
                       />
-                      Mettre à jour
+                      Ajouter
                     </label>
-                  </div>
-                  <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
-                    {editing.photo_url ? (
-                      <img src={api.atex.photoUrl(editing.id)} alt="photo" className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
-                    )}
                   </div>
                 </div>
 
-                <div className="border rounded-2xl p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="font-semibold">Pièces jointes & photos</div>
-                    <div className="flex items-center gap-2">
-                      <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
-                        <input
-                          type="file"
-                          className="hidden"
-                          multiple
-                          onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files))}
-                        />
-                        Ajouter
-                      </label>
-                      <label className="px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer">
-                        <input
-                          type="file"
-                          accept="image/*"
-                          multiple
-                          className="hidden"
-                          onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
-                        />
-                        Analyser (IA)
-                      </label>
-                      <Btn variant="subtle" onClick={analyzeCompliance}>Vérifier conformité (IA)</Btn>
+                {/* Liste des pièces jointes */}
+                <div className="mt-3 space-y-2">
+                  {files.length === 0 && (
+                    <div className="text-xs text-gray-500">Aucune pièce jointe.</div>
+                  )}
+                  {files.map((f) => (
+                    <div key={f.id} className="flex items-center justify-between text-sm border rounded-lg px-2 py-1">
+                      <a
+                        href={f.url || `${API_BASE}/api/atex/files/${encodeURIComponent(f.id)}/download`}
+                        target="_blank" rel="noreferrer"
+                        className="text-blue-700 hover:underline truncate max-w-[70%]"
+                        title={f.name || f.filename}
+                      >
+                        {f.name || f.filename || `Fichier ${f.id}`}
+                      </a>
+                      <button
+                        className="text-rose-600 hover:underline"
+                        onClick={async () => {
+                          await api.atex.deleteFile(f.id);
+                          reloadFiles(editing.id);
+                        }}
+                      >
+                        Supprimer
+                      </button>
                     </div>
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    Glisser-déposer supporté dans l’onglet Plans lors de la création in situ.
-                  </div>
+                  ))}
                 </div>
-              </>
+
+                <div className="text-xs text-gray-500 mt-2">
+                  Glisser-déposer supporté dans l’onglet Plans lors de la création in situ.
+                </div>
+              </div>
             )}
 
             <div className="border rounded-2xl p-3">
