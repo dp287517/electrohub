@@ -81,7 +81,6 @@ function getUser(req) {
 }
 
 // -------------------------------------------------
-import crypto from "crypto";
 const multerFiles = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, FILES_DIR),
@@ -183,7 +182,6 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_plans_logical ON atex_plans(logical_name);
   `);
-  await pool.query(`ALTER TABLE atex_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_plan_names (
@@ -324,31 +322,77 @@ app.get("/api/atex/file", async (req, res) => {
 app.get("/api/atex/equipments", async (req, res) => {
   try {
     const q = (req.query.q || "").toString().trim().toLowerCase();
+    const statusFilter = (req.query.status || "").toString().trim();
+    const building = (req.query.building || "").toString().trim().toLowerCase();
+    const zone = (req.query.zone || "").toString().trim().toLowerCase();
+    const compliance = (req.query.compliance || "").toString().trim(); // "conforme" | "non_conforme" | "na" | ""
+
+    // on remonte aussi le dernier "result" pour en déduire compliance_state
     const { rows } = await pool.query(
       `
-      SELECT e.*, 
-             COALESCE((SELECT MAX(date) FROM atex_checks c WHERE c.equipment_id=e.id), NULL) AS last_check_date
+      SELECT e.*,
+             (SELECT MAX(date) FROM atex_checks c WHERE c.equipment_id=e.id) AS last_check_date,
+             (SELECT result FROM atex_checks c
+               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
+               ORDER BY c.date DESC NULLS LAST
+               LIMIT 1) AS last_result
       FROM atex_equipments e
       ORDER BY e.created_at DESC
       `
     );
-    const items = rows
-      .filter((r) => {
-        if (!q) return true;
-        const hay = [r.name, r.building, r.zone, r.equipment, r.sub_equipment, r.type]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-        return hay.includes(q);
-      })
-      .map((r) => ({
+
+    let items = rows.map((r) => {
+      const computed_status = eqStatusFromDue(r.next_check_date);
+      const compliance_state =
+        r.last_result === "conforme"
+          ? "conforme"
+          : r.last_result === "non_conforme"
+          ? "non_conforme"
+          : "na";
+
+      const hay = [
+        r.name,
+        r.building,
+        r.zone,
+        r.equipment,
+        r.sub_equipment,
+        r.type,
+        r.manufacturer,
+        r.manufacturer_ref,
+        r.atex_mark_gas,
+        r.atex_mark_dust,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return {
         ...r,
-        status: eqStatusFromDue(r.next_check_date),
+        status: computed_status,
+        compliance_state,
         photo_url:
           (r.photo_content && r.photo_content.length) || r.photo_path
             ? `/api/atex/equipments/${r.id}/photo`
             : null,
-      }));
+        __hay: hay,
+      };
+    });
+
+    // Texte libre
+    if (q) items = items.filter((it) => it.__hay.includes(q));
+    // Building / zone
+    if (building) items = items.filter((it) => (it.building || "").toLowerCase().includes(building));
+    if (zone) items = items.filter((it) => (it.zone || "").toLowerCase().includes(zone));
+    // Statut (calculé)
+    if (statusFilter) items = items.filter((it) => it.status === statusFilter);
+    // Conformité (dérivée)
+    if (compliance === "conforme") items = items.filter((it) => it.compliance_state === "conforme");
+    if (compliance === "non_conforme") items = items.filter((it) => it.compliance_state === "non_conforme");
+    if (compliance === "na") items = items.filter((it) => it.compliance_state === "na");
+
+    // cleanup
+    items = items.map(({ __hay, ...x }) => x);
+
     res.json({ items });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -358,13 +402,29 @@ app.get("/api/atex/equipments", async (req, res) => {
 app.get("/api/atex/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
-    const { rows } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
+    const { rows } = await pool.query(
+      `
+      SELECT e.*,
+             (SELECT result FROM atex_checks c
+               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
+               ORDER BY c.date DESC NULLS LAST
+               LIMIT 1) AS last_result
+      FROM atex_equipments e WHERE e.id=$1
+      `,
+      [id]
+    );
     const eq = rows?.[0] || null;
     if (!eq) return res.status(404).json({ ok: false, error: "not found" });
     eq.photo_url =
       (eq.photo_content && eq.photo_content.length) || eq.photo_path
         ? `/api/atex/equipments/${id}/photo`
         : null;
+    eq.compliance_state =
+      eq.last_result === "conforme"
+        ? "conforme"
+        : eq.last_result === "non_conforme"
+        ? "non_conforme"
+        : "na";
     res.json({ equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
