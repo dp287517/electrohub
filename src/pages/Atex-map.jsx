@@ -276,6 +276,8 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
 
   // Eviter reload/polling avant carte prête
   const readyRef = useRef(false);
+  // Déclenchement initial unique une fois imgSize prêt
+  const firstPaintRef = useRef(false);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [positions, setPositions] = useState([]);
@@ -355,6 +357,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       legendRef.current = null;
       editHandlesLayerRef.current = null;
       readyRef.current = false;
+      firstPaintRef.current = false;
     };
 
     (async () => {
@@ -443,8 +446,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
           if (cancelled || readyRef.current) return;
           readyRef.current = true;
           forceRedraw();
-          const endReload = timeStart("initial reloadAll");
-          try { await reloadAll(); } finally { endReload(); }
+          // Ne pas lancer reloadAll ici si imgSize n'est pas encore reflété -> l'effet ci-dessous s'en charge
         };
         base.once("load", kickstart);
         m.whenReady(() => setTimeout(kickstart, 0));
@@ -461,6 +463,19 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     return () => { cancelled = true; cleanupMap(); };
     // IMPORTANT: ne pas dépendre de legendVisible ici
   }, [fileUrl, pageIndex]);
+
+  // 🔁 Première peinture garantie quand la carte est prête ET qu'on connaît la taille image
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (!readyRef.current) return;
+    if (!imgSize.w || !imgSize.h) return;
+    if (firstPaintRef.current) return;
+    firstPaintRef.current = true;
+    (async () => {
+      const end = timeStart("reloadAll [firstPaint]");
+      try { await reloadAll(); } finally { end(); forceRedraw(); }
+    })();
+  }, [imgSize.w, imgSize.h, planKey, pageIndex]);
 
   /* ----------------------------- Chargements ----------------------------- */
   async function reloadAll() {
@@ -591,17 +606,50 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
     } finally { end(); }
   }
 
-  async function updateEquipmentMacroAndSub(equipmentId, subareaId) {
+  // ✅ Restauré : création d’un équipement au centre, + MAJ zones/macro/sub
+  async function createEquipmentAtCenter() {
+    if (!plan) return;
+    const end = timeStart("createEquipmentAtCenter");
+    setLoading(true);
     try {
-      const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
-      const patch = {
-        equipment: planDisplayName || "",
-        sub_equipment: subName || "",
-      };
-      log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
-      await api.atex.updateEquipment(equipmentId, patch);
+      const created = await api.atex.createEquipment({ name: "", status: "a_faire" });
+      const id = created?.id || created?.equipment?.id;
+      if (!id) throw new Error("Création ATEX: ID manquant");
+
+      const resp = await api.atexMaps.setPosition(id, {
+        logical_name: plan.logical_name,
+        plan_id: plan.id,
+        page_index: pageIndex,
+        x_frac: 0.5,
+        y_frac: 0.5,
+      });
+      log("setPosition (new equip) response", { raw: safeJson(resp) });
+
+      if (resp?.zones) {
+        setZonesByEquip((prev) => ({
+          ...prev,
+          [id]: {
+            zoning_gas: resp.zones?.zoning_gas ?? null,
+            zoning_dust: resp.zones?.zoning_dust ?? null,
+          },
+        }));
+        await updateEquipmentMacroAndSub(id, resp.zones?.subarea_id || null);
+
+        if (typeof onZonesApplied === "function") {
+          try { onZonesApplied(id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); }
+          catch (e) { log("onZonesApplied(new) error", { error: String(e) }, "warn"); }
+        }
+      }
+
+      setUnsavedIds((prev) => new Set(prev).add(id));
+      await loadPositions();
+      onOpenEquipment?.({ id, name: created?.equipment?.name || created?.name || "Équipement" });
     } catch (e) {
-      log("updateEquipmentMacroAndSub error", { error: String(e) }, "warn");
+      console.error(e); // eslint-disable-line no-console
+      alert("Erreur création équipement");
+    } finally {
+      setLoading(false);
+      end();
     }
   }
 
@@ -1153,7 +1201,6 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
       const next = !v;
       const el = legendRef.current?.getContainer?.();
       if (el) el.style.display = next ? "block" : "none";
-      // Pas de re-init map ici
       return next;
     });
   };
@@ -1169,7 +1216,7 @@ export default function AtexMap({ plan, pageIndex = 0, onOpenEquipment, onZonesA
         {/* Toolbar dans la carte (haut-gauche) */}
         <div className="atex-toolbar">
           {/* + au centre */}
-          <button className="btn-plus" onClick={onAddEquipment} title="Ajouter un équipement au centre">+</button>
+          <button className="btn-plus" onClick={() => createEquipmentAtCenter()} title="Ajouter un équipement au centre">+</button>
 
           {/* Dessiner */}
           <div className="btn-pencil-wrap">
