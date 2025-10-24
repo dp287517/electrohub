@@ -461,7 +461,7 @@ function PlanCard({ plan, onRename, onPick }) {
   );
 }
 
-/* --- PlanViewerLeaflet --- */
+/* --- PlanViewerLeaflet (HD) --- */
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
   pageIndex = 0,
@@ -487,7 +487,7 @@ const PlanViewerLeaflet = forwardRef(({
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
-  // ✅ Correctifs vue persistante
+  // ✅ Vue persistante
   const initialFitDoneRef = useRef(false);
   const userViewTouchedRef = useRef(false);
 
@@ -567,7 +567,7 @@ const PlanViewerLeaflet = forwardRef(({
     log("Add control mounted");
   }
 
-  // >>> INITIALISATION / RENDU PDF
+  // >>> INITIALISATION / RENDU PDF (Hi-DPI)
   useEffect(() => {
     if (disabled) return;          // ❌ pas d’instanciation si désactivé
     if (!fileUrl || !wrapRef.current) return;
@@ -611,8 +611,14 @@ const PlanViewerLeaflet = forwardRef(({
       try {
         log("PDF load start", { fileUrl, pageIndex });
         await cleanupPdf(); // 🧹 annule proprement l’éventuel rendu précédent
+
+        // ——— Rendu source Hi-DPI (comme Atex-map.jsx) ———
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-        const dpr = window.devicePixelRatio || 1;
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const isCoarse = (() => {
+          try { return window.matchMedia?.("(pointer: coarse)")?.matches || false; } catch { return false; }
+        })();
+        const qualityBoost = isCoarse ? 2.5 : 3.5; // mobile : un cran plus bas
 
         // PDF open
         loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
@@ -622,8 +628,9 @@ const PlanViewerLeaflet = forwardRef(({
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
-        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        // Image source nettement plus grande → zoom propre
+        const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
+        const safeScale = Math.min(6.0, Math.max(0.75, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
         log("PDF page ready", { baseW: baseVp.width, baseH: baseVp.height, scale: safeScale, bmpW: viewport.width, bmpH: viewport.height });
 
@@ -631,8 +638,13 @@ const PlanViewerLeaflet = forwardRef(({
         canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
+        ctx.imageSmoothingEnabled = true; // anti-aliasing
 
-        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
+        renderTaskRef.current = page.render({
+          canvasContext: ctx,
+          viewport,
+          intent: "display",
+        });
         await renderTaskRef.current.promise;
         if (cancelled) return;
 
@@ -697,8 +709,8 @@ const PlanViewerLeaflet = forwardRef(({
         const fitZoom = map.getBoundsZoom(bounds, true);
         map.options.zoomSnap = 0.1;
         map.options.zoomDelta = 0.5;
-        map.setMinZoom(fitZoom - 1);
-        map.setMaxZoom(fitZoom + 6);
+        map.setMinZoom(fitZoom - 2); // autorise un cran de plus vers l’extérieur
+        map.setMaxZoom(fitZoom + 8); // et beaucoup plus de détails vers l’intérieur
         map.setMaxBounds(bounds.pad(0.5));
         map.fitBounds(bounds, { padding: [8, 8] });
         initialFitDoneRef.current = true;
@@ -738,7 +750,7 @@ const PlanViewerLeaflet = forwardRef(({
         initialFitDoneRef.current = true;
         log("resize → first fit");
       } else {
-        // ✅ on conserve la vue utilisateur
+        // ✅ conserve la vue utilisateur
         m.setView(keepCenter, keepZoom, { animate: false });
         log("resize → keep view", { z: keepZoom, center: keepCenter });
       }
@@ -828,7 +840,7 @@ const PlanViewerLeaflet = forwardRef(({
     m.scrollWheelZoom?.disable();
     m.invalidateSize(false);
     const fitZoom = m.getBoundsZoom(b, true);
-    m.setMinZoom(fitZoom - 1);
+    m.setMinZoom(fitZoom - 2);
     m.fitBounds(b, { padding: [8, 8] });
     initialFitDoneRef.current = true;
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
@@ -838,7 +850,7 @@ const PlanViewerLeaflet = forwardRef(({
 
   // Hauteur wrapper : s’adapte à l’écran (utile sur smartphone aussi en modal)
   const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
-  const wrapperHeight = Math.max(320, Math.min( imgSize.h || 720, viewportH - 180 ));
+  const wrapperHeight = Math.max(320, Math.min(imgSize.h || 720, viewportH - 180));
 
   return (
     <div className="mt-3 relative">
