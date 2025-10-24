@@ -1,15 +1,14 @@
 // src/pages/Atex.jsx
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 dayjs.locale("fr");
 
 import "../styles/atex-map.css";
 import { api, API_BASE } from "../lib/api.js";
-
 import AtexMap from "./Atex-map.jsx";
 
-/* ----------------------------- Utils ----------------------------- */
+/* ----------------------------- UI utils ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm",
@@ -58,13 +57,9 @@ function Select({ value, onChange, options = [], className = "", placeholder }) 
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) =>
         typeof o === "string" ? (
-          <option key={o} value={o}>
-            {o}
-          </option>
+          <option key={o} value={o}>{o}</option>
         ) : (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
+          <option key={o.value} value={o.value}>{o.label}</option>
         )
       )}
     </select>
@@ -94,9 +89,7 @@ function Labeled({ label, children }) {
 }
 function Drawer({ title, children, onClose }) {
   useEffect(() => {
-    const handler = (e) => {
-      if (e.key === "Escape") onClose?.();
-    };
+    const handler = (e) => { if (e.key === "Escape") onClose?.(); };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [onClose]);
@@ -150,7 +143,7 @@ function statusColor(s) {
 }
 function statusLabel(s) {
   if (s === STATUS.A_FAIRE) return "À faire";
-  if (s === STATUS.EN_COURS) return "En cours (<30j)";
+  if (s === STATUS.EN_COURS) return "≤90j";
   if (s === STATUS.EN_RETARD) return "En retard";
   if (s === STATUS.FAIT) return "Fait";
   return s || "—";
@@ -253,6 +246,12 @@ export default function Atex() {
   const [selectedPlan, setSelectedPlan] = useState(null);
 
   /* ----------------------------- Helpers ----------------------------- */
+  const debouncer = useRef(null);
+  function triggerReloadDebounced() {
+    if (debouncer.current) clearTimeout(debouncer.current);
+    debouncer.current = setTimeout(reload, 300);
+  }
+
   async function reload() {
     setLoading(true);
     try {
@@ -265,6 +264,7 @@ export default function Atex() {
       });
       setItems(Array.isArray(res?.items) ? res.items : []);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setItems([]);
     } finally {
@@ -301,28 +301,28 @@ export default function Atex() {
             id: f.id,
             name: f.original_name || f.name || f.filename || `Fichier ${f.id}`,
             mime: f.mime,
-            url: f.download_url || f.inline_url || `${API_BASE}/api/atex/files/${encodeURIComponent(f.id)}/download`,
+            url:
+              f.download_url ||
+              f.inline_url ||
+              `${API_BASE}/api/atex/files/${encodeURIComponent(f.id)}/download`,
           }))
         : Array.isArray(res?.items)
         ? res.items // compat si le client normalise déjà
         : [];
       setFiles(arr);
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setFiles([]);
     }
   }
 
+  useEffect(() => { reload(); }, []);
   useEffect(() => {
-    reload();
-  }, []);
-  useEffect(() => {
-    const t = setTimeout(reload, 350);
-    return () => clearTimeout(t);
+    triggerReloadDebounced();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, status, building, zone, compliance]);
-  useEffect(() => {
-    reloadCalendar();
-  }, [items]);
+  useEffect(() => { reloadCalendar(); }, [items]);
 
   function openEdit(equipment) {
     const merged = {
@@ -371,6 +371,7 @@ export default function Atex() {
       await reload();
       setToast("Fiche enregistrée ✅");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToast("Erreur enregistrement");
     }
@@ -386,6 +387,7 @@ export default function Atex() {
       await reload();
       setToast("Équipement supprimé ✅");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToast("Suppression impossible");
     }
@@ -400,6 +402,7 @@ export default function Atex() {
       await reload();
       setToast("Photo mise à jour ✅");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToast("Échec upload photo");
     }
@@ -411,6 +414,7 @@ export default function Atex() {
       await reloadFiles(editing.id);
       setToast(filesArr.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToast("Échec upload fichiers");
     }
@@ -433,6 +437,7 @@ export default function Atex() {
       }));
       setToast("Analyse photos terminée ✅");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToast("Analyse photos indisponible");
     }
@@ -452,6 +457,7 @@ export default function Atex() {
       await reload();
       setToast(res?.message || res?.rationale || "Analyse conformité OK ✅");
     } catch (e) {
+      // eslint-disable-next-line no-console
       console.error(e);
       setToast("Analyse conformité indisponible");
     }
@@ -478,9 +484,7 @@ export default function Atex() {
       setMapsLoading(false);
     }
   }
-  useEffect(() => {
-    if (tab === "plans") loadPlans();
-  }, [tab]);
+  useEffect(() => { if (tab === "plans") loadPlans(); }, [tab]);
 
   /* ----------------------------- UI ----------------------------- */
   const StickyTabs = () => (
@@ -521,7 +525,7 @@ export default function Atex() {
               options={[
                 { value: "", label: "Tous statuts" },
                 { value: STATUS.A_FAIRE, label: "À faire (vert)" },
-                { value: STATUS.EN_COURS, label: "En cours <30j (orange)" },
+                { value: STATUS.EN_COURS, label: "En cours ≤90j (orange)" },
                 { value: STATUS.EN_RETARD, label: "En retard (rouge)" },
                 { value: STATUS.FAIT, label: "Fait (hist.)" },
               ]}
