@@ -351,16 +351,13 @@ export default function AtexMap({
 
   const [zonesByEquip, setZonesByEquip] = useState(() => ({}));
   const [subareasById, setSubareasById] = useState(() => ({}));
-  const [lastSubareaId, setLastSubareaId] = useState(null); // ✅ dernière zone créée
+  const [lastSubareaId, setLastSubareaId] = useState(null); // dernière zone créée
 
   const editHandlesLayerRef = useRef(null);
   const [geomEdit, setGeomEdit] = useState({ active: false, kind: null, shapeId: null, layer: null });
 
   const [drawMenu, setDrawMenu] = useState(false);
   const drawMenuRef = useRef(null);
-
-  const [placeOnClick, setPlaceOnClick] = useState(false); // 🎯 mode “placer à la souris”
-  const placeOnClickRef = useRef(false);
 
   const [open, setOpen] = useState(inModal ? !!autoOpenModal : true);
 
@@ -369,6 +366,23 @@ export default function AtexMap({
     () => (plan?.display_name || plan?.logical_name || plan?.id || "").toString(),
     [plan]
   );
+  // 🧭 Métadonnées plan (Bâtiment / Zone) persistées par plan+page
+  const metaKey = useMemo(
+    () => plan ? `atex:planmeta:${plan.logical_name || plan.id || "plan"}:${pageIndex}` : "",
+    [plan, pageIndex]
+  );
+  const [planMeta, setPlanMeta] = useState({ building: "", zone: "" });
+  useEffect(() => {
+    if (!metaKey) return;
+    try {
+      const raw = localStorage.getItem(metaKey);
+      if (raw) setPlanMeta(JSON.parse(raw));
+    } catch {}
+  }, [metaKey]);
+  useEffect(() => {
+    if (!metaKey) return;
+    try { localStorage.setItem(metaKey, JSON.stringify(planMeta)); } catch {}
+  }, [metaKey, planMeta]);
 
   const fileUrl = useMemo(() => {
     if (!plan) return null;
@@ -388,8 +402,6 @@ export default function AtexMap({
       if (e.key === "Escape") {
         setDrawMenu(false);
         setDrawing(DRAW_NONE);
-        setPlaceOnClick(false);
-        placeOnClickRef.current = false;
         if (polyTemp.length) setPolyTemp([]);
       }
     };
@@ -649,7 +661,6 @@ export default function AtexMap({
         : [];
       const list = await enrichStatuses(baseList);
 
-      // cache zones by equip (pour ouverture fiche depuis carte)
       const zmap = {};
       for (const p of list) {
         zmap[p.id] = { zoning_gas: p.zoning_gas ?? null, zoning_dust: p.zoning_dust ?? null };
@@ -689,7 +700,12 @@ export default function AtexMap({
   async function updateEquipmentMacroAndSub(equipmentId, subareaId) {
     try {
       const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
-      const patch = { equipment: planDisplayName || "", sub_equipment: subName || "" };
+      const patch = {
+        equipment: planDisplayName || "",
+        sub_equipment: subName || "",
+        building: (planMeta.building || "").trim(),
+        zone: (planMeta.zone || "").trim(),
+      };
       log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
       await api.atex.updateEquipment(equipmentId, patch);
     } catch (e) {
@@ -699,7 +715,6 @@ export default function AtexMap({
 
   /* ---------------------- Création équipement (utilitaires) ---------------------- */
   function centroidFracOfSubarea(sa) {
-    // renvoie {xf,yf} en fractions [0..1] du plan (selon kind)
     if (!sa) return null;
     if (sa.kind === "rect") {
       const xf = ((sa.x1 ?? 0) + (sa.x2 ?? 0)) / 2;
@@ -710,7 +725,6 @@ export default function AtexMap({
       return { xf: sa.cx ?? 0.5, yf: sa.cy ?? 0.5 };
     }
     if (sa.kind === "poly" && Array.isArray(sa.points) && sa.points.length) {
-      // centroïde simple (moyenne)
       const n = sa.points.length;
       const sum = sa.points.reduce((acc, [x, y]) => [acc[0] + x, acc[1] + y], [0, 0]);
       return { xf: sum[0] / n, yf: sum[1] / n };
@@ -718,7 +732,7 @@ export default function AtexMap({
     return null;
   }
 
-  async function createEquipmentAtFrac(xf, yf, droppedFiles /* optional: FileList|Array<File> */) {
+  async function createEquipmentAtFrac(xf, yf, droppedFiles /* optional */) {
     if (!plan || !baseLayerRef.current) return;
     const end = timeStart("createEquipmentAtFrac");
     try {
@@ -735,18 +749,11 @@ export default function AtexMap({
       });
       log("setPosition (new equip) response", { raw: safeJson(resp) });
 
-      if (resp?.zones) {
-        await updateEquipmentMacroAndSub(id, resp.zones?.subarea_id || null);
-        try { onZonesApplied?.(id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); } catch {}
-      }
+      await updateEquipmentMacroAndSub(id, resp?.zones?.subarea_id || null);
+      try { onZonesApplied?.(id, { zoning_gas: resp?.zones?.zoning_gas ?? null, zoning_dust: resp?.zones?.zoning_dust ?? null }); } catch {}
 
-      // Upload fichiers déposés (si fournis)
       if (droppedFiles && droppedFiles.length) {
-        try {
-          await api.atex.uploadAttachments(id, Array.from(droppedFiles));
-        } catch (e) {
-          log("uploadAttachments error", { error: String(e) }, "warn");
-        }
+        try { await api.atex.uploadAttachments(id, Array.from(droppedFiles)); } catch (e) { log("uploadAttachments error", { error: String(e) }, "warn"); }
       }
 
       await reloadAll();
@@ -759,7 +766,6 @@ export default function AtexMap({
 
   async function createEquipmentAtCenter(droppedFiles) {
     if (!plan || !baseLayerRef.current) return;
-    // ✅ si on a une "dernière zone créée", placer au centroïde de celle-ci
     let xf, yf;
     const last = lastSubareaId ? subareasById[lastSubareaId] : null;
     if (last) {
@@ -813,10 +819,8 @@ export default function AtexMap({
               y_frac: Math.round(yf * 1e6) / 1e6,
             });
             log("setPosition response", { raw: safeJson(resp) });
-            if (resp?.zones) {
-              await updateEquipmentMacroAndSub(p.id, resp.zones?.subarea_id || null);
-              try { onZonesApplied?.(p.id, { zoning_gas: resp.zones?.zoning_gas ?? null, zoning_dust: resp.zones?.zoning_dust ?? null }); } catch {}
-            }
+            await updateEquipmentMacroAndSub(p.id, resp?.zones?.subarea_id || null);
+            try { onZonesApplied?.(p.id, { zoning_gas: resp?.zones?.zoning_gas ?? null, zoning_dust: resp?.zones?.zoning_dust ?? null }); } catch {}
             await reloadAll();
           } catch (e) {
             console.error("[ATEX] setPosition error", e);
@@ -1093,7 +1097,7 @@ export default function AtexMap({
               created = await api.atexMaps.createSubarea(payload);
             }
             const zid = created?.id || created?.subarea?.id;
-            if (zid) setLastSubareaId(zid); // ✅ mémorise dernière zone créée
+            if (zid) setLastSubareaId(zid);
           } catch (e) {
             console.error("[ATEX] Subarea create failed", e);
             alert("Erreur création zone");
@@ -1140,7 +1144,6 @@ export default function AtexMap({
     };
     const onDblClick = () => {
       if (polyTemp.length < 3) return;
-      // ouvrir éditeur puis créer
       openSubareaEditorAtCenter(
         async (meta) => {
           const end = timeStart("createSubarea (poly)");
@@ -1158,7 +1161,7 @@ export default function AtexMap({
               page_index: pageIndex,
             });
             const zid = created?.id || created?.subarea?.id;
-            if (zid) setLastSubareaId(zid); // ✅ mémorise dernière zone créée
+            if (zid) setLastSubareaId(zid);
           } catch (e) {
             console.error("[ATEX] Subarea poly create failed", e);
             alert("Erreur création polygone");
@@ -1244,7 +1247,7 @@ export default function AtexMap({
           xf = frac.xf; yf = frac.yf;
         }
       } catch {}
-      // sinon, fallback centre (ou dernière zone)
+      // fallback: centroïde dernière zone ou centre plan
       if (xf == null || yf == null) {
         const last = lastSubareaId ? subareasById[lastSubareaId] : null;
         const c = last ? centroidFracOfSubarea(last) : null;
@@ -1300,19 +1303,6 @@ export default function AtexMap({
         {/* ➕ au centre (ou centroïde de la dernière zone) */}
         <button className="btn-plus" onClick={() => createEquipmentAtCenter()} title="Ajouter un équipement (centre / dernière zone)">+</button>
 
-        {/* 🎯 placer à la souris */}
-        <button
-          className={`btn-pencil ${placeOnClick ? "active" : ""}`}
-          title={placeOnClick ? "Cliquer sur le plan pour placer un équipement (actif)" : "Placer un équipement à la souris"}
-          onClick={() => {
-            const next = !placeOnClick;
-            setPlaceOnClick(next);
-            placeOnClickRef.current = next;
-          }}
-        >
-          🎯
-        </button>
-
         {/* ✏️ Dessin zones */}
         <div className="btn-pencil-wrap" ref={drawMenuRef}>
           <button className="btn-pencil" onClick={() => setDrawMenu((v) => !v)} title="Dessiner (zones ATEX)">✏️</button>
@@ -1331,7 +1321,6 @@ export default function AtexMap({
           <button className="btn-pencil" title="Terminer le polygone" onClick={() => {
             const m = mapRef.current;
             if (!m || polyTemp.length < 3) return;
-            // simuler double-clic
             const ev = new MouseEvent("dblclick");
             m.getContainer().dispatchEvent(ev);
           }}>✔️</button>
@@ -1373,12 +1362,7 @@ export default function AtexMap({
         </button>
       </div>
 
-      {/* Overlay aide modes */}
-      {placeOnClick && (
-        <div className="absolute left-3 top-3 z-[5000] px-2 py-1 text-[11px] rounded bg-amber-50 border border-amber-200 text-amber-800 shadow">
-          Mode “placer à la souris” : cliquez sur le plan pour créer un équipement.
-        </div>
-      )}
+      {/* Overlays d’aide */}
       {drawing === DRAW_POLY && (
         <div className="absolute left-3 top-3 z-[5000] px-2 py-1 text-[11px] rounded bg-blue-50 border border-blue-200 text-blue-800 shadow">
           Mode polygone : cliquez pour ajouter des sommets, puis “✔️ Terminer polygone”.
@@ -1386,21 +1370,6 @@ export default function AtexMap({
       )}
     </div>
   );
-
-  // click sur la carte pour “placer à la souris”
-  useEffect(() => {
-    const m = mapRef.current;
-    const base = baseLayerRef.current;
-    if (!m || !base) return;
-    const onClick = async (e) => {
-      if (!placeOnClickRef.current || draggingRef.current) return;
-      const { xf, yf } = fromLatLngToFrac(e.latlng, base);
-      await createEquipmentAtFrac(xf, yf);
-    };
-    m.on("click", onClick);
-    return () => { try { m.off("click", onClick); } catch {} };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planKey, pageIndex]);
 
   const EditorPopover = editorPos?.screen ? (
     <div className="fixed z-[7000]" style={editorStyle}>
@@ -1466,9 +1435,29 @@ export default function AtexMap({
           {/* Dialog */}
           <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
             <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b">
-                <div className="font-semibold">{title}{planDisplayName ? ` — ${planDisplayName}` : ""}</div>
+              <div className="flex items-center justify-between px-4 py-3 border-b gap-3 flex-wrap">
+                <div className="font-semibold">
+                  {title}{planDisplayName ? ` — ${planDisplayName}` : ""}
+                </div>
                 <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <span className="text-sm text-gray-600">Bâtiment</span>
+                    <input
+                      className="border rounded-lg px-2 py-1 text-sm w-[160px]"
+                      value={planMeta.building}
+                      onChange={(e) => setPlanMeta((m) => ({ ...m, building: e.target.value }))}
+                      placeholder="Ex: Bât. A"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-sm text-gray-600">Zone</span>
+                    <input
+                      className="border rounded-lg px-2 py-1 text-sm w-[160px]"
+                      value={planMeta.zone}
+                      onChange={(e) => setPlanMeta((m) => ({ ...m, zone: e.target.value }))}
+                      placeholder="Ex: Niv. 2"
+                    />
+                  </div>
                   <Btn variant="ghost" onClick={() => setOpen(false)}>Fermer</Btn>
                 </div>
               </div>
