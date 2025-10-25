@@ -121,8 +121,8 @@ async function ensureSchema() {
       name TEXT NOT NULL,
       building TEXT DEFAULT '',
       zone TEXT DEFAULT '',
-      equipment TEXT DEFAULT '',          -- ← "Équipement (macro)" (nom du plan)
-      sub_equipment TEXT DEFAULT '',      -- ← "Sous-Équipement (depuis zones tracées)" (nom de la forme)
+      equipment TEXT DEFAULT '',          -- "Équipement (macro)" (nom du plan)
+      sub_equipment TEXT DEFAULT '',      -- "Sous-Équipement" (nom de la forme)
       type TEXT DEFAULT '',
       manufacturer TEXT DEFAULT '',
       manufacturer_ref TEXT DEFAULT '',
@@ -414,6 +414,7 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
     const { rows } = await pool.query(
       `
       SELECT e.*,
+             (SELECT MAX(date) FROM atex_checks c WHERE c.equipment_id=e.id) AS last_check_date,
              (SELECT result FROM atex_checks c
                WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
                ORDER BY c.date DESC NULLS LAST
@@ -424,16 +425,20 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
     );
     const eq = rows?.[0] || null;
     if (!eq) return res.status(404).json({ ok: false, error: "not found" });
-    eq.photo_url =
-      (eq.photo_content && eq.photo_content.length) || eq.photo_path
-        ? `/api/atex/equipments/${id}/photo`
-        : null;
+
+    // ✅ alignement avec la liste: status dynamique + compliance_state + photo_url
+    eq.status = eqStatusFromDue(eq.next_check_date);
     eq.compliance_state =
       eq.last_result === "conforme"
         ? "conforme"
         : eq.last_result === "non_conforme"
         ? "non_conforme"
         : "na";
+    eq.photo_url =
+      (eq.photo_content && eq.photo_content.length) || eq.photo_path
+        ? `/api/atex/equipments/${id}/photo`
+        : null;
+
     res.json({ equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
@@ -518,6 +523,7 @@ app.put("/api/atex/equipments/:id", async (req, res) => {
     const { rows } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
     const eq = rows?.[0] || null;
     if (eq) {
+      eq.status = eqStatusFromDue(eq.next_check_date);
       eq.photo_url =
         (eq.photo_content && eq.photo_content.length) || eq.photo_path
           ? `/api/atex/equipments/${id}/photo`
@@ -692,6 +698,7 @@ app.put("/api/atex/equipments/:id/checks/:checkId", multerFiles.array("files"), 
         (equipment.photo_content && equipment.photo_content.length) || equipment.photo_path
           ? `/api/atex/equipments/${id}/photo`
           : null;
+      equipment.status = eqStatusFromDue(equipment.next_check_date);
     }
     res.json({ ok:true, equipment });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
@@ -1076,7 +1083,7 @@ app.get("/api/atex/maps/positions", async (req, res) => {
         const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
         logical = rows?.[0]?.logical_name || "";
       } else {
-        // si "id" n'est pas un UUID, on le traite comme logical_name
+        // si "id" n'est pas un UUID, on le traite comme logical_name (compat)
         logical = id;
       }
     }
@@ -1127,7 +1134,7 @@ app.get("/api/atex/maps/subareas", async (req, res) => {
 
     if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
 
-    // Gardé en ASC pour l'affichage (ordre de création), la priorité de sélection est gérée côté detectZonesForPoint (DESC)
+    // ASC pour affichage; priorité de sélection gérée en DESC dans detectZonesForPoint
     const { rows } = await pool.query(
       `SELECT * FROM atex_subareas WHERE logical_name=$1 AND page_index=$2 ORDER BY created_at ASC`,
       [logical, pageIndex]
@@ -1457,6 +1464,7 @@ app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
         (eq.photo_content && eq.photo_content.length) || eq.photo_path
           ? `/api/atex/equipments/${id}/photo`
           : null;
+      eq.status = eqStatusFromDue(eq.next_check_date);
       eq.compliance_state =
         eq.last_result === "conforme" ? "conforme" :
         eq.last_result === "non_conforme" ? "non_conforme" : "na";
