@@ -274,9 +274,6 @@ export default function Atex() {
   const [editing, setEditing] = useState(null);
   const initialRef = useRef(null); // snapshot pour dirty check
 
-  // info contrôle
-  const [lastCheckDate, setLastCheckDate] = useState(null);
-
   // PJ list
   const [files, setFiles] = useState([]);
 
@@ -299,6 +296,12 @@ export default function Atex() {
   function triggerReloadDebounced() {
     if (debouncer.current) clearTimeout(debouncer.current);
     debouncer.current = setTimeout(reload, 300);
+  }
+
+  function next36MonthsISO(dateStr) {
+    if (!dateStr) return "";
+    const d = dayjs(dateStr);
+    return d.isValid() ? d.add(36, "month").format("YYYY-MM-DD") : "";
   }
 
   async function reload() {
@@ -363,16 +366,6 @@ export default function Atex() {
     }
   }
 
-  async function reloadLastCheck(equipId) {
-    try {
-      const r = await api.atex.listHistory(equipId);
-      const last = Array.isArray(r?.checks) ? r.checks[0] : null;
-      setLastCheckDate(last?.date || null);
-    } catch {
-      setLastCheckDate(null);
-    }
-  }
-
   useEffect(() => {
     reload();
   }, []);
@@ -397,7 +390,7 @@ export default function Atex() {
     initialRef.current = base;
     setDrawerOpen(true);
     if (base?.id) {
-      // 🔄 recharge frais depuis le serveur pour refléter setPosition et autres mises à jour
+      // 🔄 recharge frais depuis le serveur pour refléter setPosition et autres mises à jour (dont bâtiment/zone)
       api.atex
         .getEquipment(base.id)
         .then((res) => {
@@ -410,13 +403,11 @@ export default function Atex() {
         })
         .catch(() => {});
       reloadFiles(base.id);
-      reloadLastCheck(base.id);
     }
   }
   function closeEdit() {
     setEditing(null);
     setFiles([]);
-    setLastCheckDate(null);
     setDrawerOpen(false);
     initialRef.current = null;
   }
@@ -438,6 +429,7 @@ export default function Atex() {
       "atex_mark_dust",
       "comment",
       "installed_at",
+      "last_check_date",   // ✅ on suit maintenant ce champ
       "next_check_date",
       "zoning_gas",
       "zoning_dust",
@@ -466,7 +458,8 @@ export default function Atex() {
       comment: editing.comment || "",
       status: editing.status || STATUS.A_FAIRE,
       installed_at: editing.installed_at || editing.installation_date || null,
-      next_check_date: editing.next_check_date || null,
+      last_check_date: editing.last_check_date || null,     // ✅ on persiste le dernier contrôle
+      next_check_date: editing.next_check_date || null,     // (auto +36m, modifiable)
       zoning_gas: editing.zoning_gas ?? null,
       zoning_dust: editing.zoning_dust ?? null,
     };
@@ -573,16 +566,12 @@ export default function Atex() {
       const decision = res?.decision || null;
       const rationale = res?.rationale || "";
 
-      // applique la décision (si l’endpoint existe côté front api)
       if (editing?.id && api.atex.applyCompliance) {
         try {
           await api.atex.applyCompliance(editing.id, { decision, rationale });
-        } catch {
-          // silencieux: si l’endpoint n’existe pas côté back, on garde au moins le toast d’info
-        }
+        } catch {}
       }
 
-      // rafraîchit fiche + liste
       if (editing?.id) {
         const fresh = await api.atex.getEquipment(editing.id).catch(() => null);
         if (fresh?.equipment) {
@@ -960,20 +949,33 @@ export default function Atex() {
       {drawerOpen && editing && (
         <Drawer title={`ATEX • ${editing.name || "nouvel équipement"}`} onClose={closeEdit} dirty={dirty}>
           <div className="space-y-4">
-            {/* 🏢 Bâtiment & 🧭 Zone en entête (à côté du bouton fermer) */}
+            {/* 🏢 Bâtiment & 🧭 Zone — repris du plan (lecture seule) */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="grid sm:grid-cols-3 gap-3">
-                <Labeled label="Bâtiment">
-                  <Input value={editing.building || ""} onChange={(v) => setEditing({ ...editing, building: v })} />
+                <Labeled label="Bâtiment (depuis plan)">
+                  <Input
+                    value={editing.building || ""}
+                    onChange={() => {}}
+                    readOnly
+                    className="bg-gray-50 text-gray-600"
+                    title="Défini dans l'en-tête du plan PDF"
+                  />
                 </Labeled>
-                <Labeled label="Zone (plan)">
-                  <Input value={editing.zone || ""} onChange={(v) => setEditing({ ...editing, zone: v })} />
+                <Labeled label="Zone (depuis plan)">
+                  <Input
+                    value={editing.zone || ""}
+                    onChange={() => {}}
+                    readOnly
+                    className="bg-gray-50 text-gray-600"
+                    title="Défini dans l'en-tête du plan PDF"
+                  />
                 </Labeled>
                 <div className="flex items-end">
                   <Btn
                     variant={dirty ? "warn" : "ghost"}
                     className={dirty ? "animate-pulse" : ""}
                     onClick={saveBase}
+                    disabled={!dirty}
                   >
                     {dirty ? "Enregistrer la fiche" : "Enregistré"}
                   </Btn>
@@ -1075,10 +1077,21 @@ export default function Atex() {
                   onChange={(v) => setEditing({ ...editing, installed_at: v })}
                 />
               </Labeled>
-              <Labeled label="Dernier contrôle (lecture seule)">
-                <Input type="date" value={asDateInput(lastCheckDate)} readOnly />
+              <Labeled label="Dernier contrôle">
+                <Input
+                  type="date"
+                  value={asDateInput(editing.last_check_date)}
+                  onChange={(v) => {
+                    const nextAuto = next36MonthsISO(v);
+                    setEditing((cur) => ({
+                      ...(cur || {}),
+                      last_check_date: v,
+                      next_check_date: nextAuto || cur?.next_check_date || "",
+                    }));
+                  }}
+                />
               </Labeled>
-              <Labeled label="Prochain contrôle (auto à la clôture)">
+              <Labeled label="Prochain contrôle (auto +36 mois, ajustable)">
                 <Input
                   type="date"
                   value={asDateInput(editing.next_check_date)}
