@@ -570,10 +570,27 @@ export default function Atex() {
     if (!editing?.id) return;
     const before = { ...editing };
     try {
-      await api.atex.verifyCompliance(editing.id);
+      // Étape 1 : Analyse IA de conformité (marquage vs zonage)
+      const body = {
+        atex_mark_gas: editing.atex_mark_gas || "",
+        atex_mark_dust: editing.atex_mark_dust || "",
+        target_gas: editing.zoning_gas ?? null,
+        target_dust: editing.zoning_dust ?? null,
+      };
+
+      const res = await api.atex.assessConformity(body);
+      const decision = res?.decision || null;
+      const rationale = res?.rationale || "";
+
+      // Étape 2 : Appliquer la décision (enregistre un check IA)
+      if (api.atex.applyCompliance) {
+        await api.atex.applyCompliance(editing.id, { decision, rationale });
+      }
+
+      // Étape 3 : Recharger la fiche complète
       const updated = await api.atex.getEquipment(editing.id);
 
-      // Fusionner les champs photo IA si non enregistrés
+      // Étape 4 : Fusionner les champs IA (fabricant, ref, marquage)
       setEditing({
         ...before,
         ...updated,
@@ -584,10 +601,14 @@ export default function Atex() {
       });
 
       await reload();
-      setToast("Vérification conformité IA effectuée");
+      setToast(
+        decision
+          ? `Conformité: ${decision === "conforme" ? "Conforme" : "Non conforme"}`
+          : "Analyse IA terminée"
+      );
     } catch (e) {
-      console.error(e);
-      setToast("Échec vérification IA");
+      console.error("[ATEX] Échec vérification IA:", e);
+      setToast("Échec vérification conformité IA");
     }
   }
 
