@@ -2,12 +2,10 @@
    ATEX MAP — styles Leaflet + légende + marqueurs + zones
    Calqué sur Doors, adapté ATEX (gaz / poussière).
    ========================================================================== */
-
 /* ----------- Effets génériques ----------- */
 @keyframes blinkPulse { 0%{opacity:1} 50%{opacity:.35} 100%{opacity:1} }
 .blink-orange { animation: blinkPulse 1.2s ease-in-out infinite; }
-.blink-red    { animation: blinkPulse 0.9s ease-in-out infinite; }
-
+.blink-red { animation: blinkPulse 0.9s ease-in-out infinite; }
 /* ----------- Wrapper Leaflet ----------- */
 .leaflet-wrapper {
   position: relative;
@@ -16,17 +14,14 @@
   overflow: hidden;
   background: #fff;
 }
-
 .leaflet-container {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
 }
-
 /* Assure un fond neutre derrière les overlays */
 .leaflet-container .leaflet-overlay-pane svg {
   overflow: visible;
 }
-
-/* ----------- (legacy) Bouton ➕ control — non utilisé désormais ----------- */
+/* ----------- (legacy) Bouton control — non utilisé désormais ----------- */
 .leaflet-control-addatex a {
   display: inline-flex;
   align-items: center;
@@ -41,14 +36,12 @@
   box-shadow: 0 1px 2px rgba(0,0,0,.15);
 }
 .leaflet-control-addatex a:hover { background: #1d4ed8; }
-
 /* ----------- Marqueurs (icônes div) ----------- */
 /* Utilisée par L.divIcon({ className: "atex-marker-inline", ... }) dans Atex-map.jsx */
 .atex-marker-inline {
   background: transparent !important;
   border: none !important;
 }
-
 /* jeux d’états (toujours OK si besoin ailleurs) */
 .atex-marker--new,
 .atex-marker--todo,
@@ -57,11 +50,10 @@
   width: 22px; height: 22px; border-radius: 9999px;
   box-shadow: 0 0 0 1px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.12);
 }
-.atex-marker--new  { background:#2563eb; border:2px solid #93c5fd; }
+.atex-marker--new { background:#2563eb; border:2px solid #93c5fd; }
 .atex-marker--todo { background:#059669; border:2px solid #34d399; }
 .atex-marker--soon { background:#f59e0b; border:2px solid #fbbf24; }
 .atex-marker--late { background:#e11d48; border:2px solid #fb7185; }
-
 /* ----------- Menu pick multi-marqueurs ----------- */
 .atex-pick {
   position: absolute; z-index: 1300;
@@ -75,7 +67,6 @@
   cursor: pointer;
 }
 .atex-pick > button:hover { background: #f3f4f6; }
-
 /* ----------- Légende zoning (control bas droite) ----------- */
 .atex-legend {
   position: absolute; right: 8px; bottom: 8px; z-index: 1200;
@@ -92,7 +83,6 @@
   width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15);
 }
 .atex-legend__label { font-size: 12px; color: #374151; }
-
 /* ----------- Zones: lisibles mais discrètes ----------- */
 /* Tous les vecteurs dans le pane des zones restent fins/transparents */
 .leaflet-pane.zonesPane svg path,
@@ -103,7 +93,6 @@
   opacity: 0.9;
   fill-opacity: 0.12 !important; /* pour éviter de cacher le plan */
 }
-
 /* Libellé de zone (marker HTML non interactif) */
 .atex-subarea-label {
   pointer-events: none;
@@ -113,7 +102,6 @@
 .atex-subarea-label > div {
   backdrop-filter: blur(2px);
 }
-
 /* Hachures option mix gaz+poussière si nécessaire */
 .leaflet-overlay-pane .atex-subarea-mix {
   fill-opacity: .22;
@@ -130,7 +118,6 @@
       transparent 8px
     );
 }
-
 /* ----------- Poignées d’édition (pane dédié) ----------- */
 .leaflet-pane.editPane .leaflet-interactive { cursor: move; }
 .leaflet-pane.editPane svg path,
@@ -141,7 +128,6 @@
   fill-opacity: 1;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,.15));
 }
-
 /* ----------- Mini légende des marqueurs (bas de carte) ----------- */
 .atex-legend-markers {
   display: flex; align-items: center; gap: 12px; font-size: 12px; color: #4b5563;
@@ -151,11 +137,10 @@
   width: 12px; height: 12px; border-radius: 9999px; display: inline-block; margin-right: 6px;
   border: 1px solid rgba(0,0,0,.15);
 }
-.dot-todo  { background: #059669; }
-.dot-soon  { background: #f59e0b; }
-.dot-late  { background: #e11d48; }
-.dot-new   { background: #2563eb; }
-
+.dot-todo { background: #059669; }
+.dot-soon { background: #f59e0b; }
+.dot-late { background: #e11d48; }
+.dot-new { background: #2563eb; }
 /* ----------- Carte — bandeau titre/toolbar interne ----------- */
 .atex-map-toolbar {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -164,7 +149,6 @@
 .atex-map-title {
   font-weight: 600; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-
 /* ----------- Leaflet.draw (si jamais activé) ----------- */
 .leaflet-draw-toolbar a {
   background: #fff;
@@ -176,11 +160,9 @@
   background: #fff; color: #111827; border: 1px solid #e5e7eb;
 }
 .leaflet-draw-actions a:hover { background: #f3f4f6; }
-
 /* ----------- Modale plein écran (mobile) ----------- */
 .atex-viewer-modal { position: fixed; inset: 0; z-index: 5000; background: #fff; padding: 8px; }
 .atex-viewer-modal .leaflet-wrapper { height: calc(100vh - 64px); }
-
 /* ----------- Badges / helpers ----------- */
 .badge {
   display: inline-flex; align-items: center; gap: 6px;
@@ -191,14 +173,12 @@
 .badge--red { background: #ffe4e6; color: #9f1239; }
 .badge--blue { background: #dbeafe; color: #1e40af; }
 .badge--gray { background: #f3f4f6; color: #374151; }
-
 /* ----------- Tooltips (si L.tooltip) ----------- */
 .leaflet-tooltip.atex-tip {
   background: #111827; color: #fff; border: none; border-radius: 6px;
   box-shadow: 0 8px 20px rgba(0,0,0,.18);
 }
 .leaflet-tooltip.atex-tip:before { border-top-color: #111827; }
-
 /* ----------- Responsive ----------- */
 @media (max-width: 640px) {
   .atex-legend {
@@ -207,7 +187,6 @@
   .atex-legend__label { font-size: 11px; }
   .leaflet-control-zoom { transform: translateY(4px); }
 }
-
 /* =========================
    AJOUT — toolbar (plus / crayon / ajuster)
    ========================= */
@@ -220,7 +199,6 @@
   gap: 8px;
   z-index: 5000; /* au-dessus des overlays et contrôles Leaflet */
 }
-
 .btn-plus,
 .btn-pencil {
   width: 36px;
@@ -236,12 +214,9 @@
   align-items: center;
   justify-content: center;
 }
-
 .btn-plus:hover,
 .btn-pencil:hover { background: #fff; }
-
 .btn-pencil-wrap { position: relative; }
-
 .draw-menu {
   position: absolute;
   top: 40px; /* sous le crayon */
@@ -254,7 +229,6 @@
   overflow: hidden;
   box-shadow: 0 8px 24px rgba(0,0,0,.12);
 }
-
 .draw-menu > button {
   padding: 8px 12px;
   background: transparent;
@@ -264,5 +238,25 @@
   cursor: pointer;
   font-size: 14px;
 }
-
 .draw-menu > button:hover { background: #f6f6f6; }
+
+/* --- Mode édition de forme (zoom modal + visuel carte) --- */
+body.editing-geom .leaflet-wrapper .leaflet-container {
+  cursor: crosshair !important;
+}
+body.editing-geom .fixed.z-\[7000\] {
+  transform: scale(0.92);
+  opacity: 0.8;
+  pointer-events: none;
+  transition: all 0.25s ease;
+}
+
+/* Animation des feedbacks toast */
+@keyframes fade-in-out {
+  0% { opacity: 0; transform: translateY(10px); }
+  10%, 90% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-10px); }
+}
+.toast {
+  animation: fade-in-out 2.6s ease-in-out forwards;
+}
