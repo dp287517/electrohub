@@ -1378,24 +1378,26 @@ app.get("/api/atex/maps/meta", async (req, res) => {
 
 app.put("/api/atex/maps/meta", async (req, res) => {
   try {
-    const { plan_key, building, zone } = req.body || {};
-    if (!plan_key) return res.status(400).json({ error: "plan_key manquant" });
+    const { plan_key, building, zone } = req.body;
+    if (!plan_key) return res.status(400).json({ error: "plan_key requis" });
 
-    const rows = await pool.query(
-      `UPDATE atex_plans 
-          SET building = $2, zone = $3, updated_at = now()
-        WHERE logical_name = $1 OR id::text = $1
-        RETURNING id, logical_name AS plan_key, building, zone`,
-      [safeStr(plan_key), safeStr(building), safeStr(zone)]
+    // détecter si c’est un ID numérique
+    const plan = await db.get(
+      `SELECT * FROM atex_plans WHERE id = ? OR logical_name = ? LIMIT 1`,
+      [Number(plan_key), plan_key]
     );
 
-    if (!rows.length)
-      return res.status(404).json({ error: "Plan introuvable" });
+    if (!plan) return res.status(404).json({ error: "Plan introuvable" });
 
-    res.json(rows[0]);
+    await db.run(
+      `UPDATE atex_plans SET building = ?, zone = ? WHERE id = ?`,
+      [building || null, zone || null, plan.id]
+    );
+
+    res.json({ ok: true });
   } catch (e) {
-    console.error("[PUT /maps/meta]", e);
-    res.status(500).json({ error: e.message });
+    console.error("setMeta error", e);
+    res.status(500).json({ error: String(e) });
   }
 });
 // -------------------------------------------------
