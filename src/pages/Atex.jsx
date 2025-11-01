@@ -564,6 +564,33 @@ export default function Atex() {
       setToast("Analyse conformité indisponible");
     }
   }
+
+  // CORRECTIF CHATGPT : Fusion des champs IA après verifyCompliance
+  async function verifyComplianceIA() {
+    if (!editing?.id) return;
+    const before = { ...editing };
+    try {
+      await api.atex.verifyCompliance(editing.id);
+      const updated = await api.atex.getEquipment(editing.id);
+
+      // Fusionner les champs photo IA si non enregistrés
+      setEditing({
+        ...before,
+        ...updated,
+        fabricant: updated.fabricant || before.fabricant,
+        ref_fabricant: updated.ref_fabricant || before.ref_fabricant,
+        marquage_gaz: updated.marquage_gaz || before.marquage_gaz,
+        marquage_pouss: updated.marquage_pouss || before.marquage_pouss,
+      });
+
+      await reload();
+      setToast("Vérification conformité IA effectuée");
+    } catch (e) {
+      console.error(e);
+      setToast("Échec vérification IA");
+    }
+  }
+
   /* ----------------------------- Plans ----------------------------- */
   async function loadPlans() {
     setMapsLoading(true);
@@ -954,7 +981,7 @@ export default function Atex() {
                     />
                     Analyser des photos (IA)
                   </label>
-                  <Btn variant="subtle" onClick={analyzeCompliance}>
+                  <Btn variant="subtle" onClick={verifyComplianceIA}>
                     Vérifier conformité (IA)
                   </Btn>
                 </div>
