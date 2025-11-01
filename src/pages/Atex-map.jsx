@@ -1272,7 +1272,7 @@ export default function AtexMap({
         ≤90j
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} }} />
+        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} />
         En retard
       </span>
       <span className="inline-flex items-center gap-1">
