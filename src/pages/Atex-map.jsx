@@ -1272,7 +1272,7 @@ export default function AtexMap({
         ≤90j
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} />
+        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} }} />
         En retard
       </span>
       <span className="inline-flex items-center gap-1">
@@ -1291,6 +1291,26 @@ export default function AtexMap({
       </div>
     );
   }
+  // ----------------------------- META (Bâtiment / Zone) -----------------------------
+useEffect(() => {
+  if (!planKey) return;
+  api.atexMaps.getMeta(planKey)
+    .then(({ building, zone }) => {
+      setBuilding(building || "");
+      setZone(zone || "");
+    })
+    .catch(() => {});
+}, [planKey]);
+
+const handleMetaChange = async (nextBuilding, nextZone) => {
+  setBuilding(nextBuilding);
+  setZone(nextZone);
+  try {
+    await api.atexMaps.setMeta(planKey, { building: nextBuilding, zone: nextZone });
+  } catch (err) {
+    console.warn("Erreur mise à jour meta:", err);
+  }
+};
   // --- Modal plein écran
   return (
     <>
@@ -1342,18 +1362,3 @@ export default function AtexMap({
     </>
   );
 }
-useEffect(() => {
-  if (!planKey) return;
-  api.atexMaps.getMeta(planKey)
-    .then(({ building, zone }) => {
-      setBuilding(building || "");
-      setZone(zone || "");
-    })
-    .catch(() => {});
-}, [planKey]);
-
-const handleMetaChange = async (nextBuilding, nextZone) => {
-  setBuilding(nextBuilding);
-  setZone(nextZone);
-  await api.atexMaps.setMeta(planKey, { building: nextBuilding, zone: nextZone });
-};
