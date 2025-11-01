@@ -2,6 +2,7 @@
 // server_atex.js — ATEX CMMS microservice (ESM)
 // Port par défaut: 3001
 // ==============================
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -15,21 +16,27 @@ import pg from "pg";
 import StreamZip from "node-stream-zip";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
+
 // --- OpenAI (extraction & conformité)
 const { OpenAI } = await import("openai");
+
 dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
 const PORT = Number(process.env.ATEX_PORT || 3001);
 const HOST = process.env.ATEX_HOST || "0.0.0.0";
+
 // Dossiers data
 const DATA_DIR = process.env.ATEX_DATA_DIR || path.resolve(__dirname, "./_data_atex");
 const FILES_DIR = path.join(DATA_DIR, "files");
 const MAPS_INCOMING_DIR = path.join(DATA_DIR, "maps_incoming");
 const MAPS_DIR = path.join(DATA_DIR, "maps");
+
 for (const d of [DATA_DIR, FILES_DIR, MAPS_DIR, MAPS_INCOMING_DIR]) {
   await fsp.mkdir(d, { recursive: true });
 }
+
 // -------------------------------------------------
 const app = express();
 app.use(express.json({ limit: "25mb" }));
@@ -66,11 +73,13 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
+
 function getUser(req) {
   const name = req.header("X-User-Name") || null;
   const email = req.header("X-User-Email") || null;
   return { name, email };
 }
+
 // -------------------------------------------------
 const multerFiles = multer({
   storage: multer.diskStorage({
@@ -80,6 +89,7 @@ const multerFiles = multer({
   }),
   limits: { fileSize: 50 * 1024 * 1024 },
 });
+
 const multerZip = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, MAPS_INCOMING_DIR),
@@ -88,6 +98,7 @@ const multerZip = multer({
   }),
   limits: { fileSize: 300 * 1024 * 1024 },
 });
+
 // -------------------------------------------------
 const { Pool } = pg;
 const pool = new Pool({
@@ -98,18 +109,20 @@ const pool = new Pool({
   max: 10,
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
+
 // -------------------------------------------------
 async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_equipments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       building TEXT DEFAULT '',
       zone TEXT DEFAULT '',
-      equipment TEXT DEFAULT '', -- "Équipement (macro)" (nom du plan)
-      sub_equipment TEXT DEFAULT '', -- "Sous-Équipement" (nom de la forme)
+      equipment TEXT DEFAULT '',          -- "Équipement (macro)" (nom du plan)
+      sub_equipment TEXT DEFAULT '',      -- "Sous-Équipement" (nom de la forme)
       type TEXT DEFAULT '',
       manufacturer TEXT DEFAULT '',
       manufacturer_ref TEXT DEFAULT '',
@@ -128,6 +141,7 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_eq_next ON atex_equipments(next_check_date);
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_checks (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -142,6 +156,7 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_checks_eq ON atex_checks(equipment_id);
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_files (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -154,6 +169,7 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_files_eq ON atex_files(equipment_id);
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_plans (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -166,12 +182,14 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_plans_logical ON atex_plans(logical_name);
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_plan_names (
       logical_name TEXT PRIMARY KEY,
       display_name TEXT NOT NULL
     );
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_positions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -185,6 +203,7 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_positions_lookup ON atex_positions(logical_name, page_index);
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_subareas (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -204,6 +223,7 @@ async function ensureSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_atex_subareas_lookup ON atex_subareas(logical_name, page_index);
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_settings (
       id INTEGER PRIMARY KEY DEFAULT 1,
@@ -219,6 +239,7 @@ async function ensureSchema() {
     INSERT INTO atex_settings(id) VALUES (1)
     ON CONFLICT (id) DO NOTHING;
   `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS atex_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -232,6 +253,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_atex_events_time ON atex_events(ts DESC);
   `);
 }
+
 // -------------------------------------------------
 // Utils
 function eqStatusFromDue(due) {
@@ -271,6 +293,7 @@ async function logEvent(req, action, details = {}) {
   }
   console.log(`[atex][${action}]`, { by: u.email || u.name || "anon", ...details });
 }
+
 // Helpers pour contexte plan/sous-zone → fiche équipement
 async function getPlanDisplayName(logical_name) {
   const { rows } = await pool.query(
@@ -285,6 +308,7 @@ async function getSubareaNameById(id) {
   const nm = (rows?.[0]?.name || "").trim();
   return nm || null;
 }
+
 // -------------------------------------------------
 // Health / File
 app.get("/api/atex/health", async (_req, res) => {
@@ -295,6 +319,7 @@ app.get("/api/atex/health", async (_req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 app.get("/api/atex/file", async (req, res) => {
   try {
     const p = String(req.query.path || "");
@@ -306,6 +331,7 @@ app.get("/api/atex/file", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // -------------------------------------------------
 /** EQUIPEMENTS **/
 app.get("/api/atex/equipments", async (req, res) => {
@@ -315,6 +341,7 @@ app.get("/api/atex/equipments", async (req, res) => {
     const building = (req.query.building || "").toString().trim().toLowerCase();
     const zone = (req.query.zone || "").toString().trim().toLowerCase();
     const compliance = (req.query.compliance || "").toString().trim(); // "conforme" | "non_conforme" | "na" | ""
+
     const { rows } = await pool.query(
       `
       SELECT e.*,
@@ -327,6 +354,7 @@ app.get("/api/atex/equipments", async (req, res) => {
       ORDER BY e.created_at DESC
       `
     );
+
     let items = rows.map((r) => {
       const computed_status = eqStatusFromDue(r.next_check_date);
       const compliance_state =
@@ -335,6 +363,7 @@ app.get("/api/atex/equipments", async (req, res) => {
           : r.last_result === "non_conforme"
           ? "non_conforme"
           : "na";
+
       const hay = [
         r.name,
         r.building,
@@ -350,6 +379,7 @@ app.get("/api/atex/equipments", async (req, res) => {
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
+
       return {
         ...r,
         status: computed_status,
@@ -361,6 +391,7 @@ app.get("/api/atex/equipments", async (req, res) => {
         __hay: hay,
       };
     });
+
     if (q) items = items.filter((it) => it.__hay.includes(q));
     if (building) items = items.filter((it) => (it.building || "").toLowerCase().includes(building));
     if (zone) items = items.filter((it) => (it.zone || "").toLowerCase().includes(zone));
@@ -368,12 +399,15 @@ app.get("/api/atex/equipments", async (req, res) => {
     if (compliance === "conforme") items = items.filter((it) => it.compliance_state === "conforme");
     if (compliance === "non_conforme") items = items.filter((it) => it.compliance_state === "non_conforme");
     if (compliance === "na") items = items.filter((it) => it.compliance_state === "na");
+
     items = items.map(({ __hay, ...x }) => x);
+
     res.json({ items });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 app.get("/api/atex/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -391,6 +425,7 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
     );
     const eq = rows?.[0] || null;
     if (!eq) return res.status(404).json({ ok: false, error: "not found" });
+
     // ✅ alignement avec la liste: status dynamique + compliance_state + photo_url
     eq.status = eqStatusFromDue(eq.next_check_date);
     eq.compliance_state =
@@ -403,11 +438,13 @@ app.get("/api/atex/equipments/:id", async (req, res) => {
       (eq.photo_content && eq.photo_content.length) || eq.photo_path
         ? `/api/atex/equipments/${id}/photo`
         : null;
+
     res.json({ equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 app.post("/api/atex/equipments", async (req, res) => {
   try {
     const {
@@ -424,12 +461,14 @@ app.post("/api/atex/equipments", async (req, res) => {
       comment = "",
       installed_at = null,
     } = req.body || {};
+
     // 36 mois après l'installation (ou maintenant si non fourni)
     const installDate = installed_at ? new Date(installed_at) : new Date();
     const firstDue = addMonths(installDate, 36);
+
     const { rows } = await pool.query(
       `
-      INSERT INTO atex_equipments
+      INSERT INTO atex_equipments 
         (name, building, zone, equipment, sub_equipment, type,
          manufacturer, manufacturer_ref, atex_mark_gas, atex_mark_dust,
          comment, installed_at, next_check_date, zoning_gas, zoning_dust)
@@ -459,6 +498,7 @@ app.post("/api/atex/equipments", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 app.put("/api/atex/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -494,6 +534,7 @@ app.put("/api/atex/equipments/:id", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 app.delete("/api/atex/equipments/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -503,14 +544,17 @@ app.delete("/api/atex/equipments/:id", async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // Photos / Files
 app.post("/api/atex/equipments/:id/photo", multerFiles.single("photo"), async (req, res) => {
   try {
     const id = String(req.params.id);
     const file = req.file;
     if (!file) return res.status(400).json({ ok:false, error:"no file" });
+
     let buf = null;
     try { buf = await fsp.readFile(file.path); } catch {}
+
     await pool.query(
       `UPDATE atex_equipments
          SET photo_path=$1,
@@ -522,10 +566,12 @@ app.post("/api/atex/equipments/:id/photo", multerFiles.single("photo"), async (r
     res.json({ ok:true, url:`/api/atex/equipments/${id}/photo` });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ try{
   const id = String(req.params.id);
   const { rows } = await pool.query(`SELECT photo_path, photo_content FROM atex_equipments WHERE id=$1`, [id]);
   const row = rows?.[0] || null; if(!row) return res.status(404).end();
+
   if (row.photo_content && row.photo_content.length) {
     res.type("image/jpeg");
     return res.end(row.photo_content, "binary");
@@ -534,6 +580,7 @@ app.get("/api/atex/equipments/:id/photo", async (req,res)=>{ try{
   if (!fs.existsSync(p)) return res.status(404).end();
   res.sendFile(path.resolve(p));
 } catch { res.status(404).end(); }});
+
 app.get("/api/atex/equipments/:id/files", async (req,res)=>{ try{
   const id = String(req.params.id);
   const { rows } = await pool.query(`SELECT * FROM atex_files WHERE equipment_id=$1 ORDER BY uploaded_at DESC`, [id]);
@@ -546,6 +593,7 @@ app.get("/api/atex/equipments/:id/files", async (req,res)=>{ try{
   }));
   res.json({ files });
 } catch(e){ res.status(500).json({ ok:false, error:e.message }); }});
+
 app.post("/api/atex/equipments/:id/files", multerFiles.array("files"), async (req,res)=>{ try{
   const id = String(req.params.id);
   for (const f of (req.files||[])) {
@@ -559,6 +607,7 @@ app.post("/api/atex/equipments/:id/files", multerFiles.array("files"), async (re
   }
   res.json({ ok:true });
 } catch(e){ res.status(500).json({ ok:false, error:e.message }); }});
+
 app.get("/api/atex/files/:fileId/download", async (req, res) => {
   try {
     const id = String(req.params.fileId);
@@ -568,6 +617,7 @@ app.get("/api/atex/files/:fileId/download", async (req, res) => {
     );
     const r = rows?.[0];
     if (!r) return res.status(404).end();
+
     const filename = r.original_name || "file";
     res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(filename)}`);
     if (r.file_content && r.file_content.length) {
@@ -581,12 +631,14 @@ app.get("/api/atex/files/:fileId/download", async (req, res) => {
     return res.status(404).end();
   } catch { res.status(500).json({ ok:false }); }
 });
+
 app.delete("/api/atex/files/:fileId", async (req,res)=>{ try{
   const id = String(req.params.fileId);
   const { rows } = await pool.query(`DELETE FROM atex_files WHERE id=$1 RETURNING file_path`, [id]);
   const fp = rows?.[0]?.file_path; if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
   res.json({ ok:true });
 } catch(e){ res.status(500).json({ ok:false, error:e.message }); }});
+
 // -------------------------------------------------
 // Settings / Checks / Calendar
 app.get("/api/atex/settings", async (_req, res) => {
@@ -604,6 +656,7 @@ app.put("/api/atex/settings", async (req, res) => {
     res.json(rows?.[0] || {});
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.post("/api/atex/equipments/:id/checks", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -615,6 +668,7 @@ app.post("/api/atex/equipments/:id/checks", async (req, res) => {
     res.json({ check: rows[0] });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.put("/api/atex/equipments/:id/checks/:checkId", multerFiles.array("files"), async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -622,17 +676,21 @@ app.put("/api/atex/equipments/:id/checks/:checkId", multerFiles.array("files"), 
     let items = [], close = false;
     if (req.is("multipart/form-data")) { items = JSON.parse(req.body.items || "[]"); close = String(req.body.close || "false")==="true"; }
     else { items = req.body.items || []; close = !!req.body.close; }
+
     const filesArr = (req.files||[]).map(f=>({ name:f.originalname, mime:f.mimetype, path:f.path, url:fileUrlFromPath(f.path) }));
     await pool.query(`UPDATE atex_checks SET items=$1, files=$2 WHERE id=$3`, [JSON.stringify(items), JSON.stringify(filesArr), checkId]);
+
     if (close) {
       const values2 = await pool.query(`SELECT items FROM atex_checks WHERE id=$1`, [checkId]);
       const its = values2?.rows?.[0]?.items || [];
       const vals = (its || []).slice(0, 5).map((i) => i?.value).filter(Boolean);
       const result = vals.includes("non_conforme") ? "non_conforme" : (vals.length ? "conforme" : null);
+
       const nextDate = addMonths(new Date(), 36);
       await pool.query(`UPDATE atex_equipments SET next_check_date=$1, updated_at=now() WHERE id=$2`, [nextDate, id]);
       await pool.query(`UPDATE atex_checks SET status='fait', result=$1, date=now() WHERE id=$2`, [result, checkId]);
     }
+
     const { rows: eqR } = await pool.query(`SELECT * FROM atex_equipments WHERE id=$1`, [id]);
     const equipment = eqR?.[0] || null;
     if (equipment) {
@@ -645,11 +703,13 @@ app.put("/api/atex/equipments/:id/checks/:checkId", multerFiles.array("files"), 
     res.json({ ok:true, equipment });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.get("/api/atex/equipments/:id/history", async (req,res)=>{ try{
   const id = String(req.params.id);
   const { rows } = await pool.query(`SELECT * FROM atex_checks WHERE equipment_id=$1 ORDER BY date DESC`, [id]);
   res.json({ checks: rows || [] });
 } catch(e){ res.status(500).json({ ok:false, error:e.message }); }});
+
 app.get("/api/atex/calendar", async (_req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -667,12 +727,14 @@ app.get("/api/atex/calendar", async (_req, res) => {
     res.json({ events });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // -------------------------------------------------
 // MAPS — Upload ZIP + list + rename + file URL
 app.post("/api/atex/maps/uploadZip", multerZip.single("zip"), async (req, res) => {
   try {
     const zipPath = req.file?.path;
     if (!zipPath) return res.status(400).json({ ok: false, error: "zip missing" });
+
     const zip = new StreamZip.async({ file: zipPath, storeEntries: true });
     const imported = [];
     try {
@@ -680,18 +742,23 @@ app.post("/api/atex/maps/uploadZip", multerZip.single("zip"), async (req, res) =
       const files = Object.values(entries).filter(
         (e) => !e.isDirectory && /\.pdf$/i.test(e.name)
       );
+
       for (const entry of files) {
         const rawName = entry.name.split("/").pop();
         const { name: baseName } = path.parse(rawName || entry.name);
         const base = baseName || "plan";
         const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
         const version = Math.floor(Date.now() / 1000);
+
         const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
         await fsp.mkdir(path.dirname(dest), { recursive: true });
         await zip.extract(entry.name, dest);
+
         let buf = null;
         try { buf = await fsp.readFile(dest); } catch { buf = null; }
+
         const page_count = 1;
+
         if (buf) {
           await pool.query(
             `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, content)
@@ -705,22 +772,26 @@ app.post("/api/atex/maps/uploadZip", multerZip.single("zip"), async (req, res) =
             [logical, version, path.basename(dest), dest, page_count]
           );
         }
+
         await pool.query(
           `INSERT INTO atex_plan_names (logical_name, display_name) VALUES ($1,$2)
            ON CONFLICT (logical_name) DO NOTHING`,
           [logical, base]
         );
+
         imported.push({ logical_name: logical, version, page_count });
       }
     } finally {
       await zip.close().catch(()=>{});
       fs.rmSync(zipPath, { force: true });
     }
+
     res.json({ ok: true, imported });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // ⚙️ listPlans => id = UUID de la dernière version
 app.get("/api/atex/maps/listPlans", async (_req, res) => {
   try {
@@ -741,10 +812,12 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
     res.json({ plans, items: plans });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // Alias compat (si l’ancien front appelle encore /plans)
 app.get("/api/atex/maps/plans", (req, res) =>
   app._router.handle(Object.assign(req, { url: "/api/atex/maps/listPlans" }), res)
 );
+
 app.put("/api/atex/maps/renamePlan", async (req, res) => {
   try {
     const { logical_name, display_name } = req.body || {};
@@ -758,11 +831,13 @@ app.put("/api/atex/maps/renamePlan", async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // 🔹 Fichier du plan
 app.get("/api/atex/maps/planFile", async (req, res) => {
   try {
     let logical = (req.query.logical_name || "").toString();
     const id = (req.query.id || "").toString();
+
     if (id && isUuid(id)) {
       const { rows } = await pool.query(
         `SELECT file_path, content FROM atex_plans WHERE id=$1 ORDER BY version DESC LIMIT 1`,
@@ -777,7 +852,9 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
       if (fp && fs.existsSync(fp)) return res.type("application/pdf").sendFile(path.resolve(fp));
       return res.status(404).send("not_found");
     }
+
     if (!logical) return res.status(400).json({ ok: false, error: "logical_name required" });
+
     let rows = (
       await pool.query(
         `SELECT file_path, content FROM atex_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
@@ -792,6 +869,7 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
         )
       ).rows;
     }
+
     let row = rows?.[0] || null;
     if (row?.content?.length) {
       res.type("application/pdf");
@@ -806,12 +884,14 @@ app.get("/api/atex/maps/planFile", async (req, res) => {
       );
       if (candidate) fp = path.join(MAPS_DIR, candidate);
     }
+
     if (!fp || !fs.existsSync(fp)) return res.status(404).send("not_found");
     res.type("application/pdf").sendFile(path.resolve(fp));
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 // Aliases compat pour planFile
 app.get("/api/atex/maps/plan/:logical/file", async (req, res) => {
   req.query.logical_name = req.params.logical;
@@ -833,6 +913,7 @@ app.get("/api/doors/maps/plan-id/:id/file", async (req, res) => {
   req.url = "/api/atex/maps/planFile";
   return app._router.handle(req, res);
 });
+
 // -------------------------------------------------
 // MAPS — Positions & Subareas (avec auto MAJ fiche équipement)
 function pointInRect(px, py, x1, y1, x2, y2) {
@@ -881,9 +962,11 @@ async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
   }
   return { zoning_gas: null, zoning_dust: null, subarea_id: null, subarea_name: null };
 }
+
 async function updateEquipmentContext({ equipment_id, logical_name, zoning_gas, zoning_dust, subarea_id, subarea_name_hint }) {
   const planDisplay = await getPlanDisplayName(logical_name);
   const subName = subarea_name_hint || (await getSubareaNameById(subarea_id));
+
   // MAJ zonage + nom du plan (equipment) + nom de sous-zone (sub_equipment)
   await pool.query(
     `UPDATE atex_equipments
@@ -895,13 +978,16 @@ async function updateEquipmentContext({ equipment_id, logical_name, zoning_gas, 
      WHERE id=$5`,
     [zoning_gas, zoning_dust, planDisplay, subName || null, equipment_id]
   );
+
   return { plan_display_name: planDisplay, subarea_name: subName || null };
 }
+
 app.put("/api/atex/maps/setPosition", async (req, res) => {
   try {
     const { equipment_id, logical_name, plan_id = null, page_index = 0, x_frac, y_frac } = req.body || {};
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null)
       return res.status(400).json({ ok: false, error: "missing params" });
+
     await pool.query(
       `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -909,6 +995,7 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
        DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
+
     const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
     const ctx = await updateEquipmentContext({
       equipment_id,
@@ -918,6 +1005,7 @@ app.put("/api/atex/maps/setPosition", async (req, res) => {
       subarea_id: zones.subarea_id,
       subarea_name_hint: zones.subarea_name || null,
     });
+
     res.json({ ok: true, zones, ...ctx });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
@@ -931,6 +1019,7 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
     const { logical_name, plan_id = null, page_index = 0, x_frac, y_frac } = req.body || {};
     if (!equipment_id || !logical_name || x_frac == null || y_frac == null)
       return res.status(400).json({ ok: false, error: "missing params" });
+
     await pool.query(
       `INSERT INTO atex_positions (equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -938,6 +1027,7 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
        DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac`,
       [equipment_id, logical_name, isUuid(plan_id) ? plan_id : null, page_index, x_frac, y_frac]
     );
+
     const zones = await detectZonesForPoint(logical_name, page_index, Number(x_frac), Number(y_frac));
     const ctx = await updateEquipmentContext({
       equipment_id,
@@ -947,18 +1037,22 @@ app.put("/api/atex/maps/positions/:equipmentId", async (req, res) => {
       subarea_id: zones.subarea_id,
       subarea_name_hint: zones.subarea_name || null,
     });
+
     res.json({ ok: true, zones, ...ctx });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // 🔧 Reindex (front l'appelle après modif des sous-zones)
 app.post("/api/atex/maps/reindexZones", async (req, res) => {
   try {
     const { logical_name, page_index = 0 } = req.body || {};
     if (!logical_name) return res.status(400).json({ ok:false, error:"logical_name required" });
+
     const { rows: pos } = await pool.query(
       `SELECT equipment_id, x_frac, y_frac FROM atex_positions WHERE logical_name=$1 AND page_index=$2`,
       [logical_name, Number(page_index)]
     );
+
     let updated = 0;
     for (const p of pos) {
       const z = await detectZonesForPoint(logical_name, Number(page_index), Number(p.x_frac), Number(p.y_frac));
@@ -976,12 +1070,14 @@ app.post("/api/atex/maps/reindexZones", async (req, res) => {
     res.json({ ok:true, updated });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // ✅ Positions — accepte id (UUID) OU logical_name
 app.get("/api/atex/maps/positions", async (req, res) => {
   try {
     let logical = (req.query.logical_name || "").toString().trim();
     const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
+
     if (!logical && id) {
       if (isUuid(id)) {
         const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
@@ -992,6 +1088,7 @@ app.get("/api/atex/maps/positions", async (req, res) => {
       }
     }
     if (!logical) return res.status(400).json({ ok: false, error: "logical_name or id required" });
+
     const { rows } = await pool.query(
       `
       SELECT p.equipment_id, p.x_frac, p.y_frac,
@@ -1018,12 +1115,14 @@ app.get("/api/atex/maps/positions", async (req, res) => {
     res.json({ items });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // ✅ Subareas — accepte id (UUID) OU logical_name
 app.get("/api/atex/maps/subareas", async (req, res) => {
   try {
     let logical = (req.query.logical_name || "").toString().trim();
     const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
+
     if (!logical && id) {
       if (isUuid(id)) {
         const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
@@ -1032,7 +1131,9 @@ app.get("/api/atex/maps/subareas", async (req, res) => {
         logical = id;
       }
     }
+
     if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
+
     // ASC pour affichage; priorité de sélection gérée en DESC dans detectZonesForPoint
     const { rows } = await pool.query(
       `SELECT * FROM atex_subareas WHERE logical_name=$1 AND page_index=$2 ORDER BY created_at ASC`,
@@ -1041,11 +1142,13 @@ app.get("/api/atex/maps/subareas", async (req, res) => {
     res.json({ items: rows || [] });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.get("/api/atex/maps/subareas/stats", async (req, res) => {
   try {
     let logical = (req.query.logical_name || "").toString().trim();
     const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
+
     if (!logical && id) {
       if (isUuid(id)) {
         const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
@@ -1054,7 +1157,9 @@ app.get("/api/atex/maps/subareas/stats", async (req, res) => {
         logical = id;
       }
     }
+
     if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
+
     const { rows } = await pool.query(
       `SELECT COUNT(*)::int AS n FROM atex_subareas WHERE logical_name=$1 AND page_index=$2`,
       [logical, pageIndex]
@@ -1062,6 +1167,7 @@ app.get("/api/atex/maps/subareas/stats", async (req, res) => {
     res.json({ ok:true, count: rows?.[0]?.n ?? 0 });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.post("/api/atex/maps/subareas", async (req, res) => {
   try {
     const {
@@ -1073,9 +1179,12 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
       zoning_gas = null, zoning_dust = null,
       logical_name, plan_id = null, page_index = 0,
     } = req.body || {};
+
     if (!logical_name || !kind) return res.status(400).json({ ok: false, error: "missing params" });
     if (!["rect","circle","poly"].includes(kind)) return res.status(400).json({ ok:false, error:"invalid kind" });
+
     const planIdSafe = isUuid(plan_id) ? plan_id : null;
+
     const { rows } = await pool.query(
       `INSERT INTO atex_subareas
         (logical_name, plan_id, page_index, kind, x1,y1,x2,y2,cx,cy,r,points,name,zoning_gas,zoning_dust)
@@ -1094,6 +1203,7 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
     res.json({ ok:true, subarea: created, created: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.put("/api/atex/maps/subareas/:id", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -1101,9 +1211,11 @@ app.put("/api/atex/maps/subareas/:id", async (req, res) => {
     const set = [];
     const vals = [];
     let i = 1;
+
     if (body.name !== undefined) { set.push(`name=$${i++}`); vals.push(body.name); }
     if (body.zoning_gas !== undefined) { set.push(`zoning_gas=$${i++}`); vals.push(body.zoning_gas); }
     if (body.zoning_dust !== undefined) { set.push(`zoning_dust=$${i++}`); vals.push(body.zoning_dust); }
+
     if (body.kind) {
       if (!["rect","circle","poly"].includes(body.kind)) return res.status(400).json({ ok:false, error:"invalid kind" });
       set.push(`kind=$${i++}`); vals.push(body.kind);
@@ -1115,9 +1227,12 @@ app.put("/api/atex/maps/subareas/:id", async (req, res) => {
     if (body.points !== undefined) {
       set.push(`points=$${i++}`); vals.push(body.points ? JSON.stringify(body.points) : null);
     }
+
     if (!set.length) return res.json({ ok: true });
+
     set.push(`updated_at=now()`);
     vals.push(id);
+
     await pool.query(`UPDATE atex_subareas SET ${set.join(", ")} WHERE id=$${i}`, vals);
     await logEvent(req, "subarea.update", {
       id,
@@ -1126,6 +1241,7 @@ app.put("/api/atex/maps/subareas/:id", async (req, res) => {
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
   try {
     const id = String(req.params.id);
@@ -1135,11 +1251,14 @@ app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
       cx = null, cy = null, r = null,
       points = null,
     } = req.body || {};
+
     if (kind && !["rect","circle","poly"].includes(kind))
       return res.status(400).json({ ok:false, error:"invalid kind" });
+
     const set = [];
     const vals = [];
     let i = 1;
+
     if (kind) { set.push(`kind=$${i++}`); vals.push(kind); }
     for (const [k, v] of Object.entries({ x1,y1,x2,y2,cx,cy,r })) {
       if (v !== undefined) { set.push(`${k}=$${i++}`); vals.push(v); }
@@ -1148,12 +1267,14 @@ app.put("/api/atex/maps/subareas/:id/geometry", async (req, res) => {
       set.push(`points=$${i++}`); vals.push(points ? JSON.stringify(points) : null);
     }
     set.push(`updated_at=now()`);
+
     vals.push(id);
     await pool.query(`UPDATE atex_subareas SET ${set.join(", ")} WHERE id=$${i}`, vals);
     await logEvent(req, "subarea.update.geometry", { id, kind, hasPoints: Array.isArray(points) ? points.length : null });
     res.json({ ok:true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
   try { const id = String(req.params.id);
     await pool.query(`DELETE FROM atex_subareas WHERE id=$1`, [id]);
@@ -1161,12 +1282,14 @@ app.delete("/api/atex/maps/subareas/:id", async (req, res) => {
     res.json({ ok:true });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // ✅ purge — accepte id OU logical_name
 app.delete("/api/atex/maps/subareas/purge", async (req, res) => {
   try {
     let logical = (req.query.logical_name || "").toString().trim();
     const id = (req.query.id || "").toString().trim();
     const pageIndex = Number(req.query.page_index || 0);
+
     if (!logical && id) {
       if (isUuid(id)) {
         const { rows } = await pool.query(`SELECT logical_name FROM atex_plans WHERE id=$1 LIMIT 1`, [id]);
@@ -1175,9 +1298,11 @@ app.delete("/api/atex/maps/subareas/purge", async (req, res) => {
         logical = id;
       }
     }
+
     if (!logical) return res.status(400).json({ ok:false, error:"logical_name or id required" });
     if ((req.header("X-Confirm") || "").toLowerCase() !== "purge")
       return res.status(412).json({ ok:false, error:"missing confirmation header X-Confirm: purge" });
+
     const { rows } = await pool.query(
       `DELETE FROM atex_subareas WHERE logical_name=$1 AND page_index=$2 RETURNING id`,
       [logical, pageIndex]
@@ -1186,6 +1311,57 @@ app.delete("/api/atex/maps/subareas/purge", async (req, res) => {
     res.json({ ok:true, deleted: rows.length });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
+// -------------------------------------------------
+// MAPS META — building / zone persistants par plan
+// -------------------------------------------------
+app.get("/api/atex/maps/meta", async (req, res) => {
+  try {
+    const plan_key = (req.query.plan_key || "").toString().trim();
+    if (!plan_key) return res.status(400).json({ error: "plan_key requis" });
+
+    const { rows } = await pool.query(
+      `SELECT id, logical_name, building, zone
+         FROM atex_plans
+        WHERE id::text = $1 OR logical_name = $1
+        ORDER BY version DESC LIMIT 1`,
+      [plan_key]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Plan introuvable" });
+    res.json(rows[0]);
+  } catch (e) {
+    console.error("getMeta error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/atex/maps/meta", async (req, res) => {
+  try {
+    const { plan_key, building = null, zone = null } = req.body || {};
+    if (!plan_key) return res.status(400).json({ error: "plan_key requis" });
+
+    // Cherche le plan par UUID ou logical_name
+    const { rows: found } = await pool.query(
+      `SELECT id FROM atex_plans
+        WHERE id::text = $1 OR logical_name = $1
+        ORDER BY version DESC LIMIT 1`,
+      [plan_key]
+    );
+    const plan = found?.[0];
+    if (!plan) return res.status(404).json({ error: "Plan introuvable" });
+
+    await pool.query(
+      `UPDATE atex_plans SET building=$1, zone=$2 WHERE id=$3`,
+      [building, zone, plan.id]
+    );
+
+    res.json({ ok: true, plan_id: plan.id, building, zone });
+  } catch (e) {
+    console.error("setMeta error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // -------------------------------------------------
 // Logs
 app.get("/api/atex/logs", async (req, res) => {
@@ -1204,6 +1380,7 @@ app.get("/api/atex/logs", async (req, res) => {
     res.json({ items: rows || [] });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // -------------------------------------------------
 // IA
 function openaiClient() {
@@ -1211,12 +1388,15 @@ function openaiClient() {
   if (!key) return null;
   return new OpenAI({ apiKey: key });
 }
+
 app.post("/api/atex/extract", multerFiles.array("files"), async (req, res) => {
   try {
     const client = openaiClient();
     if (!client) return res.status(501).json({ ok: false, error: "OPENAI_API_KEY missing" });
+
     const files = req.files || [];
     if (!files.length) return res.status(400).json({ ok: false, error: "no files" });
+
     const images = await Promise.all(
       files.map(async (f) => ({
         name: f.originalname,
@@ -1224,6 +1404,7 @@ app.post("/api/atex/extract", multerFiles.array("files"), async (req, res) => {
         data: (await fsp.readFile(f.path)).toString("base64"),
       }))
     );
+
     const sys = `Tu es un assistant d'inspection ATEX. Extrait des photos:
 - manufacturer
 - manufacturer_ref
@@ -1231,6 +1412,7 @@ app.post("/api/atex/extract", multerFiles.array("files"), async (req, res) => {
 - atex_mark_dust
 - type
 Réponds en JSON strict.`;
+
     const content = [
       { role: "system", content: sys },
       {
@@ -1244,12 +1426,14 @@ Réponds en JSON strict.`;
         ],
       },
     ];
+
     const resp = await client.chat.completions.create({
       model: process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini",
       messages: content,
       temperature: 0.1,
       response_format: { type: "json_object" },
     });
+
     let data = {};
     try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
     res.json({ ok: true, extracted: {
@@ -1261,11 +1445,14 @@ Réponds en JSON strict.`;
     }});
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 app.post("/api/atex/assess", async (req, res) => {
   try {
     const client = openaiClient();
     if (!client) return res.status(501).json({ ok: false, error: "OPENAI_API_KEY missing" });
+
     const { atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = req.body || {};
+
     const sys = `Tu es expert ATEX. Retourne {"decision":"conforme|non_conforme|indetermine","rationale":"..."} en JSON strict.`;
     const messages = [
       { role: "system", content: sys },
@@ -1273,17 +1460,20 @@ app.post("/api/atex/assess", async (req, res) => {
         `Marquage gaz: ${atex_mark_gas||"(aucun)"}\nMarquage poussière: ${atex_mark_dust||"(aucun)"}\nZonage cible gaz: ${target_gas}\nZonage cible poussière: ${target_dust}`
       },
     ];
+
     const resp = await client.chat.completions.create({
       model: process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini",
       messages,
       temperature: 0,
       response_format: { type: "json_object" },
     });
+
     let data = {};
     try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
     res.json({ ok:true, ...data });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); } // <- fix .json
 });
+
 // ✅ Endpoint dédié pour "appliquer" la conformité IA à une fiche (sans toucher à l'échéance)
 app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
   try {
@@ -1291,6 +1481,7 @@ app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
     const { decision = null, rationale = "" } = req.body || {};
     if (!["conforme", "non_conforme", "indetermine", null].includes(decision))
       return res.status(400).json({ ok:false, error:"invalid decision" });
+
     const u = getUser(req);
     const { rows } = await pool.query(
       `INSERT INTO atex_checks(equipment_id, status, date, items, result, user_name, user_email, files)
@@ -1304,6 +1495,7 @@ app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
         u.email || "",
       ]
     );
+
     // Retourner la fiche avec état de conformité recalculé
     const { rows: eqR } = await pool.query(
       `
@@ -1327,9 +1519,11 @@ app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
         eq.last_result === "conforme" ? "conforme" :
         eq.last_result === "non_conforme" ? "non_conforme" : "na";
     }
+
     res.json({ ok:true, check: rows[0], equipment: eq });
   } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
 });
+
 // Legacy aliases (compat)
 app.post("/api/atex/analyzePhotoBatch", (req, res) => {
   req.url = "/api/atex/extract";
@@ -1340,66 +1534,6 @@ app.post("/api/atex/aiAnalyze", (req, res) => {
   return app._router.handle(req, res);
 });
 
-// -------------------------------------------------
-// Utilitaire pour sécuriser les chaînes (prévention injection SQL / null)
-// -------------------------------------------------
-function safeStr(v) {
-  if (v === undefined || v === null) return "";
-  return String(v).trim();
-}
-
-/* -------------------------------------------------------------------------- */
-/*           🔹 META bâtiment / zone persistés directement dans atex_plans     */
-/* -------------------------------------------------------------------------- */
-
-app.get("/api/atex/maps/meta", async (req, res) => {
-  try {
-    const plan_key = safeStr(req.query.plan_key);
-    if (!plan_key) return res.status(400).json({ error: "plan_key manquant" });
-
-    const rows = await pool.query(
-      `SELECT logical_name AS plan_key, building, zone 
-         FROM atex_plans 
-        WHERE logical_name = $1 
-           OR id::text = $1 
-        LIMIT 1`,
-      [plan_key]
-    );
-
-    if (!rows.length)
-      return res.json({ plan_key, building: "", zone: "" });
-
-    res.json(rows[0]);
-  } catch (e) {
-    console.error("[GET /maps/meta]", e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.put("/api/atex/maps/meta", async (req, res) => {
-  try {
-    const { plan_key, building, zone } = req.body;
-    if (!plan_key) return res.status(400).json({ error: "plan_key requis" });
-
-    // détecter si c’est un ID numérique
-    const plan = await db.get(
-      `SELECT * FROM atex_plans WHERE id = ? OR logical_name = ? LIMIT 1`,
-      [Number(plan_key), plan_key]
-    );
-
-    if (!plan) return res.status(404).json({ error: "Plan introuvable" });
-
-    await db.run(
-      `UPDATE atex_plans SET building = ?, zone = ? WHERE id = ?`,
-      [building || null, zone || null, plan.id]
-    );
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error("setMeta error", e);
-    res.status(500).json({ error: String(e) });
-  }
-});
 // -------------------------------------------------
 await ensureSchema();
 app.listen(PORT, HOST, () => {
