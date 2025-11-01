@@ -54,7 +54,7 @@ function getIdentity() {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
         if (!email && u?.email) email = String(u.email);
-        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u?.displayName);
       } catch {}
     }
   } catch {}
@@ -1260,7 +1260,7 @@ export default function AtexMap({
             onClick={() => setDrawMenu((v) => !v)}
             title="Dessiner (zones ATEX)"
           >
-            
+            ✏️  
           </button>
           {drawMenu && (
             <div className="draw-menu">
@@ -1311,7 +1311,7 @@ export default function AtexMap({
               m.getContainer().dispatchEvent(ev);
             }}
           >
-            
+            ✅  
           </button>
         )}
         {/* Ajuster la vue */}
@@ -1334,7 +1334,7 @@ export default function AtexMap({
             log("adjust view", { fitZoom, finalZoom: m.getZoom() });
           }}
         >
-          
+          🗺️
         </button>
         {geomEdit.active && (
           <button
@@ -1342,7 +1342,7 @@ export default function AtexMap({
             title="Sauvegarder la géométrie"
             onClick={saveGeomEdit}
           >
-            
+            💾
           </button>
         )}
         {/* Légende */}
@@ -1436,17 +1436,32 @@ export default function AtexMap({
       })
       .catch((err) => console.warn("getMeta error (ignored):", err));
   }, [plan?.id, plan?.logical_name]);
+
+  // CORRECTIF CHATGPT : Propagation bâtiment/zone
   async function handleMetaChange(nextBuilding, nextZone) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
+    const prevBuilding = building;
+    const prevZone = zone;
     setBuilding(nextBuilding);
     setZone(nextZone);
     try {
       await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
+
+      // Propagation auto aux équipements
+      if (nextBuilding !== prevBuilding || nextZone !== prevZone) {
+        await api.atex.bulkRename({
+          field: "meta_update",
+          from: { building: prevBuilding, zone: prevZone },
+          to: { building: nextBuilding, zone: nextZone },
+        });
+        console.info("[ATEX] Bâtiment/zone propagés aux équipements");
+      }
     } catch (err) {
       console.warn("Erreur mise à jour meta:", err);
     }
   }
+
   // --- Modal plein écran
   return (
     <>
@@ -1470,11 +1485,11 @@ export default function AtexMap({
                   {title}
                   {planDisplayName ? ` — ${planDisplayName}` : ""}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <div className="flex items-center gap-1">
                     <span className="text-sm text-gray-600">Bâtiment</span>
                     <input
-                      className="border rounded-lg px-2 py-1 text-sm w-[160px]"
+                      className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
                       value={building}
                       onChange={(e) => handleMetaChange(e.target.value, zone)}
                       placeholder="Ex: Bât. A"
@@ -1483,7 +1498,7 @@ export default function AtexMap({
                   <div className="flex items-center gap-1">
                     <span className="text-sm text-gray-600">Zone</span>
                     <input
-                      className="border rounded-lg px-2 py-1 text-sm w-[160px]"
+                      className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
                       value={zone}
                       onChange={(e) => handleMetaChange(building, e.target.value)}
                       placeholder="Ex: Niv. 2"
@@ -1494,9 +1509,11 @@ export default function AtexMap({
                   </Btn>
                 </div>
               </div>
-              <div className="p-3 md:p-4 overflow-auto flex-1">
+              <div className="flex-1 overflow-hidden">
                 {MapInner}
-                {MarkerLegend}
+                <div className="p-3">
+                  {MarkerLegend}
+                </div>
               </div>
             </div>
           </div>
@@ -1563,7 +1580,7 @@ function PlanCard({ plan, onRename, onPick }) {
             </div>
             <div className="flex items-center gap-1">
               <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>
-                ✏️
+                [Pencil Icon]
               </Btn>
               <Btn variant="subtle" onClick={() => onPick(plan)}>
                 Ouvrir
