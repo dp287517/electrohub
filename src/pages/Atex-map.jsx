@@ -1158,7 +1158,11 @@ export default function AtexMap({
     };
   }, [lastSubareaId, subareasById]);
   /* ----------------------------- RENDER ----------------------------- */
-  const viewerHeight = Math.min((typeof window !== "undefined" ? window.innerHeight : 900) - 140, (imgSize.h || 900));
+  const viewerHeight = Math.min(
+    (typeof window !== "undefined" ? window.innerHeight : 900) - 140,
+    imgSize.h || 900
+  );
+
   const toggleLegend = () => {
     setLegendVisible((v) => {
       const next = !v;
@@ -1167,12 +1171,26 @@ export default function AtexMap({
       return next;
     });
   };
+
   const editorStyle = editorPos?.screen
     ? {
-        left: Math.max(8, Math.min((editorPos.screen.x || 0) - 150, (typeof window !== "undefined" ? window.innerWidth : 1200) - 300)),
-        top: Math.max(8, Math.min((editorPos.screen.y || 0) - 10, (typeof window !== "undefined" ? window.innerHeight : 800) - 260)),
+        left: Math.max(
+          8,
+          Math.min(
+            (editorPos.screen.x || 0) - 150,
+            (typeof window !== "undefined" ? window.innerWidth : 1200) - 300
+          )
+        ),
+        top: Math.max(
+          8,
+          Math.min(
+            (editorPos.screen.y || 0) - 10,
+            (typeof window !== "undefined" ? window.innerHeight : 800) - 260
+          )
+        ),
       }
     : {};
+
   const MapInner = (
     <div
       ref={wrapRef}
@@ -1181,29 +1199,78 @@ export default function AtexMap({
     >
       {/* Toolbar */}
       <div className="atex-toolbar">
-        {/* ➕ au centre (ou centroïde de la dernière zone) */}
-        <button className="btn-plus" onClick={() => createEquipmentAtCenter()} title="Ajouter un équipement (centre / dernière zone)">+</button>
+        {/* ➕ Ajouter un équipement */}
+        <button
+          className="btn-plus"
+          onClick={() => createEquipmentAtCenter()}
+          title="Ajouter un équipement (centre / dernière zone)"
+        >
+          +
+        </button>
+
         {/* ✏️ Dessin zones */}
         <div className="btn-pencil-wrap" ref={drawMenuRef}>
-          <button className="btn-pencil" onClick={() => setDrawMenu((v) => !v)} title="Dessiner (zones ATEX)">✏️</button>
+          <button
+            className="btn-pencil"
+            onClick={() => setDrawMenu((v) => !v)}
+            title="Dessiner (zones ATEX)"
+          >
+            ✏️
+          </button>
           {drawMenu && (
             <div className="draw-menu">
-              <button onClick={() => { setDrawMode("rect"); setDrawMenu(false); }}>Rectangle</button>
-              <button onClick={() => { setDrawMode("poly"); setDrawMenu(false); }}>Polygone</button>
-              <button onClick={() => { setDrawMode("circle"); setDrawMenu(false); }}>Cercle</button>
-              <button onClick={() => { setDrawMode("none"); setDrawMenu(false); }}>Annuler</button>
+              <button
+                onClick={() => {
+                  setDrawMode("rect");
+                  setDrawMenu(false);
+                }}
+              >
+                Rectangle
+              </button>
+              <button
+                onClick={() => {
+                  setDrawMode("poly");
+                  setDrawMenu(false);
+                }}
+              >
+                Polygone
+              </button>
+              <button
+                onClick={() => {
+                  setDrawMode("circle");
+                  setDrawMenu(false);
+                }}
+              >
+                Cercle
+              </button>
+              <button
+                onClick={() => {
+                  setDrawMode("none");
+                  setDrawMenu(false);
+                }}
+              >
+                Annuler
+              </button>
             </div>
           )}
         </div>
+
         {/* Fin polygone */}
         {drawing === DRAW_POLY && (
-          <button className="btn-pencil" title="Terminer le polygone" onClick={() => {
-            const m = mapRef.current;
-            if (!m || polyTemp.length < 3) return;
-            const ev = new MouseEvent("dblclick");
-            m.getContainer().dispatchEvent(ev);
-          }}>✔️</button>
+          <button
+            className="btn-pencil"
+            title="Terminer le polygone"
+            onClick={() => {
+              const m = mapRef.current;
+              if (!m || polyTemp.length < 3) return;
+              const ev = new MouseEvent("dblclick");
+              m.getContainer().dispatchEvent(ev);
+            }}
+          >
+            ✔️
+          </button>
         )}
+
         {/* Ajuster la vue */}
         <button
           className="btn-plus"
@@ -1226,9 +1293,18 @@ export default function AtexMap({
         >
           🗺️
         </button>
+
         {geomEdit.active && (
-          <button className="btn-pencil" title="Sauvegarder la géométrie" onClick={saveGeomEdit}>💾</button>
+          <button
+            className="btn-pencil"
+            title="Sauvegarder la géométrie"
+            onClick={saveGeomEdit}
+          >
+            💾
+          </button>
         )}
+
+        {/* Légende */}
         <button
           className="btn-pencil"
           title={legendVisible ? "Cacher la légende" : "Afficher la légende"}
@@ -1237,7 +1313,8 @@ export default function AtexMap({
           {legendVisible ? "⮜" : "⮞"}
         </button>
       </div>
-      {/* Overlays d’aide */}
+
+      {/* Overlay aide polygone */}
       {drawing === DRAW_POLY && (
         <div className="absolute left-3 top-3 z-[5000] px-2 py-1 text-[11px] rounded bg-blue-50 border border-blue-200 text-blue-800 shadow">
           Mode polygone : cliquez pour ajouter des sommets, puis “✔️ Terminer polygone”.
@@ -1245,15 +1322,23 @@ export default function AtexMap({
       )}
     </div>
   );
+
   const EditorPopover = editorPos?.screen ? (
     <div className="fixed z-[7000]" style={editorStyle}>
       <SubAreaEditor
         initial={editorInit}
         onSave={onSaveSubarea}
-        onCancel={() => { editorPos?.onCancel?.(); setEditorPos(null); }}
+        onCancel={() => {
+          editorPos?.onCancel?.();
+          setEditorPos(null);
+        }}
         onStartGeomEdit={
           editorPos?.layer && editorPos?.kind
-            ? () => startGeomEdit(editorPos.layer, { id: editorPos.shapeId, kind: editorPos.kind })
+            ? () =>
+                startGeomEdit(editorPos.layer, {
+                  id: editorPos.shapeId,
+                  kind: editorPos.kind,
+                })
             : undefined
         }
         allowDelete={!!editorPos?.shapeId}
@@ -1261,6 +1346,7 @@ export default function AtexMap({
       />
     </div>
   ) : null;
+
   const MarkerLegend = (
     <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
       <span className="inline-flex items-center gap-1">
@@ -1268,20 +1354,29 @@ export default function AtexMap({
         À faire
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full blink-orange" style={{ background: "#f59e0b" }} />
+        <span
+          className="w-3 h-3 rounded-full blink-orange"
+          style={{ background: "#f59e0b" }}
+        />
         ≤90j
       </span>
       <span className="inline-flex items-center gap-1">
-        <span className="w-3 h-3 rounded-full blink-red" style={{ background: "#e11d48" }} />
+        <span
+          className="w-3 h-3 rounded-full blink-red"
+          style={{ background: "#e11d48" }}
+        />
         En retard
       </span>
       <span className="inline-flex items-center gap-1">
         <span className="w-3 h-3 rounded-full" style={{ background: "#2563eb" }} />
         Nouvelle (à enregistrer)
       </span>
-      <span className="inline-flex items-center gap-1 text-gray-500">• Remplissage = Poussière • Bordure = Gaz</span>
+      <span className="inline-flex items-center gap-1 text-gray-500">
+        • Remplissage = Poussière • Bordure = Gaz
+      </span>
     </div>
   );
+
   if (!inModal) {
     return (
       <div className="relative">
@@ -1291,48 +1386,59 @@ export default function AtexMap({
       </div>
     );
   }
-// ----------------------------- META (Bâtiment / Zone) -----------------------------
-useEffect(() => {
-  if (!plan) return; // 🧱 ne rien faire si plan pas encore chargé
-  const key = plan.id || plan.logical_name;
-  if (!key) return; // 🔒 sécurité
-  api.atexMaps.getMeta(key)
-    .then((res) => {
-      setBuilding(res?.building || "");
-      setZone(res?.zone || "");
-    })
-    .catch((err) => console.warn("getMeta error (ignored):", err));
-}, [plan?.id, plan?.logical_name]);
 
-async function handleMetaChange(nextBuilding, nextZone) {
-  if (!plan) return;
-  const key = plan.id || plan.logical_name;
-  setBuilding(nextBuilding);
-  setZone(nextZone);
-  try {
-    await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
-  } catch (err) {
-    console.warn("Erreur mise à jour meta:", err);
+  // ----------------------------- META (Bâtiment / Zone) -----------------------------
+  useEffect(() => {
+    if (!plan) return;
+    const key = plan.id || plan.logical_name;
+    if (!key) return;
+    api.atexMaps
+      .getMeta(key)
+      .then((res) => {
+        setBuilding(res?.building || "");
+        setZone(res?.zone || "");
+      })
+      .catch((err) => console.warn("getMeta error (ignored):", err));
+  }, [plan?.id, plan?.logical_name]);
+
+  async function handleMetaChange(nextBuilding, nextZone) {
+    if (!plan) return;
+    const key = plan.id || plan.logical_name;
+    setBuilding(nextBuilding);
+    setZone(nextZone);
+    try {
+      await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
+    } catch (err) {
+      console.warn("Erreur mise à jour meta:", err);
+    }
   }
-}
 
   // --- Modal plein écran
   return (
     <>
       {!open && (
-        <Btn className="mt-2" onClick={() => setOpen(true)}>Ouvrir le plan</Btn>
+        <Btn className="mt-2" onClick={() => setOpen(true)}>
+          Ouvrir le plan
+        </Btn>
       )}
+
       {open && (
         <div className="fixed inset-0 z-[6000] flex flex-col">
           {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setOpen(false)}
+          />
+
           {/* Dialog */}
           <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
             <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
               <div className="flex items-center justify-between px-4 py-3 border-b gap-3 flex-wrap">
                 <div className="font-semibold">
-                  {title}{planDisplayName ? ` — ${planDisplayName}` : ""}
+                  {title}
+                  {planDisplayName ? ` — ${planDisplayName}` : ""}
                 </div>
+
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1">
                     <span className="text-sm text-gray-600">Bâtiment</span>
@@ -1352,15 +1458,19 @@ async function handleMetaChange(nextBuilding, nextZone) {
                       placeholder="Ex: Niv. 2"
                     />
                   </div>
-                  <Btn variant="ghost" onClick={() => setOpen(false)}>Fermer</Btn>
+                  <Btn variant="ghost" onClick={() => setOpen(false)}>
+                    Fermer
+                  </Btn>
                 </div>
               </div>
+
               <div className="p-3 md:p-4 overflow-auto flex-1">
                 {MapInner}
                 {MarkerLegend}
               </div>
             </div>
           </div>
+
           {EditorPopover}
         </div>
       )}
