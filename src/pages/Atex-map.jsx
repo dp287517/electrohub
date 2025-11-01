@@ -1291,26 +1291,31 @@ export default function AtexMap({
       </div>
     );
   }
-  // ----------------------------- META (Bâtiment / Zone) -----------------------------
+// ----------------------------- META (Bâtiment / Zone) -----------------------------
 useEffect(() => {
-  if (!planKey) return;
-  api.atexMaps.getMeta(planKey)
-    .then(({ building, zone }) => {
-      setBuilding(building || "");
-      setZone(zone || "");
+  if (!plan) return; // 🧱 ne rien faire si plan pas encore chargé
+  const key = plan.id || plan.logical_name;
+  if (!key) return; // 🔒 sécurité
+  api.atexMaps.getMeta(key)
+    .then((res) => {
+      setBuilding(res?.building || "");
+      setZone(res?.zone || "");
     })
-    .catch(() => {});
-}, [planKey]);
+    .catch((err) => console.warn("getMeta error (ignored):", err));
+}, [plan?.id, plan?.logical_name]);
 
-const handleMetaChange = async (nextBuilding, nextZone) => {
+async function handleMetaChange(nextBuilding, nextZone) {
+  if (!plan) return;
+  const key = plan.id || plan.logical_name;
   setBuilding(nextBuilding);
   setZone(nextZone);
   try {
-    await api.atexMaps.setMeta(planKey, { building: nextBuilding, zone: nextZone });
+    await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
   } catch (err) {
     console.warn("Erreur mise à jour meta:", err);
   }
-};
+}
+
   // --- Modal plein écran
   return (
     <>
