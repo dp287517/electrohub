@@ -1340,6 +1340,14 @@ app.post("/api/atex/aiAnalyze", (req, res) => {
   return app._router.handle(req, res);
 });
 
+// -------------------------------------------------
+// Utilitaire pour sécuriser les chaînes (prévention injection SQL / null)
+// -------------------------------------------------
+function safeStr(v) {
+  if (v === undefined || v === null) return "";
+  return String(v).trim();
+}
+
 /* -------------------------------------------------------------------------- */
 /*           🔹 META bâtiment / zone persistés directement dans atex_plans     */
 /* -------------------------------------------------------------------------- */
