@@ -3,11 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 dayjs.locale("fr");
-
 import "../styles/atex-map.css";
 import { api, API_BASE } from "../lib/api.js";
 import AtexMap from "./Atex-map.jsx";
-
 /* ----------------------------- UI utils ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -107,7 +105,6 @@ function Drawer({ title, children, onClose, dirty = false }) {
     return () => document.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty]);
-
   useEffect(() => {
     const beforeUnload = (e) => {
       if (dirty) {
@@ -118,7 +115,6 @@ function Drawer({ title, children, onClose, dirty = false }) {
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [dirty]);
-
   function confirmClose() {
     if (dirty) {
       const ok = window.confirm("Des modifications ne sont pas enregistrées. Fermer quand même ?");
@@ -126,7 +122,6 @@ function Drawer({ title, children, onClose, dirty = false }) {
     }
     onClose?.();
   }
-
   return (
     <div className="fixed inset-0 z-[6000]">
       <div className="absolute inset-0 bg-black/30" onClick={confirmClose} />
@@ -155,14 +150,12 @@ function Toast({ text, onClose }) {
     </div>
   );
 }
-
 /* ---- Dates pour <input type="date"> ---- */
 function asDateInput(v) {
   if (!v) return "";
   const d = dayjs(v);
   return d.isValid() ? d.format("YYYY-MM-DD") : "";
 }
-
 /* ----------------------------- Status ----------------------------- */
 const STATUS = {
   A_FAIRE: "a_faire",
@@ -184,7 +177,6 @@ function statusLabel(s) {
   if (s === STATUS.FAIT) return "Fait";
   return s || "—";
 }
-
 /* ----------------------------- Mini calendrier ----------------------------- */
 function MonthCalendar({ events = [], onDayClick }) {
   const [cursor, setCursor] = useState(() => dayjs().startOf("month"));
@@ -251,16 +243,13 @@ function MonthCalendar({ events = [], onDayClick }) {
     </div>
   );
 }
-
 /* ----------------------------- Page principale ATEX ----------------------------- */
 export default function Atex() {
   // Onglets
   const [tab, setTab] = useState("controls");
-
   // Liste équipements
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-
   // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -268,42 +257,35 @@ export default function Atex() {
   const [building, setBuilding] = useState("");
   const [zone, setZone] = useState("");
   const [compliance, setCompliance] = useState("");
-
   // Édition
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const initialRef = useRef(null); // snapshot pour dirty check
-
   // PJ list
   const [files, setFiles] = useState([]);
-
+  // Historique des contrôles (audit trail)
+  const [history, setHistory] = useState([]);
   // Calendrier
   const [calendar, setCalendar] = useState({ events: [] });
-
   // Toast
   const [toast, setToast] = useState("");
-
   // Plans
   const [plans, setPlans] = useState([]);
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
-
   // Tick de rafraîchissement carte (force remount)
   const [mapRefreshTick, setMapRefreshTick] = useState(0);
-
   /* ----------------------------- Helpers ----------------------------- */
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
     if (debouncer.current) clearTimeout(debouncer.current);
     debouncer.current = setTimeout(reload, 300);
   }
-
   function next36MonthsISO(dateStr) {
     if (!dateStr) return "";
     const d = dayjs(dateStr);
     return d.isValid() ? d.add(36, "month").format("YYYY-MM-DD") : "";
   }
-
   async function reload() {
     setLoading(true);
     try {
@@ -322,7 +304,6 @@ export default function Atex() {
       setLoading(false);
     }
   }
-
   async function reloadCalendar() {
     try {
       const cal = await api.atex.calendar?.();
@@ -340,8 +321,7 @@ export default function Atex() {
       }));
     setCalendar({ events: evts });
   }
-
-  // ⚙️ Normalise la shape renvoyée par le backend pour les fichiers
+  // Normalise la shape renvoyée par le backend pour les fichiers
   async function reloadFiles(equipId) {
     if (!equipId) return;
     try {
@@ -365,7 +345,6 @@ export default function Atex() {
       setFiles([]);
     }
   }
-
   useEffect(() => {
     reload();
   }, []);
@@ -376,21 +355,19 @@ export default function Atex() {
   useEffect(() => {
     reloadCalendar();
   }, [items]);
-
   // Merge helper: tient compte d'un éventuel champ zones.*, sinon zoning_*
   const mergeZones = (raw) => ({
     ...raw,
     zoning_gas: raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null,
     zoning_dust: raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null,
   });
-
   async function openEdit(equipment) {
     const base = mergeZones(equipment || {});
     setEditing(base);
     initialRef.current = base;
     setDrawerOpen(true);
     if (base?.id) {
-      // 🔄 recharge frais depuis le serveur pour refléter setPosition et autres mises à jour (dont bâtiment/zone)
+      // recharge frais depuis le serveur pour refléter setPosition et autres mises à jour (dont bâtiment/zone)
       api.atex
         .getEquipment(base.id)
         .then((res) => {
@@ -403,15 +380,20 @@ export default function Atex() {
         })
         .catch(() => {});
       reloadFiles(base.id);
+      // Charge aussi l’historique de contrôles
+      api.atex
+        .getEquipmentHistory(base.id)
+        .then((res) => setHistory(Array.isArray(res?.checks) ? res.checks : []))
+        .catch(() => setHistory([]));
     }
   }
   function closeEdit() {
     setEditing(null);
     setFiles([]);
+    setHistory([]);
     setDrawerOpen(false);
     initialRef.current = null;
   }
-
   function isDirty() {
     if (!editing || !initialRef.current) return false;
     const A = editing;
@@ -429,7 +411,7 @@ export default function Atex() {
       "atex_mark_dust",
       "comment",
       "installed_at",
-      "last_check_date",   // ✅ on suit maintenant ce champ
+      "last_check_date", // on suit maintenant ce champ
       "next_check_date",
       "zoning_gas",
       "zoning_dust",
@@ -441,7 +423,6 @@ export default function Atex() {
     });
   }
   const dirty = isDirty();
-
   async function saveBase() {
     if (!editing) return;
     const payload = {
@@ -458,8 +439,8 @@ export default function Atex() {
       comment: editing.comment || "",
       status: editing.status || STATUS.A_FAIRE,
       installed_at: editing.installed_at || editing.installation_date || null,
-      last_check_date: editing.last_check_date || null,     // ✅ on persiste le dernier contrôle
-      next_check_date: editing.next_check_date || null,     // (auto +36m, modifiable)
+      last_check_date: editing.last_check_date || null, // on persiste le dernier contrôle
+      next_check_date: editing.next_check_date || null, // (auto +36m, modifiable)
       zoning_gas: editing.zoning_gas ?? null,
       zoning_dust: editing.zoning_dust ?? null,
     };
@@ -477,13 +458,12 @@ export default function Atex() {
         initialRef.current = fresh;
       }
       await reload();
-      setToast("Fiche enregistrée ✅");
+      setToast("Fiche enregistrée");
     } catch (e) {
       console.error(e); // eslint-disable-line no-console
       setToast("Erreur enregistrement");
     }
   }
-
   async function deleteEquipment() {
     if (!editing?.id) return;
     const ok = window.confirm("Supprimer définitivement cet équipement ATEX ? Cette action est irréversible.");
@@ -493,13 +473,12 @@ export default function Atex() {
       closeEdit();
       await reload();
       setMapRefreshTick((t) => t + 1);
-      setToast("Équipement supprimé ✅");
+      setToast("Équipement supprimé");
     } catch (e) {
       console.error(e); // eslint-disable-line no-console
       setToast("Suppression impossible");
     }
   }
-
   /* ----------------------------- Photos / pièces jointes ----------------------------- */
   async function uploadMainPhoto(file) {
     if (!editing?.id || !file) return;
@@ -510,7 +489,7 @@ export default function Atex() {
       setEditing((cur) => ({ ...(cur || {}), photo_url: url }));
       await reloadFiles(editing.id);
       await reload();
-      setToast("Photo mise à jour ✅");
+      setToast("Photo mise à jour");
     } catch (e) {
       console.error(e); // eslint-disable-line no-console
       setToast("Échec upload photo");
@@ -521,13 +500,12 @@ export default function Atex() {
     try {
       await api.atex.uploadAttachments(editing.id, filesArr);
       await reloadFiles(editing.id);
-      setToast(filesArr.length > 1 ? "Fichiers ajoutés ✅" : "Fichier ajouté ✅");
+      setToast(filesArr.length > 1 ? "Fichiers ajoutés" : "Fichier ajouté");
     } catch (e) {
       console.error(e); // eslint-disable-line no-console
       setToast("Échec upload fichiers");
     }
   }
-
   /* ----------------------------- IA ----------------------------- */
   async function analyzeFromPhotos(filesLike) {
     const list = Array.from(filesLike || []);
@@ -537,19 +515,18 @@ export default function Atex() {
       const s = res?.extracted || res || {};
       setEditing((x) => ({
         ...(x || {}),
-        manufacturer: x?.manufacturer || s.manufacturer || "",
-        manufacturer_ref: x?.manufacturer_ref || s.manufacturer_ref || "",
-        atex_mark_gas: x?.atex_mark_gas || s.atex_mark_gas || "",
-        atex_mark_dust: x?.atex_mark_dust || s.atex_mark_dust || "",
-        type: x?.type || s.type || "",
+        manufacturer: s.manufacturer || x?.manufacturer || "",
+        manufacturer_ref: s.manufacturer_ref || x?.manufacturer_ref || "",
+        atex_mark_gas: s.atex_mark_gas || x?.atex_mark_gas || "",
+        atex_mark_dust: s.atex_mark_dust || x?.atex_mark_dust || "",
+        type: s.type || x?.type || "",
       }));
-      setToast("Analyse photos terminée ✅");
+      setToast("Analyse photos terminée");
     } catch (e) {
       console.error(e); // eslint-disable-line no-console
       setToast("Analyse photos indisponible");
     }
   }
-
   async function analyzeCompliance() {
     if (!editing) return;
     try {
@@ -562,16 +539,13 @@ export default function Atex() {
       const res =
         (api.atex.assessConformity && (await api.atex.assessConformity(body))) ||
         (api.atex.aiAnalyze && (await api.atex.aiAnalyze(body)));
-
       const decision = res?.decision || null;
       const rationale = res?.rationale || "";
-
       if (editing?.id && api.atex.applyCompliance) {
         try {
           await api.atex.applyCompliance(editing.id, { decision, rationale });
         } catch {}
       }
-
       if (editing?.id) {
         const fresh = await api.atex.getEquipment(editing.id).catch(() => null);
         if (fresh?.equipment) {
@@ -580,18 +554,16 @@ export default function Atex() {
         }
       }
       await reload();
-
       setToast(
         decision
-          ? `Conformité: ${decision === "conforme" ? "Conforme ✅" : decision === "non_conforme" ? "Non conforme ❌" : "Indéterminé"}`
-          : (res?.message || "Analyse conformité OK ✅")
+          ? `Conformité: ${decision === "conforme" ? "Conforme" : decision === "non_conforme" ? "Non conforme" : "Indéterminé"}`
+          : (res?.message || "Analyse conformité OK")
       );
     } catch (e) {
       console.error(e); // eslint-disable-line no-console
       setToast("Analyse conformité indisponible");
     }
   }
-
   /* ----------------------------- Plans ----------------------------- */
   async function loadPlans() {
     setMapsLoading(true);
@@ -605,7 +577,6 @@ export default function Atex() {
   useEffect(() => {
     if (tab === "plans") loadPlans();
   }, [tab]);
-
   /* ---------- Optimistic zone merge helper (UI instantanée) ---------- */
   function applyZonesLocally(id, zones) {
     if (!id) return;
@@ -630,31 +601,28 @@ export default function Atex() {
         : cur
     );
   }
-
   /* ----------------------------- UI ----------------------------- */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
         <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>
-          📋 Contrôles
+          Contrôles
         </Btn>
         <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
-          📅 Calendrier
+          Calendrier
         </Btn>
         <Btn variant={tab === "plans" ? "primary" : "ghost"} onClick={() => setTab("plans")}>
-          🗺️ Plans
+          Plans
         </Btn>
         <Btn variant={tab === "settings" ? "primary" : "ghost"} onClick={() => setTab("settings")}>
-          ⚙️ Paramètres
+          Paramètres
         </Btn>
       </div>
     </div>
   );
-
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
-
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Équipements ATEX</h1>
@@ -665,9 +633,7 @@ export default function Atex() {
           </Btn>
         </div>
       </header>
-
       <StickyTabs />
-
       {filtersOpen && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
           <div className="grid md:grid-cols-5 gap-3">
@@ -715,7 +681,6 @@ export default function Atex() {
           <div className="text-xs text-gray-500">Recherche automatique activée.</div>
         </div>
       )}
-
       {/* --------- Onglet Contrôles --------- */}
       {tab === "controls" && (
         <div className="bg-white rounded-2xl border shadow-sm">
@@ -808,7 +773,6 @@ export default function Atex() {
               </tbody>
             </table>
           </div>
-
           {/* Mobile cards */}
           <div className="sm:hidden divide-y">
             {loading && <div className="p-4 text-gray-500">Chargement…</div>}
@@ -863,7 +827,6 @@ export default function Atex() {
           </div>
         </div>
       )}
-
       {/* --------- Onglet Calendrier --------- */}
       {tab === "calendar" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4">
@@ -878,7 +841,6 @@ export default function Atex() {
           />
         </div>
       )}
-
       {/* --------- Onglet Plans --------- */}
       {tab === "plans" && (
         <div className="space-y-4">
@@ -887,12 +849,11 @@ export default function Atex() {
             <AtexZipImport
               disabled={mapsLoading}
               onDone={async () => {
-                setToast("Plans importés ✅");
+                setToast("Plans importés");
                 await loadPlans();
               }}
             />
           </div>
-
           <PlanCards
             plans={plans}
             onRename={async (plan, name) => {
@@ -901,7 +862,6 @@ export default function Atex() {
             }}
             onPick={setSelectedPlan}
           />
-
           {selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -914,7 +874,6 @@ export default function Atex() {
                   </Btn>
                 </div>
               </div>
-
               <AtexMap
                 key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
                 plan={selectedPlan}
@@ -935,7 +894,6 @@ export default function Atex() {
           )}
         </div>
       )}
-
       {/* --------- Onglet Paramètres --------- */}
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-2">
@@ -944,12 +902,11 @@ export default function Atex() {
           </div>
         </div>
       )}
-
       {/* --------- Drawer Édition --------- */}
       {drawerOpen && editing && (
         <Drawer title={`ATEX • ${editing.name || "nouvel équipement"}`} onClose={closeEdit} dirty={dirty}>
           <div className="space-y-4">
-            {/* 🏢 Bâtiment & 🧭 Zone — repris du plan (lecture seule) */}
+            {/* Bâtiment & Zone — repris du plan (lecture seule) */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="grid sm:grid-cols-3 gap-3">
                 <Labeled label="Bâtiment (depuis plan)">
@@ -982,8 +939,7 @@ export default function Atex() {
                 </div>
               </div>
             </div>
-
-            {/* 🔥 Ajout & Analyse IA */}
+            {/* Ajout & Analyse IA */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="font-semibold">Ajout & Analyse IA</div>
@@ -1007,7 +963,6 @@ export default function Atex() {
                 Conseils : photo nette de la plaque (gaz/poussière). Le zonage provient des zones du plan.
               </div>
             </div>
-
             {/* Métadonnées principales */}
             <div className="grid sm:grid-cols-2 gap-3">
               <Labeled label="Nom">
@@ -1041,7 +996,6 @@ export default function Atex() {
                 />
               </Labeled>
             </div>
-
             <div className="grid sm:grid-cols-2 gap-3">
               <Labeled label="Équipement (macro)">
                 <Input value={editing.equipment || ""} onChange={(v) => setEditing({ ...editing, equipment: v })} />
@@ -1053,7 +1007,6 @@ export default function Atex() {
                 />
               </Labeled>
             </div>
-
             <div className="grid sm:grid-cols-2 gap-3">
               <Labeled label="Zonage gaz (0 / 1 / 2)">
                 <Input
@@ -1068,7 +1021,6 @@ export default function Atex() {
                 />
               </Labeled>
             </div>
-
             <div className="grid sm:grid-cols-3 gap-3">
               <Labeled label="Date d’installation">
                 <Input
@@ -1078,18 +1030,49 @@ export default function Atex() {
                 />
               </Labeled>
               <Labeled label="Dernier contrôle">
-                <Input
-                  type="date"
-                  value={asDateInput(editing.last_check_date)}
-                  onChange={(v) => {
-                    const nextAuto = next36MonthsISO(v);
-                    setEditing((cur) => ({
-                      ...(cur || {}),
-                      last_check_date: v,
-                      next_check_date: nextAuto || cur?.next_check_date || "",
-                    }));
-                  }}
-                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    className="flex-1"
+                    value={asDateInput(editing.last_check_date)}
+                    onChange={(v) => {
+                      const nextAuto = next36MonthsISO(v);
+                      setEditing((cur) => ({
+                        ...(cur || {}),
+                        last_check_date: v,
+                        next_check_date: nextAuto || cur?.next_check_date || "",
+                      }));
+                    }}
+                  />
+                  {/* Bouton check rapide */}
+                  {editing?.id && (
+                    <Btn
+                      variant="subtle"
+                      title="Valider le contrôle aujourd'hui"
+                      onClick={async () => {
+                        try {
+                          await api.atex.quickCheckEquipment(editing.id);
+                          const today = dayjs().format("YYYY-MM-DD");
+                          const nextAuto = next36MonthsISO(today);
+                          setEditing((cur) => ({
+                            ...(cur || {}),
+                            last_check_date: today,
+                            next_check_date: nextAuto,
+                          }));
+                          // recharge historique
+                          const res = await api.atex.getEquipmentHistory(editing.id);
+                          setHistory(Array.isArray(res?.checks) ? res.checks : []);
+                          setToast("Contrôle validé");
+                        } catch (e) {
+                          console.error(e);
+                          setToast("Erreur validation rapide");
+                        }
+                      }}
+                    >
+                      ✅  
+                    </Btn>
+                  )}
+                </div>
               </Labeled>
               <Labeled label="Prochain contrôle (auto +36 mois, ajustable)">
                 <Input
@@ -1099,7 +1082,6 @@ export default function Atex() {
                 />
               </Labeled>
             </div>
-
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-gray-600">Statut</span>
@@ -1115,7 +1097,6 @@ export default function Atex() {
               </div>
               <div className="text-sm text-gray-600">Alerte tableau: ≤90 jours avant l’échéance</div>
             </div>
-
             <div className="grid sm:grid-cols-2 gap-3">
               <Btn
                 variant={dirty ? "warn" : "ghost"}
@@ -1131,7 +1112,6 @@ export default function Atex() {
                 </Btn>
               )}
             </div>
-
             {/* Photo principale */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -1156,7 +1136,6 @@ export default function Atex() {
                 </div>
               </div>
             )}
-
             {/* Pièces jointes & photos */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
@@ -1174,7 +1153,6 @@ export default function Atex() {
                     </label>
                   </div>
                 </div>
-
                 {/* Liste des pièces jointes */}
                 <div className="mt-3 space-y-2">
                   {files.length === 0 && <div className="text-xs text-gray-500">Aucune pièce jointe.</div>}
@@ -1201,13 +1179,43 @@ export default function Atex() {
                     </div>
                   ))}
                 </div>
-
                 <div className="text-xs text-gray-500 mt-2">
                   Glisser-déposer supporté dans l’onglet Plans lors de la création in situ.
                 </div>
               </div>
             )}
-
+            {/* Historique des contrôles */}
+            {editing?.id && (
+              <div className="border rounded-2xl p-3 bg-white">
+                <div className="font-semibold mb-2">Historique des contrôles</div>
+                {history.length === 0 && (
+                  <div className="text-xs text-gray-500">Aucun contrôle enregistré.</div>
+                )}
+                {history.length > 0 && (
+                  <div className="text-sm divide-y border rounded-lg">
+                    {history.map((h, i) => (
+                      <div key={i} className="flex items-center justify-between px-2 py-1">
+                        <div>
+                          <div className="font-medium">
+                            {dayjs(h.date || h.checked_at).format("DD/MM/YYYY")}
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {h.user_name || h.user_email || "—"}
+                          </div>
+                        </div>
+                        <Badge color={h.decision === "conforme" ? "green" : h.decision === "non_conforme" ? "red" : "gray"}>
+                          {h.decision === "conforme"
+                            ? "Conforme"
+                            : h.decision === "non_conforme"
+                            ? "Non conforme"
+                            : "—"}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="border rounded-2xl p-3">
               <div className="font-semibold mb-2">Commentaire</div>
               <Textarea
@@ -1223,15 +1231,13 @@ export default function Atex() {
     </section>
   );
 }
-
 /* ----------------------------- Sous-composants locaux ----------------------------- */
-
 function AtexZipImport({ disabled, onDone }) {
   const inputRef = useRef(null);
   return (
     <div className="flex items-center gap-2">
       <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={disabled}>
-        📦 Import ZIP de plans
+        Import ZIP de plans
       </Btn>
       <input
         ref={inputRef}
@@ -1250,7 +1256,6 @@ function AtexZipImport({ disabled, onDone }) {
     </div>
   );
 }
-
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -1261,7 +1266,6 @@ function PlanCards({ plans = [], onRename, onPick }) {
     </div>
   );
 }
-
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -1269,7 +1273,7 @@ function PlanCard({ plan, onRename, onPick }) {
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center justify-center text-gray-500">
-          <div className="text-4xl leading-none">📄</div>
+          <div className="text-4xl leading-none">PDF</div>
           <div className="text-[11px] mt-1">PDF</div>
         </div>
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
@@ -1284,7 +1288,7 @@ function PlanCard({ plan, onRename, onPick }) {
             </div>
             <div className="flex items-center gap-1">
               <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>
-                ✏️
+                ✏️  
               </Btn>
               <Btn variant="subtle" onClick={() => onPick(plan)}>
                 Ouvrir
