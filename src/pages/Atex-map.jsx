@@ -240,7 +240,17 @@ function SubAreaEditor({ initial = {}, onSave, onCancel, onStartGeomEdit, allowD
       <div className="flex items-center justify-between pt-1">
         <Btn variant="ghost" onClick={onCancel}>Fermer</Btn>
         <div className="flex items-center gap-2">
-          {!!onStartGeomEdit && <Btn variant="subtle" onClick={onStartGeomEdit}>Modifier la forme</Btn>}
+          {!!onStartGeomEdit && (
+            <Btn
+              variant="subtle"
+              onClick={() => {
+                document.body.classList.add("editing-geom");
+                onStartGeomEdit();
+              }}
+            >
+              Modifier la forme
+            </Btn>
+          )}
           <Btn
             onClick={() =>
               onSave?.({
@@ -345,7 +355,7 @@ export default function AtexMap({
     () => (plan?.display_name || plan?.logical_name || plan?.id || "").toString(),
     [plan]
   );
-  // 🧭 Métadonnées plan (Bâtiment / Zone) persistées par plan+page
+  // Métadonnées plan (Bâtiment / Zone) persistées par plan+page
   const [building, setBuilding] = useState("");
   const [zone, setZone] = useState("");
   const fileUrl = useMemo(() => {
@@ -827,6 +837,10 @@ export default function AtexMap({
     if (sa.kind === "rect") mountRectHandles(layer);
     if (sa.kind === "circle") mountCircleHandles(layer);
     if (sa.kind === "poly") mountPolyHandles(layer);
+    // Fermer le modal pour plus de clarté pendant l’édition
+    setEditorPos(null);
+    // Surligne la forme en édition
+    layer.setStyle({ weight: 2.5, color: "#2563eb", dashArray: "4,4" });
   }
   async function saveGeomEdit() {
     if (!geomEdit.active || !geomEdit.layer || !geomEdit.shapeId || !baseLayerRef.current) return;
@@ -861,7 +875,27 @@ export default function AtexMap({
       }
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       clearEditHandles();
+      document.body.classList.remove("editing-geom");
       await reloadAll();
+      // Feedback toast
+      const toast = document.createElement("div");
+      toast.textContent = "Forme enregistrée";
+      Object.assign(toast.style, {
+        position: "fixed",
+        bottom: "20px",
+        right: "20px",
+        background: "#2563eb",
+        color: "white",
+        padding: "8px 12px",
+        borderRadius: "8px",
+        fontSize: "13px",
+        boxShadow: "0 2px 6px rgba(0,0,0,.2)",
+        zIndex: 9999,
+        transition: "opacity 0.5s",
+      });
+      document.body.appendChild(toast);
+      setTimeout(() => (toast.style.opacity = "0"), 2000);
+      setTimeout(() => toast.remove(), 2600);
     } catch (e) {
       console.error("[ATEX] saveGeomEdit error", e);
     } finally { end(); }
@@ -1095,6 +1129,21 @@ export default function AtexMap({
       if (editorPos?.shapeId) {
         const payload = { name: meta.name, zoning_gas: meta.zoning_gas, zoning_dust: meta.zoning_dust };
         await api.atexMaps.updateSubarea(editorPos.shapeId, payload);
+
+        // Propagation automatique si nom changé
+        if (meta?.name && meta.name !== editorInit.name) {
+          try {
+            await api.atex.bulkRename({
+              field: "sub_equipment",
+              from: editorInit.name || "",
+              to: meta.name,
+            });
+            console.info("[ATEX] Nom sous-zone propagé aux équipements");
+          } catch (e) {
+            console.warn("Propagation sous-zone échouée:", e);
+          }
+        }
+
         setEditorPos(null);
         await reloadAll();
       }
@@ -1162,7 +1211,6 @@ export default function AtexMap({
     (typeof window !== "undefined" ? window.innerHeight : 900) - 140,
     imgSize.h || 900
   );
-
   const toggleLegend = () => {
     setLegendVisible((v) => {
       const next = !v;
@@ -1171,7 +1219,6 @@ export default function AtexMap({
       return next;
     });
   };
-
   const editorStyle = editorPos?.screen
     ? {
         left: Math.max(
@@ -1190,7 +1237,6 @@ export default function AtexMap({
         ),
       }
     : {};
-
   const MapInner = (
     <div
       ref={wrapRef}
@@ -1199,7 +1245,7 @@ export default function AtexMap({
     >
       {/* Toolbar */}
       <div className="atex-toolbar">
-        {/* ➕ Ajouter un équipement */}
+        {/* Ajouter un équipement */}
         <button
           className="btn-plus"
           onClick={() => createEquipmentAtCenter()}
@@ -1207,15 +1253,14 @@ export default function AtexMap({
         >
           +
         </button>
-
-        {/* ✏️ Dessin zones */}
+        {/* Dessin zones */}
         <div className="btn-pencil-wrap" ref={drawMenuRef}>
           <button
             className="btn-pencil"
             onClick={() => setDrawMenu((v) => !v)}
             title="Dessiner (zones ATEX)"
           >
-            ✏️
+            
           </button>
           {drawMenu && (
             <div className="draw-menu">
@@ -1254,7 +1299,6 @@ export default function AtexMap({
             </div>
           )}
         </div>
-
         {/* Fin polygone */}
         {drawing === DRAW_POLY && (
           <button
@@ -1267,10 +1311,9 @@ export default function AtexMap({
               m.getContainer().dispatchEvent(ev);
             }}
           >
-            ✔️
+            
           </button>
         )}
-
         {/* Ajuster la vue */}
         <button
           className="btn-plus"
@@ -1291,19 +1334,17 @@ export default function AtexMap({
             log("adjust view", { fitZoom, finalZoom: m.getZoom() });
           }}
         >
-          🗺️
+          
         </button>
-
         {geomEdit.active && (
           <button
             className="btn-pencil"
             title="Sauvegarder la géométrie"
             onClick={saveGeomEdit}
           >
-            💾
+            
           </button>
         )}
-
         {/* Légende */}
         <button
           className="btn-pencil"
@@ -1313,16 +1354,14 @@ export default function AtexMap({
           {legendVisible ? "⮜" : "⮞"}
         </button>
       </div>
-
       {/* Overlay aide polygone */}
       {drawing === DRAW_POLY && (
         <div className="absolute left-3 top-3 z-[5000] px-2 py-1 text-[11px] rounded bg-blue-50 border border-blue-200 text-blue-800 shadow">
-          Mode polygone : cliquez pour ajouter des sommets, puis “✔️ Terminer polygone”.
+          Mode polygone : cliquez pour ajouter des sommets, puis “Terminer polygone”.
         </div>
       )}
     </div>
   );
-
   const EditorPopover = editorPos?.screen ? (
     <div className="fixed z-[7000]" style={editorStyle}>
       <SubAreaEditor
@@ -1346,7 +1385,6 @@ export default function AtexMap({
       />
     </div>
   ) : null;
-
   const MarkerLegend = (
     <div className="flex items-center gap-3 mt-2 text-xs text-gray-600 flex-wrap">
       <span className="inline-flex items-center gap-1">
@@ -1376,7 +1414,6 @@ export default function AtexMap({
       </span>
     </div>
   );
-
   if (!inModal) {
     return (
       <div className="relative">
@@ -1386,7 +1423,6 @@ export default function AtexMap({
       </div>
     );
   }
-
   // ----------------------------- META (Bâtiment / Zone) -----------------------------
   useEffect(() => {
     if (!plan) return;
@@ -1400,7 +1436,6 @@ export default function AtexMap({
       })
       .catch((err) => console.warn("getMeta error (ignored):", err));
   }, [plan?.id, plan?.logical_name]);
-
   async function handleMetaChange(nextBuilding, nextZone) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
@@ -1412,7 +1447,6 @@ export default function AtexMap({
       console.warn("Erreur mise à jour meta:", err);
     }
   }
-
   // --- Modal plein écran
   return (
     <>
@@ -1421,7 +1455,6 @@ export default function AtexMap({
           Ouvrir le plan
         </Btn>
       )}
-
       {open && (
         <div className="fixed inset-0 z-[6000] flex flex-col">
           {/* Backdrop */}
@@ -1429,7 +1462,6 @@ export default function AtexMap({
             className="absolute inset-0 bg-black/40"
             onClick={() => setOpen(false)}
           />
-
           {/* Dialog */}
           <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
             <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
@@ -1438,7 +1470,6 @@ export default function AtexMap({
                   {title}
                   {planDisplayName ? ` — ${planDisplayName}` : ""}
                 </div>
-
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-1">
                     <span className="text-sm text-gray-600">Bâtiment</span>
@@ -1463,17 +1494,106 @@ export default function AtexMap({
                   </Btn>
                 </div>
               </div>
-
               <div className="p-3 md:p-4 overflow-auto flex-1">
                 {MapInner}
                 {MarkerLegend}
               </div>
             </div>
           </div>
-
           {EditorPopover}
         </div>
       )}
     </>
+  );
+}
+/* ----------------------------- Sous-composants locaux ----------------------------- */
+function AtexZipImport({ disabled, onDone }) {
+  const inputRef = useRef(null);
+  return (
+    <div className="flex items-center gap-2">
+      <Btn variant="ghost" onClick={() => inputRef.current?.click()} disabled={disabled}>
+        Import ZIP de plans
+      </Btn>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".zip,application/zip"
+        className="hidden"
+        onChange={async (e) => {
+          const f = e.target.files?.[0];
+          if (f) {
+            await api.atexMaps.uploadZip(f);
+            onDone?.();
+          }
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+function PlanCards({ plans = [], onRename, onPick }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
+      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
+      {plans.map((p) => (
+        <PlanCard key={p.id || p.logical_name} plan={p} onRename={onRename} onPick={onPick} />
+      ))}
+    </div>
+  );
+}
+function PlanCard({ plan, onRename, onPick }) {
+  const [edit, setEdit] = useState(false);
+  const [name, setName] = useState(plan.display_name || plan.logical_name || "");
+  return (
+    <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
+      <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
+        <div className="flex flex-col items-center justify-center text-gray-500">
+          <div className="text-4xl leading-none">PDF</div>
+          <div className="text-[11px] mt-1">PDF</div>
+        </div>
+        <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
+          {name}
+        </div>
+      </div>
+      <div className="p-3">
+        {!edit ? (
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-medium truncate" title={name}>
+              {name || "—"}
+            </div>
+            <div className="flex items-center gap-1">
+              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>
+                ✏️
+              </Btn>
+              <Btn variant="subtle" onClick={() => onPick(plan)}>
+                Ouvrir
+              </Btn>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input value={name} onChange={setName} />
+            <Btn
+              variant="subtle"
+              onClick={async () => {
+                await onRename(plan, (name || "").trim());
+                setEdit(false);
+              }}
+            >
+              OK
+            </Btn>
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                setName(plan.display_name || plan.logical_name || "");
+                setEdit(false);
+              }}
+            >
+              Annuler
+            </Btn>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
