@@ -93,7 +93,7 @@ async function jsonFetch(url, options = {}) {
   if (res.status === 204) return null;
   return ct.includes("application/json") ? res.json() : null;
 }
-/** 🔹 Utilitaire bas niveau pour appels JSON "bruts" */
+/** Utilitaire bas niveau pour appels JSON "bruts" */
 export async function apiBaseFetchJSON(path, options = {}) {
   const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
   const headers = identityHeaders(new Headers(options.headers || {}));
@@ -303,7 +303,8 @@ export const api = {
       fd.append("file", file);
       if (email) fd.append("user_email", email);
       if (name) fd.append("user_name", name);
-      return upload(`/api/doors/doors/${encodeURIComponent(id)}/files`, fd);
+      return 
+      upload(`/api/doors/doors/${encodeURIComponent(id)}/files`, fd);
     },
     deleteFile: (fileId) => del(`/api/doors/files/${encodeURIComponent(fileId)}`),
     startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, { _user: getIdentity() }),
@@ -323,7 +324,8 @@ export const api = {
         _user: getIdentity(),
       });
     },
-    listHistory: (doorId) => get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
+    listHistory: (doorId) =>
+      get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
     qrUrl: (id, size = 256, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`, bust),
     qrcodesUrl: (id, sizes = "80,120,200", force = false, { bust = false } = {}) =>
@@ -451,19 +453,20 @@ export const api = {
     },
     listHistory: (equipmentId) =>
       get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/history`),
+    // ✅ Quick check (valider un contrôle aujourd'hui sans formulaire)
+    quickCheckEquipment: (id) => {
+      return post(`/api/atex/equipments/${encodeURIComponent(id)}/quickCheck`, {});
+    },
     // Calendrier & paramètres
     calendar: () => get(`/api/atex/calendar`),
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
     // IA extraction (multi-photos) & conformité
     extractFromPhotos: (files = []) => {
-      // ✅ multi-fichiers via champ "files" → /api/atex/extract (backend agrège toutes les images)
-      const { email, name } = getIdentity();
+      // ✅ multi-fichiers via champ "files" → /api/atex/analyzePhotoBatch (nouvelle route robuste)
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
-      if (email) fd.append("user_email", email);
-      if (name) fd.append("user_name", name);
-      return upload(`/api/atex/extract`, fd);
+      return upload(`/api/atex/analyzePhotoBatch`, fd);
     },
     assessConformity: ({ atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = {}) =>
       post(`/api/atex/assess`, { atex_mark_gas, atex_mark_dust, target_gas, target_dust }),
@@ -473,6 +476,8 @@ export const api = {
     // ✅ Alias rétro-compat pour corriger les appels legacy du front
     analyzePhotoBatch: (files = []) => api.atex.extractFromPhotos(files),
     aiAnalyze: (payload) => api.atex.assessConformity(payload),
+    // (Optionnel) Audit trail en bas de fiche
+    getEquipmentHistory: (id) => get(`/api/atex/equipments/${encodeURIComponent(id)}/history`),
   },
   /** --- ATEX MAPS (Plans PDF + positions + sous-zones) --- */
   atexMaps: {
@@ -507,7 +512,7 @@ export const api = {
     // Positions
     positions: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/positions`, { logical_name, page_index }),
-    // 🔧 fix: accepte id **numérique** OU UUID OU logical_name
+    // fix: accepte id **numérique** OU UUID OU logical_name
     positionsAuto: (planOrKey, page_index = 0) => {
       const key = typeof planOrKey === "string" ? planOrKey : (planOrKey?.id || planOrKey?.logical_name || "");
       if (isUuid(key) || isNumericId(key)) return get(`/api/atex/maps/positions`, { id: key, page_index });
@@ -517,7 +522,7 @@ export const api = {
     setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
       post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }),
     /* ================== Sous-zones (subareas) ================== */
-    // 🔧 fix: accepte id **numérique** OU UUID, sinon logical_name
+    // fix: accepte id **numérique** OU UUID, sinon logical_name
     listSubareas: (planKey, page_index = 0) => {
       const key = typeof planKey === "string" ? planKey : (planKey?.id || planKey?.logical_name || "");
       if (isUuid(key) || isNumericId(key)) return get(`/api/atex/maps/subareas`, { id: key, page_index });
@@ -587,6 +592,10 @@ export const api = {
         }
       }
       return put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, body);
+    },
+    // (Optionnel) Mise à jour partielle de la géométrie uniquement
+    updateSubareaGeometry: (id, partial) => {
+      return put(`/api/atex/maps/subareas/${encodeURIComponent(id)}/geometry`, partial);
     },
     deleteSubarea: (id) => del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
     getMeta: (plan_key) => get(`/api/atex/maps/meta`, { plan_key }),
