@@ -395,6 +395,8 @@ export default function AtexMap({
   // Métadonnées plan (Bâtiment / Zone) persistées par plan+page
   const [building, setBuilding] = useState("");
   const [zone, setZone] = useState("");
+  const [savedBuilding, setSavedBuilding] = useState("");
+  const [savedZone, setSavedZone] = useState("");
   const fileUrl = useMemo(() => {
     if (!plan) return null;
     if (api?.atexMaps?.planFileUrlAuto) return api.atexMaps.planFileUrlAuto(plan, { bust: true });
@@ -1087,12 +1089,30 @@ function setupHandleDrag(map, onMoveCallback) {
       console.error("[ATEX] saveGeomEdit error", e);
     } finally {
       // --- 5️⃣ Toujours restaurer un état stable ---
-      document.body.classList.remove("editing-geom");
-      document.body.style.userSelect = "";
+      const m = mapRef.current;
+      resetAfterGeomEdit(m);
       clearEditHandles();
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       end();
     }
+  }
+
+    /* --------------------------------------------------------------------------
+    RÉINITIALISATION GLOBALE APRÈS ÉDITION
+    -------------------------------------------------------------------------- */
+  function resetAfterGeomEdit(map) {
+    try {
+      map?.dragging?.enable?.();
+      map?.off("mousemove");
+      map?.off("mouseup");
+      map?.off("mousedown");
+    } catch {}
+    document.body.classList.remove("editing-geom");
+    document.body.style.userSelect = "";
+    const editPane = document.querySelector(".leaflet-pane.editPane");
+    if (editPane) editPane.style.pointerEvents = "auto";
+    const inter = document.querySelectorAll(".leaflet-interactive");
+    inter.forEach((el) => (el.style.pointerEvents = "auto"));
   }
 
   function drawSubareas(items) {
@@ -1665,50 +1685,77 @@ function setupHandleDrag(map, onMoveCallback) {
     api.atexMaps
       .getMeta(key)
       .then((res) => {
-        setBuilding(res?.building || "");
-        setZone(res?.zone || "");
+        const b = res?.building || "";
+        const z = res?.zone || "";
+        setBuilding(b);
+        setZone(z);
+        setSavedBuilding(b);
+        setSavedZone(z);
       })
       .catch((err) => console.warn("getMeta error (ignored):", err));
   }, [plan?.id, plan?.logical_name]);
 
-  // ✅ Propagation cohérente des changements bâtiment / zone
+
+  // ✅ Remplace intégralement ta fonction handleMetaChange par ceci
   async function handleMetaChange(nextBuilding, nextZone) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
+
+    // 🧩 on capture l’état avant modification (IMPORTANT)
     const prevBuilding = building;
     const prevZone = zone;
 
-    setBuilding(nextBuilding);
-    setZone(nextZone);
-
     try {
+      // 1️⃣ Met à jour les métadonnées du plan
       await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
 
-      // --- Propagation automatique des équipements si le nom du bâtiment change ---
+      // 2️⃣ Met à jour l’état React seulement après succès
+      setBuilding(nextBuilding);
+      setZone(nextZone);
+
+      // 3️⃣ Propagation automatique des équipements
       if (nextBuilding && nextBuilding !== prevBuilding) {
-        await api.atex.bulkRename({
+        const res = await api.atex.bulkRename({
           field: "building",
           from: prevBuilding || "",
           to: nextBuilding,
         });
-        console.info(`[ATEX] Bâtiment renommé : ${prevBuilding} → ${nextBuilding}`);
+        console.info(`[ATEX] Bâtiment renommé : ${prevBuilding} → ${nextBuilding}`, res);
       }
 
-      // --- Propagation automatique si le nom de la zone change ---
       if (nextZone && nextZone !== prevZone) {
-        await api.atex.bulkRename({
+        const res = await api.atex.bulkRename({
           field: "zone",
           from: prevZone || "",
           to: nextZone,
         });
-        console.info(`[ATEX] Zone renommée : ${prevZone} → ${nextZone}`);
+        console.info(`[ATEX] Zone renommée : ${prevZone} → ${nextZone}`, res);
       }
 
-      // Recharge les équipements pour reflet immédiat
+      // 4️⃣ Recharge les équipements
       await reloadAll();
 
+      // 5️⃣ Petit feedback visuel
+      const toast = document.createElement("div");
+      toast.textContent = "Changements enregistrés ✅";
+      Object.assign(toast.style, {
+        position: "fixed",
+        bottom: "20px",
+        right: "20px",
+        background: "#059669",
+        color: "white",
+        padding: "8px 12px",
+        borderRadius: "8px",
+        fontSize: "13px",
+        boxShadow: "0 2px 6px rgba(0,0,0,.2)",
+        zIndex: 9999,
+        transition: "opacity 0.5s",
+      });
+      document.body.appendChild(toast);
+      setTimeout(() => (toast.style.opacity = "0"), 2000);
+      setTimeout(() => toast.remove(), 2600);
     } catch (err) {
-      console.warn("Erreur mise à jour meta:", err);
+      console.error("[ATEX] Erreur mise à jour meta:", err);
     }
   }
 
@@ -1781,13 +1828,15 @@ function setupHandleDrag(map, onMoveCallback) {
                       onChange={(e) => setBuilding(e.target.value)}
                       placeholder="Ex: Bât. A"
                     />
-                    {/* Bouton ✔ affiché uniquement si le bâtiment a changé */}
-                    {building !== "" && (
+                    {/* ✅ bouton visible uniquement si modif réelle */}
+                    {building.trim() !== savedBuilding.trim() && (
                       <button
                         className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
                         title="Enregistrer le nom du bâtiment"
                         onClick={async () => {
                           await handleMetaChange(building, zone);
+                          setSavedBuilding(building);
+
                           // ✅ petit toast visuel
                           const toast = document.createElement("div");
                           toast.textContent = "Bâtiment enregistré ✅";
@@ -1823,13 +1872,15 @@ function setupHandleDrag(map, onMoveCallback) {
                       onChange={(e) => setZone(e.target.value)}
                       placeholder="Ex: Niv. 2"
                     />
-                    {/* Bouton ✔ affiché uniquement si la zone a changé */}
-                    {zone !== "" && (
+                    {/* ✅ bouton visible uniquement si modif réelle */}
+                    {zone.trim() !== savedZone.trim() && (
                       <button
                         className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
                         title="Enregistrer le nom de la zone"
                         onClick={async () => {
                           await handleMetaChange(building, zone);
+                          setSavedZone(zone);
+
                           // ✅ petit toast visuel
                           const toast = document.createElement("div");
                           toast.textContent = "Zone enregistrée ✅";
@@ -1864,9 +1915,7 @@ function setupHandleDrag(map, onMoveCallback) {
 
               <div className="flex-1 overflow-hidden">
                 {MapInner}
-                <div className="p-3">
-                  {MarkerLegend}
-                </div>
+                <div className="p-3">{MarkerLegend}</div>
               </div>
             </div>
           </div>
