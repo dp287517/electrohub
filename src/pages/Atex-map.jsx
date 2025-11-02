@@ -397,6 +397,13 @@ export default function AtexMap({
   const [zone, setZone] = useState("");
   const [savedBuilding, setSavedBuilding] = useState("");
   const [savedZone, setSavedZone] = useState("");
+
+  // AJOUT : États nécessaires au rechargement après modification bâtiment/zone
+  const [loading, setLoading] = useState(false);
+  const [positions, setPositions] = useState([]);
+  const [equipments, setEquipments] = useState([]);
+  const [mapRefreshTick, setMapRefreshTick] = useState(0);
+
   const fileUrl = useMemo(() => {
     if (!plan) return null;
     if (api?.atexMaps?.planFileUrlAuto) return api.atexMaps.planFileUrlAuto(plan, { bust: true });
@@ -614,7 +621,7 @@ export default function AtexMap({
       await loadPositions();
     } finally { end(); }
   }
-  async function enrichStatuses(list) {
+    async function enrichStatuses(list) {
     if (!Array.isArray(list) || list.length === 0) return list;
     const byId = Object.fromEntries(list.map((p) => [p.id, p]));
     let updated = false;
@@ -653,6 +660,30 @@ export default function AtexMap({
     }
     return Object.values(byId);
   }
+
+  // AJOUT ICI : Nouvelle fonction de rechargement
+  async function reloadPlanData() {
+    if (!planKey) return;
+
+    setLoading?.(true);
+    try {
+      // 1. Recharger les positions (marqueurs)
+      const pos = await api.atexMaps.positionsAuto(planKey, pageIndex);
+      setPositions(pos?.items || []);
+
+      // 2. Recharger toutes les fiches équipements du plan
+      const eqs = await api.atex.listEquipments({ plan: planKey });
+      setEquipments(eqs?.items || []);
+
+      // 3. Forcer le remontage Leaflet
+      setMapRefreshTick?.((t) => t + 1);
+    } catch (e) {
+      console.error("[ATEX] reloadPlanData error", e);
+    } finally {
+      setLoading?.(false);
+    }
+  }
+
   async function loadPositions() {
     const end = timeStart("loadPositions");
     try {
@@ -1696,7 +1727,7 @@ function setupHandleDrag(map, onMoveCallback) {
   }, [plan?.id, plan?.logical_name]);
 
 
-  async function handleMetaChange(nextBuilding, nextZone) {
+    async function handleMetaChange(nextBuilding, nextZone) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
 
@@ -1704,10 +1735,10 @@ function setupHandleDrag(map, onMoveCallback) {
     const prevZone = zone;
 
     try {
-      // 1️⃣ Met à jour les métadonnées du plan
+      // 1. Met à jour les métadonnées du plan
       await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
 
-      // 2️⃣ Propagation automatique aux équipements
+      // 2. Propagation automatique aux équipements
       if (nextBuilding && nextBuilding !== prevBuilding) {
         await api.atex.bulkRename({
           field: "building",
@@ -1723,17 +1754,17 @@ function setupHandleDrag(map, onMoveCallback) {
         });
       }
 
-      // 3️⃣ Met à jour l’état React
+      // 3. Met à jour l’état React
       setBuilding(nextBuilding);
       setZone(nextZone);
 
       // attendre que React applique les changements (sinon reloadAll utilise l'ancien état)
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // 4️⃣ Recharge proprement les positions et zones
+      // 4. Recharge proprement les positions et zones
       await reloadAll();
 
-      // 5️⃣ Recharge les équipements (pour leurs métadonnées à jour)
+      // 5. Recharge les équipements (pour leurs métadonnées à jour)
       try {
         const eq = await api.atex.listEquipments?.();
         if (eq?.items?.length) {
@@ -1750,12 +1781,12 @@ function setupHandleDrag(map, onMoveCallback) {
           );
         }
       } catch (e) {
-        console.warn("⚠️ Erreur rechargement équipements après renommage:", e);
+        console.warn("Erreur rechargement équipements après renommage:", e);
       }
 
-      // 6️⃣ Feedback visuel (toast)
+      // 6. Feedback visuel (toast)
       const toast = document.createElement("div");
-      toast.textContent = "Changements enregistrés ✅";
+      toast.textContent = "Changements enregistrés";
       Object.assign(toast.style, {
         position: "fixed",
         bottom: "20px",
@@ -1773,7 +1804,7 @@ function setupHandleDrag(map, onMoveCallback) {
       setTimeout(() => (toast.style.opacity = "0"), 2000);
       setTimeout(() => toast.remove(), 2600);
 
-      // 7️⃣ Informe le parent (Atex.jsx) pour recharger la liste principale et ses filtres
+      // 7. Informe le parent (Atex.jsx) pour recharger la liste principale et ses filtres
       if (typeof onMetaChanged === "function") {
         onMetaChanged();
       }
@@ -1851,7 +1882,7 @@ function setupHandleDrag(map, onMoveCallback) {
                       onChange={(e) => setBuilding(e.target.value)}
                       placeholder="Ex: Bât. A"
                     />
-                    {/* ✅ bouton visible uniquement si modif réelle */}
+                    {/* Bouton visible uniquement si modif réelle */}
                     {building.trim() !== savedBuilding.trim() && (
                       <button
                         className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
@@ -1859,26 +1890,6 @@ function setupHandleDrag(map, onMoveCallback) {
                         onClick={async () => {
                           await handleMetaChange(building, zone);
                           setSavedBuilding(building);
-
-                          // ✅ petit toast visuel
-                          const toast = document.createElement("div");
-                          toast.textContent = "Bâtiment enregistré ✅";
-                          Object.assign(toast.style, {
-                            position: "fixed",
-                            bottom: "20px",
-                            right: "20px",
-                            background: "#059669",
-                            color: "white",
-                            padding: "8px 12px",
-                            borderRadius: "8px",
-                            fontSize: "13px",
-                            boxShadow: "0 2px 6px rgba(0,0,0,.2)",
-                            zIndex: 9999,
-                            transition: "opacity 0.5s",
-                          });
-                          document.body.appendChild(toast);
-                          setTimeout(() => (toast.style.opacity = "0"), 2000);
-                          setTimeout(() => toast.remove(), 2600);
                         }}
                       >
                         ✔
@@ -1895,7 +1906,7 @@ function setupHandleDrag(map, onMoveCallback) {
                       onChange={(e) => setZone(e.target.value)}
                       placeholder="Ex: Niv. 2"
                     />
-                    {/* ✅ bouton visible uniquement si modif réelle */}
+                    {/* Bouton visible uniquement si modif réelle */}
                     {zone.trim() !== savedZone.trim() && (
                       <button
                         className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
@@ -1903,26 +1914,6 @@ function setupHandleDrag(map, onMoveCallback) {
                         onClick={async () => {
                           await handleMetaChange(building, zone);
                           setSavedZone(zone);
-
-                          // ✅ petit toast visuel
-                          const toast = document.createElement("div");
-                          toast.textContent = "Zone enregistrée ✅";
-                          Object.assign(toast.style, {
-                            position: "fixed",
-                            bottom: "20px",
-                            right: "20px",
-                            background: "#059669",
-                            color: "white",
-                            padding: "8px 12px",
-                            borderRadius: "8px",
-                            fontSize: "13px",
-                            boxShadow: "0 2px 6px rgba(0,0,0,.2)",
-                            zIndex: 9999,
-                            transition: "opacity 0.5s",
-                          });
-                          document.body.appendChild(toast);
-                          setTimeout(() => (toast.style.opacity = "0"), 2000);
-                          setTimeout(() => toast.remove(), 2600);
                         }}
                       >
                         ✔
