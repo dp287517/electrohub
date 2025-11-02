@@ -368,57 +368,64 @@ export default function Atex() {
       window.addEventListener("atex-plan-meta-updated", handler);
       return () => window.removeEventListener("atex-plan-meta-updated", handler);
     }, [q, status, building, zone, compliance]);
-  // Merge helper : tient compte d’un éventuel champ zones.*, sinon zoning_*
-  // et nettoie les champs imbriqués pour éviter les affichages JSON
-  const mergeZones = (raw) => {
-    const clean = {
-      ...raw,
-      zoning_gas: raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null,
-      zoning_dust: raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null,
-    };
+    // Merge helper : robuste contre objets imbriqués et champs manquants
+      const mergeZones = (raw) => {
+        if (!raw) return raw;
 
-    // 🧹 Corrige les champs texte pour être toujours plats (jamais des objets)
-    clean.equipment =
-      typeof raw?.equipment === "object"
-        ? raw?.equipment?.equipment || raw?.equipment?.name || ""
-        : raw?.equipment || "";
+        const clean = { ...raw };
 
-    clean.sub_equipment =
-      typeof raw?.sub_equipment === "object"
-        ? raw?.sub_equipment?.name || raw?.sub_equipment?.equipment || ""
-        : raw?.sub_equipment || "";
+        // Champs texte : toujours string, jamais objet
+        const textFields = ["building", "zone", "equipment", "sub_equipment"];
+        textFields.forEach(field => {
+          if (typeof clean[field] === "object" && clean[field] !== null) {
+            clean[field] = clean[field].name || clean[field].equipment || clean[field].id || "";
+          } else if (clean[field] == null) {
+            clean[field] = "";
+          } else {
+            clean[field] = String(clean[field]);
+          }
+        });
 
-    clean.building =
-      typeof raw?.building === "object" ? raw?.building?.name || "" : raw?.building || "";
+        // Zonage
+        clean.zoning_gas = raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null;
+        clean.zoning_dust = raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null;
 
-    clean.zone =
-      typeof raw?.zone === "object" ? raw?.zone?.name || "" : raw?.zone || "";
+        return clean;
+      };
 
-    return clean;
-  };
-
-  async function openEdit(equipment) {
+  async function openEdit(equipment, reloadFn) {
     const base = mergeZones(equipment || {});
     setEditing(base);
     initialRef.current = base;
     setDrawerOpen(true);
+
+    // Stocke la fonction reload pour usage global
+    if (typeof reloadFn === "function") {
+      window._atexReload = reloadFn;
+    } else {
+      delete window._atexReload;
+    }
+
     if (base?.id) {
       try {
-        // recharge les données de l’équipement à jour
+        // Recharge les données fraîches
         const res = await api.atex.getEquipment(base.id);
         const fresh = mergeZones(res?.equipment || {});
+
         setEditing((cur) => {
           const next = { ...(cur || {}), ...fresh };
           initialRef.current = next;
           return next;
         });
 
-        // recharge l’historique et les fichiers
+        // Historique
         const hist = await api.atex.getEquipmentHistory(base.id);
         setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
+
+        // Fichiers
         await reloadFiles(base.id);
       } catch (err) {
-        console.warn("[ATEX] Erreur lors du rechargement équipement :", err);
+        console.warn("[ATEX] Erreur rechargement équipement :", err);
         setHistory([]);
         setFiles([]);
       }
@@ -429,6 +436,8 @@ export default function Atex() {
     setEditing(null);
     setFiles([]);
     setHistory([]);
+    // Nettoyage global : évite que reload() du plan reste accroché
+    delete window._atexReload;
     setDrawerOpen(false);
     initialRef.current = null;
   }
@@ -606,12 +615,12 @@ export default function Atex() {
     }
   }
 
-  // CORRECTIF CHATGPT : Fusion des champs IA après verifyCompliance
+  // VÉRIFICATION IA : mise à jour immédiate + reload intelligent
   async function verifyComplianceIA() {
     if (!editing?.id) return;
-    const before = { ...editing };
+
     try {
-      // Étape 1 : Analyse IA de conformité (marquage vs zonage)
+      // 1. Analyse IA
       const body = {
         atex_mark_gas: editing.atex_mark_gas || "",
         atex_mark_dust: editing.atex_mark_dust || "",
@@ -623,29 +632,26 @@ export default function Atex() {
       const decision = res?.decision || null;
       const rationale = res?.rationale || "";
 
-      // Étape 2 : Appliquer la décision (enregistre un check IA)
+      // 2. Appliquer la décision
       if (api.atex.applyCompliance) {
         await api.atex.applyCompliance(editing.id, { decision, rationale });
       }
 
-      // Étape 3 : Recharger la fiche complète
+      // 3. Recharger la fiche
       const updated = await api.atex.getEquipment(editing.id);
+      const merged = mergeZones(updated?.equipment || updated || {});
 
-      // Étape 4 : Fusionner les champs IA (fabricant, ref, marquage)
-      setEditing({
-        ...before,
-        ...updated,
-        fabricant: updated.fabricant || before.fabricant,
-        ref_fabricant: updated.ref_fabricant || before.ref_fabricant,
-        marquage_gaz: updated.marquage_gaz || before.marquage_gaz,
-        marquage_pouss: updated.marquage_pouss || before.marquage_pouss,
-      });
-      if (updated?.equipment || updated?.compliance_state) {
-        const cs = updated.equipment?.compliance_state || updated.compliance_state || null;
-        setEditing((cur) => ({ ...cur, compliance_state: cs }));
+      // 4. Mettre à jour l'édition
+      setEditing(merged);
+
+      // 5. Recharger le tableau (ou via parent)
+      if (typeof window._atexReload === "function") {
+        await window._atexReload();
+      } else {
+        await reload();
       }
 
-      await reload();
+      // 6. Toast
       setToast(
         decision
           ? `Conformité: ${decision === "conforme" ? "Conforme" : "Non conforme"}`
@@ -1147,24 +1153,41 @@ export default function Atex() {
                       }));
                     }}
                   />
-                  {/* Bouton check rapide */}
+                  {/* Bouton check rapide – évite double si IA déjà faite */}
                   {editing?.id && (
                     <Btn
                       variant="subtle"
                       title="Valider le contrôle aujourd'hui"
                       onClick={async () => {
                         try {
+                          // Si conformité déjà définie par IA → on ne crée pas de check manuel
+                          if (editing.compliance_state) {
+                            setToast("Conformité déjà vérifiée par IA");
+                            return;
+                          }
+
                           await api.atex.quickCheckEquipment(editing.id);
                           const today = dayjs().format("YYYY-MM-DD");
                           const nextAuto = next36MonthsISO(today);
+
                           setEditing((cur) => ({
                             ...(cur || {}),
                             last_check_date: today,
                             next_check_date: nextAuto,
+                            compliance_state: "conforme", // optionnel : marque comme conforme
                           }));
-                          // recharge historique
+
+                          // Recharge historique
                           const res = await api.atex.getEquipmentHistory(editing.id);
                           setHistory(Array.isArray(res?.checks) ? res.checks : []);
+
+                          // Recharge tableau
+                          if (typeof window._atexReload === "function") {
+                            await window._atexReload();
+                          } else {
+                            await reload();
+                          }
+
                           setToast("Contrôle validé");
                         } catch (e) {
                           console.error(e);
@@ -1172,7 +1195,7 @@ export default function Atex() {
                         }
                       }}
                     >
-                      ✅  
+                        Checkmark  
                     </Btn>
                   )}
                 </div>
