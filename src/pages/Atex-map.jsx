@@ -1735,6 +1735,24 @@ function setupHandleDrag(map, onMoveCallback) {
       // 4️⃣ Recharge les équipements
       await reloadAll();
 
+      // Forcer la mise à jour des équipements visibles (métadonnées)
+      try {
+        const eq = await api.atex.listEquipments?.();
+        if (eq?.items?.length) {
+          drawMarkers(eq.items.map(it => ({
+            id: it.id,
+            name: it.name,
+            x: Number(it.x_frac ?? it.x ?? 0),
+            y: Number(it.y_frac ?? it.y ?? 0),
+            status: it.status || "a_faire",
+            zoning_gas: it.zoning_gas ?? null,
+            zoning_dust: it.zoning_dust ?? null,
+          })));
+        }
+      } catch (e) {
+        console.warn("⚠️ Erreur rechargement équipements après renommage:", e);
+      }
+
       // 5️⃣ Petit feedback visuel
       const toast = document.createElement("div");
       toast.textContent = "Changements enregistrés ✅";
