@@ -1313,19 +1313,37 @@ app.put("/api/atex/maps/meta", async (req, res) => {
   try {
     const { plan_key, building = null, zone = null } = req.body || {};
     if (!plan_key) return res.status(400).json({ error: "plan_key requis" });
+    
     // Cherche le plan par UUID ou logical_name
     const { rows: found } = await pool.query(
-      `SELECT id FROM atex_plans
-        WHERE id::text = $1 OR logical_name = $1
-        ORDER BY version DESC LIMIT 1`,
+      `SELECT id, logical_name FROM atex_plans
+       WHERE id::text = $1 OR logical_name = $1
+       ORDER BY version DESC LIMIT 1`,
       [plan_key]
     );
     const plan = found?.[0];
     if (!plan) return res.status(404).json({ error: "Plan introuvable" });
+    
+    // Mise à jour du plan (comme avant)
     await pool.query(
       `UPDATE atex_plans SET building=$1, zone=$2 WHERE id=$3`,
       [building, zone, plan.id]
     );
+    
+    // NOUVEAU : Propagation aux équipements liés via positions (seulement pour ce plan)
+    // Utilise logical_name pour cibler précisément
+    await pool.query(`
+      UPDATE atex_equipments e
+      SET building = COALESCE($1, e.building),  -- Met à jour seulement si fourni (sinon garde l'ancien)
+          zone = COALESCE($2, e.zone),          -- Idem pour zone
+          updated_at = now()
+      FROM atex_positions p
+      WHERE p.equipment_id = e.id AND p.logical_name = $3
+    `, [building, zone, plan.logical_name]);
+    
+    // Log l'événement (comme ailleurs dans le code)
+    await logEvent(req, "plans.meta.update", { plan_key, building, zone, propagated: true });
+    
     res.json({ ok: true, plan_id: plan.id, building, zone });
   } catch (e) {
     console.error("setMeta error", e);
