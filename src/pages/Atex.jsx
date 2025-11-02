@@ -563,17 +563,19 @@ export default function Atex() {
     try {
       const res = await api.atex.analyzePhotoBatch(list);
       const s = res?.extracted || res || {};
+
       setEditing((x) => ({
-        ...(x || {}),
+        ...x, // Garde l'état actuel
         manufacturer: s.manufacturer || x?.manufacturer || "",
         manufacturer_ref: s.manufacturer_ref || x?.manufacturer_ref || "",
         atex_mark_gas: s.atex_mark_gas || x?.atex_mark_gas || "",
         atex_mark_dust: s.atex_mark_dust || x?.atex_mark_dust || "",
         type: s.type || x?.type || "",
       }));
+
       setToast("Analyse photos terminée");
     } catch (e) {
-      console.error(e); // eslint-disable-line no-console
+      console.error(e);
       setToast("Analyse photos indisponible");
     }
   }
@@ -615,15 +617,17 @@ export default function Atex() {
     }
   }
 
-  // VÉRIFICATION IA : mise à jour immédiate + reload intelligent
+  // VÉRIFICATION IA : garde les champs photo + recharge historique
   async function verifyComplianceIA() {
     if (!editing?.id) return;
+
+    const before = { ...editing }; // Garde les champs photo IA
 
     try {
       // 1. Analyse IA
       const body = {
         atex_mark_gas: editing.atex_mark_gas || "",
-        atex_mark_dust: editing.atex_mark_dust || "",
+        atex_mark_gas: editing.atex_mark_dust || "",
         target_gas: editing.zoning_gas ?? null,
         target_dust: editing.zoning_dust ?? null,
       };
@@ -637,21 +641,28 @@ export default function Atex() {
         await api.atex.applyCompliance(editing.id, { decision, rationale });
       }
 
-      // 3. Recharger la fiche
+      // 3. Recharger la fiche (garder les champs photo)
       const updated = await api.atex.getEquipment(editing.id);
       const merged = mergeZones(updated?.equipment || updated || {});
 
-      // 4. Mettre à jour l'édition
-      setEditing(merged);
+      // 4. Fusionner : garde photo IA + ajoute conformité
+      setEditing({
+        ...before, // Garde photo IA
+        ...merged, // Ajoute conformité
+        compliance_state: merged?.compliance_state || decision || null,
+      });
 
-      // 5. Recharger le tableau (ou via parent)
+      // 5. Recharger historique IMMÉDIATEMENT
+      const hist = await api.atex.getEquipmentHistory(editing.id);
+      setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
+
+      // 6. Recharger tableau
       if (typeof window._atexReload === "function") {
         await window._atexReload();
       } else {
         await reload();
       }
 
-      // 6. Toast
       setToast(
         decision
           ? `Conformité: ${decision === "conforme" ? "Conforme" : "Non conforme"}`
@@ -1195,7 +1206,7 @@ export default function Atex() {
                         }
                       }}
                     >
-                        Checkmark  
+                      ✅ 
                     </Btn>
                   )}
                 </div>
