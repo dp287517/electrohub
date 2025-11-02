@@ -355,38 +355,34 @@ export default function Atex() {
   useEffect(() => {
     reloadCalendar();
   }, [items]);
-  // Merge helper: tient compte d'un éventuel champ zones.*, sinon zoning_*
-  const mergeZones = (raw) => ({
-    ...raw,
-    zoning_gas: raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null,
-    zoning_dust: raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null,
-  });
-  async function openEdit(equipment) {
-    const base = mergeZones(equipment || {});
-    setEditing(base);
-    initialRef.current = base;
-    setDrawerOpen(true);
-    if (base?.id) {
-      // recharge frais depuis le serveur pour refléter setPosition et autres mises à jour (dont bâtiment/zone)
-      api.atex
-        .getEquipment(base.id)
-        .then((res) => {
-          const fresh = mergeZones(res?.equipment || {});
-          setEditing((cur) => {
-            const next = { ...(cur || {}), ...fresh };
-            initialRef.current = next;
-            return next;
-          });
-        })
-        .catch(() => {});
-      reloadFiles(base.id);
-      // Charge aussi l’historique de contrôles
-      api.atex
-        .getEquipmentHistory(base.id)
-        .then((res) => setHistory(Array.isArray(res?.checks) ? res.checks : []))
-        .catch(() => setHistory([]));
-    }
-  }
+  // Merge helper : tient compte d’un éventuel champ zones.*, sinon zoning_*
+  // et nettoie les champs imbriqués pour éviter les affichages JSON
+  const mergeZones = (raw) => {
+    const clean = {
+      ...raw,
+      zoning_gas: raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null,
+      zoning_dust: raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null,
+    };
+
+    // 🧹 Corrige les champs texte pour être toujours plats (jamais des objets)
+    clean.equipment =
+      typeof raw?.equipment === "object"
+        ? raw?.equipment?.equipment || raw?.equipment?.name || ""
+        : raw?.equipment || "";
+
+    clean.sub_equipment =
+      typeof raw?.sub_equipment === "object"
+        ? raw?.sub_equipment?.name || raw?.sub_equipment?.equipment || ""
+        : raw?.sub_equipment || "";
+
+    clean.building =
+      typeof raw?.building === "object" ? raw?.building?.name || "" : raw?.building || "";
+
+    clean.zone =
+      typeof raw?.zone === "object" ? raw?.zone?.name || "" : raw?.zone || "";
+
+    return clean;
+  };
   function closeEdit() {
     setEditing(null);
     setFiles([]);
