@@ -454,6 +454,9 @@ export default function Atex() {
       const eq = updated?.equipment || updated || null;
       if (eq?.id) {
         const fresh = mergeZones(eq);
+        // 🧹 Corrige le type des champs
+        fresh.equipment = typeof fresh.equipment === "object" ? fresh.equipment?.equipment || "" : fresh.equipment || "";
+        fresh.sub_equipment = typeof fresh.sub_equipment === "object" ? fresh.sub_equipment?.name || "" : fresh.sub_equipment || "";
         setEditing(fresh);
         initialRef.current = fresh;
       }
@@ -599,6 +602,10 @@ export default function Atex() {
         marquage_gaz: updated.marquage_gaz || before.marquage_gaz,
         marquage_pouss: updated.marquage_pouss || before.marquage_pouss,
       });
+      if (updated?.equipment || updated?.compliance_state) {
+        const cs = updated.equipment?.compliance_state || updated.compliance_state || null;
+        setEditing((cur) => ({ ...cur, compliance_state: cs }));
+      }
 
       await reload();
       setToast(
@@ -1251,13 +1258,18 @@ export default function Atex() {
                             {h.user_name || h.user_email || "—"}
                           </div>
                         </div>
-                        <Badge color={h.decision === "conforme" ? "green" : h.decision === "non_conforme" ? "red" : "gray"}>
-                          {h.decision === "conforme"
-                            ? "Conforme"
-                            : h.decision === "non_conforme"
-                            ? "Non conforme"
-                            : "—"}
-                        </Badge>
+                        {(() => {
+                          const decision = h.decision || h.compliance_state || "";
+                          return (
+                            <Badge color={decision === "conforme" ? "green" : decision === "non_conforme" ? "red" : "gray"}>
+                              {decision === "conforme"
+                                ? "Conforme"
+                                : decision === "non_conforme"
+                                ? "Non conforme"
+                                : "—"}
+                            </Badge>
+                          );
+                        })()}
                       </div>
                     ))}
                   </div>
