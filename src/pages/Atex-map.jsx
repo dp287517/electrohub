@@ -850,27 +850,27 @@ export default function AtexMap({
     if (!lay) return;
     try { lay.clearLayers(); } catch {}
   }
-  /* =========================================================================
-    --- Edition de formes (zones ATEX) : handles + déplacement fluide ---
-    ====================================================================== */
+/* =========================================================================
+   --- Edition de formes (zones ATEX) : handles + déplacement fluide ---
+   ====================================================================== */
 
-  // ✅ Helper central pour un drag fluide et sans blocage
-  function setupHandleDrag(map, onMoveCallback) {
-    const move = (ev) => onMoveCallback(ev);
-    const up = () => {
-      map.off("mousemove", move);
-      map.off("mouseup", up);
-      map.dragging.enable();
-      document.body.style.userSelect = ""; // rétablit la sélection texte
-    };
-    map.on("mousemove", move);
-    map.on("mouseup", up);
-    document.body.style.userSelect = "none"; // évite sélection de texte pendant le drag
-  }
+// ✅ Helper central pour un drag fluide et sans blocage
+function setupHandleDrag(map, onMoveCallback) {
+  const move = (ev) => onMoveCallback(ev);
+  const up = () => {
+    map.off("mousemove", move);
+    map.off("mouseup", up);
+    map.dragging.enable();
+    document.body.style.userSelect = ""; // rétablit la sélection texte
+  };
+  map.on("mousemove", move);
+  map.on("mouseup", up);
+  document.body.style.userSelect = "none"; // évite sélection de texte pendant le drag
+}
 
-  /* --------------------------------------------------------------------------
-    RECTANGLE
-    -------------------------------------------------------------------------- */
+/* --------------------------------------------------------------------------
+   RECTANGLE
+   -------------------------------------------------------------------------- */
   function mountRectHandles(layer) {
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
@@ -896,10 +896,9 @@ export default function AtexMap({
 
       h.on("mousedown", (e) => {
         m.dragging.disable();
-        const current = [...corners];
         setupHandleDrag(m, (ev) => {
-          current[idx] = ev.latlng;
-          updateByCorners(current);
+          corners[idx] = ev.latlng;              // 🔧 mise à jour permanente
+          updateByCorners(corners);
           h.setLatLng(ev.latlng);
         });
       });
@@ -935,7 +934,7 @@ export default function AtexMap({
         const c = ev.latlng;
         layer.setLatLng(c);
         centerH.setLatLng(c);
-        radiusH.setLatLng(L.latLng(c.lat, c.lng + r));
+        radiusH.setLatLng(L.latLng(c.lat, c.lng + layer.getRadius()));
       });
     });
 
@@ -975,9 +974,8 @@ export default function AtexMap({
       h.on("mousedown", (e) => {
         m.dragging.disable();
         setupHandleDrag(m, (ev) => {
-          const newLatLngs = layer.getLatLngs()[0].slice();
-          newLatLngs[idx] = ev.latlng;
-          layer.setLatLngs([newLatLngs]);
+          latlngs[idx] = ev.latlng;                // 🔧 met à jour la réf interne
+          layer.setLatLngs([latlngs]);            // redraw fluide
           h.setLatLng(ev.latlng);
         });
       });
@@ -1000,6 +998,15 @@ export default function AtexMap({
 
     // Surligne la forme active
     layer.setStyle({ weight: 2.5, color: "#2563eb", dashArray: "4,4" });
+
+    // 🔧 Permet d'annuler avec ESC
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        clearEditHandles();
+        setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+        document.body.classList.remove("editing-geom");
+      }
+    });
   }
 
   /* --------------------------------------------------------------------------
@@ -1025,7 +1032,6 @@ export default function AtexMap({
           y2: (b.getNorth() - bounds.getSouth()) / H,
         };
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
-
       } else if (geomEdit.kind === "circle") {
         const c = ly.getLatLng();
         const r = ly.getRadius();
@@ -1037,7 +1043,6 @@ export default function AtexMap({
           r: r / Math.min(W, H),
         };
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
-
       } else if (geomEdit.kind === "poly") {
         const latlngs = ly.getLatLngs()[0] || [];
         const { W, H, bounds } = dims;
@@ -1053,6 +1058,7 @@ export default function AtexMap({
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       clearEditHandles();
       document.body.classList.remove("editing-geom");
+      document.body.style.userSelect = ""; // 🔧 rétablit comportement normal
 
       // --- 3️⃣ Recharge les zones mises à jour ---
       await reloadAll();
@@ -1082,6 +1088,7 @@ export default function AtexMap({
     } finally {
       // --- 5️⃣ Toujours restaurer un état stable ---
       document.body.classList.remove("editing-geom");
+      document.body.style.userSelect = "";
       clearEditHandles();
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       end();
