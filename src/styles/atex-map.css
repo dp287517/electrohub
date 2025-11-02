@@ -60,7 +60,7 @@
 .atex-legend {
   position: absolute;
   right: 12px;
-  bottom: 12px;
+  bottom: 40px; /* 🟢 remonte la légende pour éviter le chevauchement des boutons zoom */
   z-index: 1200;
   background: #ffffff;
   border: 1px solid #e5e7eb;
@@ -71,7 +71,7 @@
   max-width: 280px;
   pointer-events: auto;
   backdrop-filter: blur(4px);
-  overflow: visible; /* ✅ supprime le scroll */
+  overflow: visible; /* 🟢 supprime le scroll */
 }
 
 .atex-legend__title {
