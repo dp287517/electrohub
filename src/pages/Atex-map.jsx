@@ -54,7 +54,7 @@ function getIdentity() {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
         if (!email && u?.email) email = String(u.email);
-        if (!name && (u?.name || u?.displayName)) name = String(u.name || u?.displayName);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
       } catch {}
     }
   } catch {}
@@ -281,18 +281,16 @@ function addLegendControl(map) {
         "div",
         "leaflet-bar leaflet-control p-2 bg-white rounded-xl border shadow atex-legend"
       );
-
-      // ✅ Styles pour éviter que la légende soit rognée ou sorte du cadre
+      // Styles pour éviter que la légende soit rognée ou sorte du cadre
       el.style.maxWidth = "280px";
       el.style.marginBottom = "12px"; // espace par rapport au bas de la carte
-      el.style.marginRight = "12px";  // espace par rapport au bord droit
+      el.style.marginRight = "12px"; // espace par rapport au bord droit
       el.style.pointerEvents = "auto"; // clics sur la légende autorisés
       el.style.overflowY = "auto"; // scroll si le contenu dépasse
       el.style.maxHeight = "160px"; // limite la hauteur totale visible
       el.style.borderRadius = "0.75rem";
       el.style.boxShadow = "0 2px 6px rgba(0,0,0,0.15)";
-
-      // ✅ Contenu de la légende
+      // Contenu de la légende
       el.innerHTML = `
         <div class="text-xs font-semibold mb-1">Légende ATEX</div>
         <div class="text-[11px] text-gray-600 mb-1">
@@ -328,21 +326,18 @@ function addLegendControl(map) {
           </div>
         </div>
         <div class="mt-2 text-[10px] text-gray-500">
-          Exemple : remplissage 
+          Exemple : remplissage
           <span class="inline-block w-3 h-3 align-middle rounded-sm" style="background:${DUST_FILL[21]}"></span>
-          &nbsp;bordure 
+          &nbsp;bordure
           <span class="inline-block w-3 h-3 align-middle rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span>
         </div>
       `;
-
-      // ✅ Empêche les scrolls/clics de la légende d’impacter la carte
+      // Empêche les scrolls/clics de la légende d’impacter la carte
       L.DomEvent.disableScrollPropagation(el);
       L.DomEvent.disableClickPropagation(el);
-
       return el;
     },
   });
-
   const inst = new ctrl();
   map.addControl(inst);
   return inst;
@@ -427,26 +422,21 @@ export default function AtexMap({
   /* -------------------- Init carte (une fois) + rendu PDF -------------------- */
   useEffect(() => {
     if (!wrapRef.current || !open) return;
-
     const jobKey = `${fileUrl || "no-pdf"}::${pageIndex}`;
-
-    // ✅ Correction : forcer rechargement si carte nettoyée ou couches absentes
+    // Correction : forcer rechargement si carte nettoyée ou couches absentes
     const mustForceReload =
       !baseReadyRef.current ||
       !mapRef.current ||
       !subareasLayerRef.current ||
       !markersLayerRef.current;
-
     if (lastJob.current.key === jobKey && !mustForceReload) return;
     lastJob.current.key = jobKey;
-
     const cleanupPdf = async () => {
       try { renderTaskRef.current?.cancel(); } catch {}
       try { await loadingTaskRef.current?.destroy?.(); } catch {}
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
     };
-
     const cleanupMap = () => {
       const m = mapRef.current;
       try { roRef.current?.disconnect?.(); } catch {}
@@ -467,15 +457,12 @@ export default function AtexMap({
       baseReadyRef.current = false;
       indexedRef.current = { key: "", done: false };
     };
-
     let onResize = null;
-
     (async () => {
       const close = timeStart("init map + pdf render");
       try {
         await cleanupPdf();
-
-        // 1️⃣ Création de la carte Leaflet
+        // 1. Création de la carte Leaflet
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
@@ -488,21 +475,17 @@ export default function AtexMap({
         });
         L.control.zoom({ position: "topright" }).addTo(m);
         mapRef.current = m;
-
         // --- Pans et couches ---
         m.createPane("basePane"); m.getPane("basePane").style.zIndex = 200;
         m.createPane("zonesPane"); m.getPane("zonesPane").style.zIndex = 380;
         m.createPane("markersPane"); m.getPane("markersPane").style.zIndex = 400;
         m.createPane("editPane"); m.getPane("editPane").style.zIndex = 450;
-
         legendRef.current = addLegendControl(m);
         const legendEl = legendRef.current?.getContainer?.();
         if (legendEl) legendEl.style.display = legendVisible ? "block" : "none";
-
         markersLayerRef.current = L.layerGroup({ pane: "markersPane" }).addTo(m);
         subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
         editHandlesLayerRef.current = L.layerGroup({ pane: "editPane" }).addTo(m);
-
         // --- Bounds provisoires avant rendu PDF ---
         const PROV_W = 2000, PROV_H = 1400;
         const provBounds = L.latLngBounds([[0, 0], [PROV_H, PROV_W]]);
@@ -515,7 +498,6 @@ export default function AtexMap({
         m.setMaxZoom(fitZoom + 8);
         m.setMaxBounds(provBounds.pad(0.5));
         m.fitBounds(provBounds, { padding: [10, 10] });
-
         // --- Resize listeners ---
         onResize = () => {
           try {
@@ -531,8 +513,7 @@ export default function AtexMap({
           roRef.current = new ResizeObserver(() => { onResize(); });
           roRef.current.observe(wrapRef.current);
         } catch {}
-
-        // 2️⃣ Rendu PDF -> image -> base overlay
+        // 2. Rendu PDF -> image -> base overlay
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -553,11 +534,9 @@ export default function AtexMap({
           await renderTaskRef.current.promise;
           const dataUrl = canvas.toDataURL("image/png");
           setImgSize({ w: canvas.width, h: canvas.height });
-
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
           const base = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
           baseLayerRef.current = base;
-
           await new Promise(requestAnimationFrame);
           m.invalidateSize(false);
           const fitZoom2 = m.getBoundsZoom(bounds, true);
@@ -565,11 +544,9 @@ export default function AtexMap({
           m.setMaxZoom(fitZoom2 + 8);
           m.setMaxBounds(bounds.pad(0.5));
           m.fitBounds(bounds, { padding: [10, 10] });
-
-          // ✅ Marque la carte prête et recharge
+          // Marque la carte prête et recharge
           baseReadyRef.current = true;
           await reloadAll(); // <--- recharge formes + équipements
-
           try { await pdf.cleanup?.(); } catch {}
         }
       } catch (e) {
@@ -578,7 +555,6 @@ export default function AtexMap({
         close();
       }
     })();
-
     return () => {
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy?.(); } catch {}
@@ -586,7 +562,6 @@ export default function AtexMap({
       loadingTaskRef.current = null;
       cleanupMap();
     };
-
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileUrl, pageIndex, open]);
   /* ----------------------------- Chargements + INDEX ----------------------------- */
@@ -708,17 +683,15 @@ export default function AtexMap({
       const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
       const patch = {
         building, // conserve le bâtiment actuel
-        zone,     // conserve la zone actuelle
+        zone, // conserve la zone actuelle
         equipment: planDisplayName || "",
         sub_equipment: subName || "",
       };
-
-      // ⚙️ Logique : ne pas écraser si on reste dans la même sous-zone
+      // Logique : ne pas écraser si on reste dans la même sous-zone
       const oldSub = zonesByEquip[equipmentId]?.sub_equipment || "";
       if (subName && subName === oldSub) {
         delete patch.sub_equipment; // même zone → ne rien changer
       }
-
       log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
       await api.atex.updateEquipment(equipmentId, patch);
     } catch (e) {
@@ -855,8 +828,7 @@ export default function AtexMap({
 /* =========================================================================
    --- Edition de formes (zones ATEX) : handles + déplacement fluide ---
    ====================================================================== */
-
-// ✅ Helper central pour un drag fluide et sans blocage
+// Helper central pour un drag fluide et sans blocage
 function setupHandleDrag(map, onMoveCallback) {
   const move = (ev) => onMoveCallback(ev);
   const up = () => {
@@ -869,7 +841,6 @@ function setupHandleDrag(map, onMoveCallback) {
   map.on("mouseup", up);
   document.body.style.userSelect = "none"; // évite sélection de texte pendant le drag
 }
-
 /* --------------------------------------------------------------------------
    RECTANGLE
    -------------------------------------------------------------------------- */
@@ -877,14 +848,11 @@ function setupHandleDrag(map, onMoveCallback) {
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
-
     const b = layer.getBounds();
     const corners = [b.getSouthWest(), b.getSouthEast(), b.getNorthEast(), b.getNorthWest()];
-
     const updateByCorners = (pts) => {
       layer.setBounds(L.latLngBounds(pts[0], pts[2]));
     };
-
     corners.forEach((ll, idx) => {
       const h = L.circleMarker(ll, {
         radius: 5,
@@ -895,18 +863,16 @@ function setupHandleDrag(map, onMoveCallback) {
         pane: "editPane",
         bubblingMouseEvents: false,
       }).addTo(lay);
-
       h.on("mousedown", (e) => {
         m.dragging.disable();
         setupHandleDrag(m, (ev) => {
-          corners[idx] = ev.latlng;              // 🔧 mise à jour permanente
+          corners[idx] = ev.latlng; // mise à jour permanente
           updateByCorners(corners);
           h.setLatLng(ev.latlng);
         });
       });
     });
   }
-
   /* --------------------------------------------------------------------------
     CERCLE
     -------------------------------------------------------------------------- */
@@ -914,21 +880,17 @@ function setupHandleDrag(map, onMoveCallback) {
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
-
     const center = layer.getLatLng();
     const r = layer.getRadius();
     const east = L.latLng(center.lat, center.lng + r);
-
     const centerH = L.circleMarker(center, {
       radius: 5, color: "#111827", weight: 1,
       fillColor: "#ffffff", fillOpacity: 1, pane: "editPane"
     }).addTo(lay);
-
     const radiusH = L.circleMarker(east, {
       radius: 5, color: "#111827", weight: 1,
       fillColor: "#ffffff", fillOpacity: 1, pane: "editPane"
     }).addTo(lay);
-
     // Déplacement du centre
     centerH.on("mousedown", (e) => {
       m.dragging.disable();
@@ -939,7 +901,6 @@ function setupHandleDrag(map, onMoveCallback) {
         radiusH.setLatLng(L.latLng(c.lat, c.lng + layer.getRadius()));
       });
     });
-
     // Redimensionnement du rayon
     radiusH.on("mousedown", (e) => {
       m.dragging.disable();
@@ -951,7 +912,6 @@ function setupHandleDrag(map, onMoveCallback) {
       });
     });
   }
-
   /* --------------------------------------------------------------------------
     POLYGONE
     -------------------------------------------------------------------------- */
@@ -959,9 +919,7 @@ function setupHandleDrag(map, onMoveCallback) {
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
-
     const latlngs = layer.getLatLngs()[0] || [];
-
     latlngs.forEach((ll, idx) => {
       const h = L.circleMarker(ll, {
         radius: 5,
@@ -972,36 +930,30 @@ function setupHandleDrag(map, onMoveCallback) {
         pane: "editPane",
         bubblingMouseEvents: false
       }).addTo(lay);
-
       h.on("mousedown", (e) => {
         m.dragging.disable();
         setupHandleDrag(m, (ev) => {
-          latlngs[idx] = ev.latlng;                // 🔧 met à jour la réf interne
-          layer.setLatLngs([latlngs]);            // redraw fluide
+          latlngs[idx] = ev.latlng; // met à jour la réf interne
+          layer.setLatLngs([latlngs]); // redraw fluide
           h.setLatLng(ev.latlng);
         });
       });
     });
   }
-
   /* --------------------------------------------------------------------------
     DÉMARRAGE DE L'ÉDITION DE FORME
     -------------------------------------------------------------------------- */
   function startGeomEdit(layer, sa) {
     clearEditHandles();
     setGeomEdit({ active: true, kind: sa.kind, shapeId: sa.id, layer });
-
     if (sa.kind === "rect") mountRectHandles(layer);
     if (sa.kind === "circle") mountCircleHandles(layer);
     if (sa.kind === "poly") mountPolyHandles(layer);
-
     // Fermer le modal pour plus de clarté pendant l’édition
     setEditorPos(null);
-
     // Surligne la forme active
     layer.setStyle({ weight: 2.5, color: "#2563eb", dashArray: "4,4" });
-
-    // 🔧 Permet d'annuler avec ESC
+    // Permet d'annuler avec ESC
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         clearEditHandles();
@@ -1010,7 +962,6 @@ function setupHandleDrag(map, onMoveCallback) {
       }
     });
   }
-
   /* --------------------------------------------------------------------------
     SAUVEGARDE DE LA FORME
     -------------------------------------------------------------------------- */
@@ -1020,9 +971,8 @@ function setupHandleDrag(map, onMoveCallback) {
     const ly = geomEdit.layer;
     const base = baseLayerRef.current;
     const dims = getPlanDims(base);
-
     try {
-      // --- 1️⃣ Extraction des nouvelles coordonnées ---
+      // --- 1. Extraction des nouvelles coordonnées ---
       if (geomEdit.kind === "rect") {
         const b = ly.getBounds();
         const { W, H, bounds } = dims;
@@ -1055,17 +1005,14 @@ function setupHandleDrag(map, onMoveCallback) {
         const payload = { kind: "poly", points };
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
       }
-
-      // --- 2️⃣ Réinitialisation du mode édition ---
+      // --- 2. Réinitialisation du mode édition ---
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       clearEditHandles();
       document.body.classList.remove("editing-geom");
-      document.body.style.userSelect = ""; // 🔧 rétablit comportement normal
-
-      // --- 3️⃣ Recharge les zones mises à jour ---
+      document.body.style.userSelect = ""; // rétablit comportement normal
+      // --- 3. Recharge les zones mises à jour ---
       await reloadAll();
-
-      // --- 4️⃣ Feedback visuel (toast temporaire) ---
+      // --- 4. Feedback visuel (toast temporaire) ---
       const toast = document.createElement("div");
       toast.textContent = "Forme enregistrée";
       Object.assign(toast.style, {
@@ -1084,11 +1031,10 @@ function setupHandleDrag(map, onMoveCallback) {
       document.body.appendChild(toast);
       setTimeout(() => (toast.style.opacity = "0"), 2000);
       setTimeout(() => toast.remove(), 2600);
-
     } catch (e) {
       console.error("[ATEX] saveGeomEdit error", e);
     } finally {
-      // --- 5️⃣ Toujours restaurer un état stable ---
+      // --- 5. Toujours restaurer un état stable ---
       const m = mapRef.current;
       resetAfterGeomEdit(m);
       clearEditHandles();
@@ -1096,7 +1042,6 @@ function setupHandleDrag(map, onMoveCallback) {
       end();
     }
   }
-
     /* --------------------------------------------------------------------------
     RÉINITIALISATION GLOBALE APRÈS ÉDITION
     -------------------------------------------------------------------------- */
@@ -1114,7 +1059,6 @@ function setupHandleDrag(map, onMoveCallback) {
     const inter = document.querySelectorAll(".leaflet-interactive");
     inter.forEach((el) => (el.style.pointerEvents = "auto"));
   }
-
   function drawSubareas(items) {
     const end = timeStart("drawSubareas");
     try {
@@ -1123,18 +1067,14 @@ function setupHandleDrag(map, onMoveCallback) {
       if (!m || !base) return;
       if (!subareasLayerRef.current)
         subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
-
       const g = subareasLayerRef.current;
       g.clearLayers();
       clearEditHandles();
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-
       const { W, H, bounds } = getPlanDims(base);
-
       (items || []).forEach((sa) => {
         let layer = null;
         const style = colorForSubarea(sa);
-
         if (sa.kind === "rect") {
           const x1 = bounds.getWest() + (sa.x1 ?? 0) * W;
           const y1 = bounds.getSouth() + (sa.y1 ?? 0) * H;
@@ -1154,11 +1094,9 @@ function setupHandleDrag(map, onMoveCallback) {
           ]);
           layer = L.polygon(pts, style);
         }
-
         if (!layer) return;
         layer.__meta = sa;
         layer.addTo(g);
-
         // Éditeur local quand on clique sur la zone
         layer.on("click", (e) => {
           setEditorInit({
@@ -1176,7 +1114,6 @@ function setupHandleDrag(map, onMoveCallback) {
             kind: sa.kind,
           });
         });
-
         // Label texte
         if (sa?.name) {
           const center =
@@ -1193,7 +1130,6 @@ function setupHandleDrag(map, onMoveCallback) {
           }
         }
       });
-
       g.bringToFront?.();
       markersLayerRef.current?.bringToFront?.();
     } catch (e) {
@@ -1202,7 +1138,6 @@ function setupHandleDrag(map, onMoveCallback) {
       end();
     }
   }
-
   /* -------- Dessin zones -------- */
   function setDrawMode(mode) {
     if (mode === "rect") setDrawing(DRAW_RECT);
@@ -1377,7 +1312,6 @@ function setupHandleDrag(map, onMoveCallback) {
       if (editorPos?.shapeId) {
         const payload = { name: meta.name, zoning_gas: meta.zoning_gas, zoning_dust: meta.zoning_dust };
         await api.atexMaps.updateSubarea(editorPos.shapeId, payload);
-
         // Propagation automatique si nom changé
         if (meta?.name && meta.name !== editorInit.name) {
           try {
@@ -1395,13 +1329,11 @@ function setupHandleDrag(map, onMoveCallback) {
             console.warn("Propagation sous-zone échouée:", e);
           }
         }
-
         setEditorPos(null);
         await reloadAll();
         }
         } finally { end(); }
         }
-
         async function onDeleteSubarea() {
           const end = timeStart("onDeleteSubarea");
           try {
@@ -1413,7 +1345,6 @@ function setupHandleDrag(map, onMoveCallback) {
             await reloadAll();
           } finally { end(); }
         }
-
   /* ----------------------------- DnD: création + upload ----------------------------- */
   useEffect(() => {
     const el = wrapRef.current;
@@ -1514,7 +1445,7 @@ function setupHandleDrag(map, onMoveCallback) {
             onClick={() => setDrawMenu((v) => !v)}
             title="Dessiner (zones ATEX)"
           >
-            ✏️  
+            [Pencil Icon]
           </button>
           {drawMenu && (
             <div className="draw-menu">
@@ -1565,7 +1496,7 @@ function setupHandleDrag(map, onMoveCallback) {
               m.getContainer().dispatchEvent(ev);
             }}
           >
-            ✅  
+            [Check Icon]
           </button>
         )}
         {/* Ajuster la vue */}
@@ -1588,7 +1519,7 @@ function setupHandleDrag(map, onMoveCallback) {
             log("adjust view", { fitZoom, finalZoom: m.getZoom() });
           }}
         >
-          🗺️
+          [Map Icon]
         </button>
         {geomEdit.active && (
           <button
@@ -1596,7 +1527,7 @@ function setupHandleDrag(map, onMoveCallback) {
             title="Sauvegarder la géométrie"
             onClick={saveGeomEdit}
           >
-            💾
+            [Save Icon]
           </button>
         )}
         {/* Légende */}
@@ -1605,7 +1536,7 @@ function setupHandleDrag(map, onMoveCallback) {
           title={legendVisible ? "Cacher la légende" : "Afficher la légende"}
           onClick={toggleLegend}
         >
-          {legendVisible ? "⮜" : "⮞"}
+          {legendVisible ? "Left Arrow" : "Right Arrow"}
         </button>
       </div>
       {/* Overlay aide polygone */}
@@ -1677,6 +1608,7 @@ function setupHandleDrag(map, onMoveCallback) {
       </div>
     );
   }
+
   // ----------------------------- META (Bâtiment / Zone) -----------------------------
   useEffect(() => {
     if (!plan) return;
@@ -1695,258 +1627,246 @@ function setupHandleDrag(map, onMoveCallback) {
       .catch((err) => console.warn("getMeta error (ignored):", err));
   }, [plan?.id, plan?.logical_name]);
 
+/* -------------------------------------------------------------- 
+ * CORRECTIF 1 : Fonction de rechargement des données du plan 
+ * -------------------------------------------------------------- */
+async function reloadPlanData() {
+  if (!planKey) return;
 
-  async function handleMetaChange(nextBuilding, nextZone) {
-    if (!plan) return;
-    const key = plan.id || plan.logical_name;
+  try {
+    // 1. Recharge les positions (marqueurs)
+    const pos = await api.atexMaps.positionsAuto(planKey, pageIndex);
+    setPositions(pos?.items || []);
 
-    const prevBuilding = building;
-    const prevZone = zone;
+    // 2. Recharge toutes les fiches équipements du plan (pour le tableau de contrôle)
+    const eqs = await api.atex.listEquipments({ plan: planKey });
+    setEquipments(eqs?.items || []);
 
-    try {
-      // 1️⃣ Met à jour les métadonnées du plan
-      await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
+    // 3. Force le remontage Leaflet
+    setMapRefreshTick((t) => t + 1);
+  } catch (e) {
+    console.error("[ATEX] reloadPlanData error", e);
+  }
+}
 
-      // 2️⃣ Propagation automatique aux équipements
-      if (nextBuilding && nextBuilding !== prevBuilding) {
-        await api.atex.bulkRename({
-          field: "building",
-          from: prevBuilding || "",
-          to: nextBuilding,
-        });
-      }
-      if (nextZone && nextZone !== prevZone) {
-        await api.atex.bulkRename({
-          field: "zone",
-          from: prevZone || "",
-          to: nextZone,
-        });
-      }
+/* -------------------------------------------------------------- 
+ * CORRECTIF 2 : handleMetaChange → appel reloadPlanData
+ * -------------------------------------------------------------- */
+async function handleMetaChange(nextBuilding, nextZone) {
+  if (!plan) return;
+  const key = plan.id || plan.logical_name;
+  const prevBuilding = building;
+  const prevZone = zone;
 
-      // 3️⃣ Met à jour l’état React
-      setBuilding(nextBuilding);
-      setZone(nextZone);
+  try {
+    // 1. Met à jour les métadonnées du plan
+    await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
 
-      // attendre que React applique les changements (sinon reloadAll utilise l'ancien état)
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // 4️⃣ Recharge proprement les positions et zones
-      await reloadAll();
-
-      // 5️⃣ Recharge les équipements (pour leurs métadonnées à jour)
-      try {
-        const eq = await api.atex.listEquipments?.();
-        if (eq?.items?.length) {
-          drawMarkers(
-            eq.items.map((it) => ({
-              id: it.id,
-              name: it.name,
-              x: Number(it.x_frac ?? it.x ?? 0),
-              y: Number(it.y_frac ?? it.y ?? 0),
-              status: it.status || "a_faire",
-              zoning_gas: it.zoning_gas ?? null,
-              zoning_dust: it.zoning_dust ?? null,
-            }))
-          );
-        }
-      } catch (e) {
-        console.warn("⚠️ Erreur rechargement équipements après renommage:", e);
-      }
-
-      // 6️⃣ Feedback visuel (toast)
-      const toast = document.createElement("div");
-      toast.textContent = "Changements enregistrés ✅";
-      Object.assign(toast.style, {
-        position: "fixed",
-        bottom: "20px",
-        right: "20px",
-        background: "#059669",
-        color: "white",
-        padding: "8px 12px",
-        borderRadius: "8px",
-        fontSize: "13px",
-        boxShadow: "0 2px 6px rgba(0,0,0,.2)",
-        zIndex: 9999,
-        transition: "opacity 0.5s",
+    // 2. Propagation automatique aux équipements (via bulkRename global)
+    if (nextBuilding && nextBuilding !== prevBuilding) {
+      await api.atex.bulkRename({
+        field: "building",
+        from: prevBuilding || "",
+        to: nextBuilding,
       });
-      document.body.appendChild(toast);
-      setTimeout(() => (toast.style.opacity = "0"), 2000);
-      setTimeout(() => toast.remove(), 2600);
-
-      // 7️⃣ Informe le parent (Atex.jsx) pour recharger la liste principale et ses filtres
-      if (typeof onMetaChanged === "function") {
-        onMetaChanged();
-      }
-    } catch (err) {
-      console.error("[ATEX] Erreur mise à jour meta:", err);
     }
-  }
-
-  function handleClosePlan() {
-    try {
-      // 1️⃣ Supprime la carte Leaflet
-      if (mapRef.current) {
-        try { mapRef.current.off(); } catch {}
-        try { mapRef.current.eachLayer((l) => mapRef.current.removeLayer(l)); } catch {}
-        try { mapRef.current.remove(); } catch {}
-        mapRef.current = null;
-      }
-
-      // 2️⃣ Vide toutes les références
-      baseLayerRef.current = null;
-      markersLayerRef.current = null;
-      subareasLayerRef.current = null;
-      editHandlesLayerRef.current = null;
-
-      // 3️⃣ Réinitialise les états React
-      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-      setEditorPos(null);
-      setEditorInit({});
-      setDrawing(DRAW_NONE);
-      setPolyTemp([]);
-      setZonesByEquip({});
-      setSubareasById({});
-      setOpen(false);
-      setTimeout(() => mapRef.current = null, 150);
-
-      // 4️⃣ Supprime les éventuelles cartes ou cards résiduelles
-      document.querySelectorAll(".plan-card, .plan-preview, .plan-footer").forEach((el) => el.remove());
-
-      console.info("[ATEX] Plan fermé proprement ✅");
-    } catch (err) {
-      console.error("[ATEX] Erreur fermeture plan:", err);
+    if (nextZone && nextZone !== prevZone) {
+      await api.atex.bulkRename({
+        field: "zone",
+        from: prevZone || "",
+        to: nextZone,
+      });
     }
+
+    // 3. Met à jour l’état React
+    setBuilding(nextBuilding);
+    setZone(nextZone);
+    setSavedBuilding(nextBuilding);
+    setSavedZone(nextZone);
+
+    // 4. Recharge les données du plan (marqueurs + fiches)
+    await reloadPlanData();
+
+    // 5. Feedback visuel (toast)
+    const toast = document.createElement("div");
+    toast.textContent = "Changements enregistrés";
+    Object.assign(toast.style, {
+      position: "fixed",
+      bottom: "20px",
+      right: "20px",
+      background: "#059669",
+      color: "white",
+      padding: "8px 12px",
+      borderRadius: "8px",
+      fontSize: "13px",
+      boxShadow: "0 2px 6px rgba(0,0,0,.2)",
+      zIndex: 9999,
+      transition: "opacity 0.5s",
+    });
+    document.body.appendChild(toast);
+    setTimeout(() => (toast.style.opacity = "0"), 2000);
+    setTimeout(() => toast.remove(), 2600);
+  } catch (err) {
+    console.error("[ATEX] Erreur mise à jour meta:", err);
   }
+}
 
-  // --- Modal plein écran
-  return (
-    <>
-      {!open && (
-        <Btn className="mt-2" onClick={() => setOpen(true)}>
-          Ouvrir le plan
-        </Btn>
-      )}
-      {open && (
-        <div className="fixed inset-0 z-[6000] flex flex-col">
-          {/* Backdrop */}
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={handleClosePlan}
-          />
-          {/* Dialog */}
-          <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
-            <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b gap-3 flex-wrap">
-                <div className="font-semibold">
-                  {title}
-                  {planDisplayName ? ` — ${planDisplayName}` : ""}
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {/* Champ Bâtiment */}
-                  <div className="flex items-center gap-1">
-                    <span className="text-sm text-gray-600">Bâtiment</span>
-                    <input
-                      className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
-                      value={building}
-                      onChange={(e) => setBuilding(e.target.value)}
-                      placeholder="Ex: Bât. A"
-                    />
-                    {/* ✅ bouton visible uniquement si modif réelle */}
-                    {building.trim() !== savedBuilding.trim() && (
-                      <button
-                        className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
-                        title="Enregistrer le nom du bâtiment"
-                        onClick={async () => {
-                          await handleMetaChange(building, zone);
-                          setSavedBuilding(building);
+function handleClosePlan() {
+  try {
+    // 1. Supprime la carte Leaflet
+    if (mapRef.current) {
+      try { mapRef.current.off(); } catch {}
+      try { mapRef.current.eachLayer((l) => mapRef.current.removeLayer(l)); } catch {}
+      try { mapRef.current.remove(); } catch {}
+      mapRef.current = null;
+    }
+    // 2. Vide toutes les références
+    baseLayerRef.current = null;
+    markersLayerRef.current = null;
+    subareasLayerRef.current = null;
+    editHandlesLayerRef.current = null;
+    // 3. Réinitialise les états React
+    setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+    setEditorPos(null);
+    setEditorInit({});
+    setDrawing(DRAW_NONE);
+    setPolyTemp([]);
+    setZonesByEquip({});
+    setSubareasById({});
+    setOpen(false);
+    setTimeout(() => mapRef.current = null, 150);
+    // 4. Supprime les éventuelles cartes ou cards résiduelles
+    document.querySelectorAll(".plan-card, .plan-preview, .plan-footer").forEach((el) => el.remove());
+    console.info("[ATEX] Plan fermé proprement");
+  } catch (err) {
+    console.error("[ATEX] Erreur fermeture plan:", err);
+  }
+}
 
-                          // ✅ petit toast visuel
-                          const toast = document.createElement("div");
-                          toast.textContent = "Bâtiment enregistré ✅";
-                          Object.assign(toast.style, {
-                            position: "fixed",
-                            bottom: "20px",
-                            right: "20px",
-                            background: "#059669",
-                            color: "white",
-                            padding: "8px 12px",
-                            borderRadius: "8px",
-                            fontSize: "13px",
-                            boxShadow: "0 2px 6px rgba(0,0,0,.2)",
-                            zIndex: 9999,
-                            transition: "opacity 0.5s",
-                          });
-                          document.body.appendChild(toast);
-                          setTimeout(() => (toast.style.opacity = "0"), 2000);
-                          setTimeout(() => toast.remove(), 2600);
-                        }}
-                      >
-                        ✔
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Champ Zone */}
-                  <div className="flex items-center gap-1">
-                    <span className="text-sm text-gray-600">Zone</span>
-                    <input
-                      className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
-                      value={zone}
-                      onChange={(e) => setZone(e.target.value)}
-                      placeholder="Ex: Niv. 2"
-                    />
-                    {/* ✅ bouton visible uniquement si modif réelle */}
-                    {zone.trim() !== savedZone.trim() && (
-                      <button
-                        className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
-                        title="Enregistrer le nom de la zone"
-                        onClick={async () => {
-                          await handleMetaChange(building, zone);
-                          setSavedZone(zone);
-
-                          // ✅ petit toast visuel
-                          const toast = document.createElement("div");
-                          toast.textContent = "Zone enregistrée ✅";
-                          Object.assign(toast.style, {
-                            position: "fixed",
-                            bottom: "20px",
-                            right: "20px",
-                            background: "#059669",
-                            color: "white",
-                            padding: "8px 12px",
-                            borderRadius: "8px",
-                            fontSize: "13px",
-                            boxShadow: "0 2px 6px rgba(0,0,0,.2)",
-                            zIndex: 9999,
-                            transition: "opacity 0.5s",
-                          });
-                          document.body.appendChild(toast);
-                          setTimeout(() => (toast.style.opacity = "0"), 2000);
-                          setTimeout(() => toast.remove(), 2600);
-                        }}
-                      >
-                        ✔
-                      </button>
-                    )}
-                  </div>
-
-                  <Btn variant="ghost" onClick={handleClosePlan}>
-                    Fermer
-                  </Btn>
-                </div>
+// --- Modal plein écran
+return (
+  <>
+    {!open && (
+      <Btn className="mt-2" onClick={() => setOpen(true)}>
+        Ouvrir le plan
+      </Btn>
+    )}
+    {open && (
+      <div className="fixed inset-0 z-[6000] flex flex-col">
+        {/* Backdrop */}
+        <div
+          className="absolute inset-0 bg-black/40"
+          onClick={handleClosePlan}
+        />
+        {/* Dialog */}
+        <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
+          <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b gap-3 flex-wrap">
+              <div className="font-semibold">
+                {title}
+                {planDisplayName ? ` — ${planDisplayName}` : ""}
               </div>
-
-              <div className="flex-1 overflow-hidden">
-                {MapInner}
-                <div className="p-3">{MarkerLegend}</div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Champ Bâtiment */}
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-gray-600">Bâtiment</span>
+                  <input
+                    className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
+                    value={building}
+                    onChange={(e) => setBuilding(e.target.value)}
+                    placeholder="Ex: Bât. A"
+                  />
+                  {/* Bouton visible uniquement si modif réelle */}
+                  {building.trim() !== savedBuilding.trim() && (
+                    <button
+                      className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
+                      title="Enregistrer le nom du bâtiment"
+                      onClick={async () => {
+                        await handleMetaChange(building, zone);
+                        setSavedBuilding(building);
+                        // Petit toast visuel
+                        const toast = document.createElement("div");
+                        toast.textContent = "Bâtiment enregistré";
+                        Object.assign(toast.style, {
+                          position: "fixed",
+                          bottom: "20px",
+                          right: "20px",
+                          background: "#059669",
+                          color: "white",
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          fontSize: "13px",
+                          boxShadow: "0 2px 6px rgba(0,0,0,.2)",
+                          zIndex: 9999,
+                          transition: "opacity 0.5s",
+                        });
+                        document.body.appendChild(toast);
+                        setTimeout(() => (toast.style.opacity = "0"), 2000);
+                        setTimeout(() => toast.remove(), 2600);
+                      }}
+                    >
+                      [Check]
+                    </button>
+                  )}
+                </div>
+                {/* Champ Zone */}
+                <div className="flex items-center gap-1">
+                  <span className="text-sm text-gray-600">Zone</span>
+                  <input
+                    className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
+                    value={zone}
+                    onChange={(e) => setZone(e.target.value)}
+                    placeholder="Ex: Niv. 2"
+                  />
+                  {/* Bouton visible uniquement si modif réelle */}
+                  {zone.trim() !== savedZone.trim() && (
+                    <button
+                      className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
+                      title="Enregistrer le nom de la zone"
+                      onClick={async () => {
+                        await handleMetaChange(building, zone);
+                        setSavedZone(zone);
+                        // Petit toast visuel
+                        const toast = document.createElement("div");
+                        toast.textContent = "Zone enregistrée";
+                        Object.assign(toast.style, {
+                          position: "fixed",
+                          bottom: "20px",
+                          right: "20px",
+                          background: "#059669",
+                          color: "white",
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          fontSize: "13px",
+                          boxShadow: "0 2px 6px rgba(0,0,0,.2)",
+                          zIndex: 9999,
+                          transition: "opacity 0.5s",
+                        });
+                        document.body.appendChild(toast);
+                        setTimeout(() => (toast.style.opacity = "0"), 2000);
+                        setTimeout(() => toast.remove(), 2600);
+                      }}
+                    >
+                      [Check]
+                    </button>
+                  )}
+                </div>
+                <Btn variant="ghost" onClick={handleClosePlan}>
+                  Fermer
+                </Btn>
               </div>
             </div>
+            <div className="flex-1 overflow-hidden">
+              {MapInner}
+              <div className="p-3">{MarkerLegend}</div>
+            </div>
           </div>
-          {EditorPopover}
         </div>
-      )}
-    </>
-  );
+        {EditorPopover}
+      </div>
+    )}
+  </>
+);
 }
 /* ----------------------------- Sous-composants locaux ----------------------------- */
 function AtexZipImport({ disabled, onDone }) {
