@@ -1696,12 +1696,10 @@ function setupHandleDrag(map, onMoveCallback) {
   }, [plan?.id, plan?.logical_name]);
 
 
-  // ✅ Remplace intégralement ta fonction handleMetaChange par ceci
   async function handleMetaChange(nextBuilding, nextZone) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
 
-    // 🧩 on capture l’état avant modification (IMPORTANT)
     const prevBuilding = building;
     const prevZone = zone;
 
@@ -1709,51 +1707,53 @@ function setupHandleDrag(map, onMoveCallback) {
       // 1️⃣ Met à jour les métadonnées du plan
       await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
 
-      // 2️⃣ Met à jour l’état React seulement après succès
-      setBuilding(nextBuilding);
-      setZone(nextZone);
-
-      // 3️⃣ Propagation automatique des équipements
+      // 2️⃣ Propagation automatique aux équipements
       if (nextBuilding && nextBuilding !== prevBuilding) {
-        const res = await api.atex.bulkRename({
+        await api.atex.bulkRename({
           field: "building",
           from: prevBuilding || "",
           to: nextBuilding,
         });
-        console.info(`[ATEX] Bâtiment renommé : ${prevBuilding} → ${nextBuilding}`, res);
       }
-
       if (nextZone && nextZone !== prevZone) {
-        const res = await api.atex.bulkRename({
+        await api.atex.bulkRename({
           field: "zone",
           from: prevZone || "",
           to: nextZone,
         });
-        console.info(`[ATEX] Zone renommée : ${prevZone} → ${nextZone}`, res);
       }
 
-      // 4️⃣ Recharge les équipements
+      // 3️⃣ Met à jour l’état React
+      setBuilding(nextBuilding);
+      setZone(nextZone);
+
+      // attendre que React applique les changements (sinon reloadAll utilise l'ancien état)
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // 4️⃣ Recharge proprement les positions et zones
       await reloadAll();
 
-      // Forcer la mise à jour des équipements visibles (métadonnées)
+      // 5️⃣ Recharge les équipements (pour leurs métadonnées à jour)
       try {
         const eq = await api.atex.listEquipments?.();
         if (eq?.items?.length) {
-          drawMarkers(eq.items.map(it => ({
-            id: it.id,
-            name: it.name,
-            x: Number(it.x_frac ?? it.x ?? 0),
-            y: Number(it.y_frac ?? it.y ?? 0),
-            status: it.status || "a_faire",
-            zoning_gas: it.zoning_gas ?? null,
-            zoning_dust: it.zoning_dust ?? null,
-          })));
+          drawMarkers(
+            eq.items.map((it) => ({
+              id: it.id,
+              name: it.name,
+              x: Number(it.x_frac ?? it.x ?? 0),
+              y: Number(it.y_frac ?? it.y ?? 0),
+              status: it.status || "a_faire",
+              zoning_gas: it.zoning_gas ?? null,
+              zoning_dust: it.zoning_dust ?? null,
+            }))
+          );
         }
       } catch (e) {
         console.warn("⚠️ Erreur rechargement équipements après renommage:", e);
       }
 
-      // 5️⃣ Petit feedback visuel
+      // 6️⃣ Feedback visuel (toast)
       const toast = document.createElement("div");
       toast.textContent = "Changements enregistrés ✅";
       Object.assign(toast.style, {
@@ -1772,6 +1772,11 @@ function setupHandleDrag(map, onMoveCallback) {
       document.body.appendChild(toast);
       setTimeout(() => (toast.style.opacity = "0"), 2000);
       setTimeout(() => toast.remove(), 2600);
+
+      // 7️⃣ Informe le parent (Atex.jsx) pour recharger la liste principale et ses filtres
+      if (typeof onMetaChanged === "function") {
+        onMetaChanged();
+      }
     } catch (err) {
       console.error("[ATEX] Erreur mise à jour meta:", err);
     }
