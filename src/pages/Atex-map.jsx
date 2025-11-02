@@ -738,16 +738,19 @@ export default function AtexMap({
     try {
       const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
       const patch = {
-        building, // conserve le bâtiment actuel
-        zone,     // conserve la zone actuelle
         equipment: planDisplayName || "",
         sub_equipment: subName || "",
       };
 
-      // ⚙️ Logique : ne pas écraser si on reste dans la même sous-zone
+      // Ne touche PAS à building/zone → ils viennent du plan, pas du state
+      // On ne les met que s'ils existent ET si on est sûr qu'ils sont valides
+      if (savedBuilding) patch.building = savedBuilding;
+      if (savedZone) patch.zone = savedZone;
+
+      // Logique : ne pas écraser si même sous-zone
       const oldSub = zonesByEquip[equipmentId]?.sub_equipment || "";
       if (subName && subName === oldSub) {
-        delete patch.sub_equipment; // même zone → ne rien changer
+        delete patch.sub_equipment;
       }
 
       log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
@@ -852,8 +855,16 @@ export default function AtexMap({
               y_frac: Math.round(yf * 1e6) / 1e6,
             });
             log("setPosition response", { raw: safeJson(resp) });
+
+            // RECHARGE LES ZONES D'ABORD → subareasById à jour
+            await loadSubareas();
+
+            // Maintenant on peut utiliser le bon nom de sous-zone
             await updateEquipmentMacroAndSub(p.id, resp?.zones?.subarea_id || null);
+
             try { onZonesApplied?.(p.id, { zoning_gas: resp?.zones?.zoning_gas ?? null, zoning_dust: resp?.zones?.zoning_dust ?? null }); } catch {}
+
+            // Recharge tout
             await reloadAll();
           } catch (e) {
             console.error("[ATEX] setPosition error", e);
