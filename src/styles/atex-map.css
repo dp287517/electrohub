@@ -274,3 +274,31 @@ body.editing-geom .fixed.z-\[7000\] {
   100% { opacity: 0; transform: translateY(-10px); }
 }
 .toast { animation: fade-in-out 2.6s ease-in-out forwards; }
+
+/* ----------- Handles d’édition (points de contrôle) ----------- */
+.leaflet-pane.editPane svg circle {
+  stroke: #111827 !important;
+  stroke-width: 1px !important;
+  fill: #ffffff !important;
+  fill-opacity: 1 !important;
+  r: 5;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.leaflet-pane.editPane svg circle:hover {
+  fill: #3b82f6 !important; /* bleu vif sur hover */
+  stroke: #1e40af !important;
+  r: 6;
+  cursor: grabbing;
+}
+
+/* ----------- Mode édition actif : désactive les clics accidentels ----------- */
+body.editing-geom .leaflet-container {
+  cursor: crosshair !important;
+}
+
+body.editing-geom .leaflet-interactive {
+  pointer-events: none; /* évite que les autres formes interceptent les clics */
+}
+
