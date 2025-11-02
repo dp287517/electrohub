@@ -1772,29 +1772,96 @@ function setupHandleDrag(map, onMoveCallback) {
                   {planDisplayName ? ` — ${planDisplayName}` : ""}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
+                  {/* Champ Bâtiment */}
                   <div className="flex items-center gap-1">
                     <span className="text-sm text-gray-600">Bâtiment</span>
                     <input
                       className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
                       value={building}
-                      onChange={(e) => handleMetaChange(e.target.value, zone)}
+                      onChange={(e) => setBuilding(e.target.value)}
                       placeholder="Ex: Bât. A"
                     />
+                    {/* Bouton ✔ affiché uniquement si le bâtiment a changé */}
+                    {building !== "" && (
+                      <button
+                        className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
+                        title="Enregistrer le nom du bâtiment"
+                        onClick={async () => {
+                          await handleMetaChange(building, zone);
+                          // ✅ petit toast visuel
+                          const toast = document.createElement("div");
+                          toast.textContent = "Bâtiment enregistré ✅";
+                          Object.assign(toast.style, {
+                            position: "fixed",
+                            bottom: "20px",
+                            right: "20px",
+                            background: "#059669",
+                            color: "white",
+                            padding: "8px 12px",
+                            borderRadius: "8px",
+                            fontSize: "13px",
+                            boxShadow: "0 2px 6px rgba(0,0,0,.2)",
+                            zIndex: 9999,
+                            transition: "opacity 0.5s",
+                          });
+                          document.body.appendChild(toast);
+                          setTimeout(() => (toast.style.opacity = "0"), 2000);
+                          setTimeout(() => toast.remove(), 2600);
+                        }}
+                      >
+                        ✔
+                      </button>
+                    )}
                   </div>
+
+                  {/* Champ Zone */}
                   <div className="flex items-center gap-1">
                     <span className="text-sm text-gray-600">Zone</span>
                     <input
                       className="border rounded-lg px-2 py-1 text-sm w-[160px] bg-white text-black"
                       value={zone}
-                      onChange={(e) => handleMetaChange(building, e.target.value)}
+                      onChange={(e) => setZone(e.target.value)}
                       placeholder="Ex: Niv. 2"
                     />
+                    {/* Bouton ✔ affiché uniquement si la zone a changé */}
+                    {zone !== "" && (
+                      <button
+                        className="px-2 py-1 bg-emerald-600 text-white rounded text-sm hover:bg-emerald-700"
+                        title="Enregistrer le nom de la zone"
+                        onClick={async () => {
+                          await handleMetaChange(building, zone);
+                          // ✅ petit toast visuel
+                          const toast = document.createElement("div");
+                          toast.textContent = "Zone enregistrée ✅";
+                          Object.assign(toast.style, {
+                            position: "fixed",
+                            bottom: "20px",
+                            right: "20px",
+                            background: "#059669",
+                            color: "white",
+                            padding: "8px 12px",
+                            borderRadius: "8px",
+                            fontSize: "13px",
+                            boxShadow: "0 2px 6px rgba(0,0,0,.2)",
+                            zIndex: 9999,
+                            transition: "opacity 0.5s",
+                          });
+                          document.body.appendChild(toast);
+                          setTimeout(() => (toast.style.opacity = "0"), 2000);
+                          setTimeout(() => toast.remove(), 2600);
+                        }}
+                      >
+                        ✔
+                      </button>
+                    )}
                   </div>
+
                   <Btn variant="ghost" onClick={handleClosePlan}>
                     Fermer
                   </Btn>
                 </div>
               </div>
+
               <div className="flex-1 overflow-hidden">
                 {MapInner}
                 <div className="p-3">
