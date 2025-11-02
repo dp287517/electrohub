@@ -478,6 +478,7 @@ export const api = {
     aiAnalyze: (payload) => api.atex.assessConformity(payload),
     // (Optionnel) Audit trail en bas de fiche
     getEquipmentHistory: (id) => get(`/api/atex/equipments/${encodeURIComponent(id)}/history`),
+    bulkRename: (payload) => post("/api/atex/maps/bulkRename", payload),
   },
   /** --- ATEX MAPS (Plans PDF + positions + sous-zones) --- */
   atexMaps: {
