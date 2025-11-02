@@ -383,6 +383,35 @@ export default function Atex() {
 
     return clean;
   };
+
+  async function openEdit(equipment) {
+    const base = mergeZones(equipment || {});
+    setEditing(base);
+    initialRef.current = base;
+    setDrawerOpen(true);
+    if (base?.id) {
+      try {
+        // recharge les données de l’équipement à jour
+        const res = await api.atex.getEquipment(base.id);
+        const fresh = mergeZones(res?.equipment || {});
+        setEditing((cur) => {
+          const next = { ...(cur || {}), ...fresh };
+          initialRef.current = next;
+          return next;
+        });
+
+        // recharge l’historique et les fichiers
+        const hist = await api.atex.getEquipmentHistory(base.id);
+        setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
+        await reloadFiles(base.id);
+      } catch (err) {
+        console.warn("[ATEX] Erreur lors du rechargement équipement :", err);
+        setHistory([]);
+        setFiles([]);
+      }
+    }
+  }
+
   function closeEdit() {
     setEditing(null);
     setFiles([]);
