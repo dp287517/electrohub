@@ -1671,26 +1671,42 @@ function setupHandleDrag(map, onMoveCallback) {
       .catch((err) => console.warn("getMeta error (ignored):", err));
   }, [plan?.id, plan?.logical_name]);
 
-  // CORRECTIF CHATGPT : Propagation bâtiment/zone
+  // ✅ Propagation cohérente des changements bâtiment / zone
   async function handleMetaChange(nextBuilding, nextZone) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
     const prevBuilding = building;
     const prevZone = zone;
+
     setBuilding(nextBuilding);
     setZone(nextZone);
+
     try {
       await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
 
-      // Propagation auto aux équipements
-      if (nextBuilding !== prevBuilding || nextZone !== prevZone) {
+      // --- Propagation automatique des équipements si le nom du bâtiment change ---
+      if (nextBuilding && nextBuilding !== prevBuilding) {
         await api.atex.bulkRename({
-          field: "meta_update",
-          from: { building: prevBuilding, zone: prevZone },
-          to: { building: nextBuilding, zone: nextZone },
+          field: "building",
+          from: prevBuilding || "",
+          to: nextBuilding,
         });
-        console.info("[ATEX] Bâtiment/zone propagés aux équipements");
+        console.info(`[ATEX] Bâtiment renommé : ${prevBuilding} → ${nextBuilding}`);
       }
+
+      // --- Propagation automatique si le nom de la zone change ---
+      if (nextZone && nextZone !== prevZone) {
+        await api.atex.bulkRename({
+          field: "zone",
+          from: prevZone || "",
+          to: nextZone,
+        });
+        console.info(`[ATEX] Zone renommée : ${prevZone} → ${nextZone}`);
+      }
+
+      // Recharge les équipements pour reflet immédiat
+      await reloadAll();
+
     } catch (err) {
       console.warn("Erreur mise à jour meta:", err);
     }
