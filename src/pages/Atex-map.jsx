@@ -388,15 +388,26 @@ export default function AtexMap({
   /* -------------------- Init carte (une fois) + rendu PDF -------------------- */
   useEffect(() => {
     if (!wrapRef.current || !open) return;
+
     const jobKey = `${fileUrl || "no-pdf"}::${pageIndex}`;
-    if (lastJob.current.key === jobKey) return;
+
+    // ✅ Correction : forcer rechargement si carte nettoyée ou couches absentes
+    const mustForceReload =
+      !baseReadyRef.current ||
+      !mapRef.current ||
+      !subareasLayerRef.current ||
+      !markersLayerRef.current;
+
+    if (lastJob.current.key === jobKey && !mustForceReload) return;
     lastJob.current.key = jobKey;
+
     const cleanupPdf = async () => {
       try { renderTaskRef.current?.cancel(); } catch {}
       try { await loadingTaskRef.current?.destroy?.(); } catch {}
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
     };
+
     const cleanupMap = () => {
       const m = mapRef.current;
       try { roRef.current?.disconnect?.(); } catch {}
@@ -417,12 +428,15 @@ export default function AtexMap({
       baseReadyRef.current = false;
       indexedRef.current = { key: "", done: false };
     };
+
     let onResize = null;
+
     (async () => {
       const close = timeStart("init map + pdf render");
       try {
         await cleanupPdf();
-        // 1) CARTE
+
+        // 1️⃣ Création de la carte Leaflet
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
@@ -435,17 +449,22 @@ export default function AtexMap({
         });
         L.control.zoom({ position: "topright" }).addTo(m);
         mapRef.current = m;
+
+        // --- Pans et couches ---
         m.createPane("basePane"); m.getPane("basePane").style.zIndex = 200;
         m.createPane("zonesPane"); m.getPane("zonesPane").style.zIndex = 380;
         m.createPane("markersPane"); m.getPane("markersPane").style.zIndex = 400;
         m.createPane("editPane"); m.getPane("editPane").style.zIndex = 450;
+
         legendRef.current = addLegendControl(m);
         const legendEl = legendRef.current?.getContainer?.();
         if (legendEl) legendEl.style.display = legendVisible ? "block" : "none";
+
         markersLayerRef.current = L.layerGroup({ pane: "markersPane" }).addTo(m);
         subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
         editHandlesLayerRef.current = L.layerGroup({ pane: "editPane" }).addTo(m);
-        // Provisional bounds
+
+        // --- Bounds provisoires avant rendu PDF ---
         const PROV_W = 2000, PROV_H = 1400;
         const provBounds = L.latLngBounds([[0, 0], [PROV_H, PROV_W]]);
         await new Promise(requestAnimationFrame);
@@ -457,6 +476,8 @@ export default function AtexMap({
         m.setMaxZoom(fitZoom + 8);
         m.setMaxBounds(provBounds.pad(0.5));
         m.fitBounds(provBounds, { padding: [10, 10] });
+
+        // --- Resize listeners ---
         onResize = () => {
           try {
             const keepCenter = m.getCenter();
@@ -471,7 +492,8 @@ export default function AtexMap({
           roRef.current = new ResizeObserver(() => { onResize(); });
           roRef.current.observe(wrapRef.current);
         } catch {}
-        // 2) RENDU PDF -> image -> fit -> data
+
+        // 2️⃣ Rendu PDF -> image -> base overlay
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = Math.max(1, window.devicePixelRatio || 1);
@@ -492,9 +514,11 @@ export default function AtexMap({
           await renderTaskRef.current.promise;
           const dataUrl = canvas.toDataURL("image/png");
           setImgSize({ w: canvas.width, h: canvas.height });
+
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
           const base = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
           baseLayerRef.current = base;
+
           await new Promise(requestAnimationFrame);
           m.invalidateSize(false);
           const fitZoom2 = m.getBoundsZoom(bounds, true);
@@ -502,8 +526,11 @@ export default function AtexMap({
           m.setMaxZoom(fitZoom2 + 8);
           m.setMaxBounds(bounds.pad(0.5));
           m.fitBounds(bounds, { padding: [10, 10] });
+
+          // ✅ Marque la carte prête et recharge
           baseReadyRef.current = true;
-          await reloadAll();
+          await reloadAll(); // <--- recharge formes + équipements
+
           try { await pdf.cleanup?.(); } catch {}
         }
       } catch (e) {
@@ -512,6 +539,7 @@ export default function AtexMap({
         close();
       }
     })();
+
     return () => {
       try { renderTaskRef.current?.cancel(); } catch {}
       try { loadingTaskRef.current?.destroy?.(); } catch {}
@@ -519,6 +547,7 @@ export default function AtexMap({
       loadingTaskRef.current = null;
       cleanupMap();
     };
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileUrl, pageIndex, open]);
   /* ----------------------------- Chargements + INDEX ----------------------------- */
@@ -639,11 +668,18 @@ export default function AtexMap({
     try {
       const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
       const patch = {
+        building, // conserve le bâtiment actuel
+        zone,     // conserve la zone actuelle
         equipment: planDisplayName || "",
         sub_equipment: subName || "",
-        building: (building || "").trim(),
-        zone: (zone || "").trim(),
       };
+
+      // ⚙️ Logique : ne pas écraser si on reste dans la même sous-zone
+      const oldSub = zonesByEquip[equipmentId]?.sub_equipment || "";
+      if (subName && subName === oldSub) {
+        delete patch.sub_equipment; // même zone → ne rien changer
+      }
+
       log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
       await api.atex.updateEquipment(equipmentId, patch);
     } catch (e) {
@@ -786,6 +822,7 @@ export default function AtexMap({
     const updateByCorners = (pts) => layer.setBounds(L.latLngBounds(pts[0], pts[2]));
     corners.forEach((ll, idx) => {
       const h = L.circleMarker(ll, { radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false }).addTo(lay);
+      h.on("click", (e) => L.DomEvent.stopPropagation(e));
       h.on("mousedown", () => {
         m.dragging.disable();
         const onMove = (ev) => { const pts = [...corners]; pts[idx] = ev.latlng; updateByCorners(pts); };
@@ -848,7 +885,9 @@ export default function AtexMap({
     const ly = geomEdit.layer;
     const base = baseLayerRef.current;
     const dims = getPlanDims(base);
+
     try {
+      // --- 1️⃣ Prépare les données selon le type de forme ---
       if (geomEdit.kind === "rect") {
         const b = ly.getBounds();
         const { W, H, bounds } = dims;
@@ -860,24 +899,39 @@ export default function AtexMap({
           y2: (b.getNorth() - bounds.getSouth()) / H,
         };
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
+
       } else if (geomEdit.kind === "circle") {
         const c = ly.getLatLng();
         const r = ly.getRadius();
         const { W, H, bounds } = dims;
-        const payload = { kind: "circle", cx: (c.lng - bounds.getWest()) / W, cy: (c.lat - bounds.getSouth()) / H, r: r / Math.min(W, H) };
+        const payload = {
+          kind: "circle",
+          cx: (c.lng - bounds.getWest()) / W,
+          cy: (c.lat - bounds.getSouth()) / H,
+          r: r / Math.min(W, H),
+        };
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
+
       } else if (geomEdit.kind === "poly") {
         const latlngs = ly.getLatLngs()[0] || [];
         const { W, H, bounds } = dims;
-        const points = latlngs.map((ll) => [(ll.lng - bounds.getWest()) / W, (ll.lat - bounds.getSouth()) / H]);
+        const points = latlngs.map((ll) => [
+          (ll.lng - bounds.getWest()) / W,
+          (ll.lat - bounds.getSouth()) / H,
+        ]);
         const payload = { kind: "poly", points };
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
       }
+
+      // --- 2️⃣ Réinitialisation propre du mode édition ---
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       clearEditHandles();
       document.body.classList.remove("editing-geom");
+
+      // --- 3️⃣ Recharge les zones mises à jour ---
       await reloadAll();
-      // Feedback toast
+
+      // --- 4️⃣ Feedback visuel (toast temporaire) ---
       const toast = document.createElement("div");
       toast.textContent = "Forme enregistrée";
       Object.assign(toast.style, {
@@ -896,64 +950,16 @@ export default function AtexMap({
       document.body.appendChild(toast);
       setTimeout(() => (toast.style.opacity = "0"), 2000);
       setTimeout(() => toast.remove(), 2600);
+
     } catch (e) {
       console.error("[ATEX] saveGeomEdit error", e);
-    } finally { end(); }
-  }
-  function drawSubareas(items) {
-    const end = timeStart("drawSubareas");
-    try {
-      const m = mapRef.current;
-      const base = baseLayerRef.current;
-      if (!m || !base) return;
-      if (!subareasLayerRef.current) subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
-      const g = subareasLayerRef.current;
-      g.clearLayers();
+    } finally {
+      // --- 5️⃣ Toujours restaurer un état stable ---
+      document.body.classList.remove("editing-geom");
       clearEditHandles();
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-      const { W, H, bounds } = getPlanDims(base);
-      (items || []).forEach((sa) => {
-        let layer = null;
-        const style = colorForSubarea(sa);
-        if (sa.kind === "rect") {
-          const x1 = bounds.getWest() + (sa.x1 ?? 0) * W;
-          const y1 = bounds.getSouth() + (sa.y1 ?? 0) * H;
-          const x2 = bounds.getWest() + (sa.x2 ?? 0) * W;
-          const y2 = bounds.getSouth() + (sa.y2 ?? 0) * H;
-          const b = L.latLngBounds(L.latLng(y1, x1), L.latLng(y2, x2));
-          layer = L.rectangle(b, style);
-        } else if (sa.kind === "circle") {
-          const cx = bounds.getWest() + (sa.cx ?? 0.5) * W;
-          const cy = bounds.getSouth() + (sa.cy ?? 0.5) * H;
-          const r = Math.max(4, (sa.r ?? 0.05) * Math.min(W, H));
-          layer = L.circle(L.latLng(cy, cx), { radius: r, ...style });
-        } else if (sa.kind === "poly") {
-          const pts = (sa.points || []).map(([xf, yf]) => [bounds.getSouth() + yf * H, bounds.getWest() + xf * W]);
-          layer = L.polygon(pts, style);
-        }
-        if (!layer) return;
-        layer.__meta = sa;
-        layer.addTo(g);
-        layer.on("click", (e) => {
-          setEditorInit({ id: sa.id, name: sa.name || "", zoning_gas: sa.zoning_gas ?? null, zoning_dust: sa.zoning_dust ?? null });
-          setEditorPos({
-            screen: e.originalEvent ? { x: e.originalEvent.clientX, y: e.originalEvent.clientY } : null,
-            shapeId: sa.id, layer, kind: sa.kind,
-          });
-        });
-        if (sa?.name) {
-          const center = layer.getBounds?.().getCenter?.() || layer.getLatLng?.() || null;
-          if (center) {
-            L.marker(center, {
-              interactive: false, pane: "zonesPane",
-              icon: L.divIcon({ className: "atex-subarea-label", html: `<div class="px-2 py-1 rounded bg-white/90 border shadow text-[11px]">${sa.name}</div>` }),
-            }).addTo(g);
-          }
-        }
-      });
-      g.bringToFront?.();
-      markersLayerRef.current?.bringToFront?.();
-    } finally { end(); }
+      end();
+    }
   }
   /* -------- Dessin zones -------- */
   function setDrawMode(mode) {
@@ -1462,6 +1468,42 @@ export default function AtexMap({
     }
   }
 
+  function handleClosePlan() {
+    try {
+      // 1️⃣ Supprime la carte Leaflet
+      if (mapRef.current) {
+        try { mapRef.current.off(); } catch {}
+        try { mapRef.current.eachLayer((l) => mapRef.current.removeLayer(l)); } catch {}
+        try { mapRef.current.remove(); } catch {}
+        mapRef.current = null;
+      }
+
+      // 2️⃣ Vide toutes les références
+      baseLayerRef.current = null;
+      markersLayerRef.current = null;
+      subareasLayerRef.current = null;
+      editHandlesLayerRef.current = null;
+
+      // 3️⃣ Réinitialise les états React
+      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+      setEditorPos(null);
+      setEditorInit({});
+      setDrawing(DRAW_NONE);
+      setPolyTemp([]);
+      setZonesByEquip({});
+      setSubareasById({});
+      setOpen(false);
+      setTimeout(() => mapRef.current = null, 150);
+
+      // 4️⃣ Supprime les éventuelles cartes ou cards résiduelles
+      document.querySelectorAll(".plan-card, .plan-preview, .plan-footer").forEach((el) => el.remove());
+
+      console.info("[ATEX] Plan fermé proprement ✅");
+    } catch (err) {
+      console.error("[ATEX] Erreur fermeture plan:", err);
+    }
+  }
+
   // --- Modal plein écran
   return (
     <>
@@ -1475,7 +1517,7 @@ export default function AtexMap({
           {/* Backdrop */}
           <div
             className="absolute inset-0 bg-black/40"
-            onClick={() => setOpen(false)}
+            onClick={handleClosePlan}
           />
           {/* Dialog */}
           <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
@@ -1504,7 +1546,7 @@ export default function AtexMap({
                       placeholder="Ex: Niv. 2"
                     />
                   </div>
-                  <Btn variant="ghost" onClick={() => setOpen(false)}>
+                  <Btn variant="ghost" onClick={handleClosePlan}>
                     Fermer
                   </Btn>
                 </div>
