@@ -876,7 +876,17 @@ export default function AtexMap({
           onOpenEquipment?.({
             id: p.id,
             name: p.name,
-            zones: { zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null, zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null },
+            zones: { 
+              zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null, 
+              zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null 
+            },
+            // AJOUT : passe la fonction reload du parent
+            reload: () => {
+              // Si on est dans Atex.jsx, on a accès à reload()
+              if (typeof window._atexReload === "function") {
+                window._atexReload();
+              }
+            },
           });
         });
         mk.addTo(layer);
