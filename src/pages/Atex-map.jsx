@@ -850,72 +850,161 @@ export default function AtexMap({
     if (!lay) return;
     try { lay.clearLayers(); } catch {}
   }
+  /* =========================================================================
+    --- Edition de formes (zones ATEX) : handles + déplacement fluide ---
+    ====================================================================== */
+
+  // ✅ Helper central pour un drag fluide et sans blocage
+  function setupHandleDrag(map, onMoveCallback) {
+    const move = (ev) => onMoveCallback(ev);
+    const up = () => {
+      map.off("mousemove", move);
+      map.off("mouseup", up);
+      map.dragging.enable();
+      document.body.style.userSelect = ""; // rétablit la sélection texte
+    };
+    map.on("mousemove", move);
+    map.on("mouseup", up);
+    document.body.style.userSelect = "none"; // évite sélection de texte pendant le drag
+  }
+
+  /* --------------------------------------------------------------------------
+    RECTANGLE
+    -------------------------------------------------------------------------- */
   function mountRectHandles(layer) {
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
+
     const b = layer.getBounds();
     const corners = [b.getSouthWest(), b.getSouthEast(), b.getNorthEast(), b.getNorthWest()];
-    const updateByCorners = (pts) => layer.setBounds(L.latLngBounds(pts[0], pts[2]));
+
+    const updateByCorners = (pts) => {
+      layer.setBounds(L.latLngBounds(pts[0], pts[2]));
+    };
+
     corners.forEach((ll, idx) => {
-      const h = L.circleMarker(ll, { radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false }).addTo(lay);
-      h.on("click", (e) => L.DomEvent.stopPropagation(e));
-      h.on("mousedown", () => {
+      const h = L.circleMarker(ll, {
+        radius: 5,
+        color: "#111827",
+        weight: 1,
+        fillColor: "#ffffff",
+        fillOpacity: 1,
+        pane: "editPane",
+        bubblingMouseEvents: false,
+      }).addTo(lay);
+
+      h.on("mousedown", (e) => {
         m.dragging.disable();
-        const onMove = (ev) => { const pts = [...corners]; pts[idx] = ev.latlng; updateByCorners(pts); };
-        const onUp = () => { m.dragging.enable(); m.off("mousemove", onMove); m.off("mouseup", onUp); };
-        m.on("mousemove", onMove); m.on("mouseup", onUp);
+        const current = [...corners];
+        setupHandleDrag(m, (ev) => {
+          current[idx] = ev.latlng;
+          updateByCorners(current);
+          h.setLatLng(ev.latlng);
+        });
       });
     });
   }
+
+  /* --------------------------------------------------------------------------
+    CERCLE
+    -------------------------------------------------------------------------- */
   function mountCircleHandles(layer) {
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
+
     const center = layer.getLatLng();
     const r = layer.getRadius();
     const east = L.latLng(center.lat, center.lng + r);
-    const centerH = L.circleMarker(center, { radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false }).addTo(lay);
-    const radiusH = L.circleMarker(east, { radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false }).addTo(lay);
-    centerH.on("mousedown", () => {
+
+    const centerH = L.circleMarker(center, {
+      radius: 5, color: "#111827", weight: 1,
+      fillColor: "#ffffff", fillOpacity: 1, pane: "editPane"
+    }).addTo(lay);
+
+    const radiusH = L.circleMarker(east, {
+      radius: 5, color: "#111827", weight: 1,
+      fillColor: "#ffffff", fillOpacity: 1, pane: "editPane"
+    }).addTo(lay);
+
+    // Déplacement du centre
+    centerH.on("mousedown", (e) => {
       m.dragging.disable();
-      const onMove = (ev) => { const c = ev.latlng; layer.setLatLng(c); radiusH.setLatLng(L.latLng(c.lat, c.lng + r)); };
-      const onUp = () => { m.dragging.enable(); m.off("mousemove", onMove); m.off("mouseup", onUp); };
-      m.on("mousemove", onMove); m.on("mouseup", onUp);
+      setupHandleDrag(m, (ev) => {
+        const c = ev.latlng;
+        layer.setLatLng(c);
+        centerH.setLatLng(c);
+        radiusH.setLatLng(L.latLng(c.lat, c.lng + r));
+      });
     });
-    radiusH.on("mousedown", () => {
+
+    // Redimensionnement du rayon
+    radiusH.on("mousedown", (e) => {
       m.dragging.disable();
-      const onMove = (ev) => { const c = layer.getLatLng(); const newR = Math.max(4, m.distance(c, ev.latlng)); layer.setRadius(newR); radiusH.setLatLng(L.latLng(c.lat, c.lng + newR)); };
-      const onUp = () => { m.dragging.enable(); m.off("mousemove", onMove); m.off("mouseup", onUp); };
-      m.on("mousemove", onMove); m.on("mouseup", onUp);
+      setupHandleDrag(m, (ev) => {
+        const c = layer.getLatLng();
+        const newR = Math.max(4, m.distance(c, ev.latlng));
+        layer.setRadius(newR);
+        radiusH.setLatLng(L.latLng(c.lat, c.lng + newR));
+      });
     });
   }
+
+  /* --------------------------------------------------------------------------
+    POLYGONE
+    -------------------------------------------------------------------------- */
   function mountPolyHandles(layer) {
     const lay = editHandlesLayerRef.current;
     const m = mapRef.current;
     if (!lay || !m) return;
+
     const latlngs = layer.getLatLngs()[0] || [];
+
     latlngs.forEach((ll, idx) => {
-      const h = L.circleMarker(ll, { radius: 5, color: "#111827", weight: 1, fillColor: "#ffffff", fillOpacity: 1, pane: "editPane", bubblingMouseEvents: false }).addTo(lay);
-      h.on("mousedown", () => {
+      const h = L.circleMarker(ll, {
+        radius: 5,
+        color: "#111827",
+        weight: 1,
+        fillColor: "#ffffff",
+        fillOpacity: 1,
+        pane: "editPane",
+        bubblingMouseEvents: false
+      }).addTo(lay);
+
+      h.on("mousedown", (e) => {
         m.dragging.disable();
-        const onMove = (ev) => { const newLatLngs = layer.getLatLngs()[0].slice(); newLatLngs[idx] = ev.latlng; layer.setLatLngs([newLatLngs]); };
-        const onUp = () => { m.dragging.enable(); m.off("mousemove", onMove); m.off("mouseup", onUp); };
-        m.on("mousemove", onMove); m.on("mouseup", onUp);
+        setupHandleDrag(m, (ev) => {
+          const newLatLngs = layer.getLatLngs()[0].slice();
+          newLatLngs[idx] = ev.latlng;
+          layer.setLatLngs([newLatLngs]);
+          h.setLatLng(ev.latlng);
+        });
       });
     });
   }
+
+  /* --------------------------------------------------------------------------
+    DÉMARRAGE DE L'ÉDITION DE FORME
+    -------------------------------------------------------------------------- */
   function startGeomEdit(layer, sa) {
     clearEditHandles();
     setGeomEdit({ active: true, kind: sa.kind, shapeId: sa.id, layer });
+
     if (sa.kind === "rect") mountRectHandles(layer);
     if (sa.kind === "circle") mountCircleHandles(layer);
     if (sa.kind === "poly") mountPolyHandles(layer);
+
     // Fermer le modal pour plus de clarté pendant l’édition
     setEditorPos(null);
-    // Surligne la forme en édition
+
+    // Surligne la forme active
     layer.setStyle({ weight: 2.5, color: "#2563eb", dashArray: "4,4" });
   }
+
+  /* --------------------------------------------------------------------------
+    SAUVEGARDE DE LA FORME
+    -------------------------------------------------------------------------- */
   async function saveGeomEdit() {
     if (!geomEdit.active || !geomEdit.layer || !geomEdit.shapeId || !baseLayerRef.current) return;
     const end = timeStart("saveGeomEdit");
@@ -924,7 +1013,7 @@ export default function AtexMap({
     const dims = getPlanDims(base);
 
     try {
-      // --- 1️⃣ Prépare les données selon le type de forme ---
+      // --- 1️⃣ Extraction des nouvelles coordonnées ---
       if (geomEdit.kind === "rect") {
         const b = ly.getBounds();
         const { W, H, bounds } = dims;
@@ -960,7 +1049,7 @@ export default function AtexMap({
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
       }
 
-      // --- 2️⃣ Réinitialisation propre du mode édition ---
+      // --- 2️⃣ Réinitialisation du mode édition ---
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       clearEditHandles();
       document.body.classList.remove("editing-geom");
