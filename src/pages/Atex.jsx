@@ -969,6 +969,10 @@ export default function Atex() {
                     } catch {}
                   }
                 }}
+                onMetaChanged={async () => {
+                  await reload(); // 🔄 recharge les équipements dans la liste principale
+                  setToast("Plans et équipements mis à jour");
+                }}
               />
             </div>
           )}
