@@ -277,35 +277,72 @@ function addLegendControl(map) {
   const ctrl = L.Control.extend({
     options: { position: "bottomright" },
     onAdd() {
-      const el = L.DomUtil.create("div", "leaflet-bar leaflet-control p-2 bg-white rounded-xl border shadow atex-legend");
+      const el = L.DomUtil.create(
+        "div",
+        "leaflet-bar leaflet-control p-2 bg-white rounded-xl border shadow atex-legend"
+      );
+
+      // ✅ Styles pour éviter que la légende soit rognée ou sorte du cadre
       el.style.maxWidth = "280px";
+      el.style.marginBottom = "12px"; // espace par rapport au bas de la carte
+      el.style.marginRight = "12px";  // espace par rapport au bord droit
+      el.style.pointerEvents = "auto"; // clics sur la légende autorisés
+      el.style.overflowY = "auto"; // scroll si le contenu dépasse
+      el.style.maxHeight = "160px"; // limite la hauteur totale visible
+      el.style.borderRadius = "0.75rem";
+      el.style.boxShadow = "0 2px 6px rgba(0,0,0,0.15)";
+
+      // ✅ Contenu de la légende
       el.innerHTML = `
         <div class="text-xs font-semibold mb-1">Légende ATEX</div>
-        <div class="text-[11px] text-gray-600 mb-1">Remplissage = <b>Poussière</b> • Bordure = <b>Gaz</b></div>
+        <div class="text-[11px] text-gray-600 mb-1">
+          Remplissage = <b>Poussière</b> • Bordure = <b>Gaz</b>
+        </div>
         <div class="grid grid-cols-2 gap-2 text-[11px]">
           <div>
             <div class="font-medium mb-1">Gaz</div>
-            <div class="flex items-center gap-2 mb-1"><span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[0]}"></span> Zone 0</div>
-            <div class="flex items-center gap-2 mb-1"><span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span> Zone 1</div>
-            <div class="flex items-center gap-2"><span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[2]}"></span> Zone 2</div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[0]}"></span>
+              Zone 0
+            </div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span>
+              Zone 1
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="w-4 h-4 rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[2]}"></span>
+              Zone 2
+            </div>
           </div>
           <div>
             <div class="font-medium mb-1">Poussière</div>
-            <div class="flex items-center gap-2 mb-1"><span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[20]}"></span> Zone 20</div>
-            <div class="flex items-center gap-2 mb-1"><span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[21]}"></span> Zone 21</div>
-            <div class="flex items-center gap-2"><span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[22]}"></span> Zone 22</div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[20]}"></span> Zone 20
+            </div>
+            <div class="flex items-center gap-2 mb-1">
+              <span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[21]}"></span> Zone 21
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="w-4 h-4 rounded-sm" style="background:${DUST_FILL[22]}"></span> Zone 22
+            </div>
           </div>
         </div>
         <div class="mt-2 text-[10px] text-gray-500">
-          Exemple: remplissage <span class="inline-block w-3 h-3 align-middle rounded-sm" style="background:${DUST_FILL[21]}"></span>
-          &nbsp;bordure <span class="inline-block w-3 h-3 align-middle rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span>
+          Exemple : remplissage 
+          <span class="inline-block w-3 h-3 align-middle rounded-sm" style="background:${DUST_FILL[21]}"></span>
+          &nbsp;bordure 
+          <span class="inline-block w-3 h-3 align-middle rounded-full" style="background:transparent;border:2px solid ${GAS_STROKE[1]}"></span>
         </div>
       `;
+
+      // ✅ Empêche les scrolls/clics de la légende d’impacter la carte
       L.DomEvent.disableScrollPropagation(el);
       L.DomEvent.disableClickPropagation(el);
+
       return el;
     },
   });
+
   const inst = new ctrl();
   map.addControl(inst);
   return inst;
@@ -1228,12 +1265,16 @@ export default function AtexMap({
         // Propagation automatique si nom changé
         if (meta?.name && meta.name !== editorInit.name) {
           try {
-            await api.atex.bulkRename({
-              field: "sub_equipment",
-              from: editorInit.name || "",
-              to: meta.name,
-            });
-            console.info("[ATEX] Nom sous-zone propagé aux équipements");
+            if (api.atexMaps?.bulkRename) {
+              await api.atexMaps.bulkRename({
+                field: "sub_equipment",
+                from: editorInit.name || "",
+                to: meta.name,
+              });
+              console.info("[ATEX] Nom sous-zone propagé aux équipements");
+            } else {
+              console.warn("[ATEX] bulkRename non disponible dans api.atexMaps");
+            }
           } catch (e) {
             console.warn("Propagation sous-zone échouée:", e);
           }
@@ -1241,20 +1282,22 @@ export default function AtexMap({
 
         setEditorPos(null);
         await reloadAll();
-      }
-    } finally { end(); }
-  }
-  async function onDeleteSubarea() {
-    const end = timeStart("onDeleteSubarea");
-    try {
-      if (!editorPos?.shapeId) return setEditorPos(null);
-      const ok = window.confirm("Supprimer cette sous-zone ?");
-      if (!ok) return;
-      await api.atexMaps.deleteSubarea(editorPos.shapeId);
-      setEditorPos(null);
-      await reloadAll();
-    } finally { end(); }
-  }
+        }
+        } finally { end(); }
+        }
+
+        async function onDeleteSubarea() {
+          const end = timeStart("onDeleteSubarea");
+          try {
+            if (!editorPos?.shapeId) return setEditorPos(null);
+            const ok = window.confirm("Supprimer cette sous-zone ?");
+            if (!ok) return;
+            await api.atexMaps.deleteSubarea(editorPos.shapeId);
+            setEditorPos(null);
+            await reloadAll();
+          } finally { end(); }
+        }
+
   /* ----------------------------- DnD: création + upload ----------------------------- */
   useEffect(() => {
     const el = wrapRef.current;
