@@ -600,5 +600,6 @@ export const api = {
     deleteSubarea: (id) => del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
     getMeta: (plan_key) => get(`/api/atex/maps/meta`, { plan_key }),
     setMeta: (plan_key, payload) => put(`/api/atex/maps/meta`, { plan_key, ...payload }),
+    bulkRename: (payload) => post("/api/atex/maps/bulkRename", payload),
   },
 };
