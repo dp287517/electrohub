@@ -67,22 +67,53 @@
   cursor: pointer;
 }
 .atex-pick > button:hover { background: #f3f4f6; }
+
 /* ----------- Légende zoning (control bas droite) ----------- */
 .atex-legend {
-  position: absolute; right: 8px; bottom: 8px; z-index: 1200;
-  background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px;
-  box-shadow: 0 10px 20px rgba(0,0,0,.08);
-  padding: 8px 10px; min-width: 220px;
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 1200;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.12);
+  padding: 10px 12px;
+  min-width: 220px;
+  max-width: 280px;       /* ✅ limite horizontale */
+  max-height: 180px;      /* ✅ empêche qu’elle dépasse */
+  overflow-y: auto;       /* ✅ scroll vertical si besoin */
+  pointer-events: auto;   /* ✅ clics autorisés */
+  backdrop-filter: blur(3px);
 }
-.atex-legend__title { font-size: 12px; font-weight: 600; color: #111827; margin-bottom: 6px; }
-.atex-legend__group {
-  display: grid; grid-template-columns: 18px 1fr; gap: 8px 8px; align-items: center;
+
+.atex-legend__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #111827;
   margin-bottom: 6px;
 }
-.atex-legend__chip {
-  width: 18px; height: 18px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15);
+
+.atex-legend__group {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px 8px;
+  align-items: center;
+  margin-bottom: 6px;
 }
-.atex-legend__label { font-size: 12px; color: #374151; }
+
+.atex-legend__chip {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(0,0,0,.15);
+}
+
+.atex-legend__label {
+  font-size: 12px;
+  color: #374151;
+}
+
 /* ----------- Zones: lisibles mais discrètes ----------- */
 /* Tous les vecteurs dans le pane des zones restent fins/transparents */
 .leaflet-pane.zonesPane svg path,
@@ -179,14 +210,22 @@
   box-shadow: 0 8px 20px rgba(0,0,0,.18);
 }
 .leaflet-tooltip.atex-tip:before { border-top-color: #111827; }
+
 /* ----------- Responsive ----------- */
 @media (max-width: 640px) {
   .atex-legend {
-    right: 6px; bottom: 6px; min-width: 190px; padding: 6px 8px;
+    right: 6px;
+    bottom: 6px;
+    min-width: 180px;
+    max-width: 220px;
+    max-height: 140px;
+    padding: 6px 8px;
+    font-size: 11px;
   }
-  .atex-legend__label { font-size: 11px; }
+  .atex-legend__label { font-size: 10px; }
   .leaflet-control-zoom { transform: translateY(4px); }
 }
+
 /* =========================
    AJOUT — toolbar (plus / crayon / ajuster)
    ========================= */
