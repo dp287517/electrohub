@@ -275,6 +275,9 @@ export default function Atex() {
   const [selectedPlan, setSelectedPlan] = useState(null);
   // Tick de rafraîchissement carte (force remount)
   const [mapRefreshTick, setMapRefreshTick] = useState(0);
+
+    // AJOUT : Indicateur de chargement global (tableau + plans)
+    const [globalLoading, setGlobalLoading] = useState(false);
   /* ----------------------------- Helpers ----------------------------- */
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
@@ -287,6 +290,7 @@ export default function Atex() {
     return d.isValid() ? d.add(36, "month").format("YYYY-MM-DD") : "";
   }
   async function reload() {
+    setGlobalLoading(true);
     setLoading(true);
     try {
       const res = await api.atex.listEquipments({
@@ -298,10 +302,11 @@ export default function Atex() {
       });
       setItems(Array.isArray(res?.items) ? res.items : []);
     } catch (e) {
-      console.error(e); // eslint-disable-line no-console
+      console.error(e);
       setItems([]);
     } finally {
       setLoading(false);
+      setGlobalLoading(false);
     }
   }
   async function reloadCalendar() {
@@ -355,6 +360,14 @@ export default function Atex() {
   useEffect(() => {
     reloadCalendar();
   }, [items]);
+    // AJOUT : Rechargement du tableau quand le plan change (bâtiment/zone)
+    useEffect(() => {
+      const handler = async () => {
+        await reload();
+      };
+      window.addEventListener("atex-plan-meta-updated", handler);
+      return () => window.removeEventListener("atex-plan-meta-updated", handler);
+    }, [q, status, building, zone, compliance]);
   // Merge helper : tient compte d’un éventuel champ zones.*, sinon zoning_*
   // et nettoie les champs imbriqués pour éviter les affichages JSON
   const mergeZones = (raw) => {
@@ -703,6 +716,12 @@ export default function Atex() {
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
+        {/* SPINNER GLOBAL */}
+      {globalLoading && (
+        <div className="fixed inset-0 bg-white/70 flex items-center justify-center z-[5000] backdrop-blur-sm">
+          <div className="text-sm text-gray-600">Mise à jour en cours...</div>
+        </div>
+      )}
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Équipements ATEX</h1>
@@ -1288,12 +1307,14 @@ export default function Atex() {
                           </div>
                         </div>
                         {(() => {
-                          const decision = h.decision || h.compliance_state || "";
+                          const decision = h.decision || h.result || h.compliance_state || "";
+                          const isConforme = decision === "conforme";
+                          const isNonConforme = decision === "non_conforme";
                           return (
-                            <Badge color={decision === "conforme" ? "green" : decision === "non_conforme" ? "red" : "gray"}>
-                              {decision === "conforme"
+                            <Badge color={isConforme ? "green" : isNonConforme ? "red" : "gray"}>
+                              {isConforme
                                 ? "Conforme"
-                                : decision === "non_conforme"
+                                : isNonConforme
                                 ? "Non conforme"
                                 : "—"}
                             </Badge>
