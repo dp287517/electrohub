@@ -201,11 +201,11 @@ function MonthCalendar({ events = [], onDayClick }) {
         <div className="font-semibold">{cursor.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
           <Btn variant="ghost" onClick={() => setCursor(cursor.subtract(1, "month"))}>
-            Left Arrow
+            ◀
           </Btn>
           <Btn variant="ghost" onClick={() => setCursor(dayjs().startOf("month"))}>Aujourd’hui</Btn>
           <Btn variant="ghost" onClick={() => setCursor(cursor.add(1, "month"))}>
-            Right Arrow
+            ▶
           </Btn>
         </div>
       </div>
@@ -355,16 +355,6 @@ export default function Atex() {
   useEffect(() => {
     reloadCalendar();
   }, [items]);
-
-  /* -------------------------------------------------------------- 
-   * CORRECTIF : Recharger la liste après changement bâtiment/zone dans le plan 
-   * -------------------------------------------------------------- */
-  useEffect(() => {
-    const handler = () => reload();
-    window.addEventListener("atex-plan-meta-updated", handler);
-    return () => window.removeEventListener("atex-plan-meta-updated", handler);
-  }, []);
-
   // Merge helper : tient compte d’un éventuel champ zones.*, sinon zoning_*
   // et nettoie les champs imbriqués pour éviter les affichages JSON
   const mergeZones = (raw) => {
@@ -374,7 +364,7 @@ export default function Atex() {
       zoning_dust: raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null,
     };
 
-    // Corrige les champs texte pour être toujours plats (jamais des objets)
+    // 🧹 Corrige les champs texte pour être toujours plats (jamais des objets)
     clean.equipment =
       typeof raw?.equipment === "object"
         ? raw?.equipment?.equipment || raw?.equipment?.name || ""
@@ -489,7 +479,7 @@ export default function Atex() {
       const eq = updated?.equipment || updated || null;
       if (eq?.id) {
         const fresh = mergeZones(eq);
-        // Corrige le type des champs
+        // 🧹 Corrige le type des champs
         fresh.equipment = typeof fresh.equipment === "object" ? fresh.equipment?.equipment || "" : fresh.equipment || "";
         fresh.sub_equipment = typeof fresh.sub_equipment === "object" ? fresh.sub_equipment?.name || "" : fresh.sub_equipment || "";
         setEditing(fresh);
@@ -980,7 +970,7 @@ export default function Atex() {
                   }
                 }}
                 onMetaChanged={async () => {
-                  await reload(); // recharge les équipements dans la liste principale
+                  await reload(); // 🔄 recharge les équipements dans la liste principale
                   setToast("Plans et équipements mis à jour");
                 }}
               />
@@ -1163,7 +1153,7 @@ export default function Atex() {
                         }
                       }}
                     >
-                      Check  
+                      ✅  
                     </Btn>
                   )}
                 </div>
@@ -1387,7 +1377,7 @@ function PlanCard({ plan, onRename, onPick }) {
             </div>
             <div className="flex items-center gap-1">
               <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>
-                Pencil  
+                ✏️  
               </Btn>
               <Btn variant="subtle" onClick={() => onPick(plan)}>
                 Ouvrir
