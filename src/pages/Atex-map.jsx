@@ -961,6 +961,95 @@ export default function AtexMap({
       end();
     }
   }
+
+  function drawSubareas(items) {
+    const end = timeStart("drawSubareas");
+    try {
+      const m = mapRef.current;
+      const base = baseLayerRef.current;
+      if (!m || !base) return;
+      if (!subareasLayerRef.current)
+        subareasLayerRef.current = L.layerGroup({ pane: "zonesPane" }).addTo(m);
+
+      const g = subareasLayerRef.current;
+      g.clearLayers();
+      clearEditHandles();
+      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+
+      const { W, H, bounds } = getPlanDims(base);
+
+      (items || []).forEach((sa) => {
+        let layer = null;
+        const style = colorForSubarea(sa);
+
+        if (sa.kind === "rect") {
+          const x1 = bounds.getWest() + (sa.x1 ?? 0) * W;
+          const y1 = bounds.getSouth() + (sa.y1 ?? 0) * H;
+          const x2 = bounds.getWest() + (sa.x2 ?? 0) * W;
+          const y2 = bounds.getSouth() + (sa.y2 ?? 0) * H;
+          const b = L.latLngBounds(L.latLng(y1, x1), L.latLng(y2, x2));
+          layer = L.rectangle(b, style);
+        } else if (sa.kind === "circle") {
+          const cx = bounds.getWest() + (sa.cx ?? 0.5) * W;
+          const cy = bounds.getSouth() + (sa.cy ?? 0.5) * H;
+          const r = Math.max(4, (sa.r ?? 0.05) * Math.min(W, H));
+          layer = L.circle(L.latLng(cy, cx), { radius: r, ...style });
+        } else if (sa.kind === "poly") {
+          const pts = (sa.points || []).map(([xf, yf]) => [
+            bounds.getSouth() + yf * H,
+            bounds.getWest() + xf * W,
+          ]);
+          layer = L.polygon(pts, style);
+        }
+
+        if (!layer) return;
+        layer.__meta = sa;
+        layer.addTo(g);
+
+        // Éditeur local quand on clique sur la zone
+        layer.on("click", (e) => {
+          setEditorInit({
+            id: sa.id,
+            name: sa.name || "",
+            zoning_gas: sa.zoning_gas ?? null,
+            zoning_dust: sa.zoning_dust ?? null,
+          });
+          setEditorPos({
+            screen: e.originalEvent
+              ? { x: e.originalEvent.clientX, y: e.originalEvent.clientY }
+              : null,
+            shapeId: sa.id,
+            layer,
+            kind: sa.kind,
+          });
+        });
+
+        // Label texte
+        if (sa?.name) {
+          const center =
+            layer.getBounds?.().getCenter?.() || layer.getLatLng?.() || null;
+          if (center) {
+            L.marker(center, {
+              interactive: false,
+              pane: "zonesPane",
+              icon: L.divIcon({
+                className: "atex-subarea-label",
+                html: `<div class="px-2 py-1 rounded bg-white/90 border shadow text-[11px]">${sa.name}</div>`,
+              }),
+            }).addTo(g);
+          }
+        }
+      });
+
+      g.bringToFront?.();
+      markersLayerRef.current?.bringToFront?.();
+    } catch (e) {
+      console.error("[ATEX] drawSubareas error", e);
+    } finally {
+      end();
+    }
+  }
+
   /* -------- Dessin zones -------- */
   function setDrawMode(mode) {
     if (mode === "rect") setDrawing(DRAW_RECT);
