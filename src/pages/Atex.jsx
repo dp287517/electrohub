@@ -595,7 +595,11 @@ export default function Atex() {
       const rationale = res?.rationale || "";
       if (editing?.id && api.atex.applyCompliance) {
         try {
-          await api.atex.applyCompliance(editing.id, { decision, rationale });
+          await api.atex.applyCompliance(editing.id, { 
+            decision, 
+            rationale,
+            source: res?.source || "unknown" // ✅ ici aussi 
+          });
         } catch {}
       }
       if (editing?.id) {
@@ -639,7 +643,11 @@ export default function Atex() {
 
       // 3. Application de la décision de conformité
       if (api.atex.applyCompliance) {
-        await api.atex.applyCompliance(editing.id, { decision, rationale });
+        await api.atex.applyCompliance(editing.id, { 
+          decision, 
+          rationale, 
+          source: res?.source || "unknown" // ✅ provenance locale ou IA 
+        });
       }
 
       // 4. Récupération de la fiche mise à jour depuis le backend
