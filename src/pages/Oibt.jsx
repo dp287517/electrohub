@@ -189,6 +189,10 @@ export default function Oibt() {
   const [statusFilterPeriodics, setStatusFilterPeriodics] = useState("all");
   const [expandedPeriodics, setExpandedPeriodics] = useState(new Set());
 
+  // Contrôles à venir
+  const [upcoming, setUpcoming] = useState([]);
+  const [loadingUpcoming, setLoadingUpcoming] = useState(false);
+
   // UI
   const [toast, setToast] = useState(null);
   const [confirm, setConfirm] = useState({ open: false, id: null });
@@ -200,7 +204,11 @@ export default function Oibt() {
   // Eviter boucles d'auto-correction due
   const fixedDueIdsRef = useRef(new Set());
 
-  useEffect(() => { refreshAll(); }, []);
+  useEffect(() => {
+    refreshAll();
+    refreshUpcoming();
+    refreshBuildings();
+  }, []);
   async function refreshAll() {
     try {
       const [pj, per] = await Promise.all([
@@ -211,6 +219,36 @@ export default function Oibt() {
       setPeriodics(per?.data || per || []);
     } catch (e) { setToast({ msg: e.message || "Erreur de chargement", type: "error" }); }
   }
+
+  // --------------------- CHARGEMENT DES CONTRÔLES À VENIR ---------------------
+  async function refreshUpcoming() {
+    try {
+      setLoadingUpcoming(true);
+      const res = await api.oibt.listUpcoming();
+      setUpcoming(res?.data || []);
+    } catch (e) {
+      setToast({ msg: e.message || "Erreur de chargement des contrôles à venir", type: "error" });
+    } finally {
+      setLoadingUpcoming(false);
+    }
+  }
+
+  // ------------------------- VUE PAR BÂTIMENT -------------------------
+  const [buildings, setBuildings] = useState([]);
+  const [loadingBuildings, setLoadingBuildings] = useState(false);
+
+  async function refreshBuildings() {
+    try {
+      setLoadingBuildings(true);
+      const res = await api.oibt.listBuildings();
+      setBuildings(res?.data || []);
+    } catch (e) {
+      setToast({ msg: e.message || "Erreur de chargement des bâtiments", type: "error" });
+    } finally {
+      setLoadingBuildings(false);
+    }
+  }
+
 
   /* ----------------------------- YEAR HELPERS ---------------------------- */
   const getYear = (item) => {
@@ -627,6 +665,8 @@ export default function Oibt() {
   const TABS = [
     { id: "projects", label: "Projets", count: filteredProjects.length },
     { id: "periodics", label: "Périodiques", count: filteredPeriodics.length },
+    { id: "upcoming", label: "Contrôles à venir", count: upcoming.length },
+    { id: "buildings", label: "Vue par bâtiment", count: buildings.length },
     { id: "analysis", label: "Analysis" },
   ];
 
@@ -1025,6 +1065,156 @@ export default function Oibt() {
               })}
               {filteredPeriodics.length === 0 && <div className="text-sm text-gray-600">Aucun contrôle périodique.</div>}
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* -------------------------- CONTRÔLES À VENIR -------------------------- */}
+      <div id="panel-upcoming" role="tabpanel" aria-labelledby="tab-upcoming" hidden={tab !== "upcoming"}>
+        {tab === "upcoming" && (
+          <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                <CalendarClock className="text-blue-600" /> Contrôles périodiques à venir
+              </h2>
+              <button onClick={refreshUpcoming} className={btn()}>Rafraîchir</button>
+            </div>
+
+            {loadingUpcoming ? (
+              <div className="text-gray-500 text-sm italic">Chargement des contrôles à venir…</div>
+            ) : upcoming.length === 0 ? (
+              <div className="text-gray-600 text-sm">Aucun contrôle prévu pour le moment.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full border border-gray-200 rounded-lg overflow-hidden">
+                  <thead className="bg-gray-100 text-gray-700 text-sm">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Bâtiment</th>
+                      <th className="px-3 py-2 text-left">Dernier contrôle</th>
+                      <th className="px-3 py-2 text-left">Prochain à effectuer</th>
+                      <th className="px-3 py-2 text-left">Échéance (dans…)</th>
+                      <th className="px-3 py-2 text-left">Historique</th>
+                      <th className="px-3 py-2 text-left">Dernier rapport</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 text-sm">
+                    {upcoming.map((b, i) => (
+                      <tr key={i} className="hover:bg-blue-50 transition-colors">
+                        <td className="px-3 py-2 font-medium text-gray-900">{b.building}</td>
+                        <td className="px-3 py-2">{b.last_year ? b.last_year : "—"}</td>
+                        <td className="px-3 py-2">{b.next_due_year}</td>
+                        <td className="px-3 py-2">
+                          {b.next_due_in <= 0 ? (
+                            <span className="text-red-600 font-medium">À faire cette année</span>
+                          ) : (
+                            <span className="text-gray-700">{b.next_due_in} an{b.next_due_in > 1 ? "s" : ""}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          <details className="cursor-pointer select-none">
+                            <summary className="text-blue-600 hover:underline">Voir</summary>
+                            <ul className="pl-4 mt-1 text-gray-600 space-y-0.5">
+                              {b.history.map((h, j) => (
+                                <li key={j}>
+                                  {h.year} — créé le {toFR(new Date(h.created_at))}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        </td>
+                        <td className="px-3 py-2">
+                          {b.history?.[0]?.id ? (
+                            <a
+                              href={`${API_BASE}/api/oibt/periodics/${b.history[0].id}/download?type=report`}
+                              className="text-blue-600 hover:underline flex items-center gap-1"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <Download size={16} /> Télécharger
+                            </a>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* -------------------------- VUE PAR BÂTIMENT -------------------------- */}
+      <div id="panel-buildings" role="tabpanel" aria-labelledby="tab-buildings" hidden={tab !== "buildings"}>
+        {tab === "buildings" && (
+          <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                <Folder className="text-indigo-600" /> Vue par bâtiment
+              </h2>
+              <button onClick={refreshBuildings} className={btn()}>Rafraîchir</button>
+            </div>
+
+            {loadingBuildings ? (
+              <div className="text-gray-500 text-sm italic">Chargement des données des bâtiments…</div>
+            ) : buildings.length === 0 ? (
+              <div className="text-gray-600 text-sm">Aucun bâtiment trouvé.</div>
+            ) : (
+              <div className="grid gap-6">
+                {buildings.map((b, i) => (
+                  <div key={i} className="border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden">
+                    <div className="px-4 py-3 bg-gray-50 flex justify-between items-center">
+                      <div className="font-semibold text-gray-900">{b.building}</div>
+                      <div className="text-sm text-gray-600">
+                        <CalendarClock className="inline-block mr-1" size={16} />
+                        Prochain contrôle prévu :{" "}
+                        <span className="font-medium text-blue-700">{b.next_due_year}</span>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-sm text-gray-800">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            <th className="px-3 py-2 text-left">Année</th>
+                            <th className="px-3 py-2 text-left">Avancement</th>
+                            <th className="px-3 py-2 text-left">Rapport</th>
+                            <th className="px-3 py-2 text-left">Défauts</th>
+                            <th className="px-3 py-2 text-left">Confirmation</th>
+                            <th className="px-3 py-2 text-left">Créé le</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                          {b.years.map((y, j) => (
+                            <tr key={j} className="hover:bg-blue-50 transition-colors">
+                              <td className="px-3 py-2 font-medium text-gray-900">{y.year}</td>
+                              <td className="px-3 py-2 w-40">
+                                <Progress value={y.progress} />
+                                <div className="text-xs text-gray-600 mt-1">{y.progress}%</div>
+                              </td>
+                              <td className="px-3 py-2">
+                                <Badge ok={!!y.report_received} label={y.report_received ? "Oui" : "Non"} />
+                              </td>
+                              <td className="px-3 py-2">
+                                <Badge ok={!!y.defect_report_received} label={y.defect_report_received ? "Oui" : "Non"} />
+                              </td>
+                              <td className="px-3 py-2">
+                                <Badge ok={!!y.confirmation_received} label={y.confirmation_received ? "Oui" : "Non"} />
+                              </td>
+                              <td className="px-3 py-2 text-gray-600">
+                                {y.created_at ? toFR(new Date(y.created_at)) : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
