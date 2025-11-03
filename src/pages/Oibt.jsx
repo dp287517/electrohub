@@ -697,6 +697,32 @@ export default function Oibt() {
     { id: "analysis", label: "Analysis" },
   ];
 
+  // Fonction globale pour ouvrir un contrôle périodique complet depuis d’autres onglets
+  useEffect(() => {
+    window.openPeriodicDetails = (id) => {
+      // Passe à l’onglet périodiques
+      setTab("periodics");
+
+      // Déplie automatiquement le contrôle voulu
+      setExpandedPeriodics((prev) => {
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+
+      // Feedback utilisateur
+      setToast({
+        msg: "Ouverture du contrôle complet…",
+        type: "info",
+      });
+    };
+
+    // Nettoyage quand le composant est démonté
+    return () => {
+      delete window.openPeriodicDetails;
+    };
+  }, []);
+
   return (
     <section className="max-w-7xl mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 to-white min-h-screen">
       <header className="mb-4">
@@ -949,30 +975,6 @@ export default function Oibt() {
       >
         {tab === "periodics" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
-            {/* Fonction interne pour ouvrir un contrôle spécifique */}
-            {/* ---------------------------------------------------------------- */}
-            {/** On initialise la fonction globale une seule fois pour ouvrir un contrôle complet depuis d’autres onglets */}
-            {useEffect(() => {
-              window.openPeriodicDetails = (id) => {
-                // Passe à l’onglet périodiques
-                setTab("periodics");
-
-                // Déplie automatiquement le contrôle voulu
-                setExpandedPeriodics((prev) => {
-                  const next = new Set(prev);
-                  next.add(id);
-                  return next;
-                });
-
-                // Feedback utilisateur
-                setToast({
-                  msg: "Ouverture du contrôle complet…",
-                  type: "info",
-                });
-              };
-            }, [])}
-            {/* ---------------------------------------------------------------- */}
-
             {/* Barre de filtres et création */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
