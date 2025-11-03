@@ -1156,11 +1156,16 @@ function setupHandleDrag(map, onMoveCallback) {
       console.error("[ATEX] saveGeomEdit error", e);
     } finally {
       // --- 5️⃣ Toujours restaurer un état stable ---
-      const m = mapRef.current;
-      resetAfterGeomEdit(m);
-      clearEditHandles();
-      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-      end();
+      try {
+        const m = mapRef.current;
+        resetAfterGeomEdit(m);
+        clearEditHandles();
+        setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+      } catch (err) {
+        console.warn("[ATEX] Cleanup après édition échoué:", err);
+      } finally {
+        end();
+      }
     }
   }
 
@@ -1749,6 +1754,7 @@ function setupHandleDrag(map, onMoveCallback) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
     if (!key) return;
+
     api.atexMaps
       .getMeta(key)
       .then((res) => {
@@ -1762,8 +1768,7 @@ function setupHandleDrag(map, onMoveCallback) {
       .catch((err) => console.warn("getMeta error (ignored):", err));
   }, [plan?.id, plan?.logical_name]);
 
-
-    async function handleMetaChange(nextBuilding, nextZone) {
+  async function handleMetaChange(nextBuilding, nextZone) {
     if (!plan) return;
     const key = plan.id || plan.logical_name;
 
@@ -1771,10 +1776,10 @@ function setupHandleDrag(map, onMoveCallback) {
     const prevZone = zone;
 
     try {
-      // 1. Met à jour les métadonnées du plan
+      // 1️⃣ Met à jour les métadonnées du plan
       await api.atexMaps.setMeta(key, { building: nextBuilding, zone: nextZone });
 
-      // 2. Propagation automatique aux équipements
+      // 2️⃣ Propagation automatique aux équipements
       if (nextBuilding && nextBuilding !== prevBuilding) {
         await api.atex.bulkRename({
           field: "building",
@@ -1790,22 +1795,21 @@ function setupHandleDrag(map, onMoveCallback) {
         });
       }
 
-      // 3. Met à jour l’état React
+      // 3️⃣ Met à jour l’état React local
       setBuilding(nextBuilding);
       setZone(nextZone);
+      await new Promise((r) => setTimeout(r, 100)); // attendre que React applique les changements
 
-      // attendre que React applique les changements (sinon reloadAll utilise l'ancien état)
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // 4. Recharge proprement les positions et zones
+      // 4️⃣ Recharge les sous-zones + positions
       await reloadAll();
 
-      // 5. Recharge les équipements (pour leurs métadonnées à jour)
+      // 5️⃣ Recharge proprement les équipements visibles sur la carte
       try {
-        const eq = await api.atex.listEquipments?.();
-        if (eq?.items?.length) {
+        const eqResp = await api.atex.listEquipments?.({ plan: key });
+        const eqItems = Array.isArray(eqResp?.items) ? eqResp.items : [];
+        if (eqItems.length > 0) {
           drawMarkers(
-            eq.items.map((it) => ({
+            eqItems.map((it) => ({
               id: it.id,
               name: it.name,
               x: Number(it.x_frac ?? it.x ?? 0),
@@ -1817,10 +1821,13 @@ function setupHandleDrag(map, onMoveCallback) {
           );
         }
       } catch (e) {
-        console.warn("Erreur rechargement équipements après renommage:", e);
+        console.warn("[ATEX] Erreur rechargement équipements:", e);
       }
 
-      // 6. Feedback visuel (toast)
+      // 6️⃣ Force un tick de rafraîchissement pour la carte (corrige disparition)
+      setMapRefreshTick((t) => t + 1);
+
+      // 7️⃣ Feedback visuel
       const toast = document.createElement("div");
       toast.textContent = "Changements enregistrés";
       Object.assign(toast.style, {
@@ -1840,7 +1847,7 @@ function setupHandleDrag(map, onMoveCallback) {
       setTimeout(() => (toast.style.opacity = "0"), 2000);
       setTimeout(() => toast.remove(), 2600);
 
-      // 7. Informe le parent (Atex.jsx) pour recharger la liste principale et ses filtres
+      // 8️⃣ Informe le parent pour mise à jour des filtres éventuels
       if (typeof onMetaChanged === "function") {
         onMetaChanged();
       }
