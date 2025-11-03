@@ -1068,14 +1068,17 @@ function setupHandleDrag(map, onMoveCallback) {
     // Surligne la forme active
     layer.setStyle({ weight: 2.5, color: "#2563eb", dashArray: "4,4" });
 
-    // 🔧 Permet d'annuler avec ESC
-    document.addEventListener("keydown", (e) => {
+    // 🔧 Permet d'annuler avec ESC (et se retire proprement)
+    const escHandler = (e) => {
       if (e.key === "Escape") {
         clearEditHandles();
         setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
         document.body.classList.remove("editing-geom");
+        resetAfterGeomEdit(mapRef.current);
+        document.removeEventListener("keydown", escHandler);
       }
-    });
+    };
+    document.addEventListener("keydown", escHandler);
   }
 
   /* --------------------------------------------------------------------------
@@ -1816,6 +1819,10 @@ function setupHandleDrag(map, onMoveCallback) {
       // 4️⃣ Recharge les sous-zones + positions
       await reloadAll();
 
+      // 🧭 Attendre un cycle complet de rendu du plan avant redessiner
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise(requestAnimationFrame);
+
       // 5️⃣ Forcer la recalibration des coordonnées équipements
       try {
         const eqResp = await api.atex.listEquipments?.({ plan: key });
@@ -1923,6 +1930,12 @@ function setupHandleDrag(map, onMoveCallback) {
       setLegendVisible(true);
       setOpen(false);
       setTimeout(() => (mapRef.current = null), 150);
+
+      // 6️⃣ Forcer la fermeture visuelle du modal immédiatement
+      setTimeout(() => {
+        const modal = document.querySelector(".fixed.inset-0.z-[6000]");
+        if (modal) modal.remove();
+      }, 200);
 
       console.info("[ATEX] Plan fermé et nettoyé ✅");
     } catch (err) {
