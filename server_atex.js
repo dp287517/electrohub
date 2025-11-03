@@ -1566,13 +1566,17 @@ Rappelle-toi :
 app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
   try {
     const id = String(req.params.id);
-    const { decision = null, rationale = "" } = req.body || {};
+    // ✅ inclure `source` ici
+    const { decision = null, rationale = "", source = null } = req.body || {};
     if (!["conforme", "non_conforme", "indetermine", null].includes(decision))
       return res.status(400).json({ ok:false, error:"invalid decision" });
+
     const u = getUser(req);
+
+    // ✅ insertion avec details contenant la source
     const { rows } = await pool.query(
-      `INSERT INTO atex_checks(equipment_id, status, date, items, result, user_name, user_email, files)
-       VALUES($1,'fait',now(),$2,$3,$4,$5,'[]'::jsonb)
+      `INSERT INTO atex_checks(equipment_id, status, date, items, result, user_name, user_email, files, details)
+       VALUES($1,'fait',now(),$2,$3,$4,$5,'[]'::jsonb,$6)
        RETURNING *`,
       [
         id,
@@ -1580,19 +1584,18 @@ app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
         decision === "indetermine" ? null : decision,
         u.name || "",
         u.email || "",
-        { source: source || "unknown" }, // ✅ provenance stockée ici
+        { source: source || "unknown" }, // ✅ plus d’erreur ici
       ]
     );
-    // Retourner la fiche avec état de conformité recalculé
+
+    // ✅ retour équipement mis à jour
     const { rows: eqR } = await pool.query(
-      `
-      SELECT e.*,
-             (SELECT result FROM atex_checks c
-              WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
-              ORDER BY c.date DESC NULLS LAST
-              LIMIT 1) AS last_result
-      FROM atex_equipments e WHERE e.id=$1
-      `,
+      `SELECT e.*,
+              (SELECT result FROM atex_checks c
+               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
+               ORDER BY c.date DESC NULLS LAST
+               LIMIT 1) AS last_result
+         FROM atex_equipments e WHERE e.id=$1`,
       [id]
     );
     const eq = eqR?.[0] || null;
@@ -1603,11 +1606,17 @@ app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
           : null;
       eq.status = eqStatusFromDue(eq.next_check_date);
       eq.compliance_state =
-        eq.last_result === "conforme" ? "conforme" :
-        eq.last_result === "non_conforme" ? "non_conforme" : "na";
+        eq.last_result === "conforme"
+          ? "conforme"
+          : eq.last_result === "non_conforme"
+          ? "non_conforme"
+          : "na";
     }
-    res.json({ ok:true, check: rows[0], equipment: eq });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+
+    res.json({ ok: true, check: rows[0], equipment: eq });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 // Legacy aliases (compat)
 app.post("/api/atex/aiAnalyze", (req, res) => {
