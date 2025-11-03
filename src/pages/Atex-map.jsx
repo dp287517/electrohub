@@ -1131,6 +1131,8 @@ function setupHandleDrag(map, onMoveCallback) {
 
       // --- 3️⃣ Recharge les zones mises à jour ---
       await reloadAll();
+      // --- 3️⃣ bis : Réactive Leaflet immédiatement pour éviter blocage ---
+      resetAfterGeomEdit(mapRef.current);
 
       // --- 4️⃣ Feedback visuel (toast temporaire) ---
       const toast = document.createElement("div");
@@ -1174,18 +1176,29 @@ function setupHandleDrag(map, onMoveCallback) {
     -------------------------------------------------------------------------- */
   function resetAfterGeomEdit(map) {
     try {
-      map?.dragging?.enable?.();
-      map?.off("mousemove");
-      map?.off("mouseup");
-      map?.off("mousedown");
-    } catch {}
+      if (map) {
+        map.dragging.enable();
+        map.off("mousemove");
+        map.off("mouseup");
+        map.off("mousedown");
+        map.eachLayer((l) => {
+          if (l.options?.interactive) l._path && (l._path.style.pointerEvents = "auto");
+        });
+      }
+    } catch (err) {
+      console.warn("[ATEX] resetAfterGeomEdit error", err);
+    }
+
     document.body.classList.remove("editing-geom");
     document.body.style.userSelect = "";
+
     const editPane = document.querySelector(".leaflet-pane.editPane");
     if (editPane) editPane.style.pointerEvents = "auto";
+
     const inter = document.querySelectorAll(".leaflet-interactive");
     inter.forEach((el) => (el.style.pointerEvents = "auto"));
   }
+
 
   function drawSubareas(items) {
     const end = timeStart("drawSubareas");
@@ -1803,22 +1816,25 @@ function setupHandleDrag(map, onMoveCallback) {
       // 4️⃣ Recharge les sous-zones + positions
       await reloadAll();
 
-      // 5️⃣ Recharge proprement les équipements visibles sur la carte
+      // 5️⃣ Forcer la recalibration des coordonnées équipements
       try {
         const eqResp = await api.atex.listEquipments?.({ plan: key });
         const eqItems = Array.isArray(eqResp?.items) ? eqResp.items : [];
         if (eqItems.length > 0) {
-          drawMarkers(
-            eqItems.map((it) => ({
-              id: it.id,
-              name: it.name,
-              x: Number(it.x_frac ?? it.x ?? 0),
-              y: Number(it.y_frac ?? it.y ?? 0),
-              status: it.status || "a_faire",
-              zoning_gas: it.zoning_gas ?? null,
-              zoning_dust: it.zoning_dust ?? null,
-            }))
-          );
+          // 🧭 Attendre le rendu complet du plan avant de replacer les marqueurs
+          await new Promise(requestAnimationFrame);
+          baseLayerRef.current?.bringToFront?.();
+          drawMarkers(eqItems.map((it) => {
+            const x = Number(it.x_frac ?? it.x ?? 0);
+            const y = Number(it.y_frac ?? it.y ?? 0);
+            // 🧭 corrige le décalage : Leaflet recalcule les bounds après reload
+            const base = baseLayerRef.current;
+            if (base) {
+              const ll = toLatLngFrac(x, y, base);
+              return { ...it, x, y, latlng: ll };
+            }
+            return { ...it, x, y };
+          }));
         }
       } catch (e) {
         console.warn("[ATEX] Erreur rechargement équipements:", e);
@@ -1858,7 +1874,9 @@ function setupHandleDrag(map, onMoveCallback) {
 
   function handleClosePlan() {
     try {
-      // 1️⃣ Supprime complètement la carte Leaflet et ses listeners
+      console.info("[ATEX] Fermeture du plan en cours…");
+
+      // 1️⃣ Supprimer la carte Leaflet proprement
       if (mapRef.current) {
         try {
           mapRef.current.off();
@@ -1866,12 +1884,11 @@ function setupHandleDrag(map, onMoveCallback) {
           mapRef.current.remove();
         } catch (err) {
           console.warn("[ATEX] Erreur nettoyage Leaflet:", err);
-        } finally {
-          mapRef.current = null;
         }
+        mapRef.current = null;
       }
 
-      // 2️⃣ Nettoyage des observers et événements globaux
+      // 2️⃣ Nettoyage des observers & events globaux
       try {
         roRef.current?.disconnect?.();
         window.removeEventListener("resize", onResize);
@@ -1879,14 +1896,23 @@ function setupHandleDrag(map, onMoveCallback) {
       } catch {}
       roRef.current = null;
 
-      // 3️⃣ Vide toutes les références de couches
+      // 3️⃣ Purge DOM Leaflet (divs fantômes)
+      document.querySelectorAll(".leaflet-container, .leaflet-pane, .leaflet-control").forEach((el) => el.remove());
+      // 🧹 Supprime les éventuelles cartes ou cards résiduelles
+      document.querySelectorAll(".plan-card, .plan-preview, .plan-footer").forEach((el) => el.remove());
+      document.body.classList.remove("editing-geom");
+      document.body.style.userSelect = "";
+
+      // 4️⃣ Reset des refs React
+      baseReadyRef.current = false;
+      lastJob.current.key = null;
       baseLayerRef.current = null;
       markersLayerRef.current = null;
       subareasLayerRef.current = null;
       editHandlesLayerRef.current = null;
       legendRef.current = null;
 
-      // 4️⃣ Réinitialise les états React
+      // 5️⃣ Reset des états
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       setEditorPos(null);
       setEditorInit({});
@@ -1894,31 +1920,16 @@ function setupHandleDrag(map, onMoveCallback) {
       setPolyTemp([]);
       setZonesByEquip({});
       setSubareasById({});
-      setOpen(false);
       setLegendVisible(true);
-      setMapRefreshTick((t) => t + 1);
+      setOpen(false);
+      setTimeout(() => (mapRef.current = null), 150);
 
-      // 5️⃣ Supprime les éventuelles cartes DOM résiduelles de Leaflet
-      const wrappers = document.querySelectorAll(".leaflet-container, .leaflet-pane, .leaflet-control");
-      wrappers.forEach((el) => el.remove());
-
-      // 6️⃣ Supprime les overlays modaux restés ouverts (cas du "Fermer" buggué)
-      document.querySelectorAll(".plan-card, .plan-preview, .plan-footer").forEach((el) => el.remove());
-      document.body.classList.remove("editing-geom");
-      document.body.style.userSelect = "";
-
-      // 7️⃣ Petit délai pour s'assurer que le DOM est propre avant réouverture
-      setTimeout(() => {
-        mapRef.current = null;
-        baseReadyRef.current = false;
-        lastJob.current.key = null;
-      }, 150);
-
-      console.info("[ATEX] Plan fermé proprement ✅");
+      console.info("[ATEX] Plan fermé et nettoyé ✅");
     } catch (err) {
       console.error("[ATEX] Erreur fermeture plan:", err);
     }
   }
+
 
   // --- Modal plein écran
   return (
