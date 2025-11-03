@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { api, API_BASE } from "../lib/api.js";
 import {
   Folder, FileText, CalendarClock, Download, Trash2, BarChart3,
-  AlertTriangle, CheckCircle2, XCircle, ChevronDown, UploadCloud, Filter, Paperclip
+  AlertTriangle, CheckCircle2, XCircle, ChevronDown, UploadCloud, Filter, Paperclip, Plus, Home, Building2
 } from "lucide-react";
 
 /* ----------------------------- UI HELPERS ----------------------------- */
@@ -191,6 +191,10 @@ export default function Oibt() {
 
   // Contrôles à venir
   const [upcoming, setUpcoming] = useState([]);
+
+  // Stocke les rapports initiaux sélectionnés pour chaque bâtiment
+  const [fileReportsNew, setFileReportsNew] = useState({});
+
   const [loadingUpcoming, setLoadingUpcoming] = useState(false);
 
   // UI
@@ -528,6 +532,29 @@ export default function Oibt() {
       setPeriodics(s => s.filter(c => c.id !== id));
       setToast({ msg: "Bâtiment supprimé", type: "info" });
     } catch (e) { setToast({ msg: e.message, type: "error" }); }
+  }
+
+  // ---------------------------------------------------------------------------
+  //  DUPLIQUER UN CONTRÔLE PÉRIODIQUE (nouvelle année pour un même bâtiment)
+  // ---------------------------------------------------------------------------
+  async function duplicatePeriodic(base) {
+    try {
+      // Calcule la prochaine année selon le type de bâtiment
+      const currentYear = base.year ?? getYear(base);
+      const nextYear = base.building?.toLowerCase().includes("atex") ? currentYear + 3 : currentYear + 5;
+
+      // Crée la nouvelle ligne via l’API
+      const newRow = await api.oibt.createPeriodic({
+        building: base.building,
+        year: nextYear,
+      });
+
+      // Recharge la liste
+      await refreshAll();
+      setToast({ msg: `Nouveau contrôle ${base.building} (${nextYear}) créé`, type: "success" });
+    } catch (e) {
+      setToast({ msg: e.message || "Erreur lors de la création du nouveau contrôle", type: "error" });
+    }
   }
 
   // Sporadique: besoin = floor(nb projets ouverts / 10)
@@ -914,176 +941,388 @@ export default function Oibt() {
       </div>
 
       {/* ---------------------------- PÉRIODIQUES ---------------------------- */}
-      <div id="panel-periodics" role="tabpanel" aria-labelledby="tab-periodics" hidden={tab !== "periodics"}>
+      <div
+        id="panel-periodics"
+        role="tabpanel"
+        aria-labelledby="tab-periodics"
+        hidden={tab !== "periodics"}
+      >
         {tab === "periodics" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+            {/* Fonction interne pour ouvrir un contrôle spécifique */}
+            {/* ---------------------------------------------------------------- */}
+            {/** On initialise la fonction globale une seule fois pour ouvrir un contrôle complet depuis d’autres onglets */}
+            {useEffect(() => {
+              window.openPeriodicDetails = (id) => {
+                // Passe à l’onglet périodiques
+                setTab("periodics");
+
+                // Déplie automatiquement le contrôle voulu
+                setExpandedPeriodics((prev) => {
+                  const next = new Set(prev);
+                  next.add(id);
+                  return next;
+                });
+
+                // Feedback utilisateur
+                setToast({
+                  msg: "Ouverture du contrôle complet…",
+                  type: "info",
+                });
+              };
+            }, [])}
+            {/* ---------------------------------------------------------------- */}
+
+            {/* Barre de filtres et création */}
             <div className="flex items-center justify-between gap-3 flex-wrap">
-              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">Contrôles périodiques</h2>
+              <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
+                Contrôles périodiques
+              </h2>
               <div className="flex gap-2 w-full sm:w-auto items-center">
                 <Filter className="text-gray-500 hidden sm:block" />
-                <select value={statusFilterPeriodics} onChange={e=>setStatusFilterPeriodics(e.target.value)} className={clsInput()} style={{maxWidth:180}}>
+                <select
+                  value={statusFilterPeriodics}
+                  onChange={(e) => setStatusFilterPeriodics(e.target.value)}
+                  className={clsInput()}
+                  style={{ maxWidth: 180 }}
+                >
                   <option value="all">Statut : Tous</option>
                   <option value="progress">En cours</option>
                   <option value="done">Terminés</option>
                 </select>
-                <select value={yearFilterPeriodics} onChange={e=>setYearFilterPeriodics(e.target.value)} className={clsInput()} style={{maxWidth:160}}>
+                <select
+                  value={yearFilterPeriodics}
+                  onChange={(e) => setYearFilterPeriodics(e.target.value)}
+                  className={clsInput()}
+                  style={{ maxWidth: 160 }}
+                >
                   <option value="all">Année : Toutes</option>
-                  {uniquePeriodicYears.map(y => <option key={y} value={y}>{y}</option>)}
+                  {uniquePeriodicYears.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
                 </select>
-                <input value={qBuild} onChange={e => setQBuild(e.target.value)} placeholder="Filtrer par bâtiment…" className={clsInput()} />
-                <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
+                <input
+                  value={qBuild}
+                  onChange={(e) => setQBuild(e.target.value)}
+                  placeholder="Filtrer par bâtiment…"
+                  className={clsInput()}
+                />
+                <button onClick={refreshAll} className={btn()}>
+                  Rafraîchir
+                </button>
               </div>
             </div>
 
+            {/* Formulaire création manuelle */}
             <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <input value={building} onChange={e => setBuilding(e.target.value)} placeholder="Nom du bâtiment" className={clsInput()} />
-              <DropInput label="Glissez-déposez le rapport initial (optionnel)" multiple={false} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> setFileReport(files[0] || null)} />
-              <button onClick={addPeriodic} className={btnPrimary()}>Ajouter</button>
+              <input
+                value={building}
+                onChange={e => setBuilding(e.target.value)}
+                placeholder="Nom du bâtiment"
+                className={clsInput()}
+              />
+              <DropInput
+                label="Glissez-déposez le rapport initial (optionnel)"
+                multiple={false}
+                accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                onFiles={files => setFileReport(files[0] || null)}
+              />
+              <button onClick={addPeriodic} className={btnPrimary()}>
+                Ajouter
+              </button>
             </div>
 
-            <div className="mt-4 grid gap-4">
-              {filteredPeriodics.map(c => {
-                const progress = periodicProgress(c);
-                const year = c.year ?? getYear(c);
-                const expanded = expandedPeriodics.has(c.id);
-                const done = progress === 100;
-                const created = c.created_at || c.createdAt;
-
-                return (
-                  <div key={c.id} className="p-4 rounded-xl border border-gray-200 bg-white">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        {done ? <CheckCircle2 className="text-emerald-600" /> : <FileText className="text-indigo-500" />}
-                        <div>
-                          <div className="font-medium text-gray-900">{c.building}</div>
-                          <div className="text-xs text-gray-600 flex flex-wrap items-center gap-3">
-                            <span>Année&nbsp;
-                              <input
-                                type="number"
-                                value={year}
-                                onChange={e => setPeriodicYear(c.id, Number(e.target.value))}
-                                className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 ml-1"
-                              />
-                            </span>
-                            {!!created && <span className="flex items-center gap-1"><CalendarClock size={14}/> Créé le {toFR(new Date(created))}</span>}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => toggleExpandPeriodic(c.id)}
-                          className="px-2 py-1 rounded border bg-white text-gray-700 hover:bg-gray-50 flex items-center gap-1"
-                          title={expanded ? "Replier" : "Dérouler"}
-                        >
-                          <ChevronDown className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
-                        </button>
-                        <button onClick={() => setConfirm({ open: true, id: `per-${c.id}` })} title="Supprimer" className="text-red-600 hover:text-red-700"><Trash2 /></button>
-                      </div>
+            {/* Liste groupée par bâtiment */}
+            <div className="mt-4 grid gap-6">
+              {/** regroupement */}
+              {useMemo(() => {
+                const map = {};
+                for (const c of filteredPeriodics) {
+                  const name = c.building || "Autres";
+                  if (!map[name]) map[name] = [];
+                  map[name].push(c);
+                }
+                return Object.entries(map);
+              }, [filteredPeriodics]).map(([buildingName, rows]) => (
+                <div
+                  key={buildingName}
+                  className="border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden"
+                >
+                  {/* En-tête de groupe */}
+                  <div className="px-4 py-3 bg-gray-50 flex justify-between items-center">
+                    <div className="font-semibold text-gray-900 flex items-center gap-2">
+                      <Folder className="text-indigo-600" /> {buildingName}
                     </div>
-
-                    <div className="mt-3">
-                      <Progress value={progress} />
-                      <div className="mt-1 text-xs text-gray-600">{progress}%</div>
-                    </div>
-
-                    {/* Contenu déroulant */}
-                    {expanded && (
-                      <div className="mt-3 grid gap-3 lg:grid-cols-3">
-                        {/* Rapport de contrôle périodique */}
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-gray-900">Rapport de contrôle périodique</div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
-                              <input type="checkbox" checked={!!c.report_received} onChange={() => togglePeriodic(c, "report")} />
-                              Reçu
-                            </label>
-                            <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "report", files)} />
-                            <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                            {c.has_report && (
-                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrlLatest(c.id, "report")} target="_blank" rel="noreferrer">
-                                <Download size={16}/> Télécharger le dernier
-                              </a>
-                            )}
-                          </div>
-                          {/* liste des fichiers */}
-                          <FilesList
-                            list={perFiles[`${c.id}:report`]}
-                            onLoad={() => loadPeriodicFiles(c.id, "report", true)}
-                            makeHref={(fid)=> perDownloadById(fid)}
-                          />
-                        </div>
-
-                        {/* Élimination des défauts */}
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-gray-900">Élimination des défauts</div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
-                              <input type="checkbox" checked={!!c.defect_report_received} onChange={() => togglePeriodic(c, "defect")} />
-                              Reçus
-                            </label>
-                            <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "defect", files)} />
-                            <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                            {c.has_defect && (
-                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrlLatest(c.id, "defect")} target="_blank" rel="noreferrer">
-                                <Download size={16}/> Télécharger le dernier
-                              </a>
-                            )}
-                          </div>
-                          <FilesList
-                            list={perFiles[`${c.id}:defect`]}
-                            onLoad={() => loadPeriodicFiles(c.id, "defect", true)}
-                            makeHref={(fid)=> perDownloadById(fid)}
-                          />
-                        </div>
-
-                        {/* Confirmation */}
-                        <div className="space-y-2">
-                          <div className="text-sm font-medium text-gray-900">Confirmation</div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
-                              <input type="checkbox" checked={!!c.confirmation_received} onChange={() => togglePeriodic(c, "confirm")} />
-                              Reçue
-                            </label>
-                            <DropInput multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" onFiles={(files)=> uploadPeriodic(c.id, "confirmation", files)} />
-                            <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
-                            {c.has_confirmation && (
-                              <a className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0" href={perFileUrlLatest(c.id, "confirmation")} target="_blank" rel="noreferrer">
-                                <Download size={16}/> Télécharger le dernier
-                              </a>
-                            )}
-                          </div>
-                          <FilesList
-                            list={perFiles[`${c.id}:confirmation`]}
-                            onLoad={() => loadPeriodicFiles(c.id, "confirmation", true)}
-                            makeHref={(fid)=> perDownloadById(fid)}
-                          />
-                        </div>
-                      </div>
-                    )}
+                    <button
+                      onClick={() => duplicatePeriodic(rows[0])}
+                      className="text-blue-600 hover:underline text-sm flex items-center gap-1"
+                    >
+                      + Nouveau contrôle
+                    </button>
                   </div>
-                );
-              })}
-              {filteredPeriodics.length === 0 && <div className="text-sm text-gray-600">Aucun contrôle périodique.</div>}
+
+                  {/* Corps : tous les contrôles de ce bâtiment */}
+                  <div className="p-4 grid gap-4">
+                    {rows.map(c => {
+                      const progress = periodicProgress(c);
+                      const year = c.year ?? getYear(c);
+                      const expanded = expandedPeriodics.has(c.id);
+                      const done = progress === 100;
+                      const created = c.created_at || c.createdAt;
+
+                      return (
+                        <div
+                          key={c.id}
+                          className="p-3 rounded-lg border border-gray-200 bg-white"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              {done ? (
+                                <CheckCircle2 className="text-emerald-600" />
+                              ) : (
+                                <FileText className="text-indigo-500" />
+                              )}
+                              <div>
+                                <div className="font-medium text-gray-900">
+                                  Année {year}
+                                </div>
+                                {!!created && (
+                                  <div className="text-xs text-gray-600 flex items-center gap-1">
+                                    <CalendarClock size={14} /> Créé le{" "}
+                                    {toFR(new Date(created))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => toggleExpandPeriodic(c.id)}
+                                className="px-2 py-1 rounded border bg-white text-gray-700 hover:bg-gray-50 flex items-center gap-1"
+                                title={expanded ? "Replier" : "Dérouler"}
+                              >
+                                <ChevronDown
+                                  className={`transition-transform ${
+                                    expanded ? "rotate-180" : ""
+                                  }`}
+                                />
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setConfirm({ open: true, id: `per-${c.id}` })
+                                }
+                                title="Supprimer"
+                                className="text-red-600 hover:text-red-700"
+                              >
+                                <Trash2 />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="mt-3">
+                            <Progress value={progress} />
+                            <div className="mt-1 text-xs text-gray-600">
+                              {progress}%
+                            </div>
+                          </div>
+
+                          {/* Contenu déroulant */}
+                          {expanded && (
+                            <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                              {/* Rapport */}
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium text-gray-900">
+                                  Rapport de contrôle périodique
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={!!c.report_received}
+                                      onChange={() => togglePeriodic(c, "report")}
+                                    />
+                                    Reçu
+                                  </label>
+                                  <DropInput
+                                    multiple
+                                    accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                                    onFiles={files =>
+                                      uploadPeriodic(c.id, "report", files)
+                                    }
+                                  />
+                                  <Badge
+                                    ok={!!c.has_report}
+                                    label={
+                                      c.has_report ? "Fichier joint" : "Aucun fichier"
+                                    }
+                                    className="shrink-0"
+                                  />
+                                  {c.has_report && (
+                                    <a
+                                      className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0"
+                                      href={perFileUrlLatest(c.id, "report")}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <Download size={16} /> Télécharger le dernier
+                                    </a>
+                                  )}
+                                </div>
+                                <FilesList
+                                  list={perFiles[`${c.id}:report`]}
+                                  onLoad={() =>
+                                    loadPeriodicFiles(c.id, "report", true)
+                                  }
+                                  makeHref={fid => perDownloadById(fid)}
+                                />
+                              </div>
+
+                              {/* Défauts */}
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium text-gray-900">
+                                  Élimination des défauts
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={!!c.defect_report_received}
+                                      onChange={() => togglePeriodic(c, "defect")}
+                                    />
+                                    Reçus
+                                  </label>
+                                  <DropInput
+                                    multiple
+                                    accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                                    onFiles={files =>
+                                      uploadPeriodic(c.id, "defect", files)
+                                    }
+                                  />
+                                  <Badge
+                                    ok={!!c.has_defect}
+                                    label={
+                                      c.has_defect ? "Fichier joint" : "Aucun fichier"
+                                    }
+                                    className="shrink-0"
+                                  />
+                                  {c.has_defect && (
+                                    <a
+                                      className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0"
+                                      href={perFileUrlLatest(c.id, "defect")}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <Download size={16} /> Télécharger le dernier
+                                    </a>
+                                  )}
+                                </div>
+                                <FilesList
+                                  list={perFiles[`${c.id}:defect`]}
+                                  onLoad={() =>
+                                    loadPeriodicFiles(c.id, "defect", true)
+                                  }
+                                  makeHref={fid => perDownloadById(fid)}
+                                />
+                              </div>
+
+                              {/* Confirmation */}
+                              <div className="space-y-2">
+                                <div className="text-sm font-medium text-gray-900">
+                                  Confirmation
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
+                                    <input
+                                      type="checkbox"
+                                      checked={!!c.confirmation_received}
+                                      onChange={() => togglePeriodic(c, "confirm")}
+                                    />
+                                    Reçue
+                                  </label>
+                                  <DropInput
+                                    multiple
+                                    accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                                    onFiles={files =>
+                                      uploadPeriodic(c.id, "confirmation", files)
+                                    }
+                                  />
+                                  <Badge
+                                    ok={!!c.has_confirmation}
+                                    label={
+                                      c.has_confirmation
+                                        ? "Fichier joint"
+                                        : "Aucun fichier"
+                                    }
+                                    className="shrink-0"
+                                  />
+                                  {c.has_confirmation && (
+                                    <a
+                                      className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0"
+                                      href={perFileUrlLatest(c.id, "confirmation")}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      <Download size={16} /> Télécharger le dernier
+                                    </a>
+                                  )}
+                                </div>
+                                <FilesList
+                                  list={perFiles[`${c.id}:confirmation`]}
+                                  onLoad={() =>
+                                    loadPeriodicFiles(c.id, "confirmation", true)
+                                  }
+                                  makeHref={fid => perDownloadById(fid)}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              {filteredPeriodics.length === 0 && (
+                <div className="text-sm text-gray-600">
+                  Aucun contrôle périodique.
+                </div>
+              )}
             </div>
           </div>
         )}
       </div>
 
       {/* -------------------------- CONTRÔLES À VENIR -------------------------- */}
-      <div id="panel-upcoming" role="tabpanel" aria-labelledby="tab-upcoming" hidden={tab !== "upcoming"}>
+      <div
+        id="panel-upcoming"
+        role="tabpanel"
+        aria-labelledby="tab-upcoming"
+        hidden={tab !== "upcoming"}
+      >
         {tab === "upcoming" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+            {/* En-tête */}
             <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
               <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
                 <CalendarClock className="text-blue-600" /> Contrôles périodiques à venir
               </h2>
-              <button onClick={refreshUpcoming} className={btn()}>Rafraîchir</button>
+              <button onClick={refreshUpcoming} className={btn()}>
+                Rafraîchir
+              </button>
             </div>
 
+            {/* État de chargement */}
             {loadingUpcoming ? (
-              <div className="text-gray-500 text-sm italic">Chargement des contrôles à venir…</div>
+              <div className="text-gray-500 text-sm italic">
+                Chargement des contrôles à venir…
+              </div>
             ) : upcoming.length === 0 ? (
-              <div className="text-gray-600 text-sm">Aucun contrôle prévu pour le moment.</div>
+              <div className="text-gray-600 text-sm">
+                Aucun contrôle prévu pour le moment.
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full border border-gray-200 rounded-lg overflow-hidden">
@@ -1095,24 +1334,48 @@ export default function Oibt() {
                       <th className="px-3 py-2 text-left">Échéance (dans…)</th>
                       <th className="px-3 py-2 text-left">Historique</th>
                       <th className="px-3 py-2 text-left">Dernier rapport</th>
+                      <th className="px-3 py-2 text-left">Créer / Rapport initial</th>
                     </tr>
                   </thead>
+
                   <tbody className="divide-y divide-gray-100 text-sm">
                     {upcoming.map((b, i) => (
-                      <tr key={i} className="hover:bg-blue-50 transition-colors">
-                        <td className="px-3 py-2 font-medium text-gray-900">{b.building}</td>
-                        <td className="px-3 py-2">{b.last_year ? b.last_year : "—"}</td>
+                      <tr
+                        key={b.id || i}
+                        className="hover:bg-blue-50 transition-colors align-top"
+                      >
+                        {/* Bâtiment */}
+                        <td className="px-3 py-2 font-medium text-gray-900">
+                          {b.building}
+                        </td>
+
+                        {/* Dernier contrôle */}
+                        <td className="px-3 py-2">
+                          {b.last_year || "—"}
+                        </td>
+
+                        {/* Prochain contrôle */}
                         <td className="px-3 py-2">{b.next_due_year}</td>
+
+                        {/* Échéance */}
                         <td className="px-3 py-2">
                           {b.next_due_in <= 0 ? (
-                            <span className="text-red-600 font-medium">À faire cette année</span>
+                            <span className="text-red-600 font-medium">
+                              À faire cette année
+                            </span>
                           ) : (
-                            <span className="text-gray-700">{b.next_due_in} an{b.next_due_in > 1 ? "s" : ""}</span>
+                            <span className="text-gray-700">
+                              {b.next_due_in} an{b.next_due_in > 1 ? "s" : ""}
+                            </span>
                           )}
                         </td>
+
+                        {/* Historique */}
                         <td className="px-3 py-2">
                           <details className="cursor-pointer select-none">
-                            <summary className="text-blue-600 hover:underline">Voir</summary>
+                            <summary className="text-blue-600 hover:underline">
+                              Voir
+                            </summary>
                             <ul className="pl-4 mt-1 text-gray-600 space-y-0.5">
                               {b.history.map((h, j) => (
                                 <li key={j}>
@@ -1122,6 +1385,8 @@ export default function Oibt() {
                             </ul>
                           </details>
                         </td>
+
+                        {/* Dernier rapport */}
                         <td className="px-3 py-2">
                           {b.history?.[0]?.id ? (
                             <a
@@ -1136,6 +1401,67 @@ export default function Oibt() {
                             <span className="text-gray-400">—</span>
                           )}
                         </td>
+
+                        {/* Création directe */}
+                        <td className="px-3 py-2 min-w-[260px]">
+                          <div className="flex flex-col gap-2">
+                            <DropInput
+                              label="Rapport initial (optionnel)"
+                              multiple={false}
+                              accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                              onFiles={(files) =>
+                                setFileReportsNew((prev) => ({
+                                  ...prev,
+                                  [b.building]: files[0] || null,
+                                }))
+                              }
+                            />
+
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const payload = {
+                                    building: b.building,
+                                    year: new Date().getFullYear(),
+                                  };
+                                  const res = await api.oibt.createPeriodic(payload);
+                                  if (res?.id) {
+                                    const selectedFile = fileReportsNew[b.building];
+                                    if (selectedFile) {
+                                      const fd = new FormData();
+                                      fd.append("file", selectedFile);
+                                      await api.oibt.uploadPeriodicFile(res.id, "report", fd);
+                                    }
+
+                                    setToast({
+                                      msg: `Nouveau contrôle créé pour ${b.building}`,
+                                      type: "success",
+                                    });
+                                    setFileReportsNew((prev) => ({
+                                      ...prev,
+                                      [b.building]: null,
+                                    }));
+                                    await refreshAll();
+                                    window.openPeriodicDetails(res.id);
+                                  } else {
+                                    setToast({
+                                      msg: "Création du contrôle échouée.",
+                                      type: "error",
+                                    });
+                                  }
+                                } catch (e) {
+                                  setToast({
+                                    msg: e.message || "Erreur lors de la création du contrôle",
+                                    type: "error",
+                                  });
+                                }
+                              }}
+                              className="text-sm flex items-center gap-1 text-blue-600 hover:text-blue-800 border border-blue-200 bg-white px-2 py-1 rounded-lg hover:bg-blue-50 transition"
+                            >
+                              <Plus size={16} /> Nouveau contrôle
+                            </button>
+                          </div>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1146,70 +1472,165 @@ export default function Oibt() {
         )}
       </div>
 
-      {/* -------------------------- VUE PAR BÂTIMENT -------------------------- */}
-      <div id="panel-buildings" role="tabpanel" aria-labelledby="tab-buildings" hidden={tab !== "buildings"}>
+      {/* ---------------------------- VUE PAR BÂTIMENT ---------------------------- */}
+      <div
+        id="panel-buildings"
+        role="tabpanel"
+        aria-labelledby="tab-buildings"
+        hidden={tab !== "buildings"}
+      >
         {tab === "buildings" && (
           <div className="p-5 rounded-2xl bg-white shadow-md border border-gray-200">
+            {/* En-tête */}
             <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
               <h2 className="text-xl font-semibold text-gray-900 flex items-center gap-2">
-                <Folder className="text-indigo-600" /> Vue par bâtiment
+                <Home className="text-indigo-600" /> Vue par bâtiment
               </h2>
-              <button onClick={refreshBuildings} className={btn()}>Rafraîchir</button>
+              <button onClick={refreshUpcoming} className={btn()}>
+                Rafraîchir
+              </button>
             </div>
 
-            {loadingBuildings ? (
-              <div className="text-gray-500 text-sm italic">Chargement des données des bâtiments…</div>
-            ) : buildings.length === 0 ? (
-              <div className="text-gray-600 text-sm">Aucun bâtiment trouvé.</div>
+            {/* États de chargement */}
+            {loadingUpcoming ? (
+              <div className="text-gray-500 text-sm italic">Chargement des bâtiments…</div>
+            ) : upcoming.length === 0 ? (
+              <div className="text-gray-600 text-sm">
+                Aucun bâtiment trouvé dans les contrôles périodiques.
+              </div>
             ) : (
-              <div className="grid gap-6">
-                {buildings.map((b, i) => (
-                  <div key={i} className="border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden">
+              <div className="grid gap-5">
+                {upcoming.map((b, i) => (
+                  <div
+                    key={b.id || i}
+                    className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden"
+                  >
+                    {/* En-tête du bâtiment */}
                     <div className="px-4 py-3 bg-gray-50 flex justify-between items-center">
-                      <div className="font-semibold text-gray-900">{b.building}</div>
-                      <div className="text-sm text-gray-600">
-                        <CalendarClock className="inline-block mr-1" size={16} />
-                        Prochain contrôle prévu :{" "}
-                        <span className="font-medium text-blue-700">{b.next_due_year}</span>
+                      <div className="flex items-center gap-2">
+                        <Building2 className="text-indigo-600" />
+                        <span className="font-semibold text-gray-900">{b.building}</span>
+                      </div>
+
+                      <div className="flex items-center gap-3 flex-wrap justify-end">
+                        <span className="text-sm text-gray-500">
+                          Prochain contrôle :{" "}
+                          <strong className="text-blue-700">{b.next_due_year}</strong>
+                        </span>
+
+                        {/* DropInput pour rapport initial */}
+                        <DropInput
+                          label="Rapport initial (optionnel)"
+                          multiple={false}
+                          accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
+                          onFiles={(files) =>
+                            setFileReportsNew((prev) => ({
+                              ...prev,
+                              [b.building]: files[0] || null,
+                            }))
+                          }
+                        />
+
+                        {/* ➕ Nouveau contrôle */}
+                        <button
+                          onClick={async () => {
+                            try {
+                              const payload = {
+                                building: b.building,
+                                year: new Date().getFullYear(),
+                              };
+                              const res = await api.oibt.createPeriodic(payload);
+                              if (res?.id) {
+                                const selectedFile = fileReportsNew[b.building];
+                                if (selectedFile) {
+                                  const fd = new FormData();
+                                  fd.append("file", selectedFile);
+                                  await api.oibt.uploadPeriodicFile(res.id, "report", fd);
+                                }
+
+                                setToast({
+                                  msg: `Nouveau contrôle créé pour ${b.building}`,
+                                  type: "success",
+                                });
+                                setFileReportsNew((prev) => ({
+                                  ...prev,
+                                  [b.building]: null,
+                                }));
+                                await refreshAll();
+                                window.openPeriodicDetails(res.id);
+                              } else {
+                                setToast({
+                                  msg: "Création du contrôle échouée.",
+                                  type: "error",
+                                });
+                              }
+                            } catch (e) {
+                              setToast({
+                                msg:
+                                  e.message || "Erreur lors de la création du contrôle",
+                                type: "error",
+                              });
+                            }
+                          }}
+                          className="text-sm flex items-center gap-1 text-blue-600 hover:text-blue-800 border border-blue-200 bg-white px-2 py-1 rounded-lg hover:bg-blue-50 transition"
+                        >
+                          <Plus size={16} /> Nouveau contrôle
+                        </button>
                       </div>
                     </div>
 
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full text-sm text-gray-800">
-                        <thead className="bg-gray-100">
-                          <tr>
-                            <th className="px-3 py-2 text-left">Année</th>
-                            <th className="px-3 py-2 text-left">Avancement</th>
-                            <th className="px-3 py-2 text-left">Rapport</th>
-                            <th className="px-3 py-2 text-left">Défauts</th>
-                            <th className="px-3 py-2 text-left">Confirmation</th>
-                            <th className="px-3 py-2 text-left">Créé le</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {b.years.map((y, j) => (
-                            <tr key={j} className="hover:bg-blue-50 transition-colors">
-                              <td className="px-3 py-2 font-medium text-gray-900">{y.year}</td>
-                              <td className="px-3 py-2 w-40">
-                                <Progress value={y.progress} />
-                                <div className="text-xs text-gray-600 mt-1">{y.progress}%</div>
-                              </td>
-                              <td className="px-3 py-2">
-                                <Badge ok={!!y.report_received} label={y.report_received ? "Oui" : "Non"} />
-                              </td>
-                              <td className="px-3 py-2">
-                                <Badge ok={!!y.defect_report_received} label={y.defect_report_received ? "Oui" : "Non"} />
-                              </td>
-                              <td className="px-3 py-2">
-                                <Badge ok={!!y.confirmation_received} label={y.confirmation_received ? "Oui" : "Non"} />
-                              </td>
-                              <td className="px-3 py-2 text-gray-600">
-                                {y.created_at ? toFR(new Date(y.created_at)) : "—"}
-                              </td>
-                            </tr>
+                    {/* Liste des contrôles passés */}
+                    <div className="p-4">
+                      {b.history && b.history.length > 0 ? (
+                        <div className="grid gap-2">
+                          {b.history.map((h, j) => (
+                            <div
+                              key={h.id || j}
+                              className="flex justify-between items-center border border-gray-100 rounded-lg px-3 py-2 hover:bg-blue-50 transition"
+                            >
+                              <div className="flex items-center gap-3">
+                                <CalendarClock className="text-blue-600" size={16} />
+                                <div>
+                                  <div className="font-medium text-gray-900">
+                                    Contrôle {h.year}
+                                  </div>
+                                  <div className="text-xs text-gray-600">
+                                    Créé le{" "}
+                                    {h.created_at ? toFR(new Date(h.created_at)) : "—"}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                {h.id ? (
+                                  <>
+                                    <a
+                                      href={`${API_BASE}/api/oibt/periodics/${h.id}/download?type=report`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-blue-600 hover:underline text-sm flex items-center gap-1"
+                                    >
+                                      <Download size={14} /> Rapport
+                                    </a>
+                                    <button
+                                      onClick={() => window.openPeriodicDetails(h.id)}
+                                      className="text-blue-600 hover:underline text-sm"
+                                    >
+                                      Voir
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-gray-400 text-sm">—</span>
+                                )}
+                              </div>
+                            </div>
                           ))}
-                        </tbody>
-                      </table>
+                        </div>
+                      ) : (
+                        <div className="text-gray-500 text-sm">
+                          Aucun historique de contrôle pour ce bâtiment.
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
