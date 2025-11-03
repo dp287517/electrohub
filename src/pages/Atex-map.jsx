@@ -1858,21 +1858,35 @@ function setupHandleDrag(map, onMoveCallback) {
 
   function handleClosePlan() {
     try {
-      // 1️⃣ Supprime la carte Leaflet
+      // 1️⃣ Supprime complètement la carte Leaflet et ses listeners
       if (mapRef.current) {
-        try { mapRef.current.off(); } catch {}
-        try { mapRef.current.eachLayer((l) => mapRef.current.removeLayer(l)); } catch {}
-        try { mapRef.current.remove(); } catch {}
-        mapRef.current = null;
+        try {
+          mapRef.current.off();
+          mapRef.current.eachLayer((l) => mapRef.current.removeLayer(l));
+          mapRef.current.remove();
+        } catch (err) {
+          console.warn("[ATEX] Erreur nettoyage Leaflet:", err);
+        } finally {
+          mapRef.current = null;
+        }
       }
 
-      // 2️⃣ Vide toutes les références
+      // 2️⃣ Nettoyage des observers et événements globaux
+      try {
+        roRef.current?.disconnect?.();
+        window.removeEventListener("resize", onResize);
+        window.removeEventListener("orientationchange", onResize);
+      } catch {}
+      roRef.current = null;
+
+      // 3️⃣ Vide toutes les références de couches
       baseLayerRef.current = null;
       markersLayerRef.current = null;
       subareasLayerRef.current = null;
       editHandlesLayerRef.current = null;
+      legendRef.current = null;
 
-      // 3️⃣ Réinitialise les états React
+      // 4️⃣ Réinitialise les états React
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
       setEditorPos(null);
       setEditorInit({});
@@ -1881,10 +1895,24 @@ function setupHandleDrag(map, onMoveCallback) {
       setZonesByEquip({});
       setSubareasById({});
       setOpen(false);
-      setTimeout(() => mapRef.current = null, 150);
+      setLegendVisible(true);
+      setMapRefreshTick((t) => t + 1);
 
-      // 4️⃣ Supprime les éventuelles cartes ou cards résiduelles
+      // 5️⃣ Supprime les éventuelles cartes DOM résiduelles de Leaflet
+      const wrappers = document.querySelectorAll(".leaflet-container, .leaflet-pane, .leaflet-control");
+      wrappers.forEach((el) => el.remove());
+
+      // 6️⃣ Supprime les overlays modaux restés ouverts (cas du "Fermer" buggué)
       document.querySelectorAll(".plan-card, .plan-preview, .plan-footer").forEach((el) => el.remove());
+      document.body.classList.remove("editing-geom");
+      document.body.style.userSelect = "";
+
+      // 7️⃣ Petit délai pour s'assurer que le DOM est propre avant réouverture
+      setTimeout(() => {
+        mapRef.current = null;
+        baseReadyRef.current = false;
+        lastJob.current.key = null;
+      }, 150);
 
       console.info("[ATEX] Plan fermé proprement ✅");
     } catch (err) {
