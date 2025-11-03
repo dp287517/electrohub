@@ -173,6 +173,9 @@ export const api = {
     removePeriodic: (id) => del(`/api/oibt/periodics/${id}`),
     uploadPeriodicFile: (id, type, formData) =>
       upload(`/api/oibt/periodics/${id}/upload?type=${encodeURIComponent(type)}`, formData),
+    listUpcoming: (params) => get("/api/oibt/periodics/upcoming", params),
+    // Vue par bâtiment : années + avancement + prochaine échéance
+    listBuildings: (params) => get("/api/oibt/periodics/buildings", params),
   },
   /** --- PROJECTS --- */
   projects: {
@@ -303,8 +306,7 @@ export const api = {
       fd.append("file", file);
       if (email) fd.append("user_email", email);
       if (name) fd.append("user_name", name);
-      return 
-      upload(`/api/doors/doors/${encodeURIComponent(id)}/files`, fd);
+      return upload(`/api/doors/doors/${encodeURIComponent(id)}/files`, fd);
     },
     deleteFile: (fileId) => del(`/api/doors/files/${encodeURIComponent(fileId)}`),
     startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, { _user: getIdentity() }),
