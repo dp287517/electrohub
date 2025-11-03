@@ -471,8 +471,8 @@ export const api = {
     assessConformity: ({ atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = {}) =>
       post(`/api/atex/assess`, { atex_mark_gas, atex_mark_dust, target_gas, target_dust }),
     // ✅ Appliquer la décision IA sur la fiche (enregistre un check "fait" sans modifier l’échéance)
-    applyCompliance: (equipmentId, { decision = null, rationale = "" } = {}) =>
-      post(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/compliance`, { decision, rationale }),
+    applyCompliance: (equipmentId, { decision = null, rationale = "", source = null } = {}) =>
+      post(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/compliance`, { decision, rationale, source }),
     // ✅ Alias rétro-compat pour corriger les appels legacy du front
     analyzePhotoBatch: (files = []) => api.atex.extractFromPhotos(files),
     aiAnalyze: (payload) => api.atex.assessConformity(payload),
