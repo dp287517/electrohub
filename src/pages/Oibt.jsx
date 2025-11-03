@@ -1000,9 +1000,7 @@ export default function Oibt() {
                 >
                   <option value="all">Année : Toutes</option>
                   {uniquePeriodicYears.map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
+                    <option key={y} value={y}>{y}</option>
                   ))}
                 </select>
                 <input
@@ -1011,9 +1009,7 @@ export default function Oibt() {
                   placeholder="Filtrer par bâtiment…"
                   className={clsInput()}
                 />
-                <button onClick={refreshAll} className={btn()}>
-                  Rafraîchir
-                </button>
+                <button onClick={refreshAll} className={btn()}>Rafraîchir</button>
               </div>
             </div>
 
@@ -1031,23 +1027,12 @@ export default function Oibt() {
                 accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
                 onFiles={files => setFileReport(files[0] || null)}
               />
-              <button onClick={addPeriodic} className={btnPrimary()}>
-                Ajouter
-              </button>
+              <button onClick={addPeriodic} className={btnPrimary()}>Ajouter</button>
             </div>
 
             {/* Liste groupée par bâtiment */}
             <div className="mt-4 grid gap-6">
-              {/** regroupement */}
-              {useMemo(() => {
-                const map = {};
-                for (const c of filteredPeriodics) {
-                  const name = c.building || "Autres";
-                  if (!map[name]) map[name] = [];
-                  map[name].push(c);
-                }
-                return Object.entries(map);
-              }, [filteredPeriodics]).map(([buildingName, rows]) => (
+              {groupedPeriodics.map(([buildingName, rows]) => (
                 <div
                   key={buildingName}
                   className="border border-gray-200 rounded-xl shadow-sm bg-white overflow-hidden"
@@ -1081,19 +1066,16 @@ export default function Oibt() {
                         >
                           <div className="flex items-center justify-between gap-3">
                             <div className="flex items-center gap-3">
-                              {done ? (
-                                <CheckCircle2 className="text-emerald-600" />
-                              ) : (
-                                <FileText className="text-indigo-500" />
-                              )}
+                              {done
+                                ? <CheckCircle2 className="text-emerald-600" />
+                                : <FileText className="text-indigo-500" />}
                               <div>
                                 <div className="font-medium text-gray-900">
                                   Année {year}
                                 </div>
                                 {!!created && (
                                   <div className="text-xs text-gray-600 flex items-center gap-1">
-                                    <CalendarClock size={14} /> Créé le{" "}
-                                    {toFR(new Date(created))}
+                                    <CalendarClock size={14} /> Créé le {toFR(new Date(created))}
                                   </div>
                                 )}
                               </div>
@@ -1105,16 +1087,10 @@ export default function Oibt() {
                                 className="px-2 py-1 rounded border bg-white text-gray-700 hover:bg-gray-50 flex items-center gap-1"
                                 title={expanded ? "Replier" : "Dérouler"}
                               >
-                                <ChevronDown
-                                  className={`transition-transform ${
-                                    expanded ? "rotate-180" : ""
-                                  }`}
-                                />
+                                <ChevronDown className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
                               </button>
                               <button
-                                onClick={() =>
-                                  setConfirm({ open: true, id: `per-${c.id}` })
-                                }
+                                onClick={() => setConfirm({ open: true, id: `per-${c.id}` })}
                                 title="Supprimer"
                                 className="text-red-600 hover:text-red-700"
                               >
@@ -1125,9 +1101,7 @@ export default function Oibt() {
 
                           <div className="mt-3">
                             <Progress value={progress} />
-                            <div className="mt-1 text-xs text-gray-600">
-                              {progress}%
-                            </div>
+                            <div className="mt-1 text-xs text-gray-600">{progress}%</div>
                           </div>
 
                           {/* Contenu déroulant */}
@@ -1135,32 +1109,21 @@ export default function Oibt() {
                             <div className="mt-3 grid gap-3 lg:grid-cols-3">
                               {/* Rapport */}
                               <div className="space-y-2">
-                                <div className="text-sm font-medium text-gray-900">
-                                  Rapport de contrôle périodique
-                                </div>
+                                <div className="text-sm font-medium text-gray-900">Rapport de contrôle périodique</div>
                                 <div className="flex flex-wrap items-center gap-2">
                                   <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
                                     <input
                                       type="checkbox"
                                       checked={!!c.report_received}
                                       onChange={() => togglePeriodic(c, "report")}
-                                    />
-                                    Reçu
+                                    /> Reçu
                                   </label>
                                   <DropInput
                                     multiple
                                     accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                                    onFiles={files =>
-                                      uploadPeriodic(c.id, "report", files)
-                                    }
+                                    onFiles={files => uploadPeriodic(c.id, "report", files)}
                                   />
-                                  <Badge
-                                    ok={!!c.has_report}
-                                    label={
-                                      c.has_report ? "Fichier joint" : "Aucun fichier"
-                                    }
-                                    className="shrink-0"
-                                  />
+                                  <Badge ok={!!c.has_report} label={c.has_report ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                                   {c.has_report && (
                                     <a
                                       className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0"
@@ -1174,41 +1137,28 @@ export default function Oibt() {
                                 </div>
                                 <FilesList
                                   list={perFiles[`${c.id}:report`]}
-                                  onLoad={() =>
-                                    loadPeriodicFiles(c.id, "report", true)
-                                  }
+                                  onLoad={() => loadPeriodicFiles(c.id, "report", true)}
                                   makeHref={fid => perDownloadById(fid)}
                                 />
                               </div>
 
                               {/* Défauts */}
                               <div className="space-y-2">
-                                <div className="text-sm font-medium text-gray-900">
-                                  Élimination des défauts
-                                </div>
+                                <div className="text-sm font-medium text-gray-900">Élimination des défauts</div>
                                 <div className="flex flex-wrap items-center gap-2">
                                   <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
                                     <input
                                       type="checkbox"
                                       checked={!!c.defect_report_received}
                                       onChange={() => togglePeriodic(c, "defect")}
-                                    />
-                                    Reçus
+                                    /> Reçus
                                   </label>
                                   <DropInput
                                     multiple
                                     accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                                    onFiles={files =>
-                                      uploadPeriodic(c.id, "defect", files)
-                                    }
+                                    onFiles={files => uploadPeriodic(c.id, "defect", files)}
                                   />
-                                  <Badge
-                                    ok={!!c.has_defect}
-                                    label={
-                                      c.has_defect ? "Fichier joint" : "Aucun fichier"
-                                    }
-                                    className="shrink-0"
-                                  />
+                                  <Badge ok={!!c.has_defect} label={c.has_defect ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                                   {c.has_defect && (
                                     <a
                                       className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0"
@@ -1222,43 +1172,28 @@ export default function Oibt() {
                                 </div>
                                 <FilesList
                                   list={perFiles[`${c.id}:defect`]}
-                                  onLoad={() =>
-                                    loadPeriodicFiles(c.id, "defect", true)
-                                  }
+                                  onLoad={() => loadPeriodicFiles(c.id, "defect", true)}
                                   makeHref={fid => perDownloadById(fid)}
                                 />
                               </div>
 
                               {/* Confirmation */}
                               <div className="space-y-2">
-                                <div className="text-sm font-medium text-gray-900">
-                                  Confirmation
-                                </div>
+                                <div className="text-sm font-medium text-gray-900">Confirmation</div>
                                 <div className="flex flex-wrap items-center gap-2">
                                   <label className="flex items-center gap-2 text-sm text-gray-900 whitespace-nowrap shrink-0">
                                     <input
                                       type="checkbox"
                                       checked={!!c.confirmation_received}
                                       onChange={() => togglePeriodic(c, "confirm")}
-                                    />
-                                    Reçue
+                                    /> Reçue
                                   </label>
                                   <DropInput
                                     multiple
                                     accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
-                                    onFiles={files =>
-                                      uploadPeriodic(c.id, "confirmation", files)
-                                    }
+                                    onFiles={files => uploadPeriodic(c.id, "confirmation", files)}
                                   />
-                                  <Badge
-                                    ok={!!c.has_confirmation}
-                                    label={
-                                      c.has_confirmation
-                                        ? "Fichier joint"
-                                        : "Aucun fichier"
-                                    }
-                                    className="shrink-0"
-                                  />
+                                  <Badge ok={!!c.has_confirmation} label={c.has_confirmation ? "Fichier joint" : "Aucun fichier"} className="shrink-0" />
                                   {c.has_confirmation && (
                                     <a
                                       className="text-sm text-blue-600 hover:underline flex items-center gap-1 shrink-0"
@@ -1272,9 +1207,7 @@ export default function Oibt() {
                                 </div>
                                 <FilesList
                                   list={perFiles[`${c.id}:confirmation`]}
-                                  onLoad={() =>
-                                    loadPeriodicFiles(c.id, "confirmation", true)
-                                  }
+                                  onLoad={() => loadPeriodicFiles(c.id, "confirmation", true)}
                                   makeHref={fid => perDownloadById(fid)}
                                 />
                               </div>
@@ -1288,9 +1221,7 @@ export default function Oibt() {
               ))}
 
               {filteredPeriodics.length === 0 && (
-                <div className="text-sm text-gray-600">
-                  Aucun contrôle périodique.
-                </div>
+                <div className="text-sm text-gray-600">Aucun contrôle périodique.</div>
               )}
             </div>
           </div>
