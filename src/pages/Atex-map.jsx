@@ -858,7 +858,7 @@ export default function AtexMap({
             // 1. FORCER LE CHARGEMENT DES ZONES
             await loadSubareas();
 
-            // 2. ATTENDRE QUE subareasById SOIT REMPLI (CRUCIAL APRÈS REFRESH)
+            // 2. ATTENDRE QUE subareasById SOIT REMPLI
             await new Promise((resolve) => {
               const check = () => {
                 if (Object.keys(subareasById).length > 0 || !planKey) {
@@ -881,18 +881,38 @@ export default function AtexMap({
 
             log("setPosition response", { raw: safeJson(resp) });
 
-            // 4. PATCH AVEC LE BON NOM DE SOUS-ZONE
-            await updateEquipmentMacroAndSub(p.id, resp?.zones?.subarea_id || null);
+            // 4. RÉCUPÉRER LES NOUVELLES VALEURS
+            const newSubareaId = resp?.zones?.subarea_id ?? null;
+            const newSubEquipment = newSubareaId ? (subareasById[newSubareaId]?.name || "") : "";
+            const newZoningGas = resp?.zones?.zoning_gas ?? null;
+            const newZoningDust = resp?.zones?.zoning_dust ?? null;
 
-            // 5. APPLIQUER LE ZONAGE
+            // 5. PATCH COMPLÈTE : TOUTES LES NOUVELLES VALEURS
+            const patch = {
+              equipment: planDisplayName || "",
+              sub_equipment: newSubEquipment,
+              zoning_gas: newZoningGas,
+              zoning_dust: newZoningDust,
+            };
+
+            if (savedBuilding) patch.building = savedBuilding;
+            if (savedZone) patch.zone = savedZone;
+
+            log("PATCH FINAL", { id: p.id, patch });
+            await api.atex.updateEquipment(p.id, patch);
+
+            // 6. METTRE À JOUR zonesByEquip LOCALEMENT (UI instantanée)
+            setZonesByEquip((prev) => ({
+              ...prev,
+              [p.id]: { zoning_gas: newZoningGas, zoning_dust: newZoningDust },
+            }));
+
+            // 7. APPLIQUER LE ZONAGE IMMÉDIATEMENT
             try {
-              onZonesApplied?.(p.id, {
-                zoning_gas: resp?.zones?.zoning_gas ?? null,
-                zoning_dust: resp?.zones?.zoning_dust ?? null,
-              });
+              onZonesApplied?.(p.id, { zoning_gas: newZoningGas, zoning_dust: newZoningDust });
             } catch {}
 
-            // 6. RECHARGER TOUT
+            // 8. RECHARGER TOUT
             await reloadAll();
           } catch (e) {
             console.error("[ATEX] setPosition error", e);
