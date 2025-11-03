@@ -1933,7 +1933,8 @@ function setupHandleDrag(map, onMoveCallback) {
 
       // 6️⃣ Forcer la fermeture visuelle du modal immédiatement
       setTimeout(() => {
-        const modal = document.querySelector(".fixed.inset-0.z-[6000]");
+        const modal = Array.from(document.querySelectorAll(".fixed"))
+          .find(el => el.className.includes("z-[6000]"));
         if (modal) modal.remove();
       }, 200);
 
