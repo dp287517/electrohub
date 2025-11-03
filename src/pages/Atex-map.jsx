@@ -855,7 +855,7 @@ export default function AtexMap({
           log("marker dragend -> setPosition", { id: p.id, xFrac: xf, yFrac: yf });
 
           try {
-            // 1. FORCER LE CHARGEMENT DES ZONES
+            // 1. CHARGER LES ZONES AVANT TOUT
             await loadSubareas();
 
             // 2. ATTENDRE QUE subareasById SOIT REMPLI
@@ -881,18 +881,15 @@ export default function AtexMap({
 
             log("setPosition response", { raw: safeJson(resp) });
 
-            // 4. RÉCUPÉRER LES NOUVELLES VALEURS
+            // 4. RÉCUPÉRER LE NOUVEAU subarea_id
             const newSubareaId = resp?.zones?.subarea_id ?? null;
             const newSubEquipment = newSubareaId ? (subareasById[newSubareaId]?.name || "") : "";
-            const newZoningGas = resp?.zones?.zoning_gas ?? null;
-            const newZoningDust = resp?.zones?.zoning_dust ?? null;
 
-            // 5. PATCH COMPLÈTE : TOUTES LES NOUVELLES VALEURS
+            // 5. PATCH : SOUS-ÉQUIPEMENT + ZONAGE
             const patch = {
-              equipment: planDisplayName || "",
               sub_equipment: newSubEquipment,
-              zoning_gas: newZoningGas,
-              zoning_dust: newZoningDust,
+              zoning_gas: resp?.zones?.zoning_gas ?? null,
+              zoning_dust: resp?.zones?.zoning_dust ?? null,
             };
 
             if (savedBuilding) patch.building = savedBuilding;
@@ -901,18 +898,23 @@ export default function AtexMap({
             log("PATCH FINAL", { id: p.id, patch });
             await api.atex.updateEquipment(p.id, patch);
 
-            // 6. METTRE À JOUR zonesByEquip LOCALEMENT (UI instantanée)
+            // 6. UI INSTANTANÉE
             setZonesByEquip((prev) => ({
               ...prev,
-              [p.id]: { zoning_gas: newZoningGas, zoning_dust: newZoningDust },
+              [p.id]: {
+                zoning_gas: resp?.zones?.zoning_gas ?? null,
+                zoning_dust: resp?.zones?.zoning_dust ?? null,
+              },
             }));
 
-            // 7. APPLIQUER LE ZONAGE IMMÉDIATEMENT
             try {
-              onZonesApplied?.(p.id, { zoning_gas: newZoningGas, zoning_dust: newZoningDust });
+              onZonesApplied?.(p.id, {
+                zoning_gas: resp?.zones?.zoning_gas ?? null,
+                zoning_dust: resp?.zones?.zoning_dust ?? null,
+              });
             } catch {}
 
-            // 8. RECHARGER TOUT
+            // 7. RECHARGER TOUT
             await reloadAll();
           } catch (e) {
             console.error("[ATEX] setPosition error", e);
