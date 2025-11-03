@@ -738,24 +738,27 @@ export default function AtexMap({
       drawSubareas([]);
     } finally { end(); }
   }
-  async function updateEquipmentMacroAndSub(equipmentId, subareaId) {
+  async function updateEquipmentMacroAndSub(equipmentId, subareaId, subareaNameDirect = null) {
     try {
-      const subName = subareaId ? (subareasById[subareaId]?.name || "") : "";
+      const subName =
+        subareaNameDirect ||
+        (subareaId ? (subareasById[subareaId]?.name || "") : "");
+
       const patch = {
         equipment: planDisplayName || "",
         sub_equipment: subName || "",
       };
 
-      // Ne touche PAS à building/zone → ils viennent du plan, pas du state
-      // On ne les met que s'ils existent ET si on est sûr qu'ils sont valides
       if (savedBuilding) patch.building = savedBuilding;
       if (savedZone) patch.zone = savedZone;
 
-      // Logique : ne pas écraser si même sous-zone
       const oldSub = zonesByEquip[equipmentId]?.sub_equipment || "";
       if (subName && subName === oldSub) {
         delete patch.sub_equipment;
       }
+
+      // 🔒 Sécurité : ne jamais écraser avec vide si on avait une valeur
+      if (!subName && oldSub) patch.sub_equipment = oldSub;
 
       log("updateEquipmentMacroAndSub", { equipmentId, ...patch });
       await api.atex.updateEquipment(equipmentId, patch);
@@ -861,12 +864,20 @@ export default function AtexMap({
             log("setPosition response", { raw: safeJson(resp) });
 
             // RECHARGE LES ZONES D'ABORD → subareasById à jour
-            await loadSubareas();
+            loadSubareas();
 
             // Maintenant on peut utiliser le bon nom de sous-zone
-            await updateEquipmentMacroAndSub(p.id, resp?.zones?.subarea_id || null);
-
-            try { onZonesApplied?.(p.id, { zoning_gas: resp?.zones?.zoning_gas ?? null, zoning_dust: resp?.zones?.zoning_dust ?? null }); } catch {}
+            await updateEquipmentMacroAndSub(
+              p.id, 
+              resp?.zones?.subarea_id || null,
+              resp?.zones?.subarea_name || null
+            );
+            try { 
+              onZonesApplied?.(p.id, { 
+                zoning_gas: resp?.zones?.zoning_gas ?? null, 
+                zoning_dust: resp?.zones?.zoning_dust ?? null, 
+              }); 
+            } catch {}
 
             // Recharge tout
             await reloadAll();
