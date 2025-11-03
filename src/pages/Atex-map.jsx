@@ -705,7 +705,11 @@ export default function AtexMap({
       const list = await enrichStatuses(baseList);
       const zmap = {};
       for (const p of list) {
-        zmap[p.id] = { zoning_gas: p.zoning_gas ?? null, zoning_dust: p.zoning_dust ?? null };
+        zmap[p.id] = {
+          zoning_gas: p.zoning_gas ?? null,
+          zoning_dust: p.zoning_dust ?? null,
+          sub_equipment: p.sub_equipment || null,
+        };
       }
       setZonesByEquip(zmap);
       drawMarkers(list);
