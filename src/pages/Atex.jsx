@@ -617,55 +617,68 @@ export default function Atex() {
     }
   }
 
-  // VÉRIFICATION IA : garde les champs photo + recharge historique
+  // VÉRIFICATION IA : garde les champs photo et métadonnées non enregistrées
   async function verifyComplianceIA() {
     if (!editing?.id) return;
 
-    const before = { ...editing }; // Garde les champs photo IA
+    const before = { ...editing }; // Sauvegarde l'état actuel (photos + champs saisis)
 
     try {
-      // 1. Analyse IA
+      // 1. Préparation du corps de requête IA
       const body = {
         atex_mark_gas: editing.atex_mark_gas || "",
-        atex_mark_gas: editing.atex_mark_dust || "",
+        atex_mark_dust: editing.atex_mark_dust || "",
         target_gas: editing.zoning_gas ?? null,
         target_dust: editing.zoning_dust ?? null,
       };
 
+      // 2. Analyse IA (vérification conformité)
       const res = await api.atex.assessConformity(body);
       const decision = res?.decision || null;
       const rationale = res?.rationale || "";
 
-      // 2. Appliquer la décision
+      // 3. Application de la décision de conformité
       if (api.atex.applyCompliance) {
         await api.atex.applyCompliance(editing.id, { decision, rationale });
       }
 
-      // 3. Recharger la fiche (garder les champs photo)
+      // 4. Récupération de la fiche mise à jour depuis le backend
       const updated = await api.atex.getEquipment(editing.id);
       const merged = mergeZones(updated?.equipment || updated || {});
 
-      // 4. Fusionner : garde photo IA + ajoute conformité
+      // 5. Fusionner intelligemment : garder les champs utilisateur non enregistrés
       setEditing({
-        ...before, // Garde photo IA
-        ...merged, // Ajoute conformité
+        ...merged, // Base du serveur
+        type: before.type || merged.type || "",
+        manufacturer: before.manufacturer || merged.manufacturer || "",
+        manufacturer_ref: before.manufacturer_ref || merged.manufacturer_ref || "",
+        atex_mark_gas: before.atex_mark_gas || merged.atex_mark_gas || "",
+        atex_mark_dust: before.atex_mark_dust || merged.atex_mark_dust || "",
+        photo_url: before.photo_url || merged.photo_url || "",
         compliance_state: merged?.compliance_state || decision || null,
       });
 
-      // 5. Recharger historique IMMÉDIATEMENT
+      // 6. Recharger immédiatement l’historique des contrôles
       const hist = await api.atex.getEquipmentHistory(editing.id);
       setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
 
-      // 6. Recharger tableau
+      // 7. Rafraîchir le tableau principal si possible
       if (typeof window._atexReload === "function") {
         await window._atexReload();
       } else {
         await reload();
       }
 
+      // 8. Feedback utilisateur
       setToast(
         decision
-          ? `Conformité: ${decision === "conforme" ? "Conforme" : "Non conforme"}`
+          ? `Conformité: ${
+              decision === "conforme"
+                ? "Conforme"
+                : decision === "non_conforme"
+                ? "Non conforme"
+                : "Indéterminée"
+            }`
           : "Analyse IA terminée"
       );
     } catch (e) {
