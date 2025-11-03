@@ -697,6 +697,17 @@ export default function Oibt() {
     { id: "analysis", label: "Analysis" },
   ];
 
+  // Regroupement des périodiques par bâtiment (⚠️ à placer avant le return)
+  const groupedPeriodics = useMemo(() => {
+    const map = {};
+    for (const c of filteredPeriodics) {
+      const name = c.building || "Autres";
+      if (!map[name]) map[name] = [];
+      map[name].push(c);
+    }
+    return Object.entries(map);
+  }, [filteredPeriodics]);
+
   // Fonction globale pour ouvrir un contrôle périodique complet depuis d’autres onglets
   useEffect(() => {
     window.openPeriodicDetails = (id) => {
@@ -729,19 +740,29 @@ export default function Oibt() {
         <h1 className="text-3xl font-bold text-gray-900 mb-2 flex items-center gap-2">
           <BarChart3 /> OIBT – Installation &amp; Contrôles
         </h1>
-        <p className="text-gray-600">Avis d’installation, protocoles, rapports de sécurité, contrôle de réception, contrôles périodiques et contrôle sporadique.</p>
+        <p className="text-gray-600">
+          Avis d’installation, protocoles, rapports de sécurité, contrôle de réception,
+          contrôles périodiques et contrôle sporadique.
+        </p>
       </header>
 
       {/* Statut global */}
       <div className="mb-4">
         {hasAnyAlert ? (
           <div className="grid gap-2">
-            {alerts.project.map((a, i) => <AlertBanner key={`pa-${i}`} item={a} />)}
-            {alerts.periodic.map((a, i) => <AlertBanner key={`pe-${i}`} item={a} />)}
+            {alerts.project.map((a, i) => (
+              <AlertBanner key={`pa-${i}`} item={a} />
+            ))}
+            {alerts.periodic.map((a, i) => (
+              <AlertBanner key={`pe-${i}`} item={a} />
+            ))}
           </div>
         ) : (
           <div className="px-3 py-2 rounded border bg-emerald-100 text-emerald-800 border-emerald-200 flex items-center gap-2">
-            <CheckCircle2 size={16} /> <span className="text-sm">Aucune alerte en cours — tout est OK ✅</span>
+            <CheckCircle2 size={16} />{" "}
+            <span className="text-sm">
+              Aucune alerte en cours — tout est OK ✅
+            </span>
           </div>
         )}
       </div>
