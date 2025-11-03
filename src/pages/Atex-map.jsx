@@ -827,7 +827,6 @@ export default function AtexMap({
       const base = baseLayerRef.current;
       if (!m || !layer || !base) return;
       layer.clearLayers();
-
       (list || []).forEach((p) => {
         const latlng = toLatLngFrac(p.x, p.y, base);
         const icon = makeEquipIcon(p.status, unsavedIds.has(p.id));
@@ -841,36 +840,13 @@ export default function AtexMap({
           pane: "markersPane",
         });
         mk.__meta = p;
-
-        mk.on("dragstart", () => {
-          draggingRef.current = true;
-          log("marker dragstart", { id: p.id, at: mk.getLatLng() });
-        });
-
+        mk.on("dragstart", () => { draggingRef.current = true; log("marker dragstart", { id: p.id, at: mk.getLatLng() }); });
         mk.on("drag", () => DEBUG() && log("marker drag", { id: p.id, at: mk.getLatLng() }));
-
         mk.on("dragend", async () => {
           const ll = mk.getLatLng();
           const { xf, yf } = fromLatLngToFrac(ll, base);
           log("marker dragend -> setPosition", { id: p.id, xFrac: xf, yFrac: yf });
-
           try {
-            // 1. CHARGER LES ZONES AVANT TOUT
-            await loadSubareas();
-
-            // 2. ATTENDRE QUE subareasById SOIT REMPLI
-            await new Promise((resolve) => {
-              const check = () => {
-                if (Object.keys(subareasById).length > 0 || !planKey) {
-                  resolve();
-                } else {
-                  setTimeout(check, 10);
-                }
-              };
-              check();
-            });
-
-            // 3. DÉFINIR LA NOUVELLE POSITION
             const resp = await api.atexMaps.setPosition(p.id, {
               logical_name: plan?.logical_name,
               plan_id: plan?.id,
@@ -878,43 +854,17 @@ export default function AtexMap({
               x_frac: Math.round(xf * 1e6) / 1e6,
               y_frac: Math.round(yf * 1e6) / 1e6,
             });
-
             log("setPosition response", { raw: safeJson(resp) });
 
-            // 4. RÉCUPÉRER LE NOUVEAU subarea_id
-            const newSubareaId = resp?.zones?.subarea_id ?? null;
-            const newSubEquipment = newSubareaId ? (subareasById[newSubareaId]?.name || "") : "";
+            // RECHARGE LES ZONES D'ABORD → subareasById à jour
+            await loadSubareas();
 
-            // 5. PATCH : SOUS-ÉQUIPEMENT + ZONAGE
-            const patch = {
-              sub_equipment: newSubEquipment,
-              zoning_gas: resp?.zones?.zoning_gas ?? null,
-              zoning_dust: resp?.zones?.zoning_dust ?? null,
-            };
+            // Maintenant on peut utiliser le bon nom de sous-zone
+            await updateEquipmentMacroAndSub(p.id, resp?.zones?.subarea_id || null);
 
-            if (savedBuilding) patch.building = savedBuilding;
-            if (savedZone) patch.zone = savedZone;
+            try { onZonesApplied?.(p.id, { zoning_gas: resp?.zones?.zoning_gas ?? null, zoning_dust: resp?.zones?.zoning_dust ?? null }); } catch {}
 
-            log("PATCH FINAL", { id: p.id, patch });
-            await api.atex.updateEquipment(p.id, patch);
-
-            // 6. UI INSTANTANÉE
-            setZonesByEquip((prev) => ({
-              ...prev,
-              [p.id]: {
-                zoning_gas: resp?.zones?.zoning_gas ?? null,
-                zoning_dust: resp?.zones?.zoning_dust ?? null,
-              },
-            }));
-
-            try {
-              onZonesApplied?.(p.id, {
-                zoning_gas: resp?.zones?.zoning_gas ?? null,
-                zoning_dust: resp?.zones?.zoning_dust ?? null,
-              });
-            } catch {}
-
-            // 7. RECHARGER TOUT
+            // Recharge tout
             await reloadAll();
           } catch (e) {
             console.error("[ATEX] setPosition error", e);
@@ -922,30 +872,27 @@ export default function AtexMap({
             draggingRef.current = false;
           }
         });
-
         mk.on("click", () => {
           onOpenEquipment?.({
             id: p.id,
             name: p.name,
-            zones: {
-              zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null,
-              zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null,
+            zones: { 
+              zoning_gas: zonesByEquip[p.id]?.zoning_gas ?? null, 
+              zoning_dust: zonesByEquip[p.id]?.zoning_dust ?? null 
             },
+            // AJOUT : passe la fonction reload du parent
             reload: () => {
+              // Si on est dans Atex.jsx, on a accès à reload()
               if (typeof window._atexReload === "function") {
                 window._atexReload();
               }
             },
           });
         });
-
         mk.addTo(layer);
       });
-
       layer.bringToFront?.();
-    } finally {
-      end();
-    }
+    } finally { end(); }
   }
   function colorForSubarea(sa) {
     const stroke = GAS_STROKE[sa?.zoning_gas ?? null];
