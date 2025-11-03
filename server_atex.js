@@ -1469,28 +1469,98 @@ app.post("/api/atex/extract", multerFiles.array("files"), async (req, res) => {
     res.status(500).json({ ok:false, error:e.message });
   }
 });
+function localAtexCompliance(atex_mark_gas, atex_mark_dust, target_gas, target_dust) {
+  const result = { decision: "indetermine", rationale: "" };
+
+  function parseCategory(mark, type) {
+    if (!mark) return null;
+    const m = mark.match(/II\s*(\d)\s*[GD]/i);
+    if (!m) return null;
+    const cat = parseInt(m[1]);
+    const zones =
+      type === "gas"
+        ? cat === 1 ? [0,1,2] : cat === 2 ? [1,2] : cat === 3 ? [2] : []
+        : cat === 1 ? [20,21,22] : cat === 2 ? [21,22] : cat === 3 ? [22] : [];
+    return { cat, zones };
+  }
+
+  const g = parseCategory(atex_mark_gas, "gas");
+  const d = parseCategory(atex_mark_dust, "dust");
+
+  let gasOk = null, dustOk = null;
+
+  if (target_gas != null && g)
+    gasOk = g.zones.includes(Number(target_gas));
+  if (target_dust != null && d)
+    dustOk = d.zones.includes(Number(target_dust));
+
+  if ((gasOk === true || gasOk === null) && (dustOk === true || dustOk === null)) {
+    result.decision = "conforme";
+    result.rationale = "Le marquage couvre les zones cibles (norme 2014/34/UE).";
+  } else if (gasOk === false || dustOk === false) {
+    result.decision = "non_conforme";
+    result.rationale = "Le marquage ne couvre pas les zones cibles.";
+  } else {
+    result.decision = "indetermine";
+    result.rationale = "Impossible de déterminer à partir du marquage fourni.";
+  }
+
+  return result;
+}
 app.post("/api/atex/assess", async (req, res) => {
   try {
     const client = openaiClient();
-    if (!client) return res.status(501).json({ ok: false, error: "OPENAI_API_KEY missing" });
     const { atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = req.body || {};
-    const sys = `Tu es expert ATEX. Retourne {"decision":"conforme|non_conforme|indetermine","rationale":"..."} en JSON strict.`;
+
+    // ✅ Étape 1 : logique locale fiable
+    const local = localAtexCompliance(atex_mark_gas, atex_mark_dust, target_gas, target_dust);
+    if (local.decision !== "indetermine") {
+      // Si la règle est claire selon la directive ATEX → on ne demande pas à l'IA
+      return res.json({ ok: true, ...local, source: "local" });
+    }
+
+    // ✅ Étape 2 : fallback IA seulement si marquage incomplet ou douteux
+    if (!client) return res.status(501).json({ ok: false, error: "OPENAI_API_KEY missing" });
+
+    const sys = `Tu es expert ATEX. Retourne {"decision":"conforme|non_conforme|indetermine","rationale":"..."} en JSON strict.
+Rappelle-toi :
+- Catégorie 1G/D → zones 0,1,2 (ou 20,21,22)
+- Catégorie 2G/D → zones 1,2 (ou 21,22)
+- Catégorie 3G/D → zones 2 (ou 22)
+`;
+
     const messages = [
       { role: "system", content: sys },
-      { role: "user", content:
-        `Marquage gaz: ${atex_mark_gas||"(aucun)"}\nMarquage poussière: ${atex_mark_dust||"(aucun)"}\nZonage cible gaz: ${target_gas}\nZonage cible poussière: ${target_dust}`
+      {
+        role: "user",
+        content:
+          `Marquage gaz: ${atex_mark_gas || "(aucun)"}\n` +
+          `Marquage poussière: ${atex_mark_dust || "(aucun)"}\n` +
+          `Zonage cible gaz: ${target_gas}\n` +
+          `Zonage cible poussière: ${target_dust}`,
       },
     ];
+
     const resp = await client.chat.completions.create({
       model: process.env.ATEX_OPENAI_MODEL || "gpt-4o-mini",
       messages,
       temperature: 0,
       response_format: { type: "json_object" },
     });
+
     let data = {};
-    try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
-    res.json({ ok:true, ...data });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); } // <- fix .json
+    try {
+      data = JSON.parse(resp.choices?.[0]?.message?.content || "{}");
+    } catch {
+      data = {};
+    }
+
+    // ✅ Étape 3 : envoie la réponse finale
+    res.json({ ok: true, ...data, source: "openai" });
+
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 // ✅ Endpoint dédié pour "appliquer" la conformité IA à une fiche (sans toucher à l'échéance)
 app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
@@ -1510,6 +1580,7 @@ app.post("/api/atex/equipments/:id/compliance", async (req, res) => {
         decision === "indetermine" ? null : decision,
         u.name || "",
         u.email || "",
+        { source: source || "unknown" }, // ✅ provenance stockée ici
       ]
     );
     // Retourner la fiche avec état de conformité recalculé
