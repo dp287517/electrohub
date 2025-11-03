@@ -726,6 +726,119 @@ app.get("/api/oibt/periodics/download-file", async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------------
+// CONTRÔLES À VENIR
+// ------------------------------------------------------------------
+app.get("/api/oibt/periodics/upcoming", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const currentYear = new Date().getFullYear();
+
+    const { rows } = await pool.query(
+      `SELECT id, site, building, year, created_at, updated_at
+       FROM oibt_periodics
+       WHERE site=$1
+       ORDER BY building, year DESC`,
+      [site]
+    );
+
+    // Regrouper par bâtiment et calculer la prochaine échéance
+    const byBuilding = {};
+    for (const r of rows) {
+      byBuilding[r.building] = byBuilding[r.building] || [];
+      byBuilding[r.building].push(r);
+    }
+
+    const upcoming = Object.entries(byBuilding).map(([building, history]) => {
+      history.sort((a, b) => b.year - a.year);
+      const last = history[0];
+      const interval = building.toLowerCase().includes("atex") ? 3 : 5;
+      const nextYear = (last?.year || currentYear) + interval;
+      return {
+        building,
+        last_id: last?.id || null,
+        last_year: last?.year || null,
+        next_due_year: nextYear,
+        next_due_in: nextYear - currentYear,
+        history,
+      };
+    });
+
+    res.json({ data: upcoming });
+  } catch (e) {
+    console.error("[OIBT UPCOMING]", e);
+    res.status(500).json({ error: "Upcoming failed" });
+  }
+});
+
+// ------------------------------------------------------------------
+// VUE PAR BÂTIMENT : années + avancement + prochain contrôle
+// ------------------------------------------------------------------
+app.get("/api/oibt/periodics/buildings", async (req, res) => {
+  try {
+    const site = siteOf(req);
+    const currentYear = new Date().getFullYear();
+
+    // Récupérer tous les périodiques du site
+    const { rows } = await pool.query(
+      `SELECT id, building, year,
+              report_received, defect_report_received, confirmation_received,
+              report_received_at, defect_report_received_at, confirmation_received_at,
+              created_at
+       FROM oibt_periodics
+       WHERE site=$1
+       ORDER BY building, year DESC`,
+      [site]
+    );
+
+    if (!rows.length) return res.json({ data: [] });
+
+    // Regrouper par bâtiment
+    const byBuilding = {};
+    for (const r of rows) {
+      byBuilding[r.building] = byBuilding[r.building] || [];
+      byBuilding[r.building].push(r);
+    }
+
+    // Calcul du % d’avancement et de la prochaine échéance
+    const result = Object.entries(byBuilding).map(([building, history]) => {
+      history.sort((a, b) => b.year - a.year);
+      const last = history[0];
+      const interval = building.toLowerCase().includes("atex") ? 3 : 5;
+      const nextDueYear = (last?.year || currentYear) + interval;
+
+      const years = history.map(h => {
+        const total = 3;
+        const done = [h.report_received, h.defect_report_received, h.confirmation_received].filter(Boolean).length;
+        const progress = Math.round((done / total) * 100);
+        return {
+          id: h.id,
+          year: h.year,
+          progress,
+          report_received: h.report_received,
+          defect_report_received: h.defect_report_received,
+          confirmation_received: h.confirmation_received,
+          report_received_at: h.report_received_at,
+          defect_report_received_at: h.defect_report_received_at,
+          confirmation_received_at: h.confirmation_received_at,
+          created_at: h.created_at
+        };
+      });
+
+      return {
+        building,
+        next_due_year: nextDueYear,
+        years
+      };
+    });
+
+    res.json({ data: result });
+  } catch (e) {
+    console.error("[OIBT BUILDINGS VIEW]", e);
+    res.status(500).json({ error: "Buildings view failed" });
+  }
+});
+
 /* ------------------------------------------------------------------ */
 /*                                START                               */
 /* ------------------------------------------------------------------ */
