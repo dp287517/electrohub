@@ -1,20 +1,11 @@
 // ============================================================================
-// src/pages/Controls.jsx — v2
-// Page complète pour les contrôles (BT / HV / Gantt / Non intégrés)
-// Compatible avec Neon + server_controls.js (v2)
-// Auteur : ChatGPT - 2025
+// src/pages/Controls.jsx — version finale corrigée et autonome
+// Intègre Tabs, Button, Card, Modal "Vue plan" + interop avec Controls-map.jsx
 // ============================================================================
 
 import React, { useEffect, useState } from "react";
+import ControlsMap from "./Controls-map.jsx";
 import { api } from "../lib/api.js";
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-  TabsContent,
-} from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   ChevronRight,
   ChevronDown,
@@ -23,6 +14,8 @@ import {
   Calendar,
   Wand2,
   RefreshCw,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -32,6 +25,81 @@ import {
   YAxis,
   Tooltip,
 } from "recharts";
+import "../styles/controls.css";
+
+// ---------------------------------------------------------------------------
+// Composants UI intégrés (Tabs, Button, Card)
+// ---------------------------------------------------------------------------
+export function Tabs({ value, onValueChange, children }) {
+  const [active, setActive] = useState(value);
+  useEffect(() => setActive(value), [value]);
+  return (
+    <div className="flex flex-col gap-3">
+      {React.Children.map(children, (child) =>
+        React.cloneElement(child, { active, onValueChange })
+      )}
+    </div>
+  );
+}
+export function TabsList({ children }) {
+  return <div className="flex flex-wrap gap-2 mt-2">{children}</div>;
+}
+export function TabsTrigger({ value, children, active, onValueChange }) {
+  const selected = active === value;
+  return (
+    <button
+      onClick={() => onValueChange(value)}
+      className={`px-3 py-2 rounded-lg text-sm font-semibold transition ${
+        selected
+          ? "bg-indigo-600 text-white"
+          : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+export function TabsContent({ value, active, children }) {
+  if (value !== active) return null;
+  return <div className="fade-in-up mt-4">{children}</div>;
+}
+
+export function Button({
+  children,
+  variant = "primary",
+  size = "md",
+  ...props
+}) {
+  const base =
+    "inline-flex items-center justify-center font-semibold rounded-lg transition-all disabled:opacity-50";
+  const variants = {
+    primary: "bg-indigo-600 text-white hover:bg-indigo-700",
+    secondary: "bg-gray-100 text-gray-800 hover:bg-gray-200",
+    ghost: "bg-transparent text-gray-600 hover:bg-gray-100",
+  };
+  const sizes = {
+    sm: "px-2.5 py-1.5 text-sm",
+    md: "px-3.5 py-2 text-sm",
+  };
+  return (
+    <button className={`${base} ${variants[variant]} ${sizes[size]}`} {...props}>
+      {children}
+    </button>
+  );
+}
+
+export function Card({ children, className = "" }) {
+  return (
+    <div
+      className={`bg-white shadow-sm rounded-xl border border-gray-200 ${className}`}
+    >
+      {children}
+    </div>
+  );
+}
+export function CardContent({ children, className = "" }) {
+  return <div className={`p-4 ${className}`}>{children}</div>;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers simples
@@ -42,7 +110,6 @@ const Pill = ({ children }) => (
   </span>
 );
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : "—");
-
 function StatusPill({ s }) {
   const v = String(s || "").toLowerCase();
   const map = {
@@ -118,7 +185,7 @@ function Checklist({ schema, onSubmit }) {
           <div key={o.key} className="mb-2">
             <div className="text-xs text-gray-600">{o.label}</div>
             <input
-              className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
+              className="observation-input"
               value={obs[o.key] || ""}
               onChange={(e) =>
                 setObs((s) => ({ ...s, [o.key]: e.target.value }))
@@ -221,7 +288,7 @@ function Details({ task, refresh }) {
 
         <Checklist schema={schema} onSubmit={submit} />
 
-        <div className="bg-violet-50 p-3 rounded-lg">
+        <div className="ia-panel">
           <div className="flex items-center gap-2 mb-2">
             <Wand2 className="text-violet-600" size={16} />
             <div className="font-semibold">IA (avant intervention)</div>
@@ -241,7 +308,7 @@ function Details({ task, refresh }) {
 }
 
 // ---------------------------------------------------------------------------
-// Arborescence hiérarchique
+// Tree hiérarchique + bouton Vue plan intégré
 // ---------------------------------------------------------------------------
 function NodeHeader({ title, count, open, toggle, level = 0 }) {
   return (
@@ -261,7 +328,7 @@ function NodeHeader({ title, count, open, toggle, level = 0 }) {
   );
 }
 
-function Tree({ statusFilter, onSelect }) {
+function Tree({ statusFilter, onSelect, onShowPlan }) {
   const [tree, setTree] = useState([]);
   const [exp, setExp] = useState({});
 
@@ -301,12 +368,28 @@ function Tree({ statusFilter, onSelect }) {
         return (
           <div key={kB} className="border rounded-xl">
             <div className="px-4 py-3 bg-gray-50 flex items-center justify-between">
-              <div className="text-lg font-semibold">{b.label}</div>
+              <div className="flex items-center gap-2">
+                <div className="text-lg font-semibold">{b.label}</div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    onShowPlan({
+                      id: b.label,
+                      display_name: b.label,
+                      url_pdf: `/plans/${b.label.replace(/\s+/g, "_")}.pdf`,
+                    })
+                  }
+                >
+                  Vue plan
+                </Button>
+              </div>
               <div className="text-xs text-gray-500">
                 HV {hvCount} • Switchboards {swCount}
               </div>
             </div>
 
+            {/* Contenu bâtiment */}
             <div className="p-3 space-y-2">
               {/* HV */}
               <NodeHeader
@@ -423,7 +506,7 @@ function Tree({ statusFilter, onSelect }) {
 }
 
 // ---------------------------------------------------------------------------
-// Gantt chart
+// Gantt
 // ---------------------------------------------------------------------------
 function Gantt() {
   const [data, setData] = useState([]);
@@ -462,7 +545,7 @@ function Gantt() {
               <XAxis type="number" hide />
               <YAxis type="category" dataKey="name" width={220} />
               <Tooltip />
-              <Bar dataKey="days" fill="#6366f1" />
+              <Bar dataKey="days" className="gantt-bar" />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -472,7 +555,7 @@ function Gantt() {
 }
 
 // ---------------------------------------------------------------------------
-// Non intégrés (diff TSD/DB)
+// Non intégrés (diff TSD / DB Neon)
 // ---------------------------------------------------------------------------
 function MissingPanel() {
   const [data, setData] = useState(null);
@@ -520,16 +603,19 @@ function MissingPanel() {
 }
 
 // ---------------------------------------------------------------------------
-// Page principale
+// Page principale ControlsV2 + modal "Vue plan"
 // ---------------------------------------------------------------------------
 export default function ControlsV2() {
   const [tab, setTab] = useState("bt");
   const [status, setStatus] = useState("open");
   const [selected, setSelected] = useState(null);
+  const [mapPlan, setMapPlan] = useState(null);
+  const [showMap, setShowMap] = useState(false);
+
   const refresh = async () => {};
 
   return (
-    <section className="p-8 max-w-7xl mx-auto">
+    <section className="p-8 max-w-7xl mx-auto controls-wrapper">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-3xl font-bold">Contrôles (TSD) v2</h1>
         <div className="flex items-center gap-2">
@@ -555,40 +641,84 @@ export default function ControlsV2() {
           <TabsTrigger value="missing">Non intégrés</TabsTrigger>
         </TabsList>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-4">
-          <TabsContent
-            value="bt"
-            className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
-          >
-            <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
-              <Tree statusFilter={status} onSelect={setSelected} />
-            </div>
-            <div>
-              <Details task={selected} refresh={refresh} />
-            </div>
-          </TabsContent>
+        <TabsContent
+          value="bt"
+          className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
+        >
+          <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
+            <Tree
+              statusFilter={status}
+              onSelect={setSelected}
+              onShowPlan={(p) => {
+                setMapPlan(p);
+                setShowMap(true);
+              }}
+            />
+          </div>
+          <div>
+            <Details task={selected} refresh={refresh} />
+          </div>
+        </TabsContent>
 
-          <TabsContent
-            value="hv"
-            className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
-          >
-            <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
-              <Tree statusFilter={status} onSelect={setSelected} />
-            </div>
-            <div>
-              <Details task={selected} refresh={refresh} />
-            </div>
-          </TabsContent>
+        <TabsContent
+          value="hv"
+          className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
+        >
+          <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
+            <Tree
+              statusFilter={status}
+              onSelect={setSelected}
+              onShowPlan={(p) => {
+                setMapPlan(p);
+                setShowMap(true);
+              }}
+            />
+          </div>
+          <div>
+            <Details task={selected} refresh={refresh} />
+          </div>
+        </TabsContent>
 
-          <TabsContent value="gantt" className="col-span-2">
-            <Gantt />
-          </TabsContent>
+        <TabsContent value="gantt" className="col-span-2">
+          <Gantt />
+        </TabsContent>
 
-          <TabsContent value="missing" className="col-span-2">
-            <MissingPanel />
-          </TabsContent>
-        </div>
+        <TabsContent value="missing" className="col-span-2">
+          <MissingPanel />
+        </TabsContent>
       </Tabs>
+
+      {/* -------------------- MODAL "VUE PLAN" -------------------- */}
+      {showMap && mapPlan && (
+        <div className="fixed inset-0 z-[6000] flex flex-col fade-in-up">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setShowMap(false)}
+          />
+          <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
+            <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 border-b gap-3">
+                <div className="font-semibold">
+                  Vue plan — {mapPlan.display_name}
+                </div>
+                <Button variant="ghost" onClick={() => setShowMap(false)}>
+                  Fermer
+                </Button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <ControlsMap
+                  plan={mapPlan}
+                  onSelectTask={(t) => {
+                    setSelected(t);
+                    setShowMap(false);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
+
