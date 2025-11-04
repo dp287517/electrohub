@@ -895,7 +895,7 @@ export default function Oibt() {
                       <ul className="mt-3 space-y-3">
                         {(p.status || []).map((a, i) => {
                           const key = a.key || (a.name?.includes("Avis") ? "avis" : a.name?.includes("Protocole") ? "protocole" : a.name?.includes("Rapport") ? "rapport" : a.name?.toLowerCase().includes("sporad") ? "sporadic" : "reception");
-                          const showUpload = key !== "sporadic";
+                          const showUpload = true;
                           const hasFile = !!p.attachments?.[key];
                           const accept = ".pdf,.doc,.docx,.png,.jpg,.jpeg";
                           const canUploadMulti = key !== "sporadic";
