@@ -1,636 +1,594 @@
-// src/pages/Controls.jsx
-// Dashboard Contrôles (TSD) — Hiérarchie + Checklist + IA (optionnelle)
+// ============================================================================
+// src/pages/Controls.jsx — v2
+// Page complète pour les contrôles (BT / HV / Gantt / Non intégrés)
+// Compatible avec Neon + server_controls.js (v2)
+// Auteur : ChatGPT - 2025
+// ============================================================================
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { get } from '../lib/api.js';
+import React, { useEffect, useState } from "react";
+import { api } from "../lib/api.js";
 import {
-  ChevronRight, ChevronDown, SlidersHorizontal, Image as ImageIcon,
-  CheckCircle2, Upload, Paperclip, Sparkles, Link2
-} from 'lucide-react';
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  ChevronRight,
+  ChevronDown,
+  Upload,
+  Paperclip,
+  Calendar,
+  Wand2,
+  RefreshCw,
+} from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+} from "recharts";
 
-/* ---------- UI helpers ---------- */
-const Pill = ({ color = 'bg-gray-200 text-gray-800', children }) => (
-  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${color}`}>{children}</span>
+// ---------------------------------------------------------------------------
+// Helpers simples
+// ---------------------------------------------------------------------------
+const Pill = ({ children }) => (
+  <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold">
+    {children}
+  </span>
 );
-const StatusPill = ({ status }) => {
-  const s = String(status || '').toLowerCase();
-  if (s === 'done' || s === 'closed') return <Pill color="bg-green-100 text-green-700">Done</Pill>;
-  if (s === 'overdue') return <Pill color="bg-red-100 text-red-700">Overdue</Pill>;
-  if (s === 'pending') return <Pill color="bg-amber-100 text-amber-700">Pending</Pill>;
-  return <Pill color="bg-blue-100 text-blue-700">{status || 'Planned'}</Pill>;
-};
-const fmtDate = (d) => d ? new Date(d).toLocaleDateString() : '—';
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : "—");
 
-function Toast({ msg, type='info', onClose }) {
-  const colors = { success:'bg-green-600', error:'bg-red-600', info:'bg-blue-600' };
-  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
+function StatusPill({ s }) {
+  const v = String(s || "").toLowerCase();
+  const map = {
+    done: "bg-green-100 text-green-700",
+    closed: "bg-green-100 text-green-700",
+    overdue: "bg-red-100 text-red-700",
+    pending: "bg-amber-100 text-amber-700",
+  };
+  const cls = map[v] || "bg-blue-100 text-blue-700";
   return (
-    <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-xl shadow-xl text-sm text-white ${colors[type]} ring-1 ring-black/10`}>
-      {msg}
-    </div>
+    <span
+      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${cls}`}
+    >
+      {s || "Planned"}
+    </span>
   );
 }
 
-/* ---------- helpers internes ---------- */
-async function patchJSON(url, body) {
-  const r = await fetch(url, {
-    method: 'PATCH',
-    headers: { 'Content-Type':'application/json' },
-    body: JSON.stringify(body || {})
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
-}
-
-/* ---------- Checklist inline ---------- */
-function ChecklistInline({ task, schema, onClosed, busy, pushToast }) {
-  const [checklist, setChecklist] = useState(() =>
-    (schema?.checklist || []).map(i => ({ key: i.key, label: i.label, value: '' }))
+// ---------------------------------------------------------------------------
+// Checklist dynamique
+// ---------------------------------------------------------------------------
+function Checklist({ schema, onSubmit }) {
+  const [items, setItems] = useState(
+    (schema?.checklist || []).map((q) => ({ key: q.key, value: "" }))
   );
-  const [observations, setObservations] = useState(() => {
-    const base = {};
-    (schema?.observations || []).forEach(o => { base[o.key] = ''; });
-    return base;
-  });
-  const [comment, setComment] = useState('');
+  const [obs, setObs] = useState(
+    Object.fromEntries((schema?.observations || []).map((o) => [o.key, ""]))
+  );
   const [files, setFiles] = useState([]);
+  const [comment, setComment] = useState("");
 
-  const checklistOptions = useMemo(() => {
-    const first = (schema?.checklist || [])[0];
-    if (first && Array.isArray(first.options) && first.options.length) return first.options;
-    return ['Conforme','Non conforme','Non applicable'];
-  }, [schema]);
+  const opts = ["Conforme", "Non conforme", "Non applicable"];
 
-  const setValue = (key, v) =>
-    setChecklist(cs => cs.map(c => c.key === key ? { ...c, value: v } : c));
+  const setValue = (k, v) =>
+    setItems((arr) => arr.map((x) => (x.key === k ? { ...x, value: v } : x)));
 
-  const handleFile = async (e) => {
+  const onFile = (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const buf = await f.arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
-    setFiles(prev => [...prev, { name: f.name, type: f.type, size: f.size, _b64: b64 }]);
+    setFiles((p) => [...p, f]);
   };
 
-  const submit = async () => {
-    const payload = {
-      record_status: 'done',
-      checklist,
-      observations,
-      attachments: files.map(f => ({ filename: f.name, mimetype: f.type, size: f.size, data: f._b64 })),
-      comment,
-      closed_at: new Date().toISOString(),
-    };
-    await onClosed(payload);
-    setFiles([]);
-    setComment('');
-    pushToast('Tâche clôturée et replanifiée.', 'success');
-  };
+  const submit = () => onSubmit({ items, obs, files, comment });
 
   return (
-    <div className="bg-white p-4 rounded-xl border border-gray-200 mt-3">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div>
-          <h4 className="font-semibold text-gray-800 mb-2">Checklist</h4>
-          <div className="space-y-3">
-            {(schema?.checklist || []).map((item, idx) => (
-              <div key={item.key || idx} className="flex items-center gap-3">
-                <div className="flex-1 text-sm text-gray-800">{item.label}</div>
-                <select
-                  className="p-2 rounded-lg bg-white ring-1 ring-black/10"
-                  value={(checklist.find(c => c.key === item.key)?.value) || ''}
-                  onChange={e => setValue(item.key, e.target.value)}
-                >
-                  <option value="">Sélectionner</option>
-                  {checklistOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div>
-          <h4 className="font-semibold text-gray-800 mb-2">Observations</h4>
-          <div className="space-y-3">
-            {(schema?.observations || []).map((o, i) => (
-              <div key={o.key || i}>
-                <label className="block text-xs text-gray-600 mb-1">{o.label}</label>
-                <input
-                  className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
-                  value={observations[o.key] || ''}
-                  onChange={e => setObservations(s => ({ ...s, [o.key]: e.target.value }))}
-                />
-              </div>
-            ))}
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Commentaires</label>
-              <textarea
-                className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
-                rows={3}
-                value={comment}
-                onChange={e => setComment(e.target.value)}
-              />
+    <div className="space-y-4">
+      <div>
+        <div className="text-sm font-semibold mb-2">Checklist</div>
+        <div className="space-y-2">
+          {schema?.checklist?.map((q) => (
+            <div key={q.key} className="flex items-center gap-3">
+              <div className="flex-1 text-sm">{q.label}</div>
+              <select
+                className="p-2 rounded-lg bg-white ring-1 ring-black/10"
+                value={items.find((x) => x.key === q.key)?.value || ""}
+                onChange={(e) => setValue(q.key, e.target.value)}
+              >
+                <option value="">Sélectionner</option>
+                {opts.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
             </div>
-          </div>
+          ))}
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer hover:bg-gray-50">
-          <Upload size={16}/> Joindre une photo
-          <input type="file" className="hidden" onChange={handleFile} accept="image/*" />
-        </label>
-        {files.map((f,idx)=>(
-          <span key={idx} className="text-xs bg-white ring-1 ring-black/10 px-2 py-1 rounded-lg flex items-center gap-2">
-            <Paperclip size={14}/> {f.name}
-          </span>
+      <div>
+        <div className="text-sm font-semibold mb-2">Observations</div>
+        {(schema?.observations || []).map((o) => (
+          <div key={o.key} className="mb-2">
+            <div className="text-xs text-gray-600">{o.label}</div>
+            <input
+              className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
+              value={obs[o.key] || ""}
+              onChange={(e) =>
+                setObs((s) => ({ ...s, [o.key]: e.target.value }))
+              }
+            />
+          </div>
         ))}
-        <div className="flex-1" />
-        <button
-          disabled={busy}
-          onClick={submit}
-          className={`px-4 py-2 rounded-lg text-white shadow ${busy ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'} flex items-center gap-2`}
-        >
-          <CheckCircle2 size={18}/> Clôturer & Replanifier
-        </button>
       </div>
+
+      <div>
+        <div className="text-xs text-gray-600 mb-1">Commentaire</div>
+        <textarea
+          rows={3}
+          className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+        />
+      </div>
+
+      <div>
+        <label className="inline-flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer w-fit">
+          <Upload size={16} /> Joindre une photo
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onFile}
+          />
+        </label>
+        <div className="flex flex-wrap gap-2 mt-1">
+          {files.map((f, i) => (
+            <span
+              key={i}
+              className="text-xs bg-white ring-1 ring-black/10 px-2 py-1 rounded-lg flex items-center gap-1"
+            >
+              <Paperclip size={14} /> {f.name}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <Button
+        onClick={submit}
+        className="bg-green-600 hover:bg-green-700 text-white"
+      >
+        Clôturer & replanifier
+      </Button>
     </div>
   );
 }
 
-/* ---------- IA (optionnelle, route non bloquante) ---------- */
-function AiAssist({ task, onUploaded, pushToast }) {
-  const [file, setFile] = useState(null);
-  const [res, setRes] = useState(null);
+// ---------------------------------------------------------------------------
+// Détails d'une tâche
+// ---------------------------------------------------------------------------
+function Details({ task, refresh }) {
+  const [schema, setSchema] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  const run = async () => {
+  useEffect(() => {
     if (!task) return;
+    api.controls.taskSchema(task.id).then(setSchema).catch(console.error);
+  }, [task]);
+
+  const submit = async ({ items, obs, files, comment }) => {
     setBusy(true);
     try {
-      const form = new FormData();
-      form.append('task_id', String(task.id));
-      form.append('attach', '1');
-      if (file) form.append('file', file);
-      const r = await fetch('/api/controls/ai/analyze-before', { method: 'POST', body: form });
-      // Cette route peut ne pas exister → on ne fait pas planter l'écran
-      const ct = r.headers.get('content-type') || '';
-      const json = ct.includes('application/json') ? await r.json() : null;
-      if (!r.ok) throw new Error(json?.error || `HTTP ${r.status}`);
-      setRes(json);
-      if (file && onUploaded) onUploaded();
-    } catch (e) {
-      pushToast(`IA: ${e.message}`, 'error');
+      for (const f of files) {
+        await api.controls.attachToTask(task.id, f).catch(() => {});
+      }
+      await api.controls.closeTask(task.id, {
+        record_status: "done",
+        checklist: items,
+        observations: obs,
+        comment,
+        closed_at: new Date().toISOString(),
+      });
+      await refresh();
     } finally {
       setBusy(false);
     }
   };
 
-  return (
-    <div className="bg-white p-4 rounded-xl border border-gray-200 mt-3">
-      <div className="flex items-center gap-2 mb-3">
-        <Sparkles className="text-violet-500" size={18} />
-        <h4 className="font-semibold text-gray-800">Analyse IA (avant intervention)</h4>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <label className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer hover:bg-gray-50">
-          <ImageIcon size={16}/> Sélectionner une photo
-          <input type="file" className="hidden" accept="image/*" onChange={e=>setFile(e.target.files?.[0]||null)} />
-        </label>
-        <button
-          disabled={busy || !task}
-          onClick={run}
-          className={`px-4 py-2 rounded-lg text-white ${busy?'bg-gray-400':'bg-violet-600 hover:bg-violet-700'}`}
-        >
-          Lancer l’analyse
-        </button>
-        {!!file && <span className="text-xs text-gray-600">{file.name}</span>}
-      </div>
+  if (!task)
+    return <div className="text-gray-500">Sélectionne une tâche à droite.</div>;
+  if (!schema) return <div>Chargement…</div>;
 
-      {res && (
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-violet-50 p-3 rounded-lg">
-            <div className="text-xs font-semibold text-violet-800 mb-1">EPI</div>
-            <div className="text-sm text-violet-900 whitespace-pre-wrap">{res?.safety?.ppe || '—'}</div>
-            <div className="text-xs font-semibold text-violet-800 mt-3 mb-1">Dangers</div>
-            <div className="text-sm text-violet-900 whitespace-pre-wrap">{res?.safety?.hazards || '—'}</div>
-          </div>
-          <div className="bg-emerald-50 p-3 rounded-lg">
-            <div className="text-xs font-semibold text-emerald-800 mb-1">Procédure suggérée</div>
-            <ol className="text-sm text-emerald-900 space-y-1">
-              {(res?.procedure?.steps || []).map((s) => (
-                <li key={s.step}>• {s.text}</li>
-              ))}
-            </ol>
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-4">
+        <div>
+          <div className="text-xs text-gray-500">Tâche</div>
+          <div className="text-lg font-semibold">{task.label}</div>
+          <div className="text-xs text-gray-500">
+            Échéance: {fmtDate(task.next_control)}{" "}
+            <span className="ml-2">
+              <StatusPill s={task.status} />
+            </span>
           </div>
         </div>
-      )}
-    </div>
+
+        <Checklist schema={schema} onSubmit={submit} />
+
+        <div className="bg-violet-50 p-3 rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <Wand2 className="text-violet-600" size={16} />
+            <div className="font-semibold">IA (avant intervention)</div>
+          </div>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              await api.controls.analyze(task.id);
+            }}
+          >
+            <Wand2 size={16} /> Lancer
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-/* ---------- Panneau de droite (détail tâche) ---------- */
-function DetailsPane({ selectedTask, refreshHierarchy, pushToast }) {
-  const [schema, setSchema] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [closing, setClosing] = useState(false);
-
-  useEffect(() => {
-    const load = async () => {
-      if (!selectedTask) { setSchema(null); return; }
-      setLoading(true);
-      try {
-        const s = await get(`/api/controls/tasks/${selectedTask.id}/schema`);
-        setSchema(s);
-      } catch (e) {
-        pushToast(`Schema: ${e.message}`, 'error');
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, [selectedTask]);
-
-  const onClosed = async (payload) => {
-    try {
-      setClosing(true);
-      await patchJSON(`/api/controls/tasks/${selectedTask.id}/close`, payload);
-      setSchema(null);
-      await refreshHierarchy();
-    } catch (e) {
-      pushToast(`Close: ${e.message}`, 'error');
-    } finally {
-      setClosing(false);
-    }
-  };
-
-  if (!selectedTask) {
-    return (
-      <div className="h-full flex items-center justify-center text-gray-500">
-        Sélectionne une tâche dans la hiérarchie
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-3">
-      <div className="p-4 bg-white rounded-xl border border-gray-200">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs text-gray-500">Tâche</div>
-            <div className="text-lg font-semibold text-gray-800">{selectedTask.label}</div>
-            <div className="text-xs text-gray-500 mt-1">
-              Due: {fmtDate(selectedTask.due_date)} • <StatusPill status={selectedTask.status} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {loading ? (
-        <div className="p-4 bg-white rounded-xl border border-gray-200">Chargement…</div>
-      ) : schema ? (
-        <>
-          <ChecklistInline
-            task={selectedTask}
-            schema={schema}
-            onClosed={onClosed}
-            busy={closing}
-            pushToast={pushToast}
-          />
-          <AiAssist
-            task={selectedTask}
-            onUploaded={async ()=>{}}
-            pushToast={pushToast}
-          />
-        </>
-      ) : (
-        <div className="p-4 bg-white rounded-xl border border-gray-200">Aucun schéma disponible.</div>
-      )}
-    </div>
-  );
-}
-
-/* ---------- Hiérarchie / Arbre ---------- */
+// ---------------------------------------------------------------------------
+// Arborescence hiérarchique
+// ---------------------------------------------------------------------------
 function NodeHeader({ title, count, open, toggle, level = 0 }) {
   return (
     <div
-      className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer ${open ? 'bg-gray-100' : 'hover:bg-gray-50'}`}
+      className={`flex items-center justify-between px-3 py-2 rounded-lg ${
+        open ? "bg-gray-100" : "hover:bg-gray-50"
+      } cursor-pointer`}
       onClick={toggle}
+      style={{ marginLeft: level * 12 }}
     >
       <div className="flex items-center gap-2">
-        {open ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
-        <div className="font-semibold" style={{ marginLeft: level * 8 }}>{title}</div>
+        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        <span className="font-semibold">{title}</span>
       </div>
       <Pill>{count}</Pill>
     </div>
   );
 }
 
-function TaskRow({ t, onSelect, statusFilter }) {
-  if (statusFilter !== 'all') {
-    const wanted = statusFilter === 'open' ? ['Planned','Pending','Overdue'] : ['Done','Closed'];
-    if (!wanted.includes(String(t.status))) return null;
-  }
+function Tree({ statusFilter, onSelect }) {
+  const [tree, setTree] = useState([]);
+  const [exp, setExp] = useState({});
+
+  const toggle = (k) => setExp((s) => ({ ...s, [k]: !s[k] }));
+
+  const refresh = async () => {
+    const r = await api.controls.hierarchyTree();
+    setTree(r || []);
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const count = (tasks = []) => {
+    if (statusFilter === "all") return tasks.length;
+    const open = ["Planned", "Pending", "Overdue"];
+    const done = ["Done", "Closed"];
+    return (tasks || []).filter((t) =>
+      statusFilter === "open" ? open.includes(t.status) : done.includes(t.status)
+    ).length;
+  };
+
   return (
-    <div
-      className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between"
-      onClick={() => onSelect(t)}
-    >
-      <div className="text-sm text-gray-800">{t.label}</div>
-      <div className="flex items-center gap-2">
-        <StatusPill status={t.status} />
-        <span className="text-xs text-gray-500">{fmtDate(t.due_date)}</span>
-      </div>
+    <div className="space-y-3">
+      {tree.map((b, bi) => {
+        const kB = `b-${bi}`;
+        const oB = !!exp[kB];
+        const hvCount = (b.hv || []).reduce((a, n) => a + count(n.tasks), 0);
+        const swCount = (b.switchboards || []).reduce(
+          (a, sb) =>
+            a +
+            count(sb.tasks) +
+            (sb.devices || []).reduce((x, d) => x + count(d.tasks), 0),
+          0
+        );
+        return (
+          <div key={kB} className="border rounded-xl">
+            <div className="px-4 py-3 bg-gray-50 flex items-center justify-between">
+              <div className="text-lg font-semibold">{b.label}</div>
+              <div className="text-xs text-gray-500">
+                HV {hvCount} • Switchboards {swCount}
+              </div>
+            </div>
+
+            <div className="p-3 space-y-2">
+              {/* HV */}
+              <NodeHeader
+                title="High Voltage"
+                count={hvCount}
+                open={oB && exp[`${kB}-hv`]}
+                toggle={() => {
+                  toggle(kB);
+                  toggle(`${kB}-hv`);
+                }}
+              />
+              {oB &&
+                exp[`${kB}-hv`] &&
+                b.hv.map((n, i) => (
+                  <div key={i} className="pl-4">
+                    <NodeHeader
+                      title={n.label}
+                      count={count(n.tasks)}
+                      open={exp[`hv-${i}`]}
+                      toggle={() => toggle(`hv-${i}`)}
+                      level={1}
+                    />
+                    {exp[`hv-${i}`] &&
+                      n.tasks.map((t) => (
+                        <div
+                          key={t.id}
+                          onClick={() => onSelect(t)}
+                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between"
+                        >
+                          <div className="text-sm">{t.label}</div>
+                          <div className="flex items-center gap-2">
+                            <StatusPill s={t.status} />
+                            <span className="text-xs text-gray-500">
+                              {fmtDate(t.next_control)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                ))}
+
+              {/* Switchboards */}
+              <NodeHeader
+                title="Switchboards"
+                count={swCount}
+                open={oB && exp[`${kB}-sb`]}
+                toggle={() => {
+                  toggle(kB);
+                  toggle(`${kB}-sb`);
+                }}
+              />
+              {oB &&
+                exp[`${kB}-sb`] &&
+                b.switchboards.map((sb, si) => (
+                  <div key={si} className="pl-4">
+                    <NodeHeader
+                      title={sb.label}
+                      count={count(sb.tasks)}
+                      open={exp[`sb-${si}`]}
+                      toggle={() => toggle(`sb-${si}`)}
+                      level={1}
+                    />
+                    {exp[`sb-${si}`] &&
+                      sb.tasks.map((t) => (
+                        <div
+                          key={t.id}
+                          onClick={() => onSelect(t)}
+                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between"
+                        >
+                          <div className="text-sm">{t.label}</div>
+                          <div className="flex items-center gap-2">
+                            <StatusPill s={t.status} />
+                            <span className="text-xs text-gray-500">
+                              {fmtDate(t.next_control)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    {sb.devices?.map((d, di) => (
+                      <div key={di} className="pl-6">
+                        <NodeHeader
+                          title={`Device — ${d.label}`}
+                          count={count(d.tasks)}
+                          open={exp[`d-${si}-${di}`]}
+                          toggle={() => toggle(`d-${si}-${di}`)}
+                          level={2}
+                        />
+                        {exp[`d-${si}-${di}`] &&
+                          d.tasks.map((t) => (
+                            <div
+                              key={t.id}
+                              onClick={() => onSelect(t)}
+                              className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between"
+                            >
+                              <div className="text-sm">{t.label}</div>
+                              <div className="flex items-center gap-2">
+                                <StatusPill s={t.status} />
+                                <span className="text-xs text-gray-500">
+                                  {fmtDate(t.next_control)}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-/* ---------- Page principale ---------- */
-export default function Controls() {
-  const [tree, setTree] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [expanded, setExpanded] = useState({});
-  const [statusFilter, setStatusFilter] = useState('open'); // 'open' | 'done' | 'all'
-  const [selectedTask, setSelectedTask] = useState(null);
-  const [toast, setToast] = useState(null);
-  const pushToast = (msg, type='info') => setToast({ msg, type });
-
-  const refreshHierarchy = async () => {
-    setLoading(true);
-    setSelectedTask(null);
-    try {
-      const t = await get('/api/controls/hierarchy/tree');
-      setTree(Array.isArray(t) ? t : []);
-    } catch (e) {
-      pushToast(`Hiérarchie: ${e.message}`, 'error');
-      setTree([]);
-    } finally {
-      setLoading(false);
-    }
+// ---------------------------------------------------------------------------
+// Gantt chart
+// ---------------------------------------------------------------------------
+function Gantt() {
+  const [data, setData] = useState([]);
+  const load = async () => {
+    const r = await api.controls.timeline();
+    setData(
+      (r.items || []).map((t) => ({
+        name: t.label,
+        days: Math.max(
+          1,
+          Math.round((new Date(t.end) - Date.now()) / 86400000)
+        ),
+      }))
+    );
   };
+  useEffect(() => {
+    load();
+  }, []);
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Calendar size={16} />
+          <div className="font-semibold">Gantt (jours restants)</div>
+          <Button size="sm" variant="ghost" onClick={load}>
+            <RefreshCw size={14} />
+          </Button>
+        </div>
+        <div style={{ width: "100%", height: 280 }}>
+          <ResponsiveContainer>
+            <BarChart
+              data={data}
+              layout="vertical"
+              margin={{ left: 80, right: 20 }}
+            >
+              <XAxis type="number" hide />
+              <YAxis type="category" dataKey="name" width={220} />
+              <Tooltip />
+              <Bar dataKey="days" fill="#6366f1" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-  const autoLink = async ({ create = 1, seed = 1 } = {}) => {
-    try {
-      const res = await get('/api/controls/bootstrap/auto-link', { create, seed });
-      pushToast(`Auto-link OK (${Array.isArray(res?.actions)?res.actions.length:0} opérations)`, 'success');
-      await refreshHierarchy();
-    } catch (e) {
-      pushToast(`Auto-link: ${e.message}`, 'error');
-    }
+// ---------------------------------------------------------------------------
+// Non intégrés (diff TSD/DB)
+// ---------------------------------------------------------------------------
+function MissingPanel() {
+  const [data, setData] = useState(null);
+  const load = async () => {
+    const r = await fetch("/api/controls/tsd/missing").then((r) => r.json());
+    setData(r);
   };
+  useEffect(() => {
+    load();
+  }, []);
 
-  useEffect(() => { refreshHierarchy(); }, []);
-
-  const toggleKey = (k) => setExpanded(s => ({ ...s, [k]: !s[k] }));
-
-  // Compteur tâches filtrées
-  const countTasks = (tasks = []) => {
-    if (statusFilter === 'all') return tasks.length;
-    const wanted = statusFilter === 'open' ? ['Planned','Pending','Overdue'] : ['Done','Closed'];
-    return tasks.filter(t => wanted.includes(String(t.status))).length;
-    };
+  if (!data)
+    return (
+      <Card>
+        <CardContent className="p-4">Chargement…</CardContent>
+      </Card>
+    );
 
   return (
-    <section className="p-8 max-w-7xl mx-auto bg-gradient-to-br from-indigo-50 to-emerald-50 rounded-3xl min-h-screen">
-      <header className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl md:text-4xl font-bold text-gray-800">Contrôles (TSD)</h1>
-        <div className="flex items-center gap-2">
-          {/* Filtre statut */}
-          <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-xl ring-1 ring-black/10">
-            <SlidersHorizontal size={16} className="text-gray-500"/>
-            <select
-              className="bg-transparent outline-none text-sm"
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              title="Filtrer par statut"
-            >
-              <option value="open">Open</option>
-              <option value="done">Done</option>
-              <option value="all">Tous</option>
-            </select>
+    <div className="grid md:grid-cols-2 gap-4">
+      <Card>
+        <CardContent className="p-4">
+          <div className="font-semibold mb-2">
+            Catégories TSD sans table
           </div>
+          <ul className="list-disc pl-5 text-sm">
+            {(data.missing || []).map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="p-4">
+          <div className="font-semibold mb-2">Snippets SQL proposés</div>
+          <pre className="text-xs whitespace-pre-wrap">
+            {(data.sqlTemplates || [])
+              .map((x) => `-- ${x.table}\n${x.sql}`)
+              .join("\n\n")}
+          </pre>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
-          {/* Auto-link/seed (utile après reset DB) */}
-          <button
-            onClick={() => autoLink({ create: 1, seed: 1 })}
-            className="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 text-sm flex items-center gap-2"
-            title="Créer entités manquantes + semer les tâches"
+// ---------------------------------------------------------------------------
+// Page principale
+// ---------------------------------------------------------------------------
+export default function ControlsV2() {
+  const [tab, setTab] = useState("bt");
+  const [status, setStatus] = useState("open");
+  const [selected, setSelected] = useState(null);
+  const refresh = async () => {};
+
+  return (
+    <section className="p-8 max-w-7xl mx-auto">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-3xl font-bold">Contrôles (TSD) v2</h1>
+        <div className="flex items-center gap-2">
+          <select
+            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
           >
-            <Link2 size={16}/> Relier & Seed
-          </button>
-
-          <button
-            onClick={refreshHierarchy}
-            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 hover:bg-gray-50 text-sm"
-          >
-            Actualiser
-          </button>
-        </div>
-      </header>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Colonne gauche : Arborescence */}
-        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4">
-          {loading ? (
-            <div className="p-6 text-center text-gray-600">Chargement…</div>
-          ) : tree.length === 0 ? (
-            <div className="p-6 text-center text-gray-500">
-              Aucune donnée. Utilise “Relier & Seed” si tu viens de vider la base.
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {tree.map((site, si) => {
-                const keySite = `s-${site.id || site.label || si}`;
-                const openSite = !!expanded[keySite];
-                const hvCount = (site.hv || []).reduce((a, n) => a + countTasks(n.tasks), 0);
-                const sbCount = (site.switchboards || []).reduce((a, sb) =>
-                  a + countTasks(sb.tasks) + (sb.devices||[]).reduce((x, d)=> x + countTasks(d.tasks), 0), 0);
-                const atexCount = (site.atex || []).reduce((a, z) =>
-                  a + countTasks(z.tasks) + (z.equipments||[]).reduce((x, e)=> x + countTasks(e.tasks), 0), 0);
-
-                return (
-                  <div key={keySite} className="border border-gray-200 rounded-xl overflow-hidden">
-                    <div className="px-4 py-3 bg-gray-50 flex items-center justify-between">
-                      <div className="text-lg font-semibold text-gray-800">{site.label || site.id || 'Site'}</div>
-                      <div className="text-xs text-gray-500">HV {hvCount} • Switchboards {sbCount} • ATEX {atexCount}</div>
-                    </div>
-
-                    <div className="p-3 space-y-2">
-                      {/* HV */}
-                      <NodeHeader
-                        title="High Voltage"
-                        count={(site.hv || []).reduce((a,n)=> a + countTasks(n.tasks), 0)}
-                        open={openSite && expanded[`${keySite}-hv`]}
-                        toggle={() => { toggleKey(keySite); toggleKey(`${keySite}-hv`); }}
-                      />
-                      {openSite && expanded[`${keySite}-hv`] && (
-                        <div className="pl-4 space-y-2">
-                          {(site.hv || []).map((n, i) => {
-                            const k = `${keySite}-hv-${i}`;
-                            const open = !!expanded[k];
-                            return (
-                              <div key={k}>
-                                <NodeHeader
-                                  title={n.label || 'HV'}
-                                  count={countTasks(n.tasks)}
-                                  open={open}
-                                  toggle={() => toggleKey(k)}
-                                  level={1}
-                                />
-                                {open && (
-                                  <div className="pl-6 space-y-1">
-                                    {(n.tasks || []).map(t => (
-                                      <TaskRow key={t.id} t={t} onSelect={setSelectedTask} statusFilter={statusFilter}/>
-                                    ))}
-                                    {countTasks(n.tasks) === 0 && <div className="text-xs text-gray-400 pl-1">Aucune tâche</div>}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                          {(site.hv||[]).length === 0 && <div className="text-xs text-gray-400 pl-1">Aucun équipement HV</div>}
-                        </div>
-                      )}
-
-                      {/* Switchboards */}
-                      <NodeHeader
-                        title="Switchboards"
-                        count={(site.switchboards || []).reduce((a,sb)=> a + countTasks(sb.tasks) + (sb.devices||[]).reduce((x,d)=>x+countTasks(d.tasks),0), 0)}
-                        open={openSite && expanded[`${keySite}-sb`]}
-                        toggle={() => { toggleKey(keySite); toggleKey(`${keySite}-sb`); }}
-                      />
-                      {openSite && expanded[`${keySite}-sb`] && (
-                        <div className="pl-4 space-y-2">
-                          {(site.switchboards || []).map((sb, i) => {
-                            const k = `${keySite}-sb-${i}`;
-                            const open = !!expanded[k];
-                            return (
-                              <div key={k}>
-                                <NodeHeader
-                                  title={sb.label || 'Switchboard'}
-                                  count={countTasks(sb.tasks) + (sb.devices||[]).reduce((x,d)=>x+countTasks(d.tasks),0)}
-                                  open={open}
-                                  toggle={() => toggleKey(k)}
-                                  level={1}
-                                />
-                                {open && (
-                                  <div className="pl-6 space-y-2">
-                                    {/* tâches du switchboard */}
-                                    {(sb.tasks || []).map(t => (
-                                      <TaskRow key={t.id} t={t} onSelect={setSelectedTask} statusFilter={statusFilter}/>
-                                    ))}
-                                    {countTasks(sb.tasks) === 0 && <div className="text-xs text-gray-400 pl-1">Aucune tâche (switchboard)</div>}
-                                    {/* Devices */}
-                                    {(sb.devices || []).map((d, di) => {
-                                      const kd = `${k}-dev-${di}`;
-                                      const opend = !!expanded[kd];
-                                      return (
-                                        <div key={kd} className="mt-1">
-                                          <NodeHeader
-                                            title={`Device — ${d.label || d.code || d.id}`}
-                                            count={countTasks(d.tasks)}
-                                            open={opend}
-                                            toggle={() => toggleKey(kd)}
-                                            level={2}
-                                          />
-                                          {opend && (
-                                            <div className="pl-6 space-y-1">
-                                              {(d.tasks || []).map(t => (
-                                                <TaskRow key={t.id} t={t} onSelect={setSelectedTask} statusFilter={statusFilter}/>
-                                              ))}
-                                              {countTasks(d.tasks) === 0 && <div className="text-xs text-gray-400 pl-1">Aucune tâche (device)</div>}
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                          {(site.switchboards||[]).length === 0 && <div className="text-xs text-gray-400 pl-1">Aucun switchboard</div>}
-                        </div>
-                      )}
-
-                      {/* ATEX */}
-                      <NodeHeader
-                        title="ATEX"
-                        count={(site.atex || []).reduce((a,z)=> a + countTasks(z.tasks) + (z.equipments||[]).reduce((x,e)=>x+countTasks(e.tasks),0), 0)}
-                        open={openSite && expanded[`${keySite}-atex`]}
-                        toggle={() => { toggleKey(keySite); toggleKey(`${keySite}-atex`); }}
-                      />
-                      {openSite && expanded[`${keySite}-atex`] && (
-                        <div className="pl-4 space-y-2">
-                          {(site.atex || []).map((z, zi) => {
-                            const kz = `${keySite}-atex-${zi}`;
-                            const openz = !!expanded[kz];
-                            return (
-                              <div key={kz}>
-                                <NodeHeader
-                                  title={`Zone ${z.zone || 'Z?'}`}
-                                  count={countTasks(z.tasks) + (z.equipments||[]).reduce((x,e)=>x+countTasks(e.tasks),0)}
-                                  open={openz}
-                                  toggle={() => toggleKey(kz)}
-                                  level={1}
-                                />
-                                {openz && (
-                                  <div className="pl-6 space-y-2">
-                                    {(z.tasks || []).map(t => (
-                                      <TaskRow key={t.id} t={t} onSelect={setSelectedTask} statusFilter={statusFilter}/>
-                                    ))}
-                                    {(z.equipments || []).map((e, ei) => {
-                                      const ke = `${kz}-eq-${ei}`;
-                                      const opene = !!expanded[ke];
-                                      return (
-                                        <div key={ke}>
-                                          <NodeHeader
-                                            title={e.label || e.code || e.id}
-                                            count={countTasks(e.tasks)}
-                                            open={opene}
-                                            toggle={() => toggleKey(ke)}
-                                            level={2}
-                                          />
-                                          {opene && (
-                                            <div className="pl-6 space-y-1">
-                                              {(e.tasks || []).map(t => (
-                                                <TaskRow key={t.id} t={t} onSelect={setSelectedTask} statusFilter={statusFilter}/>
-                                              ))}
-                                              {countTasks(e.tasks) === 0 && <div className="text-xs text-gray-400 pl-1">Aucune tâche</div>}
-                                            </div>
-                                          )}
-                                        </div>
-                                      );
-                                    })}
-                                    {countTasks(z.tasks) === 0 && (z.equipments||[]).length === 0 && (
-                                      <div className="text-xs text-gray-400 pl-1">Aucun équipement ATEX</div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                          {(site.atex||[]).length === 0 && <div className="text-xs text-gray-400 pl-1">Aucune zone ATEX</div>}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Colonne droite : Détails */}
-        <div className="bg-white rounded-2xl shadow-sm ring-1 ring-black/5 p-4 min-h-[480px]">
-          <DetailsPane
-            selectedTask={selectedTask}
-            refreshHierarchy={refreshHierarchy}
-            pushToast={pushToast}
-          />
+            <option value="open">Open</option>
+            <option value="done">Done</option>
+            <option value="all">Tous</option>
+          </select>
         </div>
       </div>
 
-      {toast && <Toast {...toast} onClose={()=>setToast(null)} />}
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList>
+          <TabsTrigger value="bt">
+            BT (Bâtiments → Switchboards → Devices)
+          </TabsTrigger>
+          <TabsTrigger value="hv">HV (Bâtiments → HV)</TabsTrigger>
+          <TabsTrigger value="gantt">Gantt</TabsTrigger>
+          <TabsTrigger value="missing">Non intégrés</TabsTrigger>
+        </TabsList>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-4">
+          <TabsContent
+            value="bt"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
+          >
+            <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
+              <Tree statusFilter={status} onSelect={setSelected} />
+            </div>
+            <div>
+              <Details task={selected} refresh={refresh} />
+            </div>
+          </TabsContent>
+
+          <TabsContent
+            value="hv"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
+          >
+            <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
+              <Tree statusFilter={status} onSelect={setSelected} />
+            </div>
+            <div>
+              <Details task={selected} refresh={refresh} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="gantt" className="col-span-2">
+            <Gantt />
+          </TabsContent>
+
+          <TabsContent value="missing" className="col-span-2">
+            <MissingPanel />
+          </TabsContent>
+        </div>
+      </Tabs>
     </section>
   );
 }
