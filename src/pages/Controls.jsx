@@ -17,14 +17,19 @@ import {
   Eye,
   EyeOff,
 } from "lucide-react";
+import { Bar } from "react-chartjs-2";
 import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  Title,
   Tooltip,
-} from "recharts";
+  Legend,
+} from "chart.js";
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+
 import "../styles/controls.css";
 
 // ---------------------------------------------------------------------------
@@ -506,25 +511,63 @@ function Tree({ statusFilter, onSelect, onShowPlan }) {
 }
 
 // ---------------------------------------------------------------------------
-// Gantt
+// Gantt (Chart.js version, cohérente avec Obsolescence.jsx)
 // ---------------------------------------------------------------------------
 function Gantt() {
-  const [data, setData] = useState([]);
+  const [data, setData] = useState({ labels: [], datasets: [] });
+
   const load = async () => {
-    const r = await api.controls.timeline();
-    setData(
-      (r.items || []).map((t) => ({
-        name: t.label,
-        days: Math.max(
-          1,
-          Math.round((new Date(t.end) - Date.now()) / 86400000)
-        ),
-      }))
-    );
+    try {
+      const r = await api.controls.timeline();
+      const tasks = Array.isArray(r.items) ? r.items : [];
+      const labels = tasks.map((t) => t.label);
+      const days = tasks.map((t) =>
+        Math.max(1, Math.round((new Date(t.end) - Date.now()) / 86400000))
+      );
+      setData({
+        labels,
+        datasets: [
+          {
+            label: "Jours restants",
+            data: days,
+            backgroundColor: "#6366f1",
+            borderRadius: 6,
+          },
+        ],
+      });
+    } catch (e) {
+      console.error("Erreur chargement Gantt:", e);
+    }
   };
+
   useEffect(() => {
     load();
   }, []);
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    indexAxis: "y",
+    scales: {
+      x: {
+        title: { display: true, text: "Jours restants" },
+        grid: { color: "#f3f4f6" },
+      },
+      y: {
+        ticks: { autoSkip: false },
+        grid: { display: false },
+      },
+    },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (ctx) => `${ctx.parsed.x} jours restants`,
+        },
+      },
+    },
+  };
+
   return (
     <Card>
       <CardContent className="p-4">
@@ -535,19 +578,8 @@ function Gantt() {
             <RefreshCw size={14} />
           </Button>
         </div>
-        <div style={{ width: "100%", height: 280 }}>
-          <ResponsiveContainer>
-            <BarChart
-              data={data}
-              layout="vertical"
-              margin={{ left: 80, right: 20 }}
-            >
-              <XAxis type="number" hide />
-              <YAxis type="category" dataKey="name" width={220} />
-              <Tooltip />
-              <Bar dataKey="days" className="gantt-bar" />
-            </BarChart>
-          </ResponsiveContainer>
+        <div style={{ height: 320 }}>
+          <Bar data={data} options={options} />
         </div>
       </CardContent>
     </Card>
