@@ -289,6 +289,25 @@ export default function Atex() {
     const d = dayjs(dateStr);
     return d.isValid() ? d.add(36, "month").format("YYYY-MM-DD") : "";
   }
+  // Règle locale de conformité selon zonage + marquage
+  function simpleConformityCheck({ zoning_gas, zoning_dust, atex_mark_gas, atex_mark_dust }) {
+    const hasEx = (s) => typeof s === "string" && /Ex\s*[A-Za-z0-9]/.test(s);
+
+    const gasZoned = zoning_gas != null;   // 0/1/2
+    const dustZoned = zoning_dust != null; // 20/21/22
+
+    // Pas de zonage du tout → conforme
+    if (!gasZoned && !dustZoned) return "conforme";
+
+    // Si zone gaz → il faut un marquage gaz lisible (contient "Ex…")
+    if (gasZoned && !hasEx(atex_mark_gas)) return "non_conforme";
+
+    // Si zone poussière → il faut un marquage poussière lisible
+    if (dustZoned && !hasEx(atex_mark_dust)) return "non_conforme";
+
+    // Zonage(s) respecté(s)
+    return "conforme";
+  }
   async function reload() {
     setGlobalLoading(true);
     setLoading(true);
@@ -369,29 +388,38 @@ export default function Atex() {
       return () => window.removeEventListener("atex-plan-meta-updated", handler);
     }, [q, status, building, zone, compliance]);
     // Merge helper : robuste contre objets imbriqués et champs manquants
-      const mergeZones = (raw) => {
-        if (!raw) return raw;
+    const mergeZones = (raw) => {
+      if (!raw) return raw;
 
-        const clean = { ...raw };
+      const clean = { ...raw };
 
-        // Champs texte : toujours string, jamais objet
-        const textFields = ["building", "zone", "equipment", "sub_equipment"];
-        textFields.forEach(field => {
-          if (typeof clean[field] === "object" && clean[field] !== null) {
-            clean[field] = clean[field].name || clean[field].equipment || clean[field].id || "";
-          } else if (clean[field] == null) {
-            clean[field] = "";
-          } else {
-            clean[field] = String(clean[field]);
-          }
-        });
+      // 🧹 Normalisation des champs texte (toujours string, jamais objet)
+      const textFields = ["building", "zone", "equipment", "sub_equipment"];
+      textFields.forEach((field) => {
+        if (typeof clean[field] === "object" && clean[field] !== null) {
+          clean[field] = clean[field].name || clean[field].equipment || clean[field].id || "";
+        } else if (clean[field] == null) {
+          clean[field] = "";
+        } else {
+          clean[field] = String(clean[field]);
+        }
+      });
 
-        // Zonage
-        clean.zoning_gas = raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null;
-        clean.zoning_dust = raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null;
+      // 🗺️ Zonage gaz / poussière
+      clean.zoning_gas = raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null;
+      clean.zoning_dust = raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null;
 
-        return clean;
-      };
+      // ✅ Conformité : on force une valeur explicite pour éviter les retours vides
+      // - On priorise : valeur backend (`compliance_state`) → décision IA → résultat historique
+      // - Sinon, on met "na" pour éviter que le tableau affiche "—"
+      clean.compliance_state =
+        raw?.compliance_state ||
+        raw?.decision ||
+        raw?.last_result ||
+        "na";
+
+      return clean;
+    };
 
   async function openEdit(equipment, reloadFn) {
     const base = mergeZones(equipment || {});
@@ -475,16 +503,40 @@ export default function Atex() {
   async function saveBase() {
     if (!editing) return;
 
-    // 🧩 Validation locale des marquages ATEX avant enregistrement
+    // 🧩 Validation locale des marquages ATEX avant enregistrement (non bloquante si champ vide)
+    // - On vérifie la forme du marquage ("Ex...") UNIQUEMENT si un marquage est saisi ET qu'il existe un zonage correspondant.
+    // - L'absence de marquage n'empêche JAMAIS l'enregistrement : la conformité tranchera (non conforme si le zonage l'exige).
     const looksLikeAtexMark = (s) => s && /Ex\s*[A-Za-z0-9]/.test(s);
-    if (editing.atex_mark_gas && !looksLikeAtexMark(editing.atex_mark_gas)) {
-      alert("⚠️ Le marquage gaz semble incomplet (aucun code 'Ex' détecté).");
+
+    const hasGasZone = editing.zoning_gas != null;
+    const hasDustZone = editing.zoning_dust != null;
+
+    // Si zoné gaz et un marquage gaz est saisi mais invalide → on bloque pour éviter de sauver un format faux
+    if (hasGasZone && editing.atex_mark_gas && !looksLikeAtexMark(editing.atex_mark_gas)) {
+      alert("⚠️ Le marquage gaz saisi semble incomplet (aucun code 'Ex' détecté).");
       return;
     }
-    if (editing.atex_mark_dust && !looksLikeAtexMark(editing.atex_mark_dust)) {
-      alert("⚠️ Le marquage poussière semble incomplet (aucun code 'Ex' détecté).");
+
+    // Si zoné poussière et un marquage poussière est saisi mais invalide → on bloque
+    if (hasDustZone && editing.atex_mark_dust && !looksLikeAtexMark(editing.atex_mark_dust)) {
+      alert("⚠️ Le marquage poussière saisi semble incomplet (aucun code 'Ex' détecté).");
       return;
     }
+
+    // 📝 Harmonisation locale de la conformité (sans bloquer l'enregistrement)
+    // Règles :
+    // - Si zone gaz/poussière et marquage correspondant manquant → non conforme
+    // - Si aucun zonage → conforme
+    // - Sinon, on conserve l'état courant (ou "na" par défaut)
+    const missingGasMark = hasGasZone && !editing.atex_mark_gas;
+    const missingDustMark = hasDustZone && !editing.atex_mark_dust;
+
+    const nextCompliance =
+      missingGasMark || missingDustMark
+        ? "non_conforme"
+        : (!hasGasZone && !hasDustZone ? "conforme" : (editing.compliance_state ?? "na"));
+
+    setEditing((cur) => ({ ...(cur || {}), compliance_state: nextCompliance }));
 
     const payload = {
       name: editing.name || "",
@@ -532,6 +584,7 @@ export default function Atex() {
         initialRef.current = fresh;
       }
 
+      // ✅ Ces lignes doivent être DANS le try
       await reload();
       setToast("Fiche enregistrée");
     } catch (e) {
@@ -680,14 +733,25 @@ export default function Atex() {
     }
   }
 
-  // VÉRIFICATION IA : garde les champs photo et métadonnées non enregistrées
+  // VÉRIFICATION IA (frontend) : pas de blocage si marquages manquants, combine IA + règle locale
   async function verifyComplianceIA() {
     if (!editing?.id) return;
 
-    const before = { ...editing }; // Sauvegarde de l’état actuel (photo + métadonnées)
+    const before = { ...editing }; // snapshot avant IA (préserver les champs saisis)
+
+    // --- Règle locale immédiate (zonage + marquages) ---
+    const hasEx = (s) => typeof s === "string" && /Ex\s*[A-Za-z0-9]/.test(s);
+    const gasZoned = editing.zoning_gas != null;   // 0/1/2 => zoné
+    const dustZoned = editing.zoning_dust != null; // 20/21/22 => zoné
+    const localDecision = (() => {
+      if (!gasZoned && !dustZoned) return "conforme";         // pas de zonage => conforme
+      if (gasZoned && !hasEx(editing.atex_mark_gas || "")) return "non_conforme";
+      if (dustZoned && !hasEx(editing.atex_mark_dust || "")) return "non_conforme";
+      return "conforme";
+    })();
 
     try {
-      // 1️⃣ Préparation du corps de requête IA
+      // 1) Corps IA (aucune validation bloquante en amont)
       const body = {
         atex_mark_gas: editing.atex_mark_gas || "",
         atex_mark_dust: editing.atex_mark_dust || "",
@@ -695,75 +759,69 @@ export default function Atex() {
         target_dust: editing.zoning_dust ?? null,
       };
 
-      // 2️⃣ Validation locale du marquage avant envoi IA
-      const looksLikeAtexMark = (s) => s && /Ex\s*[A-Za-z0-9]/.test(s);
-      if (!looksLikeAtexMark(body.atex_mark_gas) && !looksLikeAtexMark(body.atex_mark_dust)) {
-        console.warn("[ATEX] Marquage incomplet détecté :", body);
-        setEditing((cur) => ({ ...cur, compliance_state: "non_conforme" }));
-        setToast("Marquage ATEX incomplet (aucun code 'Ex' détecté)");
-        return;
+      // 2) Appel IA si dispo ; si ça échoue, on garde la décision locale
+      let res = null;
+      try {
+        if (api.atex.assessConformity) {
+          res = await api.atex.assessConformity(body);
+        } else if (api.atex.aiAnalyze) {
+          res = await api.atex.aiAnalyze(body);
+        }
+      } catch (e) {
+        console.warn("[ATEX] IA indisponible, décision locale utilisée :", e);
       }
 
-      // 3️⃣ Analyse IA (vérification conformité)
-      const res = await api.atex.assessConformity(body);
-      const decision = res?.decision || null;
-      const rationale = res?.rationale || "";
+      // 3) Choix final : décision IA prioritaire si explicite, sinon décision locale
+      const decision =
+        res?.decision === "conforme" || res?.decision === "non_conforme"
+          ? res.decision
+          : localDecision;
 
-      // 4️⃣ Application de la décision de conformité
+      const rationale = res?.rationale || (decision === localDecision ? "Décision locale (zonage/marquage)" : "");
+
+      // 4) Reporter la décision au backend si possible
       if (api.atex.applyCompliance) {
         await api.atex.applyCompliance(editing.id, {
           decision,
           rationale,
-          source: res?.source || "unknown",
+          source: res?.source || (res ? "ai" : "local_rule"),
         });
       }
 
-      // 5️⃣ Récupération de la fiche mise à jour depuis le backend
-      const updated = await api.atex.getEquipment(editing.id);
+      // 5) Recharger la fiche et fusionner prudemment (ne pas écraser les champs saisis par du vide)
+      const updated = await api.atex.getEquipment(editing.id).catch(() => null);
       const merged = mergeZones(updated?.equipment || updated || {});
 
-      // 6️⃣ Fusion robuste : garder les champs utilisateur non écrasés
       setEditing((cur) => {
         const safe = { ...before };
-        const mergedSafe = merged || {};
+        const next = { ...(merged || {}) };
+        const isEmpty = (v) => v == null || (typeof v === "string" && v.trim() === "");
 
-        const preserveIfEmpty = (field) => {
-          if (!mergedSafe[field] || mergedSafe[field].trim() === "") {
-            mergedSafe[field] = safe[field] || "";
-          }
-        };
+        ["type", "manufacturer", "manufacturer_ref", "atex_mark_gas", "atex_mark_dust"].forEach((field) => {
+          if (isEmpty(next[field])) next[field] = safe[field] || "";
+        });
 
-        ["type", "manufacturer", "manufacturer_ref", "atex_mark_gas", "atex_mark_dust"].forEach(preserveIfEmpty);
-
-        return {
-          ...safe,
-          ...mergedSafe,
-          photo_url: safe.photo_url || mergedSafe.photo_url || "",
-          compliance_state: mergedSafe.compliance_state || decision || safe.compliance_state || null,
-        };
+        next.photo_url = safe.photo_url || next.photo_url || "";
+        next.compliance_state = next.compliance_state || decision || safe.compliance_state || "na";
+        return next;
       });
 
-      // 7️⃣ Recharger l’historique immédiatement
-      const hist = await api.atex.getEquipmentHistory(editing.id);
-      setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
+      // 6) Historique + rafraîchissement tableau
+      try {
+        const hist = await api.atex.getEquipmentHistory(editing.id);
+        setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
+      } catch {}
 
-      // 8️⃣ Rafraîchir le tableau principal
       if (typeof window._atexReload === "function") {
         await window._atexReload();
       } else {
         await reload();
       }
 
-      // 9️⃣ Feedback utilisateur
+      // 7) Feedback
       setToast(
         decision
-          ? `Conformité: ${
-              decision === "conforme"
-                ? "Conforme"
-                : decision === "non_conforme"
-                ? "Non conforme"
-                : "Indéterminée"
-            }`
+          ? `Conformité: ${decision === "conforme" ? "Conforme" : "Non conforme"}`
           : "Analyse IA terminée"
       );
     } catch (e) {
