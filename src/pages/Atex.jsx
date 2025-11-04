@@ -458,7 +458,7 @@ export default function Atex() {
       "atex_mark_dust",
       "comment",
       "installed_at",
-      "last_check_date", // on suit maintenant ce champ
+      "last_check_date",
       "next_check_date",
       "zoning_gas",
       "zoning_dust",
@@ -469,9 +469,23 @@ export default function Atex() {
       return String(va) !== String(vb);
     });
   }
+
   const dirty = isDirty();
+
   async function saveBase() {
     if (!editing) return;
+
+    // 🧩 Validation locale des marquages ATEX avant enregistrement
+    const looksLikeAtexMark = (s) => s && /Ex\s*[A-Za-z0-9]/.test(s);
+    if (editing.atex_mark_gas && !looksLikeAtexMark(editing.atex_mark_gas)) {
+      alert("⚠️ Le marquage gaz semble incomplet (aucun code 'Ex' détecté).");
+      return;
+    }
+    if (editing.atex_mark_dust && !looksLikeAtexMark(editing.atex_mark_dust)) {
+      alert("⚠️ Le marquage poussière semble incomplet (aucun code 'Ex' détecté).");
+      return;
+    }
+
     const payload = {
       name: editing.name || "",
       building: editing.building || "",
@@ -486,11 +500,12 @@ export default function Atex() {
       comment: editing.comment || "",
       status: editing.status || STATUS.A_FAIRE,
       installed_at: editing.installed_at || editing.installation_date || null,
-      last_check_date: editing.last_check_date || null, // on persiste le dernier contrôle
-      next_check_date: editing.next_check_date || null, // (auto +36m, modifiable)
+      last_check_date: editing.last_check_date || null,
+      next_check_date: editing.next_check_date || null,
       zoning_gas: editing.zoning_gas ?? null,
       zoning_dust: editing.zoning_dust ?? null,
     };
+
     try {
       let updated;
       if (editing.id) {
@@ -498,22 +513,33 @@ export default function Atex() {
       } else {
         updated = await api.atex.createEquipment(payload);
       }
+
       const eq = updated?.equipment || updated || null;
       if (eq?.id) {
         const fresh = mergeZones(eq);
-        // 🧹 Corrige le type des champs
-        fresh.equipment = typeof fresh.equipment === "object" ? fresh.equipment?.equipment || "" : fresh.equipment || "";
-        fresh.sub_equipment = typeof fresh.sub_equipment === "object" ? fresh.sub_equipment?.name || "" : fresh.sub_equipment || "";
+
+        // 🧹 Corrige le type des champs objets potentiels
+        fresh.equipment =
+          typeof fresh.equipment === "object"
+            ? fresh.equipment?.equipment || ""
+            : fresh.equipment || "";
+        fresh.sub_equipment =
+          typeof fresh.sub_equipment === "object"
+            ? fresh.sub_equipment?.name || ""
+            : fresh.sub_equipment || "";
+
         setEditing(fresh);
         initialRef.current = fresh;
       }
+
       await reload();
       setToast("Fiche enregistrée");
     } catch (e) {
-      console.error(e); // eslint-disable-line no-console
+      console.error("[ATEX] Erreur lors de l'enregistrement :", e);
       setToast("Erreur enregistrement");
     }
   }
+
   async function deleteEquipment() {
     if (!editing?.id) return;
     const ok = window.confirm("Supprimer définitivement cet équipement ATEX ? Cette action est irréversible.");
@@ -560,25 +586,37 @@ export default function Atex() {
   async function analyzeFromPhotos(filesLike) {
     const list = Array.from(filesLike || []);
     if (!list.length) return;
+
     try {
       const res = await api.atex.analyzePhotoBatch(list);
       const s = res?.extracted || res || {};
 
-      setEditing((x) => ({
-        ...x, // Garde l'état actuel
-        manufacturer: s.manufacturer || x?.manufacturer || "",
-        manufacturer_ref: s.manufacturer_ref || x?.manufacturer_ref || "",
-        atex_mark_gas: s.atex_mark_gas || x?.atex_mark_gas || "",
-        atex_mark_dust: s.atex_mark_dust || x?.atex_mark_dust || "",
-        type: s.type || x?.type || "",
-      }));
+      // 🧩 Fusion robuste : ne remplace que si la valeur IA est non vide et pertinente
+      setEditing((x) => {
+        const safe = { ...x };
+
+        const applyIfValid = (field, value) => {
+          if (value && typeof value === "string" && value.trim().length > 2 && value.trim() !== safe[field]) {
+            safe[field] = value.trim();
+          }
+        };
+
+        applyIfValid("manufacturer", s.manufacturer);
+        applyIfValid("manufacturer_ref", s.manufacturer_ref);
+        applyIfValid("atex_mark_gas", s.atex_mark_gas);
+        applyIfValid("atex_mark_dust", s.atex_mark_dust);
+        applyIfValid("type", s.type);
+
+        return safe;
+      });
 
       setToast("Analyse photos terminée");
     } catch (e) {
-      console.error(e);
+      console.error("[ATEX] Erreur analyse IA :", e);
       setToast("Analyse photos indisponible");
     }
   }
+
   async function analyzeCompliance() {
     if (!editing) return;
     try {
@@ -588,20 +626,33 @@ export default function Atex() {
         target_gas: editing.zoning_gas ?? null,
         target_dust: editing.zoning_dust ?? null,
       };
+
+      // 🧩 Validation locale du marquage : doit contenir au moins "Ex"
+      const looksLikeAtexMark = (s) => s && /Ex\s*[A-Za-z0-9]/.test(s);
+      if (!looksLikeAtexMark(body.atex_mark_gas) && !looksLikeAtexMark(body.atex_mark_dust)) {
+        console.warn("[ATEX] Marquage incomplet détecté :", body);
+        setEditing((cur) => ({ ...cur, compliance_state: "non_conforme" }));
+        setToast("Marquage ATEX incomplet (aucun code 'Ex' détecté)");
+        return;
+      }
+
       const res =
         (api.atex.assessConformity && (await api.atex.assessConformity(body))) ||
         (api.atex.aiAnalyze && (await api.atex.aiAnalyze(body)));
+
       const decision = res?.decision || null;
       const rationale = res?.rationale || "";
+
       if (editing?.id && api.atex.applyCompliance) {
         try {
-          await api.atex.applyCompliance(editing.id, { 
-            decision, 
+          await api.atex.applyCompliance(editing.id, {
+            decision,
             rationale,
-            source: res?.source || "unknown" // ✅ ici aussi 
+            source: res?.source || "unknown",
           });
         } catch {}
       }
+
       if (editing?.id) {
         const fresh = await api.atex.getEquipment(editing.id).catch(() => null);
         if (fresh?.equipment) {
@@ -609,14 +660,22 @@ export default function Atex() {
           setEditing((cur) => ({ ...(cur || {}), ...merged }));
         }
       }
+
       await reload();
+
       setToast(
         decision
-          ? `Conformité: ${decision === "conforme" ? "Conforme" : decision === "non_conforme" ? "Non conforme" : "Indéterminé"}`
-          : (res?.message || "Analyse conformité OK")
+          ? `Conformité: ${
+              decision === "conforme"
+                ? "Conforme"
+                : decision === "non_conforme"
+                ? "Non conforme"
+                : "Indéterminé"
+            }`
+          : res?.message || "Analyse conformité OK"
       );
     } catch (e) {
-      console.error(e); // eslint-disable-line no-console
+      console.error("[ATEX] Erreur analyse conformité :", e);
       setToast("Analyse conformité indisponible");
     }
   }
@@ -625,10 +684,10 @@ export default function Atex() {
   async function verifyComplianceIA() {
     if (!editing?.id) return;
 
-    const before = { ...editing }; // Sauvegarde l'état actuel (photos + champs saisis)
+    const before = { ...editing }; // Sauvegarde de l’état actuel (photo + métadonnées)
 
     try {
-      // 1. Préparation du corps de requête IA
+      // 1️⃣ Préparation du corps de requête IA
       const body = {
         atex_mark_gas: editing.atex_mark_gas || "",
         atex_mark_dust: editing.atex_mark_dust || "",
@@ -636,48 +695,66 @@ export default function Atex() {
         target_dust: editing.zoning_dust ?? null,
       };
 
-      // 2. Analyse IA (vérification conformité)
+      // 2️⃣ Validation locale du marquage avant envoi IA
+      const looksLikeAtexMark = (s) => s && /Ex\s*[A-Za-z0-9]/.test(s);
+      if (!looksLikeAtexMark(body.atex_mark_gas) && !looksLikeAtexMark(body.atex_mark_dust)) {
+        console.warn("[ATEX] Marquage incomplet détecté :", body);
+        setEditing((cur) => ({ ...cur, compliance_state: "non_conforme" }));
+        setToast("Marquage ATEX incomplet (aucun code 'Ex' détecté)");
+        return;
+      }
+
+      // 3️⃣ Analyse IA (vérification conformité)
       const res = await api.atex.assessConformity(body);
       const decision = res?.decision || null;
       const rationale = res?.rationale || "";
 
-      // 3. Application de la décision de conformité
+      // 4️⃣ Application de la décision de conformité
       if (api.atex.applyCompliance) {
-        await api.atex.applyCompliance(editing.id, { 
-          decision, 
-          rationale, 
-          source: res?.source || "unknown" // ✅ provenance locale ou IA 
+        await api.atex.applyCompliance(editing.id, {
+          decision,
+          rationale,
+          source: res?.source || "unknown",
         });
       }
 
-      // 4. Récupération de la fiche mise à jour depuis le backend
+      // 5️⃣ Récupération de la fiche mise à jour depuis le backend
       const updated = await api.atex.getEquipment(editing.id);
       const merged = mergeZones(updated?.equipment || updated || {});
 
-      // 5. Fusionner intelligemment : garder les champs utilisateur non enregistrés
-      setEditing({
-        ...merged, // Base du serveur
-        type: before.type || merged.type || "",
-        manufacturer: before.manufacturer || merged.manufacturer || "",
-        manufacturer_ref: before.manufacturer_ref || merged.manufacturer_ref || "",
-        atex_mark_gas: before.atex_mark_gas || merged.atex_mark_gas || "",
-        atex_mark_dust: before.atex_mark_dust || merged.atex_mark_dust || "",
-        photo_url: before.photo_url || merged.photo_url || "",
-        compliance_state: merged?.compliance_state || decision || null,
+      // 6️⃣ Fusion robuste : garder les champs utilisateur non écrasés
+      setEditing((cur) => {
+        const safe = { ...before };
+        const mergedSafe = merged || {};
+
+        const preserveIfEmpty = (field) => {
+          if (!mergedSafe[field] || mergedSafe[field].trim() === "") {
+            mergedSafe[field] = safe[field] || "";
+          }
+        };
+
+        ["type", "manufacturer", "manufacturer_ref", "atex_mark_gas", "atex_mark_dust"].forEach(preserveIfEmpty);
+
+        return {
+          ...safe,
+          ...mergedSafe,
+          photo_url: safe.photo_url || mergedSafe.photo_url || "",
+          compliance_state: mergedSafe.compliance_state || decision || safe.compliance_state || null,
+        };
       });
 
-      // 6. Recharger immédiatement l’historique des contrôles
+      // 7️⃣ Recharger l’historique immédiatement
       const hist = await api.atex.getEquipmentHistory(editing.id);
       setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
 
-      // 7. Rafraîchir le tableau principal si possible
+      // 8️⃣ Rafraîchir le tableau principal
       if (typeof window._atexReload === "function") {
         await window._atexReload();
       } else {
         await reload();
       }
 
-      // 8. Feedback utilisateur
+      // 9️⃣ Feedback utilisateur
       setToast(
         decision
           ? `Conformité: ${
@@ -690,7 +767,7 @@ export default function Atex() {
           : "Analyse IA terminée"
       );
     } catch (e) {
-      console.error("[ATEX] Échec vérification IA:", e);
+      console.error("[ATEX] Échec vérification conformité IA :", e);
       setToast("Échec vérification conformité IA");
     }
   }
