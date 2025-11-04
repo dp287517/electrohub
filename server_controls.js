@@ -339,37 +339,110 @@ router.get("/hierarchy/tree", async (req, res) => {
   try {
     const buildings = [];
 
-    // --- 1. Buildings existants
-    const { rows: bRows } = await pool.query("SELECT DISTINCT building_code AS code FROM switchboards WHERE building_code IS NOT NULL");
+    // --- 1. Buildings existants depuis les switchboards (codes distincts)
+    const { rows: bRows } = await pool.query(
+      "SELECT DISTINCT building_code AS code FROM switchboards WHERE building_code IS NOT NULL"
+    );
+
     for (const b of bRows) {
       const building = { label: b.code, switchboards: [], hv: [] };
 
-      // --- 2. HV
-      const { rows: hvRows } = await pool.query("SELECT * FROM high_voltage WHERE building_code=$1", [b.code]);
+      // ---------------------------------------------------------------------
+      // 2. HIGH VOLTAGE — hv_equipments + hv_devices
+      // ---------------------------------------------------------------------
+      const { rows: hvRows } = await pool.query(
+        "SELECT * FROM hv_equipments WHERE building_code=$1",
+        [b.code]
+      );
+
       for (const hv of hvRows) {
-        const { rows: hvTasks } = await pool.query("SELECT * FROM controls_tasks WHERE entity_id=$1", [hv.id]);
-        building.hv.push({ id: hv.id, label: hv.name, tasks: hvTasks });
+        // Tâches associées à l’équipement HT
+        const { rows: hvTasks } = await pool.query(
+          "SELECT * FROM controls_tasks WHERE entity_id=$1",
+          [hv.id]
+        );
+
+        // Récupérer les devices HT rattachés
+        const { rows: hvDevices } = await pool.query(
+          "SELECT * FROM hv_devices WHERE hv_equipment_id=$1",
+          [hv.id]
+        );
+
+        const devices = [];
+        for (const d of hvDevices) {
+          const { rows: devTasks } = await pool.query(
+            "SELECT * FROM controls_tasks WHERE entity_id=$1",
+            [d.id]
+          );
+          devices.push({
+            id: d.id,
+            label: d.name,
+            type: d.device_type,
+            tasks: devTasks,
+          });
+        }
+
+        building.hv.push({
+          id: hv.id,
+          label: hv.name,
+          tasks: hvTasks,
+          devices,
+        });
       }
 
-      // --- 3. Switchboards + Devices
-      const { rows: swRows } = await pool.query("SELECT * FROM switchboards WHERE building_code=$1", [b.code]);
-      for (const sw of swRows) {
-        const { rows: swTasks } = await pool.query("SELECT * FROM controls_tasks WHERE entity_id=$1", [sw.id]);
-        const swObj = { id: sw.id, label: sw.name, tasks: swTasks, devices: [] };
+      // ---------------------------------------------------------------------
+      // 3. LOW VOLTAGE — switchboards + devices
+      // ---------------------------------------------------------------------
+      const { rows: swRows } = await pool.query(
+        "SELECT * FROM switchboards WHERE building_code=$1",
+        [b.code]
+      );
 
-        const { rows: devRows } = await pool.query("SELECT * FROM devices WHERE switchboard_id=$1", [sw.id]);
+      for (const sw of swRows) {
+        const { rows: swTasks } = await pool.query(
+          "SELECT * FROM controls_tasks WHERE entity_id=$1",
+          [sw.id]
+        );
+
+        const swObj = {
+          id: sw.id,
+          label: sw.name,
+          tasks: swTasks,
+          devices: [],
+        };
+
+        // Charger les devices LV pour ce switchboard
+        const { rows: devRows } = await pool.query(
+          "SELECT * FROM devices WHERE switchboard_id=$1",
+          [sw.id]
+        );
+
         for (const d of devRows) {
-          const { rows: devTasks } = await pool.query("SELECT * FROM controls_tasks WHERE entity_id=$1", [d.id]);
-          swObj.devices.push({ id: d.id, label: d.name, tasks: devTasks });
+          const { rows: devTasks } = await pool.query(
+            "SELECT * FROM controls_tasks WHERE entity_id=$1",
+            [d.id]
+          );
+
+          swObj.devices.push({
+            id: d.id,
+            label: d.name,
+            type: d.device_type,
+            tasks: devTasks,
+          });
         }
+
         building.switchboards.push(swObj);
       }
 
+      // ---------------------------------------------------------------------
+      // Push final
+      // ---------------------------------------------------------------------
       buildings.push(building);
     }
 
     res.json(buildings);
   } catch (e) {
+    console.error("Erreur /hierarchy/tree :", e);
     res.status(500).json({ error: e.message });
   }
 });
