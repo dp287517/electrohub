@@ -339,10 +339,16 @@ router.get("/hierarchy/tree", async (req, res) => {
   try {
     const buildings = [];
 
-    // --- 1. Buildings existants depuis les switchboards (codes distincts)
-    const { rows: bRows } = await pool.query(
-      "SELECT DISTINCT building_code AS code FROM switchboards WHERE building_code IS NOT NULL"
-    );
+    // ---------------------------------------------------------------------
+    // 1. Buildings existants depuis switchboards + hv_equipments
+    // ---------------------------------------------------------------------
+    const { rows: bRows } = await pool.query(`
+      SELECT DISTINCT building_code AS code FROM (
+        SELECT building_code FROM switchboards WHERE building_code IS NOT NULL
+        UNION
+        SELECT building_code FROM hv_equipments WHERE building_code IS NOT NULL
+      ) q
+    `);
 
     for (const b of bRows) {
       const building = { label: b.code, switchboards: [], hv: [] };
@@ -356,13 +362,11 @@ router.get("/hierarchy/tree", async (req, res) => {
       );
 
       for (const hv of hvRows) {
-        // Tâches associées à l’équipement HT
         const { rows: hvTasks } = await pool.query(
           "SELECT * FROM controls_tasks WHERE entity_id=$1",
           [hv.id]
         );
 
-        // Récupérer les devices HT rattachés
         const { rows: hvDevices } = await pool.query(
           "SELECT * FROM hv_devices WHERE hv_equipment_id=$1",
           [hv.id]
@@ -411,7 +415,6 @@ router.get("/hierarchy/tree", async (req, res) => {
           devices: [],
         };
 
-        // Charger les devices LV pour ce switchboard
         const { rows: devRows } = await pool.query(
           "SELECT * FROM devices WHERE switchboard_id=$1",
           [sw.id]
@@ -434,9 +437,6 @@ router.get("/hierarchy/tree", async (req, res) => {
         building.switchboards.push(swObj);
       }
 
-      // ---------------------------------------------------------------------
-      // Push final
-      // ---------------------------------------------------------------------
       buildings.push(building);
     }
 
