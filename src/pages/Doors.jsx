@@ -1658,37 +1658,48 @@ function Doors() {
                 </div>
 
                 {/* --- Conteneur du viewer --- */}
-                <div className={planUIMode === "modal" ? "pt-2 relative" : "relative"}>
+                <div
+                  className={`relative ${
+                    planUIMode === "modal"
+                      ? "pt-2 h-[calc(100vh-90px)]"
+                      : "min-h-[400px]"
+                  }`}
+                  style={{ WebkitOverflowScrolling: "touch" }}
+                >
                   {/* 🌀 Loader pendant le chargement du plan */}
                   {!pdfReady && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-[10000]">
-                      <div className="flex flex-col items-center gap-3 text-gray-600">
-                        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-500"></div>
-                        <div className="text-sm">Chargement du plan…</div>
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/90 z-[99999] pointer-events-none">
+                      <div className="flex flex-col items-center gap-3 text-gray-700">
+                        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
+                        <div className="text-sm font-medium">
+                          Chargement du plan…
+                        </div>
                       </div>
                     </div>
                   )}
 
                   {/* 🗺️ Viewer principal */}
-                  <PlanViewerLeaflet
-                    ref={viewerRef}
-                    key={selectedPlan?.id || selectedPlan?.logical_name || ""}
-                    fileUrl={planFileUrl}
-                    pageIndex={planPage}
-                    points={positions}
-                    onReady={handlePdfReady}
-                    onMovePoint={handleMovePoint}
-                    onClickPoint={handleClickPoint}
-                    onCreatePoint={createDoorAtCenter}
-                    unsavedIds={unsavedDoorIds}
-                    disabled={false}
-                  />
+                  <div className="relative z-0">
+                    <PlanViewerLeaflet
+                      ref={viewerRef}
+                      key={selectedPlan?.id || selectedPlan?.logical_name || ""}
+                      fileUrl={planFileUrl}
+                      pageIndex={planPage}
+                      points={positions}
+                      onReady={handlePdfReady}
+                      onMovePoint={handleMovePoint}
+                      onClickPoint={handleClickPoint}
+                      onCreatePoint={createDoorAtCenter}
+                      unsavedIds={unsavedDoorIds}
+                      disabled={false}
+                    />
+                  </div>
                 </div>
               </div>
             )}
           </div>
         </>
-      )}  {/* ✅ Fin du bloc maps */}
+      )} {/* ✅ Fin du bloc maps */}
 
 
       {tab === "settings" && (
