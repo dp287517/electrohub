@@ -1404,10 +1404,24 @@ function Doors() {
   // Ouvrir/fermer plan
   function openPlan(plan) {
     console.log("[UI] open plan", plan?.id || plan?.logical_name);
+
+    // 🧹 Réinitialise visuellement l'ancien viewer (empêche les anciennes portes d'apparaître)
+    try {
+      if (viewerRef.current?.adjust) {
+        const wrap = document.querySelector(".leaflet-wrapper");
+        if (wrap) wrap.innerHTML = ""; // efface immédiatement l'ancien contenu
+      }
+    } catch (e) {
+      console.warn("Purge viewer précédente échouée :", e);
+    }
+
     setSelectedPlan(plan);
     setPdfReady(false);
+    setPositions([]); // 👈 Vide aussi la liste de portes locales immédiatement
+
     const stableUrl = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
     setPlanFileUrl(stableUrl);
+
     // 🔒 Fige le mode d'affichage pendant que le plan est ouvert
     try {
       const coarse = window.matchMedia?.("(pointer: coarse)")?.matches || false;
