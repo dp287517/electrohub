@@ -426,11 +426,10 @@ function PlanCard({ plan, onRename, onPick }) {
             <div className="text-[11px] mt-1">PDF</div>
           </div>
         ) : (
-          <>
-            {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
-            {!visible && <div className="text-xs text-gray-400">…</div>}
-            {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
-          </>
+          <div className="flex flex-col items-center justify-center text-gray-500">
+            <div className="text-4xl leading-none">📄</div>
+            <div className="text-[11px] mt-1">PDF</div>
+          </div>
         )}
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
           {name}
@@ -1613,63 +1612,84 @@ function Doors() {
       )}
 
       {tab === "maps" && (
-        <div className="space-y-4">
-          <PlansHeader
-            mapsLoading={mapsLoading}
-            onUploadZip={async (file) => {
-              const r = await api.doorsMaps.uploadZip(file).catch(() => null);
-              if (r?.ok) setToast("Plans importés ✅");
-              await loadPlans();
-            }}
-          />
-          <PlanCards
-            plans={plans}
-            onRename={async (plan, name) => {
-              await api.doorsMaps.renamePlan(plan.logical_name, name);
-              await loadPlans();
-            }}
-            onPick={openPlan}
-          />
+        <>
+          <div className="space-y-4">
+            <PlansHeader
+              mapsLoading={mapsLoading}
+              onUploadZip={async (file) => {
+                const r = await api.doorsMaps.uploadZip(file).catch(() => null);
+                if (r?.ok) setToast("Plans importés ✅");
+                await loadPlans();
+              }}
+            />
 
-          {/* Un seul viewer. En mode 'modal', on le passe en plein écran par CSS (z-index < Drawer). */}
-          {selectedPlan && (
-            <div
-              className={
-                planUIMode === "modal"
-                  ? "fixed inset-0 z-[5000] bg-white p-2"
-                  : "bg-white rounded-2xl border shadow-sm p-3"
-              }
-            >
-              <div className={`flex items-center justify-between gap-3 flex-wrap ${planUIMode === "modal" ? "pb-2 border-b" : ""}`}>
-                <div className="font-semibold truncate pr-3">
-                  {selectedPlan.display_name || selectedPlan.logical_name}
+            <PlanCards
+              plans={plans}
+              onRename={async (plan, name) => {
+                await api.doorsMaps.renamePlan(plan.logical_name, name);
+                await loadPlans();
+              }}
+              onPick={openPlan}
+            />
+
+            {/* Un seul viewer. En mode 'modal', on le passe en plein écran par CSS (z-index < Drawer). */}
+            {selectedPlan && (
+              <div
+                className={
+                  planUIMode === "modal"
+                    ? "fixed inset-0 z-[5000] bg-white p-2 relative"
+                    : "bg-white rounded-2xl border shadow-sm p-3 relative"
+                }
+              >
+                {/* --- En-tête du viewer --- */}
+                <div
+                  className={`flex items-center justify-between gap-3 flex-wrap ${
+                    planUIMode === "modal" ? "pb-2 border-b" : ""
+                  }`}
+                >
+                  <div className="font-semibold truncate pr-3">
+                    {selectedPlan.display_name || selectedPlan.logical_name}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Btn variant="ghost" onClick={closePlan}>
+                      Fermer le plan
+                    </Btn>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Btn variant="ghost" onClick={closePlan}>Fermer le plan</Btn>
+
+                {/* --- Conteneur du viewer --- */}
+                <div className={planUIMode === "modal" ? "pt-2 relative" : "relative"}>
+                  {/* 🌀 Loader pendant le chargement du plan */}
+                  {!pdfReady && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-[10000]">
+                      <div className="flex flex-col items-center gap-3 text-gray-600">
+                        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-500"></div>
+                        <div className="text-sm">Chargement du plan…</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 🗺️ Viewer principal */}
+                  <PlanViewerLeaflet
+                    ref={viewerRef}
+                    key={selectedPlan?.id || selectedPlan?.logical_name || ""}
+                    fileUrl={planFileUrl}
+                    pageIndex={planPage}
+                    points={positions}
+                    onReady={handlePdfReady}
+                    onMovePoint={handleMovePoint}
+                    onClickPoint={handleClickPoint}
+                    onCreatePoint={createDoorAtCenter}
+                    unsavedIds={unsavedDoorIds}
+                    disabled={false}
+                  />
                 </div>
               </div>
+            )}
+          </div>
+        </>
+      )}  {/* ✅ Fin du bloc maps */}
 
-              <div className={planUIMode === "modal" ? "pt-2" : ""}>
-                <PlanViewerLeaflet
-                  ref={viewerRef}
-                  key={selectedPlan?.id || selectedPlan?.logical_name || ""}
-                  fileUrl={planFileUrl}
-                  pageIndex={planPage}
-                  points={positions}
-                  onReady={handlePdfReady}
-                  onMovePoint={handleMovePoint}
-                  onClickPoint={handleClickPoint}
-                  onCreatePoint={createDoorAtCenter}
-                  unsavedIds={unsavedDoorIds}
-                  disabled={false}
-                />
-              </div>
-
-              {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
-            </div>
-          )}
-        </div>
-      )}
 
       {tab === "settings" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-4">
