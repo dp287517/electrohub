@@ -357,104 +357,92 @@ function PlanCard({ plan, onRename, onPick }) {
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
   const next30 = Number(plan?.actions_next_30 || 0);
   const overdue = Number(plan?.overdue || 0);
-  const canvasRef = useRef(null);
-  const [thumbErr, setThumbErr] = useState("");
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
   const isMobile = useIsMobile();
 
+  // 👀 Détection visibilité (pour chargement différé si besoin)
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
     const io = new IntersectionObserver(
-      (entries) => entries.forEach((e) => { if (e.isIntersecting) setVisible(true); }),
+      (entries) => entries.forEach((e) => {
+        if (e.isIntersecting) setVisible(true);
+      }),
       { rootMargin: "200px" }
     );
     io.observe(el);
     return () => io.disconnect();
   }, []);
 
+  // ✅ On supprime complètement le rendu PDF miniature pour éviter les lags
+  //    On affiche simplement une icône "📄 PDF"
   useEffect(() => {
-    if (isMobile || !visible) return;
-    let cancelled = false;
-    let loadingTask = null;
-    let renderTask = null;
-
-    (async () => {
-      try {
-        setThumbErr("");
-        const url = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
-        loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
-        const pdf = await loadingTask.promise;
-        if (cancelled) return;
-
-        const page = await pdf.getPage(1);
-        const vp1 = page.getViewport({ scale: 1 });
-        const capCss = 320;
-        const dpr = window.devicePixelRatio || 1;
-        const targetBitmapW = capCss * dpr;
-        const scale = Math.min(2, Math.max(0.5, targetBitmapW / vp1.width));
-        const adjusted = page.getViewport({ scale });
-
-        const c = canvasRef.current;
-        if (!c || cancelled) return;
-        c.width = Math.floor(adjusted.width);
-        c.height = Math.floor(adjusted.height);
-        const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true });
-        renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
-        await renderTask.promise;
-        try { await pdf.cleanup(); } catch {}
-        try { await loadingTask.destroy(); } catch {}
-      } catch (e) {
-        if (e?.name !== "RenderingCancelledException") setThumbErr("Aperçu indisponible.");
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      try { renderTask?.cancel(); } catch {}
-      try { loadingTask?.destroy(); } catch {}
-    };
-  }, [plan.id, plan.logical_name, visible, isMobile]);
+    setVisible(true);
+  }, []);
 
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
-        {isMobile ? (
-          <div className="flex flex-col items-center justify-center text-gray-500">
-            <div className="text-4xl leading-none">📄</div>
-            <div className="text-[11px] mt-1">PDF</div>
-          </div>
-        ) : (
-          <>
-            {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
-            {!visible && <div className="text-xs text-gray-400">…</div>}
-            {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
-          </>
-        )}
+      <div
+        ref={obsRef}
+        className="relative aspect-video bg-gray-50 flex items-center justify-center"
+      >
+        <div className="flex flex-col items-center justify-center text-gray-500">
+          <div className="text-4xl leading-none">📄</div>
+          <div className="text-[11px] mt-1">PDF</div>
+        </div>
+
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
           {name}
         </div>
       </div>
+
       <div className="p-3">
         {!edit ? (
           <div className="flex items-start justify-between gap-2">
-            <div className="font-medium truncate" title={name}>{name || "—"}</div>
+            <div className="font-medium truncate" title={name}>
+              {name || "—"}
+            </div>
             <div className="flex items-center gap-1">
-              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>✏️</Btn>
-              <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
+              <Btn
+                variant="ghost"
+                aria-label="Renommer le plan"
+                onClick={() => setEdit(true)}
+              >
+                ✏️
+              </Btn>
+              <Btn variant="subtle" onClick={() => onPick(plan)}>
+                Ouvrir
+              </Btn>
             </div>
           </div>
         ) : (
           <div className="flex items-center gap-2">
             <Input value={name} onChange={setName} />
-            <Btn variant="subtle" onClick={async () => { await onRename(plan, (name || "").trim()); setEdit(false); }}>OK</Btn>
-            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>Annuler</Btn>
+            <Btn
+              variant="subtle"
+              onClick={async () => {
+                await onRename(plan, (name || "").trim());
+                setEdit(false);
+              }}
+            >
+              OK
+            </Btn>
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                setName(plan.display_name || plan.logical_name || "");
+                setEdit(false);
+              }}
+            >
+              Annuler
+            </Btn>
           </div>
         )}
+
         <div className="flex items-center gap-2 mt-2 text-xs">
-          <Badge color="orange">≤30j: {next30}</Badge>
-          <Badge color="red">Retard: {overdue}</Badge>
+          <Badge color="orange">≤30 j : {next30}</Badge>
+          <Badge color="red">Retard : {overdue}</Badge>
         </div>
       </div>
     </div>
@@ -490,6 +478,7 @@ const PlanViewerLeaflet = forwardRef(({
   // ✅ Vue persistante
   const initialFitDoneRef = useRef(false);
   const userViewTouchedRef = useRef(false);
+  const activePlanKeyRef = useRef(null);
 
   const t0 = useRef(performance.now());
   const log = (msg, extra) => {
@@ -609,6 +598,7 @@ const PlanViewerLeaflet = forwardRef(({
 
     (async () => {
       try {
+        activePlanKeyRef.current = `${fileUrl}::${pageIndex}`;
         log("PDF load start", { fileUrl, pageIndex });
         await cleanupPdf(); // 🧹 annule proprement tout rendu précédent
 
@@ -758,9 +748,17 @@ const PlanViewerLeaflet = forwardRef(({
   // Redessiner les marqueurs
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
+
+    // ✅ Empêche de redessiner avec les données d’un ancien plan
+    const currentKey = `${fileUrl}::${pageIndex}`;
+    if (activePlanKeyRef.current !== currentKey) {
+      log("⏭️ Skip redraw – outdated plan", { currentKey, active: activePlanKeyRef.current });
+      return;
+    }
+
     log("points changed → redraw", { count: (points || []).length, imgSize });
     drawMarkers(points, imgSize.w, imgSize.h);
-  }, [points, imgSize, unsavedIds]);
+  }, [points, imgSize, unsavedIds, fileUrl, pageIndex]);
 
   function drawMarkers(list, w, h) {
     const map = mapRef.current;
