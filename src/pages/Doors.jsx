@@ -479,6 +479,7 @@ const PlanViewerLeaflet = forwardRef(({
   const initialFitDoneRef = useRef(false);
   const userViewTouchedRef = useRef(false);
   const activePlanKeyRef = useRef(null);
+  const [loading, setLoading] = useState(false);
 
   const t0 = useRef(performance.now());
   const log = (msg, extra) => {
@@ -600,6 +601,7 @@ const PlanViewerLeaflet = forwardRef(({
 
     (async () => {
       try {
+        setLoading(true); // 🟡 démarre le loader
         activePlanKeyRef.current = `${fileUrl}::${pageIndex}`;
         log("PDF load start", { fileUrl, pageIndex });
         await cleanupPdf(); // 🧹 annule proprement tout rendu précédent
@@ -710,8 +712,10 @@ const PlanViewerLeaflet = forwardRef(({
         try { await pdf.cleanup(); } catch {}
         if (!isActive) return;
         onReady?.();
+        setLoading(false); // ✅ fin du chargement → on débloque
         log("Viewer ready");
       } catch (e) {
+        setLoading(false); // 🔴 stop aussi en cas d’erreur
         if (!isActive) return;
         if (String(e?.name) === "RenderingCancelledException") return;
         console.error("Leaflet viewer error", e);
@@ -848,31 +852,79 @@ const PlanViewerLeaflet = forwardRef(({
   return (
     <div className="mt-3 relative">
       <div className="flex items-center justify-end gap-2 mb-2">
-        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>Ajuster</Btn>
+        <Btn
+          variant="ghost"
+          aria-label="Ajuster le zoom au plan"
+          onClick={adjust}
+        >
+          Ajuster
+        </Btn>
       </div>
+
       <div
         ref={wrapRef}
         className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
         style={{ height: wrapperHeight }}
-      />
+      >
+        {/* 🟡 Loader bloquant pendant chargement */}
+        {loading && (
+          <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[2000]">
+            <div className="animate-spin w-10 h-10 border-4 border-gray-300 border-t-blue-500 rounded-full"></div>
+            <p className="mt-2 text-sm text-gray-600">Chargement du plan…</p>
+          </div>
+        )}
+      </div>
+
+      {/* Menu contextuel multi-marqueurs */}
       {picker && (
         <div
           className="door-pick"
-          style={{ left: Math.max(8, picker.x - 120), top: Math.max(8, picker.y - 8) }}
+          style={{
+            left: Math.max(8, picker.x - 120),
+            top: Math.max(8, picker.y - 8),
+          }}
         >
           {picker.items.slice(0, 8).map((it) => (
             <button key={it.door_id} onClick={() => onPickDoor(it)}>
               {it.door_name || it.door_id}
             </button>
           ))}
-          {picker.items.length > 8 ? <div className="text-xs text-gray-500 px-1">…</div> : null}
+          {picker.items.length > 8 ? (
+            <div className="text-xs text-gray-500 px-1">…</div>
+          ) : null}
         </div>
       )}
+
+      {/* Légende des couleurs */}
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#059669"}}/> À faire</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full blink-orange" style={{background:"#f59e0b"}}/> ≤30j</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full blink-red" style={{background:"#e11d48"}}/> En retard</span>
-        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full door-marker--blue" style={{background:"#2563eb"}}/> Nouvelle (à enregistrer)</span>
+        <span className="inline-flex items-center gap-1">
+          <span
+            className="w-3 h-3 rounded-full"
+            style={{ background: "#059669" }}
+          />
+          À faire
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span
+            className="w-3 h-3 rounded-full blink-orange"
+            style={{ background: "#f59e0b" }}
+          />
+          ≤30j
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span
+            className="w-3 h-3 rounded-full blink-red"
+            style={{ background: "#e11d48" }}
+          />
+          En retard
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span
+            className="w-3 h-3 rounded-full door-marker--blue"
+            style={{ background: "#2563eb" }}
+          />
+          Nouvelle (à enregistrer)
+        </span>
       </div>
     </div>
   );
