@@ -841,12 +841,12 @@ async function loadPlans() {
   }
 }
 
-// 🧭 Chargement automatique des plans à l’ouverture de l’onglet
+// 🧭 Chargement des plans quand on entre dans l’onglet
 useEffect(() => {
   if (tab === "plans") loadPlans();
 }, [tab]);
 
-// 🧹 Nettoyage automatique du plan sélectionné quand on quitte l’onglet “Plans”
+// 🧹 Nettoyage automatique quand on quitte l’onglet
 useEffect(() => {
   if (tab !== "plans" && selectedPlan) {
     setSelectedPlan(null);
@@ -856,8 +856,6 @@ useEffect(() => {
 /* ---------- Optimistic zone merge helper (UI instantanée) ---------- */
 function applyZonesLocally(id, zones) {
   if (!id) return;
-
-  // Met à jour les zones dans la liste principale
   setItems((old) =>
     (old || []).map((it) =>
       it.id === id
@@ -869,8 +867,6 @@ function applyZonesLocally(id, zones) {
         : it
     )
   );
-
-  // Met aussi à jour la fiche en édition si elle correspond à l’ID
   setEditing((cur) =>
     cur && cur.id === id
       ? {
@@ -881,6 +877,85 @@ function applyZonesLocally(id, zones) {
       : cur
   );
 }
+
+/* --------- Onglet Plans (rendu JSX) --------- */
+{tab === "plans" && (
+  <div className="space-y-4">
+    {/* Barre d’import ZIP */}
+    <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
+      <div className="font-semibold">Plans PDF</div>
+      <AtexZipImport
+        disabled={mapsLoading}
+        onDone={async () => {
+          setToast("Plans importés");
+          await loadPlans();
+        }}
+      />
+    </div>
+
+    {/* Liste des cartes de plans */}
+    <PlanCards
+      plans={plans}
+      onRename={async (plan, name) => {
+        await api.atexMaps.renamePlan(plan.logical_name, name);
+        await loadPlans();
+      }}
+      // ✅ Correction : recharger même si on clique sur le même plan
+      onPick={(plan) => {
+        setSelectedPlan(plan);
+        setMapRefreshTick((t) => t + 1);
+      }}
+    />
+
+    {/* ✅ Card du plan sélectionné — disparaît proprement */}
+    {selectedPlan ? (
+      <div
+        key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
+        className="bg-white rounded-2xl border shadow-sm p-3 transition-all duration-200 animate-fadeIn"
+      >
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="font-semibold truncate pr-3">
+            {selectedPlan.display_name || selectedPlan.logical_name}
+          </div>
+          <div className="flex items-center gap-2">
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                // 🔥 Forcer le démontage complet de la card
+                setSelectedPlan(null);
+                setMapRefreshTick((t) => t + 1);
+              }}
+            >
+              Fermer le plan
+            </Btn>
+          </div>
+        </div>
+
+        <AtexMap
+          key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
+          plan={selectedPlan}
+          onOpenEquipment={openEdit}
+          onZonesApplied={async (id, zones) => {
+            applyZonesLocally(id, zones);
+            await reload();
+            if (editing?.id === id) {
+              try {
+                const res = await api.atex.getEquipment(id);
+                const fresh = mergeZones(res?.equipment || {});
+                setEditing((cur) => ({ ...(cur || {}), ...fresh }));
+              } catch {}
+            }
+          }}
+          onMetaChanged={async () => {
+            await reload();
+            setToast("Plans et équipements mis à jour");
+          }}
+        />
+      </div>
+    ) : null}
+  </div>
+)}
+
   /* ----------------------------- UI ----------------------------- */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
