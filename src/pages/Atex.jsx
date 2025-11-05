@@ -830,43 +830,57 @@ export default function Atex() {
     }
   }
 
-  /* ----------------------------- Plans ----------------------------- */
-  async function loadPlans() {
-    setMapsLoading(true);
-    try {
-      const r = await api.atexMaps.listPlans();
-      setPlans(Array.isArray(r?.plans) ? r.plans : []);
-    } finally {
-      setMapsLoading(false);
-    }
+/* ----------------------------- Plans ----------------------------- */
+async function loadPlans() {
+  setMapsLoading(true);
+  try {
+    const r = await api.atexMaps.listPlans();
+    setPlans(Array.isArray(r?.plans) ? r.plans : []);
+  } finally {
+    setMapsLoading(false);
   }
-  useEffect(() => {
-    if (tab === "plans") loadPlans();
-  }, [tab]);
-  /* ---------- Optimistic zone merge helper (UI instantanée) ---------- */
-  function applyZonesLocally(id, zones) {
-    if (!id) return;
-    setItems((old) =>
-      (old || []).map((it) =>
-        it.id === id
-          ? {
-              ...it,
-              zoning_gas: zones?.zoning_gas ?? it.zoning_gas,
-              zoning_dust: zones?.zoning_dust ?? it.zoning_dust,
-            }
-          : it
-      )
-    );
-    setEditing((cur) =>
-      cur && cur.id === id
+}
+
+// 🧭 Chargement automatique des plans à l’ouverture de l’onglet
+useEffect(() => {
+  if (tab === "plans") loadPlans();
+}, [tab]);
+
+// 🧹 Nettoyage automatique du plan sélectionné quand on quitte l’onglet “Plans”
+useEffect(() => {
+  if (tab !== "plans" && selectedPlan) {
+    setSelectedPlan(null);
+  }
+}, [tab, selectedPlan]);
+
+/* ---------- Optimistic zone merge helper (UI instantanée) ---------- */
+function applyZonesLocally(id, zones) {
+  if (!id) return;
+
+  // Met à jour les zones dans la liste principale
+  setItems((old) =>
+    (old || []).map((it) =>
+      it.id === id
         ? {
-            ...cur,
-            zoning_gas: zones?.zoning_gas ?? cur.zoning_gas,
-            zoning_dust: zones?.zoning_dust ?? cur.zoning_dust,
+            ...it,
+            zoning_gas: zones?.zoning_gas ?? it.zoning_gas,
+            zoning_dust: zones?.zoning_dust ?? it.zoning_dust,
           }
-        : cur
-    );
-  }
+        : it
+    )
+  );
+
+  // Met aussi à jour la fiche en édition si elle correspond à l’ID
+  setEditing((cur) =>
+    cur && cur.id === id
+      ? {
+          ...cur,
+          zoning_gas: zones?.zoning_gas ?? cur.zoning_gas,
+          zoning_dust: zones?.zoning_dust ?? cur.zoning_dust,
+        }
+      : cur
+  );
+}
   /* ----------------------------- UI ----------------------------- */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
