@@ -843,15 +843,24 @@ async function loadPlans() {
 
 // 🧭 Chargement des plans quand on entre dans l’onglet
 useEffect(() => {
-  if (tab === "plans") loadPlans();
+  if (tab === "plans") {
+    loadPlans();
+  }
 }, [tab]);
 
-// 🧹 Nettoyage automatique quand on quitte l’onglet
+// 🧹 Nettoyage automatique : dès qu'on quitte l’onglet ou recharge les plans
 useEffect(() => {
   if (tab !== "plans" && selectedPlan) {
     setSelectedPlan(null);
   }
-}, [tab, selectedPlan]);
+}, [tab]);
+
+// 🧹 Fermeture automatique si la liste des plans est rechargée
+useEffect(() => {
+  if (!mapsLoading && selectedPlan && !plans.find(p => p.logical_name === selectedPlan.logical_name)) {
+    setSelectedPlan(null);
+  }
+}, [plans, mapsLoading]);
 
 /* ---------- Optimistic zone merge helper (UI instantanée) ---------- */
 function applyZonesLocally(id, zones) {
@@ -880,7 +889,7 @@ function applyZonesLocally(id, zones) {
 
 /* --------- Onglet Plans (rendu JSX) --------- */
 {tab === "plans" && (
-  <div className="space-y-4">
+  <div className="space-y-4" key={`plans-tab-${selectedPlan ? selectedPlan.logical_name : "none"}`}>
     {/* Barre d’import ZIP */}
     <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
       <div className="font-semibold">Plans PDF</div>
@@ -900,18 +909,22 @@ function applyZonesLocally(id, zones) {
         await api.atexMaps.renamePlan(plan.logical_name, name);
         await loadPlans();
       }}
-      // ✅ Correction : recharger même si on clique sur le même plan
       onPick={(plan) => {
-        setSelectedPlan(plan);
-        setMapRefreshTick((t) => t + 1);
+        // Si on reclique sur le même plan → toggle propre
+        if (selectedPlan?.logical_name === plan.logical_name) {
+          setSelectedPlan(null);
+        } else {
+          setSelectedPlan(plan);
+          setMapRefreshTick((t) => t + 1);
+        }
       }}
     />
 
-    {/* ✅ Card du plan sélectionné — disparaît proprement */}
-    {selectedPlan ? (
+    {/* ✅ Bandeau du plan sélectionné */}
+    {selectedPlan && (
       <div
-        key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
-        className="bg-white rounded-2xl border shadow-sm p-3 transition-all duration-200 animate-fadeIn"
+        key={`plan-view-${selectedPlan.logical_name}-${mapRefreshTick}`}
+        className="bg-white rounded-2xl border shadow-sm p-3 transition-all duration-300 animate-fadeIn"
       >
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="font-semibold truncate pr-3">
@@ -921,7 +934,6 @@ function applyZonesLocally(id, zones) {
             <Btn
               variant="ghost"
               onClick={() => {
-                // 🔥 Forcer le démontage complet de la card
                 setSelectedPlan(null);
                 setMapRefreshTick((t) => t + 1);
               }}
@@ -952,7 +964,7 @@ function applyZonesLocally(id, zones) {
           }}
         />
       </div>
-    ) : null}
+    )}
   </div>
 )}
 
