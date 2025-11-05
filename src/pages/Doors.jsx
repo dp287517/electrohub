@@ -576,25 +576,27 @@ const PlanViewerLeaflet = forwardRef(({
     };
 
     const cleanupMap = () => {
-      const map = mapRef.current;
-      if (map) {
-        try { map.off(); } catch {}
-        try { map.stop?.(); } catch {}
-        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-        try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
-        try { map.remove(); } catch {}
-      }
-      mapRef.current = null;
-      imageLayerRef.current = null;
-      if (markersLayerRef.current) { 
-        try { markersLayerRef.current.clearLayers(); } catch {} 
-        markersLayerRef.current = null; 
-      }
-      addBtnControlRef.current = null;
-      initialFitDoneRef.current = false;
-      userViewTouchedRef.current = false;
-      log("Viewer unmounted & cleaned");
-    };
+    const map = mapRef.current;
+    if (map) {
+      try { map.off(); } catch {}
+      try { map.stop?.(); } catch {}
+      try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
+      try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
+      try { map.remove(); } catch {}
+    }
+
+    // 🧹 Vide immédiatement toutes les couches avant que le plan suivant s’instancie
+    if (markersLayerRef.current) {
+      try { markersLayerRef.current.clearLayers(); } catch {}
+    }
+    markersLayerRef.current = null;
+    imageLayerRef.current = null;
+    mapRef.current = null;
+    addBtnControlRef.current = null;
+    initialFitDoneRef.current = false;
+    userViewTouchedRef.current = false;
+    log("Viewer unmounted & cleaned (markers cleared)");
+  };
 
     (async () => {
       try {
@@ -762,10 +764,17 @@ const PlanViewerLeaflet = forwardRef(({
 
   function drawMarkers(list, w, h) {
     const map = mapRef.current;
-    if (!map) return;
+
+    // ✅ Étape 2 : bloque tout dessin si la carte a été démontée
+    if (!map || !aliveRef.current) {
+      log("⏭️ drawMarkers skipped – map not active");
+      return;
+    }
+
     if (!markersLayerRef.current) {
       markersLayerRef.current = L.layerGroup().addTo(map);
     }
+
     const g = markersLayerRef.current;
     g.clearLayers();
 
@@ -800,7 +809,7 @@ const PlanViewerLeaflet = forwardRef(({
 
       mk.on("dragend", () => {
         if (!onMovePoint) return;
-        const ll = mk.getLatLng(); // CRS.Simple → lat=y, lng=x
+        const ll = mk.getLatLng();
         const xFrac = Math.min(1, Math.max(0, ll.lng / w));
         const yFrac = Math.min(1, Math.max(0, ll.lat / h));
         const xf = Math.round(xFrac * 1e6) / 1e6;
