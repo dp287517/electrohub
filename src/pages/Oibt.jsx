@@ -618,7 +618,7 @@ export default function Oibt() {
   useEffect(() => {
     for (const p of projects) {
       if (!expandedProjects.has(p.id)) continue;
-      const steps = (p.status||[]).map(a => (a.key || "").toLowerCase()).filter(k => k && k !== "sporadic");
+      const steps = (p.status || []).map(a => (a.key || "").toLowerCase()).filter(k => !!k);
       for (const act of steps) loadProjectFiles(p.id, act).catch(()=>{});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
