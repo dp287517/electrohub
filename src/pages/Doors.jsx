@@ -357,99 +357,111 @@ function PlanCard({ plan, onRename, onPick }) {
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
   const next30 = Number(plan?.actions_next_30 || 0);
   const overdue = Number(plan?.overdue || 0);
+  const canvasRef = useRef(null);
+  const [thumbErr, setThumbErr] = useState("");
   const [visible, setVisible] = useState(false);
   const obsRef = useRef(null);
   const isMobile = useIsMobile();
 
-  // 👀 Détection visibilité (pour chargement différé si besoin)
   useEffect(() => {
     const el = obsRef.current;
     if (!el) return;
     const io = new IntersectionObserver(
-      (entries) => entries.forEach((e) => {
-        if (e.isIntersecting) setVisible(true);
-      }),
+      (entries) => entries.forEach((e) => { if (e.isIntersecting) setVisible(true); }),
       { rootMargin: "200px" }
     );
     io.observe(el);
     return () => io.disconnect();
   }, []);
 
-  // ✅ On supprime complètement le rendu PDF miniature pour éviter les lags
-  //    On affiche simplement une icône "📄 PDF"
   useEffect(() => {
-    setVisible(true);
-  }, []);
+    if (isMobile || !visible) return;
+    let cancelled = false;
+    let loadingTask = null;
+    let renderTask = null;
+
+    (async () => {
+      try {
+        setThumbErr("");
+        const url = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
+        loadingTask = pdfjsLib.getDocument(pdfDocOpts(url));
+        const pdf = await loadingTask.promise;
+        if (cancelled) return;
+
+        const page = await pdf.getPage(1);
+        const vp1 = page.getViewport({ scale: 1 });
+        const capCss = 320;
+        const dpr = window.devicePixelRatio || 1;
+        const targetBitmapW = capCss * dpr;
+        const scale = Math.min(2, Math.max(0.5, targetBitmapW / vp1.width));
+        const adjusted = page.getViewport({ scale });
+
+        const c = canvasRef.current;
+        if (!c || cancelled) return;
+        c.width = Math.floor(adjusted.width);
+        c.height = Math.floor(adjusted.height);
+        const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true });
+        renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
+        await renderTask.promise;
+        try { await pdf.cleanup(); } catch {}
+        try { await loadingTask.destroy(); } catch {}
+      } catch (e) {
+        if (e?.name !== "RenderingCancelledException") setThumbErr("Aperçu indisponible.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      try { renderTask?.cancel(); } catch {}
+      try { loadingTask?.destroy(); } catch {}
+    };
+  }, [plan.id, plan.logical_name, visible, isMobile]);
 
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div
-        ref={obsRef}
-        className="relative aspect-video bg-gray-50 flex items-center justify-center"
-      >
-        <div className="flex flex-col items-center justify-center text-gray-500">
-          <div className="text-4xl leading-none">📄</div>
-          <div className="text-[11px] mt-1">PDF</div>
-        </div>
-
+      <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
+        {isMobile ? (
+          <div className="flex flex-col items-center justify-center text-gray-500">
+            <div className="text-4xl leading-none">📄</div>
+            <div className="text-[11px] mt-1">PDF</div>
+          </div>
+        ) : (
+          <>
+            {visible && <canvas ref={canvasRef} style={{ width: "100%", height: "100%", objectFit: "contain" }} />}
+            {!visible && <div className="text-xs text-gray-400">…</div>}
+            {!!thumbErr && <div className="text-xs text-gray-500">{thumbErr}</div>}
+          </>
+        )}
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
           {name}
         </div>
       </div>
-
       <div className="p-3">
         {!edit ? (
           <div className="flex items-start justify-between gap-2">
-            <div className="font-medium truncate" title={name}>
-              {name || "—"}
-            </div>
+            <div className="font-medium truncate" title={name}>{name || "—"}</div>
             <div className="flex items-center gap-1">
-              <Btn
-                variant="ghost"
-                aria-label="Renommer le plan"
-                onClick={() => setEdit(true)}
-              >
-                ✏️
-              </Btn>
-              <Btn variant="subtle" onClick={() => onPick(plan)}>
-                Ouvrir
-              </Btn>
+              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>✏️</Btn>
+              <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
             </div>
           </div>
         ) : (
           <div className="flex items-center gap-2">
             <Input value={name} onChange={setName} />
-            <Btn
-              variant="subtle"
-              onClick={async () => {
-                await onRename(plan, (name || "").trim());
-                setEdit(false);
-              }}
-            >
-              OK
-            </Btn>
-            <Btn
-              variant="ghost"
-              onClick={() => {
-                setName(plan.display_name || plan.logical_name || "");
-                setEdit(false);
-              }}
-            >
-              Annuler
-            </Btn>
+            <Btn variant="subtle" onClick={async () => { await onRename(plan, (name || "").trim()); setEdit(false); }}>OK</Btn>
+            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>Annuler</Btn>
           </div>
         )}
-
         <div className="flex items-center gap-2 mt-2 text-xs">
-          <Badge color="orange">≤30 j : {next30}</Badge>
-          <Badge color="red">Retard : {overdue}</Badge>
+          <Badge color="orange">≤30j: {next30}</Badge>
+          <Badge color="red">Retard: {overdue}</Badge>
         </div>
       </div>
     </div>
   );
 }
 
-/* --- PlanViewerLeaflet (HD) --- */
+/* --- PlanViewerLeaflet --- */
 const PlanViewerLeaflet = forwardRef(({
   fileUrl,
   pageIndex = 0,
@@ -475,11 +487,9 @@ const PlanViewerLeaflet = forwardRef(({
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
-  // ✅ Vue persistante
+  // ✅ Correctifs vue persistante
   const initialFitDoneRef = useRef(false);
   const userViewTouchedRef = useRef(false);
-  const activePlanKeyRef = useRef(null);
-  const [loading, setLoading] = useState(false);
 
   const t0 = useRef(performance.now());
   const log = (msg, extra) => {
@@ -557,16 +567,20 @@ const PlanViewerLeaflet = forwardRef(({
     log("Add control mounted");
   }
 
-  // >>> INITIALISATION / RENDU PDF (Hi-DPI)
+  // >>> INITIALISATION / RENDU PDF
   useEffect(() => {
-    if (disabled) return; // ❌ pas d’instanciation si désactivé
+    if (disabled) return;          // ❌ pas d’instanciation si désactivé
     if (!fileUrl || !wrapRef.current) return;
 
-    let isActive = true; // ✅ garde de sécurité : empêche les rendus obsolètes
+    let cancelled = false;
     aliveRef.current = true;
     t0.current = performance.now();
 
     const jobKey = `${fileUrl}::${pageIndex}`;
+    if (lastJob.current.key === jobKey) {
+      onReady?.();
+      return;
+    }
     lastJob.current.key = jobKey;
 
     const cleanupPdf = async () => {
@@ -575,74 +589,58 @@ const PlanViewerLeaflet = forwardRef(({
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
     };
-
     const cleanupMap = () => {
-    const map = mapRef.current;
-    if (map) {
-      try { map.off(); } catch {}
-      try { map.stop?.(); } catch {}
-      try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
-      try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
-      try { map.remove(); } catch {}
-    }
-
-    // 🧹 Vide immédiatement toutes les couches avant que le plan suivant s’instancie
-    if (markersLayerRef.current) {
-      try { markersLayerRef.current.clearLayers(); } catch {}
-    }
-    markersLayerRef.current = null;
-    imageLayerRef.current = null;
-    mapRef.current = null;
-    addBtnControlRef.current = null;
-    initialFitDoneRef.current = false;
-    userViewTouchedRef.current = false;
-    log("Viewer unmounted & cleaned (markers cleared)");
-  };
+      const map = mapRef.current;
+      if (map) {
+        try { map.off(); } catch {}
+        try { map.stop?.(); } catch {}
+        try { map.eachLayer(l => { try { map.removeLayer(l); } catch {} }); } catch {}
+        try { addBtnControlRef.current && map.removeControl(addBtnControlRef.current); } catch {}
+        try { map.remove(); } catch {}
+      }
+      mapRef.current = null;
+      imageLayerRef.current = null;
+      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
+      addBtnControlRef.current = null;
+      initialFitDoneRef.current = false;
+      userViewTouchedRef.current = false;
+      log("Viewer unmounted & cleaned");
+    };
 
     (async () => {
       try {
-        setLoading(true); // 🟡 démarre le loader
-        activePlanKeyRef.current = `${fileUrl}::${pageIndex}`;
         log("PDF load start", { fileUrl, pageIndex });
-        await cleanupPdf(); // 🧹 annule proprement tout rendu précédent
-
-        // ——— Rendu source Hi-DPI ———
+        await cleanupPdf(); // 🧹 annule proprement l’éventuel rendu précédent
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-        const dpr = Math.max(1, window.devicePixelRatio || 1);
-        const isCoarse = (() => {
-          try { return window.matchMedia?.("(pointer: coarse)")?.matches || false; } catch { return false; }
-        })();
-        const qualityBoost = isCoarse ? 2.5 : 3.5;
+        const dpr = window.devicePixelRatio || 1;
 
-        // 📄 Ouvre le nouveau PDF
+        // PDF open
         loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTaskRef.current.promise;
-        if (!isActive) return;
+        if (cancelled) return;
 
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
-        const safeScale = Math.min(6.0, Math.max(0.75, targetBitmapW / baseVp.width));
+        const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
+        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
         log("PDF page ready", { baseW: baseVp.width, baseH: baseVp.height, scale: safeScale, bmpW: viewport.width, bmpH: viewport.height });
 
         const canvas = document.createElement("canvas");
-        canvas.width = Math.floor(viewport.width);
+        canvas.width  = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
-        ctx.imageSmoothingEnabled = true;
 
-        renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
         await renderTaskRef.current.promise;
-        if (!isActive) return;
+        if (cancelled) return;
 
         const dataUrl = canvas.toDataURL("image/png");
-        if (!isActive) return;
         setImgSize({ w: canvas.width, h: canvas.height });
         log("PDF rendered to image", { w: canvas.width, h: canvas.height });
 
-        // 🗺️ Création de la carte Leaflet
+        // Map init (une seule fois)
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
@@ -672,8 +670,11 @@ const PlanViewerLeaflet = forwardRef(({
             else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
             else setPicker(null);
           });
-          m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; });
-          m.on("movestart", () => { setPicker(null); userViewTouchedRef.current = true; });
+          m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; log("zoomstart"); });
+          m.on("movestart",  () => { setPicker(null); userViewTouchedRef.current = true; log("movestart"); });
+          m.on("zoomend",    () => { log("zoomend", { z: m.getZoom() }); });
+          m.on("moveend",    () => { log("moveend", { center: m.getCenter() }); });
+
           mapRef.current = m;
           log("Map created");
         }
@@ -688,20 +689,20 @@ const PlanViewerLeaflet = forwardRef(({
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
-        log("Image layer added");
+        log("Image layer added", { bounds: "Q" });
 
         await new Promise(requestAnimationFrame);
-        if (!isActive) return;
-
         map.invalidateSize(false);
+
         const fitZoom = map.getBoundsZoom(bounds, true);
         map.options.zoomSnap = 0.1;
         map.options.zoomDelta = 0.5;
-        map.setMinZoom(fitZoom - 2);
-        map.setMaxZoom(fitZoom + 8);
+        map.setMinZoom(fitZoom - 1);
+        map.setMaxZoom(fitZoom + 6);
         map.setMaxBounds(bounds.pad(0.5));
         map.fitBounds(bounds, { padding: [8, 8] });
         initialFitDoneRef.current = true;
+        log("Initial fitBounds done", { fitZoom });
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
@@ -710,14 +711,15 @@ const PlanViewerLeaflet = forwardRef(({
 
         setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
         try { await pdf.cleanup(); } catch {}
-        if (!isActive) return;
         onReady?.();
-        setLoading(false); // ✅ fin du chargement → on débloque
         log("Viewer ready");
       } catch (e) {
-        setLoading(false); // 🔴 stop aussi en cas d’erreur
-        if (!isActive) return;
         if (String(e?.name) === "RenderingCancelledException") return;
+        const msg = String(e?.message || "");
+        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) {
+          log("PDF worker ended");
+          return;
+        }
         console.error("Leaflet viewer error", e);
       }
     })();
@@ -730,23 +732,27 @@ const PlanViewerLeaflet = forwardRef(({
       const keepCenter = m.getCenter();
       const keepZoom = m.getZoom();
       m.invalidateSize(false);
+
       if (!initialFitDoneRef.current) {
         m.fitBounds(b, { padding: [8, 8] });
         initialFitDoneRef.current = true;
+        log("resize → first fit");
       } else {
+        // ✅ on conserve la vue utilisateur
         m.setView(keepCenter, keepZoom, { animate: false });
+        log("resize → keep view", { z: keepZoom, center: keepCenter });
       }
     };
-
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
 
     return () => {
-      isActive = false; // ✅ empêche toute suite de rendu
+      cancelled = true;
       aliveRef.current = false;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onResize);
-      cleanupPdf();
+      try { renderTaskRef.current?.cancel(); } catch {}
+      try { loadingTaskRef.current?.destroy(); } catch {}
       cleanupMap();
     };
   }, [fileUrl, pageIndex, disabled]);
@@ -754,31 +760,16 @@ const PlanViewerLeaflet = forwardRef(({
   // Redessiner les marqueurs
   useEffect(() => {
     if (!mapRef.current || !imgSize.w) return;
-
-    // ✅ Empêche de redessiner avec les données d’un ancien plan
-    const currentKey = `${fileUrl}::${pageIndex}`;
-    if (activePlanKeyRef.current !== currentKey) {
-      log("⏭️ Skip redraw – outdated plan", { currentKey, active: activePlanKeyRef.current });
-      return;
-    }
-
     log("points changed → redraw", { count: (points || []).length, imgSize });
     drawMarkers(points, imgSize.w, imgSize.h);
-  }, [points, imgSize, unsavedIds, fileUrl, pageIndex]);
+  }, [points, imgSize, unsavedIds]);
 
   function drawMarkers(list, w, h) {
     const map = mapRef.current;
-
-    // ✅ Étape 2 : bloque tout dessin si la carte a été démontée
-    if (!map || !aliveRef.current) {
-      log("⏭️ drawMarkers skipped – map not active");
-      return;
-    }
-
+    if (!map) return;
     if (!markersLayerRef.current) {
       markersLayerRef.current = L.layerGroup().addTo(map);
     }
-
     const g = markersLayerRef.current;
     g.clearLayers();
 
@@ -813,7 +804,7 @@ const PlanViewerLeaflet = forwardRef(({
 
       mk.on("dragend", () => {
         if (!onMovePoint) return;
-        const ll = mk.getLatLng();
+        const ll = mk.getLatLng(); // CRS.Simple → lat=y, lng=x
         const xFrac = Math.min(1, Math.max(0, ll.lng / w));
         const yFrac = Math.min(1, Math.max(0, ll.lat / h));
         const xf = Math.round(xFrac * 1e6) / 1e6;
@@ -837,7 +828,7 @@ const PlanViewerLeaflet = forwardRef(({
     m.scrollWheelZoom?.disable();
     m.invalidateSize(false);
     const fitZoom = m.getBoundsZoom(b, true);
-    m.setMinZoom(fitZoom - 2);
+    m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
     initialFitDoneRef.current = true;
     setTimeout(() => { try { m.scrollWheelZoom?.enable(); } catch {} }, 50);
@@ -847,84 +838,36 @@ const PlanViewerLeaflet = forwardRef(({
 
   // Hauteur wrapper : s’adapte à l’écran (utile sur smartphone aussi en modal)
   const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
-  const wrapperHeight = Math.max(320, Math.min(imgSize.h || 720, viewportH - 180));
+  const wrapperHeight = Math.max(320, Math.min( imgSize.h || 720, viewportH - 180 ));
 
   return (
     <div className="mt-3 relative">
       <div className="flex items-center justify-end gap-2 mb-2">
-        <Btn
-          variant="ghost"
-          aria-label="Ajuster le zoom au plan"
-          onClick={adjust}
-        >
-          Ajuster
-        </Btn>
+        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>Ajuster</Btn>
       </div>
-
       <div
         ref={wrapRef}
         className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
         style={{ height: wrapperHeight }}
-      >
-        {/* 🟡 Loader bloquant pendant chargement */}
-        {loading && (
-          <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[2000]">
-            <div className="animate-spin w-10 h-10 border-4 border-gray-300 border-t-blue-500 rounded-full"></div>
-            <p className="mt-2 text-sm text-gray-600">Chargement du plan…</p>
-          </div>
-        )}
-      </div>
-
-      {/* Menu contextuel multi-marqueurs */}
+      />
       {picker && (
         <div
           className="door-pick"
-          style={{
-            left: Math.max(8, picker.x - 120),
-            top: Math.max(8, picker.y - 8),
-          }}
+          style={{ left: Math.max(8, picker.x - 120), top: Math.max(8, picker.y - 8) }}
         >
           {picker.items.slice(0, 8).map((it) => (
             <button key={it.door_id} onClick={() => onPickDoor(it)}>
               {it.door_name || it.door_id}
             </button>
           ))}
-          {picker.items.length > 8 ? (
-            <div className="text-xs text-gray-500 px-1">…</div>
-          ) : null}
+          {picker.items.length > 8 ? <div className="text-xs text-gray-500 px-1">…</div> : null}
         </div>
       )}
-
-      {/* Légende des couleurs */}
       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-        <span className="inline-flex items-center gap-1">
-          <span
-            className="w-3 h-3 rounded-full"
-            style={{ background: "#059669" }}
-          />
-          À faire
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span
-            className="w-3 h-3 rounded-full blink-orange"
-            style={{ background: "#f59e0b" }}
-          />
-          ≤30j
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span
-            className="w-3 h-3 rounded-full blink-red"
-            style={{ background: "#e11d48" }}
-          />
-          En retard
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span
-            className="w-3 h-3 rounded-full door-marker--blue"
-            style={{ background: "#2563eb" }}
-          />
-          Nouvelle (à enregistrer)
-        </span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{background:"#059669"}}/> À faire</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full blink-orange" style={{background:"#f59e0b"}}/> ≤30j</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full blink-red" style={{background:"#e11d48"}}/> En retard</span>
+        <span className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full door-marker--blue" style={{background:"#2563eb"}}/> Nouvelle (à enregistrer)</span>
       </div>
     </div>
   );
@@ -1051,8 +994,6 @@ function Doors() {
   const planPage = 0;
   const [positions, setPositions] = useState([]);
   const [pdfReady, setPdfReady] = useState(false);
-  const [mapLoading, setMapLoading] = useState(false);
-
   const viewerRef = useRef(null);
 
   // ➕ Liste locale des nouvelles portes (non “enregistrées” via le bouton Enregistrer la fiche)
@@ -1386,10 +1327,8 @@ function Doors() {
       })) : [];
       list = list.filter(it => matchFilters(it));
       setPositions(list);
-      setMapLoading(false); // ✅ portes reçues → on débloque
     } catch {
       setPositions([]);
-      setMapLoading(false); // ✅ même en cas d’erreur
     }
   }
   useEffect(() => { if (tab === "maps") loadPlans(); }, [tab]);
@@ -1466,9 +1405,10 @@ function Doors() {
   // Ouvrir/fermer plan
   function openPlan(plan) {
     console.log("[UI] open plan", plan?.id || plan?.logical_name);
-    setMapLoading(true); // 🟡 active le blocage global
     setSelectedPlan(plan);
     setPdfReady(false);
+    const stableUrl = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
+    setPlanFileUrl(stableUrl);
     // 🔒 Fige le mode d'affichage pendant que le plan est ouvert
     try {
       const coarse = window.matchMedia?.("(pointer: coarse)")?.matches || false;
@@ -1724,14 +1664,6 @@ function Doors() {
                   disabled={false}
                 />
               </div>
-
-              {/* 🟡 Loader global : bloque jusqu’à apparition des bonnes portes */}
-              {mapLoading && (
-                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[6000]">
-                  <div className="animate-spin w-10 h-10 border-4 border-gray-300 border-t-blue-500 rounded-full"></div>
-                  <p className="mt-2 text-sm text-gray-600">Chargement des portes…</p>
-                </div>
-              )}
 
               {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
             </div>
