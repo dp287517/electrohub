@@ -569,18 +569,14 @@ const PlanViewerLeaflet = forwardRef(({
 
   // >>> INITIALISATION / RENDU PDF (Hi-DPI)
   useEffect(() => {
-    if (disabled) return;          // ❌ pas d’instanciation si désactivé
+    if (disabled) return; // ❌ pas d’instanciation si désactivé
     if (!fileUrl || !wrapRef.current) return;
 
-    let cancelled = false;
+    let isActive = true; // ✅ garde de sécurité : empêche les rendus obsolètes
     aliveRef.current = true;
     t0.current = performance.now();
 
     const jobKey = `${fileUrl}::${pageIndex}`;
-    if (lastJob.current.key === jobKey) {
-      onReady?.();
-      return;
-    }
     lastJob.current.key = jobKey;
 
     const cleanupPdf = async () => {
@@ -589,6 +585,7 @@ const PlanViewerLeaflet = forwardRef(({
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
     };
+
     const cleanupMap = () => {
       const map = mapRef.current;
       if (map) {
@@ -600,7 +597,10 @@ const PlanViewerLeaflet = forwardRef(({
       }
       mapRef.current = null;
       imageLayerRef.current = null;
-      if (markersLayerRef.current) { try { markersLayerRef.current.clearLayers(); } catch {} markersLayerRef.current = null; }
+      if (markersLayerRef.current) { 
+        try { markersLayerRef.current.clearLayers(); } catch {} 
+        markersLayerRef.current = null; 
+      }
       addBtnControlRef.current = null;
       initialFitDoneRef.current = false;
       userViewTouchedRef.current = false;
@@ -610,49 +610,45 @@ const PlanViewerLeaflet = forwardRef(({
     (async () => {
       try {
         log("PDF load start", { fileUrl, pageIndex });
-        await cleanupPdf(); // 🧹 annule proprement l’éventuel rendu précédent
+        await cleanupPdf(); // 🧹 annule proprement tout rendu précédent
 
-        // ——— Rendu source Hi-DPI (comme Atex-map.jsx) ———
+        // ——— Rendu source Hi-DPI ———
         const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
         const dpr = Math.max(1, window.devicePixelRatio || 1);
         const isCoarse = (() => {
           try { return window.matchMedia?.("(pointer: coarse)")?.matches || false; } catch { return false; }
         })();
-        const qualityBoost = isCoarse ? 2.5 : 3.5; // mobile : un cran plus bas
+        const qualityBoost = isCoarse ? 2.5 : 3.5;
 
-        // PDF open
+        // 📄 Ouvre le nouveau PDF
         loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
         const pdf = await loadingTaskRef.current.promise;
-        if (cancelled) return;
+        if (!isActive) return;
 
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        // Image source nettement plus grande → zoom propre
         const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
         const safeScale = Math.min(6.0, Math.max(0.75, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
         log("PDF page ready", { baseW: baseVp.width, baseH: baseVp.height, scale: safeScale, bmpW: viewport.width, bmpH: viewport.height });
 
         const canvas = document.createElement("canvas");
-        canvas.width  = Math.floor(viewport.width);
+        canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         const ctx = canvas.getContext("2d", { alpha: true });
-        ctx.imageSmoothingEnabled = true; // anti-aliasing
+        ctx.imageSmoothingEnabled = true;
 
-        renderTaskRef.current = page.render({
-          canvasContext: ctx,
-          viewport,
-          intent: "display",
-        });
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
         await renderTaskRef.current.promise;
-        if (cancelled) return;
+        if (!isActive) return;
 
         const dataUrl = canvas.toDataURL("image/png");
+        if (!isActive) return;
         setImgSize({ w: canvas.width, h: canvas.height });
         log("PDF rendered to image", { w: canvas.width, h: canvas.height });
 
-        // Map init (une seule fois)
+        // 🗺️ Création de la carte Leaflet
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
@@ -682,11 +678,8 @@ const PlanViewerLeaflet = forwardRef(({
             else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
             else setPicker(null);
           });
-          m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; log("zoomstart"); });
-          m.on("movestart",  () => { setPicker(null); userViewTouchedRef.current = true; log("movestart"); });
-          m.on("zoomend",    () => { log("zoomend", { z: m.getZoom() }); });
-          m.on("moveend",    () => { log("moveend", { center: m.getCenter() }); });
-
+          m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; });
+          m.on("movestart", () => { setPicker(null); userViewTouchedRef.current = true; });
           mapRef.current = m;
           log("Map created");
         }
@@ -701,20 +694,20 @@ const PlanViewerLeaflet = forwardRef(({
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
         imageLayerRef.current = layer;
         layer.addTo(map);
-        log("Image layer added", { bounds: "Q" });
+        log("Image layer added");
 
         await new Promise(requestAnimationFrame);
-        map.invalidateSize(false);
+        if (!isActive) return;
 
+        map.invalidateSize(false);
         const fitZoom = map.getBoundsZoom(bounds, true);
         map.options.zoomSnap = 0.1;
         map.options.zoomDelta = 0.5;
-        map.setMinZoom(fitZoom - 2); // autorise un cran de plus vers l’extérieur
-        map.setMaxZoom(fitZoom + 8); // et beaucoup plus de détails vers l’intérieur
+        map.setMinZoom(fitZoom - 2);
+        map.setMaxZoom(fitZoom + 8);
         map.setMaxBounds(bounds.pad(0.5));
         map.fitBounds(bounds, { padding: [8, 8] });
         initialFitDoneRef.current = true;
-        log("Initial fitBounds done", { fitZoom });
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
@@ -723,15 +716,12 @@ const PlanViewerLeaflet = forwardRef(({
 
         setTimeout(() => { try { aliveRef.current && map.scrollWheelZoom.enable(); } catch {} }, 60);
         try { await pdf.cleanup(); } catch {}
+        if (!isActive) return;
         onReady?.();
         log("Viewer ready");
       } catch (e) {
+        if (!isActive) return;
         if (String(e?.name) === "RenderingCancelledException") return;
-        const msg = String(e?.message || "");
-        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) {
-          log("PDF worker ended");
-          return;
-        }
         console.error("Leaflet viewer error", e);
       }
     })();
@@ -744,27 +734,23 @@ const PlanViewerLeaflet = forwardRef(({
       const keepCenter = m.getCenter();
       const keepZoom = m.getZoom();
       m.invalidateSize(false);
-
       if (!initialFitDoneRef.current) {
         m.fitBounds(b, { padding: [8, 8] });
         initialFitDoneRef.current = true;
-        log("resize → first fit");
       } else {
-        // ✅ conserve la vue utilisateur
         m.setView(keepCenter, keepZoom, { animate: false });
-        log("resize → keep view", { z: keepZoom, center: keepCenter });
       }
     };
+
     window.addEventListener("resize", onResize);
     window.addEventListener("orientationchange", onResize);
 
     return () => {
-      cancelled = true;
+      isActive = false; // ✅ empêche toute suite de rendu
       aliveRef.current = false;
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onResize);
-      try { renderTaskRef.current?.cancel(); } catch {}
-      try { loadingTaskRef.current?.destroy(); } catch {}
+      cleanupPdf();
       cleanupMap();
     };
   }, [fileUrl, pageIndex, disabled]);
