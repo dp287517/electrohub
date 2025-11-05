@@ -1126,14 +1126,20 @@ export default function Atex() {
               }}
             />
           </div>
+
           <PlanCards
             plans={plans}
             onRename={async (plan, name) => {
               await api.atexMaps.renamePlan(plan.logical_name, name);
               await loadPlans();
             }}
-            onPick={setSelectedPlan}
+            // ✅ Correction : forcer un remount même si on rouvre le même plan
+            onPick={(plan) => {
+              setSelectedPlan(plan);
+              setMapRefreshTick((t) => t + 1);
+            }}
           />
+
           {selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -1141,11 +1147,20 @@ export default function Atex() {
                   {selectedPlan.display_name || selectedPlan.logical_name}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Btn variant="ghost" onClick={() => setSelectedPlan(null)}>
+                  <Btn
+                    variant="ghost"
+                    onClick={() => {
+                      // ✅ Correction : fermeture propre du plan
+                      setSelectedPlan(null);
+                      setMapRefreshTick((t) => t + 1);
+                    }}
+                  >
                     Fermer le plan
                   </Btn>
                 </div>
               </div>
+
+              {/* ✅ Correction : clé unique qui se renouvelle à chaque ouverture */}
               <AtexMap
                 key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
                 plan={selectedPlan}
