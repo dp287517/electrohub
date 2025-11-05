@@ -1051,6 +1051,8 @@ function Doors() {
   const planPage = 0;
   const [positions, setPositions] = useState([]);
   const [pdfReady, setPdfReady] = useState(false);
+  const [mapLoading, setMapLoading] = useState(false);
+
   const viewerRef = useRef(null);
 
   // ➕ Liste locale des nouvelles portes (non “enregistrées” via le bouton Enregistrer la fiche)
@@ -1384,8 +1386,10 @@ function Doors() {
       })) : [];
       list = list.filter(it => matchFilters(it));
       setPositions(list);
+      setMapLoading(false); // ✅ portes reçues → on débloque
     } catch {
       setPositions([]);
+      setMapLoading(false); // ✅ même en cas d’erreur
     }
   }
   useEffect(() => { if (tab === "maps") loadPlans(); }, [tab]);
@@ -1462,10 +1466,9 @@ function Doors() {
   // Ouvrir/fermer plan
   function openPlan(plan) {
     console.log("[UI] open plan", plan?.id || plan?.logical_name);
+    setMapLoading(true); // 🟡 active le blocage global
     setSelectedPlan(plan);
     setPdfReady(false);
-    const stableUrl = api.doorsMaps.planFileUrlAuto(plan, { bust: true });
-    setPlanFileUrl(stableUrl);
     // 🔒 Fige le mode d'affichage pendant que le plan est ouvert
     try {
       const coarse = window.matchMedia?.("(pointer: coarse)")?.matches || false;
@@ -1721,6 +1724,14 @@ function Doors() {
                   disabled={false}
                 />
               </div>
+
+              {/* 🟡 Loader global : bloque jusqu’à apparition des bonnes portes */}
+              {mapLoading && (
+                <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex flex-col items-center justify-center z-[6000]">
+                  <div className="animate-spin w-10 h-10 border-4 border-gray-300 border-t-blue-500 rounded-full"></div>
+                  <p className="mt-2 text-sm text-gray-600">Chargement des portes…</p>
+                </div>
+              )}
 
               {!pdfReady && <div className="text-xs text-gray-500 px-1 pt-2">Chargement du plan…</div>}
             </div>
