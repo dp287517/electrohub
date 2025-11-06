@@ -34,9 +34,17 @@ export async function verifyBubbleToken(bubbleToken) {
     throw new Error(`Bubble verification failed (${res.status}): ${text}`);
   }
 
-  // Tentative de décodage JSON
-  const data = await res.json().catch(() => ({}));
-  console.log("🔍 Bubble verify response:", data);
+  let text = await res.text();
+  console.log("🧾 Bubble raw response:", text);
+
+  let data = {};
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error("❌ Impossible de parser la réponse JSON Bubble");
+  }
+  console.log("🔍 Bubble parsed response:", data);
+
 
   // ✅ Réponse attendue : { success: true, user: "email@domaine.com" }
   if (!data?.success || !data?.user) {
