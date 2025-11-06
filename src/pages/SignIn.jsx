@@ -28,7 +28,7 @@ export default function SignIn() {
   return (
     <AuthCard title="Welcome back" subtitle="Sign in to access your dashboard.">
       <form className="space-y-5" onSubmit={onSubmit}>
-        {/* Ligne "External company" */}
+        {/* External company section */}
         <div
           className="flex items-center justify-between cursor-pointer select-none border rounded-lg p-3 bg-gray-50 hover:bg-gray-100 transition"
           onClick={() => setShowExternal(!showExternal)}
@@ -43,47 +43,24 @@ export default function SignIn() {
           </span>
         </div>
 
-        {/* Champs Email / Password */}
         {showExternal && (
           <div className="space-y-4 mt-3 animate-fade-in">
             <div>
-              <label className="label" htmlFor="email">
-                Email
-              </label>
-              <input
-                className="input mt-1 w-full"
-                id="email"
-                name="email"
-                type="email"
-                placeholder="you@company.com"
-                required
-              />
+              <label className="label" htmlFor="email">Email</label>
+              <input className="input mt-1 w-full" id="email" name="email" type="email" placeholder="you@company.com" required />
             </div>
             <div>
-              <label className="label" htmlFor="password">
-                Password
-              </label>
-              <input
-                className="input mt-1 w-full"
-                id="password"
-                name="password"
-                type="password"
-                placeholder="••••••••"
-                required
-              />
+              <label className="label" htmlFor="password">Password</label>
+              <input className="input mt-1 w-full" id="password" name="password" type="password" placeholder="••••••••" required />
             </div>
-
             <div className="flex items-center gap-2 text-sm text-gray-600">
               <input type="checkbox" className="rounded" /> Remember me
             </div>
-
-            <button className="btn btn-primary w-full" type="submit">
-              Sign in
-            </button>
+            <button className="btn btn-primary w-full" type="submit">Sign in</button>
           </div>
         )}
 
-        {/* Bouton Return */}
+        {/* Return to Haleon-tool */}
         <div className="mt-6">
           <a
             href="https://haleon-tool.io"
