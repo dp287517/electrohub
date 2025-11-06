@@ -3,27 +3,38 @@ import fetch from "node-fetch";
 import jwt from "jsonwebtoken";
 
 /**
- * Vérifie le token d’un utilisateur Bubble via un workflow Bubble sécurisé
- * (à adapter à ton endpoint Bubble API)
+ * Vérifie le token d’un utilisateur Bubble via ton workflow Bubble sécurisé
  */
 export async function verifyBubbleToken(bubbleToken) {
   if (!bubbleToken) throw new Error("Missing token");
 
-  // ⚙️ Remplace cette URL par ton workflow Bubble
-  const verifyUrl = process.env.BUBBLE_VERIFY_URL || "https://yourapp.bubbleapps.io/api/1.1/wf/verify_token";
+  // ✅ URL Bubble en production
+  const verifyUrl =
+    process.env.BUBBLE_VERIFY_URL ||
+    "https://haleon-tool.io/api/1.1/wf/verify_token";
 
+  // 🔒 Clé API Bubble (ne pas exposer côté client)
+  const apiKey =
+    process.env.BUBBLE_PRIVATE_KEY || "851cbb99c81df43edd4f81942bdf5006";
+
+  // Appel vers Bubble
   const res = await fetch(verifyUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`, // ✅ Auth sécurisée
+    },
     body: JSON.stringify({ token: bubbleToken }),
   });
 
-  if (!res.ok) throw new Error(`Bubble verification failed (${res.status})`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Bubble verification failed (${res.status}): ${text}`);
+  }
+
   const data = await res.json();
 
-  // ✅ Exemple de réponse attendue de Bubble :
-  // { success: true, user: { email, name, id } }
-
+  // ✅ Exemple attendu : { success: true, user: { email, name, id } }
   if (!data?.user?.email) throw new Error("Invalid Bubble response");
 
   return data.user;
