@@ -152,6 +152,31 @@ app.post("/api/auth/signup", express.json(), async (_req, res) => {
   res.status(201).json({ ok: true });
 });
 
+/* ================================================================
+   🔵 Auth via Bubble (nouvelle route)
+   ================================================================ */
+import { verifyBubbleToken, signLocalJWT } from "./auth-bubble.js";
+
+app.post("/api/auth/bubble", express.json(), async (req, res) => {
+  try {
+    const { token } = req.body || {};
+    if (!token) return res.status(400).json({ error: "Missing token" });
+
+    // 1️⃣ Vérifie le token Bubble
+    const user = await verifyBubbleToken(token);
+
+    // 2️⃣ Crée un JWT local pour ElectroHub (2h)
+    const jwtToken = signLocalJWT(user);
+
+    // 3️⃣ Stocke en cookie + renvoie au front
+    res.cookie("token", jwtToken, { httpOnly: true, sameSite: "lax" });
+    res.json({ ok: true, user, jwt: jwtToken });
+  } catch (err) {
+    console.error("Bubble auth failed:", err);
+    res.status(401).json({ error: err.message || "Invalid Bubble token" });
+  }
+});
+
 // -------- Static ----------
 const __dist = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist");
 app.use(express.static(__dist));
