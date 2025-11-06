@@ -15,7 +15,10 @@ export default function SignIn() {
     try {
       const { token } = await post('/api/auth/signin', { email, password });
       localStorage.setItem('eh_token', token);
-      localStorage.setItem('eh_user', JSON.stringify({ email, site: 'Nyon', department: 'Maintenance' }));
+      localStorage.setItem(
+        'eh_user',
+        JSON.stringify({ email, site: 'Nyon', department: 'Maintenance' })
+      );
       navigate('/dashboard');
     } catch (err) {
       alert('Sign in failed: ' + err.message);
@@ -44,7 +47,9 @@ export default function SignIn() {
         {showExternal && (
           <div className="space-y-4 mt-3 animate-fade-in">
             <div>
-              <label className="label" htmlFor="email">Email</label>
+              <label className="label" htmlFor="email">
+                Email
+              </label>
               <input
                 className="input mt-1 w-full"
                 id="email"
@@ -55,7 +60,9 @@ export default function SignIn() {
               />
             </div>
             <div>
-              <label className="label" htmlFor="password">Password</label>
+              <label className="label" htmlFor="password">
+                Password
+              </label>
               <input
                 className="input mt-1 w-full"
                 id="password"
@@ -76,25 +83,24 @@ export default function SignIn() {
           </div>
         )}
 
-        {/* Bouton Connect with Haleon-tool */}
-        <div className="mt-6">
-          <button
-            type="button"
-            onClick={() => alert('Connecting via Haleon-tool...')}
-            className="w-full py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-brand-600 to-brand-800 shadow-lg hover:shadow-xl hover:scale-[1.02] transition-transform duration-200"
-          >
-            Connect with Haleon-tool
-          </button>
-        </div>
-
         {/* Bouton Return */}
-        <div className="mt-3">
+        <div className="mt-6">
           <a
             href="https://haleon-tool.io"
             className="block text-center w-full py-3 rounded-xl font-medium border border-gray-300 text-gray-700 hover:bg-gray-100 transition"
           >
             Return to haleon-tool
           </a>
+        </div>
+
+        {/* Bouton Se connecter via Bubble */}
+        <div className="mt-3">
+          <button
+            type="button"
+            className="w-full py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-600 to-blue-700 shadow-lg hover:shadow-xl hover:scale-[1.02] transition-transform duration-200"
+          >
+            Se connecter via Bubble
+          </button>
         </div>
       </form>
     </AuthCard>
