@@ -3,8 +3,7 @@ import fetch from "node-fetch";
 import jwt from "jsonwebtoken";
 
 /**
- * 🔐 Vérifie le token d’un utilisateur Bubble via ton workflow Bubble sécurisé
- * Ce workflow doit renvoyer : { success: true, user: "email@domaine.com" }
+ * Vérifie le token d’un utilisateur Bubble via ton workflow Bubble sécurisé
  */
 export async function verifyBubbleToken(bubbleToken) {
   if (!bubbleToken) throw new Error("Missing token");
@@ -23,36 +22,35 @@ export async function verifyBubbleToken(bubbleToken) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`, // Sécurité Bubble API
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ token: bubbleToken }),
   });
 
-  // Gestion d’erreur HTTP
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`Bubble verification failed (${res.status}): ${text}`);
   }
 
-  let text = await res.text();
+  // 🧾 Lecture et parsing de la réponse
+  const text = await res.text();
   console.log("🧾 Bubble raw response:", text);
-
   let data = {};
   try {
     data = JSON.parse(text);
   } catch {
-    console.error("❌ Impossible de parser la réponse JSON Bubble");
+    console.error("❌ JSON parse failed");
   }
   console.log("🔍 Bubble parsed response:", data);
 
-
-  // ✅ Réponse attendue : { success: true, user: "email@domaine.com" }
-  if (!data?.success || !data?.user) {
+  // ✅ Adapté à la structure Bubble actuelle
+  const payload = data?.response || {};
+  if (!payload.success || !payload.user) {
     throw new Error("Invalid Bubble response");
   }
 
-  // Renvoie un objet utilisateur simplifié
-  const email = String(data.user).trim().toLowerCase();
+  // Crée un objet utilisateur à partir de l’email
+  const email = String(payload.user).trim().toLowerCase();
   const name = email.split("@")[0].replace(/[._-]+/g, " ");
   return {
     id: email,
@@ -63,7 +61,7 @@ export async function verifyBubbleToken(bubbleToken) {
 }
 
 /**
- * 🧩 Crée un JWT local pour ElectroHub à partir des infos Bubble
+ * Crée un JWT local pour ElectroHub à partir des infos Bubble
  */
 export function signLocalJWT(user) {
   const payload = {
