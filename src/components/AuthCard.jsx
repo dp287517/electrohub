@@ -12,34 +12,12 @@ export default function AuthCard({ title, subtitle, children }) {
 
     if (incoming) {
       console.log("✅ Token Bubble reçu depuis l’URL :", incoming);
-
-      // 1️⃣ Enregistre le token côté ElectroHub
       localStorage.setItem("bubble_token", incoming);
-
-      // 2️⃣ (Optionnel) Login automatique via Bubble — décommenter si tu veux activer
-      /*
-      (async () => {
-        try {
-          const res = await api.bubble.login(incoming);
-          if (res?.ok) {
-            localStorage.setItem("eh_token", res.jwt);
-            localStorage.setItem("eh_user", JSON.stringify(res.user));
-            // Nettoie l’URL et redirige
-            window.history.replaceState({}, "", window.location.pathname);
-            navigate("/dashboard");
-          }
-        } catch (e) {
-          console.error("Auto Bubble login failed", e);
-        }
-      })();
-      */
-
-      // 3️⃣ Nettoie l’URL pour ne pas laisser ?token=... visible
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, [navigate]);
 
-  // 🧩 Étape 2 : bouton manuel pour se connecter via Bubble
+  // 🧩 Étape 2 : bouton Haleon Account dynamique
   async function handleBubbleLogin() {
     try {
       const token = localStorage.getItem("bubble_token");
@@ -47,23 +25,21 @@ export default function AuthCard({ title, subtitle, children }) {
         alert("Aucun token Bubble trouvé");
         return;
       }
-
       const res = await api.bubble.login(token);
       if (res?.ok) {
-        console.log("✅ Connexion Bubble réussie :", res);
+        console.log("✅ Connexion Haleon réussie :", res);
         localStorage.setItem("eh_token", res.jwt);
         localStorage.setItem("eh_user", JSON.stringify(res.user));
         navigate("/dashboard");
       } else {
-        alert("Échec de la connexion via Bubble");
+        alert("Échec de la connexion via Haleon");
       }
     } catch (err) {
-      console.error("❌ Erreur Bubble login :", err);
-      alert("Erreur lors de la connexion via Bubble");
+      console.error("❌ Erreur Haleon login :", err);
+      alert("Erreur lors de la connexion via Haleon");
     }
   }
 
-  // 🧩 UI
   return (
     <div className="container-narrow">
       <div className="grid md:grid-cols-2 gap-10 py-12 items-center">
@@ -93,15 +69,16 @@ export default function AuthCard({ title, subtitle, children }) {
         <div className="card p-8">
           <h1 className="text-3xl font-bold mb-2">{title}</h1>
           <p className="text-gray-600 mb-8">{subtitle}</p>
-          {children}
 
-          {/* Bouton Bubble */}
+          {/* ✅ Bouton Haleon Account dynamique */}
           <button
             onClick={handleBubbleLogin}
-            className="mt-4 w-full py-2 px-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="w-full mb-6 py-3 px-4 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-600 via-blue-700 to-blue-800 shadow-lg hover:shadow-xl hover:scale-[1.03] transition-all duration-200 animate-pulse-slow"
           >
-            Se connecter via Bubble
+            Haleon account
           </button>
+
+          {children}
         </div>
       </div>
     </div>
