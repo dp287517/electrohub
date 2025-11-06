@@ -607,4 +607,10 @@ export const api = {
     bulkRename: ({ field, from, to }) =>
       post("/api/atex/bulk/rename", { field, from, to }),
   },
+
+  /** --- 🔵 BUBBLE AUTH --- */
+  bubble: {
+    // Authentifie un utilisateur via Bubble token
+    login: (token) => post("/api/auth/bubble", { token }),
+  },
 };
