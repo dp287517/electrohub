@@ -42,6 +42,18 @@ export default function AuthCard({ title, subtitle, children }) {
 
   return (
     <div className="container-narrow">
+      <style>
+        {`
+          @keyframes pulseSlow {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0px rgba(59,130,246,0.5); }
+            50% { transform: scale(1.03); box-shadow: 0 0 20px rgba(59,130,246,0.4); }
+          }
+          .animate-pulse-slow {
+            animation: pulseSlow 2.5s ease-in-out infinite;
+          }
+        `}
+      </style>
+
       <div className="grid md:grid-cols-2 gap-10 py-12 items-center">
         {/* Section gauche */}
         <div className="hidden md:block">
@@ -70,12 +82,13 @@ export default function AuthCard({ title, subtitle, children }) {
           <h1 className="text-3xl font-bold mb-2">{title}</h1>
           <p className="text-gray-600 mb-8">{subtitle}</p>
 
-          {/* ✅ Bouton Haleon Account dynamique */}
+          {/* 🔥 Bouton Haleon Account dynamique */}
           <button
             onClick={handleBubbleLogin}
-            className="w-full mb-6 py-3 px-4 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-600 via-blue-700 to-blue-800 shadow-lg hover:shadow-xl hover:scale-[1.03] transition-all duration-200 animate-pulse-slow"
+            className="w-full mb-6 py-3 px-4 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-600 via-blue-700 to-blue-800 shadow-lg hover:shadow-xl hover:scale-[1.05] transition-all duration-200 animate-pulse-slow relative overflow-hidden"
           >
-            Haleon account
+            <span className="relative z-10">Haleon account</span>
+            <span className="absolute inset-0 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-700 opacity-0 hover:opacity-100 transition-opacity duration-300 rounded-xl"></span>
           </button>
 
           {children}
