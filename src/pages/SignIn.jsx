@@ -99,7 +99,7 @@ export default function SignIn() {
             type="button"
             className="w-full py-3 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-600 to-blue-700 shadow-lg hover:shadow-xl hover:scale-[1.02] transition-transform duration-200"
           >
-            Se connecter via Bubble
+            Connect with Haleon-tool !
           </button>
         </div>
       </form>
