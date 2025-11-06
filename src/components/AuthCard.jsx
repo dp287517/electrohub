@@ -1,30 +1,39 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 
 export default function AuthCard({ title, subtitle, children }) {
   const navigate = useNavigate();
+  const [hasHaleonToken, setHasHaleonToken] = useState(false);
 
-  // 🧩 Étape 1 : détecte si un token Bubble est présent dans l’URL
+  // 🧩 Étape 1 : détecte si un token Bubble est présent dans l’URL ou localStorage
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const incoming = params.get("token");
 
     if (incoming) {
-      console.log("✅ Token Bubble reçu depuis l’URL :", incoming);
+      console.log("✅ Token Haleon reçu depuis l’URL :", incoming);
       localStorage.setItem("bubble_token", incoming);
+      setHasHaleonToken(true);
       window.history.replaceState({}, "", window.location.pathname);
+    } else {
+      // Vérifie si un token Haleon existe déjà en localStorage
+      const existing = localStorage.getItem("bubble_token");
+      if (existing) {
+        setHasHaleonToken(true);
+      }
     }
   }, [navigate]);
 
-  // 🧩 Étape 2 : bouton Haleon Account dynamique
+  // 🧩 Étape 2 : connexion via Haleon
   async function handleBubbleLogin() {
     try {
       const token = localStorage.getItem("bubble_token");
       if (!token) {
-        alert("Aucun token Bubble trouvé");
+        alert("Aucun token Haleon trouvé — connectez-vous d’abord via haleon-tool.io");
         return;
       }
+
       const res = await api.bubble.login(token);
       if (res?.ok) {
         console.log("✅ Connexion Haleon réussie :", res);
@@ -82,14 +91,16 @@ export default function AuthCard({ title, subtitle, children }) {
           <h1 className="text-3xl font-bold mb-2">{title}</h1>
           <p className="text-gray-600 mb-8">{subtitle}</p>
 
-          {/* 🔥 Bouton Haleon Account dynamique */}
-          <button
-            onClick={handleBubbleLogin}
-            className="w-full mb-6 py-3 px-4 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-600 via-blue-700 to-blue-800 shadow-lg hover:shadow-xl hover:scale-[1.05] transition-all duration-200 animate-pulse-slow relative overflow-hidden"
-          >
-            <span className="relative z-10">Haleon account</span>
-            <span className="absolute inset-0 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-700 opacity-0 hover:opacity-100 transition-opacity duration-300 rounded-xl"></span>
-          </button>
+          {/* 🔥 Bouton Haleon Account dynamique — seulement si token détecté */}
+          {hasHaleonToken && (
+            <button
+              onClick={handleBubbleLogin}
+              className="w-full mb-6 py-3 px-4 rounded-xl font-semibold text-white bg-gradient-to-r from-blue-600 via-blue-700 to-blue-800 shadow-lg hover:shadow-xl hover:scale-[1.05] transition-all duration-200 animate-pulse-slow relative overflow-hidden"
+            >
+              <span className="relative z-10">Haleon-tool account</span>
+              <span className="absolute inset-0 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-700 opacity-0 hover:opacity-100 transition-opacity duration-300 rounded-xl"></span>
+            </button>
+          )}
 
           {children}
         </div>
