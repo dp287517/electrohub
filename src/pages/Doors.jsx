@@ -1084,22 +1084,40 @@ function Doors() {
   async function suggestUniqueDoorName() {
     return `${baseDoorName()} ${formatDoorNumber(1)}`;
   }
-  async function createDoorWithUniqueName(payloadBase, { maxTries = 60 } = {}) {
+
+  async function createDoorWithUniqueName(payloadBase, { maxTries = 10000 } = {}) {
+    // 1) Récupère les portes "Porte xxx" sans filtres
+    const listAll = await API.list({ q: "Porte", status: "", building: "", floor: "", door_state: "" });
+    const taken = new Set(
+      (listAll.items || [])
+        .map(it => (it.name || "").trim())
+        .filter(n => /^Porte \d{3}$/.test(n))
+        .map(n => parseInt(n.slice(-3), 10))
+    );
+
+    // 2) Trouve le plus petit numéro libre
     let n = 1;
+    while (taken.has(n)) n++;
+    const start = n;
+
+    // 3) Essaie en partant du prochain libre (et retente si race condition)
+    let tries = 0;
     let lastErr = null;
-    while (n <= maxTries) {
-      const candidate = `${baseDoorName()} ${formatDoorNumber(n)}`;
+    while (tries < maxTries) {
+      const candidate = `Porte ${String(n).padStart(3, "0")}`;
       try {
         const res = await API.create({ ...payloadBase, name: candidate });
-        return res;
+        return res; // succès
       } catch (e) {
         lastErr = e;
         const msg = String(e?.message || "");
         if (msg.toLowerCase().includes("duplicate key") || msg.toLowerCase().includes("unique constraint")) {
+          // quelqu’un vient de prendre ce nom → on essaye le suivant
           n += 1;
+          tries += 1;
           continue;
         }
-        throw e;
+        throw e; // autre erreur → relayer
       }
     }
     throw new Error(lastErr?.message || "Impossible de générer un nom unique");
