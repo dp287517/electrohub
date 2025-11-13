@@ -19,15 +19,28 @@ function Tabs({ value, onValueChange, children }) {
   );
 }
 
-function TabsList({ children }) {
-  return <div className="flex flex-wrap gap-2 mt-2">{children}</div>;
+function TabsList({ children, active, onValueChange }) {
+  return (
+    <div className="flex flex-wrap gap-2 mt-2">
+      {React.Children.map(children, (child) =>
+        React.cloneElement(child, { active, onValueChange })
+      )}
+    </div>
+  );
 }
 
 function TabsTrigger({ value, children, active, onValueChange }) {
   const selected = active === value;
+
+  const handleClick = () => {
+    if (typeof onValueChange === "function") {
+      onValueChange(value);
+    }
+  };
+
   return (
     <button
-      onClick={() => onValueChange(value)}
+      onClick={handleClick}
       className={`px-3 py-2 rounded-lg text-sm font-semibold transition ${
         selected
           ? "bg-indigo-600 text-white"
