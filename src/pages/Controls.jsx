@@ -1,41 +1,13 @@
-// ============================================================================
-// src/pages/Controls.jsx — version finale corrigée et autonome
-// Intègre Tabs, Button, Card, Modal "Vue plan" + interop avec Controls-map.jsx
-// ============================================================================
-
-import React, { useEffect, useState } from "react";
-import ControlsMap from "./Controls-map.jsx";
+import React, { useEffect, useState, useRef } from "react";
+import { ChevronRight, ChevronDown, Upload, Paperclip, Calendar, Wand2, RefreshCw, Eye, AlertTriangle, CheckCircle, XCircle, Clock, Map, MapPin } from "lucide-react";
+import ControlsMap, { ControlsMapManager } from "./Controls-map.jsx";
 import { api } from "../lib/api.js";
-import {
-  ChevronRight,
-  ChevronDown,
-  Upload,
-  Paperclip,
-  Calendar,
-  Wand2,
-  RefreshCw,
-  Eye,
-  EyeOff,
-} from "lucide-react";
-import { Bar } from "react-chartjs-2";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-} from "chart.js";
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+// ============================================================================
+// COMPOSANTS UI DE BASE
+// ============================================================================
 
-import "../styles/controls.css";
-
-// ---------------------------------------------------------------------------
-// Composants UI intégrés (Tabs, Button, Card)
-// ---------------------------------------------------------------------------
-export function Tabs({ value, onValueChange, children }) {
+function Tabs({ value, onValueChange, children }) {
   const [active, setActive] = useState(value);
   useEffect(() => setActive(value), [value]);
   return (
@@ -46,10 +18,12 @@ export function Tabs({ value, onValueChange, children }) {
     </div>
   );
 }
-export function TabsList({ children }) {
+
+function TabsList({ children }) {
   return <div className="flex flex-wrap gap-2 mt-2">{children}</div>;
 }
-export function TabsTrigger({ value, children, active, onValueChange }) {
+
+function TabsTrigger({ value, children, active, onValueChange }) {
   const selected = active === value;
   return (
     <button
@@ -64,79 +38,85 @@ export function TabsTrigger({ value, children, active, onValueChange }) {
     </button>
   );
 }
-export function TabsContent({ value, active, children }) {
+
+function TabsContent({ value, active, children }) {
   if (value !== active) return null;
   return <div className="fade-in-up mt-4">{children}</div>;
 }
 
-export function Button({
-  children,
-  variant = "primary",
-  size = "md",
-  ...props
-}) {
-  const base =
-    "inline-flex items-center justify-center font-semibold rounded-lg transition-all disabled:opacity-50";
+function Button({ children, variant = "primary", size = "md", className = "", ...props }) {
+  const base = "inline-flex items-center justify-center font-semibold rounded-lg transition-all disabled:opacity-50 gap-2";
   const variants = {
     primary: "bg-indigo-600 text-white hover:bg-indigo-700",
     secondary: "bg-gray-100 text-gray-800 hover:bg-gray-200",
     ghost: "bg-transparent text-gray-600 hover:bg-gray-100",
+    danger: "bg-red-600 text-white hover:bg-red-700",
+    success: "bg-green-600 text-white hover:bg-green-700",
+    warning: "bg-amber-500 text-white hover:bg-amber-600",
   };
   const sizes = {
     sm: "px-2.5 py-1.5 text-sm",
     md: "px-3.5 py-2 text-sm",
   };
   return (
-    <button className={`${base} ${variants[variant]} ${sizes[size]}`} {...props}>
+    <button className={`${base} ${variants[variant]} ${sizes[size]} ${className}`} {...props}>
       {children}
     </button>
   );
 }
 
-export function Card({ children, className = "" }) {
-  return (
-    <div
-      className={`bg-white shadow-sm rounded-xl border border-gray-200 ${className}`}
-    >
-      {children}
-    </div>
-  );
+function Card({ children, className = "" }) {
+  return <div className={`bg-white shadow-sm rounded-xl border border-gray-200 ${className}`}>{children}</div>;
 }
-export function CardContent({ children, className = "" }) {
+
+function CardContent({ children, className = "" }) {
   return <div className={`p-4 ${className}`}>{children}</div>;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers simples
-// ---------------------------------------------------------------------------
-const Pill = ({ children }) => (
-  <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold">
-    {children}
-  </span>
-);
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString() : "—");
-function StatusPill({ s }) {
-  const v = String(s || "").toLowerCase();
-  const map = {
-    done: "bg-green-100 text-green-700",
-    closed: "bg-green-100 text-green-700",
-    overdue: "bg-red-100 text-red-700",
-    pending: "bg-amber-100 text-amber-700",
+function Badge({ children, variant = "default" }) {
+  const variants = {
+    default: "bg-gray-100 text-gray-700",
+    success: "bg-green-100 text-green-700",
+    warning: "bg-amber-100 text-amber-700",
+    danger: "bg-red-100 text-red-700",
+    info: "bg-blue-100 text-blue-700",
   };
-  const cls = map[v] || "bg-blue-100 text-blue-700";
   return (
-    <span
-      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${cls}`}
-    >
-      {s || "Planned"}
+    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${variants[variant]}`}>
+      {children}
     </span>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Checklist dynamique
-// ---------------------------------------------------------------------------
-function Checklist({ schema, onSubmit }) {
+// ============================================================================
+// HELPERS & FORMATAGE
+// ============================================================================
+
+const fmtDate = (d) => (d ? new Date(d).toLocaleDateString("fr-FR") : "—");
+
+function StatusPill({ status }) {
+  const s = String(status || "").toLowerCase();
+  const map = {
+    planned: { variant: "success", icon: CheckCircle, label: "Planifié" },
+    pending: { variant: "warning", icon: Clock, label: "À faire (≤30j)" },
+    overdue: { variant: "danger", icon: AlertTriangle, label: "En retard" },
+    done: { variant: "info", icon: CheckCircle, label: "Terminé" },
+  };
+  const cfg = map[s] || map.planned;
+  const Icon = cfg.icon;
+  return (
+    <Badge variant={cfg.variant}>
+      <Icon size={12} className="inline mr-1" />
+      {cfg.label}
+    </Badge>
+  );
+}
+
+// ============================================================================
+// COMPOSANT CHECKLIST
+// ============================================================================
+
+function Checklist({ schema, onSubmit, busy }) {
   const [items, setItems] = useState(
     (schema?.checklist || []).map((q) => ({ key: q.key, value: "" }))
   );
@@ -159,16 +139,18 @@ function Checklist({ schema, onSubmit }) {
 
   const submit = () => onSubmit({ items, obs, files, comment });
 
+  const allFilled = items.every((i) => i.value);
+
   return (
     <div className="space-y-4">
       <div>
         <div className="text-sm font-semibold mb-2">Checklist</div>
         <div className="space-y-2">
           {schema?.checklist?.map((q) => (
-            <div key={q.key} className="flex items-center gap-3">
+            <div key={q.key} className="flex items-start gap-3">
               <div className="flex-1 text-sm">{q.label}</div>
               <select
-                className="p-2 rounded-lg bg-white ring-1 ring-black/10"
+                className="p-2 rounded-lg bg-white ring-1 ring-black/10 text-sm"
                 value={items.find((x) => x.key === q.key)?.value || ""}
                 onChange={(e) => setValue(q.key, e.target.value)}
               >
@@ -184,41 +166,36 @@ function Checklist({ schema, onSubmit }) {
         </div>
       </div>
 
-      <div>
-        <div className="text-sm font-semibold mb-2">Observations</div>
-        {(schema?.observations || []).map((o) => (
-          <div key={o.key} className="mb-2">
-            <div className="text-xs text-gray-600">{o.label}</div>
-            <input
-              className="observation-input"
-              value={obs[o.key] || ""}
-              onChange={(e) =>
-                setObs((s) => ({ ...s, [o.key]: e.target.value }))
-              }
-            />
-          </div>
-        ))}
-      </div>
+      {schema?.observations?.length > 0 && (
+        <div>
+          <div className="text-sm font-semibold mb-2">Observations</div>
+          {schema.observations.map((o) => (
+            <div key={o.key} className="mb-2">
+              <div className="text-xs text-gray-600">{o.label}</div>
+              <input
+                className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10 text-sm"
+                value={obs[o.key] || ""}
+                onChange={(e) => setObs((s) => ({ ...s, [o.key]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
+      )}
 
       <div>
         <div className="text-xs text-gray-600 mb-1">Commentaire</div>
         <textarea
           rows={3}
-          className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10"
+          className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10 text-sm"
           value={comment}
           onChange={(e) => setComment(e.target.value)}
         />
       </div>
 
       <div>
-        <label className="inline-flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer w-fit">
+        <label className="inline-flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer w-fit text-sm">
           <Upload size={16} /> Joindre une photo
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={onFile}
-          />
+          <input type="file" accept="image/*" className="hidden" onChange={onFile} />
         </label>
         <div className="flex flex-wrap gap-2 mt-1">
           {files.map((f, i) => (
@@ -232,525 +209,443 @@ function Checklist({ schema, onSubmit }) {
         </div>
       </div>
 
-      <Button
-        onClick={submit}
-        className="bg-green-600 hover:bg-green-700 text-white"
-      >
-        Clôturer & replanifier
+      <Button onClick={submit} disabled={!allFilled || busy} variant="success" className="w-full">
+        {busy ? "Enregistrement..." : "Clôturer & Replanifier"}
       </Button>
+
+      {schema?.notes && (
+        <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">{schema.notes}</div>
+      )}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Détails d'une tâche
-// ---------------------------------------------------------------------------
-function Details({ task, refresh }) {
+// ============================================================================
+// COMPOSANT DÉTAILS TÂCHE
+// ============================================================================
+
+function TaskDetails({ task, onClose, onRefresh }) {
   const [schema, setSchema] = useState(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!task) return;
-    api.controls.taskSchema(task.id).then(setSchema).catch(console.error);
+    api.controls.taskSchema(task.id).then(setSchema);
   }, [task]);
 
-  const submit = async ({ items, obs, files, comment }) => {
+  const submit = async (data) => {
     setBusy(true);
     try {
-      for (const f of files) {
-        await api.controls.attachToTask(task.id, f).catch(() => {});
-      }
-      await api.controls.closeTask(task.id, {
-        record_status: "done",
-        checklist: items,
-        observations: obs,
-        comment,
-        closed_at: new Date().toISOString(),
-      });
-      await refresh();
+      await api.controls.closeTask(task.id, data);
+      onRefresh?.();
+      onClose?.();
     } finally {
       setBusy(false);
     }
   };
 
-  if (!task)
-    return <div className="text-gray-500">Sélectionne une tâche à droite.</div>;
-  if (!schema) return <div>Chargement…</div>;
+  if (!task) return null;
 
   return (
-    <Card>
-      <CardContent className="p-4 space-y-4">
-        <div>
-          <div className="text-xs text-gray-500">Tâche</div>
-          <div className="text-lg font-semibold">{task.label}</div>
-          <div className="text-xs text-gray-500">
-            Échéance: {fmtDate(task.next_control)}{" "}
-            <span className="ml-2">
-              <StatusPill s={task.status} />
-            </span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <div
+        className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between">
+          <div>
+            <div className="font-semibold text-lg">{task.task_name || task.label}</div>
+            <div className="text-xs text-gray-500 mt-1">
+              Échéance: {fmtDate(task.next_control)} • <StatusPill status={task.status} />
+            </div>
           </div>
-        </div>
-
-        <Checklist schema={schema} onSubmit={submit} />
-
-        <div className="ia-panel">
-          <div className="flex items-center gap-2 mb-2">
-            <Wand2 className="text-violet-600" size={16} />
-            <div className="font-semibold">IA (avant intervention)</div>
-          </div>
-          <Button
-            variant="secondary"
-            onClick={async () => {
-              await api.controls.analyze(task.id);
-            }}
-          >
-            <Wand2 size={16} /> Lancer
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Fermer
           </Button>
         </div>
-      </CardContent>
-    </Card>
-  );
-}
 
-// ---------------------------------------------------------------------------
-// Tree hiérarchique + bouton Vue plan intégré
-// ---------------------------------------------------------------------------
-function NodeHeader({ title, count, open, toggle, level = 0 }) {
-  return (
-    <div
-      className={`flex items-center justify-between px-3 py-2 rounded-lg ${
-        open ? "bg-gray-100" : "hover:bg-gray-50"
-      } cursor-pointer`}
-      onClick={toggle}
-      style={{ marginLeft: level * 12 }}
-    >
-      <div className="flex items-center gap-2">
-        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-        <span className="font-semibold">{title}</span>
+        <div className="p-4">
+          {!schema && <div className="text-gray-500">Chargement du schéma TSD...</div>}
+          {schema && <Checklist schema={schema} onSubmit={submit} busy={busy} />}
+        </div>
       </div>
-      <Pill>{count}</Pill>
     </div>
   );
 }
 
-function Tree({ statusFilter, onSelect, onShowPlan }) {
-  const [tree, setTree] = useState([]);
-  const [exp, setExp] = useState({});
+// ============================================================================
+// COMPOSANT ARBRE HIÉRARCHIQUE
+// ============================================================================
 
-  const toggle = (k) => setExp((s) => ({ ...s, [k]: !s[k] }));
+function TreeNode({ title, count, open, toggle, level = 0, children, positioned, needsPosition }) {
+  return (
+    <div>
+      <div
+        className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer ${
+          open ? "bg-indigo-50" : "hover:bg-gray-50"
+        }`}
+        onClick={toggle}
+        style={{ marginLeft: level * 12 }}
+      >
+        <div className="flex items-center gap-2">
+          {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          <span className="font-semibold text-sm">{title}</span>
+          {needsPosition && (
+            <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+              <MapPin size={12} className="inline mr-1" />
+              À placer sur plan
+            </span>
+          )}
+        </div>
+        <Badge variant="default">{count}</Badge>
+      </div>
+      {open && <div className="ml-4">{children}</div>}
+    </div>
+  );
+}
 
-  const refresh = async () => {
-    const r = await api.controls.hierarchyTree();
-    setTree(r || []);
-  };
+function HierarchyTree({ statusFilter, onSelectTask, onShowPlan, onRefresh }) {
+  const [tree, setTree] = useState(null);
+  const [expanded, setExpanded] = useState({});
 
   useEffect(() => {
-    refresh();
-  }, []);
+    loadTree();
+  }, [statusFilter]);
 
-  const count = (tasks = []) => {
+  const loadTree = async () => {
+    try {
+      const data = await api.controls.hierarchyTree({ status: statusFilter });
+      setTree(data);
+    } catch (e) {
+      console.error("[HierarchyTree] error:", e);
+    }
+  };
+
+  const toggle = (key) => setExpanded((s) => ({ ...s, [key]: !s[key] }));
+
+  const countTasks = (tasks) => {
+    if (!Array.isArray(tasks)) return 0;
     if (statusFilter === "all") return tasks.length;
     const open = ["Planned", "Pending", "Overdue"];
-    const done = ["Done", "Closed"];
-    return (tasks || []).filter((t) =>
+    const done = ["Done"];
+    return tasks.filter((t) =>
       statusFilter === "open" ? open.includes(t.status) : done.includes(t.status)
     ).length;
   };
 
+  if (!tree) return <div className="text-gray-500">Chargement...</div>;
+
   return (
     <div className="space-y-3">
-      {tree.map((b, bi) => {
+      {tree.buildings?.map((b, bi) => {
         const kB = `b-${bi}`;
-        const oB = !!exp[kB];
-        const hvCount = (b.hv || []).reduce((a, n) => a + count(n.tasks), 0);
+        const hvCount = (b.hv || []).reduce((a, n) => a + countTasks(n.tasks), 0);
         const swCount = (b.switchboards || []).reduce(
-          (a, sb) =>
-            a +
-            count(sb.tasks) +
-            (sb.devices || []).reduce((x, d) => x + count(d.tasks), 0),
+          (a, sb) => a + countTasks(sb.tasks) + (sb.devices || []).reduce((x, d) => x + countTasks(d.tasks), 0),
           0
         );
+
         return (
-          <div key={kB} className="border rounded-xl">
-            <div className="px-4 py-3 bg-gray-50 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+          <Card key={kB}>
+            <div className="px-4 py-3 bg-gray-50 flex items-center justify-between border-b">
+              <div className="flex items-center gap-3">
                 <div className="text-lg font-semibold">{b.label}</div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() =>
-                    onShowPlan({
-                      id: b.label,
-                      display_name: b.label,
-                      url_pdf: `/plans/${b.label.replace(/\s+/g, "_")}.pdf`,
-                    })
-                  }
-                >
-                  Vue plan
+                <Button size="sm" variant="secondary" onClick={() => onShowPlan?.(b)}>
+                  <Map size={14} /> Vue plan
                 </Button>
               </div>
-              <div className="text-xs text-gray-500">
-                HV {hvCount} • Switchboards {swCount}
-              </div>
+              <div className="text-xs text-gray-500">HV: {hvCount} • Switchboards: {swCount}</div>
             </div>
 
-            {/* Contenu bâtiment */}
-            <div className="p-3 space-y-2">
+            <CardContent className="p-3 space-y-2">
               {/* HV */}
-              <NodeHeader
+              <TreeNode
                 title="High Voltage"
                 count={hvCount}
-                open={oB && exp[`${kB}-hv`]}
-                toggle={() => {
-                  toggle(kB);
-                  toggle(`${kB}-hv`);
-                }}
-              />
-              {oB &&
-                exp[`${kB}-hv`] &&
-                b.hv.map((n, i) => (
-                  <div key={i} className="pl-4">
-                    <NodeHeader
-                      title={n.label}
-                      count={count(n.tasks)}
-                      open={exp[`hv-${i}`]}
-                      toggle={() => toggle(`hv-${i}`)}
-                      level={1}
-                    />
-                    {exp[`hv-${i}`] &&
-                      n.tasks.map((t) => (
-                        <div
-                          key={t.id}
-                          onClick={() => onSelect(t)}
-                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between"
-                        >
-                          <div className="text-sm">{t.label}</div>
-                          <div className="flex items-center gap-2">
-                            <StatusPill s={t.status} />
-                            <span className="text-xs text-gray-500">
-                              {fmtDate(t.next_control)}
-                            </span>
-                          </div>
+                open={expanded[`${kB}-hv`]}
+                toggle={() => toggle(`${kB}-hv`)}
+              >
+                {b.hv?.map((eq, i) => (
+                  <TreeNode
+                    key={i}
+                    title={eq.label}
+                    count={countTasks(eq.tasks)}
+                    open={expanded[`hv-${i}`]}
+                    toggle={() => toggle(`hv-${i}`)}
+                    level={1}
+                    needsPosition={!eq.positioned}
+                  >
+                    {eq.tasks?.map((t) => (
+                      <div
+                        key={t.id}
+                        onClick={() => onSelectTask(t)}
+                        className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                      >
+                        <div>{t.task_name}</div>
+                        <div className="flex items-center gap-2">
+                          <StatusPill status={t.status} />
+                          <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
                         </div>
-                      ))}
-                  </div>
-                ))}
-
-              {/* Switchboards */}
-              <NodeHeader
-                title="Switchboards"
-                count={swCount}
-                open={oB && exp[`${kB}-sb`]}
-                toggle={() => {
-                  toggle(kB);
-                  toggle(`${kB}-sb`);
-                }}
-              />
-              {oB &&
-                exp[`${kB}-sb`] &&
-                b.switchboards.map((sb, si) => (
-                  <div key={si} className="pl-4">
-                    <NodeHeader
-                      title={sb.label}
-                      count={count(sb.tasks)}
-                      open={exp[`sb-${si}`]}
-                      toggle={() => toggle(`sb-${si}`)}
-                      level={1}
-                    />
-                    {exp[`sb-${si}`] &&
-                      sb.tasks.map((t) => (
-                        <div
-                          key={t.id}
-                          onClick={() => onSelect(t)}
-                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between"
-                        >
-                          <div className="text-sm">{t.label}</div>
-                          <div className="flex items-center gap-2">
-                            <StatusPill s={t.status} />
-                            <span className="text-xs text-gray-500">
-                              {fmtDate(t.next_control)}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                    {sb.devices?.map((d, di) => (
-                      <div key={di} className="pl-6">
-                        <NodeHeader
-                          title={`Device — ${d.label}`}
-                          count={count(d.tasks)}
-                          open={exp[`d-${si}-${di}`]}
-                          toggle={() => toggle(`d-${si}-${di}`)}
-                          level={2}
-                        />
-                        {exp[`d-${si}-${di}`] &&
-                          d.tasks.map((t) => (
-                            <div
-                              key={t.id}
-                              onClick={() => onSelect(t)}
-                              className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between"
-                            >
-                              <div className="text-sm">{t.label}</div>
-                              <div className="flex items-center gap-2">
-                                <StatusPill s={t.status} />
-                                <span className="text-xs text-gray-500">
-                                  {fmtDate(t.next_control)}
-                                </span>
-                              </div>
-                            </div>
-                          ))}
                       </div>
                     ))}
-                  </div>
+                    {eq.devices?.map((d, di) => (
+                      <TreeNode
+                        key={di}
+                        title={d.label}
+                        count={countTasks(d.tasks)}
+                        open={expanded[`hv-dev-${i}-${di}`]}
+                        toggle={() => toggle(`hv-dev-${i}-${di}`)}
+                        level={2}
+                        needsPosition={!d.positioned}
+                      >
+                        {d.tasks?.map((t) => (
+                          <div
+                            key={t.id}
+                            onClick={() => onSelectTask(t)}
+                            className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                          >
+                            <div>{t.task_name}</div>
+                            <div className="flex items-center gap-2">
+                              <StatusPill status={t.status} />
+                              <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </TreeNode>
+                    ))}
+                  </TreeNode>
                 ))}
-            </div>
-          </div>
+              </TreeNode>
+
+              {/* Switchboards */}
+              <TreeNode
+                title="Switchboards"
+                count={swCount}
+                open={expanded[`${kB}-sb`]}
+                toggle={() => toggle(`${kB}-sb`)}
+              >
+                {b.switchboards?.map((sb, i) => (
+                  <TreeNode
+                    key={i}
+                    title={sb.label}
+                    count={countTasks(sb.tasks)}
+                    open={expanded[`sb-${i}`]}
+                    toggle={() => toggle(`sb-${i}`)}
+                    level={1}
+                    needsPosition={!sb.positioned}
+                  >
+                    {sb.tasks?.map((t) => (
+                      <div
+                        key={t.id}
+                        onClick={() => onSelectTask(t)}
+                        className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                      >
+                        <div>{t.task_name}</div>
+                        <div className="flex items-center gap-2">
+                          <StatusPill status={t.status} />
+                          <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {sb.devices?.map((d, di) => (
+                      <TreeNode
+                        key={di}
+                        title={`${d.label} (hérite position)`}
+                        count={countTasks(d.tasks)}
+                        open={expanded[`sb-dev-${i}-${di}`]}
+                        toggle={() => toggle(`sb-dev-${i}-${di}`)}
+                        level={2}
+                      >
+                        {d.tasks?.map((t) => (
+                          <div
+                            key={t.id}
+                            onClick={() => onSelectTask(t)}
+                            className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                          >
+                            <div>{t.task_name}</div>
+                            <div className="flex items-center gap-2">
+                              <StatusPill status={t.status} />
+                              <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </TreeNode>
+                    ))}
+                  </TreeNode>
+                ))}
+              </TreeNode>
+            </CardContent>
+          </Card>
         );
       })}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Gantt (Chart.js version, cohérente avec Obsolescence.jsx)
-// ---------------------------------------------------------------------------
-function Gantt() {
-  const [data, setData] = useState({ labels: [], datasets: [] });
+// ============================================================================
+// COMPOSANT ÉQUIPEMENTS MANQUANTS
+// ============================================================================
 
-  const load = async () => {
-    try {
-      const r = await api.controls.timeline();
-      const tasks = Array.isArray(r.items) ? r.items : [];
-      const labels = tasks.map((t) => t.label);
-      const days = tasks.map((t) =>
-        Math.max(1, Math.round((new Date(t.end) - Date.now()) / 86400000))
-      );
-      setData({
-        labels,
-        datasets: [
-          {
-            label: "Jours restants",
-            data: days,
-            backgroundColor: "#6366f1",
-            borderRadius: 6,
-          },
-        ],
-      });
-    } catch (e) {
-      console.error("Erreur chargement Gantt:", e);
-    }
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    indexAxis: "y",
-    scales: {
-      x: {
-        title: { display: true, text: "Jours restants" },
-        grid: { color: "#f3f4f6" },
-      },
-      y: {
-        ticks: { autoSkip: false },
-        grid: { display: false },
-      },
-    },
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        callbacks: {
-          label: (ctx) => `${ctx.parsed.x} jours restants`,
-        },
-      },
-    },
-  };
-
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <Calendar size={16} />
-          <div className="font-semibold">Gantt (jours restants)</div>
-          <Button size="sm" variant="ghost" onClick={load}>
-            <RefreshCw size={14} />
-          </Button>
-        </div>
-        <div style={{ height: 320 }}>
-          <Bar data={data} options={options} />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Non intégrés (diff TSD / DB Neon)
-// ---------------------------------------------------------------------------
-function MissingPanel() {
+function MissingEquipment() {
   const [data, setData] = useState(null);
-  const load = async () => {
-    const r = await fetch("/api/controls/tsd/missing").then((r) => r.json());
-    setData(r);
-  };
+
   useEffect(() => {
-    load();
+    api.controls.getMissingEquipment().then(setData);
   }, []);
 
-  if (!data)
-    return (
-      <Card>
-        <CardContent className="p-4">Chargement…</CardContent>
-      </Card>
-    );
+  if (!data) return <div>Chargement...</div>;
 
   return (
     <div className="grid md:grid-cols-2 gap-4">
       <Card>
-        <CardContent className="p-4">
-          <div className="font-semibold mb-2">
-            Catégories TSD sans table
+        <CardContent>
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle className="text-amber-500" size={20} />
+            <div className="font-semibold">Équipements non intégrés</div>
           </div>
-          <ul className="list-disc pl-5 text-sm">
-            {(data.missing || []).map((t) => (
-              <li key={t}>{t}</li>
+          <div className="text-sm text-gray-600 mb-3">
+            Ces catégories TSD n'ont pas encore de table en base. Créez-les pour activer les contrôles.
+          </div>
+          <div className="space-y-2">
+            {data.missing?.map((m, i) => (
+              <div key={i} className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="font-medium text-amber-900">{m.category}</div>
+                <div className="text-xs text-amber-700 mt-1">
+                  Table manquante: <code className="bg-amber-100 px-1 rounded">{m.db_table}</code> • {m.count_in_tsd}{" "}
+                  contrôles TSD
+                </div>
+              </div>
             ))}
-          </ul>
+          </div>
         </CardContent>
       </Card>
+
       <Card>
-        <CardContent className="p-4">
-          <div className="font-semibold mb-2">Snippets SQL proposés</div>
-          <pre className="text-xs whitespace-pre-wrap">
-            {(data.sqlTemplates || [])
-              .map((x) => `-- ${x.table}\n${x.sql}`)
-              .join("\n\n")}
-          </pre>
+        <CardContent>
+          <div className="flex items-center gap-2 mb-3">
+            <CheckCircle className="text-green-500" size={20} />
+            <div className="font-semibold">Équipements intégrés</div>
+          </div>
+          <div className="space-y-2">
+            {data.existing?.map((e, i) => (
+              <div key={i} className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                <div className="font-medium text-green-900">{e.category}</div>
+                <div className="text-xs text-green-700 mt-1">
+                  Table: <code className="bg-green-100 px-1 rounded">{e.db_table}</code> • {e.count} équipements
+                </div>
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Page principale ControlsV2 + modal "Vue plan"
-// ---------------------------------------------------------------------------
-export default function ControlsV2() {
-  const [tab, setTab] = useState("bt");
-  const [status, setStatus] = useState("open");
-  const [selected, setSelected] = useState(null);
-  const [mapPlan, setMapPlan] = useState(null);
-  const [showMap, setShowMap] = useState(false);
+// ============================================================================
+// PAGE PRINCIPALE
+// ============================================================================
 
-  const refresh = async () => {};
+export default function ControlsPage() {
+  const [tab, setTab] = useState("tree");
+  const [statusFilter, setStatusFilter] = useState("open");
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [showMap, setShowMap] = useState(false);
+  const [selectedBuilding, setSelectedBuilding] = useState(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  const handleRefresh = () => setRefreshTrigger((t) => t + 1);
 
   return (
-    <section className="p-8 max-w-7xl mx-auto controls-wrapper">
+    <section className="p-8 max-w-7xl mx-auto">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-3xl font-bold">Contrôles (TSD) v2</h1>
+        <div>
+          <h1 className="text-3xl font-bold">Contrôles (TSD)</h1>
+          <div className="text-sm text-gray-500 mt-1">Maintenance, Inspection & Testing of Electrical Equipment</div>
+        </div>
         <div className="flex items-center gap-2">
           <select
-            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
+            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 text-sm"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
           >
-            <option value="open">Open</option>
-            <option value="done">Done</option>
-            <option value="all">Tous</option>
+            <option value="open">Tâches ouvertes</option>
+            <option value="done">Tâches terminées</option>
+            <option value="all">Toutes</option>
           </select>
+          <Button variant="secondary" size="sm" onClick={handleRefresh}>
+            <RefreshCw size={14} /> Actualiser
+          </Button>
         </div>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
-          <TabsTrigger value="bt">
-            BT (Bâtiments → Switchboards → Devices)
-          </TabsTrigger>
-          <TabsTrigger value="hv">HV (Bâtiments → HV)</TabsTrigger>
-          <TabsTrigger value="gantt">Gantt</TabsTrigger>
-          <TabsTrigger value="missing">Non intégrés</TabsTrigger>
+          <TabsTrigger value="tree">Arborescence</TabsTrigger>
+          <TabsTrigger value="plans">Plans</TabsTrigger>
+          <TabsTrigger value="missing">Équipements manquants</TabsTrigger>
         </TabsList>
 
-        <TabsContent
-          value="bt"
-          className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
-        >
-          <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
-            <Tree
-              statusFilter={status}
-              onSelect={setSelected}
-              onShowPlan={(p) => {
-                setMapPlan(p);
-                setShowMap(true);
-              }}
-            />
-          </div>
-          <div>
-            <Details task={selected} refresh={refresh} />
-          </div>
+        <TabsContent value="tree">
+          <HierarchyTree
+            statusFilter={statusFilter}
+            onSelectTask={setSelectedTask}
+            onShowPlan={(building) => {
+              setSelectedBuilding(building);
+              setShowMap(true);
+            }}
+            onRefresh={handleRefresh}
+          />
         </TabsContent>
 
-        <TabsContent
-          value="hv"
-          className="grid grid-cols-1 lg:grid-cols-2 gap-6 col-span-2"
-        >
-          <div className="bg-white rounded-2xl ring-1 ring-black/5 p-4">
-            <Tree
-              statusFilter={status}
-              onSelect={setSelected}
-              onShowPlan={(p) => {
-                setMapPlan(p);
-                setShowMap(true);
-              }}
-            />
-          </div>
-          <div>
-            <Details task={selected} refresh={refresh} />
-          </div>
+        <TabsContent value="plans">
+          <ControlsMapManager
+            onPlanSelect={(plan) => {
+              setSelectedBuilding({ label: plan.display_name || plan.logical_name, plan });
+              setShowMap(true);
+            }}
+          />
         </TabsContent>
 
-        <TabsContent value="gantt" className="col-span-2">
-          <Gantt />
-        </TabsContent>
-
-        <TabsContent value="missing" className="col-span-2">
-          <MissingPanel />
+        <TabsContent value="missing">
+          <MissingEquipment />
         </TabsContent>
       </Tabs>
 
-      {/* -------------------- MODAL "VUE PLAN" -------------------- */}
-      {showMap && mapPlan && (
-        <div className="fixed inset-0 z-[6000] flex flex-col fade-in-up">
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={() => setShowMap(false)}
-          />
-          <div className="relative z-[6001] mx-auto my-0 h-[100dvh] w-full md:w-[min(1100px,96vw)] md:h-[94dvh] md:my-[3vh]">
-            <div className="bg-white rounded-none md:rounded-2xl shadow-lg h-full flex flex-col overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3 border-b gap-3">
-                <div className="font-semibold">
-                  Vue plan — {mapPlan.display_name}
-                </div>
-                <Button variant="ghost" onClick={() => setShowMap(false)}>
+      {selectedTask && (
+        <TaskDetails
+          task={selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onRefresh={handleRefresh}
+        />
+      )}
+
+      {showMap && selectedBuilding && (
+        <div className="fixed inset-0 z-[6000] flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowMap(false)} />
+          <div className="relative z-[6001] w-full max-w-7xl h-[90vh] mx-4">
+            <Card className="h-full flex flex-col">
+              <div className="flex items-center justify-between p-4 border-b">
+                <div className="font-semibold">Plan - {selectedBuilding.label}</div>
+                <Button variant="ghost" size="sm" onClick={() => setShowMap(false)}>
                   Fermer
                 </Button>
               </div>
               <div className="flex-1 overflow-hidden">
                 <ControlsMap
-                  plan={mapPlan}
-                  onSelectTask={(t) => {
-                    setSelected(t);
+                  plan={selectedBuilding.plan}
+                  building={selectedBuilding.label}
+                  onSelectTask={(task) => {
+                    setSelectedTask(task);
                     setShowMap(false);
                   }}
+                  inModal={false}
                 />
               </div>
-            </div>
+            </Card>
           </div>
         </div>
       )}
     </section>
   );
 }
-
