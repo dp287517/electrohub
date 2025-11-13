@@ -404,16 +404,7 @@ router.patch("/tasks/:id/close", async (req, res) => {
 // ROUTE: GET /bootstrap/auto-link
 // Crée automatiquement les tâches pour tous les équipements
 // ============================================================================
-router.get("/bootstrap/auto-link", async (req, res) => {
-  const client = await pool.connect();
-  try {
-    const site = siteOf(req);
-    let createdCount = 0;
-    
-    for (const cat of tsdLibrary.categories) {
-      if (!cat.db_table) continue;
-      
-      const { rows: tableCheck } = await client.query(
+Check } = await client.query(
         `SELECT EXISTS (
           SELECT FROM information_schema.tables 
           WHERE table_name = $1
@@ -426,9 +417,22 @@ router.get("/bootstrap/auto-link", async (req, res) => {
         continue;
       }
       
+      // Vérifier si la table a une colonne 'site'
+      const { rows: colCheck } = await client.query(
+        `SELECT EXISTS (
+          SELECT FROM information_schema.columns 
+          WHERE table_name = $1 AND column_name = 'site'
+        )`,
+        [cat.db_table]
+      );
+      
+      const hasSiteCol = colCheck[0].exists;
+      
       const { rows: entities } = await client.query(
-        `SELECT id, name FROM ${cat.db_table} WHERE site = $1`,
-        [site]
+        hasSiteCol 
+          ? `SELECT id, name FROM ${cat.db_table} WHERE site = $1`
+          : `SELECT id, name FROM ${cat.db_table}`,
+        hasSiteCol ? [site] : []
       );
       
       for (const ent of entities) {
@@ -510,9 +514,22 @@ router.get("/missing-equipment", async (req, res) => {
           count_in_tsd: (cat.controls || []).length,
         });
       } else {
+        // Vérifier si la table a une colonne 'site'
+        const { rows: colCheck } = await client.query(
+          `SELECT EXISTS (
+            SELECT FROM information_schema.columns 
+            WHERE table_name = $1 AND column_name = 'site'
+          )`,
+          [tableName]
+        );
+        
+        const hasSiteCol = colCheck[0].exists;
+        
         const { rows: countRows } = await client.query(
-          `SELECT COUNT(*) as count FROM ${tableName} WHERE site = $1`,
-          [site]
+          hasSiteCol
+            ? `SELECT COUNT(*) as count FROM ${tableName} WHERE site = $1`
+            : `SELECT COUNT(*) as count FROM ${tableName}`,
+          hasSiteCol ? [site] : []
         );
         
         existing.push({
