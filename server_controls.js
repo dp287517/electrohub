@@ -125,13 +125,13 @@ router.get("/hierarchy/tree", async (req, res) => {
             SELECT 1 FROM controls_task_positions ctp
             JOIN controls_tasks ct ON ctp.task_id = ct.id
             WHERE ct.entity_id = $1 
-            AND ct.task_code LIKE 'hv_%'
+            AND ct.entity_type = 'hv_equipment'
           ) as positioned`,
           [hv.id]
         );
         const hvPositioned = hvPosCheck[0]?.positioned || false;
 
-        // Tâches HV
+        // Tâches HV avec statut calculé
         const { rows: hvTasks } = await client.query(
           `SELECT ct.*, 
            EXISTS(
@@ -139,7 +139,7 @@ router.get("/hierarchy/tree", async (req, res) => {
              WHERE ctp.task_id = ct.id
            ) as positioned
            FROM controls_tasks ct
-           WHERE ct.entity_id = $1`,
+           WHERE ct.entity_id = $1 AND ct.entity_type = 'hv_equipment'`,
           [hv.id]
         );
 
@@ -156,6 +156,7 @@ router.get("/hierarchy/tree", async (req, res) => {
               SELECT 1 FROM controls_task_positions ctp
               JOIN controls_tasks ct ON ctp.task_id = ct.id
               WHERE ct.entity_id = $1
+              AND ct.entity_type = 'hv_device'
             ) as positioned`,
             [d.id]
           );
@@ -164,7 +165,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             `SELECT ct.*,
              EXISTS(SELECT 1 FROM controls_task_positions ctp WHERE ctp.task_id = ct.id) as positioned
              FROM controls_tasks ct
-             WHERE ct.entity_id = $1`,
+             WHERE ct.entity_id = $1 AND ct.entity_type = 'hv_device'`,
             [d.id]
           );
 
@@ -172,6 +173,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             id: d.id,
             label: d.name || d.device_type,
             positioned: dvPosCheck[0]?.positioned || false,
+            entity_type: 'hv_device',
             tasks: devTasks.map(t => ({
               ...t,
               status: computeStatus(t.next_control)
@@ -183,6 +185,8 @@ router.get("/hierarchy/tree", async (req, res) => {
           id: hv.id,
           label: hv.name,
           positioned: hvPositioned,
+          entity_type: 'hv_equipment',
+          building_code: bRow.code,
           tasks: hvTasks.map(t => ({
             ...t,
             status: computeStatus(t.next_control)
@@ -204,6 +208,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             SELECT 1 FROM controls_task_positions ctp
             JOIN controls_tasks ct ON ctp.task_id = ct.id
             WHERE ct.entity_id = $1
+            AND ct.entity_type = 'switchboard'
           ) as positioned`,
           [sw.id]
         );
@@ -212,7 +217,7 @@ router.get("/hierarchy/tree", async (req, res) => {
           `SELECT ct.*,
            EXISTS(SELECT 1 FROM controls_task_positions ctp WHERE ctp.task_id = ct.id) as positioned
            FROM controls_tasks ct
-           WHERE ct.entity_id = $1`,
+           WHERE ct.entity_id = $1 AND ct.entity_type = 'switchboard'`,
           [sw.id]
         );
 
@@ -220,6 +225,8 @@ router.get("/hierarchy/tree", async (req, res) => {
           id: sw.id,
           label: sw.name,
           positioned: swPosCheck[0]?.positioned || false,
+          entity_type: 'switchboard',
+          building_code: bRow.code,
           tasks: swTasks.map(t => ({
             ...t,
             status: computeStatus(t.next_control)
@@ -235,7 +242,7 @@ router.get("/hierarchy/tree", async (req, res) => {
 
         for (const d of devRows) {
           const { rows: devTasks } = await client.query(
-            `SELECT * FROM controls_tasks WHERE entity_id = $1`,
+            `SELECT * FROM controls_tasks WHERE entity_id = $1 AND entity_type = 'device'`,
             [d.id]
           );
 
@@ -243,6 +250,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             id: d.id,
             label: d.name || d.device_type,
             positioned: swObj.positioned, // Hérite de switchboard
+            entity_type: 'device',
             tasks: devTasks.map(t => ({
               ...t,
               status: computeStatus(t.next_control),
@@ -254,7 +262,10 @@ router.get("/hierarchy/tree", async (req, res) => {
         building.switchboards.push(swObj);
       }
 
-      buildings.push(building);
+      // Ne garder que les bâtiments qui ont du contenu
+      if (building.hv.length > 0 || building.switchboards.length > 0) {
+        buildings.push(building);
+      }
     }
 
     res.json({ buildings });
@@ -391,6 +402,7 @@ router.patch("/tasks/:id/close", async (req, res) => {
 
 // ============================================================================
 // ROUTE: GET /bootstrap/auto-link
+// Crée automatiquement les tâches pour tous les équipements
 // ============================================================================
 router.get("/bootstrap/auto-link", async (req, res) => {
   const client = await pool.connect();
@@ -425,8 +437,8 @@ router.get("/bootstrap/auto-link", async (req, res) => {
           
           const { rows: existing } = await client.query(
             `SELECT id FROM controls_tasks 
-             WHERE entity_id = $1 AND task_code = $2 AND site = $3`,
-            [ent.id, taskCode, site]
+             WHERE entity_id = $1 AND task_code = $2 AND entity_type = $3 AND site = $4`,
+            [ent.id, taskCode, cat.db_table.replace(/_/g, ''), site]
           );
           
           if (existing.length) continue;
@@ -436,16 +448,18 @@ router.get("/bootstrap/auto-link", async (req, res) => {
           await client.query(
             `INSERT INTO controls_tasks (
               site,
-              entity_id, 
+              entity_id,
+              entity_type,
               task_name, 
               task_code, 
               status, 
               next_control,
               frequency_months
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
             [
               site,
               ent.id,
+              cat.db_table.replace(/_/g, ''),
               ctrl.type,
               taskCode,
               "Planned",
@@ -654,7 +668,6 @@ router.get("/maps/positions", async (req, res) => {
       if (!rows.length) return res.json({ items: [] });
       planId = rows[0].id;
     } else if (building) {
-      // Trouver un plan par nom de bâtiment (fallback)
       const { rows } = await pool.query(
         `SELECT id FROM controls_plans WHERE display_name ILIKE $1 AND site = $2 LIMIT 1`,
         [`%${building}%`, site]
@@ -673,7 +686,8 @@ router.get("/maps/positions", async (req, res) => {
          ct.task_name,
          ct.status,
          ct.next_control,
-         ct.entity_id
+         ct.entity_id,
+         ct.entity_type
        FROM controls_task_positions ctp
        JOIN controls_tasks ct ON ctp.task_id = ct.id
        WHERE ctp.plan_id = $1 AND ctp.page_index = $2`,
@@ -684,6 +698,7 @@ router.get("/maps/positions", async (req, res) => {
       items: positions.map(p => ({
         task_id: p.task_id,
         entity_id: p.entity_id,
+        entity_type: p.entity_type,
         task_name: p.task_name,
         x_frac: Number(p.x_frac),
         y_frac: Number(p.y_frac),
@@ -697,7 +712,7 @@ router.get("/maps/positions", async (req, res) => {
 });
 
 router.post("/maps/setPosition", async (req, res) => {
-  const { task_id, entity_id, logical_name, building, page_index = 0, x_frac, y_frac } = req.body;
+  const { task_id, entity_id, entity_type, logical_name, building, page_index = 0, x_frac, y_frac } = req.body;
   const site = siteOf(req);
   
   const client = await pool.connect();
@@ -724,10 +739,10 @@ router.post("/maps/setPosition", async (req, res) => {
     
     // Si entity_id fourni, marquer TOUTES les tâches de cet équipement
     let taskIds = [];
-    if (entity_id) {
+    if (entity_id && entity_type) {
       const { rows: taskRows } = await client.query(
-        `SELECT id FROM controls_tasks WHERE entity_id = $1 AND site = $2`,
-        [entity_id, site]
+        `SELECT id FROM controls_tasks WHERE entity_id = $1 AND entity_type = $2 AND site = $3`,
+        [entity_id, entity_type, site]
       );
       taskIds = taskRows.map(r => r.id);
     } else if (task_id) {
