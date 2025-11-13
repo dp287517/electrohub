@@ -6,13 +6,13 @@ export default function AuthCard({ title, subtitle, children }) {
   const navigate = useNavigate();
   const [hasHaleonToken, setHasHaleonToken] = useState(false);
 
-  // 🧩 Étape 1 : détecte si un token Bubble est présent dans l’URL ou localStorage
+  // 🧩 Étape 1 : détecte si un token Bubble est présent dans l'URL ou localStorage
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const incoming = params.get("token");
 
     if (incoming) {
-      console.log("✅ Token Haleon reçu depuis l’URL :", incoming);
+      console.log("✅ Token Haleon reçu depuis l'URL :", incoming);
       localStorage.setItem("bubble_token", incoming);
       setHasHaleonToken(true);
       window.history.replaceState({}, "", window.location.pathname);
@@ -23,14 +23,14 @@ export default function AuthCard({ title, subtitle, children }) {
         setHasHaleonToken(true);
       }
     }
-  }, [navigate]);
+  }, []);
 
   // 🧩 Étape 2 : connexion via Haleon
   async function handleBubbleLogin() {
     try {
       const token = localStorage.getItem("bubble_token");
       if (!token) {
-        alert("Aucun token Haleon trouvé — connectez-vous d’abord via haleon-tool.io");
+        alert("Aucun token Haleon trouvé — connectez-vous d'abord via haleon-tool.io");
         return;
       }
 
@@ -38,7 +38,16 @@ export default function AuthCard({ title, subtitle, children }) {
       if (res?.ok) {
         console.log("✅ Connexion Haleon réussie :", res);
         localStorage.setItem("eh_token", res.jwt);
-        localStorage.setItem("eh_user", JSON.stringify(res.user));
+        
+        // ✅ S'assurer que le site est bien défini
+        const userWithSite = {
+          ...res.user,
+          site: res.user?.site || "Default"
+        };
+        localStorage.setItem("eh_user", JSON.stringify(userWithSite));
+        
+        console.log("✅ User stocké avec site:", userWithSite);
+        
         navigate("/dashboard");
       } else {
         alert("Échec de la connexion via Haleon");
