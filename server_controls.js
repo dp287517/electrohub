@@ -125,7 +125,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             SELECT 1 FROM controls_task_positions ctp
             JOIN controls_tasks ct ON ctp.task_id = ct.id
             WHERE ct.entity_id = $1 
-            AND ct.entity_type = 'hv_equipment'
+            AND ct.entity_type = 'hvequipment'
           ) as positioned`,
           [hv.id]
         );
@@ -139,7 +139,7 @@ router.get("/hierarchy/tree", async (req, res) => {
              WHERE ctp.task_id = ct.id
            ) as positioned
            FROM controls_tasks ct
-           WHERE ct.entity_id = $1 AND ct.entity_type = 'hv_equipment'`,
+           WHERE ct.entity_id = $1 AND ct.entity_type = 'hvequipment'`,
           [hv.id]
         );
 
@@ -156,7 +156,7 @@ router.get("/hierarchy/tree", async (req, res) => {
               SELECT 1 FROM controls_task_positions ctp
               JOIN controls_tasks ct ON ctp.task_id = ct.id
               WHERE ct.entity_id = $1
-              AND ct.entity_type = 'hv_device'
+              AND ct.entity_type = 'hvdevice'
             ) as positioned`,
             [d.id]
           );
@@ -165,7 +165,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             `SELECT ct.*,
              EXISTS(SELECT 1 FROM controls_task_positions ctp WHERE ctp.task_id = ct.id) as positioned
              FROM controls_tasks ct
-             WHERE ct.entity_id = $1 AND ct.entity_type = 'hv_device'`,
+             WHERE ct.entity_id = $1 AND ct.entity_type = 'hvdevice'`,
             [d.id]
           );
 
@@ -173,7 +173,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             id: d.id,
             label: d.name || d.device_type,
             positioned: dvPosCheck[0]?.positioned || false,
-            entity_type: 'hv_device',
+            entity_type: 'hvdevice',
             tasks: devTasks.map(t => ({
               ...t,
               status: computeStatus(t.next_control)
@@ -185,7 +185,7 @@ router.get("/hierarchy/tree", async (req, res) => {
           id: hv.id,
           label: hv.name,
           positioned: hvPositioned,
-          entity_type: 'hv_equipment',
+          entity_type: 'hvequipment',
           building_code: bRow.code,
           tasks: hvTasks.map(t => ({
             ...t,
@@ -404,7 +404,16 @@ router.patch("/tasks/:id/close", async (req, res) => {
 // ROUTE: GET /bootstrap/auto-link
 // Crée automatiquement les tâches pour tous les équipements
 // ============================================================================
-Check } = await client.query(
+router.get("/bootstrap/auto-link", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const site = siteOf(req);
+    let createdCount = 0;
+    
+    for (const cat of tsdLibrary.categories) {
+      if (!cat.db_table) continue;
+      
+      const { rows: tableCheck } = await client.query(
         `SELECT EXISTS (
           SELECT FROM information_schema.tables 
           WHERE table_name = $1
