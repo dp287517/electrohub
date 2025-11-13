@@ -1,6 +1,5 @@
 // ============================================================================
-// Controls-map.jsx - PARTIE 1/2
-// Carte interactive Leaflet + PDF.js pour positionnement des tâches de contrôle
+// Controls-map.jsx - Carte interactive avec positionnement
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -186,6 +185,14 @@ const styles = `
 .leaflet-wrapper {
   position: relative;
 }
+
+.placement-mode-active {
+  cursor: crosshair !important;
+}
+
+.placement-mode-active * {
+  cursor: crosshair !important;
+}
 `;
 
 // Injecter les styles
@@ -194,23 +201,6 @@ if (typeof document !== "undefined") {
   styleSheet.textContent = styles;
   document.head.appendChild(styleSheet);
 }
-
-// ============================================================================
-// FIN PARTIE 1/2
-// ============================================================================
-// La suite dans la partie 2/2 :
-// - Composant ControlsMap principal
-// - Composant ControlsMapManager (gestion plans + upload ZIP)
-// - Composant PlanCard
-// ============================================================================
-
-export { Btn, Input, makeTaskIcon, getPlanDims, toLatLngFrac, fromLatLngToFrac, API_BASE, userHeaders, currentSite };
-
-// ============================================================================
-// Controls-map.jsx - PARTIE 2/2
-// Composants principaux : ControlsMap + ControlsMapManager
-// ============================================================================
-// À COMBINER avec la partie 1/2 pour avoir le fichier complet
 
 // ============================================================================
 // COMPOSANT PRINCIPAL : CONTROLS MAP
@@ -222,6 +212,8 @@ export default function ControlsMap({
   pageIndex = 0,
   onSelectTask,
   inModal = false,
+  pendingPlacement = null, // { entity_id, entity_type, label }
+  onPlacementComplete,
 }) {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
@@ -235,6 +227,7 @@ export default function ControlsMap({
 
   const baseReadyRef = useRef(false);
   const draggingRef = useRef(false);
+  const placementModeRef = useRef(false);
 
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [positions, setPositions] = useState([]);
@@ -256,6 +249,21 @@ export default function ControlsMap({
     }
     return null;
   }, [plan, planKey, building]);
+
+  // Mode placement activé
+  useEffect(() => {
+    if (pendingPlacement) {
+      placementModeRef.current = true;
+      if (wrapRef.current) {
+        wrapRef.current.classList.add("placement-mode-active");
+      }
+    } else {
+      placementModeRef.current = false;
+      if (wrapRef.current) {
+        wrapRef.current.classList.remove("placement-mode-active");
+      }
+    }
+  }, [pendingPlacement]);
 
   // ============================================================================
   // INIT CARTE + RENDU PDF
@@ -342,6 +350,60 @@ export default function ControlsMap({
           roRef.current = new ResizeObserver(() => { onResize(); });
           roRef.current.observe(wrapRef.current);
         } catch {}
+
+        // Click handler pour placement
+        m.on("click", async (e) => {
+          if (!placementModeRef.current || !pendingPlacement) return;
+          
+          const latlng = e.latlng;
+          const { xf, yf } = fromLatLngToFrac(latlng, baseLayerRef.current);
+          
+          try {
+            const site = currentSite();
+            const headers = new Headers(userHeaders());
+            headers.set("X-Site", site);
+            headers.set("Content-Type", "application/json");
+            
+            const body = {
+              entity_id: pendingPlacement.entity_id,
+              entity_type: pendingPlacement.entity_type,
+              page_index: pageIndex,
+              x_frac: Math.round(xf * 1e6) / 1e6,
+              y_frac: Math.round(yf * 1e6) / 1e6,
+            };
+            
+            if (planKey) {
+              body.logical_name = planKey;
+            } else if (building) {
+              body.building = building;
+            }
+            
+            await fetch(`${API_BASE}/api/controls/maps/setPosition`, {
+              method: "POST",
+              credentials: "include",
+              headers,
+              body: JSON.stringify(body),
+            });
+            
+            await loadPositions();
+            onPlacementComplete?.();
+            
+            // Zoom sur le marqueur placé
+            setTimeout(() => {
+              const placed = positions.find(p => 
+                p.entity_id === pendingPlacement.entity_id && 
+                p.entity_type === pendingPlacement.entity_type
+              );
+              if (placed) {
+                const ll = toLatLngFrac(placed.x, placed.y, baseLayerRef.current);
+                m.setView(ll, m.getMaxZoom() - 1, { animate: true });
+              }
+            }, 200);
+          } catch (e) {
+            console.error("[ControlsMap] setPosition error", e);
+            alert("Erreur lors du placement");
+          }
+        });
 
         // 2️⃣ Rendu PDF
         if (fileUrl) {
@@ -441,6 +503,7 @@ export default function ControlsMap({
       setPositions(items.map(it => ({
         id: it.task_id || it.id,
         entity_id: it.entity_id,
+        entity_type: it.entity_type,
         name: it.task_name || it.name,
         x: Number(it.x_frac ?? it.x ?? 0),
         y: Number(it.y_frac ?? it.y ?? 0),
@@ -472,7 +535,7 @@ export default function ControlsMap({
       
       const mk = L.marker(latlng, {
         icon,
-        draggable: true,
+        draggable: !placementModeRef.current,
         autoPan: true,
         bubblingMouseEvents: false,
         keyboard: false,
@@ -498,6 +561,7 @@ export default function ControlsMap({
           
           const body = {
             entity_id: p.entity_id,
+            entity_type: p.entity_type,
             task_id: p.id,
             page_index: pageIndex,
             x_frac: Math.round(xf * 1e6) / 1e6,
@@ -526,8 +590,12 @@ export default function ControlsMap({
       });
       
       mk.on("click", () => {
+        if (placementModeRef.current) return;
+        
         onSelectTask?.({
           id: p.id,
+          entity_id: p.entity_id,
+          entity_type: p.entity_type,
           task_name: p.name,
           status: p.status,
         });
@@ -555,25 +623,31 @@ export default function ControlsMap({
     >
       {/* Toolbar */}
       <div className="absolute top-3 left-3 z-[1000] flex gap-2">
-        <button
-          className="bg-white px-3 py-2 rounded-lg shadow-sm text-sm font-semibold hover:bg-gray-50 border"
-          onClick={() => {
-            const m = mapRef.current;
-            const base = baseLayerRef.current;
-            if (!m || !base) return;
-            const b = base.getBounds();
-            m.scrollWheelZoom?.disable();
-            m.invalidateSize(false);
-            const fitZoom = m.getBoundsZoom(b, true);
-            m.setMinZoom(fitZoom - 2);
-            m.setMaxZoom(fitZoom + 8);
-            m.fitBounds(b, { padding: [12, 12] });
-            m.setZoom(m.getZoom() - 1);
-            setTimeout(() => m.scrollWheelZoom?.enable(), 60);
-          }}
-        >
-          🗺️ Ajuster
-        </button>
+        {pendingPlacement ? (
+          <div className="bg-amber-500 text-white px-4 py-2 rounded-lg shadow-lg font-semibold animate-pulse">
+            🎯 Cliquez sur le plan pour placer : {pendingPlacement.label}
+          </div>
+        ) : (
+          <button
+            className="bg-white px-3 py-2 rounded-lg shadow-sm text-sm font-semibold hover:bg-gray-50 border"
+            onClick={() => {
+              const m = mapRef.current;
+              const base = baseLayerRef.current;
+              if (!m || !base) return;
+              const b = base.getBounds();
+              m.scrollWheelZoom?.disable();
+              m.invalidateSize(false);
+              const fitZoom = m.getBoundsZoom(b, true);
+              m.setMinZoom(fitZoom - 2);
+              m.setMaxZoom(fitZoom + 8);
+              m.fitBounds(b, { padding: [12, 12] });
+              m.setZoom(m.getZoom() - 1);
+              setTimeout(() => m.scrollWheelZoom?.enable(), 60);
+            }}
+          >
+            🗺️ Ajuster
+          </button>
+        )}
       </div>
 
       {/* Légende statuts */}
@@ -721,6 +795,33 @@ export function ControlsMapManager({ onPlanSelect }) {
 function PlanCard({ plan, onSelect, onReload }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
+  const [thumbnail, setThumbnail] = useState(null);
+
+  useEffect(() => {
+    generateThumbnail();
+  }, [plan]);
+
+  async function generateThumbnail() {
+    try {
+      const url = `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(plan.logical_name)}`;
+      const loadingTask = pdfjsLib.getDocument({ url, withCredentials: true });
+      const pdf = await loadingTask.promise;
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({ scale: 0.3 });
+      
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      setThumbnail(canvas.toDataURL());
+      
+      await pdf.cleanup?.();
+    } catch (e) {
+      console.error("[PlanCard] thumbnail error:", e);
+    }
+  }
 
   async function handleRename() {
     try {
@@ -749,10 +850,14 @@ function PlanCard({ plan, onSelect, onReload }) {
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
-        <div className="flex flex-col items-center justify-center text-gray-500">
-          <div className="text-4xl leading-none">📄</div>
-          <div className="text-[11px] mt-1">PDF</div>
-        </div>
+        {thumbnail ? (
+          <img src={thumbnail} alt={name} className="w-full h-full object-cover" />
+        ) : (
+          <div className="flex flex-col items-center justify-center text-gray-500">
+            <div className="text-4xl leading-none">📄</div>
+            <div className="text-[11px] mt-1">PDF</div>
+          </div>
+        )}
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
           {name}
         </div>
@@ -800,6 +905,4 @@ function PlanCard({ plan, onSelect, onReload }) {
   );
 }
 
-// ============================================================================
-// FIN PARTIE 2/2
-// ============================================================================
+export { Btn, Input, makeTaskIcon, getPlanDims, toLatLngFrac, fromLatLngToFrac, API_BASE, userHeaders, currentSite };
