@@ -194,24 +194,55 @@ export const api = {
     assistant: (id, question) => post(`/api/projects/projects/${id}/assistant`, { question }),
     health: () => get(`/api/projects/health`),
   },
-  /** --- CONTROLS --- */
+/** --- CONTROLS --- */
   controls: {
+    // Hiérarchie et tâches
     hierarchyTree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
-    hierarchyDebug: () => get("/api/controls/hierarchy/debug"),
-    tsdMeta: () => get("/api/controls/tsd"),
-    autoLink: ({ create = 1, seed = 1 } = {}) =>
-      get("/api/controls/bootstrap/auto-link", { create, seed }),
-    listTasks: (params) => get("/api/controls/tasks", { ...(params || {}) }),
-    tasksByEntity: (entity_id, q = "") => get("/api/controls/tasks", { entity_id, q }),
     taskSchema: (id) => get(`/api/controls/tasks/${id}/schema`),
     closeTask: (id, payload) => put(`/api/controls/tasks/${id}/close`, payload),
-    attachToTask: (taskId, file) => {
+    
+    // Bootstrap
+    autoLink: () => get("/api/controls/bootstrap/auto-link"),
+    getMissingEquipment: () => get("/api/controls/missing-equipment"),
+    
+    // Plans PDF - Upload
+    uploadZip: (file) => {
       const fd = new FormData();
-      fd.append("file", file);
-      return upload(`/api/controls/tasks/${taskId}/attachments`, fd);
+      fd.append("zip", file);
+      return upload("/api/controls/maps/uploadZip", fd);
     },
-    health: () => get(`/api/controls/health`),
-    // alias rétro-compat
+    
+    // Plans PDF - Liste et gestion
+    listPlans: () => get("/api/controls/maps/listPlans"),
+    renamePlan: (logical_name, display_name) =>
+      put("/api/controls/maps/renamePlan", { logical_name, display_name }),
+    
+    // Plans PDF - URLs des fichiers
+    planFileUrl: (logical_name, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
+    planFileUrlById: (id, { bust = true } = {}) =>
+      withBust(`${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(id)}`, bust),
+    planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const key = typeof plan === "string" ? plan : (plan?.id || plan?.logical_name || "");
+      const url = (isUuid(key) || isNumericId(key))
+        ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(key)}`
+        : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(key)}`;
+      return withBust(url, bust);
+    },
+    
+    // Positions sur plans
+    positions: (logical_name, page_index = 0) =>
+      get("/api/controls/maps/positions", { logical_name, page_index }),
+    positionsById: (id, page_index = 0) =>
+      get("/api/controls/maps/positions", { id, page_index }),
+    positionsAuto: (planOrKey, page_index = 0) => {
+      const key = typeof planOrKey === "string" ? planOrKey : (planOrKey?.id || planOrKey?.logical_name || "");
+      if (isUuid(key) || isNumericId(key)) return get("/api/controls/maps/positions", { id: key, page_index });
+      return get("/api/controls/maps/positions", { logical_name: key, page_index });
+    },
+    setPosition: (payload) => post("/api/controls/maps/setPosition", payload),
+    
+    // Alias rétro-compat (si tu en as besoin)
     tree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
     catalog: (params) => get("/api/controls/tsd", { ...(params || {}) }),
     sync: ({ create = 1, seed = 1 } = {}) =>
@@ -228,6 +259,7 @@ export const api = {
     assistant: (taskId, question) => post(`/api/controls/tasks/${taskId}/assistant`, { question }),
     history: (params) => get("/api/controls/history", params),
     records: (params) => get("/api/controls/records", params),
+    health: () => get(`/api/controls/health`),
   },
   /** --- COMP-EXT --- */
   compExt: {
