@@ -290,7 +290,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
 // COMPOSANT ARBRE HIÉRARCHIQUE
 // ============================================================================
 
-function TreeNode({ title, count, open, toggle, level = 0, children, positioned, needsPosition }) {
+function TreeNode({ title, count, open, toggle, level = 0, children, positioned, needsPosition, onPlace }) {
   return (
     <div>
       <div
@@ -304,20 +304,38 @@ function TreeNode({ title, count, open, toggle, level = 0, children, positioned,
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           <span className="font-semibold text-sm">{title}</span>
           {needsPosition && (
-            <span className="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-              <MapPin size={12} className="inline mr-1" />
-              À placer sur plan
-            </span>
+            <Button 
+              size="sm" 
+              variant="warning"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPlace?.();
+              }}
+            >
+              <MapPin size={12} /> Placer sur plan
+            </Button>
+          )}
+          {positioned && !needsPosition && (
+            <Button 
+              size="sm" 
+              variant="secondary"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPlace?.();
+              }}
+            >
+              <Eye size={12} /> Voir sur plan
+            </Button>
           )}
         </div>
-        <Badge variant="default">{count}</Badge>
+        {count > 0 && <Badge variant="default">{count}</Badge>}
       </div>
       {open && <div className="ml-4">{children}</div>}
     </div>
   );
 }
 
-function HierarchyTree({ statusFilter, onSelectTask, onShowPlan, onRefresh }) {
+function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh }) {
   const [tree, setTree] = useState(null);
   const [expanded, setExpanded] = useState({});
 
@@ -352,141 +370,176 @@ function HierarchyTree({ statusFilter, onSelectTask, onShowPlan, onRefresh }) {
     <div className="space-y-3">
       {tree.buildings?.map((b, bi) => {
         const kB = `b-${bi}`;
-        const hvCount = (b.hv || []).reduce((a, n) => a + countTasks(n.tasks), 0);
-        const swCount = (b.switchboards || []).reduce(
+        const hvItems = b.hv || [];
+        const swItems = b.switchboards || [];
+        
+        const hvCount = hvItems.reduce((a, n) => a + countTasks(n.tasks), 0);
+        const swCount = swItems.reduce(
           (a, sb) => a + countTasks(sb.tasks) + (sb.devices || []).reduce((x, d) => x + countTasks(d.tasks), 0),
           0
         );
+
+        // Ne pas afficher le bâtiment s'il n'a aucun équipement
+        if (hvItems.length === 0 && swItems.length === 0) return null;
 
         return (
           <Card key={kB}>
             <div className="px-4 py-3 bg-gray-50 flex items-center justify-between border-b">
               <div className="flex items-center gap-3">
                 <div className="text-lg font-semibold">{b.label}</div>
-                <Button size="sm" variant="secondary" onClick={() => onShowPlan?.(b)}>
-                  <Map size={14} /> Vue plan
-                </Button>
               </div>
-              <div className="text-xs text-gray-500">HV: {hvCount} • Switchboards: {swCount}</div>
+              <div className="text-xs text-gray-500">
+                {hvItems.length > 0 && `HV: ${hvCount}`}
+                {hvItems.length > 0 && swItems.length > 0 && " • "}
+                {swItems.length > 0 && `Switchboards: ${swCount}`}
+              </div>
             </div>
 
             <CardContent className="p-3 space-y-2">
               {/* HV */}
-              <TreeNode
-                title="High Voltage"
-                count={hvCount}
-                open={expanded[`${kB}-hv`]}
-                toggle={() => toggle(`${kB}-hv`)}
-              >
-                {b.hv?.map((eq, i) => (
-                  <TreeNode
-                    key={i}
-                    title={eq.label}
-                    count={countTasks(eq.tasks)}
-                    open={expanded[`hv-${i}`]}
-                    toggle={() => toggle(`hv-${i}`)}
-                    level={1}
-                    needsPosition={!eq.positioned}
-                  >
-                    {eq.tasks?.map((t) => (
-                      <div
-                        key={t.id}
-                        onClick={() => onSelectTask(t)}
-                        className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                      >
-                        <div>{t.task_name}</div>
-                        <div className="flex items-center gap-2">
-                          <StatusPill status={t.status} />
-                          <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
-                        </div>
-                      </div>
-                    ))}
-                    {eq.devices?.map((d, di) => (
-                      <TreeNode
-                        key={di}
-                        title={d.label}
-                        count={countTasks(d.tasks)}
-                        open={expanded[`hv-dev-${i}-${di}`]}
-                        toggle={() => toggle(`hv-dev-${i}-${di}`)}
-                        level={2}
-                        needsPosition={!d.positioned}
-                      >
-                        {d.tasks?.map((t) => (
-                          <div
-                            key={t.id}
-                            onClick={() => onSelectTask(t)}
-                            className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                          >
-                            <div>{t.task_name}</div>
-                            <div className="flex items-center gap-2">
-                              <StatusPill status={t.status} />
-                              <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
-                            </div>
+              {hvItems.length > 0 && (
+                <TreeNode
+                  title="High Voltage"
+                  count={hvCount}
+                  open={expanded[`${kB}-hv`]}
+                  toggle={() => toggle(`${kB}-hv`)}
+                >
+                  {hvItems.map((eq, i) => (
+                    <TreeNode
+                      key={i}
+                      title={eq.label}
+                      count={countTasks(eq.tasks)}
+                      open={expanded[`hv-${i}`]}
+                      toggle={() => toggle(`hv-${i}`)}
+                      level={1}
+                      positioned={eq.positioned}
+                      needsPosition={!eq.positioned && countTasks(eq.tasks) > 0}
+                      onPlace={() => onPlaceEquipment({
+                        entity_id: eq.id,
+                        entity_type: eq.entity_type,
+                        label: eq.label,
+                        building: b.label,
+                        positioned: eq.positioned,
+                      })}
+                    >
+                      {eq.tasks?.map((t) => (
+                        <div
+                          key={t.id}
+                          onClick={() => onSelectTask(t)}
+                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                        >
+                          <div>{t.task_name}</div>
+                          <div className="flex items-center gap-2">
+                            <StatusPill status={t.status} />
+                            <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
                           </div>
-                        ))}
-                      </TreeNode>
-                    ))}
-                  </TreeNode>
-                ))}
-              </TreeNode>
+                        </div>
+                      ))}
+                      {(eq.devices || []).map((d, di) => (
+                        <TreeNode
+                          key={di}
+                          title={d.label}
+                          count={countTasks(d.tasks)}
+                          open={expanded[`hv-dev-${i}-${di}`]}
+                          toggle={() => toggle(`hv-dev-${i}-${di}`)}
+                          level={2}
+                          positioned={d.positioned}
+                          needsPosition={!d.positioned && countTasks(d.tasks) > 0}
+                          onPlace={() => onPlaceEquipment({
+                            entity_id: d.id,
+                            entity_type: d.entity_type,
+                            label: d.label,
+                            building: b.label,
+                            positioned: d.positioned,
+                          })}
+                        >
+                          {d.tasks?.map((t) => (
+                            <div
+                              key={t.id}
+                              onClick={() => onSelectTask(t)}
+                              className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                            >
+                              <div>{t.task_name}</div>
+                              <div className="flex items-center gap-2">
+                                <StatusPill status={t.status} />
+                                <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </TreeNode>
+                      ))}
+                    </TreeNode>
+                  ))}
+                </TreeNode>
+              )}
 
               {/* Switchboards */}
-              <TreeNode
-                title="Switchboards"
-                count={swCount}
-                open={expanded[`${kB}-sb`]}
-                toggle={() => toggle(`${kB}-sb`)}
-              >
-                {b.switchboards?.map((sb, i) => (
-                  <TreeNode
-                    key={i}
-                    title={sb.label}
-                    count={countTasks(sb.tasks)}
-                    open={expanded[`sb-${i}`]}
-                    toggle={() => toggle(`sb-${i}`)}
-                    level={1}
-                    needsPosition={!sb.positioned}
-                  >
-                    {sb.tasks?.map((t) => (
-                      <div
-                        key={t.id}
-                        onClick={() => onSelectTask(t)}
-                        className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                      >
-                        <div>{t.task_name}</div>
-                        <div className="flex items-center gap-2">
-                          <StatusPill status={t.status} />
-                          <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
-                        </div>
-                      </div>
-                    ))}
-                    {sb.devices?.map((d, di) => (
-                      <TreeNode
-                        key={di}
-                        title={`${d.label} (hérite position)`}
-                        count={countTasks(d.tasks)}
-                        open={expanded[`sb-dev-${i}-${di}`]}
-                        toggle={() => toggle(`sb-dev-${i}-${di}`)}
-                        level={2}
-                      >
-                        {d.tasks?.map((t) => (
-                          <div
-                            key={t.id}
-                            onClick={() => onSelectTask(t)}
-                            className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                          >
-                            <div>{t.task_name}</div>
-                            <div className="flex items-center gap-2">
-                              <StatusPill status={t.status} />
-                              <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
-                            </div>
+              {swItems.length > 0 && (
+                <TreeNode
+                  title="Switchboards"
+                  count={swCount}
+                  open={expanded[`${kB}-sb`]}
+                  toggle={() => toggle(`${kB}-sb`)}
+                >
+                  {swItems.map((sb, i) => (
+                    <TreeNode
+                      key={i}
+                      title={sb.label}
+                      count={countTasks(sb.tasks)}
+                      open={expanded[`sb-${i}`]}
+                      toggle={() => toggle(`sb-${i}`)}
+                      level={1}
+                      positioned={sb.positioned}
+                      needsPosition={!sb.positioned && countTasks(sb.tasks) > 0}
+                      onPlace={() => onPlaceEquipment({
+                        entity_id: sb.id,
+                        entity_type: sb.entity_type,
+                        label: sb.label,
+                        building: b.label,
+                        positioned: sb.positioned,
+                      })}
+                    >
+                      {sb.tasks?.map((t) => (
+                        <div
+                          key={t.id}
+                          onClick={() => onSelectTask(t)}
+                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                        >
+                          <div>{t.task_name}</div>
+                          <div className="flex items-center gap-2">
+                            <StatusPill status={t.status} />
+                            <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
                           </div>
-                        ))}
-                      </TreeNode>
-                    ))}
-                  </TreeNode>
-                ))}
-              </TreeNode>
+                        </div>
+                      ))}
+                      {(sb.devices || []).map((d, di) => (
+                        <TreeNode
+                          key={di}
+                          title={`${d.label} (hérite position)`}
+                          count={countTasks(d.tasks)}
+                          open={expanded[`sb-dev-${i}-${di}`]}
+                          toggle={() => toggle(`sb-dev-${i}-${di}`)}
+                          level={2}
+                        >
+                          {d.tasks?.map((t) => (
+                            <div
+                              key={t.id}
+                              onClick={() => onSelectTask(t)}
+                              className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                            >
+                              <div>{t.task_name}</div>
+                              <div className="flex items-center gap-2">
+                                <StatusPill status={t.status} />
+                                <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </TreeNode>
+                      ))}
+                    </TreeNode>
+                  ))}
+                </TreeNode>
+              )}
             </CardContent>
           </Card>
         );
@@ -564,10 +617,44 @@ export default function ControlsPage() {
   const [statusFilter, setStatusFilter] = useState("open");
   const [selectedTask, setSelectedTask] = useState(null);
   const [showMap, setShowMap] = useState(false);
-  const [selectedBuilding, setSelectedBuilding] = useState(null);
+  const [selectedPlan, setSelectedPlan] = useState(null);
+  const [pendingPlacement, setPendingPlacement] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const handleRefresh = () => setRefreshTrigger((t) => t + 1);
+
+  const handlePlaceEquipment = (equipment) => {
+    if (equipment.positioned) {
+      // Déjà placé : zoom direct
+      setSelectedPlan({ 
+        logical_name: equipment.building,
+        display_name: equipment.building,
+      });
+      setPendingPlacement(null);
+      setShowMap(true);
+    } else {
+      // Pas encore placé : mode placement
+      setSelectedPlan({ 
+        logical_name: equipment.building,
+        display_name: equipment.building,
+      });
+      setPendingPlacement(equipment);
+      setShowMap(true);
+    }
+  };
+
+  const handlePlacementComplete = () => {
+    setPendingPlacement(null);
+    handleRefresh();
+  };
+
+  // Auto-link au démarrage
+  useEffect(() => {
+    api.controls.autoLink().then(() => {
+      console.log("[Controls] Auto-link completed");
+      handleRefresh();
+    });
+  }, []);
 
   return (
     <section className="p-8 max-w-7xl mx-auto">
@@ -603,10 +690,7 @@ export default function ControlsPage() {
           <HierarchyTree
             statusFilter={statusFilter}
             onSelectTask={setSelectedTask}
-            onShowPlan={(building) => {
-              setSelectedBuilding(building);
-              setShowMap(true);
-            }}
+            onPlaceEquipment={handlePlaceEquipment}
             onRefresh={handleRefresh}
           />
         </TabsContent>
@@ -614,7 +698,8 @@ export default function ControlsPage() {
         <TabsContent value="plans">
           <ControlsMapManager
             onPlanSelect={(plan) => {
-              setSelectedBuilding({ label: plan.display_name || plan.logical_name, plan });
+              setSelectedPlan(plan);
+              setPendingPlacement(null);
               setShowMap(true);
             }}
           />
@@ -633,25 +718,39 @@ export default function ControlsPage() {
         />
       )}
 
-      {showMap && selectedBuilding && (
+      {showMap && selectedPlan && (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowMap(false)} />
+          <div className="absolute inset-0 bg-black/40" onClick={() => {
+            setShowMap(false);
+            setPendingPlacement(null);
+          }} />
           <div className="relative z-[6001] w-full max-w-7xl h-[90vh] mx-4">
             <Card className="h-full flex flex-col">
               <div className="flex items-center justify-between p-4 border-b">
-                <div className="font-semibold">Plan - {selectedBuilding.label}</div>
-                <Button variant="ghost" size="sm" onClick={() => setShowMap(false)}>
+                <div className="font-semibold">
+                  Plan - {selectedPlan.display_name || selectedPlan.logical_name}
+                  {pendingPlacement && (
+                    <span className="ml-3 text-sm text-amber-600">
+                      Mode placement : {pendingPlacement.label}
+                    </span>
+                  )}
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => {
+                  setShowMap(false);
+                  setPendingPlacement(null);
+                }}>
                   Fermer
                 </Button>
               </div>
               <div className="flex-1 overflow-hidden">
                 <ControlsMap
-                  plan={selectedBuilding.plan}
-                  building={selectedBuilding.label}
+                  plan={selectedPlan}
+                  building={selectedPlan.logical_name}
                   onSelectTask={(task) => {
                     setSelectedTask(task);
-                    setShowMap(false);
                   }}
+                  pendingPlacement={pendingPlacement}
+                  onPlacementComplete={handlePlacementComplete}
                   inModal={false}
                 />
               </div>
