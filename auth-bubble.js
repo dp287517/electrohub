@@ -3,7 +3,7 @@ import fetch from "node-fetch";
 import jwt from "jsonwebtoken";
 
 /**
- * Vérifie le token d’un utilisateur Bubble via ton workflow Bubble sécurisé
+ * Vérifie le token d'un utilisateur Bubble via ton workflow Bubble sécurisé
  */
 export async function verifyBubbleToken(bubbleToken) {
   if (!bubbleToken) throw new Error("Missing token");
@@ -49,14 +49,17 @@ export async function verifyBubbleToken(bubbleToken) {
     throw new Error("Invalid Bubble response");
   }
 
-  // Crée un objet utilisateur à partir de l’email
+  // Crée un objet utilisateur à partir de l'email
   const email = String(payload.user).trim().toLowerCase();
   const name = email.split("@")[0].replace(/[._-]+/g, " ");
+  
+  // ✅ CORRECTION : Ajouter le site par défaut
   return {
     id: email,
     email,
     name: name.charAt(0).toUpperCase() + name.slice(1),
     origin: "bubble",
+    site: "Default", // ✅ Site par défaut pour les users Bubble
   };
 }
 
@@ -69,6 +72,7 @@ export function signLocalJWT(user) {
     name: user.name || user.email,
     email: user.email,
     source: "bubble",
+    site: user.site || "Default", // ✅ Inclure le site dans le JWT
   };
 
   const secret = process.env.JWT_SECRET || "devsecret";
