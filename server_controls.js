@@ -19,7 +19,7 @@ import pg from "pg";
 dayjs.extend(utc);
 dotenv.config();
 
-// --- OpenAI (IA photos / sécurité / infos équipements / assistant tâches)
+// --- OpenAI (IA photos / sécurité / infos équipements / match TSD/équipements)
 const { OpenAI } = await import("openai");
 
 // ============================================================================
@@ -116,7 +116,7 @@ function generateInitialDate(_frequency) {
   return baseDate.add(offsetDays, "day").format("YYYY-MM-DD");
 }
 
-// Trouver le contrôle TSD par task_code
+// Trouver le contrôle TSD par task_code (dérivé de type)
 function findTSDControl(taskCode) {
   if (!taskCode) return null;
   const canon = String(taskCode).toLowerCase();
@@ -146,7 +146,7 @@ function entityTypeFromCategory(cat) {
     case "sites":
       return "site";
     default:
-      return t.replace(/_/g, "");
+      return t ? t.replace(/_/g, "") : "equipment";
   }
 }
 
@@ -298,7 +298,7 @@ Contraintes :
   };
 }
 
-// Routes IA (mêmes principes que ATEX, mais pour Controls)
+// Routes IA (photos)
 router.post(
   "/ai/analyzePhotoBatch",
   multerFiles.array("files"),
@@ -313,7 +313,6 @@ router.post(
         req.files || []
       );
 
-      // Nettoyage des fichiers temporaires
       await Promise.all(
         (req.files || []).map((f) => fsp.unlink(f.path).catch(() => {}))
       );
@@ -326,7 +325,7 @@ router.post(
   }
 );
 
-// Alias plus générique
+// Alias
 router.post("/ai/extract", multerFiles.array("files"), async (req, res) => {
   try {
     const client = openaiClient();
@@ -531,10 +530,8 @@ Consignes :
 
 // ============================================================================
 // ROUTE: GET /hierarchy/tree
-// Retourne l'arborescence complète avec indicateur "positioned"
-// + héritage de position pour les cellules HT comme pour les devices TGBT
-// + filtre status=open|done|all (utilisé par Controls.jsx)
 // ============================================================================
+
 router.get("/hierarchy/tree", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -551,17 +548,14 @@ router.get("/hierarchy/tree", async (req, res) => {
         .filter((t) => {
           if (statusFilter === "all") return true;
           if (statusFilter === "done") {
-            // Pour l'instant "terminées" = celles avec last_control non nul
             return !!t.last_control;
           }
-          // "open" = contrôles à venir / en retard
           return ["Planned", "Pending", "Overdue"].includes(t.status);
         });
     };
 
     const buildings = [];
 
-    // Récupérer tous les buildings pertinents
     const { rows: buildingRows } = await client.query(
       `
       SELECT DISTINCT building_code AS code FROM (
@@ -577,14 +571,13 @@ router.get("/hierarchy/tree", async (req, res) => {
     for (const bRow of buildingRows) {
       const building = { label: bRow.code, hv: [], switchboards: [] };
 
-      // ========== HIGH VOLTAGE ==========
+      // ---------- HV ----------
       const { rows: hvEquips } = await client.query(
         `SELECT * FROM hv_equipments WHERE building_code = $1 AND site = $2`,
         [bRow.code, site]
       );
 
       for (const hv of hvEquips) {
-        // Vérifier si HV est positionné
         const { rows: hvPosCheck } = await client.query(
           `SELECT EXISTS(
             SELECT 1 FROM controls_task_positions ctp
@@ -596,7 +589,6 @@ router.get("/hierarchy/tree", async (req, res) => {
         );
         const hvPositioned = hvPosCheck[0]?.positioned || false;
 
-        // Tâches HV
         const { rows: hvTasksRaw } = await client.query(
           `SELECT ct.*,
              EXISTS(
@@ -610,7 +602,6 @@ router.get("/hierarchy/tree", async (req, res) => {
         );
         const hvTasks = filterTasks(hvTasksRaw);
 
-        // Devices HV (cellules, etc.)
         const { rows: hvDevices } = await client.query(
           `SELECT * FROM hv_devices WHERE hv_equipment_id = $1 AND site = $2`,
           [hv.id, site]
@@ -641,11 +632,8 @@ router.get("/hierarchy/tree", async (req, res) => {
           );
           const devTasks = filterTasks(devTasksRaw);
 
-          // 👉 NOTE IMPORTANTE :
-          // - positioned : true si la cellule est explicitement positionnée
-          //   OU si l'équipement HV parent est positionné.
-          //   => permet d'afficher "(hérite position)" côté front.
-          const devicePositioned = (dvPosCheck[0]?.positioned || false) || hvPositioned;
+          const devicePositioned =
+            (dvPosCheck[0]?.positioned || false) || hvPositioned;
 
           devices.push({
             id: d.id,
@@ -667,14 +655,13 @@ router.get("/hierarchy/tree", async (req, res) => {
         });
       }
 
-      // ========== SWITCHBOARDS ==========
+      // ---------- SWITCHBOARDS ----------
       const { rows: swRows } = await client.query(
         `SELECT * FROM switchboards WHERE building_code = $1 AND site = $2`,
         [bRow.code, site]
       );
 
       for (const sw of swRows) {
-        // Vérifier si Switchboard est positionné
         const { rows: swPosCheck } = await client.query(
           `SELECT EXISTS(
             SELECT 1 FROM controls_task_positions ctp
@@ -710,7 +697,6 @@ router.get("/hierarchy/tree", async (req, res) => {
           devices: [],
         };
 
-        // Devices (héritent de la position du switchboard)
         const { rows: devRows } = await client.query(
           `SELECT * FROM devices WHERE switchboard_id = $1 AND site = $2`,
           [sw.id, site]
@@ -736,13 +722,11 @@ router.get("/hierarchy/tree", async (req, res) => {
           });
         }
 
-        // On garde le switchboard même si pour l’instant il n’a que des tasks à venir filtrées
         if (swObj.tasks.length || swObj.devices.length) {
           building.switchboards.push(swObj);
         }
       }
 
-      // Ne garder que les bâtiments qui ont du contenu
       if (building.hv.length > 0 || building.switchboards.length > 0) {
         buildings.push(building);
       }
@@ -760,6 +744,7 @@ router.get("/hierarchy/tree", async (req, res) => {
 // ============================================================================
 // ROUTE: GET /tasks/:id/schema
 // ============================================================================
+
 router.get("/tasks/:id/schema", async (req, res) => {
   const { id } = req.params;
 
@@ -788,6 +773,7 @@ router.get("/tasks/:id/schema", async (req, res) => {
 
     const schema = {
       category_key: category.key,
+      tsd_code: task.task_code,
       checklist: (control.checklist || []).map((q, i) => ({
         key: `${category.key}_${i}`,
         label: typeof q === "string" ? q : q.label || q,
@@ -810,10 +796,10 @@ router.get("/tasks/:id/schema", async (req, res) => {
 // ============================================================================
 // ROUTE: PATCH /tasks/:id/close
 // ============================================================================
+
 router.patch("/tasks/:id/close", async (req, res) => {
   const { id } = req.params;
 
-  // Harmonisation du payload (front envoie items/obs)
   const body = req.body || {};
   const checklist = body.checklist || body.items || [];
   const observations = body.observations || body.obs || {};
@@ -887,315 +873,135 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ============================================================================
-// ROUTE: POST /tasks/:id/analyze
-// Analyse IA d'une tâche de contrôle (résumé, risques, priorités...)
+// IA — AUTO-LINK : MATCH INTELLIGENT TSD <-> ÉQUIPEMENTS
 // ============================================================================
 
-router.post("/tasks/:id/analyze", async (req, res) => {
-  const { id } = req.params;
-  const db = await pool.connect();
-  try {
-    const { rows } = await db.query(
-      `SELECT * FROM controls_tasks WHERE id = $1`,
-      [id]
-    );
-    if (!rows.length) {
-      return res.status(404).json({ error: "Task not found" });
-    }
-    const task = rows[0];
+/**
+ * IA : pour une catégorie TSD donnée, suggère quels contrôles appliquer à quels équipements.
+ * - category : un objet de tsdLibrary.categories[i]
+ * - entities : rows de la table DB (id, name, device_type, switchboard_name, ...)
+//  Retour attendu (JSON IA) :
+//  { "items": [ { "equipment_id": 12, "controls": ["Visual Inspection", "Low-Voltage ACB – Annual"] }, ... ] }
+ */
+async function aiSuggestControlsForCategory(client, category, entities) {
+  if (!client || !entities.length) return null;
 
-    // Récupérer l'équipement lié
-    let equipment = null;
-    if (task.entity_type === "hvequipment") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM hv_equipments WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    } else if (task.entity_type === "hvdevice") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM hv_devices WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    } else if (task.entity_type === "switchboard") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM switchboards WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    } else if (task.entity_type === "device") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM devices WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    }
+  const controlsSummary = (category.controls || []).map((c) => ({
+    type: c.type,
+    description: c.description || "",
+    frequency: c.frequency || null,
+  }));
 
-    // TSD associé
-    const tsd = findTSDControl(task.task_code);
+  const equipmentsSummary = entities.map((e) => ({
+    id: e.id,
+    name:
+      e.name ||
+      e.device_type ||
+      e.switchboard_name ||
+      e.label ||
+      `${category.db_table} #${e.id}`,
+    device_type: e.device_type || null,
+    switchboard_type: e.switchboard_type || null,
+    rated_current:
+      e.rated_current ||
+      e.in ||
+      e.rating ||
+      e.nominal_current ||
+      null,
+    tags: e.tags || null,
+    building_code: e.building_code || e.building || null,
+  }));
 
-    // Derniers enregistrements de contrôle
-    const { rows: records } = await db.query(
-      `SELECT * FROM controls_records 
-       WHERE task_id = $1 
-       ORDER BY performed_at DESC 
-       LIMIT 5`,
-      [id]
-    );
+  const sys = `Tu es un assistant IA de maintenance électrique industrielle.
+Tu aides à appliquer une TSD (Testing & Inspection) à un parc d'équipements.
 
-    const client = openaiClient();
-    if (!client) {
-      return res
-        .status(500)
-        .json({ error: "OPENAI_API_KEY missing for Controls" });
-    }
-
-    const sys = `
-Tu es un assistant expert en maintenance et sécurité des installations électriques (HTA/HTB, TGBT, tableaux, transformateurs, etc.).
-Tu aides à analyser une tâche de contrôle issue d'une librairie TSD (Testing & Inspection).
+On te donne :
+- une catégorie TSD (par ex. "Low voltage switchgear (<1000 V ac)") avec sa liste de contrôles standard,
+- une liste d'équipements (tableaux, cellules HT, devices, etc.) extraits d'une base de données.
 
 Objectif :
-- Résumer la situation
-- Identifier les risques principaux (techniques et sécurité)
-- Suggérer des actions prioritaires
-- Donner une vision synthétique compréhensible par un responsable maintenance/énergie
+- Pour CHAQUE équipement, décider quels contrôles de la TSD sont pertinents.
+- Certains équipements peuvent n'avoir qu'un sous-ensemble des contrôles (par ex. tous n'ont pas de protections à injection primaire, etc.).
+- Si tu n'as pas assez d'information pour distinguer, applique les contrôles "généraux" (inspection visuelle, tests de base) mais évite les contrôles manifestement hors sujet.
 
-Réponds en français, formaté en sections claires.
-`;
+Contraintes importantes :
+- Les noms de contrôles dans ta réponse DOIVENT correspondre EXACTEMENT aux champs "type" des contrôles TSD fournis.
+- Ne crée PAS de contrôles inventés.
+- Ne renvoie aucun texte hors JSON.`;
 
-    const ctx = {
-      task: {
-        id: task.id,
-        name: task.task_name,
-        code: task.task_code,
-        status: task.status,
-        next_control: task.next_control,
-        last_control: task.last_control,
-      },
-      equipment: equipment
-        ? {
-            id: equipment.id,
-            name: equipment.name || equipment.device_type || equipment.switchboard_name,
-            building_code: equipment.building_code || equipment.building || null,
-          }
-        : null,
-      tsd_control: tsd
-        ? {
-            category_key: tsd.category.key,
-            category_label: tsd.category.label,
-            type: tsd.control.type,
-            description: tsd.control.description || "",
-            frequency: tsd.control.frequency || null,
-          }
-        : null,
-      recent_records: records.map((r) => ({
-        performed_at: r.performed_at,
-        result_status: r.result_status,
-        comments: r.comments,
-      })),
-    };
-
-    const userPrompt = `
-Voici le contexte JSON de la tâche de contrôle :
-
+  const user = `Catégorie TSD (JSON) :
 \`\`\`json
-${JSON.stringify(ctx, null, 2)}
+${JSON.stringify(
+  {
+    key: category.key,
+    label: category.label,
+    controls: controlsSummary,
+  },
+  null,
+  2
+)}
 \`\`\`
 
-Analyse cette tâche en respectant le rôle défini.
-`;
+Équipements (JSON) :
+\`\`\`json
+${JSON.stringify(equipmentsSummary, null, 2)}
+\`\`\`
 
-    const resp = await client.chat.completions.create({
-      model:
-        process.env.CONTROLS_OPENAI_MODEL ||
-        process.env.ATEX_OPENAI_MODEL ||
-        "gpt-4o-mini",
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.2,
-    });
+Réponds STRICTEMENT avec un JSON de la forme :
 
-    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
-    res.json({ ok: true, answer });
-  } catch (e) {
-    console.error("[Controls] /tasks/:id/analyze error:", e);
-    res.status(500).json({ error: e.message });
-  } finally {
-    db.release();
-  }
-});
+{
+  "items": [
+    {
+      "equipment_id": <id de l'équipement>,
+      "controls": ["Nom exact du contrôle 1", "Nom exact du contrôle 2", ...]
+    },
+    ...
+  ]
+}`;
 
+  const resp = await client.chat.completions.create({
+    model:
+      process.env.CONTROLS_OPENAI_MODEL ||
+      process.env.ATEX_OPENAI_MODEL ||
+      "gpt-4o-mini",
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: sys },
+      { role: "user", content: user },
+    ],
+  });
 
-// ============================================================================
-// ROUTE: POST /tasks/:id/assistant
-// Assistant IA Q&A sur une tâche de contrôle
-// ============================================================================
-
-router.post("/tasks/:id/assistant", async (req, res) => {
-  const { id } = req.params;
-  const { question = "" } = req.body || {};
-  const db = await pool.connect();
+  let parsed = null;
   try {
-    const { rows } = await db.query(
-      `SELECT * FROM controls_tasks WHERE id = $1`,
-      [id]
-    );
-    if (!rows.length) {
-      return res.status(404).json({ error: "Task not found" });
-    }
-    const task = rows[0];
-
-    let equipment = null;
-    if (task.entity_type === "hvequipment") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM hv_equipments WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    } else if (task.entity_type === "hvdevice") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM hv_devices WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    } else if (task.entity_type === "switchboard") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM switchboards WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    } else if (task.entity_type === "device") {
-      equipment = (
-        await db.query(
-          `SELECT * FROM devices WHERE id = $1`,
-          [task.entity_id]
-        )
-      ).rows[0];
-    }
-
-    const tsd = findTSDControl(task.task_code);
-
-    const { rows: records } = await db.query(
-      `SELECT * FROM controls_records 
-       WHERE task_id = $1 
-       ORDER BY performed_at DESC 
-       LIMIT 5`,
-      [id]
-    );
-
-    const client = openaiClient();
-    if (!client) {
-      return res
-        .status(500)
-        .json({ error: "OPENAI_API_KEY missing for Controls" });
-    }
-
-    const sys = `
-Tu es un assistant IA spécialisé en contrôle d'installations électriques.
-Tu réponds aux questions de l'utilisateur sur UNE tâche de contrôle précise, en t'appuyant sur le contexte fourni.
-Tes réponses doivent être:
-- précises
-- orientées sécurité et maintenance
-- en français
-`;
-
-    const ctx = {
-      task: {
-        id: task.id,
-        name: task.task_name,
-        code: task.task_code,
-        status: task.status,
-        next_control: task.next_control,
-        last_control: task.last_control,
-      },
-      equipment: equipment
-        ? {
-            id: equipment.id,
-            name: equipment.name || equipment.device_type || equipment.switchboard_name,
-            building_code: equipment.building_code || equipment.building || null,
-          }
-        : null,
-      tsd_control: tsd
-        ? {
-            category_key: tsd.category.key,
-            category_label: tsd.category.label,
-            type: tsd.control.type,
-            description: tsd.control.description || "",
-            frequency: tsd.control.frequency || null,
-          }
-        : null,
-      recent_records: records.map((r) => ({
-        performed_at: r.performed_at,
-        result_status: r.result_status,
-        comments: r.comments,
-      })),
-    };
-
-    const userPrompt = `
-Contexte de la tâche (JSON) :
-
-\`\`\`json
-${JSON.stringify(ctx, null, 2)}
-\`\`\`
-
-Question de l'utilisateur :
-"${question}"
-`;
-
-    const resp = await client.chat.completions.create({
-      model:
-        process.env.CONTROLS_OPENAI_MODEL ||
-        process.env.ATEX_OPENAI_MODEL ||
-        "gpt-4o-mini",
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.25,
-    });
-
-    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
-    res.json({ ok: true, answer });
-  } catch (e) {
-    console.error("[Controls] /tasks/:id/assistant error:", e);
-    res.status(500).json({ error: e.message });
-  } finally {
-    db.release();
+    parsed = JSON.parse(resp.choices?.[0]?.message?.content || "{}");
+  } catch {
+    parsed = null;
   }
-});
+
+  if (!parsed || !Array.isArray(parsed.items)) return null;
+  return parsed.items;
+}
 
 // ============================================================================
 // ROUTE: GET /bootstrap/auto-link
 // Bootstrap / resync complet TSD → controls_tasks pour un site
-// - Efface toutes les tâches de ce site dans controls_tasks
-// - Recrée toutes les tâches à partir de tsdLibrary + tables HV/TGBT/devices
 // ============================================================================
+
 router.get("/bootstrap/auto-link", async (req, res) => {
   const site = siteOf(req);
   const client = await pool.connect();
+  const aiClient = openaiClient();
+  const useAI = !!aiClient; // si clé OpenAI dispo → mode IA
 
   try {
     await client.query("BEGIN");
 
-    // 1) On purge TOUTES les tâches de ce site (simple et clair)
-    await client.query(
-      `DELETE FROM controls_tasks WHERE site = $1`,
-      [site]
-    );
+    // 1) On purge TOUTES les tâches de ce site
+    await client.query(`DELETE FROM controls_tasks WHERE site = $1`, [site]);
 
     let created = 0;
 
-    // 2) Pour chaque catégorie TSD, on regarde si la table existe et contient des équipements pour ce site
     for (const cat of tsdLibrary.categories || []) {
       const tableName = cat.db_table;
       if (!tableName) continue;
@@ -1207,21 +1013,61 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       let entities = [];
       try {
         const { rows } = await client.query(
-          `SELECT id, name, device_type, switchboard_name, building_code 
+          `SELECT id, name, device_type, switchboard_name, building_code, site 
            FROM ${tableName}
            WHERE site = $1`,
           [site]
         );
         entities = rows;
       } catch (e) {
-        // Si la table n'existe pas vraiment dans ta base, on ignore cette catégorie
-        console.warn(`[Controls][auto-link] Table manquante ou invalide: ${tableName}`, e.message);
+        console.warn(
+          `[Controls][auto-link] Table manquante ou invalide: ${tableName}`,
+          e.message
+        );
         continue;
       }
 
       if (!entities.length) continue;
 
       const entityType = entityTypeFromCategory(cat);
+
+      // -------------------------
+      // MODE IA : choix des contrôles par équipement
+      // -------------------------
+      let decisionsByEquipment = null;
+      if (useAI) {
+        try {
+          decisionsByEquipment = await aiSuggestControlsForCategory(
+            aiClient,
+            cat,
+            entities
+          );
+        } catch (e) {
+          console.error(
+            `[Controls][auto-link][AI] erreur IA pour catégorie ${cat.key}:`,
+            e
+          );
+        }
+      }
+
+      // Réindexer les contrôles TSD par type
+      const controlsByType = {};
+      for (const ctrl of controls) {
+        controlsByType[ctrl.type] = ctrl;
+      }
+
+      // Index IA par equipment_id → liste de types
+      const aiMap = new Map();
+      if (Array.isArray(decisionsByEquipment)) {
+        for (const item of decisionsByEquipment) {
+          if (!item || !item.equipment_id) continue;
+          const list = Array.isArray(item.controls) ? item.controls : [];
+          aiMap.set(
+            item.equipment_id,
+            list.filter((t) => typeof t === "string" && controlsByType[t])
+          );
+        }
+      }
 
       for (const ent of entities) {
         const label =
@@ -1230,20 +1076,30 @@ router.get("/bootstrap/auto-link", async (req, res) => {
           ent.switchboard_name ||
           `${tableName} #${ent.id}`;
 
-        for (const ctrl of controls) {
-          const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
+        // Liste finale de contrôles à appliquer sur CET équipement
+        let controlsForThis = [];
 
-          // Date initiale pseudo-aléatoire en 2026 + prochaine échéance
+        if (useAI && aiMap.has(ent.id) && aiMap.get(ent.id).length) {
+          controlsForThis = aiMap.get(ent.id).map((type) => controlsByType[type]);
+        } else {
+          // Fallback (pas d'IA ou pas de réponse exploitable) :
+          controlsForThis = controls;
+        }
+
+        for (const ctrl of controlsForThis) {
+          if (!ctrl) continue;
+
+          const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
           const firstDate = generateInitialDate(ctrl.frequency || null);
           const nextDate = addFrequency(firstDate, ctrl.frequency || null);
 
-          // On convertit la fréquence en mois si possible (pour info / stats)
           let freqMonths = null;
           if (ctrl.frequency?.interval && ctrl.frequency?.unit) {
             const { interval, unit } = ctrl.frequency;
             if (unit === "months") freqMonths = interval;
             else if (unit === "years") freqMonths = interval * 12;
-            else if (unit === "weeks") freqMonths = Math.round((interval * 7) / 30);
+            else if (unit === "weeks")
+              freqMonths = Math.round((interval * 7) / 30);
           }
 
           await client.query(
@@ -1255,7 +1111,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
               site,
               ent.id,
               entityType,
-              `${cat.label} – ${ctrl.type}`, // nom plus explicite
+              `${cat.label} – ${ctrl.type}`,
               taskCode,
               "Planned",
               firstDate,
@@ -1271,9 +1127,10 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 
     await client.query("COMMIT");
 
-    const msg = `Synchronisation OK – ${created} tâches créées pour le site "${site}"`;
+    const modeLabel = useAI ? "avec IA" : "sans IA";
+    const msg = `Synchronisation OK (${modeLabel}) – ${created} tâches créées pour le site "${site}"`;
     console.log("[Controls][auto-link]", msg);
-    res.json({ ok: true, created, message: msg });
+    res.json({ ok: true, created, message: msg, ai: useAI });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("[Controls][auto-link] ERROR:", e);
@@ -1288,9 +1145,8 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 
 // ============================================================================
 // ROUTE: GET /missing-equipment
-// Logique améliorée : table absente OU 0 équipements = "non intégré"
-// + champs compatibles avec Controls.jsx (count_in_tsd)
 // ============================================================================
+
 router.get("/missing-equipment", async (req, res) => {
   const client = await pool.connect();
   try {
@@ -1302,7 +1158,6 @@ router.get("/missing-equipment", async (req, res) => {
       const tableName = cat.db_table;
       if (!tableName) continue;
 
-      // Table présente ?
       const { rows: tableCheck } = await client.query(
         `SELECT EXISTS (
           SELECT FROM information_schema.tables 
@@ -1326,7 +1181,6 @@ router.get("/missing-equipment", async (req, res) => {
         continue;
       }
 
-      // Colonne site ?
       const { rows: colCheck } = await client.query(
         `SELECT EXISTS (
           SELECT FROM information_schema.columns 
@@ -1378,6 +1232,7 @@ router.get("/missing-equipment", async (req, res) => {
 // ============================================================================
 // ROUTE: GET /tsd  — expose la tsd_library brute (catalogue)
 // ============================================================================
+
 router.get("/tsd", async (_req, res) => {
   try {
     res.json(tsdLibrary);
@@ -1388,7 +1243,7 @@ router.get("/tsd", async (_req, res) => {
 });
 
 // ============================================================================
-// ROUTES GESTION DES PLANS (alignées avec ATEX, mais pour Controls)
+// ROUTES GESTION DES PLANS
 // ============================================================================
 
 // Upload ZIP de plans (PDF) vers table controls_plans
@@ -1413,7 +1268,6 @@ router.post("/maps/uploadZip", uploadZip.single("zip"), async (req, res) => {
       const logicalName = fileName.replace(/\.pdf$/i, "");
       const content = await file.buffer();
 
-      // Un plan = logical_name + site
       const { rows: existing } = await client.query(
         `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
         [logicalName, site]
@@ -1459,7 +1313,6 @@ router.get("/maps/listPlans", async (req, res) => {
       [site]
     );
 
-    // Compat : plans + items
     res.json({ plans: rows, items: rows });
   } catch (e) {
     console.error("[Controls] listPlans error:", e);
@@ -1496,7 +1349,6 @@ router.get("/maps/planFile", async (req, res) => {
     let query, params;
 
     if (id) {
-      // On accepte UUID ou numérique, on laisse Postgres caster
       query = `SELECT content FROM controls_plans WHERE id = $1 AND site = $2`;
       params = [id, site];
     } else if (logical_name) {
@@ -1689,6 +1541,7 @@ router.post("/maps/setPosition", async (req, res) => {
 // ============================================================================
 // MOUNT & BOOT
 // ============================================================================
+
 const BASE_PATH = process.env.CONTROLS_BASE_PATH || "/api/controls";
 app.use(BASE_PATH, router);
 
