@@ -888,18 +888,9 @@ export default function ControlsPage() {
     handleRefresh();
   };
 
-  // Auto-link au démarrage
+  // Chargement initial de l'arborescence (sans auto-link pour éviter les doublons)
   useEffect(() => {
-    api.controls
-      .autoLink()
-      .then(() => {
-        console.log("[Controls] Auto-link completed");
-        handleRefresh();
-      })
-      .catch((e) => {
-        console.error("[Controls] autoLink error:", e);
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    handleRefresh();
   }, []);
 
   return (
