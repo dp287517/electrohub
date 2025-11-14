@@ -150,6 +150,96 @@ function entityTypeFromCategory(cat) {
   }
 }
 
+// ============================================================================
+// HELPERS MÉTIER — COHÉRENCE ÉQUIPEMENT / CONTRÔLES
+// ============================================================================
+
+// Construit une chaîne "nom complet" à partir des colonnes utiles
+function getEquipmentNameString(ent) {
+  const parts = [];
+  if (ent.name) parts.push(ent.name);
+  if (ent.device_type) parts.push(ent.device_type);
+  if (ent.switchboard_name) parts.push(ent.switchboard_name);
+  if (ent.description) parts.push(ent.description);
+  return parts.join(" ").toLowerCase();
+}
+
+// Heuristique : est-ce que cet équipement ressemble à un variateur de vitesse ?
+function isVsdLikeEntity(ent) {
+  const s = getEquipmentNameString(ent);
+  return (
+    /vsd\b/.test(s) ||
+    /vfd\b/.test(s) ||
+    /variateur/.test(s) ||
+    /variable\s*speed/.test(s) ||
+    /drive\b/.test(s) ||
+    /convertisseur de fréquence/.test(s)
+  );
+}
+
+/**
+ * Filtre métier : est-ce que le contrôle de cette catégorie peut s'appliquer
+ * à cet équipement ?
+ *
+ * Objectif : bloquer les cas absurdes que tu as remontés :
+ * - contrôles Distribution Boards sur des disjoncteurs / devices individuels
+ * - contrôles Emergency Lighting sur n'importe quel device
+ * - contrôles Fire Detection sur des TGBT / devices
+ * - contrôles Power Factor Correction sur une cellule HT qui n'est pas PFC
+ * - contrôles VSD sur un device qui n'est pas un variateur
+ */
+function isControlAllowedForEntity(cat, ctrl, ent) {
+  const key = cat.key || "";
+  const name = getEquipmentNameString(ent);
+
+  // ------------- Distribution Boards (<1000 V ac) -------------
+  if (key === "distribution_boards") {
+    const isBoard = /tgbt|qgbt|qg\b|tableau|tab\b|db\b|distribution board|switchboard/.test(
+      name
+    );
+    const looksBreaker =
+      /mcb|mccb|disjoncteur|breaker|interrupteur|sectionneur/.test(name);
+
+    // On n'accepte que si ça ressemble clairement à un tableau et pas à un simple disjoncteur
+    return isBoard && !looksBreaker;
+  }
+
+  // ------------- Emergency Lighting Systems -------------
+  if (key === "emergency_lighting") {
+    const isEmerg =
+      /baes|bloc secours|éclairage de sécurité|eclairage de securite|emergency lighting|emergency light/.test(
+        name
+      );
+    return isEmerg;
+  }
+
+  // ------------- Fire Detection and Fire Alarm Systems -------------
+  if (key === "fire_detection") {
+    const isFire =
+      /ssi\b|sdsi\b|détection incendie|detection incendie|fire detection|fire alarm|smoke detector|détecteur de fumée|detecteur de fumee/.test(
+        name
+      );
+    return isFire;
+  }
+
+  // ------------- Power Factor Correction (>1000 V ac) -------------
+  if (key === "pfc_hv" || key === "pfc_lv") {
+    const isPfc =
+      /pfc\b|compensation|condensateur|capacitor bank|batterie de condensateurs|power factor/.test(
+        name
+      );
+    return isPfc;
+  }
+
+  // ------------- Variable Speed Drives -------------
+  if (key === "vsd") {
+    return isVsdLikeEntity(ent);
+  }
+
+  // Par défaut : on laisse passer (IA + bon sens métier)
+  return true;
+}
+
 // Mapping inverse : entity_type -> table DB (pour IA sur les tâches)
 function tableFromEntityType(entityType) {
   switch (entityType) {
@@ -1004,6 +1094,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 
     let created = 0;
     let usedAI = false;
+    const warnings = [];
 
     // Parcours de toutes les catégories de la TSD
     for (const cat of tsdLibrary.categories || []) {
@@ -1012,6 +1103,8 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 
       const controls = cat.controls || [];
       if (!controls.length) continue;
+      // Pour certains types (ex: VSD), on veut détecter les équipements "suspects" sans contrôle
+      const vsdLikeMissing = [];
 
       // ------------------------------
       // 1) Récupérer les équipements
@@ -1090,49 +1183,52 @@ router.get("/bootstrap/auto-link", async (req, res) => {
           };
 
           const sys = `
-Tu es un ingénieur électricien / ingénieur maintenance industriel.
-Tu connais très bien :
-- les installations HT/MT/BT,
-- les TGBT, tableaux de distribution, MCC, UPS, batteries, éclairage de sécurité,
-- les zones ATEX / Hazardous Areas (IEC 60079).
+    Tu es un ingénieur électricien / ingénieur maintenance industriel.
+    Tu connais très bien :
+    - les installations HT/MT/BT,
+    - les TGBT, tableaux de distribution, MCC, UPS, batteries, éclairage de sécurité,
+    - les zones ATEX / Hazardous Areas (IEC 60079).
 
-Ton rôle :
-À partir d'une liste d'équipements (issue d'une base de données) et d'un catalogue de contrôles (TSD),
-tu dois décider quels contrôles appliquer à CHAQUE équipement.
+    Ton rôle :
+    À partir d'une liste d'équipements (issue d'une base de données) et d'un catalogue de contrôles (TSD),
+    tu dois décider quels contrôles appliquer à CHAQUE équipement.
 
-RÈGLES IMPORTANTES :
-- Tu parles "comme un électricien", tu comprends les abréviations :
-  TR1, TR2, TX, TGBT, DB, MCC, UPS, LV, HV, MV, Ex, Zone 1, Zone 2, etc.
-- Tu comprends les tensions implicites :
-  - switchboards / distribution boards / TGBT < 1000 V ac
-  - high voltage / HV / transformateurs / cellules > 1000 V ac
-- Tu es TRÈS CONSERVATEUR :
-  - si tu n'es pas sûr qu'un contrôle s'applique à un équipement, tu NE L'AJOUTES PAS.
-  - Tu préfères renvoyer une liste vide plutôt que mettre un contrôle incorrect.
+    RÈGLES IMPORTANTES (TRÈS STRICTES) :
+    - Tu parles "comme un électricien", tu comprends les abréviations :
+      TR1, TR2, TX, TGBT, DB, MCC, UPS, LV, HV, MV, Ex, Zone 1, Zone 2, etc.
+    - Tu comprends les tensions implicites :
+      - switchboards / distribution boards / TGBT < 1000 V ac
+      - high voltage / HV / transformateurs / cellules > 1000 V ac
+    - Tu es TRÈS CONSERVATEUR :
+      - si tu n'es pas sûr qu'un contrôle s'applique à un équipement, tu NE L'AJOUTES PAS.
+      - Tu préfères renvoyer une liste vide plutôt que mettre un contrôle incorrect.
 
-Exemples de cohérence :
-- Les contrôles "Cast Resin Transformers" ne s'appliquent qu'à des transformateurs résine HT.
-- Les contrôles "Hazardous Areas (IEC 60079)" ne s'appliquent qu'à des équipements clairement en zone Ex / ATEX.
-- Les contrôles "Emergency Lighting Systems" s'appliquent seulement si l'équipement est lié à l'éclairage de sécurité.
-- Les contrôles "Battery Systems" s'appliquent à des systèmes de batteries (UPS, chargeurs, baies batteries...).
-- Les contrôles "Fire Detection and Fire Alarm Systems" s'appliquent aux systèmes de détection incendie.
+    Exemples de cohérence :
+    - Les contrôles "Cast Resin Transformers" ne s'appliquent qu'à des transformateurs résine HT.
+    - Les contrôles "Hazardous Areas (IEC 60079)" ne s'appliquent qu'à des équipements clairement en zone Ex / ATEX.
+    - Les contrôles "Emergency Lighting Systems" s'appliquent seulement si l'équipement est lié à l'éclairage de sécurité (BAES, blocs secours, etc.).
+    - Les contrôles "Battery Systems" s'appliquent à des systèmes de batteries (UPS, chargeurs, baies batteries...).
+    - Les contrôles "Fire Detection and Fire Alarm Systems" s'appliquent aux systèmes de détection incendie (SSI, détecteurs, centrales incendie), pas aux TGBT ou devices de puissance.
+    - Les contrôles "Distribution Boards (<1000 V ac)" s'appliquent uniquement aux tableaux de distribution (TGBT, DB, QGBT, QG, MCC, etc.), pas à un disjoncteur individuel.
+    - Les contrôles "Power Factor Correction (>1000 V ac)" s'appliquent uniquement aux équipements de type batterie de condensateurs / compensation de réactif (PFC, capacitor bank...), jamais aux autres cellules HT.
+    - Les contrôles "Variable Speed Drives" s'appliquent uniquement aux variateurs de vitesse (VSD, variateur, VFD, drive de moteur).
 
-Si aucune correspondance évidente :
-- Tu renvoies une liste vide de contrôles pour cet équipement.
+    Si aucune correspondance évidente :
+    - Tu renvoies une liste vide de contrôles pour cet équipement.
 
-Tu NE DOIS PAS inventer de nouveaux types de contrôles.
-Tu NE DOIS utiliser que les contrôles présents dans controls_catalog (en utilisant leur "type_key").
+    Tu NE DOIS PAS inventer de nouveaux types de contrôles.
+    Tu NE DOIS utiliser que les contrôles présents dans controls_catalog (en utilisant leur "type_key").
 
-Réponse STRICTEMENT en JSON, sans texte autour, au format :
-{
-  "decisions_by_equipment": [
+    Réponse STRICTEMENT en JSON, sans texte autour, au format :
     {
-      "equipment_id": <id numérique>,
-      "controls": ["type_key1", "type_key2", ...]
-    },
-    ...
-  ]
-}
+      "decisions_by_equipment": [
+        {
+          "equipment_id": <id numérique>,
+          "controls": ["type_key1", "type_key2", ...]
+        },
+        ...
+      ]
+    }
           `.trim();
 
           const user = `
@@ -1231,12 +1327,25 @@ Consignes :
           controlsForThis = controls;
         }
 
+        // 5.a) Filtre métier backend : on enlève les contrôles incohérents
+        controlsForThis = controlsForThis.filter((ctrl) =>
+          isControlAllowedForEntity(cat, ctrl, ent)
+        );
+
+        // 5.b) Cas particulier VSD : si l'équipement ressemble à un variateur mais
+        // n'obtient AUCUN contrôle, on enregistre un warning pour l'UI
+        if (cat.key === "vsd" && isVsdLikeEntity(ent) && controlsForThis.length === 0) {
+          vsdLikeMissing.push({
+            id: ent.id,
+            label,
+          });
+        }
+
+        // 5.c) Création des tâches
         for (const ctrl of controlsForThis) {
           if (!ctrl) continue;
 
-          const taskCode = ctrl.type
-            .toLowerCase()
-            .replace(/\s+/g, "_");
+          const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
 
           // Date initiale pseudo-aléatoire en 2026
           const firstDate = generateInitialDate(ctrl.frequency || null);
@@ -1277,6 +1386,20 @@ Consignes :
           }
         }
       }
+
+      // ------------------------------
+      // 6) Warnings spécifiques catégorie (ex: VSD)
+      // ------------------------------
+      if (cat.key === "vsd" && vsdLikeMissing.length > 0) {
+        warnings.push({
+          category_key: cat.key,
+          category_label: cat.label,
+          type: "vsd_like_without_controls",
+          message:
+            "Certains équipements ressemblent à des variateurs de vitesse (VSD) mais aucun contrôle TSD 'Variable Speed Drives' n'a pu être appliqué. Vérifier le mapping / la TSD.",
+          equipments: vsdLikeMissing,
+        });
+      }
     }
 
     await client.query("COMMIT");
@@ -1284,7 +1407,7 @@ Consignes :
     const modeLabel = useAI ? "avec IA" : "sans IA";
     const msg = `Synchronisation OK (${modeLabel}) – ${created} tâches créées pour le site "${site}"`;
     console.log("[Controls][auto-link]", msg);
-    res.json({ ok: true, created, message: msg, ai: useAI });
+    res.json({ ok: true, created, message: msg, ai: useAI, warnings });
   } catch (e) {
     await client.query("ROLLBACK");
     console.error("[Controls][auto-link] ERROR:", e);
