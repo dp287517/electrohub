@@ -1009,22 +1009,33 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       const controls = cat.controls || [];
       if (!controls.length) continue;
 
-      // On récupère les équipements pour ce site
+      // On récupère les équipements pour ce site, de manière robuste
       let entities = [];
       try {
-        const { rows } = await client.query(
-          `SELECT id, name, device_type, switchboard_name, building_code, site 
-           FROM ${tableName}
-           WHERE site = $1`,
-          [site]
+        // On vérifie d'abord si la colonne "site" existe dans la table
+        const { rows: colCheck } = await client.query(
+          `SELECT EXISTS (
+             SELECT FROM information_schema.columns 
+             WHERE table_name = $1 AND column_name = 'site'
+           )`,
+          [tableName]
         );
+        const hasSiteCol = colCheck[0]?.exists;
+
+        const { rows } = await client.query(
+          hasSiteCol
+            ? `SELECT * FROM ${tableName} WHERE site = $1`
+            : `SELECT * FROM ${tableName}`,
+          hasSiteCol ? [site] : []
+        );
+
         entities = rows;
       } catch (e) {
         console.warn(
           `[Controls][auto-link] Table manquante ou invalide: ${tableName}`,
           e.message
         );
-        continue;
+        continue; // on passe à la catégorie suivante sans casser la transaction
       }
 
       if (!entities.length) continue;
