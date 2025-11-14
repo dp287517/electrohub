@@ -985,23 +985,27 @@ Réponds STRICTEMENT avec un JSON de la forme :
 
 // ============================================================================
 // ROUTE: GET /bootstrap/auto-link
-// Bootstrap / resync complet TSD → controls_tasks pour un site
+// Bootstrap / resync TSD → controls_tasks pour un site
+// - NE SUPPRIME PLUS les tâches existantes
+// - Utilise l'IA (si dispo) pour choisir les contrôles par équipement
 // ============================================================================
 
 router.get("/bootstrap/auto-link", async (req, res) => {
   const site = siteOf(req);
   const client = await pool.connect();
-  const aiClient = openaiClient();
-  const useAI = !!aiClient; // si clé OpenAI dispo → mode IA
+
+  // On peut désactiver l'IA avec ?ai=0 dans l'URL
+  const aiRequested = String(req.query.ai ?? "1") === "1";
+  const aiClient = aiRequested ? openaiClient() : null;
+  const useAI = !!aiClient;
 
   try {
     await client.query("BEGIN");
 
-    // 1) On purge TOUTES les tâches de ce site
-    await client.query(`DELETE FROM controls_tasks WHERE site = $1`, [site]);
-
     let created = 0;
+    let usedAI = false;
 
+    // Parcours de toutes les catégories de la TSD
     for (const cat of tsdLibrary.categories || []) {
       const tableName = cat.db_table;
       if (!tableName) continue;
@@ -1009,10 +1013,12 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       const controls = cat.controls || [];
       if (!controls.length) continue;
 
-      // On récupère les équipements pour ce site, de manière robuste
+      // ------------------------------
+      // 1) Récupérer les équipements
+      // ------------------------------
       let entities = [];
       try {
-        // On vérifie d'abord si la colonne "site" existe dans la table
+        // Vérifier si la colonne "site" existe dans la table
         const { rows: colCheck } = await client.query(
           `SELECT EXISTS (
              SELECT FROM information_schema.columns 
@@ -1042,32 +1048,147 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 
       const entityType = entityTypeFromCategory(cat);
 
-      // -------------------------
-      // MODE IA : choix des contrôles par équipement
-      // -------------------------
-      let decisionsByEquipment = null;
+      // ------------------------------
+      // 2) Index des contrôles TSD par "type_key" (snake_case)
+      // ------------------------------
+      const controlsByKey = {};
+      const controlsCatalogForAI = controls.map((c) => {
+        const typeKey = c.type
+          ? c.type.toLowerCase().replace(/\s+/g, "_")
+          : null;
+        if (typeKey) {
+          controlsByKey[typeKey] = c;
+        }
+        return {
+          type: c.type,
+          type_key: typeKey,
+          description: c.description || c.notes || "",
+          frequency: c.frequency || null,
+        };
+      });
+
+      // ------------------------------
+      // 3) Appel IA (optionnel) pour décider les contrôles par équipement
+      // ------------------------------
+      let decisionsByEquipment = [];
       if (useAI) {
         try {
-          decisionsByEquipment = await aiSuggestControlsForCategory(
-            aiClient,
-            cat,
-            entities
-          );
+          usedAI = true;
+
+          const aiPayload = {
+            site,
+            db_table: tableName,
+            category: {
+              key: cat.key,
+              label: cat.label,
+            },
+            controls_catalog: controlsCatalogForAI,
+            equipments: entities.map((e) => ({
+              id: e.id,
+              raw: e, // on donne tout, l'IA se débrouille
+            })),
+          };
+
+          const sys = `
+Tu es un ingénieur électricien / ingénieur maintenance industriel.
+Tu connais très bien :
+- les installations HT/MT/BT,
+- les TGBT, tableaux de distribution, MCC, UPS, batteries, éclairage de sécurité,
+- les zones ATEX / Hazardous Areas (IEC 60079).
+
+Ton rôle :
+À partir d'une liste d'équipements (issue d'une base de données) et d'un catalogue de contrôles (TSD),
+tu dois décider quels contrôles appliquer à CHAQUE équipement.
+
+RÈGLES IMPORTANTES :
+- Tu parles "comme un électricien", tu comprends les abréviations :
+  TR1, TR2, TX, TGBT, DB, MCC, UPS, LV, HV, MV, Ex, Zone 1, Zone 2, etc.
+- Tu comprends les tensions implicites :
+  - switchboards / distribution boards / TGBT < 1000 V ac
+  - high voltage / HV / transformateurs / cellules > 1000 V ac
+- Tu es TRÈS CONSERVATEUR :
+  - si tu n'es pas sûr qu'un contrôle s'applique à un équipement, tu NE L'AJOUTES PAS.
+  - Tu préfères renvoyer une liste vide plutôt que mettre un contrôle incorrect.
+
+Exemples de cohérence :
+- Les contrôles "Cast Resin Transformers" ne s'appliquent qu'à des transformateurs résine HT.
+- Les contrôles "Hazardous Areas (IEC 60079)" ne s'appliquent qu'à des équipements clairement en zone Ex / ATEX.
+- Les contrôles "Emergency Lighting Systems" s'appliquent seulement si l'équipement est lié à l'éclairage de sécurité.
+- Les contrôles "Battery Systems" s'appliquent à des systèmes de batteries (UPS, chargeurs, baies batteries...).
+- Les contrôles "Fire Detection and Fire Alarm Systems" s'appliquent aux systèmes de détection incendie.
+
+Si aucune correspondance évidente :
+- Tu renvoies une liste vide de contrôles pour cet équipement.
+
+Tu NE DOIS PAS inventer de nouveaux types de contrôles.
+Tu NE DOIS utiliser que les contrôles présents dans controls_catalog (en utilisant leur "type_key").
+
+Réponse STRICTEMENT en JSON, sans texte autour, au format :
+{
+  "decisions_by_equipment": [
+    {
+      "equipment_id": <id numérique>,
+      "controls": ["type_key1", "type_key2", ...]
+    },
+    ...
+  ]
+}
+          `.trim();
+
+          const user = `
+Contexte JSON :
+
+\`\`\`json
+${JSON.stringify(aiPayload, null, 2)}
+\`\`\`
+
+Consignes :
+- Pour chaque equipment_id, choisis UNIQUEMENT les contrôles dont le "type_key" correspond clairement.
+- Tu n'es PAS obligé de proposer des contrôles pour tous les équipements.
+- Si aucun contrôle n'est pertinent pour un équipement : retourne "controls": [] pour lui, ou ne le mets pas dans la liste.
+          `.trim();
+
+          const resp = await aiClient.chat.completions.create({
+            model:
+              process.env.CONTROLS_OPENAI_MODEL ||
+              process.env.ATEX_OPENAI_MODEL ||
+              "gpt-4o-mini",
+            temperature: 0.1,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: sys },
+              { role: "user", content: user },
+            ],
+          });
+
+          let parsed = {};
+          try {
+            parsed = JSON.parse(resp.choices?.[0]?.message?.content || "{}");
+          } catch {
+            parsed = {};
+          }
+
+          if (
+            parsed &&
+            Array.isArray(parsed.decisions_by_equipment)
+          ) {
+            decisionsByEquipment = parsed.decisions_by_equipment;
+          } else {
+            decisionsByEquipment = [];
+          }
         } catch (e) {
           console.error(
-            `[Controls][auto-link][AI] erreur IA pour catégorie ${cat.key}:`,
+            "[Controls][auto-link][AI] error on category:",
+            cat.label,
             e
           );
+          decisionsByEquipment = [];
         }
       }
 
-      // Réindexer les contrôles TSD par type
-      const controlsByType = {};
-      for (const ctrl of controls) {
-        controlsByType[ctrl.type] = ctrl;
-      }
-
-      // Index IA par equipment_id → liste de types
+      // ------------------------------
+      // 4) Index IA : equipment_id → liste de type_key valides
+      // ------------------------------
       const aiMap = new Map();
       if (Array.isArray(decisionsByEquipment)) {
         for (const item of decisionsByEquipment) {
@@ -1075,11 +1196,16 @@ router.get("/bootstrap/auto-link", async (req, res) => {
           const list = Array.isArray(item.controls) ? item.controls : [];
           aiMap.set(
             item.equipment_id,
-            list.filter((t) => typeof t === "string" && controlsByType[t])
+            list.filter(
+              (t) => typeof t === "string" && controlsByKey[t]
+            )
           );
         }
       }
 
+      // ------------------------------
+      // 5) Création des tâches par équipement
+      // ------------------------------
       for (const ent of entities) {
         const label =
           ent.name ||
@@ -1087,21 +1213,30 @@ router.get("/bootstrap/auto-link", async (req, res) => {
           ent.switchboard_name ||
           `${tableName} #${ent.id}`;
 
-        // Liste finale de contrôles à appliquer sur CET équipement
         let controlsForThis = [];
 
-        if (useAI && aiMap.has(ent.id) && aiMap.get(ent.id).length) {
-          // IA : types -> objets contrôles TSD
-          controlsForThis = aiMap.get(ent.id).map((type) => controlsByType[type]);
+        if (useAI) {
+          // IA active : on n'applique que ce que l'IA a explicitement validé
+          if (aiMap.has(ent.id) && aiMap.get(ent.id).length) {
+            controlsForThis = aiMap
+              .get(ent.id)
+              .map((key) => controlsByKey[key])
+              .filter(Boolean);
+          } else {
+            // IA n'a rien dit pour cet équipement → aucun contrôle
+            controlsForThis = [];
+          }
         } else {
-          // Fallback (pas d'IA ou pas de réponse exploitable) :
+          // IA désactivée : on applique tous les contrôles de la catégorie
           controlsForThis = controls;
         }
 
         for (const ctrl of controlsForThis) {
           if (!ctrl) continue;
 
-          const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
+          const taskCode = ctrl.type
+            .toLowerCase()
+            .replace(/\s+/g, "_");
 
           // Date initiale pseudo-aléatoire en 2026
           const firstDate = generateInitialDate(ctrl.frequency || null);
@@ -1119,7 +1254,6 @@ router.get("/bootstrap/auto-link", async (req, res) => {
             }
           }
 
-          // INSERT + ignore tout conflit de clé unique (quel qu'il soit)
           const result = await client.query(
             `INSERT INTO controls_tasks
                (site, entity_id, entity_type, task_name, task_code,
@@ -1138,7 +1272,6 @@ router.get("/bootstrap/auto-link", async (req, res) => {
             ]
           );
 
-          // rowCount = 1 si une ligne a été insérée, 0 si déjà existante
           if (result.rowCount > 0) {
             created++;
           }
@@ -1490,14 +1623,31 @@ router.post("/maps/setPosition", async (req, res) => {
   try {
     let planId;
 
+    // 1) Identifier le plan à partir de logical_name ou building
     if (logical_name) {
-      const { rows } = await client.query(
-        `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
-        [logical_name, site]
-      );
-      if (!rows.length)
-        return res.status(404).json({ error: "Plan not found" });
-      planId = rows[0].id;
+      const key = String(logical_name);
+
+      // Si c'est un id numérique OU un UUID → on le traite comme un id de plan
+      if (/^\d+$/.test(key) || isUuid(key)) {
+        const { rows } = await client.query(
+          `SELECT id FROM controls_plans WHERE id = $1 AND site = $2`,
+          [key, site]
+        );
+        if (!rows.length) {
+          return res.status(404).json({ error: "Plan not found" });
+        }
+        planId = rows[0].id;
+      } else {
+        // Sinon : on considère que c'est un logical_name (comportement historique)
+        const { rows } = await client.query(
+          `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
+          [key, site]
+        );
+        if (!rows.length) {
+          return res.status(404).json({ error: "Plan not found" });
+        }
+        planId = rows[0].id;
+      }
     } else if (building) {
       const { rows } = await client.query(
         `SELECT id FROM controls_plans 
@@ -1506,13 +1656,17 @@ router.post("/maps/setPosition", async (req, res) => {
          LIMIT 1`,
         [`%${building}%`, site]
       );
-      if (!rows.length)
+      if (!rows.length) {
         return res.status(404).json({ error: "Plan not found" });
+      }
       planId = rows[0].id;
     } else {
       return res.status(400).json({ error: "Missing plan identifier" });
     }
 
+    const pageIndexInt = Number(page_index) || 0;
+
+    // 2) Déterminer les task_id à positionner
     let taskIds = [];
 
     if (entity_id && entity_type) {
@@ -1526,11 +1680,12 @@ router.post("/maps/setPosition", async (req, res) => {
       taskIds = [task_id];
     }
 
+    // 3) Upsert dans controls_task_positions
     for (const tid of taskIds) {
       const { rows: existing } = await client.query(
         `SELECT id FROM controls_task_positions 
          WHERE task_id = $1 AND plan_id = $2 AND page_index = $3`,
-        [tid, planId, page_index]
+        [tid, planId, pageIndexInt]
       );
 
       if (existing.length) {
@@ -1545,7 +1700,7 @@ router.post("/maps/setPosition", async (req, res) => {
           `INSERT INTO controls_task_positions 
            (task_id, plan_id, page_index, x_frac, y_frac, created_at)
            VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [tid, planId, page_index, x_frac, y_frac]
+          [tid, planId, pageIndexInt, x_frac, y_frac]
         );
       }
     }
