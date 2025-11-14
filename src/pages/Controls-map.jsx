@@ -1,5 +1,5 @@
 // ============================================================================
-// Controls-map.jsx - Carte interactive avec positionnement (CORRIGÉ v3)
+// Controls-map.jsx - Carte interactive avec positionnement (CORRIGÉ v4)
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -106,6 +106,18 @@ function buildControlsPlanFileUrl(keyOrLogical) {
   }
 
   return url;
+}
+
+/**
+ * Options PDF.js alignées sur Atex-map (standardFontDataUrl, headers, etc.)
+ */
+function pdfDocOpts(url) {
+  return {
+    url,
+    withCredentials: true,
+    httpHeaders: userHeaders(),
+    standardFontDataUrl: "/standard_fonts/",
+  };
 }
 
 // ============================================================================
@@ -319,7 +331,7 @@ export default function ControlsMap({
     }
 
     if (building) {
-      // Fallback : on suppose un logical_name = code bâtiment
+      // Fallback : logical_name = code bâtiment
       return buildControlsPlanFileUrl(building);
     }
 
@@ -645,7 +657,7 @@ export default function ControlsMap({
           }
         });
 
-        // 2️⃣ Rendu PDF
+        // 2️⃣ Rendu PDF (aligné sur Atex-map)
         if (fileUrl) {
           const containerW = Math.max(
             320,
@@ -658,11 +670,10 @@ export default function ControlsMap({
             Math.max(1800, Math.floor(containerW * dpr * qualityBoost))
           );
 
-          loadingTaskRef.current = pdfjsLib.getDocument({
-            url: fileUrl,
-            withCredentials: true,
-            httpHeaders: userHeaders(),
-          });
+          // ⬇️ même pattern que Atex-map
+          loadingTaskRef.current = pdfjsLib.getDocument(
+            pdfDocOpts(fileUrl)
+          );
 
           const pdf = await loadingTaskRef.current.promise;
           const page = await pdf.getPage(Number(pageIndex) + 1);
@@ -969,7 +980,7 @@ export function ControlsMapManager({ onPlanSelect }) {
 }
 
 // ============================================================================
-// COMPOSANT VIGNETTE PLAN
+// COMPOSANT VIGNETTE PLAN (SANS PRÉVISU PDF)
 // ============================================================================
 
 function PlanCard({ plan, onSelect, onReload }) {
@@ -977,44 +988,6 @@ function PlanCard({ plan, onSelect, onReload }) {
   const [name, setName] = useState(
     plan.display_name || plan.logical_name || ""
   );
-  const [thumbnail, setThumbnail] = useState(null);
-  const [thumbError, setThumbError] = useState(false);
-
-  useEffect(() => {
-    generateThumbnail();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [plan.id, plan.logical_name]);
-
-  async function generateThumbnail() {
-    setThumbError(false);
-    setThumbnail(null);
-    try {
-      const key = plan.id || plan.logical_name;
-      const url = buildControlsPlanFileUrl(key);
-
-      const loadingTask = pdfjsLib.getDocument({
-        url,
-        withCredentials: true,
-        httpHeaders: userHeaders(),
-      });
-      const pdf = await loadingTask.promise;
-      const page = await pdf.getPage(1);
-      const viewport = page.getViewport({ scale: 0.25 });
-
-      const canvas = document.createElement("canvas");
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      const ctx = canvas.getContext("2d");
-
-      await page.render({ canvasContext: ctx, viewport }).promise;
-      setThumbnail(canvas.toDataURL());
-
-      await pdf.cleanup?.();
-    } catch (e) {
-      console.error("[PlanCard] thumbnail error:", e);
-      setThumbError(true);
-    }
-  }
 
   async function handleRename() {
     try {
@@ -1043,20 +1016,10 @@ function PlanCard({ plan, onSelect, onReload }) {
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
-        {thumbnail && !thumbError ? (
-          <img
-            src={thumbnail}
-            alt={name}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <div className="flex flex-col items-center justify-center text-gray-500">
-            <div className="text-4xl leading-none">📄</div>
-            <div className="text-[11px] mt-1">
-              {thumbError ? "Plan indisponible" : "PDF"}
-            </div>
-          </div>
-        )}
+        <div className="flex flex-col items-center justify-center text-gray-500 w-full h-full">
+          <div className="text-4xl leading-none">📄</div>
+          <div className="text-[11px] mt-1">PDF</div>
+        </div>
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
           {name}
         </div>
