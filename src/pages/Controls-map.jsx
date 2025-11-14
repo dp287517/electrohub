@@ -1,5 +1,5 @@
 // ============================================================================
-// Controls-map.jsx - Carte interactive avec positionnement (CORRIGÉ v4)
+// Controls-map.jsx - Carte interactive avec positionnement (FOCUS + PLANS)
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -239,12 +239,21 @@ const styles = `
   50% { opacity: 0.7; }
 }
 
+@keyframes blink-focus {
+  0%, 100% { transform: scale(1); box-shadow:0 0 0 0 rgba(59,130,246,0.6); }
+  50% { transform: scale(1.25); box-shadow:0 0 0 10px rgba(59,130,246,0); }
+}
+
 .blink-red {
   animation: blink-red 1.5s ease-in-out infinite;
 }
 
 .blink-orange {
   animation: blink-orange 2s ease-in-out infinite;
+}
+
+.blink-focus {
+  animation: blink-focus 1.2s ease-out 0s 3;
 }
 
 .task-marker-inline {
@@ -284,11 +293,13 @@ export default function ControlsMap({
   inModal = false,
   pendingPlacement = null, // { entity_id, entity_type, label }
   onPlacementComplete,
+  focusEntity = null, // { entity_id, entity_type } pour zoom + clignotement
 }) {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const baseLayerRef = useRef(null);
   const markersLayerRef = useRef(null);
+  const markersIndexRef = useRef(new Map());
   const roRef = useRef(null);
 
   const loadingTaskRef = useRef(null);
@@ -352,6 +363,51 @@ export default function ControlsMap({
       }
     }
   }, [pendingPlacement]);
+
+  // ========================================================================
+  // HIGHLIGHT / FOCUS SUR UN ÉQUIPEMENT
+  // ========================================================================
+  function highlightFocusedEntity() {
+    if (!focusEntity) return;
+    const m = mapRef.current;
+    const base = baseLayerRef.current;
+    if (!m || !base) return;
+
+    const key = `${focusEntity.entity_type}:${focusEntity.entity_id}`;
+    const mk = markersIndexRef.current.get(key);
+    if (!mk) return;
+
+    const ll = mk.getLatLng();
+    const maxZoom =
+      typeof m.getMaxZoom === "function" ? m.getMaxZoom() : undefined;
+    const currentZoom = m.getZoom();
+    const targetZoom = Number.isFinite(maxZoom)
+      ? Math.min(currentZoom + 2, maxZoom)
+      : currentZoom + 2;
+
+    m.setView(ll, targetZoom, { animate: true });
+
+    const el = mk.getElement && mk.getElement();
+    if (el) {
+      el.classList.add("blink-focus");
+      setTimeout(() => {
+        el.classList.remove("blink-focus");
+      }, 4000);
+    }
+
+    mk.openPopup?.();
+  }
+
+  // Quand focusEntity change ou quand les positions changent, on tente de refaire le focus
+  useEffect(() => {
+    if (!focusEntity) return;
+    // petit timeout pour laisser Leaflet finir de dessiner les markers
+    const t = setTimeout(() => {
+      highlightFocusedEntity();
+    }, 150);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusEntity, positions]);
 
   // ========================================================================
   // CHARGEMENT DES POSITIONS
@@ -419,6 +475,7 @@ export default function ControlsMap({
     if (!m || !layer || !base) return;
 
     layer.clearLayers();
+    markersIndexRef.current.clear();
 
     (list || []).forEach((p) => {
       const latlng = toLatLngFrac(p.x, p.y, base);
@@ -435,6 +492,13 @@ export default function ControlsMap({
       });
 
       mk.__meta = p;
+
+      // indexation par entité (pour focusEntity)
+      if (p.entity_id && p.entity_type) {
+        const key = `${p.entity_type}:${p.entity_id}`;
+        // Si plusieurs tâches pour la même entité, on garde juste le dernier marker
+        markersIndexRef.current.set(key, mk);
+      }
 
       mk.on("dragstart", () => {
         draggingRef.current = true;
@@ -474,7 +538,7 @@ export default function ControlsMap({
 
           await loadPositions();
         } catch (e) {
-          console.error("[ControlsMap] setPosition error", e);
+          console.error("[ControlsMap] setPosition (drag) error", e);
         } finally {
           draggingRef.current = false;
         }
@@ -496,6 +560,13 @@ export default function ControlsMap({
     });
 
     layer.bringToFront?.();
+
+    // Si un focus est demandé, on tente de le mettre en avant après avoir dessiné
+    if (focusEntity) {
+      setTimeout(() => {
+        highlightFocusedEntity();
+      }, 120);
+    }
   }
 
   // ========================================================================
@@ -652,7 +723,7 @@ export default function ControlsMap({
             await loadPositions();
             onPlacementComplete?.();
           } catch (e) {
-            console.error("[ControlsMap] setPosition error", e);
+            console.error("[ControlsMap] setPosition (click) error", e);
             alert("Erreur lors du placement");
           }
         });
@@ -670,7 +741,6 @@ export default function ControlsMap({
             Math.max(1800, Math.floor(containerW * dpr * qualityBoost))
           );
 
-          // ⬇️ même pattern que Atex-map
           loadingTaskRef.current = pdfjsLib.getDocument(
             pdfDocOpts(fileUrl)
           );
