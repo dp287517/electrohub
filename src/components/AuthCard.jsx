@@ -39,10 +39,10 @@ export default function AuthCard({ title, subtitle, children }) {
         console.log("✅ Connexion Haleon réussie :", res);
         localStorage.setItem("eh_token", res.jwt);
         
-        // ✅ S'assurer que le site est bien défini
+        // ✅ CORRECTION FINALE : S'assurer que le site est bien "Nyon"
         const userWithSite = {
           ...res.user,
-          site: res.user?.site || "Default"
+          site: res.user?.site || "Nyon" // ✅ Fallback sur "Nyon" au lieu de "Default"
         };
         localStorage.setItem("eh_user", JSON.stringify(userWithSite));
         
