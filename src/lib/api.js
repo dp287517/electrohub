@@ -254,34 +254,29 @@ export const api = {
     renamePlan: (logical_name, display_name) =>
       put("/api/controls/maps/renamePlan", { logical_name, display_name }),
 
-    // URLs fichiers plans
+    // Plans PDF - URLs des fichiers
+    // 👉 On réutilise le backend ATEX, qui fonctionne déjà très bien pour les PDF.
     planFileUrl: (logical_name, { bust = true } = {}) =>
-      withBust(
-        `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
-          logical_name
-        )}`,
-        bust
-      ),
+      withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
 
     planFileUrlById: (id, { bust = true } = {}) =>
-      withBust(
-        `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(id)}`,
-        bust
-      ),
+      withBust(`${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`, bust),
 
     planFileUrlAuto: (plan, { bust = true } = {}) => {
-      const key =
-        typeof plan === "string"
-          ? plan
-          : (plan?.id || plan?.logical_name || "");
-      const url =
-        isUuid(key) || isNumericId(key)
-          ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(
-              key
-            )}`
-          : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
-              key
-            )}`;
+      // On garde la même logique que pour ATEX : si c'est un UUID on passe par ?id=,
+      // sinon on passe par ?logical_name=
+      const key = typeof plan === "string"
+        ? plan
+        : (plan?.id || plan?.logical_name || "");
+
+      const useId = isUuid(key); // on ne traite plus les IDs purement numériques comme des IDs ATEX
+
+      const url = useId
+        ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
+        : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
+            typeof plan === "string" ? plan : (plan?.logical_name || "")
+          )}`;
+
       return withBust(url, bust);
     },
 
