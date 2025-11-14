@@ -194,73 +194,192 @@ export const api = {
     assistant: (id, question) => post(`/api/projects/projects/${id}/assistant`, { question }),
     health: () => get(`/api/projects/health`),
   },
-/** --- CONTROLS --- */
+
+  /** --- CONTROLS --- */
   controls: {
-    // Hiérarchie et tâches
-    hierarchyTree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
-    taskSchema: (id) => get(`/api/controls/tasks/${id}/schema`),
-    closeTask: (id, payload) => put(`/api/controls/tasks/${id}/close`, payload),
-    
-    // Bootstrap
-    autoLink: () => get("/api/controls/bootstrap/auto-link"),
-    getMissingEquipment: () => get("/api/controls/missing-equipment"),
-    
-    // Plans PDF - Upload
+    // ========================= TÂCHES & HIÉRARCHIE =========================
+
+    // Arborescence (bâtiments / HV / TGBT / devices)
+    hierarchyTree: (params) =>
+      get("/api/controls/hierarchy/tree", { ...(params || {}) }),
+
+    // Alias rétro-compat
+    tree: (params) =>
+      get("/api/controls/hierarchy/tree", { ...(params || {}) }),
+
+    // Schéma TSD pour une tâche
+    taskSchema: (id) =>
+      get(`/api/controls/tasks/${encodeURIComponent(id)}/schema`),
+
+    // Alias rétro-compat
+    taskDetails: (id) =>
+      get(`/api/controls/tasks/${encodeURIComponent(id)}/schema`),
+
+    // Clôture d'une tâche + replanification
+    // ⚠ server_controls.js utilise PATCH /tasks/:id/close
+    closeTask: (id, payload = {}) =>
+      jsonFetch(`/api/controls/tasks/${encodeURIComponent(id)}/close`, {
+        method: "PATCH",
+        body: JSON.stringify(payload || {}),
+      }),
+
+    // Alias rétro-compat
+    completeTask: (id, payload = {}) =>
+      jsonFetch(`/api/controls/tasks/${encodeURIComponent(id)}/close`, {
+        method: "PATCH",
+        body: JSON.stringify(payload || {}),
+      }),
+
+    // Bootstrap auto-link des tâches TSD
+    autoLink: () =>
+      get("/api/controls/bootstrap/auto-link"),
+
+    // Équipements manquants par rapport à la librairie TSD
+    getMissingEquipment: () =>
+      get("/api/controls/missing-equipment"),
+
+    // ============================ PLANS PDF ================================
+    // Upload ZIP de plans (PDF)
     uploadZip: (file) => {
       const fd = new FormData();
       fd.append("zip", file);
       return upload("/api/controls/maps/uploadZip", fd);
     },
-    
-    // Plans PDF - Liste et gestion
-    listPlans: () => get("/api/controls/maps/listPlans"),
+
+    // Liste des plans
+    listPlans: () =>
+      get("/api/controls/maps/listPlans"),
+
+    // Renommage d'un plan
     renamePlan: (logical_name, display_name) =>
       put("/api/controls/maps/renamePlan", { logical_name, display_name }),
-    
-    // Plans PDF - URLs des fichiers
+
+    // URLs fichiers plans
     planFileUrl: (logical_name, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
+      withBust(
+        `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
+          logical_name
+        )}`,
+        bust
+      ),
+
     planFileUrlById: (id, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(id)}`, bust),
+      withBust(
+        `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(id)}`,
+        bust
+      ),
+
     planFileUrlAuto: (plan, { bust = true } = {}) => {
-      const key = typeof plan === "string" ? plan : (plan?.id || plan?.logical_name || "");
-      const url = (isUuid(key) || isNumericId(key))
-        ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(key)}`
-        : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(key)}`;
+      const key =
+        typeof plan === "string"
+          ? plan
+          : (plan?.id || plan?.logical_name || "");
+      const url =
+        isUuid(key) || isNumericId(key)
+          ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(
+              key
+            )}`
+          : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
+              key
+            )}`;
       return withBust(url, bust);
     },
-    
-    // Positions sur plans
+
+    // ======================= POSITIONS SUR PLANS ==========================
+
     positions: (logical_name, page_index = 0) =>
       get("/api/controls/maps/positions", { logical_name, page_index }),
+
     positionsById: (id, page_index = 0) =>
       get("/api/controls/maps/positions", { id, page_index }),
+
     positionsAuto: (planOrKey, page_index = 0) => {
-      const key = typeof planOrKey === "string" ? planOrKey : (planOrKey?.id || planOrKey?.logical_name || "");
-      if (isUuid(key) || isNumericId(key)) return get("/api/controls/maps/positions", { id: key, page_index });
-      return get("/api/controls/maps/positions", { logical_name: key, page_index });
+      const key =
+        typeof planOrKey === "string"
+          ? planOrKey
+          : (planOrKey?.id || planOrKey?.logical_name || "");
+      if (isUuid(key) || isNumericId(key)) {
+        return get("/api/controls/maps/positions", { id: key, page_index });
+      }
+      return get("/api/controls/maps/positions", {
+        logical_name: key,
+        page_index,
+      });
     },
-    setPosition: (payload) => post("/api/controls/maps/setPosition", payload),
-    
-    // Alias rétro-compat (si tu en as besoin)
-    tree: (params) => get("/api/controls/hierarchy/tree", { ...(params || {}) }),
-    catalog: (params) => get("/api/controls/tsd", { ...(params || {}) }),
+
+    // Création / mise à jour position (appelée par ControlsMap)
+    setPosition: (payload) =>
+      post("/api/controls/maps/setPosition", payload),
+
+    // ============================ IA CONTROLS ==============================
+    // Analyse automatique d'une tâche (résumé, risques, priorités...).
+    // - nouvel usage : api.controls.analyze({ taskId, ...extra })
+    // - rétro-compat : api.controls.analyze(taskId)
+    analyze: (arg) => {
+      if (!arg) {
+        throw new Error("controls.analyze nécessite un taskId");
+      }
+      if (typeof arg === "object") {
+        const { taskId, ...body } = arg;
+        if (!taskId) throw new Error("controls.analyze: taskId manquant");
+        return post(
+          `/api/controls/tasks/${encodeURIComponent(taskId)}/analyze`,
+          body || {}
+        );
+      }
+      const taskId = arg;
+      return post(
+        `/api/controls/tasks/${encodeURIComponent(taskId)}/analyze`,
+        {}
+      );
+    },
+
+    // Assistant IA sur une tâche :
+    // - nouvel usage : api.controls.assistant({ taskId, question, ...extra })
+    // - rétro-compat : api.controls.assistant(taskId, question)
+    assistant: (arg1, arg2) => {
+      // Nouvelle API : objet { taskId, question, ... }
+      if (typeof arg1 === "object") {
+        const { taskId, question, ...extra } = arg1 || {};
+        if (!taskId) throw new Error("controls.assistant: taskId manquant");
+        return post(
+          `/api/controls/tasks/${encodeURIComponent(taskId)}/assistant`,
+          { question: question || "", ...(extra || {}) }
+        );
+      }
+      // Ancienne API : (taskId, question)
+      const taskId = arg1;
+      const question = arg2 || "";
+      if (!taskId) throw new Error("controls.assistant: taskId manquant");
+      return post(
+        `/api/controls/tasks/${encodeURIComponent(taskId)}/assistant`,
+        { question }
+      );
+    },
+
+    // ========================= FONCTIONS LEGACY ============================
+    // Catalogue TSD (si exposé côté backend)
+    catalog: (params) =>
+      get("/api/controls/tsd", { ...(params || {}) }),
+
+    // Sync legacy : alias sur auto-link
     sync: ({ create = 1, seed = 1 } = {}) =>
       get("/api/controls/bootstrap/auto-link", { create, seed }),
-    taskDetails: (id) => get(`/api/controls/tasks/${id}/schema`),
-    completeTask: (id, payload) => put(`/api/controls/tasks/${id}/close`, payload),
+
+    // Upload de pièces jointes sur tâche (si route présente côté serveur)
     uploadAttachments: (taskId, files, label) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("file", f));
       if (label) fd.append("label", label);
-      return upload(`/api/controls/tasks/${taskId}/attachments`, fd);
+      return upload(`/api/controls/tasks/${encodeURIComponent(taskId)}/attachments`, fd);
     },
-    analyze: (taskId) => post(`/api/controls/tasks/${taskId}/analyze`, {}),
-    assistant: (taskId, question) => post(`/api/controls/tasks/${taskId}/assistant`, { question }),
+
+    // Historique / enregistrements / health (si implémentés côté backend)
     history: (params) => get("/api/controls/history", params),
     records: (params) => get("/api/controls/records", params),
-    health: () => get(`/api/controls/health`),
+    health: () => get("/api/controls/health"),
   },
+
   /** --- COMP-EXT --- */
   compExt: {
     list: (params) => get("/api/comp-ext/vendors", params),
@@ -303,7 +422,12 @@ export const api = {
       part: (uploadId, partNumber, blob) => {
         const fd = new FormData();
         fd.append("chunk", blob);
-        return upload(`/api/ask-veeva/chunked/part?uploadId=${encodeURIComponent(uploadId)}&partNumber=${encodeURIComponent(partNumber)}`, fd);
+        return upload(
+          `/api/ask-veeva/chunked/part?uploadId=${encodeURIComponent(uploadId)}&partNumber=${encodeURIComponent(
+            partNumber
+          )}`,
+          fd
+        );
       },
       complete: ({ uploadId, totalParts, originalName }) =>
         post("/api/ask-veeva/chunked/complete", { uploadId, totalParts, originalName }),
@@ -312,7 +436,8 @@ export const api = {
     },
     fileMeta: (id) => get(`/api/ask-veeva/filemeta/${id}`),
     fileUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`, bust),
-    previewUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`, bust),
+    previewUrl: (id, { bust = false } = {}) =>
+      withBust(`${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`, bust),
   },
   /** --- DOORS --- */
   doors: {
@@ -351,7 +476,10 @@ export const api = {
         if (email) fd.append("user_email", email);
         if (name) fd.append("user_name", name);
         (payload.files || []).forEach((f) => fd.append("files", f));
-        return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, fd);
+        return put(
+          `/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`,
+          fd
+        );
       }
       return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, {
         ...payload,
@@ -361,9 +489,17 @@ export const api = {
     listHistory: (doorId) =>
       get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
     qrUrl: (id, size = 256, { bust = false } = {}) =>
-      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`, bust),
+      withBust(
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`,
+        bust
+      ),
     qrcodesUrl: (id, sizes = "80,120,200", force = false, { bust = false } = {}) =>
-      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes?sizes=${encodeURIComponent(sizes)}${force ? "&force=1" : ""}`, bust),
+      withBust(
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes?sizes=${encodeURIComponent(
+          sizes
+        )}${force ? "&force=1" : ""}`,
+        bust
+      ),
     nonConformPDF: (id, { bust = false } = {}) =>
       withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`, bust),
     nonConformitiesPdfUrl: (id, { bust = false } = {}) =>
@@ -422,6 +558,7 @@ export const api = {
     setPosition: (doorId, payload) =>
       put(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, payload),
   },
+
   /* ======================================================================
      ========================= ATEX (corrigé) ============================
      ====================================================================== */
@@ -478,12 +615,18 @@ export const api = {
         if (email) fd.append("user_email", email);
         if (name) fd.append("user_name", name);
         (payload.files || []).forEach((f) => fd.append("files", f)); // champ "files"
-        return put(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, fd);
+        return put(
+          `/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`,
+          fd
+        );
       }
-      return put(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`, {
-        ...payload,
-        _user: getIdentity(),
-      });
+      return put(
+        `/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`,
+        {
+          ...payload,
+          _user: getIdentity(),
+        }
+      );
     },
     listHistory: (equipmentId) =>
       get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/history`),
@@ -515,6 +658,7 @@ export const api = {
     bulkRename: ({ field, from, to }) =>
       post("/api/atex/bulk/rename", { field, from, to }),
   },
+
   /** --- ATEX MAPS (Plans PDF + positions + sous-zones) --- */
   atexMaps: {
     // Upload ZIP (champ "zip")
@@ -534,15 +678,27 @@ export const api = {
       put(`/api/atex/maps/renamePlan`, { logical_name, display_name }),
     // Fichier PDF du plan
     planFileUrl: (logical_name, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
+      withBust(
+        `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
+          logical_name
+        )}`,
+        bust
+      ),
     planFileUrlById: (id, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`, bust),
+      withBust(
+        `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`,
+        bust
+      ),
     // Helper auto (string|plan, détecte UUID **ou id numérique**)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
-      const key = typeof plan === "string" ? plan : (plan?.id || plan?.logical_name || "");
-      const url = (isUuid(key) || isNumericId(key))
-        ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
-        : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(key)}`;
+      const key =
+        typeof plan === "string" ? plan : (plan?.id || plan?.logical_name || "");
+      const url =
+        isUuid(key) || isNumericId(key)
+          ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
+          : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
+              key
+            )}`;
       return withBust(url, bust);
     },
     // Positions
@@ -550,18 +706,33 @@ export const api = {
       get(`/api/atex/maps/positions`, { logical_name, page_index }),
     // fix: accepte id **numérique** OU UUID OU logical_name
     positionsAuto: (planOrKey, page_index = 0) => {
-      const key = typeof planOrKey === "string" ? planOrKey : (planOrKey?.id || planOrKey?.logical_name || "");
-      if (isUuid(key) || isNumericId(key)) return get(`/api/atex/maps/positions`, { id: key, page_index });
+      const key =
+        typeof planOrKey === "string"
+          ? planOrKey
+          : (planOrKey?.id || planOrKey?.logical_name || "");
+      if (isUuid(key) || isNumericId(key))
+        return get(`/api/atex/maps/positions`, { id: key, page_index });
       return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
     },
     // setPosition (POST alias côté serveur)
     setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
-      post(`/api/atex/maps/setPosition`, { equipment_id: equipmentId, logical_name, plan_id, page_index, x_frac, y_frac }),
+      post(`/api/atex/maps/setPosition`, {
+        equipment_id: equipmentId,
+        logical_name,
+        plan_id,
+        page_index,
+        x_frac,
+        y_frac,
+      }),
     /* ================== Sous-zones (subareas) ================== */
     // fix: accepte id **numérique** OU UUID, sinon logical_name
     listSubareas: (planKey, page_index = 0) => {
-      const key = typeof planKey === "string" ? planKey : (planKey?.id || planKey?.logical_name || "");
-      if (isUuid(key) || isNumericId(key)) return get(`/api/atex/maps/subareas`, { id: key, page_index });
+      const key =
+        typeof planKey === "string"
+          ? planKey
+          : (planKey?.id || planKey?.logical_name || "");
+      if (isUuid(key) || isNumericId(key))
+        return get(`/api/atex/maps/subareas`, { id: key, page_index });
       return get(`/api/atex/maps/subareas`, { logical_name: key, page_index });
     },
     // Stats (compter les zones sur plan/page)
@@ -573,10 +744,21 @@ export const api = {
     // Purge complète des zones (nécessite X-Confirm: purge)
     purgeSubareas: async (logical_name, page_index = 0) => {
       const site = currentSite();
-      const headers = identityHeaders(new Headers({ "X-Site": site, "X-Confirm": "purge" }));
-      const url = `${API_BASE}/api/atex/maps/subareas/purge?${new URLSearchParams({ logical_name, page_index })}`;
-      const res = await fetch(url, { method: "DELETE", credentials: "include", headers });
-      if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+      const headers = identityHeaders(
+        new Headers({ "X-Site": site, "X-Confirm": "purge" })
+      );
+      const url = `${API_BASE}/api/atex/maps/subareas/purge?${new URLSearchParams(
+        { logical_name, page_index }
+      )}`;
+      const res = await fetch(url, {
+        method: "DELETE",
+        credentials: "include",
+        headers,
+      });
+      if (!res.ok)
+        throw new Error(
+          await res.text().catch(() => `HTTP ${res.status}`)
+        );
       return res.json();
     },
     createSubarea: (payload) => {
@@ -592,17 +774,43 @@ export const api = {
         zone_dust = null,
         plan_id = null,
       } = payload || {};
-      const base = { logical_name, plan_id, page_index, name, zoning_gas: zone_gas, zoning_dust: zone_dust };
+      const base = {
+        logical_name,
+        plan_id,
+        page_index,
+        name,
+        zoning_gas: zone_gas,
+        zoning_dust: zone_dust,
+      };
       if (shape_type === "rect") {
         const { x1, y1, x2, y2 } = geometry || {};
-        return post(`/api/atex/maps/subareas`, { ...base, kind: "rect", x1, y1, x2, y2 });
+        return post(`/api/atex/maps/subareas`, {
+          ...base,
+          kind: "rect",
+          x1,
+          y1,
+          x2,
+          y2,
+        });
       }
       if (shape_type === "circle") {
         const { cx, cy, r } = geometry || {};
-        return post(`/api/atex/maps/subareas`, { ...base, kind: "circle", cx, cy, r });
+        return post(`/api/atex/maps/subareas`, {
+          ...base,
+          kind: "circle",
+          cx,
+          cy,
+          r,
+        });
       }
-      const pts = (geometry?.points || []).map((p) => Array.isArray(p) ? p : [p.x, p.y]);
-      return post(`/api/atex/maps/subareas`, { ...base, kind: "poly", points: pts });
+      const pts = (geometry?.points || []).map((p) =>
+        Array.isArray(p) ? p : [p.x, p.y]
+      );
+      return post(`/api/atex/maps/subareas`, {
+        ...base,
+        kind: "poly",
+        points: pts,
+      });
     },
     // Mise à jour meta/geom
     updateSubarea: (id, patch = {}) => {
@@ -631,11 +839,16 @@ export const api = {
     },
     // (Optionnel) Mise à jour partielle de la géométrie uniquement
     updateSubareaGeometry: (id, partial) => {
-      return put(`/api/atex/maps/subareas/${encodeURIComponent(id)}/geometry`, partial);
+      return put(
+        `/api/atex/maps/subareas/${encodeURIComponent(id)}/geometry`,
+        partial
+      );
     },
-    deleteSubarea: (id) => del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
+    deleteSubarea: (id) =>
+      del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
     getMeta: (plan_key) => get(`/api/atex/maps/meta`, { plan_key }),
-    setMeta: (plan_key, payload) => put(`/api/atex/maps/meta`, { plan_key, ...payload }),
+    setMeta: (plan_key, payload) =>
+      put(`/api/atex/maps/meta`, { plan_key, ...payload }),
     bulkRename: ({ field, from, to }) =>
       post("/api/atex/bulk/rename", { field, from, to }),
   },
