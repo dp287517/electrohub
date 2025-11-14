@@ -1176,114 +1176,111 @@ Question de l'utilisateur :
 
 // ============================================================================
 // ROUTE: GET /bootstrap/auto-link
-// Crée automatiquement les tâches pour tous les équipements (idempotent)
+// Bootstrap / resync complet TSD → controls_tasks pour un site
+// - Efface toutes les tâches de ce site dans controls_tasks
+// - Recrée toutes les tâches à partir de tsdLibrary + tables HV/TGBT/devices
 // ============================================================================
-
 router.get("/bootstrap/auto-link", async (req, res) => {
+  const site = siteOf(req);
   const client = await pool.connect();
+
   try {
-    const site = siteOf(req);
-    let createdCount = 0;
-    let skippedDuplicates = 0;
+    await client.query("BEGIN");
 
-    for (const cat of tsdLibrary.categories) {
-      if (!cat.db_table) continue;
+    // 1) On purge TOUTES les tâches de ce site (simple et clair)
+    await client.query(
+      `DELETE FROM controls_tasks WHERE site = $1`,
+      [site]
+    );
+
+    let created = 0;
+
+    // 2) Pour chaque catégorie TSD, on regarde si la table existe et contient des équipements pour ce site
+    for (const cat of tsdLibrary.categories || []) {
       const tableName = cat.db_table;
+      if (!tableName) continue;
 
-      // 1) Vérifier si la table existe
-      const { rows: tableCheck } = await client.query(
-        `SELECT EXISTS (
-          SELECT FROM information_schema.tables 
-          WHERE table_name = $1
-        )`,
-        [tableName]
-      );
-      if (!tableCheck[0].exists) {
-        console.warn(
-          `[Controls][auto-link] Table ${tableName} not found for category ${cat.key}, skipping...`
+      const controls = cat.controls || [];
+      if (!controls.length) continue;
+
+      // On récupère les équipements pour ce site
+      let entities = [];
+      try {
+        const { rows } = await client.query(
+          `SELECT id, name, device_type, switchboard_name, building_code 
+           FROM ${tableName}
+           WHERE site = $1`,
+          [site]
         );
+        entities = rows;
+      } catch (e) {
+        // Si la table n'existe pas vraiment dans ta base, on ignore cette catégorie
+        console.warn(`[Controls][auto-link] Table manquante ou invalide: ${tableName}`, e.message);
         continue;
       }
 
-      // 2) Vérifier la colonne "site"
-      const { rows: colCheck } = await client.query(
-        `SELECT EXISTS (
-          SELECT FROM information_schema.columns 
-          WHERE table_name = $1 AND column_name = 'site'
-        )`,
-        [tableName]
-      );
-      const hasSiteCol = colCheck[0].exists;
-
-      // 3) Récupérer les équipements de cette catégorie pour le site
-      const { rows: entities } = await client.query(
-        hasSiteCol
-          ? `SELECT id, name FROM ${tableName} WHERE site = $1`
-          : `SELECT id, name FROM ${tableName}`,
-        hasSiteCol ? [site] : []
-      );
+      if (!entities.length) continue;
 
       const entityType = entityTypeFromCategory(cat);
 
       for (const ent of entities) {
-        for (const ctrl of cat.controls || []) {
+        const label =
+          ent.name ||
+          ent.device_type ||
+          ent.switchboard_name ||
+          `${tableName} #${ent.id}`;
+
+        for (const ctrl of controls) {
           const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
 
-          // 4) Insert idempotent : on laisse Postgres décider via la contrainte unique
-          const initialDate = generateInitialDate(ctrl.frequency);
+          // Date initiale pseudo-aléatoire en 2026 + prochaine échéance
+          const firstDate = generateInitialDate(ctrl.frequency || null);
+          const nextDate = addFrequency(firstDate, ctrl.frequency || null);
 
-          try {
-            const { rowCount } = await client.query(
-              `
-              INSERT INTO controls_tasks (
-                site,
-                entity_id,
-                entity_type,
-                task_name,
-                task_code,
-                status,
-                next_control,
-                frequency_months
-              )
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-              ON CONFLICT ON CONSTRAINT ux_controls_tasks_active DO NOTHING
-              `,
-              [
-                site,
-                ent.id,
-                entityType,
-                ctrl.type,
-                taskCode,
-                "Planned",
-                initialDate,
-                ctrl.frequency?.interval || null,
-              ]
-            );
-
-            if (rowCount > 0) {
-              createdCount += rowCount;
-            } else {
-              skippedDuplicates += 1;
-            }
-          } catch (e) {
-            // On logge mais on ne casse plus la boucle
-            console.warn(
-              `[Controls][auto-link] conflict or error on entity ${entityType}#${ent.id} / taskCode=${taskCode}:`,
-              e.message
-            );
-            skippedDuplicates += 1;
+          // On convertit la fréquence en mois si possible (pour info / stats)
+          let freqMonths = null;
+          if (ctrl.frequency?.interval && ctrl.frequency?.unit) {
+            const { interval, unit } = ctrl.frequency;
+            if (unit === "months") freqMonths = interval;
+            else if (unit === "years") freqMonths = interval * 12;
+            else if (unit === "weeks") freqMonths = Math.round((interval * 7) / 30);
           }
+
+          await client.query(
+            `INSERT INTO controls_tasks
+               (site, entity_id, entity_type, task_name, task_code,
+                status, first_control, next_control, frequency_months)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            [
+              site,
+              ent.id,
+              entityType,
+              `${cat.label} – ${ctrl.type}`, // nom plus explicite
+              taskCode,
+              "Planned",
+              firstDate,
+              nextDate,
+              freqMonths,
+            ]
+          );
+
+          created++;
         }
       }
     }
 
-    console.log(
-      `[Controls] Auto-link completed, created=${createdCount}, skippedDuplicates=${skippedDuplicates}`
-    );
-    res.json({ success: true, created: createdCount, skipped: skippedDuplicates });
+    await client.query("COMMIT");
+
+    const msg = `Synchronisation OK – ${created} tâches créées pour le site "${site}"`;
+    console.log("[Controls][auto-link]", msg);
+    res.json({ ok: true, created, message: msg });
   } catch (e) {
-    console.error("[Controls] auto-link error (fatal):", e);
-    res.status(500).json({ error: e.message });
+    await client.query("ROLLBACK");
+    console.error("[Controls][auto-link] ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: e.message || "Erreur interne auto-link",
+    });
   } finally {
     client.release();
   }
