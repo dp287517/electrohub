@@ -1,5 +1,5 @@
 // ============================================================================
-// Controls-map.jsx - Carte interactive avec positionnement (CORRIGÉ v2)
+// Controls-map.jsx - Carte interactive avec positionnement (CORRIGÉ v3)
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -55,14 +55,6 @@ function getIdentity() {
   return { email: email || null, name: name || null };
 }
 
-function userHeaders() {
-  const { email, name } = getIdentity();
-  const h = {};
-  if (email) h["X-User-Email"] = email;
-  if (name) h["X-User-Name"] = name;
-  return h;
-}
-
 function currentSite() {
   try {
     const u = JSON.parse(localStorage.getItem("eh_user") || "{}");
@@ -70,6 +62,16 @@ function currentSite() {
   } catch {
     return "Default";
   }
+}
+
+function userHeaders() {
+  const { email, name } = getIdentity();
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  const site = currentSite();
+  if (site) h["X-Site"] = site; // IMPORTANT pour controls_plans
+  return h;
 }
 
 function isUuid(s) {
@@ -81,6 +83,29 @@ function isNumericId(s) {
     (typeof s === "string" && /^\d+$/.test(s)) ||
     (typeof s === "number" && Number.isInteger(s))
   );
+}
+
+/**
+ * Construit l'URL complète pour récupérer un plan Controls
+ * en ajoutant systématiquement le site.
+ */
+function buildControlsPlanFileUrl(keyOrLogical) {
+  const site = currentSite();
+  const key = keyOrLogical;
+
+  let url =
+    isUuid(key) || isNumericId(key)
+      ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(key)}`
+      : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
+          key
+        )}`;
+
+  if (site) {
+    const sep = url.includes("?") ? "&" : "?";
+    url += `${sep}site=${encodeURIComponent(site)}`;
+  }
+
+  return url;
 }
 
 // ============================================================================
@@ -284,25 +309,20 @@ export default function ControlsMap({
 
   const fileUrl = useMemo(() => {
     if (!plan && !planKey && !building) return null;
+
+    // Cas où le backend renvoie déjà une URL complète
     if (plan?.url_pdf) return plan.url_pdf;
+
     if (planKey) {
       const key = planKey;
-      const url =
-        isUuid(key) || isNumericId(key)
-          ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(
-              key
-            )}`
-          : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
-              key
-            )}`;
-      return url;
+      return buildControlsPlanFileUrl(key);
     }
+
     if (building) {
       // Fallback : on suppose un logical_name = code bâtiment
-      return `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
-        building
-      )}`;
+      return buildControlsPlanFileUrl(building);
     }
+
     return null;
   }, [plan, planKey, building]);
 
@@ -970,14 +990,7 @@ function PlanCard({ plan, onSelect, onReload }) {
     setThumbnail(null);
     try {
       const key = plan.id || plan.logical_name;
-      const url =
-        isUuid(key) || isNumericId(key)
-          ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(
-              key
-            )}`
-          : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
-              key
-            )}`;
+      const url = buildControlsPlanFileUrl(key);
 
       const loadingTask = pdfjsLib.getDocument({
         url,
@@ -1101,4 +1114,5 @@ export {
   API_BASE,
   userHeaders,
   currentSite,
+  buildControlsPlanFileUrl,
 };
