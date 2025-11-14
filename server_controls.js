@@ -19,7 +19,7 @@ import pg from "pg";
 dayjs.extend(utc);
 dotenv.config();
 
-// --- OpenAI (IA photos / sécurité / infos équipements)
+// --- OpenAI (IA photos / sécurité / infos équipements / assistant tâches)
 const { OpenAI } = await import("openai");
 
 // ============================================================================
@@ -150,6 +150,24 @@ function entityTypeFromCategory(cat) {
   }
 }
 
+// Mapping inverse : entity_type -> table DB (pour IA sur les tâches)
+function tableFromEntityType(entityType) {
+  switch (entityType) {
+    case "hvequipment":
+      return "hv_equipments";
+    case "hvdevice":
+      return "hv_devices";
+    case "switchboard":
+      return "switchboards";
+    case "device":
+      return "devices";
+    case "site":
+      return "sites";
+    default:
+      return null;
+  }
+}
+
 // ============================================================================
 // MULTER / UPLOADS
 // ============================================================================
@@ -180,7 +198,7 @@ const multerFiles = multer({
 });
 
 // ============================================================================
-// IA — ANALYSE PHOTOS / INFOS ÉQUIPEMENTS / SÉCURITÉ
+// IA — CLIENT OPENAI
 // ============================================================================
 
 function openaiClient() {
@@ -192,6 +210,10 @@ function openaiClient() {
   if (!key) return null;
   return new OpenAI({ apiKey: key });
 }
+
+// ============================================================================
+// IA — ANALYSE PHOTOS / INFOS ÉQUIPEMENTS / SÉCURITÉ
+// ============================================================================
 
 /**
  * Analyse des photos d'équipements électriques / sûreté
@@ -283,6 +305,9 @@ router.post(
   async (req, res) => {
     try {
       const client = openaiClient();
+      if (!client) {
+        throw new Error("OPENAI_API_KEY missing for Controls AI");
+      }
       const extracted = await controlsExtractFromFiles(
         client,
         req.files || []
@@ -305,6 +330,9 @@ router.post(
 router.post("/ai/extract", multerFiles.array("files"), async (req, res) => {
   try {
     const client = openaiClient();
+    if (!client) {
+      throw new Error("OPENAI_API_KEY missing for Controls AI");
+    }
     const extracted = await controlsExtractFromFiles(client, req.files || []);
 
     await Promise.all(
@@ -319,13 +347,218 @@ router.post("/ai/extract", multerFiles.array("files"), async (req, res) => {
 });
 
 // ============================================================================
+// IA — ANALYSE & ASSISTANT SUR UNE TÂCHE (pour Controls.jsx / TaskDetails)
+// ============================================================================
+
+// Construit un "contexte compact" pour l'IA à partir d'une tâche
+async function buildTaskContext(taskId) {
+  const { rows: taskRows } = await pool.query(
+    `SELECT * FROM controls_tasks WHERE id = $1`,
+    [taskId]
+  );
+  if (!taskRows.length) return null;
+  const task = taskRows[0];
+
+  const tsd = findTSDControl(task.task_code);
+
+  const { rows: records } = await pool.query(
+    `SELECT * FROM controls_records 
+     WHERE task_id = $1 
+     ORDER BY performed_at DESC 
+     LIMIT 10`,
+    [taskId]
+  );
+
+  let equipment = null;
+  const table = tableFromEntityType(task.entity_type);
+  if (table) {
+    try {
+      const { rows: eqRows } = await pool.query(
+        `SELECT * FROM ${table} WHERE id = $1`,
+        [task.entity_id]
+      );
+      equipment = eqRows[0] || null;
+    } catch (e) {
+      console.warn(
+        `[Controls][AI] Failed to load equipment for entity_type=${task.entity_type}, table=${table}:`,
+        e.message
+      );
+    }
+  }
+
+  return {
+    task: {
+      id: task.id,
+      site: task.site,
+      entity_id: task.entity_id,
+      entity_type: task.entity_type,
+      task_name: task.task_name,
+      task_code: task.task_code,
+      status: task.status,
+      next_control: task.next_control,
+      last_control: task.last_control,
+      frequency_months: task.frequency_months,
+    },
+    tsd: tsd
+      ? {
+          category_key: tsd.category.key,
+          category_label: tsd.category.label,
+          control_type: tsd.control.type,
+          frequency: tsd.control.frequency || null,
+          notes: tsd.control.notes || "",
+          checklist: tsd.control.checklist || [],
+          observations: tsd.control.observations || [],
+        }
+      : null,
+    equipment,
+    records: records.map((r) => ({
+      id: r.id,
+      performed_at: r.performed_at,
+      result_status: r.result_status,
+      comments: r.comments,
+    })),
+  };
+}
+
+// Analyse automatique d'une tâche
+router.post("/tasks/:id/analyze", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const client = openaiClient();
+    if (!client) {
+      return res.status(500).json({
+        ok: false,
+        error: "OPENAI_API_KEY missing for Controls AI",
+      });
+    }
+
+    const ctx = await buildTaskContext(id);
+    if (!ctx) {
+      return res.status(404).json({ ok: false, error: "Task not found" });
+    }
+
+    const sys = `Tu es un expert en maintenance, inspection et essais d'installations électriques (HT, TGBT, protections, batteries, UPS, éclairage de sécurité...).
+Tu aides un responsable maintenance à analyser un contrôle périodique issu d'une TSD (G2.1). 
+Ton objectif : fournir un avis opérationnel exploitable immédiatement pour la sûreté / conformité du site.`;
+
+    const user = `Contexte JSON (task_context) :
+${JSON.stringify(ctx, null, 2)}
+
+Produit une ANALYSE STRUCTURÉE en français, avec les sections numérotées :
+
+1. Synthèse rapide (2-3 phrases maximum)
+2. État du contrôle (à jour / en retard / bientôt dû) + dates clés
+3. Principaux risques techniques & sécurité pour ce type d'équipement
+4. Recommandations concrètes (actions à lancer, priorités)
+5. Suggestions de checks supplémentaires (si pertinents)
+6. Commentaires sur la fréquence actuelle (ok / à renforcer / à questionner)
+
+Tu t'adresses à un technicien / responsable maintenance.
+Pas de JSON, uniquement du texte clair et lisible.`;
+
+    const resp = await client.chat.completions.create({
+      model:
+        process.env.CONTROLS_OPENAI_MODEL ||
+        process.env.ATEX_OPENAI_MODEL ||
+        "gpt-4o-mini",
+      temperature: 0.25,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: user },
+      ],
+    });
+
+    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error("[Controls][AI] tasks/:id/analyze error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Assistant IA interactif sur une tâche
+router.post("/tasks/:id/assistant", async (req, res) => {
+  const { id } = req.params;
+  const { question = "" } = req.body || {};
+
+  try {
+    const client = openaiClient();
+    if (!client) {
+      return res.status(500).json({
+        ok: false,
+        error: "OPENAI_API_KEY missing for Controls AI",
+      });
+    }
+
+    const ctx = await buildTaskContext(id);
+    if (!ctx) {
+      return res.status(404).json({ ok: false, error: "Task not found" });
+    }
+
+    const sys = `Tu es un assistant IA spécialisé en maintenance électrique industrielle, conformité TSD et sûreté (HT, TGBT, protections, EPI, etc.).
+Tu réponds de manière précise, actionnable et orientée terrain.`;
+
+    const user = `Voici le contexte de la tâche (JSON compact) :
+${JSON.stringify(ctx, null, 2)}
+
+Question de l'utilisateur :
+"${question}"
+
+Consignes :
+- Réponds en français.
+- Donne une réponse structurée, opérationnelle (utilisable directement sur le terrain ou pour un plan d'actions).
+- Si une information manque dans le contexte, dis-le simplement et propose des hypothèses réalistes.`;
+
+    const resp = await client.chat.completions.create({
+      model:
+        process.env.CONTROLS_OPENAI_MODEL ||
+        process.env.ATEX_OPENAI_MODEL ||
+        "gpt-4o-mini",
+      temperature: 0.35,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: user },
+      ],
+    });
+
+    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error("[Controls][AI] tasks/:id/assistant error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================================
 // ROUTE: GET /hierarchy/tree
 // Retourne l'arborescence complète avec indicateur "positioned"
+// + héritage de position pour les cellules HT comme pour les devices TGBT
+// + filtre status=open|done|all (utilisé par Controls.jsx)
 // ============================================================================
 router.get("/hierarchy/tree", async (req, res) => {
   const client = await pool.connect();
   try {
     const site = siteOf(req);
+    const statusFilter = String(req.query.status || "open").toLowerCase();
+
+    const filterTasks = (tasks) => {
+      if (!Array.isArray(tasks)) return [];
+      return tasks
+        .map((t) => ({
+          ...t,
+          status: computeStatus(t.next_control),
+        }))
+        .filter((t) => {
+          if (statusFilter === "all") return true;
+          if (statusFilter === "done") {
+            // Pour l'instant "terminées" = celles avec last_control non nul
+            return !!t.last_control;
+          }
+          // "open" = contrôles à venir / en retard
+          return ["Planned", "Pending", "Overdue"].includes(t.status);
+        });
+    };
+
     const buildings = [];
 
     // Récupérer tous les buildings pertinents
@@ -364,7 +597,7 @@ router.get("/hierarchy/tree", async (req, res) => {
         const hvPositioned = hvPosCheck[0]?.positioned || false;
 
         // Tâches HV
-        const { rows: hvTasks } = await client.query(
+        const { rows: hvTasksRaw } = await client.query(
           `SELECT ct.*,
              EXISTS(
                SELECT 1 FROM controls_task_positions ctp
@@ -375,8 +608,9 @@ router.get("/hierarchy/tree", async (req, res) => {
              AND ct.entity_type = 'hvequipment'`,
           [hv.id]
         );
+        const hvTasks = filterTasks(hvTasksRaw);
 
-        // Devices HV
+        // Devices HV (cellules, etc.)
         const { rows: hvDevices } = await client.query(
           `SELECT * FROM hv_devices WHERE hv_equipment_id = $1 AND site = $2`,
           [hv.id, site]
@@ -394,7 +628,7 @@ router.get("/hierarchy/tree", async (req, res) => {
             [d.id]
           );
 
-          const { rows: devTasks } = await client.query(
+          const { rows: devTasksRaw } = await client.query(
             `SELECT ct.*,
                EXISTS(
                  SELECT 1 FROM controls_task_positions ctp
@@ -405,16 +639,20 @@ router.get("/hierarchy/tree", async (req, res) => {
                AND ct.entity_type = 'hvdevice'`,
             [d.id]
           );
+          const devTasks = filterTasks(devTasksRaw);
+
+          // 👉 NOTE IMPORTANTE :
+          // - positioned : true si la cellule est explicitement positionnée
+          //   OU si l'équipement HV parent est positionné.
+          //   => permet d'afficher "(hérite position)" côté front.
+          const devicePositioned = (dvPosCheck[0]?.positioned || false) || hvPositioned;
 
           devices.push({
             id: d.id,
             label: d.name || d.device_type,
-            positioned: dvPosCheck[0]?.positioned || false,
+            positioned: devicePositioned,
             entity_type: "hvdevice",
-            tasks: devTasks.map((t) => ({
-              ...t,
-              status: computeStatus(t.next_control),
-            })),
+            tasks: devTasks,
           });
         }
 
@@ -424,10 +662,7 @@ router.get("/hierarchy/tree", async (req, res) => {
           positioned: hvPositioned,
           entity_type: "hvequipment",
           building_code: bRow.code,
-          tasks: hvTasks.map((t) => ({
-            ...t,
-            status: computeStatus(t.next_control),
-          })),
+          tasks: hvTasks,
           devices,
         });
       }
@@ -450,7 +685,7 @@ router.get("/hierarchy/tree", async (req, res) => {
           [sw.id]
         );
 
-        const { rows: swTasks } = await client.query(
+        const { rows: swTasksRaw } = await client.query(
           `SELECT ct.*,
              EXISTS(
                SELECT 1 FROM controls_task_positions ctp
@@ -461,17 +696,17 @@ router.get("/hierarchy/tree", async (req, res) => {
              AND ct.entity_type = 'switchboard'`,
           [sw.id]
         );
+        const swTasks = filterTasks(swTasksRaw);
+
+        const swPositioned = swPosCheck[0]?.positioned || false;
 
         const swObj = {
           id: sw.id,
           label: sw.name,
-          positioned: swPosCheck[0]?.positioned || false,
+          positioned: swPositioned,
           entity_type: "switchboard",
           building_code: bRow.code,
-          tasks: swTasks.map((t) => ({
-            ...t,
-            status: computeStatus(t.next_control),
-          })),
+          tasks: swTasks,
           devices: [],
         };
 
@@ -482,26 +717,29 @@ router.get("/hierarchy/tree", async (req, res) => {
         );
 
         for (const d of devRows) {
-          const { rows: devTasks } = await client.query(
+          const { rows: devTasksRaw } = await client.query(
             `SELECT * FROM controls_tasks 
              WHERE entity_id = $1 AND entity_type = 'device'`,
             [d.id]
           );
+          const devTasks = filterTasks(devTasksRaw).map((t) => ({
+            ...t,
+            positioned: swPositioned,
+          }));
 
           swObj.devices.push({
             id: d.id,
             label: d.name || d.device_type,
-            positioned: swObj.positioned,
+            positioned: swPositioned,
             entity_type: "device",
-            tasks: devTasks.map((t) => ({
-              ...t,
-              status: computeStatus(t.next_control),
-              positioned: swObj.positioned,
-            })),
+            tasks: devTasks,
           });
         }
 
-        building.switchboards.push(swObj);
+        // On garde le switchboard même si pour l’instant il n’a que des tasks à venir filtrées
+        if (swObj.tasks.length || swObj.devices.length) {
+          building.switchboards.push(swObj);
+        }
       }
 
       // Ne garder que les bâtiments qui ont du contenu
@@ -749,6 +987,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 // ============================================================================
 // ROUTE: GET /missing-equipment
 // Logique améliorée : table absente OU 0 équipements = "non intégré"
+// + champs compatibles avec Controls.jsx (count_in_tsd)
 // ============================================================================
 router.get("/missing-equipment", async (req, res) => {
   const client = await pool.connect();
@@ -771,13 +1010,16 @@ router.get("/missing-equipment", async (req, res) => {
       );
 
       const hasTable = tableCheck[0].exists;
+      const countControls = (cat.controls || []).length;
 
       if (!hasTable) {
         missing.push({
+          category_key: cat.key,
           category: cat.label,
           db_table: tableName,
           reason: "table_absente",
-          count_controls: (cat.controls || []).length,
+          count_controls: countControls,
+          count_in_tsd: countControls,
         });
         continue;
       }
@@ -803,16 +1045,21 @@ router.get("/missing-equipment", async (req, res) => {
 
       if (count === 0) {
         missing.push({
+          category_key: cat.key,
           category: cat.label,
           db_table: tableName,
           reason: "aucun_equipement",
-          count_controls: (cat.controls || []).length,
+          count_controls: countControls,
+          count_in_tsd: countControls,
         });
       } else {
         existing.push({
+          category_key: cat.key,
           category: cat.label,
           db_table: tableName,
           count,
+          count_controls: countControls,
+          count_in_tsd: countControls,
         });
       }
     }
@@ -823,6 +1070,18 @@ router.get("/missing-equipment", async (req, res) => {
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
+  }
+});
+
+// ============================================================================
+// ROUTE: GET /tsd  — expose la tsd_library brute (catalogue)
+// ============================================================================
+router.get("/tsd", async (_req, res) => {
+  try {
+    res.json(tsdLibrary);
+  } catch (e) {
+    console.error("[Controls] /tsd error:", e);
+    res.status(500).json({ error: e.message });
   }
 });
 
