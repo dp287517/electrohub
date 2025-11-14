@@ -1,5 +1,5 @@
 // ============================================================================
-// Controls-map.jsx - Carte interactive avec positionnement
+// Controls-map.jsx - Carte interactive avec positionnement (CORRIGÉ)
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -57,6 +57,14 @@ function currentSite() {
   } catch {
     return "Default";
   }
+}
+
+function isUuid(s) {
+  return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
+}
+
+function isNumericId(s) {
+  return (typeof s === "string" && /^\d+$/.test(s)) || (typeof s === "number" && Number.isInteger(s));
 }
 
 // ============================================================================
@@ -242,7 +250,11 @@ export default function ControlsMap({
     if (!plan && !planKey && !building) return null;
     if (plan?.url_pdf) return plan.url_pdf;
     if (planKey) {
-      return `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(planKey)}`;
+      const key = planKey;
+      const url = (isUuid(key) || isNumericId(key))
+        ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(key)}`
+        : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(key)}`;
+      return url;
     }
     if (building) {
       return `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(building)}`;
@@ -473,6 +485,7 @@ export default function ControlsMap({
       loadingTaskRef.current = null;
       cleanupMap();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileUrl, pageIndex]);
 
   // ============================================================================
@@ -487,8 +500,13 @@ export default function ControlsMap({
       headers.set("X-Site", site);
       
       let url = `${API_BASE}/api/controls/maps/positions?page_index=${pageIndex}`;
+      
       if (planKey) {
-        url += `&logical_name=${encodeURIComponent(planKey)}`;
+        if (isUuid(planKey) || isNumericId(planKey)) {
+          url += `&id=${encodeURIComponent(planKey)}`;
+        } else {
+          url += `&logical_name=${encodeURIComponent(planKey)}`;
+        }
       } else if (building) {
         url += `&building=${encodeURIComponent(building)}`;
       }
@@ -704,7 +722,7 @@ export function ControlsMapManager({ onPlanSelect }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       
       const data = await res.json();
-      setPlans(Array.isArray(data?.plans) ? data.plans : []);
+      setPlans(Array.isArray(data?.plans) ? data.plans : Array.isArray(data?.items) ? data.items : []);
     } catch (e) {
       console.error("[ControlsMapManager] loadPlans error:", e);
       setPlans([]);
@@ -799,12 +817,21 @@ function PlanCard({ plan, onSelect, onReload }) {
 
   useEffect(() => {
     generateThumbnail();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan]);
 
   async function generateThumbnail() {
     try {
-      const url = `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(plan.logical_name)}`;
-      const loadingTask = pdfjsLib.getDocument({ url, withCredentials: true });
+      const key = plan.id || plan.logical_name;
+      const url = (isUuid(key) || isNumericId(key))
+        ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(key)}`
+        : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(key)}`;
+      
+      const loadingTask = pdfjsLib.getDocument({ 
+        url, 
+        withCredentials: true,
+        httpHeaders: userHeaders(),
+      });
       const pdf = await loadingTask.promise;
       const page = await pdf.getPage(1);
       const viewport = page.getViewport({ scale: 0.3 });
