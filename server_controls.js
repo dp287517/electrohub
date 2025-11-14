@@ -1091,6 +1091,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
         let controlsForThis = [];
 
         if (useAI && aiMap.has(ent.id) && aiMap.get(ent.id).length) {
+          // IA : types -> objets contrôles TSD
           controlsForThis = aiMap.get(ent.id).map((type) => controlsByType[type]);
         } else {
           // Fallback (pas d'IA ou pas de réponse exploitable) :
@@ -1118,15 +1119,13 @@ router.get("/bootstrap/auto-link", async (req, res) => {
             }
           }
 
-          // INSERT avec protection sur la contrainte unique
-          // ux_controls_tasks_active : (site, entity_id, COALESCE(cluster, task_code))
-          // => si une tâche existe déjà pour (site, équipement, task_code/cluster), on ignore.
+          // INSERT + ignore tout conflit de clé unique (quel qu'il soit)
           const result = await client.query(
             `INSERT INTO controls_tasks
                (site, entity_id, entity_type, task_name, task_code,
                 status, next_control, frequency_months)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-             ON CONFLICT ON CONSTRAINT ux_controls_tasks_active DO NOTHING`,
+             ON CONFLICT DO NOTHING`,
             [
               site,
               ent.id,
@@ -1139,7 +1138,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
             ]
           );
 
-          // rowCount = 1 si une ligne a été insérée, 0 si conflit → rien créé
+          // rowCount = 1 si une ligne a été insérée, 0 si déjà existante
           if (result.rowCount > 0) {
             created++;
           }
