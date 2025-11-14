@@ -1,52 +1,75 @@
 /** src/lib/api.js */
+
 /** Base API */
 export const API_BASE = import.meta.env.VITE_API_BASE || "";
+
 /* ---------------- Identity helpers (cookies/localStorage) ---------------- */
 function getCookie(name) {
   const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
   return m ? decodeURIComponent(m[1]) : null;
 }
+
 function getIdentity() {
   // 1) cookies
   let email = getCookie("email") || null;
   let name = getCookie("name") || null;
+
   // 2) localStorage keys & JSON
   try {
-    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
-    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
+    if (!email)
+      email =
+        localStorage.getItem("email") ||
+        localStorage.getItem("user.email") ||
+        null;
+    if (!name)
+      name =
+        localStorage.getItem("name") ||
+        localStorage.getItem("user.name") ||
+        null;
+
     if ((!email || !name) && localStorage.getItem("user")) {
       try {
         const u = JSON.parse(localStorage.getItem("user"));
         if (!email && u?.email) email = String(u.email);
-        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+        if (!name && (u?.name || u?.displayName))
+          name = String(u.name || u.displayName);
       } catch {}
     }
+
     if ((!email || !name) && localStorage.getItem("eh_user")) {
       try {
         const eu = JSON.parse(localStorage.getItem("eh_user"));
         const x = eu?.user || eu?.profile || eu;
         if (!email && x?.email) email = String(x.email);
-        if (!name && (x?.name || x?.displayName)) name = String(x.name || x.displayName);
+        if (!name && (x?.name || x?.displayName))
+          name = String(x.name || x.displayName);
       } catch {}
     }
   } catch {}
+
   // 3) fallback: dérive un nom depuis l’email
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
     if (base) {
-      name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+      name = base
+        .replace(/[._-]+/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim();
     }
   }
+
   email = email ? String(email).trim() : null;
   name = name ? String(name).trim() : null;
   return { email, name };
 }
+
 function identityHeaders(h = new Headers()) {
   const { email, name } = getIdentity();
   if (email && !h.has("X-User-Email")) h.set("X-User-Email", email);
   if (name && !h.has("X-User-Name")) h.set("X-User-Name", name);
   return h;
 }
+
 /** Get current site from client-side stored profile (fallback to "Default") */
 function currentSite() {
   try {
@@ -56,27 +79,38 @@ function currentSite() {
     return "Default";
   }
 }
+
 /** Small helper: add cache-busting `v=timestamp` param to a URL */
 function withBust(url, enabled = true) {
   if (!enabled) return url;
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}v=${Date.now()}`;
 }
+
 /** UUID checker */
 function isUuid(s) {
   return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
 }
+
 /** Numeric ID checker */
 function isNumericId(s) {
-  return (typeof s === "string" && /^\d+$/.test(s)) || (typeof s === "number" && Number.isInteger(s));
+  return (
+    (typeof s === "string" && /^\d+$/.test(s)) ||
+    (typeof s === "number" && Number.isInteger(s))
+  );
 }
+
 /** Fetch JSON with automatic X-Site + Identity headers */
 async function jsonFetch(url, options = {}) {
   const site = currentSite();
   const finalUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
   const headers = identityHeaders(new Headers(options.headers || {}));
   headers.set("X-Site", site);
-  if (!headers.has("Content-Type") && options.body && !(options.body instanceof FormData)) {
+  if (
+    !headers.has("Content-Type") &&
+    options.body &&
+    !(options.body instanceof FormData)
+  ) {
     headers.set("Content-Type", "application/json");
   }
   const res = await fetch(finalUrl, {
@@ -86,13 +120,15 @@ async function jsonFetch(url, options = {}) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    const msg = text || `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}`;
+    const msg =
+      text || `HTTP ${res.status}${res.statusText ? " " + res.statusText : ""}`;
     throw new Error(msg);
   }
   const ct = res.headers.get("content-type") || "";
   if (res.status === 204) return null;
   return ct.includes("application/json") ? res.json() : null;
 }
+
 /** Utilitaire bas niveau pour appels JSON "bruts" */
 export async function apiBaseFetchJSON(path, options = {}) {
   const finalUrl = path.startsWith("http") ? path : `${API_BASE}${path}`;
@@ -102,15 +138,25 @@ export async function apiBaseFetchJSON(path, options = {}) {
   if (!headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(finalUrl, { credentials: "include", ...options, headers });
+  const res = await fetch(finalUrl, {
+    credentials: "include",
+    ...options,
+    headers,
+  });
   const ct = res.headers.get("content-type") || "";
-  const payload = ct.includes("application/json") ? await res.json() : await res.text();
+  const payload = ct.includes("application/json")
+    ? await res.json()
+    : await res.text();
   if (!res.ok) {
-    const msg = typeof payload === "string" ? payload : (payload?.error || `HTTP ${res.status}`);
+    const msg =
+      typeof payload === "string"
+        ? payload
+        : payload?.error || `HTTP ${res.status}`;
     throw new Error(msg);
   }
   return payload;
 }
+
 /** (Optionnel) Fetch binaire (blob) */
 export async function getBlob(path) {
   const site = currentSite();
@@ -121,28 +167,48 @@ export async function getBlob(path) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.blob();
 }
+
 /** Generic helpers */
 export async function get(path, params) {
   const qs = params
-    ? `?${new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null))}`
+    ? `?${new URLSearchParams(
+        Object.entries(params).filter(
+          ([, v]) => v !== undefined && v !== null
+        )
+      )}`
     : "";
   return jsonFetch(`${path}${qs}`, { method: "GET" });
 }
+
 export async function post(path, body) {
-  return jsonFetch(path, { method: "POST", body: body instanceof FormData ? body : JSON.stringify(body) });
+  return jsonFetch(path, {
+    method: "POST",
+    body: body instanceof FormData ? body : JSON.stringify(body),
+  });
 }
+
 export async function put(path, body) {
-  return jsonFetch(path, { method: "PUT", body: body instanceof FormData ? body : JSON.stringify(body) });
+  return jsonFetch(path, {
+    method: "PUT",
+    body: body instanceof FormData ? body : JSON.stringify(body),
+  });
 }
+
 export async function del(path) {
   return jsonFetch(path, { method: "DELETE" });
 }
+
 export async function upload(path, formData /* FormData */) {
   // ne pas fixer Content-Type sur FormData
   const site = currentSite();
   const url = `${API_BASE}${path}`;
   const headers = identityHeaders(new Headers({ "X-Site": site }));
-  const res = await fetch(url, { method: "POST", body: formData, credentials: "include", headers });
+  const res = await fetch(url, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
+    headers,
+  });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(text || `HTTP ${res.status}`);
@@ -150,6 +216,7 @@ export async function upload(path, formData /* FormData */) {
   const ct = res.headers.get("content-type") || "";
   return ct.includes("application/json") ? res.json() : null;
 }
+
 /** Namespaced API */
 export const api = {
   /** --- AUTH / PROFILE (si utilisés) --- */
@@ -158,6 +225,7 @@ export const api = {
     login: (payload) => post("/api/auth/login", payload),
     logout: () => post("/api/auth/logout", {}),
   },
+
   /** --- OIBT (existant) --- */
   oibt: {
     listProjects: (params) => get("/api/oibt/projects", params),
@@ -165,18 +233,30 @@ export const api = {
     createProject: (payload) => post("/api/oibt/projects", payload),
     updateProject: (id, payload) => put(`/api/oibt/projects/${id}`, payload),
     removeProject: (id) => del(`/api/oibt/projects/${id}`),
+
     uploadProjectActionFile: (id, action, formData) =>
-      upload(`/api/oibt/projects/${id}/upload?action=${encodeURIComponent(action)}`, formData),
+      upload(
+        `/api/oibt/projects/${id}/upload?action=${encodeURIComponent(action)}`,
+        formData
+      ),
+
     listPeriodics: (params) => get("/api/oibt/periodics", params),
     createPeriodic: (payload) => post("/api/oibt/periodics", payload),
     updatePeriodic: (id, payload) => put(`/api/oibt/periodics/${id}`, payload),
     removePeriodic: (id) => del(`/api/oibt/periodics/${id}`),
+
     uploadPeriodicFile: (id, type, formData) =>
-      upload(`/api/oibt/periodics/${id}/upload?type=${encodeURIComponent(type)}`, formData),
+      upload(
+        `/api/oibt/periodics/${id}/upload?type=${encodeURIComponent(type)}`,
+        formData
+      ),
+
     listUpcoming: (params) => get("/api/oibt/periodics/upcoming", params),
+
     // Vue par bâtiment : années + avancement + prochaine échéance
     listBuildings: (params) => get("/api/oibt/periodics/buildings", params),
   },
+
   /** --- PROJECTS --- */
   projects: {
     list: (params) => get("/api/projects/projects", params),
@@ -184,14 +264,22 @@ export const api = {
     update: (id, payload) => put(`/api/projects/projects/${id}`, payload),
     remove: (id) => del(`/api/projects/projects/${id}`),
     status: (id) => get(`/api/projects/projects/${id}/status`),
-    setStatus: (id, payload) => put(`/api/projects/projects/${id}/status`, payload),
+    setStatus: (id, payload) =>
+      put(`/api/projects/projects/${id}/status`, payload),
     upload: (id, category, formData) =>
-      upload(`/api/projects/projects/${id}/upload?category=${encodeURIComponent(category)}`, formData),
-    listFiles: (id, category) => get(`/api/projects/projects/${id}/files`, { category }),
+      upload(
+        `/api/projects/projects/${id}/upload?category=${encodeURIComponent(
+          category
+        )}`,
+        formData
+      ),
+    listFiles: (id, category) =>
+      get(`/api/projects/projects/${id}/files`, { category }),
     downloadFile: (file_id) => get(`/api/projects/download`, { file_id }),
     lines: (id) => get(`/api/projects/projects/${id}/lines`),
     analysis: (id) => get(`/api/projects/projects/${id}/analysis`),
-    assistant: (id, question) => post(`/api/projects/projects/${id}/assistant`, { question }),
+    assistant: (id, question) =>
+      post(`/api/projects/projects/${id}/assistant`, { question }),
     health: () => get(`/api/projects/health`),
   },
 
@@ -216,7 +304,6 @@ export const api = {
       get(`/api/controls/tasks/${encodeURIComponent(id)}/schema`),
 
     // Clôture d'une tâche + replanification
-    // ⚠ server_controls.js utilise PATCH /tasks/:id/close
     closeTask: (id, payload = {}) =>
       jsonFetch(`/api/controls/tasks/${encodeURIComponent(id)}/close`, {
         method: "PATCH",
@@ -231,14 +318,13 @@ export const api = {
       }),
 
     // Bootstrap auto-link des tâches TSD
-    autoLink: () =>
-      get("/api/controls/bootstrap/auto-link"),
+    autoLink: () => get("/api/controls/bootstrap/auto-link"),
 
     // Équipements manquants par rapport à la librairie TSD
-    getMissingEquipment: () =>
-      get("/api/controls/missing-equipment"),
+    getMissingEquipment: () => get("/api/controls/missing-equipment"),
 
     // ============================ PLANS PDF ================================
+
     // Upload ZIP de plans (PDF)
     uploadZip: (file) => {
       const fd = new FormData();
@@ -247,34 +333,41 @@ export const api = {
     },
 
     // Liste des plans
-    listPlans: () =>
-      get("/api/controls/maps/listPlans"),
+    listPlans: () => get("/api/controls/maps/listPlans"),
 
     // Renommage d'un plan
     renamePlan: (logical_name, display_name) =>
       put("/api/controls/maps/renamePlan", { logical_name, display_name }),
 
-    // Plans PDF - URLs des fichiers
-    // 👉 On réutilise le backend ATEX, qui fonctionne déjà très bien pour les PDF.
+    // URL PDF des plans Controls (backend controls_plans)
     planFileUrl: (logical_name, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(logical_name)}`, bust),
+      withBust(
+        `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
+          logical_name
+        )}`,
+        bust
+      ),
 
     planFileUrlById: (id, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`, bust),
+      withBust(
+        `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(id)}`,
+        bust
+      ),
 
+    // Helper auto (string | plan, détecte UUID ou id numérique)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
-      // On garde la même logique que pour ATEX : si c'est un UUID on passe par ?id=,
-      // sinon on passe par ?logical_name=
-      const key = typeof plan === "string"
-        ? plan
-        : (plan?.id || plan?.logical_name || "");
-
-      const useId = isUuid(key); // on ne traite plus les IDs purement numériques comme des IDs ATEX
+      const key =
+        typeof plan === "string"
+          ? plan
+          : plan?.id || plan?.logical_name || "";
+      const useId = isUuid(key) || isNumericId(key);
 
       const url = useId
-        ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
-        : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
-            typeof plan === "string" ? plan : (plan?.logical_name || "")
+        ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(
+            key
+          )}`
+        : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
+            typeof plan === "string" ? plan : plan?.logical_name || ""
           )}`;
 
       return withBust(url, bust);
@@ -292,7 +385,7 @@ export const api = {
       const key =
         typeof planOrKey === "string"
           ? planOrKey
-          : (planOrKey?.id || planOrKey?.logical_name || "");
+          : planOrKey?.id || planOrKey?.logical_name || "";
       if (isUuid(key) || isNumericId(key)) {
         return get("/api/controls/maps/positions", { id: key, page_index });
       }
@@ -307,6 +400,7 @@ export const api = {
       post("/api/controls/maps/setPosition", payload),
 
     // ============================ IA CONTROLS ==============================
+
     // Analyse automatique d'une tâche (résumé, risques, priorités...).
     // - nouvel usage : api.controls.analyze({ taskId, ...extra })
     // - rétro-compat : api.controls.analyze(taskId)
@@ -333,7 +427,6 @@ export const api = {
     // - nouvel usage : api.controls.assistant({ taskId, question, ...extra })
     // - rétro-compat : api.controls.assistant(taskId, question)
     assistant: (arg1, arg2) => {
-      // Nouvelle API : objet { taskId, question, ... }
       if (typeof arg1 === "object") {
         const { taskId, question, ...extra } = arg1 || {};
         if (!taskId) throw new Error("controls.assistant: taskId manquant");
@@ -342,7 +435,6 @@ export const api = {
           { question: question || "", ...(extra || {}) }
         );
       }
-      // Ancienne API : (taskId, question)
       const taskId = arg1;
       const question = arg2 || "";
       if (!taskId) throw new Error("controls.assistant: taskId manquant");
@@ -352,10 +444,21 @@ export const api = {
       );
     },
 
+    // Analyse multi-photos d’équipements (IA Controls, même principe ATEX)
+    extractFromPhotos: (files = []) => {
+      const fd = new FormData();
+      (files || []).forEach((f) => fd.append("files", f));
+      return upload(`/api/controls/ai/analyzePhotoBatch`, fd);
+    },
+
+    // Alias rétro-compat si besoin
+    analyzePhotoBatch: (files = []) =>
+      api.controls.extractFromPhotos(files),
+
     // ========================= FONCTIONS LEGACY ============================
-    // Catalogue TSD (si exposé côté backend)
-    catalog: (params) =>
-      get("/api/controls/tsd", { ...(params || {}) }),
+
+    // Catalogue TSD (exposé côté backend)
+    catalog: (params) => get("/api/controls/tsd", { ...(params || {}) }),
 
     // Sync legacy : alias sur auto-link
     sync: ({ create = 1, seed = 1 } = {}) =>
@@ -366,7 +469,10 @@ export const api = {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("file", f));
       if (label) fd.append("label", label);
-      return upload(`/api/controls/tasks/${encodeURIComponent(taskId)}/attachments`, fd);
+      return upload(
+        `/api/controls/tasks/${encodeURIComponent(taskId)}/attachments`,
+        fd
+      );
     },
 
     // Historique / enregistrements / health (si implémentés côté backend)
@@ -379,11 +485,13 @@ export const api = {
   compExt: {
     list: (params) => get("/api/comp-ext/vendors", params),
     create: (payload) => post("/api/comp-ext/vendors", payload),
-    update: (id, payload) => put(`/api/comp-ext/vendors/${id}`, payload),
+    update: (id, payload) =>
+      put(`/api/comp-ext/vendors/${id}`, payload),
     remove: (id) => del(`/api/comp-ext/vendors/${id}`),
     calendar: () => get("/api/comp-ext/calendar"),
     stats: () => get("/api/comp-ext/stats"),
   },
+
   /** --- ASK VEEVA --- */
   askVeeva: {
     health: () => get("/api/ask-veeva/health"),
@@ -393,14 +501,17 @@ export const api = {
     personalize: () => post("/api/ask-veeva/personalize", {}),
     logEvent: (payload) => post("/api/ask-veeva/logEvent", payload),
     feedback: (payload) => post("/api/ask-veeva/feedback", payload),
-    updateSynonyms: (payload) => post("/api/ask-veeva/synonyms/update", payload),
+    updateSynonyms: (payload) =>
+      post("/api/ask-veeva/synonyms/update", payload),
     search: (payload) => post("/api/ask-veeva/search", payload),
     findDocs: (q) => get("/api/ask-veeva/find-docs", { q }),
     ask: (payload) => post("/api/ask-veeva/ask", payload),
     pysearch: {
       health: () => get("/api/ask-veeva/pysearch/health"),
-      compare: (payload) => post("/api/ask-veeva/pysearch/compare", payload),
-      reindex: (payload = {}) => post("/api/ask-veeva/pysearch/reindex", payload),
+      compare: (payload) =>
+        post("/api/ask-veeva/pysearch/compare", payload),
+      reindex: (payload = {}) =>
+        post("/api/ask-veeva/pysearch/reindex", payload),
     },
     uploadZip: (file) => {
       const fd = new FormData();
@@ -413,97 +524,165 @@ export const api = {
       return upload("/api/ask-veeva/uploadFile", fd);
     },
     chunked: {
-      init: ({ filename, size }) => post("/api/ask-veeva/chunked/init", { filename, size }),
+      init: ({ filename, size }) =>
+        post("/api/ask-veeva/chunked/init", { filename, size }),
       part: (uploadId, partNumber, blob) => {
         const fd = new FormData();
         fd.append("chunk", blob);
         return upload(
-          `/api/ask-veeva/chunked/part?uploadId=${encodeURIComponent(uploadId)}&partNumber=${encodeURIComponent(
-            partNumber
-          )}`,
+          `/api/ask-veeva/chunked/part?uploadId=${encodeURIComponent(
+            uploadId
+          )}&partNumber=${encodeURIComponent(partNumber)}`,
           fd
         );
       },
       complete: ({ uploadId, totalParts, originalName }) =>
-        post("/api/ask-veeva/chunked/complete", { uploadId, totalParts, originalName }),
+        post("/api/ask-veeva/chunked/complete", {
+          uploadId,
+          totalParts,
+          originalName,
+        }),
       abort: ({ uploadId, upto }) =>
         post("/api/ask-veeva/chunked/abort", { uploadId, upto }),
     },
     fileMeta: (id) => get(`/api/ask-veeva/filemeta/${id}`),
-    fileUrl: (id, { bust = false } = {}) => withBust(`${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`, bust),
+    fileUrl: (id, { bust = false } = {}) =>
+      withBust(
+        `${API_BASE}/api/ask-veeva/file/${encodeURIComponent(id)}`,
+        bust
+      ),
     previewUrl: (id, { bust = false } = {}) =>
-      withBust(`${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`, bust),
+      withBust(
+        `${API_BASE}/api/ask-veeva/preview/${encodeURIComponent(id)}`,
+        bust
+      ),
   },
+
   /** --- DOORS --- */
   doors: {
     list: (params) => get("/api/doors/doors", params),
-    get: (id) => get(`/api/doors/doors/${encodeURIComponent(id)}`),
+    get: (id) =>
+      get(`/api/doors/doors/${encodeURIComponent(id)}`),
     create: (payload) => post("/api/doors/doors", payload),
-    update: (id, payload) => put(`/api/doors/doors/${encodeURIComponent(id)}`, payload),
-    remove: (id) => del(`/api/doors/doors/${encodeURIComponent(id)}`),
+    update: (id, payload) =>
+      put(`/api/doors/doors/${encodeURIComponent(id)}`, payload),
+    remove: (id) =>
+      del(`/api/doors/doors/${encodeURIComponent(id)}`),
+
     uploadPhoto: (id, file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("photo", file);
       if (email) fd.append("user_email", email);
       if (name) fd.append("user_name", name);
-      return upload(`/api/doors/doors/${encodeURIComponent(id)}/photo`, fd);
+      return upload(
+        `/api/doors/doors/${encodeURIComponent(id)}/photo`,
+        fd
+      );
     },
+
     photoUrl: (id, { bust = false } = {}) =>
-      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`, bust),
-    listFiles: (id) => get(`/api/doors/doors/${encodeURIComponent(id)}/files`),
+      withBust(
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/photo`,
+        bust
+      ),
+
+    listFiles: (id) =>
+      get(`/api/doors/doors/${encodeURIComponent(id)}/files`),
+
     uploadFile: (id, file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("file", file);
       if (email) fd.append("user_email", email);
       if (name) fd.append("user_name", name);
-      return upload(`/api/doors/doors/${encodeURIComponent(id)}/files`, fd);
+      return upload(
+        `/api/doors/doors/${encodeURIComponent(id)}/files`,
+        fd
+      );
     },
-    deleteFile: (fileId) => del(`/api/doors/files/${encodeURIComponent(fileId)}`),
-    startCheck: (doorId) => post(`/api/doors/doors/${encodeURIComponent(doorId)}/checks`, { _user: getIdentity() }),
+
+    deleteFile: (fileId) =>
+      del(`/api/doors/files/${encodeURIComponent(fileId)}`),
+
+    startCheck: (doorId) =>
+      post(
+        `/api/doors/doors/${encodeURIComponent(doorId)}/checks`,
+        { _user: getIdentity() }
+      ),
+
     saveCheck: (doorId, checkId, payload = {}) => {
       if (payload?.files?.length) {
         const { email, name } = getIdentity();
         const fd = new FormData();
-        if (payload.items) fd.append("items", JSON.stringify(payload.items));
+        if (payload.items)
+          fd.append("items", JSON.stringify(payload.items));
         if (payload.close) fd.append("close", "true");
         if (email) fd.append("user_email", email);
         if (name) fd.append("user_name", name);
-        (payload.files || []).forEach((f) => fd.append("files", f));
+        (payload.files || []).forEach((f) =>
+          fd.append("files", f)
+        );
         return put(
-          `/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`,
+          `/api/doors/doors/${encodeURIComponent(
+            doorId
+          )}/checks/${encodeURIComponent(checkId)}`,
           fd
         );
       }
-      return put(`/api/doors/doors/${encodeURIComponent(doorId)}/checks/${encodeURIComponent(checkId)}`, {
-        ...payload,
-        _user: getIdentity(),
-      });
+      return put(
+        `/api/doors/doors/${encodeURIComponent(
+          doorId
+        )}/checks/${encodeURIComponent(checkId)}`,
+        {
+          ...payload,
+          _user: getIdentity(),
+        }
+      );
     },
+
     listHistory: (doorId) =>
       get(`/api/doors/doors/${encodeURIComponent(doorId)}/history`),
+
     qrUrl: (id, size = 256, { bust = false } = {}) =>
       withBust(
-        `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcode?size=${encodeURIComponent(size)}`,
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(
+          id
+        )}/qrcode?size=${encodeURIComponent(size)}`,
         bust
       ),
+
     qrcodesUrl: (id, sizes = "80,120,200", force = false, { bust = false } = {}) =>
       withBust(
-        `${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/qrcodes?sizes=${encodeURIComponent(
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(
+          id
+        )}/qrcodes?sizes=${encodeURIComponent(
           sizes
         )}${force ? "&force=1" : ""}`,
         bust
       ),
+
     nonConformPDF: (id, { bust = false } = {}) =>
-      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`, bust),
+      withBust(
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(
+          id
+        )}/nonconformities.pdf`,
+        bust
+      ),
     nonConformitiesPdfUrl: (id, { bust = false } = {}) =>
-      withBust(`${API_BASE}/api/doors/doors/${encodeURIComponent(id)}/nonconformities.pdf`, bust),
+      withBust(
+        `${API_BASE}/api/doors/doors/${encodeURIComponent(
+          id
+        )}/nonconformities.pdf`,
+        bust
+      ),
+
     calendar: () => get(`/api/doors/calendar`),
     settingsGet: () => get(`/api/doors/settings`),
     settingsSet: (payload) => put(`/api/doors/settings`, payload),
     alerts: () => get(`/api/doors/alerts`),
   },
+
   /** --- DOORS MAPS --- */
   doorsMaps: {
     uploadZip: (file) => {
@@ -516,25 +695,65 @@ export const api = {
     },
     listPlans: () => get(`/api/doors/maps/plans`),
     renamePlan: (logical_name, display_name) =>
-      put(`/api/doors/maps/plan/${encodeURIComponent(logical_name)}/rename`, { display_name }),
+      put(
+        `/api/doors/maps/plan/${encodeURIComponent(
+          logical_name
+        )}/rename`,
+        { display_name }
+      ),
     planFileUrl: (logical_name, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical_name)}/file`, bust),
+      withBust(
+        `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
+          logical_name
+        )}/file`,
+        bust
+      ),
     planFileUrlById: (id, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(id)}/file`, bust),
+      withBust(
+        `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
+          id
+        )}/file`,
+        bust
+      ),
     planFileUrlCompatById: (id, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(id)}/file`, bust),
+      withBust(
+        `${API_BASE}/api/doors/maps/plan-id/${encodeURIComponent(
+          id
+        )}/file`,
+        bust
+      ),
     planFileUrlAuto: (plan, { bust = true } = {}) => {
       if (typeof plan === "string") {
         if (isUuid(plan) || isNumericId(plan)) {
-          return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust);
+          return withBust(
+            `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
+              plan
+            )}/file`,
+            bust
+          );
         }
-        return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan)}/file`, bust);
+        return withBust(
+          `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
+            plan
+          )}/file`,
+          bust
+        );
       }
       if (plan && (isUuid(plan.id) || isNumericId(plan.id))) {
-        return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(plan.id)}/file`, bust);
+        return withBust(
+          `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
+            plan.id
+          )}/file`,
+          bust
+        );
       }
       const logical = plan?.logical_name || "";
-      return withBust(`${API_BASE}/api/doors/maps/plan/${encodeURIComponent(logical)}/file`, bust);
+      return withBust(
+        `${API_BASE}/api/doors/maps/plan/${encodeURIComponent(
+          logical
+        )}/file`,
+        bust
+      );
     },
     positions: (logical_name, page_index = 0) =>
       get(`/api/doors/maps/positions`, { logical_name, page_index }),
@@ -544,119 +763,206 @@ export const api = {
       const key =
         typeof planOrKey === "string"
           ? planOrKey
-          : (planOrKey?.id || planOrKey?.logical_name || "");
-      if (isUuid(key) || isNumericId(key)) return get(`/api/doors/maps/positions`, { id: key, page_index });
-      return get(`/api/doors/maps/positions`, { logical_name: key, page_index });
+          : planOrKey?.id || planOrKey?.logical_name || "";
+      if (isUuid(key) || isNumericId(key))
+        return get(`/api/doors/maps/positions`, { id: key, page_index });
+      return get(`/api/doors/maps/positions`, {
+        logical_name: key,
+        page_index,
+      });
     },
     pendingPositions: (logical_name, page_index = 0) =>
-      get(`/api/doors/maps/pending-positions`, { logical_name, page_index }),
+      get(`/api/doors/maps/pending-positions`, {
+        logical_name,
+        page_index,
+      }),
     setPosition: (doorId, payload) =>
-      put(`/api/doors/maps/positions/${encodeURIComponent(doorId)}`, payload),
+      put(
+        `/api/doors/maps/positions/${encodeURIComponent(doorId)}`,
+        payload
+      ),
   },
 
   /* ======================================================================
      ========================= ATEX (corrigé) ============================
      ====================================================================== */
+
   /** --- ATEX (équipements, fichiers, contrôles, IA) --- */
   atex: {
     // Equipements
     listEquipments: (params) => get(`/api/atex/equipments`, params),
-    getEquipment: (id) => get(`/api/atex/equipments/${encodeURIComponent(id)}`),
-    createEquipment: (payload) => post(`/api/atex/equipments`, payload),
-    updateEquipment: (id, payload) => put(`/api/atex/equipments/${encodeURIComponent(id)}`, payload),
-    removeEquipment: (id) => del(`/api/atex/equipments/${encodeURIComponent(id)}`),
+    getEquipment: (id) =>
+      get(`/api/atex/equipments/${encodeURIComponent(id)}`),
+    createEquipment: (payload) =>
+      post(`/api/atex/equipments`, payload),
+    updateEquipment: (id, payload) =>
+      put(`/api/atex/equipments/${encodeURIComponent(id)}`, payload),
+    removeEquipment: (id) =>
+      del(`/api/atex/equipments/${encodeURIComponent(id)}`),
+
     // Photo principale
     photoUrl: (equipmentId, { bust = true } = {}) =>
-      withBust(`${API_BASE}/api/atex/equipments/${encodeURIComponent(equipmentId)}/photo`, bust),
+      withBust(
+        `${API_BASE}/api/atex/equipments/${encodeURIComponent(
+          equipmentId
+        )}/photo`,
+        bust
+      ),
+
     uploadPhoto: (equipmentId, file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
       fd.append("photo", file);
       if (email) fd.append("user_email", email);
       if (name) fd.append("user_name", name);
-      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/photo`, fd);
+      return upload(
+        `/api/atex/equipments/${encodeURIComponent(
+          equipmentId
+        )}/photo`,
+        fd
+      );
     },
+
     // Pièces jointes
     listFiles: (equipmentId) =>
       get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`),
+
     uploadFiles: (equipmentId, files = []) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
-      (files || []).forEach((f) => fd.append("files", f)); // champ "files"
+      (files || []).forEach((f) => fd.append("files", f));
       if (email) fd.append("user_email", email);
       if (name) fd.append("user_name", name);
-      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`, fd);
+      return upload(
+        `/api/atex/equipments/${encodeURIComponent(
+          equipmentId
+        )}/files`,
+        fd
+      );
     },
+
     // alias compat front
     uploadAttachments: (equipmentId, files = [], label) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
-      (Array.isArray(files) ? files : [files]).forEach((f) => fd.append("files", f));
+      (Array.isArray(files) ? files : [files]).forEach((f) =>
+        fd.append("files", f)
+      );
       if (label) fd.append("label", label);
       if (email) fd.append("user_email", email);
       if (name) fd.append("user_name", name);
-      return upload(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/files`, fd);
+      return upload(
+        `/api/atex/equipments/${encodeURIComponent(
+          equipmentId
+        )}/files`,
+        fd
+      );
     },
-    deleteFile: (fileId) => del(`/api/atex/files/${encodeURIComponent(fileId)}`),
+
+    deleteFile: (fileId) =>
+      del(`/api/atex/files/${encodeURIComponent(fileId)}`),
+
     // Contrôles
     startCheck: (equipmentId) =>
-      post(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks`, { _user: getIdentity() }),
+      post(
+        `/api/atex/equipments/${encodeURIComponent(
+          equipmentId
+        )}/checks`,
+        { _user: getIdentity() }
+      ),
+
     saveCheck: (equipmentId, checkId, payload = {}) => {
       if (payload?.files?.length) {
         const { email, name } = getIdentity();
         const fd = new FormData();
-        if (payload.items) fd.append("items", JSON.stringify(payload.items));
+        if (payload.items)
+          fd.append("items", JSON.stringify(payload.items));
         if (payload.close) fd.append("close", "true");
         if (email) fd.append("user_email", email);
         if (name) fd.append("user_name", name);
-        (payload.files || []).forEach((f) => fd.append("files", f)); // champ "files"
+        (payload.files || []).forEach((f) =>
+          fd.append("files", f)
+        );
         return put(
-          `/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`,
+          `/api/atex/equipments/${encodeURIComponent(
+            equipmentId
+          )}/checks/${encodeURIComponent(checkId)}`,
           fd
         );
       }
       return put(
-        `/api/atex/equipments/${encodeURIComponent(equipmentId)}/checks/${encodeURIComponent(checkId)}`,
+        `/api/atex/equipments/${encodeURIComponent(
+          equipmentId
+        )}/checks/${encodeURIComponent(checkId)}`,
         {
           ...payload,
           _user: getIdentity(),
         }
       );
     },
+
     listHistory: (equipmentId) =>
       get(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/history`),
+
     // ✅ Quick check (valider un contrôle aujourd'hui sans formulaire)
-    quickCheckEquipment: (id) => {
-      return post(`/api/atex/equipments/${encodeURIComponent(id)}/quickCheck`, {});
-    },
+    quickCheckEquipment: (id) =>
+      post(
+        `/api/atex/equipments/${encodeURIComponent(id)}/quickCheck`,
+        {}
+      ),
+
     // Calendrier & paramètres
     calendar: () => get(`/api/atex/calendar`),
     settingsGet: () => get(`/api/atex/settings`),
     settingsSet: (payload) => put(`/api/atex/settings`, payload),
+
     // IA extraction (multi-photos) & conformité
     extractFromPhotos: (files = []) => {
-      // ✅ multi-fichiers via champ "files" → /api/atex/analyzePhotoBatch (nouvelle route robuste)
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
       return upload(`/api/atex/analyzePhotoBatch`, fd);
     },
-    assessConformity: ({ atex_mark_gas = "", atex_mark_dust = "", target_gas = null, target_dust = null } = {}) =>
-      post(`/api/atex/assess`, { atex_mark_gas, atex_mark_dust, target_gas, target_dust }),
-    // ✅ Appliquer la décision IA sur la fiche (enregistre un check "fait" sans modifier l’échéance)
-    applyCompliance: (equipmentId, { decision = null, rationale = "", source = null } = {}) =>
-      post(`/api/atex/equipments/${encodeURIComponent(equipmentId)}/compliance`, { decision, rationale, source }),
-    // ✅ Alias rétro-compat pour corriger les appels legacy du front
-    analyzePhotoBatch: (files = []) => api.atex.extractFromPhotos(files),
+
+    assessConformity: ({
+      atex_mark_gas = "",
+      atex_mark_dust = "",
+      target_gas = null,
+      target_dust = null,
+    } = {}) =>
+      post(`/api/atex/assess`, {
+        atex_mark_gas,
+        atex_mark_dust,
+        target_gas,
+        target_dust,
+      }),
+
+    // ✅ Appliquer la décision IA sur la fiche
+    applyCompliance: (
+      equipmentId,
+      { decision = null, rationale = "", source = null } = {}
+    ) =>
+      post(
+        `/api/atex/equipments/${encodeURIComponent(
+          equipmentId
+        )}/compliance`,
+        { decision, rationale, source }
+      ),
+
+    // ✅ Alias rétro-compat
+    analyzePhotoBatch: (files = []) =>
+      api.atex.extractFromPhotos(files),
     aiAnalyze: (payload) => api.atex.assessConformity(payload),
+
     // (Optionnel) Audit trail en bas de fiche
-    getEquipmentHistory: (id) => get(`/api/atex/equipments/${encodeURIComponent(id)}/history`),
+    getEquipmentHistory: (id) =>
+      get(`/api/atex/equipments/${encodeURIComponent(id)}/history`),
+
     bulkRename: ({ field, from, to }) =>
       post("/api/atex/bulk/rename", { field, from, to }),
   },
 
   /** --- ATEX MAPS (Plans PDF + positions + sous-zones) --- */
   atexMaps: {
-    // Upload ZIP (champ "zip")
     uploadZip: (file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -665,13 +971,10 @@ export const api = {
       if (name) fd.append("user_name", name);
       return upload(`/api/atex/maps/uploadZip`, fd);
     },
-    // Plans
     listPlans: () => get(`/api/atex/maps/listPlans`),
-    // alias back compat (/plans)
     listPlansCompat: () => get(`/api/atex/maps/plans`),
     renamePlan: (logical_name, display_name) =>
       put(`/api/atex/maps/renamePlan`, { logical_name, display_name }),
-    // Fichier PDF du plan
     planFileUrl: (logical_name, { bust = true } = {}) =>
       withBust(
         `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
@@ -684,33 +987,39 @@ export const api = {
         `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(id)}`,
         bust
       ),
-    // Helper auto (string|plan, détecte UUID **ou id numérique**)
     planFileUrlAuto: (plan, { bust = true } = {}) => {
       const key =
-        typeof plan === "string" ? plan : (plan?.id || plan?.logical_name || "");
+        typeof plan === "string"
+          ? plan
+          : plan?.id || plan?.logical_name || "";
       const url =
         isUuid(key) || isNumericId(key)
-          ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(key)}`
+          ? `${API_BASE}/api/atex/maps/planFile?id=${encodeURIComponent(
+              key
+            )}`
           : `${API_BASE}/api/atex/maps/planFile?logical_name=${encodeURIComponent(
               key
             )}`;
       return withBust(url, bust);
     },
-    // Positions
     positions: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/positions`, { logical_name, page_index }),
-    // fix: accepte id **numérique** OU UUID OU logical_name
     positionsAuto: (planOrKey, page_index = 0) => {
       const key =
         typeof planOrKey === "string"
           ? planOrKey
-          : (planOrKey?.id || planOrKey?.logical_name || "");
+          : planOrKey?.id || planOrKey?.logical_name || "";
       if (isUuid(key) || isNumericId(key))
         return get(`/api/atex/maps/positions`, { id: key, page_index });
-      return get(`/api/atex/maps/positions`, { logical_name: key, page_index });
+      return get(`/api/atex/maps/positions`, {
+        logical_name: key,
+        page_index,
+      });
     },
-    // setPosition (POST alias côté serveur)
-    setPosition: (equipmentId, { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }) =>
+    setPosition: (
+      equipmentId,
+      { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }
+    ) =>
       post(`/api/atex/maps/setPosition`, {
         equipment_id: equipmentId,
         logical_name,
@@ -719,24 +1028,24 @@ export const api = {
         x_frac,
         y_frac,
       }),
-    /* ================== Sous-zones (subareas) ================== */
-    // fix: accepte id **numérique** OU UUID, sinon logical_name
+
+    // Sous-zones (subareas)
     listSubareas: (planKey, page_index = 0) => {
       const key =
         typeof planKey === "string"
           ? planKey
-          : (planKey?.id || planKey?.logical_name || "");
+          : planKey?.id || planKey?.logical_name || "";
       if (isUuid(key) || isNumericId(key))
         return get(`/api/atex/maps/subareas`, { id: key, page_index });
-      return get(`/api/atex/maps/subareas`, { logical_name: key, page_index });
+      return get(`/api/atex/maps/subareas`, {
+        logical_name: key,
+        page_index,
+      });
     },
-    // Stats (compter les zones sur plan/page)
     subareasStats: (logical_name, page_index = 0) =>
       get(`/api/atex/maps/subareas/stats`, { logical_name, page_index }),
-    // Recalculer zonages de tous les équipements d’un plan/page
     reindexZones: (logical_name, page_index = 0) =>
       post(`/api/atex/maps/reindexZones`, { logical_name, page_index }),
-    // Purge complète des zones (nécessite X-Confirm: purge)
     purgeSubareas: async (logical_name, page_index = 0) => {
       const site = currentSite();
       const headers = identityHeaders(
@@ -758,7 +1067,6 @@ export const api = {
     },
     createSubarea: (payload) => {
       if (payload?.kind) return post(`/api/atex/maps/subareas`, payload);
-      // format unifié (compat)
       const {
         logical_name,
         page_index = 0,
@@ -807,14 +1115,16 @@ export const api = {
         points: pts,
       });
     },
-    // Mise à jour meta/geom
     updateSubarea: (id, patch = {}) => {
       const body = {};
       if (patch.name !== undefined) body.name = patch.name;
       if (patch.zone_gas !== undefined) body.zoning_gas = patch.zone_gas;
-      if (patch.zoning_gas !== undefined) body.zoning_gas = patch.zoning_gas;
-      if (patch.zone_dust !== undefined) body.zoning_dust = patch.zone_dust;
-      if (patch.zoning_dust !== undefined) body.zoning_dust = patch.zoning_dust;
+      if (patch.zoning_gas !== undefined)
+        body.zoning_gas = patch.zoning_gas;
+      if (patch.zone_dust !== undefined)
+        body.zoning_dust = patch.zone_dust;
+      if (patch.zoning_dust !== undefined)
+        body.zoning_dust = patch.zoning_dust;
       if (patch.kind) body.kind = patch.kind;
       if (["rect", "circle", "poly"].includes(patch.kind)) {
         if (patch.kind === "rect") {
@@ -830,18 +1140,22 @@ export const api = {
           if (patch.points !== undefined) body.points = patch.points;
         }
       }
-      return put(`/api/atex/maps/subareas/${encodeURIComponent(id)}`, body);
-    },
-    // (Optionnel) Mise à jour partielle de la géométrie uniquement
-    updateSubareaGeometry: (id, partial) => {
       return put(
-        `/api/atex/maps/subareas/${encodeURIComponent(id)}/geometry`,
-        partial
+        `/api/atex/maps/subareas/${encodeURIComponent(id)}`,
+        body
       );
     },
+    updateSubareaGeometry: (id, partial) =>
+      put(
+        `/api/atex/maps/subareas/${encodeURIComponent(
+          id
+        )}/geometry`,
+        partial
+      ),
     deleteSubarea: (id) =>
       del(`/api/atex/maps/subareas/${encodeURIComponent(id)}`),
-    getMeta: (plan_key) => get(`/api/atex/maps/meta`, { plan_key }),
+    getMeta: (plan_key) =>
+      get(`/api/atex/maps/meta`, { plan_key }),
     setMeta: (plan_key, payload) =>
       put(`/api/atex/maps/meta`, { plan_key, ...payload }),
     bulkRename: ({ field, from, to }) =>
@@ -850,7 +1164,6 @@ export const api = {
 
   /** --- 🔵 BUBBLE AUTH --- */
   bubble: {
-    // Authentifie un utilisateur via Bubble token
     login: (token) => post("/api/auth/bubble", { token }),
   },
 };
