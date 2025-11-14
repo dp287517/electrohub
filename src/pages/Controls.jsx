@@ -1,9 +1,23 @@
 // ============================================================================
-// Controls.jsx - CORRIGÉ avec bouton "Placer sur plan" et gestion plans améliorée
+// Controls.jsx - avec IA, bouton "Placer sur plan" et gestion plans améliorée
 // ============================================================================
 
-import React, { useEffect, useState, useRef } from "react";
-import { ChevronRight, ChevronDown, Upload, Paperclip, Calendar, Wand2, RefreshCw, Eye, AlertTriangle, CheckCircle, XCircle, Clock, Map, MapPin } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import {
+  ChevronRight,
+  ChevronDown,
+  Upload,
+  Paperclip,
+  Calendar,
+  Wand2,
+  RefreshCw,
+  Eye,
+  AlertTriangle,
+  CheckCircle,
+  XCircle,
+  Clock,
+  MapPin,
+} from "lucide-react";
 import ControlsMap, { ControlsMapManager } from "./Controls-map.jsx";
 import { api } from "../lib/api.js";
 
@@ -61,8 +75,15 @@ function TabsContent({ value, active, children }) {
   return <div className="fade-in-up mt-4">{children}</div>;
 }
 
-function Button({ children, variant = "primary", size = "md", className = "", ...props }) {
-  const base = "inline-flex items-center justify-center font-semibold rounded-lg transition-all disabled:opacity-50 gap-2";
+function Button({
+  children,
+  variant = "primary",
+  size = "md",
+  className = "",
+  ...props
+}) {
+  const base =
+    "inline-flex items-center justify-center font-semibold rounded-lg transition-all disabled:opacity-50 gap-2";
   const variants = {
     primary: "bg-indigo-600 text-white hover:bg-indigo-700",
     secondary: "bg-gray-100 text-gray-800 hover:bg-gray-200",
@@ -76,14 +97,21 @@ function Button({ children, variant = "primary", size = "md", className = "", ..
     md: "px-3.5 py-2 text-sm",
   };
   return (
-    <button className={`${base} ${variants[variant]} ${sizes[size]} ${className}`} {...props}>
+    <button
+      className={`${base} ${variants[variant]} ${sizes[size]} ${className}`}
+      {...props}
+    >
       {children}
     </button>
   );
 }
 
 function Card({ children, className = "" }) {
-  return <div className={`bg-white shadow-sm rounded-xl border border-gray-200 ${className}`}>{children}</div>;
+  return (
+    <div className={`bg-white shadow-sm rounded-xl border border-gray-200 ${className}`}>
+      {children}
+    </div>
+  );
 }
 
 function CardContent({ children, className = "" }) {
@@ -99,7 +127,9 @@ function Badge({ children, variant = "default" }) {
     info: "bg-blue-100 text-blue-700",
   };
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${variants[variant]}`}>
+    <span
+      className={`px-2 py-0.5 rounded-full text-xs font-semibold ${variants[variant]}`}
+    >
       {children}
     </span>
   );
@@ -109,7 +139,8 @@ function Badge({ children, variant = "default" }) {
 // HELPERS & FORMATAGE
 // ============================================================================
 
-const fmtDate = (d) => (d ? new Date(d).toLocaleDateString("fr-FR") : "—");
+const fmtDate = (d) =>
+  d ? new Date(d).toLocaleDateString("fr-FR") : "—";
 
 function StatusPill({ status }) {
   const s = String(status || "").toLowerCase();
@@ -192,7 +223,9 @@ function Checklist({ schema, onSubmit, busy }) {
               <input
                 className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10 text-sm"
                 value={obs[o.key] || ""}
-                onChange={(e) => setObs((s) => ({ ...s, [o.key]: e.target.value }))}
+                onChange={(e) =>
+                  setObs((s) => ({ ...s, [o.key]: e.target.value }))
+                }
               />
             </div>
           ))}
@@ -212,7 +245,12 @@ function Checklist({ schema, onSubmit, busy }) {
       <div>
         <label className="inline-flex items-center gap-2 px-3 py-2 bg-white rounded-lg ring-1 ring-black/10 cursor-pointer w-fit text-sm">
           <Upload size={16} /> Joindre une photo
-          <input type="file" accept="image/*" className="hidden" onChange={onFile} />
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onFile}
+          />
         </label>
         <div className="flex flex-wrap gap-2 mt-1">
           {files.map((f, i) => (
@@ -226,28 +264,44 @@ function Checklist({ schema, onSubmit, busy }) {
         </div>
       </div>
 
-      <Button onClick={submit} disabled={!allFilled || busy} variant="success" className="w-full">
+      <Button
+        onClick={submit}
+        disabled={!allFilled || busy}
+        variant="success"
+        className="w-full"
+      >
         {busy ? "Enregistrement..." : "Clôturer & Replanifier"}
       </Button>
 
       {schema?.notes && (
-        <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">{schema.notes}</div>
+        <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">
+          {schema.notes}
+        </div>
       )}
     </div>
   );
 }
 
 // ============================================================================
-// COMPOSANT DÉTAILS TÂCHE
+// COMPOSANT DÉTAILS TÂCHE + ASSISTANT IA
 // ============================================================================
 
 function TaskDetails({ task, onClose, onRefresh }) {
   const [schema, setSchema] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  // IA
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiAnswer, setAiAnswer] = useState("");
+  const [aiQuestion, setAiQuestion] = useState("");
+
   useEffect(() => {
     if (!task) return;
-    api.controls.taskSchema(task.id).then(setSchema);
+    setSchema(null);
+    setAiAnswer("");
+    api.controls.taskSchema(task.id).then(setSchema).catch((e) => {
+      console.error("[TaskDetails] schema error:", e);
+    });
   }, [task]);
 
   const submit = async (data) => {
@@ -261,19 +315,71 @@ function TaskDetails({ task, onClose, onRefresh }) {
     }
   };
 
+  const runAutoAnalysis = async () => {
+    if (!task) return;
+    setAiLoading(true);
+    setAiAnswer("");
+    try {
+      const res = await api.controls.analyze({ taskId: task.id });
+      const text =
+        res?.answer ||
+        res?.analysis ||
+        res?.text ||
+        (typeof res === "string" ? res : JSON.stringify(res, null, 2));
+      setAiAnswer(text);
+    } catch (e) {
+      console.error("[TaskDetails] AI analyze error:", e);
+      setAiAnswer(
+        "Erreur lors de l'analyse IA. Vérifiez que le backend IA des contrôles est bien configuré."
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const askAi = async () => {
+    if (!task || !aiQuestion.trim()) return;
+    setAiLoading(true);
+    try {
+      const res = await api.controls.assistant({
+        taskId: task.id,
+        question: aiQuestion.trim(),
+      });
+      const text =
+        res?.answer ||
+        res?.text ||
+        (typeof res === "string" ? res : JSON.stringify(res, null, 2));
+      setAiAnswer(text);
+    } catch (e) {
+      console.error("[TaskDetails] AI assistant error:", e);
+      setAiAnswer(
+        "Erreur lors de la réponse IA. Vérifiez que le backend IA des contrôles est bien configuré."
+      );
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   if (!task) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
       <div
-        className="bg-white rounded-xl shadow-2xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto"
+        className="bg-white rounded-xl shadow-2xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between">
           <div>
-            <div className="font-semibold text-lg">{task.task_name || task.label}</div>
-            <div className="text-xs text-gray-500 mt-1">
-              Échéance: {fmtDate(task.next_control)} • <StatusPill status={task.status} />
+            <div className="font-semibold text-lg">
+              {task.task_name || task.label}
+            </div>
+            <div className="text-xs text-gray-500 mt-1 flex items-center gap-2">
+              <span>Échéance: {fmtDate(task.next_control)}</span>
+              <span>•</span>
+              <StatusPill status={task.status} />
             </div>
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -281,9 +387,70 @@ function TaskDetails({ task, onClose, onRefresh }) {
           </Button>
         </div>
 
-        <div className="p-4">
-          {!schema && <div className="text-gray-500">Chargement du schéma TSD...</div>}
-          {schema && <Checklist schema={schema} onSubmit={submit} busy={busy} />}
+        <div className="p-4 grid md:grid-cols-2 gap-6">
+          <div>
+            {!schema && (
+              <div className="text-gray-500">Chargement du schéma TSD...</div>
+            )}
+            {schema && (
+              <Checklist schema={schema} onSubmit={submit} busy={busy} />
+            )}
+          </div>
+
+          {/* Panneau IA */}
+          <div className="md:border-l md:pl-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <Wand2 size={18} className="text-indigo-500" />
+                Assistant IA (sécurité / contrôle)
+              </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={runAutoAnalysis}
+                disabled={aiLoading}
+              >
+                <Calendar size={14} />
+                {aiLoading ? "Analyse..." : "Analyser la tâche"}
+              </Button>
+            </div>
+
+            <p className="text-xs text-gray-500">
+              L&apos;assistant IA peut t&apos;aider à résumer la situation,
+              repérer les points de vigilance, générer des consignes de sécurité
+              ou répondre à tes questions sur ce contrôle précis.
+            </p>
+
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-gray-600">
+                Poser une question à l&apos;IA
+              </div>
+              <textarea
+                rows={4}
+                className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10 text-sm"
+                placeholder="Ex : Quels sont les risques principaux pour ce type d'équipement ? Quelles recommandations de sécurité proposer ?"
+                value={aiQuestion}
+                onChange={(e) => setAiQuestion(e.target.value)}
+              />
+              <div className="flex justify-end">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={askAi}
+                  disabled={aiLoading || !aiQuestion.trim()}
+                >
+                  <Wand2 size={14} />
+                  Envoyer à l&apos;IA
+                </Button>
+              </div>
+            </div>
+
+            {aiAnswer && (
+              <div className="mt-2 p-3 bg-indigo-50 border border-indigo-100 rounded-lg text-xs whitespace-pre-wrap text-gray-800">
+                {aiAnswer}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -291,10 +458,21 @@ function TaskDetails({ task, onClose, onRefresh }) {
 }
 
 // ============================================================================
-// COMPOSANT ARBRE HIÉRARCHIQUE - CORRIGÉ
+// COMPOSANT ARBRE HIÉRARCHIQUE
 // ============================================================================
 
-function TreeNode({ title, count, open, toggle, level = 0, children, positioned, needsPosition, onPlace, building }) {
+function TreeNode({
+  title,
+  count,
+  open,
+  toggle,
+  level = 0,
+  children,
+  positioned,
+  needsPosition,
+  onPlace,
+  building,
+}) {
   return (
     <div>
       <div
@@ -304,52 +482,53 @@ function TreeNode({ title, count, open, toggle, level = 0, children, positioned,
         onClick={toggle}
         style={{ marginLeft: level * 12 }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-          <span className="font-semibold text-sm">{title}</span>
-          
-          {/* ✅ AJOUT : Bouton "Placer sur plan" */}
-          {needsPosition && (
-            <Button 
-              size="sm" 
-              variant="warning"
+          <span className="font-semibold text-sm truncate">{title}</span>
+
+          {/* Indication plan + action */}
+          {(positioned || needsPosition) && (
+            <button
+              className={`ml-2 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${
+                needsPosition
+                  ? "border-amber-300 bg-amber-50 text-amber-800"
+                  : "border-emerald-300 bg-emerald-50 text-emerald-800"
+              }`}
               onClick={(e) => {
                 e.stopPropagation();
                 onPlace?.();
               }}
             >
-              <MapPin size={12} /> Placer sur plan
-            </Button>
-          )}
-          
-          {/* ✅ AJOUT : Bouton "Voir sur plan" si déjà positionné */}
-          {positioned && !needsPosition && (
-            <Button 
-              size="sm" 
-              variant="secondary"
-              onClick={(e) => {
-                e.stopPropagation();
-                onPlace?.();
-              }}
-            >
-              <Eye size={12} /> Voir sur plan
-            </Button>
+              <MapPin size={12} />
+              {needsPosition
+                ? "À placer sur un plan"
+                : `Sur un plan (${building || "Plan"})`}
+            </button>
           )}
         </div>
-        {count > 0 && <Badge variant="default">{count}</Badge>}
+        {typeof count === "number" && count > 0 && (
+          <Badge variant="default">{count}</Badge>
+        )}
       </div>
       {open && <div className="ml-4">{children}</div>}
     </div>
   );
 }
 
-function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh }) {
+function HierarchyTree({
+  statusFilter,
+  onSelectTask,
+  onPlaceEquipment,
+  onRefresh,
+  refreshKey,
+}) {
   const [tree, setTree] = useState(null);
   const [expanded, setExpanded] = useState({});
 
   useEffect(() => {
     loadTree();
-  }, [statusFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, refreshKey]);
 
   const loadTree = async () => {
     try {
@@ -360,7 +539,8 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
     }
   };
 
-  const toggle = (key) => setExpanded((s) => ({ ...s, [key]: !s[key] }));
+  const toggle = (key) =>
+    setExpanded((s) => ({ ...s, [key]: !s[key] }));
 
   const countTasks = (tasks) => {
     if (!Array.isArray(tasks)) return 0;
@@ -368,7 +548,9 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
     const open = ["Planned", "Pending", "Overdue"];
     const done = ["Done"];
     return tasks.filter((t) =>
-      statusFilter === "open" ? open.includes(t.status) : done.includes(t.status)
+      statusFilter === "open"
+        ? open.includes(t.status)
+        : done.includes(t.status)
     ).length;
   };
 
@@ -380,14 +562,23 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
         const kB = `b-${bi}`;
         const hvItems = b.hv || [];
         const swItems = b.switchboards || [];
-        
-        const hvCount = hvItems.reduce((a, n) => a + countTasks(n.tasks), 0);
+
+        const hvCount = hvItems.reduce(
+          (a, n) => a + countTasks(n.tasks),
+          0
+        );
         const swCount = swItems.reduce(
-          (a, sb) => a + countTasks(sb.tasks) + (sb.devices || []).reduce((x, d) => x + countTasks(d.tasks), 0),
+          (a, sb) =>
+            a +
+            countTasks(sb.tasks) +
+            (sb.devices || []).reduce(
+              (x, d) => x + countTasks(d.tasks),
+              0
+            ),
           0
         );
 
-        // Ne pas afficher le bâtiment s'il n'a aucun équipement
+        // Si aucun équipement, on ne montre pas le bâtiment
         if (hvItems.length === 0 && swItems.length === 0) return null;
 
         return (
@@ -399,7 +590,7 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
               <div className="text-xs text-gray-500">
                 {hvItems.length > 0 && `HV: ${hvCount}`}
                 {hvItems.length > 0 && swItems.length > 0 && " • "}
-                {swItems.length > 0 && `Switchboards: ${swCount}`}
+                {swItems.length > 0 && `TGBT/DB: ${swCount}`}
               </div>
             </div>
 
@@ -418,19 +609,21 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                       key={i}
                       title={eq.label}
                       count={countTasks(eq.tasks)}
-                      open={expanded[`hv-${i}`]}
-                      toggle={() => toggle(`hv-${i}`)}
+                      open={expanded[`hv-${bi}-${i}`]}
+                      toggle={() => toggle(`hv-${bi}-${i}`)}
                       level={1}
                       positioned={eq.positioned}
                       needsPosition={!eq.positioned && countTasks(eq.tasks) > 0}
                       building={b.label}
-                      onPlace={() => onPlaceEquipment({
-                        entity_id: eq.id,
-                        entity_type: eq.entity_type,
-                        label: eq.label,
-                        building: b.label,
-                        positioned: eq.positioned,
-                      })}
+                      onPlace={() =>
+                        onPlaceEquipment({
+                          entity_id: eq.id,
+                          entity_type: eq.entity_type,
+                          label: eq.label,
+                          building: b.label,
+                          positioned: eq.positioned,
+                        })
+                      }
                     >
                       {eq.tasks?.map((t) => (
                         <div
@@ -441,7 +634,9 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                           <div>{t.task_name}</div>
                           <div className="flex items-center gap-2">
                             <StatusPill status={t.status} />
-                            <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                            <span className="text-xs text-gray-500">
+                              {fmtDate(t.next_control)}
+                            </span>
                           </div>
                         </div>
                       ))}
@@ -450,19 +645,25 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                           key={di}
                           title={d.label}
                           count={countTasks(d.tasks)}
-                          open={expanded[`hv-dev-${i}-${di}`]}
-                          toggle={() => toggle(`hv-dev-${i}-${di}`)}
+                          open={expanded[`hv-dev-${bi}-${i}-${di}`]}
+                          toggle={() =>
+                            toggle(`hv-dev-${bi}-${i}-${di}`)
+                          }
                           level={2}
                           positioned={d.positioned}
-                          needsPosition={!d.positioned && countTasks(d.tasks) > 0}
+                          needsPosition={
+                            !d.positioned && countTasks(d.tasks) > 0
+                          }
                           building={b.label}
-                          onPlace={() => onPlaceEquipment({
-                            entity_id: d.id,
-                            entity_type: d.entity_type,
-                            label: d.label,
-                            building: b.label,
-                            positioned: d.positioned,
-                          })}
+                          onPlace={() =>
+                            onPlaceEquipment({
+                              entity_id: d.id,
+                              entity_type: d.entity_type,
+                              label: d.label,
+                              building: b.label,
+                              positioned: d.positioned,
+                            })
+                          }
                         >
                           {d.tasks?.map((t) => (
                             <div
@@ -473,7 +674,9 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                               <div>{t.task_name}</div>
                               <div className="flex items-center gap-2">
                                 <StatusPill status={t.status} />
-                                <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                                <span className="text-xs text-gray-500">
+                                  {fmtDate(t.next_control)}
+                                </span>
                               </div>
                             </div>
                           ))}
@@ -498,19 +701,23 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                       key={i}
                       title={sb.label}
                       count={countTasks(sb.tasks)}
-                      open={expanded[`sb-${i}`]}
-                      toggle={() => toggle(`sb-${i}`)}
+                      open={expanded[`sb-${bi}-${i}`]}
+                      toggle={() => toggle(`sb-${bi}-${i}`)}
                       level={1}
                       positioned={sb.positioned}
-                      needsPosition={!sb.positioned && countTasks(sb.tasks) > 0}
+                      needsPosition={
+                        !sb.positioned && countTasks(sb.tasks) > 0
+                      }
                       building={b.label}
-                      onPlace={() => onPlaceEquipment({
-                        entity_id: sb.id,
-                        entity_type: sb.entity_type,
-                        label: sb.label,
-                        building: b.label,
-                        positioned: sb.positioned,
-                      })}
+                      onPlace={() =>
+                        onPlaceEquipment({
+                          entity_id: sb.id,
+                          entity_type: sb.entity_type,
+                          label: sb.label,
+                          building: b.label,
+                          positioned: sb.positioned,
+                        })
+                      }
                     >
                       {sb.tasks?.map((t) => (
                         <div
@@ -521,7 +728,9 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                           <div>{t.task_name}</div>
                           <div className="flex items-center gap-2">
                             <StatusPill status={t.status} />
-                            <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                            <span className="text-xs text-gray-500">
+                              {fmtDate(t.next_control)}
+                            </span>
                           </div>
                         </div>
                       ))}
@@ -530,8 +739,10 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                           key={di}
                           title={`${d.label} (hérite position)`}
                           count={countTasks(d.tasks)}
-                          open={expanded[`sb-dev-${i}-${di}`]}
-                          toggle={() => toggle(`sb-dev-${i}-${di}`)}
+                          open={expanded[`sb-dev-${bi}-${i}-${di}`]}
+                          toggle={() =>
+                            toggle(`sb-dev-${bi}-${i}-${di}`)
+                          }
                           level={2}
                         >
                           {d.tasks?.map((t) => (
@@ -543,7 +754,9 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                               <div>{t.task_name}</div>
                               <div className="flex items-center gap-2">
                                 <StatusPill status={t.status} />
-                                <span className="text-xs text-gray-500">{fmtDate(t.next_control)}</span>
+                                <span className="text-xs text-gray-500">
+                                  {fmtDate(t.next_control)}
+                                </span>
                               </div>
                             </div>
                           ))}
@@ -569,7 +782,9 @@ function MissingEquipment() {
   const [data, setData] = useState(null);
 
   useEffect(() => {
-    api.controls.getMissingEquipment().then(setData);
+    api.controls.getMissingEquipment().then(setData).catch((e) => {
+      console.error("[MissingEquipment] error:", e);
+    });
   }, []);
 
   if (!data) return <div>Chargement...</div>;
@@ -583,15 +798,24 @@ function MissingEquipment() {
             <div className="font-semibold">Équipements non intégrés</div>
           </div>
           <div className="text-sm text-gray-600 mb-3">
-            Ces catégories TSD n'ont pas encore de table en base. Créez-les pour activer les contrôles.
+            Ces catégories TSD n&apos;ont pas encore de table en base. Créez-les
+            pour activer les contrôles.
           </div>
           <div className="space-y-2">
             {data.missing?.map((m, i) => (
-              <div key={i} className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                <div className="font-medium text-amber-900">{m.category}</div>
+              <div
+                key={i}
+                className="p-3 bg-amber-50 border border-amber-200 rounded-lg"
+              >
+                <div className="font-medium text-amber-900">
+                  {m.category}
+                </div>
                 <div className="text-xs text-amber-700 mt-1">
-                  Table manquante: <code className="bg-amber-100 px-1 rounded">{m.db_table}</code> • {m.count_in_tsd}{" "}
-                  contrôles TSD
+                  Table manquante:{" "}
+                  <code className="bg-amber-100 px-1 rounded">
+                    {m.db_table}
+                  </code>{" "}
+                  • {m.count_in_tsd} contrôles TSD
                 </div>
               </div>
             ))}
@@ -607,10 +831,19 @@ function MissingEquipment() {
           </div>
           <div className="space-y-2">
             {data.existing?.map((e, i) => (
-              <div key={i} className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                <div className="font-medium text-green-900">{e.category}</div>
+              <div
+                key={i}
+                className="p-3 bg-green-50 border border-green-200 rounded-lg"
+              >
+                <div className="font-medium text-green-900">
+                  {e.category}
+                </div>
                 <div className="text-xs text-green-700 mt-1">
-                  Table: <code className="bg-green-100 px-1 rounded">{e.db_table}</code> • {e.count} équipements
+                  Table:{" "}
+                  <code className="bg-green-100 px-1 rounded">
+                    {e.db_table}
+                  </code>{" "}
+                  • {e.count} équipements
                 </div>
               </div>
             ))}
@@ -622,7 +855,7 @@ function MissingEquipment() {
 }
 
 // ============================================================================
-// PAGE PRINCIPALE - CORRIGÉE
+// PAGE PRINCIPALE
 // ============================================================================
 
 export default function ControlsPage() {
@@ -634,27 +867,20 @@ export default function ControlsPage() {
   const [pendingPlacement, setPendingPlacement] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  const handleRefresh = () => setRefreshTrigger((t) => t + 1);
+  const handleRefresh = () =>
+    setRefreshTrigger((t) => t + 1);
 
-  // ✅ CORRECTION : Gestion robuste du placement
+  // Gestion du placement / visualisation sur plan
   const handlePlaceEquipment = (equipment) => {
-    if (equipment.positioned) {
-      // Déjà placé : zoom direct
-      setSelectedPlan({ 
-        logical_name: equipment.building,
-        display_name: equipment.building,
-      });
-      setPendingPlacement(null);
-      setShowMap(true);
-    } else {
-      // Pas encore placé : mode placement
-      setSelectedPlan({ 
-        logical_name: equipment.building,
-        display_name: equipment.building,
-      });
-      setPendingPlacement(equipment);
-      setShowMap(true);
-    }
+    // On ouvre directement un plan associé au bâtiment
+    setSelectedPlan({
+      logical_name: equipment.building,
+      display_name: equipment.building,
+    });
+    setPendingPlacement(
+      equipment.positioned ? null : equipment // si déjà placé : juste voir ; sinon : mode placement
+    );
+    setShowMap(true);
   };
 
   const handlePlacementComplete = () => {
@@ -664,10 +890,16 @@ export default function ControlsPage() {
 
   // Auto-link au démarrage
   useEffect(() => {
-    api.controls.autoLink().then(() => {
-      console.log("[Controls] Auto-link completed");
-      handleRefresh();
-    });
+    api.controls
+      .autoLink()
+      .then(() => {
+        console.log("[Controls] Auto-link completed");
+        handleRefresh();
+      })
+      .catch((e) => {
+        console.error("[Controls] autoLink error:", e);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
@@ -675,7 +907,9 @@ export default function ControlsPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Contrôles (TSD)</h1>
-          <div className="text-sm text-gray-500 mt-1">Maintenance, Inspection & Testing of Electrical Equipment</div>
+          <div className="text-sm text-gray-500 mt-1">
+            Maintenance, Inspection & Testing of Electrical Equipment
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -706,6 +940,7 @@ export default function ControlsPage() {
             onSelectTask={setSelectedTask}
             onPlaceEquipment={handlePlaceEquipment}
             onRefresh={handleRefresh}
+            refreshKey={refreshTrigger}
           />
         </TabsContent>
 
@@ -734,25 +969,34 @@ export default function ControlsPage() {
 
       {showMap && selectedPlan && (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => {
-            setShowMap(false);
-            setPendingPlacement(null);
-          }} />
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => {
+              setShowMap(false);
+              setPendingPlacement(null);
+            }}
+          />
           <div className="relative z-[6001] w-full max-w-7xl h-[90vh] mx-4">
             <Card className="h-full flex flex-col">
               <div className="flex items-center justify-between p-4 border-b">
                 <div className="font-semibold">
-                  Plan - {selectedPlan.display_name || selectedPlan.logical_name}
+                  Plan –{" "}
+                  {selectedPlan.display_name ||
+                    selectedPlan.logical_name}
                   {pendingPlacement && (
                     <span className="ml-3 text-sm text-amber-600">
                       Mode placement : {pendingPlacement.label}
                     </span>
                   )}
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => {
-                  setShowMap(false);
-                  setPendingPlacement(null);
-                }}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setShowMap(false);
+                    setPendingPlacement(null);
+                  }}
+                >
                   Fermer
                 </Button>
               </div>
