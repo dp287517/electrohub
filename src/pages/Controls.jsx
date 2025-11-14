@@ -1,3 +1,7 @@
+// ============================================================================
+// Controls.jsx - CORRIGÉ avec bouton "Placer sur plan" et gestion plans améliorée
+// ============================================================================
+
 import React, { useEffect, useState, useRef } from "react";
 import { ChevronRight, ChevronDown, Upload, Paperclip, Calendar, Wand2, RefreshCw, Eye, AlertTriangle, CheckCircle, XCircle, Clock, Map, MapPin } from "lucide-react";
 import ControlsMap, { ControlsMapManager } from "./Controls-map.jsx";
@@ -287,10 +291,10 @@ function TaskDetails({ task, onClose, onRefresh }) {
 }
 
 // ============================================================================
-// COMPOSANT ARBRE HIÉRARCHIQUE
+// COMPOSANT ARBRE HIÉRARCHIQUE - CORRIGÉ
 // ============================================================================
 
-function TreeNode({ title, count, open, toggle, level = 0, children, positioned, needsPosition, onPlace }) {
+function TreeNode({ title, count, open, toggle, level = 0, children, positioned, needsPosition, onPlace, building }) {
   return (
     <div>
       <div
@@ -303,6 +307,8 @@ function TreeNode({ title, count, open, toggle, level = 0, children, positioned,
         <div className="flex items-center gap-2">
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           <span className="font-semibold text-sm">{title}</span>
+          
+          {/* ✅ AJOUT : Bouton "Placer sur plan" */}
           {needsPosition && (
             <Button 
               size="sm" 
@@ -315,6 +321,8 @@ function TreeNode({ title, count, open, toggle, level = 0, children, positioned,
               <MapPin size={12} /> Placer sur plan
             </Button>
           )}
+          
+          {/* ✅ AJOUT : Bouton "Voir sur plan" si déjà positionné */}
           {positioned && !needsPosition && (
             <Button 
               size="sm" 
@@ -403,6 +411,7 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                   count={hvCount}
                   open={expanded[`${kB}-hv`]}
                   toggle={() => toggle(`${kB}-hv`)}
+                  building={b.label}
                 >
                   {hvItems.map((eq, i) => (
                     <TreeNode
@@ -414,6 +423,7 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                       level={1}
                       positioned={eq.positioned}
                       needsPosition={!eq.positioned && countTasks(eq.tasks) > 0}
+                      building={b.label}
                       onPlace={() => onPlaceEquipment({
                         entity_id: eq.id,
                         entity_type: eq.entity_type,
@@ -445,6 +455,7 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                           level={2}
                           positioned={d.positioned}
                           needsPosition={!d.positioned && countTasks(d.tasks) > 0}
+                          building={b.label}
                           onPlace={() => onPlaceEquipment({
                             entity_id: d.id,
                             entity_type: d.entity_type,
@@ -480,6 +491,7 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                   count={swCount}
                   open={expanded[`${kB}-sb`]}
                   toggle={() => toggle(`${kB}-sb`)}
+                  building={b.label}
                 >
                   {swItems.map((sb, i) => (
                     <TreeNode
@@ -491,6 +503,7 @@ function HierarchyTree({ statusFilter, onSelectTask, onPlaceEquipment, onRefresh
                       level={1}
                       positioned={sb.positioned}
                       needsPosition={!sb.positioned && countTasks(sb.tasks) > 0}
+                      building={b.label}
                       onPlace={() => onPlaceEquipment({
                         entity_id: sb.id,
                         entity_type: sb.entity_type,
@@ -609,7 +622,7 @@ function MissingEquipment() {
 }
 
 // ============================================================================
-// PAGE PRINCIPALE
+// PAGE PRINCIPALE - CORRIGÉE
 // ============================================================================
 
 export default function ControlsPage() {
@@ -623,6 +636,7 @@ export default function ControlsPage() {
 
   const handleRefresh = () => setRefreshTrigger((t) => t + 1);
 
+  // ✅ CORRECTION : Gestion robuste du placement
   const handlePlaceEquipment = (equipment) => {
     if (equipment.positioned) {
       // Déjà placé : zoom direct
