@@ -1104,7 +1104,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 
           // Date initiale pseudo-aléatoire en 2026
           const firstDate = generateInitialDate(ctrl.frequency || null);
-          // Prochaine échéance à partir de cette date
+          // Prochaine échéance
           const nextDate = addFrequency(firstDate, ctrl.frequency || null);
 
           // Fréquence en mois (pour info / stats)
@@ -1118,14 +1118,15 @@ router.get("/bootstrap/auto-link", async (req, res) => {
             }
           }
 
-          // ⚠️ IMPORTANT : ta table n'a pas de colonne first_control,
-          // donc on ne l'utilise plus dans l'INSERT.
-          // On ne stocke que next_control.
-          await client.query(
+          // INSERT avec protection sur la contrainte unique
+          // ux_controls_tasks_active : (site, entity_id, COALESCE(cluster, task_code))
+          // => si une tâche existe déjà pour (site, équipement, task_code/cluster), on ignore.
+          const result = await client.query(
             `INSERT INTO controls_tasks
                (site, entity_id, entity_type, task_name, task_code,
                 status, next_control, frequency_months)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+             ON CONFLICT ON CONSTRAINT ux_controls_tasks_active DO NOTHING`,
             [
               site,
               ent.id,
@@ -1133,13 +1134,15 @@ router.get("/bootstrap/auto-link", async (req, res) => {
               `${cat.label} – ${ctrl.type}`,
               taskCode,
               "Planned",
-              // si jamais addFrequency renvoie null, on tombe au moins sur firstDate
               nextDate || firstDate,
               freqMonths,
             ]
           );
 
-          created++;
+          // rowCount = 1 si une ligne a été insérée, 0 si conflit → rien créé
+          if (result.rowCount > 0) {
+            created++;
+          }
         }
       }
     }
