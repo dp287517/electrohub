@@ -1,5 +1,5 @@
 // ============================================================================
-// server_controls.js — Backend unifié TSD avec gestion plans
+// server_controls.js — Backend TSD CORRIGÉ avec gestion plans améliorée
 // ============================================================================
 
 import express from "express";
@@ -10,6 +10,7 @@ import multer from "multer";
 import unzipper from "unzipper";
 import path from "path";
 import fs from "fs/promises";
+import fsSync from "fs";
 
 dayjs.extend(utc);
 
@@ -44,6 +45,14 @@ try {
 
 function siteOf(req) {
   return req.header("X-Site") || req.query.site || "Default";
+}
+
+function isUuid(s) {
+  return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
+}
+
+function isNumericId(s) {
+  return (typeof s === "string" && /^\d+$/.test(s)) || (typeof s === "number" && Number.isInteger(s));
 }
 
 // Calcul du statut selon date d'échéance
@@ -558,7 +567,7 @@ router.get("/missing-equipment", async (req, res) => {
 });
 
 // ============================================================================
-// ROUTES GESTION DES PLANS
+// ROUTES GESTION DES PLANS - CORRIGÉES pour alignement avec ATEX
 // ============================================================================
 
 router.post("/maps/uploadZip", upload.single("zip"), async (req, res) => {
@@ -582,6 +591,7 @@ router.post("/maps/uploadZip", upload.single("zip"), async (req, res) => {
       const logicalName = fileName.replace(/\.pdf$/i, "");
       const content = await file.buffer();
 
+      // ✅ CORRECTION : Vérification basée sur logical_name ET site
       const { rows: existing } = await client.query(
         `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
         [logicalName, site]
@@ -624,7 +634,8 @@ router.get("/maps/listPlans", async (req, res) => {
       [site]
     );
     
-    res.json({ plans: rows });
+    // ✅ CORRECTION : Ajout d'un alias "items" pour compatibilité
+    res.json({ plans: rows, items: rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -648,6 +659,7 @@ router.put("/maps/renamePlan", async (req, res) => {
   }
 });
 
+// ✅ CORRECTION MAJEURE : Gestion robuste planFile avec UUID et logical_name
 router.get("/maps/planFile", async (req, res) => {
   const { logical_name, id } = req.query;
   const site = siteOf(req);
@@ -655,17 +667,25 @@ router.get("/maps/planFile", async (req, res) => {
   try {
     let query, params;
     
-    if (id) {
+    // Priorité 1 : Recherche par ID (UUID)
+    if (id && isUuid(id)) {
       query = `SELECT content FROM controls_plans WHERE id = $1 AND site = $2`;
       params = [id, site];
-    } else {
+    } 
+    // Priorité 2 : Recherche par logical_name
+    else if (logical_name) {
       query = `SELECT content FROM controls_plans WHERE logical_name = $1 AND site = $2`;
       params = [logical_name, site];
+    }
+    // Erreur si ni ID ni logical_name
+    else {
+      return res.status(400).json({ error: "logical_name or id required" });
     }
     
     const { rows } = await pool.query(query, params);
     
     if (!rows.length) {
+      console.log(`[Controls] Plan not found: id=${id}, logical_name=${logical_name}, site=${site}`);
       return res.status(404).json({ error: "Plan not found" });
     }
     
@@ -673,37 +693,48 @@ router.get("/maps/planFile", async (req, res) => {
     res.setHeader("Cache-Control", "public, max-age=31536000");
     res.send(rows[0].content);
   } catch (e) {
+    console.error("[Controls] planFile error:", e);
     res.status(500).json({ error: e.message });
   }
 });
 
+// ✅ CORRECTION : Positions avec gestion robuste id/logical_name
 router.get("/maps/positions", async (req, res) => {
-  const { logical_name, building, id, page_index = 0 } = req.query;
+  let { logical_name, building, id, page_index = 0 } = req.query;
   const site = siteOf(req);
   
   try {
     let planId;
     
-    if (id) {
+    // Résolution du plan_id
+    if (id && isUuid(id)) {
       planId = id;
     } else if (logical_name) {
       const { rows } = await pool.query(
         `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
         [logical_name, site]
       );
-      if (!rows.length) return res.json({ items: [] });
+      if (!rows.length) {
+        console.log(`[Controls] Plan not found for positions: logical_name=${logical_name}`);
+        return res.json({ items: [] });
+      }
       planId = rows[0].id;
     } else if (building) {
+      // Fallback : chercher un plan dont le display_name contient le building
       const { rows } = await pool.query(
         `SELECT id FROM controls_plans WHERE display_name ILIKE $1 AND site = $2 LIMIT 1`,
         [`%${building}%`, site]
       );
-      if (!rows.length) return res.json({ items: [] });
+      if (!rows.length) {
+        console.log(`[Controls] No plan found for building: ${building}`);
+        return res.json({ items: [] });
+      }
       planId = rows[0].id;
     } else {
       return res.json({ items: [] });
     }
     
+    // Récupération des positions
     const { rows: positions } = await pool.query(
       `SELECT 
          ctp.task_id,
