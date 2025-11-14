@@ -1101,23 +1101,31 @@ router.get("/bootstrap/auto-link", async (req, res) => {
           if (!ctrl) continue;
 
           const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
+
+          // Date initiale pseudo-aléatoire en 2026
           const firstDate = generateInitialDate(ctrl.frequency || null);
+          // Prochaine échéance à partir de cette date
           const nextDate = addFrequency(firstDate, ctrl.frequency || null);
 
+          // Fréquence en mois (pour info / stats)
           let freqMonths = null;
           if (ctrl.frequency?.interval && ctrl.frequency?.unit) {
             const { interval, unit } = ctrl.frequency;
             if (unit === "months") freqMonths = interval;
             else if (unit === "years") freqMonths = interval * 12;
-            else if (unit === "weeks")
+            else if (unit === "weeks") {
               freqMonths = Math.round((interval * 7) / 30);
+            }
           }
 
+          // ⚠️ IMPORTANT : ta table n'a pas de colonne first_control,
+          // donc on ne l'utilise plus dans l'INSERT.
+          // On ne stocke que next_control.
           await client.query(
             `INSERT INTO controls_tasks
                (site, entity_id, entity_type, task_name, task_code,
-                status, first_control, next_control, frequency_months)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+                status, next_control, frequency_months)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
             [
               site,
               ent.id,
@@ -1125,8 +1133,8 @@ router.get("/bootstrap/auto-link", async (req, res) => {
               `${cat.label} – ${ctrl.type}`,
               taskCode,
               "Planned",
-              firstDate,
-              nextDate,
+              // si jamais addFrequency renvoie null, on tombe au moins sur firstDate
+              nextDate || firstDate,
               freqMonths,
             ]
           );
