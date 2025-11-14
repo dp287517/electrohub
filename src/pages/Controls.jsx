@@ -1,5 +1,5 @@
 // ============================================================================
-// Controls.jsx - avec IA, bouton "Placer sur plan" et gestion plans améliorée
+// Controls.jsx - v2 FULL REWRITE (Arborescence + IA + Plans + TSD)
 // ============================================================================
 
 import React, { useEffect, useState } from "react";
@@ -11,12 +11,12 @@ import {
   Calendar,
   Wand2,
   RefreshCw,
-  Eye,
   AlertTriangle,
   CheckCircle,
   XCircle,
   Clock,
   MapPin,
+  Loader2,
 } from "lucide-react";
 import ControlsMap, { ControlsMapManager } from "./Controls-map.jsx";
 import { api } from "../lib/api.js";
@@ -108,7 +108,9 @@ function Button({
 
 function Card({ children, className = "" }) {
   return (
-    <div className={`bg-white shadow-sm rounded-xl border border-gray-200 ${className}`}>
+    <div
+      className={`bg-white shadow-sm rounded-xl border border-gray-200 ${className}`}
+    >
       {children}
     </div>
   );
@@ -145,7 +147,7 @@ const fmtDate = (d) =>
 function StatusPill({ status }) {
   const s = String(status || "").toLowerCase();
   const map = {
-    planned: { variant: "success", icon: CheckCircle, label: "Planifié" },
+    planned: { variant: "success", icon: Clock, label: "Planifié" },
     pending: { variant: "warning", icon: Clock, label: "À faire (≤30j)" },
     overdue: { variant: "danger", icon: AlertTriangle, label: "En retard" },
     done: { variant: "info", icon: CheckCircle, label: "Terminé" },
@@ -161,7 +163,8 @@ function StatusPill({ status }) {
 }
 
 // ============================================================================
-// COMPOSANT CHECKLIST
+//
+// CHECKLIST (schéma issu de la tsd_library, coté backend)
 // ============================================================================
 
 function Checklist({ schema, onSubmit, busy }) {
@@ -192,7 +195,9 @@ function Checklist({ schema, onSubmit, busy }) {
   return (
     <div className="space-y-4">
       <div>
-        <div className="text-sm font-semibold mb-2">Checklist</div>
+        <div className="text-sm font-semibold mb-2">
+          Checklist (TSD – {schema?.tsd_code || "?"})
+        </div>
         <div className="space-y-2">
           {schema?.checklist?.map((q) => (
             <div key={q.key} className="flex items-start gap-3">
@@ -283,14 +288,13 @@ function Checklist({ schema, onSubmit, busy }) {
 }
 
 // ============================================================================
-// COMPOSANT DÉTAILS TÂCHE + ASSISTANT IA
+// DÉTAILS D'UNE TÂCHE + ASSISTANT IA (par tâche)
 // ============================================================================
 
 function TaskDetails({ task, onClose, onRefresh }) {
   const [schema, setSchema] = useState(null);
   const [busy, setBusy] = useState(false);
 
-  // IA
   const [aiLoading, setAiLoading] = useState(false);
   const [aiAnswer, setAiAnswer] = useState("");
   const [aiQuestion, setAiQuestion] = useState("");
@@ -299,9 +303,13 @@ function TaskDetails({ task, onClose, onRefresh }) {
     if (!task) return;
     setSchema(null);
     setAiAnswer("");
-    api.controls.taskSchema(task.id).then(setSchema).catch((e) => {
-      console.error("[TaskDetails] schema error:", e);
-    });
+    setAiQuestion("");
+    api.controls
+      .taskSchema(task.id)
+      .then(setSchema)
+      .catch((e) => {
+        console.error("[TaskDetails] schema error:", e);
+      });
   }, [task]);
 
   const submit = async (data) => {
@@ -330,7 +338,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
     } catch (e) {
       console.error("[TaskDetails] AI analyze error:", e);
       setAiAnswer(
-        "Erreur lors de l'analyse IA. Vérifiez que le backend IA des contrôles est bien configuré."
+        "Erreur lors de l'analyse IA. Vérifie que le backend IA des contrôles est bien configuré."
       );
     } finally {
       setAiLoading(false);
@@ -353,7 +361,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
     } catch (e) {
       console.error("[TaskDetails] AI assistant error:", e);
       setAiAnswer(
-        "Erreur lors de la réponse IA. Vérifiez que le backend IA des contrôles est bien configuré."
+        "Erreur lors de la réponse IA. Vérifie que le backend IA des contrôles est bien configuré."
       );
     } finally {
       setAiLoading(false);
@@ -381,6 +389,11 @@ function TaskDetails({ task, onClose, onRefresh }) {
               <span>•</span>
               <StatusPill status={task.status} />
             </div>
+            {task.tsd_code && (
+              <div className="text-[11px] text-indigo-600 mt-1">
+                TSD: {task.tsd_code} – {task.control_type || "Contrôle"}
+              </div>
+            )}
           </div>
           <Button variant="ghost" size="sm" onClick={onClose}>
             Fermer
@@ -417,7 +430,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
 
             <p className="text-xs text-gray-500">
               L&apos;assistant IA peut t&apos;aider à résumer la situation,
-              repérer les points de vigilance, générer des consignes de sécurité
+              repérer les points de vigilance, proposer des priorités d&apos;action
               ou répondre à tes questions sur ce contrôle précis.
             </p>
 
@@ -428,7 +441,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
               <textarea
                 rows={4}
                 className="w-full p-2 rounded-lg bg-white ring-1 ring-black/10 text-sm"
-                placeholder="Ex : Quels sont les risques principaux pour ce type d'équipement ? Quelles recommandations de sécurité proposer ?"
+                placeholder="Ex : Quels sont les risques principaux pour cet équipement ? Quelles recommandations de sécurité proposer ?"
                 value={aiQuestion}
                 onChange={(e) => setAiQuestion(e.target.value)}
               />
@@ -458,21 +471,25 @@ function TaskDetails({ task, onClose, onRefresh }) {
 }
 
 // ============================================================================
-// COMPOSANT ARBRE HIÉRARCHIQUE
+// TREE NODE (briques de l'arborescence)
 // ============================================================================
 
 function TreeNode({
   title,
   count,
+  equipmentCount,
   open,
   toggle,
   level = 0,
   children,
   positioned,
   needsPosition,
-  onPlace,
+  inheritsPosition,
+  onPlanClick,
   building,
 }) {
+  const hasPlanInfo = positioned || needsPosition || inheritsPosition;
+
   return (
     <div>
       <div
@@ -486,8 +503,7 @@ function TreeNode({
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
           <span className="font-semibold text-sm truncate">{title}</span>
 
-          {/* Indication plan + action */}
-          {(positioned || needsPosition) && (
+          {hasPlanInfo && (
             <button
               className={`ml-2 inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full border ${
                 needsPosition
@@ -496,34 +512,46 @@ function TreeNode({
               }`}
               onClick={(e) => {
                 e.stopPropagation();
-                onPlace?.();
+                onPlanClick?.();
               }}
             >
               <MapPin size={12} />
               {needsPosition
                 ? "À placer sur un plan"
-                : `Sur un plan (${building || "Plan"})`}
+                : inheritsPosition
+                ? "Hérite du plan parent"
+                : `Sur un plan${building ? ` (${building})` : ""}`}
             </button>
           )}
         </div>
-        {typeof count === "number" && count > 0 && (
-          <Badge variant="default">{count}</Badge>
-        )}
+
+        <div className="flex items-center gap-2 text-xs">
+          {typeof equipmentCount === "number" && equipmentCount > 0 && (
+            <Badge variant="info">{equipmentCount} équip.</Badge>
+          )}
+          {typeof count === "number" && count > 0 && (
+            <Badge variant="default">{count} ctrl.</Badge>
+          )}
+        </div>
       </div>
       {open && <div className="ml-4">{children}</div>}
     </div>
   );
 }
 
+// ============================================================================
+// ARBORESCENCE (bâtiments / HV / TGBT / devices)
+// ============================================================================
+
 function HierarchyTree({
   statusFilter,
   onSelectTask,
-  onPlaceEquipment,
-  onRefresh,
+  onPlanAction,
   refreshKey,
 }) {
   const [tree, setTree] = useState(null);
   const [expanded, setExpanded] = useState({});
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadTree();
@@ -531,30 +559,35 @@ function HierarchyTree({
   }, [statusFilter, refreshKey]);
 
   const loadTree = async () => {
+    setLoading(true);
     try {
       const data = await api.controls.hierarchyTree({ status: statusFilter });
       setTree(data);
     } catch (e) {
       console.error("[HierarchyTree] error:", e);
+      setTree({ buildings: [] });
+    } finally {
+      setLoading(false);
     }
   };
 
   const toggle = (key) =>
     setExpanded((s) => ({ ...s, [key]: !s[key] }));
 
-  const countTasks = (tasks) => {
+  const countTasksForFilter = (tasks) => {
     if (!Array.isArray(tasks)) return 0;
     if (statusFilter === "all") return tasks.length;
-    const open = ["Planned", "Pending", "Overdue"];
-    const done = ["Done"];
+    const openStatuses = ["Planned", "Pending", "Overdue"];
+    const doneStatuses = ["Done"];
     return tasks.filter((t) =>
       statusFilter === "open"
-        ? open.includes(t.status)
-        : done.includes(t.status)
+        ? openStatuses.includes(t.status)
+        : doneStatuses.includes(t.status)
     ).length;
   };
 
-  if (!tree) return <div className="text-gray-500">Chargement...</div>;
+  if (loading && !tree) return <div className="text-gray-500">Chargement...</div>;
+  if (!tree) return <div className="text-gray-500">Aucune donnée.</div>;
 
   return (
     <div className="space-y-3">
@@ -563,22 +596,38 @@ function HierarchyTree({
         const hvItems = b.hv || [];
         const swItems = b.switchboards || [];
 
-        const hvCount = hvItems.reduce(
-          (a, n) => a + countTasks(n.tasks),
+        // Compteurs par tâches (pour la timeline)
+        const hvTaskCount = hvItems.reduce(
+          (a, hv) =>
+            a +
+            countTasksForFilter(hv.tasks) +
+            (hv.devices || []).reduce(
+              (x, d) => x + countTasksForFilter(d.tasks),
+              0
+            ),
           0
         );
-        const swCount = swItems.reduce(
+        const swTaskCount = swItems.reduce(
           (a, sb) =>
             a +
-            countTasks(sb.tasks) +
+            countTasksForFilter(sb.tasks) +
             (sb.devices || []).reduce(
-              (x, d) => x + countTasks(d.tasks),
+              (x, d) => x + countTasksForFilter(d.tasks),
               0
             ),
           0
         );
 
-        // Si aucun équipement, on ne montre pas le bâtiment
+        // Compteurs par équipements (ce que tu attends : HV/TGBT > 0 si équipements présents)
+        const hvEquipCount = hvItems.reduce(
+          (a, hv) => a + 1 + (hv.devices?.length || 0),
+          0
+        );
+        const swEquipCount = swItems.reduce(
+          (a, sb) => a + 1 + (sb.devices?.length || 0),
+          0
+        );
+
         if (hvItems.length === 0 && swItems.length === 0) return null;
 
         return (
@@ -587,183 +636,299 @@ function HierarchyTree({
               <div className="flex items-center gap-3">
                 <div className="text-lg font-semibold">{b.label}</div>
               </div>
-              <div className="text-xs text-gray-500">
-                {hvItems.length > 0 && `HV: ${hvCount}`}
-                {hvItems.length > 0 && swItems.length > 0 && " • "}
-                {swItems.length > 0 && `TGBT/DB: ${swCount}`}
+              <div className="text-xs text-gray-600 flex flex-wrap gap-3">
+                {hvEquipCount > 0 && (
+                  <span>
+                    HV: {hvEquipCount} équip. – {hvTaskCount} ctrl.
+                  </span>
+                )}
+                {swEquipCount > 0 && (
+                  <span>
+                    TGBT/DB: {swEquipCount} équip. – {swTaskCount} ctrl.
+                  </span>
+                )}
               </div>
             </div>
 
             <CardContent className="p-3 space-y-2">
-              {/* HV */}
+              {/* HIGH VOLTAGE */}
               {hvItems.length > 0 && (
                 <TreeNode
                   title="High Voltage"
-                  count={hvCount}
+                  count={hvTaskCount}
+                  equipmentCount={hvEquipCount}
                   open={expanded[`${kB}-hv`]}
                   toggle={() => toggle(`${kB}-hv`)}
                   building={b.label}
                 >
-                  {hvItems.map((eq, i) => (
-                    <TreeNode
-                      key={i}
-                      title={eq.label}
-                      count={countTasks(eq.tasks)}
-                      open={expanded[`hv-${bi}-${i}`]}
-                      toggle={() => toggle(`hv-${bi}-${i}`)}
-                      level={1}
-                      positioned={eq.positioned}
-                      needsPosition={!eq.positioned && countTasks(eq.tasks) > 0}
-                      building={b.label}
-                      onPlace={() =>
-                        onPlaceEquipment({
-                          entity_id: eq.id,
-                          entity_type: eq.entity_type,
-                          label: eq.label,
-                          building: b.label,
-                          positioned: eq.positioned,
-                        })
-                      }
-                    >
-                      {eq.tasks?.map((t) => (
-                        <div
-                          key={t.id}
-                          onClick={() => onSelectTask(t)}
-                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                        >
-                          <div>{t.task_name}</div>
-                          <div className="flex items-center gap-2">
-                            <StatusPill status={t.status} />
-                            <span className="text-xs text-gray-500">
-                              {fmtDate(t.next_control)}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                      {(eq.devices || []).map((d, di) => (
-                        <TreeNode
-                          key={di}
-                          title={d.label}
-                          count={countTasks(d.tasks)}
-                          open={expanded[`hv-dev-${bi}-${i}-${di}`]}
-                          toggle={() =>
-                            toggle(`hv-dev-${bi}-${i}-${di}`)
-                          }
-                          level={2}
-                          positioned={d.positioned}
-                          needsPosition={
-                            !d.positioned && countTasks(d.tasks) > 0
-                          }
-                          building={b.label}
-                          onPlace={() =>
-                            onPlaceEquipment({
-                              entity_id: d.id,
-                              entity_type: d.entity_type,
-                              label: d.label,
-                              building: b.label,
-                              positioned: d.positioned,
-                            })
-                          }
-                        >
-                          {d.tasks?.map((t) => (
-                            <div
-                              key={t.id}
-                              onClick={() => onSelectTask(t)}
-                              className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                            >
-                              <div>{t.task_name}</div>
-                              <div className="flex items-center gap-2">
-                                <StatusPill status={t.status} />
-                                <span className="text-xs text-gray-500">
-                                  {fmtDate(t.next_control)}
+                  {hvItems.map((eq, i) => {
+                    const hvEquipTaskCount = countTasksForFilter(eq.tasks);
+                    const hvEquipEquipCount =
+                      1 + (eq.devices?.length || 0);
+
+                    return (
+                      <TreeNode
+                        key={eq.id || i}
+                        title={eq.label}
+                        count={hvEquipTaskCount}
+                        equipmentCount={hvEquipEquipCount}
+                        open={expanded[`hv-${bi}-${i}`]}
+                        toggle={() => toggle(`hv-${bi}-${i}`)}
+                        level={1}
+                        positioned={eq.positioned}
+                        needsPosition={
+                          !eq.positioned && hvEquipTaskCount > 0
+                        }
+                        inheritsPosition={false}
+                        building={b.label}
+                        onPlanClick={() =>
+                          onPlanAction?.({
+                            entity_id: eq.id,
+                            entity_type: eq.entity_type || "hvequipment",
+                            label: eq.label,
+                            building: b.label,
+                            positioned: eq.positioned,
+                          })
+                        }
+                      >
+                        {/* Tâches de l'équipement HV lui-même */}
+                        {eq.tasks?.map((t) => (
+                          <div
+                            key={t.id}
+                            onClick={() => onSelectTask(t)}
+                            className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                          >
+                            <div className="flex flex-col">
+                              <span>{t.task_name}</span>
+                              {t.tsd_code && (
+                                <span className="text-[11px] text-gray-500">
+                                  {t.tsd_code} • {t.control_type || "Contrôle"}
                                 </span>
-                              </div>
+                              )}
                             </div>
-                          ))}
-                        </TreeNode>
-                      ))}
-                    </TreeNode>
-                  ))}
+                            <div className="flex items-center gap-2">
+                              <StatusPill status={t.status} />
+                              <span className="text-xs text-gray-500">
+                                {fmtDate(t.next_control)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+
+                        {/* Devices HV : héritage de position si le HV est positionné */}
+                        {(eq.devices || []).map((d, di) => {
+                          const deviceTaskCount = countTasksForFilter(
+                            d.tasks
+                          );
+                          const inheritsPosition =
+                            !d.positioned && eq.positioned;
+
+                          return (
+                            <TreeNode
+                              key={d.id || di}
+                              title={
+                                inheritsPosition
+                                  ? `${d.label} (hérite position)`
+                                  : d.label
+                              }
+                              count={deviceTaskCount}
+                              equipmentCount={1}
+                              open={
+                                expanded[`hv-dev-${bi}-${i}-${di}`] || false
+                              }
+                              toggle={() =>
+                                toggle(`hv-dev-${bi}-${i}-${di}`)
+                              }
+                              level={2}
+                              positioned={d.positioned || inheritsPosition}
+                              needsPosition={
+                                !d.positioned &&
+                                !eq.positioned &&
+                                deviceTaskCount > 0
+                              }
+                              inheritsPosition={inheritsPosition}
+                              building={b.label}
+                              // Pour l’instant, on laisse le clic plan pointer
+                              // sur le parent HV si héritage, sinon sur le device.
+                              onPlanClick={() => {
+                                if (inheritsPosition) {
+                                  onPlanAction?.({
+                                    entity_id: eq.id,
+                                    entity_type:
+                                      eq.entity_type || "hvequipment",
+                                    label: eq.label,
+                                    building: b.label,
+                                    positioned: eq.positioned,
+                                  });
+                                } else {
+                                  onPlanAction?.({
+                                    entity_id: d.id,
+                                    entity_type:
+                                      d.entity_type || "hvdevice",
+                                    label: d.label,
+                                    building: b.label,
+                                    positioned: d.positioned,
+                                  });
+                                }
+                              }}
+                            >
+                              {d.tasks?.map((t) => (
+                                <div
+                                  key={t.id}
+                                  onClick={() => onSelectTask(t)}
+                                  className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                                >
+                                  <div className="flex flex-col">
+                                    <span>{t.task_name}</span>
+                                    {t.tsd_code && (
+                                      <span className="text-[11px] text-gray-500">
+                                        {t.tsd_code} •{" "}
+                                        {t.control_type || "Contrôle"}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <StatusPill status={t.status} />
+                                    <span className="text-xs text-gray-500">
+                                      {fmtDate(t.next_control)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </TreeNode>
+                          );
+                        })}
+                      </TreeNode>
+                    );
+                  })}
                 </TreeNode>
               )}
 
-              {/* Switchboards */}
+              {/* SWITCHBOARDS */}
               {swItems.length > 0 && (
                 <TreeNode
                   title="Switchboards"
-                  count={swCount}
+                  count={swTaskCount}
+                  equipmentCount={swEquipCount}
                   open={expanded[`${kB}-sb`]}
                   toggle={() => toggle(`${kB}-sb`)}
                   building={b.label}
                 >
-                  {swItems.map((sb, i) => (
-                    <TreeNode
-                      key={i}
-                      title={sb.label}
-                      count={countTasks(sb.tasks)}
-                      open={expanded[`sb-${bi}-${i}`]}
-                      toggle={() => toggle(`sb-${bi}-${i}`)}
-                      level={1}
-                      positioned={sb.positioned}
-                      needsPosition={
-                        !sb.positioned && countTasks(sb.tasks) > 0
-                      }
-                      building={b.label}
-                      onPlace={() =>
-                        onPlaceEquipment({
-                          entity_id: sb.id,
-                          entity_type: sb.entity_type,
-                          label: sb.label,
-                          building: b.label,
-                          positioned: sb.positioned,
-                        })
-                      }
-                    >
-                      {sb.tasks?.map((t) => (
-                        <div
-                          key={t.id}
-                          onClick={() => onSelectTask(t)}
-                          className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                        >
-                          <div>{t.task_name}</div>
-                          <div className="flex items-center gap-2">
-                            <StatusPill status={t.status} />
-                            <span className="text-xs text-gray-500">
-                              {fmtDate(t.next_control)}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
-                      {(sb.devices || []).map((d, di) => (
-                        <TreeNode
-                          key={di}
-                          title={`${d.label} (hérite position)`}
-                          count={countTasks(d.tasks)}
-                          open={expanded[`sb-dev-${bi}-${i}-${di}`]}
-                          toggle={() =>
-                            toggle(`sb-dev-${bi}-${i}-${di}`)
-                          }
-                          level={2}
-                        >
-                          {d.tasks?.map((t) => (
-                            <div
-                              key={t.id}
-                              onClick={() => onSelectTask(t)}
-                              className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                            >
-                              <div>{t.task_name}</div>
-                              <div className="flex items-center gap-2">
-                                <StatusPill status={t.status} />
-                                <span className="text-xs text-gray-500">
-                                  {fmtDate(t.next_control)}
+                  {swItems.map((sb, i) => {
+                    const sbTaskCount = countTasksForFilter(sb.tasks);
+                    const sbEquipCount = 1 + (sb.devices?.length || 0);
+
+                    return (
+                      <TreeNode
+                        key={sb.id || i}
+                        title={sb.label}
+                        count={sbTaskCount}
+                        equipmentCount={sbEquipCount}
+                        open={expanded[`sb-${bi}-${i}`]}
+                        toggle={() => toggle(`sb-${bi}-${i}`)}
+                        level={1}
+                        positioned={sb.positioned}
+                        needsPosition={
+                          !sb.positioned && sbTaskCount > 0
+                        }
+                        inheritsPosition={false}
+                        building={b.label}
+                        onPlanClick={() =>
+                          onPlanAction?.({
+                            entity_id: sb.id,
+                            entity_type: sb.entity_type || "switchboard",
+                            label: sb.label,
+                            building: b.label,
+                            positioned: sb.positioned,
+                          })
+                        }
+                      >
+                        {sb.tasks?.map((t) => (
+                          <div
+                            key={t.id}
+                            onClick={() => onSelectTask(t)}
+                            className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                          >
+                            <div className="flex flex-col">
+                              <span>{t.task_name}</span>
+                              {t.tsd_code && (
+                                <span className="text-[11px] text-gray-500">
+                                  {t.tsd_code} • {t.control_type || "Contrôle"}
                                 </span>
-                              </div>
+                              )}
                             </div>
-                          ))}
-                        </TreeNode>
-                      ))}
-                    </TreeNode>
-                  ))}
+                            <div className="flex items-center gap-2">
+                              <StatusPill status={t.status} />
+                              <span className="text-xs text-gray-500">
+                                {fmtDate(t.next_control)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+
+                        {(sb.devices || []).map((d, di) => {
+                          const devTaskCount = countTasksForFilter(d.tasks);
+                          // Devices TGBT héritent toujours de la position du switchboard (backend)
+                          const inheritsPosition = sb.positioned;
+
+                          return (
+                            <TreeNode
+                              key={d.id || di}
+                              title={`${d.label} (hérite position)`}
+                              count={devTaskCount}
+                              equipmentCount={1}
+                              open={
+                                expanded[`sb-dev-${bi}-${i}-${di}`] || false
+                              }
+                              toggle={() =>
+                                toggle(`sb-dev-${bi}-${i}-${di}`)
+                              }
+                              level={2}
+                              positioned={inheritsPosition}
+                              needsPosition={
+                                !inheritsPosition && devTaskCount > 0
+                              }
+                              inheritsPosition={inheritsPosition}
+                              building={b.label}
+                              onPlanClick={() =>
+                                onPlanAction?.({
+                                  entity_id: sb.id,
+                                  entity_type: sb.entity_type || "switchboard",
+                                  label: sb.label,
+                                  building: b.label,
+                                  positioned: sb.positioned,
+                                })
+                              }
+                            >
+                              {d.tasks?.map((t) => (
+                                <div
+                                  key={t.id}
+                                  onClick={() => onSelectTask(t)}
+                                  className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                                >
+                                  <div className="flex flex-col">
+                                    <span>{t.task_name}</span>
+                                    {t.tsd_code && (
+                                      <span className="text-[11px] text-gray-500">
+                                        {t.tsd_code} •{" "}
+                                        {t.control_type || "Contrôle"}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <StatusPill status={t.status} />
+                                    <span className="text-xs text-gray-500">
+                                      {fmtDate(t.next_control)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </TreeNode>
+                          );
+                        })}
+                      </TreeNode>
+                    );
+                  })}
                 </TreeNode>
               )}
             </CardContent>
@@ -775,19 +940,26 @@ function HierarchyTree({
 }
 
 // ============================================================================
-// COMPOSANT ÉQUIPEMENTS MANQUANTS
+// ÉQUIPEMENTS MANQUANTS (DB vs tsd_library)
 // ============================================================================
 
 function MissingEquipment() {
   const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    api.controls.getMissingEquipment().then(setData).catch((e) => {
-      console.error("[MissingEquipment] error:", e);
-    });
+    setLoading(true);
+    api.controls
+      .getMissingEquipment()
+      .then(setData)
+      .catch((e) => {
+        console.error("[MissingEquipment] error:", e);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  if (!data) return <div>Chargement...</div>;
+  if (loading && !data) return <div>Chargement...</div>;
+  if (!data) return <div>Aucune donnée.</div>;
 
   return (
     <div className="grid md:grid-cols-2 gap-4">
@@ -798,10 +970,10 @@ function MissingEquipment() {
             <div className="font-semibold">Équipements non intégrés</div>
           </div>
           <div className="text-sm text-gray-600 mb-3">
-            Ces catégories TSD n&apos;ont pas encore de table en base. Créez-les
+            Catégories TSD sans table ou sans équipements en base. Crée-les
             pour activer les contrôles.
           </div>
-          <div className="space-y-2">
+          <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
             {data.missing?.map((m, i) => (
               <div
                 key={i}
@@ -811,7 +983,7 @@ function MissingEquipment() {
                   {m.category}
                 </div>
                 <div className="text-xs text-amber-700 mt-1">
-                  Table manquante:{" "}
+                  Table attendue :{" "}
                   <code className="bg-amber-100 px-1 rounded">
                     {m.db_table}
                   </code>{" "}
@@ -829,7 +1001,7 @@ function MissingEquipment() {
             <CheckCircle className="text-green-500" size={20} />
             <div className="font-semibold">Équipements intégrés</div>
           </div>
-          <div className="space-y-2">
+          <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
             {data.existing?.map((e, i) => (
               <div
                 key={i}
@@ -839,17 +1011,175 @@ function MissingEquipment() {
                   {e.category}
                 </div>
                 <div className="text-xs text-green-700 mt-1">
-                  Table:{" "}
+                  Table :{" "}
                   <code className="bg-green-100 px-1 rounded">
                     {e.db_table}
                   </code>{" "}
-                  • {e.count} équipements
+                  • {e.count} équipements en base
                 </div>
               </div>
             ))}
           </div>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// ============================================================================
+// MODAL DE CHOIX DU PLAN POUR LE PLACEMENT
+// ============================================================================
+
+function PlanChoiceModal({
+  open,
+  onClose,
+  equipment,
+  onPlanChosen,
+}) {
+  const [plans, setPlans] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const load = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const res = await api.controls.listPlans();
+        const list = Array.isArray(res?.plans)
+          ? res.plans
+          : Array.isArray(res)
+          ? res
+          : [];
+        if (!cancelled) {
+          setPlans(list);
+          // auto-sélection : on essaie de matcher le bâtiment dans le logical_name
+          const auto =
+            equipment &&
+            list.find((p) =>
+              (p.logical_name || "")
+                .toString()
+                .toLowerCase()
+                .includes(String(equipment.building || "").toLowerCase())
+            );
+          setSelected(auto || list[0] || null);
+        }
+      } catch (e) {
+        console.error("[PlanChoiceModal] listPlans error:", e);
+        if (!cancelled) {
+          setError("Impossible de récupérer la liste des plans.");
+        }
+      } finally {
+        !cancelled && setLoading(false);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, equipment]);
+
+  if (!open || !equipment) return null;
+
+  const confirm = () => {
+    if (!selected) {
+      setError("Merci de choisir un plan.");
+      return;
+    }
+    onPlanChosen?.(selected);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[5050] flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-xl shadow-2xl max-w-lg w-full mx-4"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-4 py-3 border-b flex items-center justify-between">
+          <div className="font-semibold text-sm">
+            Choisir un plan pour placer :{" "}
+            <span className="text-indigo-600">{equipment.label}</span>
+          </div>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Fermer
+          </Button>
+        </div>
+        <div className="p-4 space-y-3">
+          {loading && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 className="animate-spin" size={16} />
+              Chargement des plans...
+            </div>
+          )}
+
+          {!loading && plans.length === 0 && (
+            <div className="text-sm text-red-600">
+              Aucun plan n&apos;est encore disponible pour ce site.
+            </div>
+          )}
+
+          {!loading && plans.length > 0 && (
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+              {plans.map((p) => {
+                const key = p.id || p.logical_name;
+                const name = p.display_name || p.logical_name || `#${key}`;
+                const hint = p.logical_name || "";
+                const isSel = selected && (selected.id || selected.logical_name) === key;
+
+                return (
+                  <label
+                    key={key}
+                    className={`flex items-start gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm ${
+                      isSel
+                        ? "border-indigo-500 bg-indigo-50"
+                        : "border-gray-200 hover:bg-gray-50"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      className="mt-1"
+                      checked={isSel}
+                      onChange={() => setSelected(p)}
+                    />
+                    <div className="flex flex-col">
+                      <span className="font-medium">{name}</span>
+                      <span className="text-[11px] text-gray-500">
+                        {hint}
+                      </span>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          {error && (
+            <div className="text-xs text-red-600 bg-red-50 border border-red-100 px-2 py-1 rounded">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Annuler
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={confirm}
+              disabled={loading || !selected}
+            >
+              {loading ? "..." : "Ouvrir le plan et placer"}
+            </Button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -862,24 +1192,77 @@ export default function ControlsPage() {
   const [tab, setTab] = useState("tree");
   const [statusFilter, setStatusFilter] = useState("open");
   const [selectedTask, setSelectedTask] = useState(null);
+
   const [showMap, setShowMap] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [pendingPlacement, setPendingPlacement] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
+  // Sync TSD ↔ DB (génération / mise à jour des tâches)
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+
+  // Choix du plan pour placement
+  const [planChoiceOpen, setPlanChoiceOpen] = useState(false);
+  const [planChoiceEquipment, setPlanChoiceEquipment] = useState(null);
+
   const handleRefresh = () =>
     setRefreshTrigger((t) => t + 1);
 
-  // Gestion du placement / visualisation sur plan
-  const handlePlaceEquipment = (equipment) => {
-    // On ouvre directement un plan associé au bâtiment
+  useEffect(() => {
+    handleRefresh();
+  }, []);
+
+  const handleSyncTSD = async () => {
+    setSyncing(true);
+    setSyncMsg("");
+    try {
+      const res = await api.controls.autoLink();
+      setSyncMsg(
+        res?.message ||
+          "Synchronisation TSD / équipements effectuée. Les tâches ont été mises à jour."
+      );
+      handleRefresh();
+    } catch (e) {
+      console.error("[Controls] autoLink error:", e);
+      setSyncMsg(
+        e?.message ||
+          "Erreur lors de la synchronisation TSD / équipements."
+      );
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Gestion du clic sur l'icône plan dans l'arborescence
+  const handlePlanActionFromTree = (equipment) => {
+    if (!equipment) return;
+    if (!equipment.positioned) {
+      // Cas "équipement non encore placé" -> choix du plan
+      setPlanChoiceEquipment(equipment);
+      setPlanChoiceOpen(true);
+    } else {
+      // Cas "déjà placé" -> on ouvre directement la carte
+      setSelectedPlan({
+        logical_name: equipment.building,
+        display_name: equipment.building,
+      });
+      setPendingPlacement(null); // juste visualisation
+      setShowMap(true);
+    }
+  };
+
+  const handlePlanChosen = (plan) => {
+    if (!plan || !planChoiceEquipment) return;
     setSelectedPlan({
-      logical_name: equipment.building,
-      display_name: equipment.building,
+      id: plan.id,
+      logical_name: plan.logical_name,
+      display_name: plan.display_name || plan.logical_name,
     });
-    setPendingPlacement(
-      equipment.positioned ? null : equipment // si déjà placé : juste voir ; sinon : mode placement
-    );
+    // On passe en mode placement :
+    setPendingPlacement(planChoiceEquipment);
+    setPlanChoiceOpen(false);
+    setPlanChoiceEquipment(null);
     setShowMap(true);
   };
 
@@ -888,21 +1271,21 @@ export default function ControlsPage() {
     handleRefresh();
   };
 
-  // Chargement initial de l'arborescence (sans auto-link pour éviter les doublons)
-  useEffect(() => {
-    handleRefresh();
-  }, []);
-
   return (
     <section className="p-8 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-4 flex-wrap">
         <div>
           <h1 className="text-3xl font-bold">Contrôles (TSD)</h1>
           <div className="text-sm text-gray-500 mt-1">
             Maintenance, Inspection & Testing of Electrical Equipment
           </div>
+          {syncMsg && (
+            <div className="mt-2 text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded">
+              {syncMsg}
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <select
             className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 text-sm"
             value={statusFilter}
@@ -912,8 +1295,29 @@ export default function ControlsPage() {
             <option value="done">Tâches terminées</option>
             <option value="all">Toutes</option>
           </select>
-          <Button variant="secondary" size="sm" onClick={handleRefresh}>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={syncing}
+          >
             <RefreshCw size={14} /> Actualiser
+          </Button>
+          <Button
+            variant="warning"
+            size="sm"
+            onClick={handleSyncTSD}
+            disabled={syncing}
+          >
+            {syncing ? (
+              <>
+                <Loader2 size={14} className="animate-spin" /> Sync TSD...
+              </>
+            ) : (
+              <>
+                <Wand2 size={14} /> Sync TSD ↔ DB
+              </>
+            )}
           </Button>
         </div>
       </div>
@@ -925,16 +1329,17 @@ export default function ControlsPage() {
           <TabsTrigger value="missing">Équipements manquants</TabsTrigger>
         </TabsList>
 
+        {/* Onglet Arborescence */}
         <TabsContent value="tree">
           <HierarchyTree
             statusFilter={statusFilter}
             onSelectTask={setSelectedTask}
-            onPlaceEquipment={handlePlaceEquipment}
-            onRefresh={handleRefresh}
+            onPlanAction={handlePlanActionFromTree}
             refreshKey={refreshTrigger}
           />
         </TabsContent>
 
+        {/* Onglet Plans */}
         <TabsContent value="plans">
           <ControlsMapManager
             onPlanSelect={(plan) => {
@@ -945,11 +1350,13 @@ export default function ControlsPage() {
           />
         </TabsContent>
 
+        {/* Onglet Équipements manquants / cohérence TSD */}
         <TabsContent value="missing">
           <MissingEquipment />
         </TabsContent>
       </Tabs>
 
+      {/* Détails de tâche + IA */}
       {selectedTask && (
         <TaskDetails
           task={selectedTask}
@@ -958,6 +1365,18 @@ export default function ControlsPage() {
         />
       )}
 
+      {/* Modal choix de plan pour placement */}
+      <PlanChoiceModal
+        open={planChoiceOpen}
+        onClose={() => {
+          setPlanChoiceOpen(false);
+          setPlanChoiceEquipment(null);
+        }}
+        equipment={planChoiceEquipment}
+        onPlanChosen={handlePlanChosen}
+      />
+
+      {/* Carte / plan en plein écran */}
       {showMap && selectedPlan && (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center">
           <div
@@ -970,7 +1389,7 @@ export default function ControlsPage() {
           <div className="relative z-[6001] w-full max-w-7xl h-[90vh] mx-4">
             <Card className="h-full flex flex-col">
               <div className="flex items-center justify-between p-4 border-b">
-                <div className="font-semibold">
+                <div className="font-semibold text-sm">
                   Plan –{" "}
                   {selectedPlan.display_name ||
                     selectedPlan.logical_name}
