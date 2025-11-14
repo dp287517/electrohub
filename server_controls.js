@@ -812,7 +812,12 @@ router.get("/tasks/:id/schema", async (req, res) => {
 // ============================================================================
 router.patch("/tasks/:id/close", async (req, res) => {
   const { id } = req.params;
-  const { checklist, observations, comment /*, files*/ } = req.body;
+
+  // Harmonisation du payload (front envoie items/obs)
+  const body = req.body || {};
+  const checklist = body.checklist || body.items || [];
+  const observations = body.observations || body.obs || {};
+  const comment = body.comment ?? body.comments ?? null;
 
   const client = await pool.connect();
   try {
@@ -842,8 +847,9 @@ router.patch("/tasks/:id/close", async (req, res) => {
         checklist_result,
         comments,
         result_status,
-        site
-      ) VALUES ($1, $2, $3, $4, $5, $6)`,
+        site,
+        observations
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         id,
         now,
@@ -851,6 +857,7 @@ router.patch("/tasks/:id/close", async (req, res) => {
         comment || null,
         "Done",
         task.site,
+        JSON.stringify(observations || {}),
       ]
     );
 
@@ -880,20 +887,310 @@ router.patch("/tasks/:id/close", async (req, res) => {
 });
 
 // ============================================================================
-// ROUTE: GET /bootstrap/auto-link
-// Crée automatiquement les tâches pour tous les équipements
+// ROUTE: POST /tasks/:id/analyze
+// Analyse IA d'une tâche de contrôle (résumé, risques, priorités...)
 // ============================================================================
+
+router.post("/tasks/:id/analyze", async (req, res) => {
+  const { id } = req.params;
+  const db = await pool.connect();
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM controls_tasks WHERE id = $1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    const task = rows[0];
+
+    // Récupérer l'équipement lié
+    let equipment = null;
+    if (task.entity_type === "hvequipment") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM hv_equipments WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    } else if (task.entity_type === "hvdevice") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM hv_devices WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    } else if (task.entity_type === "switchboard") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM switchboards WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    } else if (task.entity_type === "device") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM devices WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    }
+
+    // TSD associé
+    const tsd = findTSDControl(task.task_code);
+
+    // Derniers enregistrements de contrôle
+    const { rows: records } = await db.query(
+      `SELECT * FROM controls_records 
+       WHERE task_id = $1 
+       ORDER BY performed_at DESC 
+       LIMIT 5`,
+      [id]
+    );
+
+    const client = openaiClient();
+    if (!client) {
+      return res
+        .status(500)
+        .json({ error: "OPENAI_API_KEY missing for Controls" });
+    }
+
+    const sys = `
+Tu es un assistant expert en maintenance et sécurité des installations électriques (HTA/HTB, TGBT, tableaux, transformateurs, etc.).
+Tu aides à analyser une tâche de contrôle issue d'une librairie TSD (Testing & Inspection).
+
+Objectif :
+- Résumer la situation
+- Identifier les risques principaux (techniques et sécurité)
+- Suggérer des actions prioritaires
+- Donner une vision synthétique compréhensible par un responsable maintenance/énergie
+
+Réponds en français, formaté en sections claires.
+`;
+
+    const ctx = {
+      task: {
+        id: task.id,
+        name: task.task_name,
+        code: task.task_code,
+        status: task.status,
+        next_control: task.next_control,
+        last_control: task.last_control,
+      },
+      equipment: equipment
+        ? {
+            id: equipment.id,
+            name: equipment.name || equipment.device_type || equipment.switchboard_name,
+            building_code: equipment.building_code || equipment.building || null,
+          }
+        : null,
+      tsd_control: tsd
+        ? {
+            category_key: tsd.category.key,
+            category_label: tsd.category.label,
+            type: tsd.control.type,
+            description: tsd.control.description || "",
+            frequency: tsd.control.frequency || null,
+          }
+        : null,
+      recent_records: records.map((r) => ({
+        performed_at: r.performed_at,
+        result_status: r.result_status,
+        comments: r.comments,
+      })),
+    };
+
+    const userPrompt = `
+Voici le contexte JSON de la tâche de contrôle :
+
+\`\`\`json
+${JSON.stringify(ctx, null, 2)}
+\`\`\`
+
+Analyse cette tâche en respectant le rôle défini.
+`;
+
+    const resp = await client.chat.completions.create({
+      model:
+        process.env.CONTROLS_OPENAI_MODEL ||
+        process.env.ATEX_OPENAI_MODEL ||
+        "gpt-4o-mini",
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.2,
+    });
+
+    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error("[Controls] /tasks/:id/analyze error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    db.release();
+  }
+});
+
+
+// ============================================================================
+// ROUTE: POST /tasks/:id/assistant
+// Assistant IA Q&A sur une tâche de contrôle
+// ============================================================================
+
+router.post("/tasks/:id/assistant", async (req, res) => {
+  const { id } = req.params;
+  const { question = "" } = req.body || {};
+  const db = await pool.connect();
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM controls_tasks WHERE id = $1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    const task = rows[0];
+
+    let equipment = null;
+    if (task.entity_type === "hvequipment") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM hv_equipments WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    } else if (task.entity_type === "hvdevice") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM hv_devices WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    } else if (task.entity_type === "switchboard") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM switchboards WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    } else if (task.entity_type === "device") {
+      equipment = (
+        await db.query(
+          `SELECT * FROM devices WHERE id = $1`,
+          [task.entity_id]
+        )
+      ).rows[0];
+    }
+
+    const tsd = findTSDControl(task.task_code);
+
+    const { rows: records } = await db.query(
+      `SELECT * FROM controls_records 
+       WHERE task_id = $1 
+       ORDER BY performed_at DESC 
+       LIMIT 5`,
+      [id]
+    );
+
+    const client = openaiClient();
+    if (!client) {
+      return res
+        .status(500)
+        .json({ error: "OPENAI_API_KEY missing for Controls" });
+    }
+
+    const sys = `
+Tu es un assistant IA spécialisé en contrôle d'installations électriques.
+Tu réponds aux questions de l'utilisateur sur UNE tâche de contrôle précise, en t'appuyant sur le contexte fourni.
+Tes réponses doivent être:
+- précises
+- orientées sécurité et maintenance
+- en français
+`;
+
+    const ctx = {
+      task: {
+        id: task.id,
+        name: task.task_name,
+        code: task.task_code,
+        status: task.status,
+        next_control: task.next_control,
+        last_control: task.last_control,
+      },
+      equipment: equipment
+        ? {
+            id: equipment.id,
+            name: equipment.name || equipment.device_type || equipment.switchboard_name,
+            building_code: equipment.building_code || equipment.building || null,
+          }
+        : null,
+      tsd_control: tsd
+        ? {
+            category_key: tsd.category.key,
+            category_label: tsd.category.label,
+            type: tsd.control.type,
+            description: tsd.control.description || "",
+            frequency: tsd.control.frequency || null,
+          }
+        : null,
+      recent_records: records.map((r) => ({
+        performed_at: r.performed_at,
+        result_status: r.result_status,
+        comments: r.comments,
+      })),
+    };
+
+    const userPrompt = `
+Contexte de la tâche (JSON) :
+
+\`\`\`json
+${JSON.stringify(ctx, null, 2)}
+\`\`\`
+
+Question de l'utilisateur :
+"${question}"
+`;
+
+    const resp = await client.chat.completions.create({
+      model:
+        process.env.CONTROLS_OPENAI_MODEL ||
+        process.env.ATEX_OPENAI_MODEL ||
+        "gpt-4o-mini",
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.25,
+    });
+
+    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error("[Controls] /tasks/:id/assistant error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    db.release();
+  }
+});
+
+// ============================================================================
+// ROUTE: GET /bootstrap/auto-link
+// Crée automatiquement les tâches pour tous les équipements (idempotent)
+// ============================================================================
+
 router.get("/bootstrap/auto-link", async (req, res) => {
   const client = await pool.connect();
   try {
     const site = siteOf(req);
     let createdCount = 0;
+    let skippedDuplicates = 0;
 
     for (const cat of tsdLibrary.categories) {
       if (!cat.db_table) continue;
       const tableName = cat.db_table;
 
-      // Table existante ?
+      // 1) Vérifier si la table existe
       const { rows: tableCheck } = await client.query(
         `SELECT EXISTS (
           SELECT FROM information_schema.tables 
@@ -901,15 +1198,14 @@ router.get("/bootstrap/auto-link", async (req, res) => {
         )`,
         [tableName]
       );
-
       if (!tableCheck[0].exists) {
         console.warn(
-          `[Controls] Table ${tableName} not found for category ${cat.key}, skipping...`
+          `[Controls][auto-link] Table ${tableName} not found for category ${cat.key}, skipping...`
         );
         continue;
       }
 
-      // Colonne 'site' ?
+      // 2) Vérifier la colonne "site"
       const { rows: colCheck } = await client.query(
         `SELECT EXISTS (
           SELECT FROM information_schema.columns 
@@ -917,9 +1213,9 @@ router.get("/bootstrap/auto-link", async (req, res) => {
         )`,
         [tableName]
       );
-
       const hasSiteCol = colCheck[0].exists;
 
+      // 3) Récupérer les équipements de cette catégorie pour le site
       const { rows: entities } = await client.query(
         hasSiteCol
           ? `SELECT id, name FROM ${tableName} WHERE site = $1`
@@ -933,51 +1229,60 @@ router.get("/bootstrap/auto-link", async (req, res) => {
         for (const ctrl of cat.controls || []) {
           const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
 
-          const { rows: existing } = await client.query(
-            `SELECT id FROM controls_tasks 
-             WHERE entity_id = $1 
-               AND task_code = $2 
-               AND entity_type = $3 
-               AND site = $4`,
-            [ent.id, taskCode, entityType, site]
-          );
-
-          if (existing.length) continue;
-
+          // 4) Insert idempotent : on laisse Postgres décider via la contrainte unique
           const initialDate = generateInitialDate(ctrl.frequency);
 
-          await client.query(
-            `INSERT INTO controls_tasks (
-              site,
-              entity_id,
-              entity_type,
-              task_name,
-              task_code,
-              status,
-              next_control,
-              frequency_months
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [
-              site,
-              ent.id,
-              entityType,
-              ctrl.type,
-              taskCode,
-              "Planned",
-              initialDate,
-              ctrl.frequency?.interval || null,
-            ]
-          );
+          try {
+            const { rowCount } = await client.query(
+              `
+              INSERT INTO controls_tasks (
+                site,
+                entity_id,
+                entity_type,
+                task_name,
+                task_code,
+                status,
+                next_control,
+                frequency_months
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+              ON CONFLICT ON CONSTRAINT ux_controls_tasks_active DO NOTHING
+              `,
+              [
+                site,
+                ent.id,
+                entityType,
+                ctrl.type,
+                taskCode,
+                "Planned",
+                initialDate,
+                ctrl.frequency?.interval || null,
+              ]
+            );
 
-          createdCount++;
+            if (rowCount > 0) {
+              createdCount += rowCount;
+            } else {
+              skippedDuplicates += 1;
+            }
+          } catch (e) {
+            // On logge mais on ne casse plus la boucle
+            console.warn(
+              `[Controls][auto-link] conflict or error on entity ${entityType}#${ent.id} / taskCode=${taskCode}:`,
+              e.message
+            );
+            skippedDuplicates += 1;
+          }
         }
       }
     }
 
-    console.log(`[Controls] Auto-link completed, created=${createdCount}`);
-    res.json({ success: true, created: createdCount });
+    console.log(
+      `[Controls] Auto-link completed, created=${createdCount}, skippedDuplicates=${skippedDuplicates}`
+    );
+    res.json({ success: true, created: createdCount, skipped: skippedDuplicates });
   } catch (e) {
-    console.error("[Controls] auto-link error:", e);
+    console.error("[Controls] auto-link error (fatal):", e);
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
