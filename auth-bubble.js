@@ -53,13 +53,13 @@ export async function verifyBubbleToken(bubbleToken) {
   const email = String(payload.user).trim().toLowerCase();
   const name = email.split("@")[0].replace(/[._-]+/g, " ");
   
-  // ✅ CORRECTION : Ajouter le site par défaut
+  // ✅ CORRECTION FINALE : Utiliser "Nyon" pour correspondre aux équipements existants
   return {
     id: email,
     email,
     name: name.charAt(0).toUpperCase() + name.slice(1),
     origin: "bubble",
-    site: "Default", // ✅ Site par défaut pour les users Bubble
+    site: "Nyon", // ✅ Changé de "Default" à "Nyon"
   };
 }
 
@@ -72,7 +72,7 @@ export function signLocalJWT(user) {
     name: user.name || user.email,
     email: user.email,
     source: "bubble",
-    site: user.site || "Default", // ✅ Inclure le site dans le JWT
+    site: user.site || "Nyon", // ✅ Fallback sur "Nyon" au lieu de "Default"
   };
 
   const secret = process.env.JWT_SECRET || "devsecret";
