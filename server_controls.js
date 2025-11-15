@@ -1178,6 +1178,11 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       // Pour certains types (ex: VSD), on veut détecter les équipements "suspects" sans contrôle
       const vsdLikeMissing = [];
 
+      // Certaines catégories doivent TOUJOURS appliquer leurs contrôles
+      // sans passer par l'IA (ex: tableaux TGBT/DB, distribution boards)
+      const forceFullControls =
+        cat.key === "lv_switchgear" || cat.key === "distribution_boards";
+
       // ------------------------------
       // 1) Vérifier que la table existe + récupérer les équipements
       // ------------------------------
