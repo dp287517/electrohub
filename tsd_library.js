@@ -660,7 +660,7 @@ export const tsdLibrary = {
     {
       "key": "transformers_cast_resin",
       "label": "Cast Resin Transformers",
-      "db_table": "devices",
+      "db_table": "hv_equipments",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -849,7 +849,7 @@ export const tsdLibrary = {
     {
       "key": "motors_hv_or_large",
       "label": "AC Induction Motors >1000 V ac or >400 kW",
-      "db_table": "hv_devices",
+      "db_table": "hv_motors",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1211,7 +1211,7 @@ export const tsdLibrary = {
     {
       "key": "pfc_lv",
       "label": "Power Factor Correction (<1000 V ac)",
-      "db_table": "devices",
+      "db_table": "pfc",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1314,7 +1314,7 @@ export const tsdLibrary = {
     {
       "key": "distribution_boards",
       "label": "Distribution Boards (<1000 V ac)",
-      "db_table": "devices",
+      "db_table": "switchboards",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1435,7 +1435,7 @@ export const tsdLibrary = {
     {
       "key": "motors_lv",
       "label": "AC Induction Motors <1000 V ac <400 kW",
-      "db_table": "devices",
+      "db_table": "motors",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1511,7 +1511,7 @@ export const tsdLibrary = {
     {
       "key": "hazardous_areas",
       "label": "Hazardous Areas (IEC 60079)",
-      "db_table": "devices",
+      "db_table": "ex_equipments",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1678,7 +1678,7 @@ export const tsdLibrary = {
     {
       "key": "emergency_lighting",
       "label": "Emergency Lighting Systems",
-      "db_table": "devices",
+      "db_table": "emergency_lighting",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1710,7 +1710,7 @@ export const tsdLibrary = {
     {
       "key": "ups_small",
       "label": "Uninterruptible Power Supply (<=5000 VA)",
-      "db_table": "devices",
+      "db_table": "ups",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1755,7 +1755,7 @@ export const tsdLibrary = {
     {
       "key": "ups_large",
       "label": "Uninterruptible Power Supply (>5000 VA)",
-      "db_table": "devices",
+      "db_table": "ups",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1856,7 +1856,7 @@ export const tsdLibrary = {
     {
       "key": "batteries",
       "label": "Battery Systems",
-      "db_table": "devices",
+      "db_table": "ups_devices",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -1953,7 +1953,7 @@ export const tsdLibrary = {
     {
       "key": "vsd",
       "label": "Variable Speed Drives",
-      "db_table": "devices",
+      "db_table": "variable_speed_drives",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -2035,7 +2035,7 @@ export const tsdLibrary = {
     {
       "key": "fire_detection_alarm",
       "label": "Fire Detection and Fire Alarm Systems",
-      "db_table": "devices",
+      "db_table": "fire_detection",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
@@ -2107,7 +2107,7 @@ export const tsdLibrary = {
     {
       "key": "earthing_systems",
       "label": "Earthing Systems",
-      "db_table": "sites",
+      "db_table": "earthing",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
