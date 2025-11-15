@@ -177,27 +177,8 @@ function isVsdLikeEntity(ent) {
   );
 }
 
-/**
- * Filtre métier : est-ce que le contrôle de cette catégorie peut s'appliquer
- * à cet équipement ?
- *
- * Objectif : bloquer les cas absurdes que tu as remontés :
- * - contrôles Distribution Boards sur des disjoncteurs / devices individuels
- * - contrôles Emergency Lighting sur n'importe quel device
- * - contrôles Fire Detection sur des TGBT / devices
- * - contrôles Power Factor Correction sur une cellule HT qui n'est pas PFC
- * - contrôles VSD sur un device qui n'est pas un variateur
- */
-function isControlAllowedForEntity(cat, ctrl, ent) {
-  const key = cat.key || "";
-  const name = getEquipmentNameString(ent);
-
-  // 0) Filtre intensité de base (MCCB >400A, Bus Duct >800A, etc.)
-  if (!isCurrentCompatible(ctrl, ent)) {
-    return false;
-  }
-
-  function getRatedCurrent(ent) {
+// Courant assigné : on essaie de récupérer rated_current / In / rating / nominal_current
+function getRatedCurrent(ent) {
   const candidates = [
     ent.rated_current,
     ent.in,
@@ -215,10 +196,37 @@ function isControlAllowedForEntity(cat, ctrl, ent) {
   return Number.isFinite(val) ? val : null;
 }
 
+// Filtre générique basé sur le calibre et le libellé du contrôle
 function isCurrentCompatible(ctrl, ent) {
   const label = String(ctrl.type || ctrl.description || "").toLowerCase();
   const current = getRatedCurrent(ent);
   if (!current) return true; // si on ne connaît pas le calibre, on ne filtre pas
+
+  // Cas explicite MCCB >400A
+  if (label.includes("mccb >400a")) {
+    return current > 400;
+  }
+
+  // Bus duct / bus riser >800A
+  if (label.includes("bus duct") || label.includes("bus riser")) {
+    return current >= 800;
+  }
+
+  return true;
+}
+
+/**
+ * Filtre métier : est-ce que le contrôle de cette catégorie peut s'appliquer
+ * à cet équipement ?
+ */
+function isControlAllowedForEntity(cat, ctrl, ent) {
+  const key = cat.key || "";
+  const name = getEquipmentNameString(ent);
+
+  // 0) Filtre intensité de base (MCCB >400A, Bus Duct >800A, etc.)
+  if (!isCurrentCompatible(ctrl, ent)) {
+    return false;
+  }
 
   // ------------- Bus Duct / Bus Riser (>800A, <1000 Vac) -------------
   if (key === "bus_duct_riser") {
@@ -236,26 +244,14 @@ function isCurrentCompatible(ctrl, ent) {
     return true;
   }
 
-  // Cas explicite MCCB >400A
-  if (label.includes("mccb >400a")) {
-    return current > 400;
-  }
-
-  // Bus duct / bus riser >800A (voir plus bas)
-  if (label.includes("bus duct") || label.includes("bus riser")) {
-    return current >= 800;
-  }
-
-  return true;
-}
-
   // ------------- Distribution Boards (<1000 V ac) -------------
   if (key === "distribution_boards") {
-    const isBoard = /tgbt|qgbt|qg\b|tableau|tab\b|db\b|distribution board|switchboard/.test(
-      name
-    );
+    const isBoard =
+      /tgbt|qgbt|qg\b|tableau|tab\b|db\b|distribution board|switchboard/i.test(
+        name
+      );
     const looksBreaker =
-      /mcb|mccb|disjoncteur|breaker|interrupteur|sectionneur/.test(name);
+      /mcb|mccb|disjoncteur|breaker|interrupteur|sectionneur/i.test(name);
 
     // On n'accepte que si ça ressemble clairement à un tableau et pas à un simple disjoncteur
     return isBoard && !looksBreaker;
@@ -264,7 +260,7 @@ function isCurrentCompatible(ctrl, ent) {
   // ------------- Emergency Lighting Systems -------------
   if (key === "emergency_lighting") {
     const isEmerg =
-      /baes|bloc secours|éclairage de sécurité|eclairage de securite|emergency lighting|emergency light/.test(
+      /baes|bloc secours|éclairage de sécurité|eclairage de securite|emergency lighting|emergency light/i.test(
         name
       );
     return isEmerg;
@@ -272,8 +268,7 @@ function isCurrentCompatible(ctrl, ent) {
 
   // ------------- UPS (Uninterruptible Power Supply) -------------
   if (key === "ups_small" || key === "ups_large") {
-    const isUps =
-      /ups\b|onduleur|uninterruptible power/i.test(name);
+    const isUps = /ups\b|onduleur|uninterruptible power/i.test(name);
     return isUps;
   }
 
@@ -285,9 +280,9 @@ function isCurrentCompatible(ctrl, ent) {
   }
 
   // ------------- Fire Detection and Fire Alarm Systems -------------
-  if (key === "fire_detection") {
+  if (key === "fire_detection" || key === "fire_detection_alarm") {
     const isFire =
-      /ssi\b|sdsi\b|détection incendie|detection incendie|fire detection|fire alarm|smoke detector|détecteur de fumée|detecteur de fumee/.test(
+      /ssi\b|sdsi\b|détection incendie|detection incendie|fire detection|fire alarm|smoke detector|détecteur de fumée|detecteur de fumee/i.test(
         name
       );
     return isFire;
@@ -296,7 +291,7 @@ function isCurrentCompatible(ctrl, ent) {
   // ------------- Power Factor Correction (>1000 V ac) -------------
   if (key === "pfc_hv" || key === "pfc_lv") {
     const isPfc =
-      /pfc\b|compensation|condensateur|capacitor bank|batterie de condensateurs|power factor/.test(
+      /pfc\b|compensation|condensateur|capacitor bank|batterie de condensateurs|power factor/i.test(
         name
       );
     return isPfc;
