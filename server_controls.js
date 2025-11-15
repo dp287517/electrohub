@@ -109,11 +109,16 @@ function addFrequency(dateStr, frequency) {
   return null;
 }
 
-// Génération date initiale 2026 avec offset aléatoire
-function generateInitialDate(_frequency) {
-  const baseDate = dayjs("2026-01-01");
-  const offsetDays = Math.floor(Math.random() * 365);
-  return baseDate.add(offsetDays, "day").format("YYYY-MM-DD");
+function generateInitialDate(frequency) {
+  // Date de référence globale
+  const refDate = dayjs("2026-01-01");
+  const now = dayjs();
+
+  // Si on est avant 2026 → on part du 01.01.2026
+  // Si on est après 2026 → on part de la date du jour (ex: 20.03.2026)
+  const baseDate = now.isAfter(refDate) ? now : refDate;
+
+  return baseDate.format("YYYY-MM-DD");
 }
 
 // Trouver le contrôle TSD par task_code (dérivé de type)
