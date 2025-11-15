@@ -323,7 +323,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
     }
   };
 
-  const runAutoAnalysis = async () => {
+  const submitAutoAnalysis = async () => {
     if (!task) return;
     setAiLoading(true);
     setAiAnswer("");
@@ -420,7 +420,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={runAutoAnalysis}
+                onClick={submitAutoAnalysis}
                 disabled={aiLoading}
               >
                 <Calendar size={14} />
@@ -596,7 +596,7 @@ function HierarchyTree({
         const hvItems = b.hv || [];
         const swItems = b.switchboards || [];
 
-        // Compteurs par tâches (pour la timeline)
+        // Compteurs par tâches
         const hvTaskCount = hvItems.reduce(
           (a, hv) =>
             a +
@@ -618,7 +618,7 @@ function HierarchyTree({
           0
         );
 
-        // Compteurs par équipements (ce que tu attends : HV/TGBT > 0 si équipements présents)
+        // Compteurs par équipements
         const hvEquipCount = hvItems.reduce(
           (a, hv) => a + 1 + (hv.devices?.length || 0),
           0
@@ -630,11 +630,13 @@ function HierarchyTree({
 
         if (hvItems.length === 0 && swItems.length === 0) return null;
 
+        const buildingLabel = b.label;
+
         return (
           <Card key={kB}>
             <div className="px-4 py-3 bg-gray-50 flex items-center justify-between border-b">
               <div className="flex items-center gap-3">
-                <div className="text-lg font-semibold">{b.label}</div>
+                <div className="text-lg font-semibold">{buildingLabel}</div>
               </div>
               <div className="text-xs text-gray-600 flex flex-wrap gap-3">
                 {hvEquipCount > 0 && (
@@ -659,12 +661,27 @@ function HierarchyTree({
                   equipmentCount={hvEquipCount}
                   open={expanded[`${kB}-hv`]}
                   toggle={() => toggle(`${kB}-hv`)}
-                  building={b.label}
+                  building={buildingLabel}
                 >
                   {hvItems.map((eq, i) => {
                     const hvEquipTaskCount = countTasksForFilter(eq.tasks);
                     const hvEquipEquipCount =
                       1 + (eq.devices?.length || 0);
+
+                    const handlePlanClick = () =>
+                      onPlanAction?.({
+                        entity_id: eq.id,
+                        entity_type: eq.entity_type || "hvequipment",
+                        label: eq.label,
+                        building: buildingLabel,
+                        building_code: eq.building_code || buildingLabel,
+                        positioned: eq.positioned,
+                        plan_id: eq.plan_id || eq.main_plan_id,
+                        plan_logical_name:
+                          eq.plan_logical_name || eq.main_plan_logical_name,
+                        plan_display_name:
+                          eq.plan_display_name || eq.main_plan_display_name,
+                      });
 
                     return (
                       <TreeNode
@@ -680,18 +697,10 @@ function HierarchyTree({
                           !eq.positioned && hvEquipTaskCount > 0
                         }
                         inheritsPosition={false}
-                        building={b.label}
-                        onPlanClick={() =>
-                          onPlanAction?.({
-                            entity_id: eq.id,
-                            entity_type: eq.entity_type || "hvequipment",
-                            label: eq.label,
-                            building: b.label,
-                            positioned: eq.positioned,
-                          })
-                        }
+                        building={buildingLabel}
+                        onPlanClick={handlePlanClick}
                       >
-                        {/* Tâches de l'équipement HV lui-même */}
+                        {/* Tâches HV */}
                         {eq.tasks?.map((t) => (
                           <div
                             key={t.id}
@@ -715,13 +724,54 @@ function HierarchyTree({
                           </div>
                         ))}
 
-                        {/* Devices HV : héritage de position si le HV est positionné */}
+                        {/* Devices HV */}
                         {(eq.devices || []).map((d, di) => {
                           const deviceTaskCount = countTasksForFilter(
                             d.tasks
                           );
                           const inheritsPosition =
                             !d.positioned && eq.positioned;
+                          const positioned = d.positioned || inheritsPosition;
+
+                          const planPayloadBase = {
+                            building: buildingLabel,
+                            building_code: d.building_code || eq.building_code || buildingLabel,
+                            plan_id:
+                              d.plan_id ||
+                              d.main_plan_id ||
+                              eq.plan_id ||
+                              eq.main_plan_id,
+                            plan_logical_name:
+                              d.plan_logical_name ||
+                              d.main_plan_logical_name ||
+                              eq.plan_logical_name ||
+                              eq.main_plan_logical_name,
+                            plan_display_name:
+                              d.plan_display_name ||
+                              d.main_plan_display_name ||
+                              eq.plan_display_name ||
+                              eq.main_plan_display_name,
+                          };
+
+                          const handlePlanClickDevice = () => {
+                            if (inheritsPosition) {
+                              onPlanAction?.({
+                                entity_id: eq.id,
+                                entity_type: eq.entity_type || "hvequipment",
+                                label: eq.label,
+                                positioned: eq.positioned,
+                                ...planPayloadBase,
+                              });
+                            } else {
+                              onPlanAction?.({
+                                entity_id: d.id,
+                                entity_type: d.entity_type || "hvdevice",
+                                label: d.label,
+                                positioned: positioned,
+                                ...planPayloadBase,
+                              });
+                            }
+                          };
 
                           return (
                             <TreeNode
@@ -740,37 +790,13 @@ function HierarchyTree({
                                 toggle(`hv-dev-${bi}-${i}-${di}`)
                               }
                               level={2}
-                              positioned={d.positioned || inheritsPosition}
+                              positioned={positioned}
                               needsPosition={
-                                !d.positioned &&
-                                !eq.positioned &&
-                                deviceTaskCount > 0
+                                !positioned && deviceTaskCount > 0
                               }
                               inheritsPosition={inheritsPosition}
-                              building={b.label}
-                              // Pour l’instant, on laisse le clic plan pointer
-                              // sur le parent HV si héritage, sinon sur le device.
-                              onPlanClick={() => {
-                                if (inheritsPosition) {
-                                  onPlanAction?.({
-                                    entity_id: eq.id,
-                                    entity_type:
-                                      eq.entity_type || "hvequipment",
-                                    label: eq.label,
-                                    building: b.label,
-                                    positioned: eq.positioned,
-                                  });
-                                } else {
-                                  onPlanAction?.({
-                                    entity_id: d.id,
-                                    entity_type:
-                                      d.entity_type || "hvdevice",
-                                    label: d.label,
-                                    building: b.label,
-                                    positioned: d.positioned,
-                                  });
-                                }
-                              }}
+                              building={buildingLabel}
+                              onPlanClick={handlePlanClickDevice}
                             >
                               {d.tasks?.map((t) => (
                                 <div
@@ -812,11 +838,26 @@ function HierarchyTree({
                   equipmentCount={swEquipCount}
                   open={expanded[`${kB}-sb`]}
                   toggle={() => toggle(`${kB}-sb`)}
-                  building={b.label}
+                  building={buildingLabel}
                 >
                   {swItems.map((sb, i) => {
                     const sbTaskCount = countTasksForFilter(sb.tasks);
                     const sbEquipCount = 1 + (sb.devices?.length || 0);
+
+                    const handlePlanClickSwitchboard = () =>
+                      onPlanAction?.({
+                        entity_id: sb.id,
+                        entity_type: sb.entity_type || "switchboard",
+                        label: sb.label,
+                        building: buildingLabel,
+                        building_code: sb.building_code || buildingLabel,
+                        positioned: sb.positioned,
+                        plan_id: sb.plan_id || sb.main_plan_id,
+                        plan_logical_name:
+                          sb.plan_logical_name || sb.main_plan_logical_name,
+                        plan_display_name:
+                          sb.plan_display_name || sb.main_plan_display_name,
+                      });
 
                     return (
                       <TreeNode
@@ -832,16 +873,8 @@ function HierarchyTree({
                           !sb.positioned && sbTaskCount > 0
                         }
                         inheritsPosition={false}
-                        building={b.label}
-                        onPlanClick={() =>
-                          onPlanAction?.({
-                            entity_id: sb.id,
-                            entity_type: sb.entity_type || "switchboard",
-                            label: sb.label,
-                            building: b.label,
-                            positioned: sb.positioned,
-                          })
-                        }
+                        building={buildingLabel}
+                        onPlanClick={handlePlanClickSwitchboard}
                       >
                         {sb.tasks?.map((t) => (
                           <div
@@ -870,6 +903,33 @@ function HierarchyTree({
                           const devTaskCount = countTasksForFilter(d.tasks);
                           // Devices TGBT héritent toujours de la position du switchboard (backend)
                           const inheritsPosition = sb.positioned;
+                          const positioned = inheritsPosition;
+
+                          const handlePlanClickDevice = () =>
+                            onPlanAction?.({
+                              entity_id: sb.id,
+                              entity_type: sb.entity_type || "switchboard",
+                              label: sb.label,
+                              building: buildingLabel,
+                              building_code:
+                                sb.building_code || buildingLabel,
+                              positioned: sb.positioned,
+                              plan_id:
+                                d.plan_id ||
+                                d.main_plan_id ||
+                                sb.plan_id ||
+                                sb.main_plan_id,
+                              plan_logical_name:
+                                d.plan_logical_name ||
+                                d.main_plan_logical_name ||
+                                sb.plan_logical_name ||
+                                sb.main_plan_logical_name,
+                              plan_display_name:
+                                d.plan_display_name ||
+                                d.main_plan_display_name ||
+                                sb.plan_display_name ||
+                                sb.main_plan_display_name,
+                            });
 
                           return (
                             <TreeNode
@@ -884,21 +944,13 @@ function HierarchyTree({
                                 toggle(`sb-dev-${bi}-${i}-${di}`)
                               }
                               level={2}
-                              positioned={inheritsPosition}
+                              positioned={positioned}
                               needsPosition={
-                                !inheritsPosition && devTaskCount > 0
+                                !positioned && devTaskCount > 0
                               }
                               inheritsPosition={inheritsPosition}
-                              building={b.label}
-                              onPlanClick={() =>
-                                onPlanAction?.({
-                                  entity_id: sb.id,
-                                  entity_type: sb.entity_type || "switchboard",
-                                  label: sb.label,
-                                  building: b.label,
-                                  positioned: sb.positioned,
-                                })
-                              }
+                              building={buildingLabel}
+                              onPlanClick={handlePlanClickDevice}
                             >
                               {d.tasks?.map((t) => (
                                 <div
@@ -1057,13 +1109,14 @@ function PlanChoiceModal({
         if (!cancelled) {
           setPlans(list);
           // auto-sélection : on essaie de matcher le bâtiment dans le logical_name
+          const building = equipment?.building || equipment?.building_code || "";
           const auto =
             equipment &&
             list.find((p) =>
               (p.logical_name || "")
                 .toString()
                 .toLowerCase()
-                .includes(String(equipment.building || "").toLowerCase())
+                .includes(String(building || "").toLowerCase())
             );
           setSelected(auto || list[0] || null);
         }
@@ -1130,7 +1183,9 @@ function PlanChoiceModal({
                 const key = p.id || p.logical_name;
                 const name = p.display_name || p.logical_name || `#${key}`;
                 const hint = p.logical_name || "";
-                const isSel = selected && (selected.id || selected.logical_name) === key;
+                const isSel =
+                  selected &&
+                  (selected.id || selected.logical_name) === key;
 
                 return (
                   <label
@@ -1197,6 +1252,7 @@ export default function ControlsPage() {
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [pendingPlacement, setPendingPlacement] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [focusEntity, setFocusEntity] = useState(null);
 
   // Sync TSD ↔ DB (génération / mise à jour des tâches)
   const [syncing, setSyncing] = useState(false);
@@ -1237,30 +1293,96 @@ export default function ControlsPage() {
   // Gestion du clic sur l'icône plan dans l'arborescence
   const handlePlanActionFromTree = (equipment) => {
     if (!equipment) return;
+
+    const entityId = equipment.entity_id || equipment.id;
+    const entityType = equipment.entity_type || "device";
+
+    // Normalisation du plan côté équipement si le backend le fournit
+    const planId =
+      equipment.plan_id ||
+      equipment.main_plan_id ||
+      null;
+    const planLogicalName =
+      equipment.plan_logical_name ||
+      equipment.main_plan_logical_name ||
+      null;
+    const planDisplayName =
+      equipment.plan_display_name ||
+      equipment.main_plan_display_name ||
+      planLogicalName ||
+      equipment.building ||
+      equipment.building_code ||
+      "";
+
+    const building =
+      equipment.building ||
+      equipment.building_code ||
+      "";
+
+    // Équipement pas encore positionné : on passe par la modale
     if (!equipment.positioned) {
-      // Cas "équipement non encore placé" -> choix du plan
-      setPlanChoiceEquipment(equipment);
-      setPlanChoiceOpen(true);
-    } else {
-      // Cas "déjà placé" -> on ouvre directement la carte
-      setSelectedPlan({
-        logical_name: equipment.building,
-        display_name: equipment.building,
+      setFocusEntity({ entity_id: entityId, entity_type: entityType });
+      setPlanChoiceEquipment({
+        ...equipment,
+        entity_id: entityId,
+        entity_type: entityType,
+        building,
       });
-      setPendingPlacement(null); // juste visualisation
-      setShowMap(true);
+      setPlanChoiceOpen(true);
+      return;
     }
+
+    // Équipement positionné et plan connu côté backend
+    if (planId || planLogicalName) {
+      setSelectedPlan({
+        id: planId || undefined,
+        logical_name: planLogicalName || undefined,
+        display_name: planDisplayName,
+        building,
+      });
+      setPendingPlacement(null); // mode visualisation
+      setFocusEntity({ entity_id: entityId, entity_type: entityType });
+      setShowMap(true);
+      return;
+    }
+
+    // Équipement positionné mais sans info de plan précise : fallback → modale
+    setFocusEntity({ entity_id: entityId, entity_type: entityType });
+    setPlanChoiceEquipment({
+      ...equipment,
+      entity_id: entityId,
+      entity_type: entityType,
+      building,
+    });
+    setPlanChoiceOpen(true);
   };
 
   const handlePlanChosen = (plan) => {
     if (!plan || !planChoiceEquipment) return;
+
+    const eq = planChoiceEquipment;
+    const entityId = eq.entity_id || eq.id;
+    const entityType = eq.entity_type || "device";
+    const building =
+      eq.building || eq.building_code || plan.display_name || plan.logical_name;
+
     setSelectedPlan({
       id: plan.id,
       logical_name: plan.logical_name,
-      display_name: plan.display_name || plan.logical_name,
+      display_name: plan.display_name || plan.logical_name || building,
+      building,
     });
-    // On passe en mode placement :
-    setPendingPlacement(planChoiceEquipment);
+
+    // Mode placement: on passe l'équipement à la carte
+    setPendingPlacement({
+      ...eq,
+      entity_id: entityId,
+      entity_type: entityType,
+      building,
+    });
+
+    setFocusEntity({ entity_id: entityId, entity_type: entityType });
+
     setPlanChoiceOpen(false);
     setPlanChoiceEquipment(null);
     setShowMap(true);
@@ -1269,6 +1391,12 @@ export default function ControlsPage() {
   const handlePlacementComplete = () => {
     setPendingPlacement(null);
     handleRefresh();
+  };
+
+  const closeMap = () => {
+    setShowMap(false);
+    setPendingPlacement(null);
+    setFocusEntity(null);
   };
 
   return (
@@ -1343,8 +1471,12 @@ export default function ControlsPage() {
         <TabsContent value="plans">
           <ControlsMapManager
             onPlanSelect={(plan) => {
-              setSelectedPlan(plan);
+              setSelectedPlan({
+                ...plan,
+                building: plan.building_code || plan.display_name || plan.logical_name,
+              });
               setPendingPlacement(null);
+              setFocusEntity(null);
               setShowMap(true);
             }}
           />
@@ -1381,10 +1513,7 @@ export default function ControlsPage() {
         <div className="fixed inset-0 z-[6000] flex items-center justify-center">
           <div
             className="absolute inset-0 bg-black/40"
-            onClick={() => {
-              setShowMap(false);
-              setPendingPlacement(null);
-            }}
+            onClick={closeMap}
           />
           <div className="relative z-[6001] w-full max-w-7xl h-[90vh] mx-4">
             <Card className="h-full flex flex-col">
@@ -1402,10 +1531,7 @@ export default function ControlsPage() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => {
-                    setShowMap(false);
-                    setPendingPlacement(null);
-                  }}
+                  onClick={closeMap}
                 >
                   Fermer
                 </Button>
@@ -1413,12 +1539,16 @@ export default function ControlsPage() {
               <div className="flex-1 overflow-hidden">
                 <ControlsMap
                   plan={selectedPlan}
-                  building={selectedPlan.logical_name}
+                  building={
+                    selectedPlan.building ||
+                    selectedPlan.logical_name
+                  }
                   onSelectTask={(task) => {
                     setSelectedTask(task);
                   }}
                   pendingPlacement={pendingPlacement}
                   onPlacementComplete={handlePlacementComplete}
+                  focusEntity={focusEntity}
                   inModal={false}
                 />
               </div>
