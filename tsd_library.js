@@ -25,7 +25,7 @@ export const tsdLibrary = {
     {
       "key": "lv_switchgear",
       "label": "Low voltage switchgear (<1000 V ac)",
-      "db_table": "switchboards",
+      "db_table": "devices",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
