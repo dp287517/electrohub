@@ -1169,40 +1169,51 @@ router.get("/bootstrap/auto-link", async (req, res) => {
 
       const controls = cat.controls || [];
       if (!controls.length) continue;
+
       // Pour certains types (ex: VSD), on veut détecter les équipements "suspects" sans contrôle
       const vsdLikeMissing = [];
 
       // ------------------------------
-      // 1) Récupérer les équipements
+      // 1) Vérifier que la table existe + récupérer les équipements
       // ------------------------------
       let entities = [];
-      try {
-        // Vérifier si la colonne "site" existe dans la table
-        const { rows: colCheck } = await client.query(
-          `SELECT EXISTS (
-             SELECT FROM information_schema.columns 
-             WHERE table_name = $1 AND column_name = 'site'
-           )`,
-          [tableName]
-        );
-        const hasSiteCol = colCheck[0]?.exists;
 
-        const { rows } = await client.query(
-          hasSiteCol
-            ? `SELECT * FROM ${tableName} WHERE site = $1`
-            : `SELECT * FROM ${tableName}`,
-          hasSiteCol ? [site] : []
-        );
+      // 1.a) Vérifier si la table existe réellement
+      const { rows: tableCheck } = await client.query(
+        `SELECT EXISTS (
+           SELECT FROM information_schema.tables 
+           WHERE table_name = $1
+         )`,
+        [tableName]
+      );
+      const hasTable = tableCheck[0]?.exists;
 
-        entities = rows;
-      } catch (e) {
+      if (!hasTable) {
         console.warn(
-          `[Controls][auto-link] Table manquante ou invalide: ${tableName}`,
-          e.message
+          `[Controls][auto-link] Table absente, catégorie ignorée: ${tableName}`
         );
         continue; // on passe à la catégorie suivante sans casser la transaction
       }
 
+      // 1.b) Vérifier si la colonne "site" existe dans la table
+      const { rows: colCheck } = await client.query(
+        `SELECT EXISTS (
+           SELECT FROM information_schema.columns 
+           WHERE table_name = $1 AND column_name = 'site'
+         )`,
+        [tableName]
+      );
+      const hasSiteCol = colCheck[0]?.exists;
+
+      // 1.c) Récupérer les entités (filtrées par site si possible)
+      const { rows } = await client.query(
+        hasSiteCol
+          ? `SELECT * FROM ${tableName} WHERE site = $1`
+          : `SELECT * FROM ${tableName}`,
+        hasSiteCol ? [site] : []
+      );
+
+      entities = rows;
       if (!entities.length) continue;
 
       const entityType = entityTypeFromCategory(cat);
@@ -1398,8 +1409,7 @@ Consignes :
           isControlAllowedForEntity(cat, ctrl, ent)
         );
 
-        // 5.b) Cas particulier VSD : si l'équipement ressemble à un variateur mais
-        // n'obtient AUCUN contrôle, on enregistre un warning pour l'UI
+        // 5.b) Cas particulier VSD : warning si équipement "VSD-like" sans contrôle
         if (cat.key === "vsd" && isVsdLikeEntity(ent) && controlsForThis.length === 0) {
           vsdLikeMissing.push({
             id: ent.id,
