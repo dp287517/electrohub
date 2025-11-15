@@ -192,6 +192,63 @@ function isControlAllowedForEntity(cat, ctrl, ent) {
   const key = cat.key || "";
   const name = getEquipmentNameString(ent);
 
+  // 0) Filtre intensité de base (MCCB >400A, Bus Duct >800A, etc.)
+  if (!isCurrentCompatible(ctrl, ent)) {
+    return false;
+  }
+
+  function getRatedCurrent(ent) {
+  const candidates = [
+    ent.rated_current,
+    ent.in,
+    ent.rating,
+    ent.nominal_current,
+  ].filter((v) => v != null);
+
+  if (!candidates.length) return null;
+
+  const raw = String(candidates[0]).replace(",", ".");
+  const m = raw.match(/(\d+(\.\d+)?)/);
+  if (!m) return null;
+
+  const val = Number(m[1]);
+  return Number.isFinite(val) ? val : null;
+}
+
+function isCurrentCompatible(ctrl, ent) {
+  const label = String(ctrl.type || ctrl.description || "").toLowerCase();
+  const current = getRatedCurrent(ent);
+  if (!current) return true; // si on ne connaît pas le calibre, on ne filtre pas
+
+  // ------------- Bus Duct / Bus Riser (>800A, <1000 Vac) -------------
+  if (key === "bus_duct_riser") {
+    const isBusDuct = /bus duct|bus riser|jeu de barres blindé|jeu de barres/i.test(
+      name
+    );
+    const current = getRatedCurrent(ent);
+
+    // Si ton site n'a pas de bus duct : tu peux même faire directement "return false"
+    if (!isBusDuct) return false;
+
+    // Cohérence avec la TSD : bus duct >800A
+    if (current && current < 800) return false;
+
+    return true;
+  }
+
+  // Cas explicite MCCB >400A
+  if (label.includes("mccb >400a")) {
+    return current > 400;
+  }
+
+  // Bus duct / bus riser >800A (voir plus bas)
+  if (label.includes("bus duct") || label.includes("bus riser")) {
+    return current >= 800;
+  }
+
+  return true;
+}
+
   // ------------- Distribution Boards (<1000 V ac) -------------
   if (key === "distribution_boards") {
     const isBoard = /tgbt|qgbt|qg\b|tableau|tab\b|db\b|distribution board|switchboard/.test(
@@ -211,6 +268,20 @@ function isControlAllowedForEntity(cat, ctrl, ent) {
         name
       );
     return isEmerg;
+  }
+
+  // ------------- UPS (Uninterruptible Power Supply) -------------
+  if (key === "ups_small" || key === "ups_large") {
+    const isUps =
+      /ups\b|onduleur|uninterruptible power/i.test(name);
+    return isUps;
+  }
+
+  // ------------- AC Induction Motors (LV) -------------
+  if (key === "motors_lv") {
+    const isMotor =
+      /motor|moteur|pompe|fan|ventilateur|blower|compressor/i.test(name);
+    return isMotor;
   }
 
   // ------------- Fire Detection and Fire Alarm Systems -------------
