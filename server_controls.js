@@ -1,2367 +1,1929 @@
-// -----------------------------------------------------------------------------
-// tsd_library.js
-// Central library of controls derived from: G2.1 Maintenance, Inspection and
-// Testing of Electrical Equipment TSD (v2.0, Effective 2023-10-12).
-// This file is generated to support Electrohub (server_controls.js / Controls.jsx).
-//
-// Usage:
-//  - RESULT_OPTIONS: standard statuses for checklist items.
-//  - Each category maps to a DB table (db_table). If that equipment type does
-//    not yet exist in DB, display `fallback_note_if_missing` to the user.
-//  - frequency: { interval: <number>, unit: 'months'|'years'|'weeks' }.
-//  - observations: free-text fields to capture readings/notes.
-// -----------------------------------------------------------------------------
-export const tsdLibrary = {
-  "meta": {
-    "source": "G2.1 Maintenance, Inspection and Testing of Electrical Equipment TSD v2.0 (Effective: 2023-10-12)",
-    "result_options": [
-      "Conforme",
-      "Non conforme",
-      "Non applicable"
-    ],
-    "missing_equipment_note": "Equipment pending integration into Electrohub system."
+// ============================================================================
+// server_controls.js — Backend TSD + Plans + IA (électrique / sécurité)
+// ============================================================================
+
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import dotenv from "dotenv";
+import multer from "multer";
+import unzipper from "unzipper";
+import path from "path";
+import fs from "fs";
+import fsp from "fs/promises";
+import { fileURLToPath } from "url";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import pg from "pg";
+
+dayjs.extend(utc);
+dotenv.config();
+
+// --- OpenAI (IA photos / sécurité / infos équipements / match TSD/équipements)
+const { OpenAI } = await import("openai");
+
+// ============================================================================
+// CONSTANTES & INIT
+// ============================================================================
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const { Pool } = pg;
+const pool = new Pool({
+  connectionString:
+    process.env.CONTROLS_DATABASE_URL ||
+    process.env.DATABASE_URL ||
+    process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+const app = express();
+const router = express.Router();
+
+app.use(helmet());
+app.use(cors());
+app.use(express.json({ limit: "30mb" }));
+app.use(express.urlencoded({ extended: true, limit: "30mb" }));
+
+// ============================================================================
+// HELPERS GÉNÉRAUX
+// ============================================================================
+
+function siteOf(req) {
+  return req.header("X-Site") || req.query.site || "Default";
+}
+
+function isUuid(s) {
+  return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
+}
+
+function isNumericId(s) {
+  return (
+    (typeof s === "string" && /^\d+$/.test(s)) ||
+    (typeof s === "number" && Number.isInteger(s))
+  );
+}
+
+// Calcul du statut selon date d'échéance
+function computeStatus(next_control) {
+  if (!next_control) return "Planned";
+  const now = dayjs();
+  const next = dayjs(next_control);
+  const diffDays = next.diff(now, "day");
+
+  if (diffDays < 0) return "Overdue";
+  if (diffDays <= 30) return "Pending";
+  return "Planned";
+}
+
+// Ajout de fréquence à une date
+function addFrequency(dateStr, frequency) {
+  if (!frequency) return null;
+  const base = dayjs(dateStr);
+
+  if (frequency.interval && frequency.unit) {
+    const unit =
+      frequency.unit === "months"
+        ? "month"
+        : frequency.unit === "years"
+        ? "year"
+        : "week";
+    return base.add(frequency.interval, unit).format("YYYY-MM-DD");
+  }
+
+  return null;
+}
+
+function generateInitialDate(frequency) {
+  // Date de référence globale
+  const refDate = dayjs("2026-01-01");
+  const now = dayjs();
+
+  // Si on est avant 2026 → on part du 01.01.2026
+  // Si on est après 2026 → on part de la date du jour (ex: 20.03.2026)
+  const baseDate = now.isAfter(refDate) ? now : refDate;
+
+  return baseDate.format("YYYY-MM-DD");
+}
+
+// Trouver le contrôle TSD par task_code (dérivé de type)
+function findTSDControl(taskCode) {
+  if (!taskCode) return null;
+  const canon = String(taskCode).toLowerCase();
+  for (const cat of tsdLibrary.categories) {
+    for (const c of cat.controls || []) {
+      const code = c.type.toLowerCase().replace(/\s+/g, "_");
+      if (code === canon) {
+        return { category: cat, control: c };
+      }
+    }
+  }
+  return null;
+}
+
+// Mapping propre db_table → entity_type (pour cohérence avec l'arborescence)
+function entityTypeFromCategory(cat) {
+  const t = cat.db_table;
+  switch (t) {
+    case "hv_equipments":
+      return "hvequipment";
+    case "hv_devices":
+      return "hvdevice";
+    case "switchboards":
+      return "switchboard";
+    case "devices":
+      return "device";
+    case "sites":
+      return "site";
+    default:
+      return t ? t.replace(/_/g, "") : "equipment";
+  }
+}
+
+// ============================================================================
+// HELPERS MÉTIER — COHÉRENCE ÉQUIPEMENT / CONTRÔLES
+// ============================================================================
+
+// Construit une chaîne "nom complet" à partir des colonnes utiles
+function getEquipmentNameString(ent) {
+  const parts = [];
+  if (ent.name) parts.push(ent.name);
+  if (ent.device_type) parts.push(ent.device_type);
+  if (ent.switchboard_name) parts.push(ent.switchboard_name);
+  if (ent.description) parts.push(ent.description);
+  return parts.join(" ").toLowerCase();
+}
+
+// Heuristique : est-ce que cet équipement ressemble à un variateur de vitesse ?
+function isVsdLikeEntity(ent) {
+  const s = getEquipmentNameString(ent);
+  return (
+    /vsd\b/.test(s) ||
+    /vfd\b/.test(s) ||
+    /variateur/.test(s) ||
+    /variable\s*speed/.test(s) ||
+    /drive\b/.test(s) ||
+    /convertisseur de fréquence/.test(s)
+  );
+}
+
+// Courant assigné : on essaie de récupérer rated_current / In / rating / nominal_current
+function getRatedCurrent(ent) {
+  const candidates = [
+    ent.rated_current,
+    ent.in,
+    ent.rating,
+    ent.nominal_current,
+  ].filter((v) => v != null);
+
+  if (!candidates.length) return null;
+
+  const raw = String(candidates[0]).replace(",", ".");
+  const m = raw.match(/(\d+(\.\d+)?)/);
+  if (!m) return null;
+
+  const val = Number(m[1]);
+  return Number.isFinite(val) ? val : null;
+}
+
+// Filtre générique basé sur le calibre et le libellé du contrôle
+function isCurrentCompatible(ctrl, ent) {
+  const label = String(ctrl.type || ctrl.description || "").toLowerCase();
+  const current = getRatedCurrent(ent);
+  if (!current) return true; // si on ne connaît pas le calibre, on ne filtre pas
+
+  // Cas explicite MCCB >400A
+  if (label.includes("mccb >400a")) {
+    return current > 400;
+  }
+
+  // Bus duct / bus riser >800A
+  if (label.includes("bus duct") || label.includes("bus riser")) {
+    return current >= 800;
+  }
+
+  return true;
+}
+
+/**
+ * Filtre métier : est-ce que le contrôle de cette catégorie peut s'appliquer
+ * à cet équipement ?
+ */
+function isControlAllowedForEntity(cat, ctrl, ent) {
+  const key = cat.key || "";
+  const name = getEquipmentNameString(ent);
+
+  // 0) Filtre intensité de base (MCCB >400A, Bus Duct >800A, etc.)
+  if (!isCurrentCompatible(ctrl, ent)) {
+    return false;
+  }
+
+  // ------------- Bus Duct / Bus Riser (>800A, <1000 Vac) -------------
+  if (key === "bus_duct_riser") {
+    const isBusDuct = /bus duct|bus riser|jeu de barres blindé|jeu de barres/i.test(
+      name
+    );
+    const current = getRatedCurrent(ent);
+
+    // Si ton site n'a pas de bus duct : tu peux même faire directement "return false"
+    if (!isBusDuct) return false;
+
+    // Cohérence avec la TSD : bus duct >800A
+    if (current && current < 800) return false;
+
+    return true;
+  }
+
+  // ------------- Distribution Boards (<1000 V ac) -------------
+  if (key === "distribution_boards") {
+    const isBoard =
+      /tgbt|qgbt|qg\b|tableau|tab\b|db\b|distribution board|switchboard/i.test(
+        name
+      );
+    const looksBreaker =
+      /mcb|mccb|disjoncteur|breaker|interrupteur|sectionneur/i.test(name);
+
+    // On n'accepte que si ça ressemble clairement à un tableau et pas à un simple disjoncteur
+    return isBoard && !looksBreaker;
+  }
+
+  // ------------- Emergency Lighting Systems -------------
+  if (key === "emergency_lighting") {
+    const isEmerg =
+      /baes|bloc secours|éclairage de sécurité|eclairage de securite|emergency lighting|emergency light/i.test(
+        name
+      );
+    return isEmerg;
+  }
+
+  // ------------- UPS (Uninterruptible Power Supply) -------------
+  if (key === "ups_small" || key === "ups_large") {
+    const isUps = /ups\b|onduleur|uninterruptible power/i.test(name);
+    return isUps;
+  }
+
+  // ------------- AC Induction Motors (LV) -------------
+  if (key === "motors_lv") {
+    const isMotor =
+      /motor|moteur|pompe|fan|ventilateur|blower|compressor/i.test(name);
+    return isMotor;
+  }
+
+  // ------------- Fire Detection and Fire Alarm Systems -------------
+  if (key === "fire_detection" || key === "fire_detection_alarm") {
+    const isFire =
+      /ssi\b|sdsi\b|détection incendie|detection incendie|fire detection|fire alarm|smoke detector|détecteur de fumée|detecteur de fumee/i.test(
+        name
+      );
+    return isFire;
+  }
+
+  // ------------- Power Factor Correction (>1000 V ac) -------------
+  if (key === "pfc_hv" || key === "pfc_lv") {
+    const isPfc =
+      /pfc\b|compensation|condensateur|capacitor bank|batterie de condensateurs|power factor/i.test(
+        name
+      );
+    return isPfc;
+  }
+
+  // ------------- Variable Speed Drives -------------
+  if (key === "vsd") {
+    return isVsdLikeEntity(ent);
+  }
+
+  // Par défaut : on laisse passer (IA + bon sens métier)
+  return true;
+}
+
+// Mapping inverse : entity_type -> table DB (pour IA sur les tâches)
+function tableFromEntityType(entityType) {
+  switch (entityType) {
+    case "hvequipment":
+      return "hv_equipments";
+    case "hvdevice":
+      return "hv_devices";
+    case "switchboard":
+      return "switchboards";
+    case "device":
+      return "devices";
+    case "site":
+      return "sites";
+    default:
+      return null;
+  }
+}
+
+// ============================================================================
+// MULTER / UPLOADS
+// ============================================================================
+
+// ZIP de plans (PDF) en mémoire
+const uploadZip = multer({ storage: multer.memoryStorage() });
+
+// Dossiers data pour IA (photos, etc.)
+const DATA_DIR =
+  process.env.CONTROLS_DATA_DIR ||
+  path.resolve(__dirname, "./_data_controls");
+const FILES_DIR = path.join(DATA_DIR, "files");
+for (const d of [DATA_DIR, FILES_DIR]) {
+  await fsp.mkdir(d, { recursive: true });
+}
+
+// Upload fichiers images pour IA (stockage disque)
+const multerFiles = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, FILES_DIR),
+    filename: (_req, file, cb) =>
+      cb(
+        null,
+        `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`
+      ),
+  }),
+  limits: { fileSize: 40 * 1024 * 1024 }, // 40 MB par fichier
+});
+
+// ============================================================================
+// IA — CLIENT OPENAI
+// ============================================================================
+
+function openaiClient() {
+  const key =
+    process.env.OPENAI_API_KEY ||
+    process.env.OPENAI_API_KEY_CONTROLS ||
+    process.env.OPENAI_API_KEY_ATEX ||
+    process.env.OPENAI_API_KEY_DOORS;
+  if (!key) return null;
+  return new OpenAI({ apiKey: key });
+}
+
+// ============================================================================
+// IA — ANALYSE PHOTOS / INFOS ÉQUIPEMENTS / SÉCURITÉ
+// ============================================================================
+
+/**
+ * Analyse des photos d'équipements électriques / sûreté
+ * Retourne un JSON structuré (nom, type, fabricant, ref, sécurité, etc.)
+ */
+async function controlsExtractFromFiles(client, files) {
+  if (!client) throw new Error("OPENAI_API_KEY missing");
+  if (!files?.length) throw new Error("no files");
+
+  const images = await Promise.all(
+    files.map(async (f) => ({
+      name: f.originalname,
+      mime: f.mimetype,
+      data: (await fsp.readFile(f.path)).toString("base64"),
+    }))
+  );
+
+  const sys = `Tu es un assistant d'inspection pour les installations électriques et de sécurité (HT, TGBT, transformateurs, UPS, éclairage de sécurité, etc.).
+À partir de plusieurs photos d'équipements, tu dois extraire des informations utiles pour un outil de maintenance / contrôle (CMMS).
+
+Renvoyer STRICTEMENT un JSON de la forme :
+{
+  "equipment_name": "nom lisible si visible, sinon chaîne vide",
+  "equipment_type": "type ou famille (ex: HV switchgear, LV switchboard, UPS, Transformer, Motor, Lighting, etc.)",
+  "manufacturer": "marque si visible",
+  "reference": "référence constructeur si visible",
+  "serial_number": "numéro de série éventuel",
+  "location_hint": "indices de localisation visibles (bâtiment, zone, étiquette...)",
+  "safety_notes": "texte court avec remarques sécurité (EPI, signalisation, étiquette danger, IP rating, etc.)",
+  "keywords": ["mot-clé1", "mot-clé2", ...]
+}
+
+Contraintes :
+- Si une info n'est pas visible, mets simplement une chaîne vide ou []. 
+- NE RENVOIE AUCUN TEXTE EN DEHORS DU JSON.`;
+
+  const messages = [
+    { role: "system", content: sys },
+    {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: "Analyse ces photos et renvoie uniquement un JSON valide.",
+        },
+        ...images.map((im) => ({
+          type: "image_url",
+          image_url: {
+            url: `data:${im.mime};base64,${im.data}`,
+          },
+        })),
+      ],
+    },
+  ];
+
+  const resp = await client.chat.completions.create({
+    model:
+      process.env.CONTROLS_OPENAI_MODEL ||
+      process.env.ATEX_OPENAI_MODEL ||
+      "gpt-4o-mini",
+    messages,
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+  });
+
+  let data = {};
+  try {
+    data = JSON.parse(resp.choices?.[0]?.message?.content || "{}");
+  } catch {
+    data = {};
+  }
+
+  return {
+    equipment_name: String(data.equipment_name || ""),
+    equipment_type: String(data.equipment_type || ""),
+    manufacturer: String(data.manufacturer || ""),
+    reference: String(data.reference || ""),
+    serial_number: String(data.serial_number || ""),
+    location_hint: String(data.location_hint || ""),
+    safety_notes: String(data.safety_notes || ""),
+    keywords: Array.isArray(data.keywords) ? data.keywords.map(String) : [],
+  };
+}
+
+// Routes IA (photos)
+router.post(
+  "/ai/analyzePhotoBatch",
+  multerFiles.array("files"),
+  async (req, res) => {
+    try {
+      const client = openaiClient();
+      if (!client) {
+        throw new Error("OPENAI_API_KEY missing for Controls AI");
+      }
+      const extracted = await controlsExtractFromFiles(
+        client,
+        req.files || []
+      );
+
+      await Promise.all(
+        (req.files || []).map((f) => fsp.unlink(f.path).catch(() => {}))
+      );
+
+      res.json({ ok: true, extracted });
+    } catch (e) {
+      console.error("[Controls][AI] analyzePhotoBatch error:", e);
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  }
+);
+
+// Alias
+router.post("/ai/extract", multerFiles.array("files"), async (req, res) => {
+  try {
+    const client = openaiClient();
+    if (!client) {
+      throw new Error("OPENAI_API_KEY missing for Controls AI");
+    }
+    const extracted = await controlsExtractFromFiles(client, req.files || []);
+
+    await Promise.all(
+      (req.files || []).map((f) => fsp.unlink(f.path).catch(() => {}))
+    );
+
+    res.json({ ok: true, extracted });
+  } catch (e) {
+    console.error("[Controls][AI] extract error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================================
+// IA — ANALYSE & ASSISTANT SUR UNE TÂCHE (pour Controls.jsx / TaskDetails)
+// ============================================================================
+
+// Construit un "contexte compact" pour l'IA à partir d'une tâche
+async function buildTaskContext(taskId) {
+  const { rows: taskRows } = await pool.query(
+    `SELECT * FROM controls_tasks WHERE id = $1`,
+    [taskId]
+  );
+  if (!taskRows.length) return null;
+  const task = taskRows[0];
+
+  const tsd = findTSDControl(task.task_code);
+
+  const { rows: records } = await pool.query(
+    `SELECT * FROM controls_records 
+     WHERE task_id = $1 
+     ORDER BY performed_at DESC 
+     LIMIT 10`,
+    [taskId]
+  );
+
+  let equipment = null;
+  const table = tableFromEntityType(task.entity_type);
+  if (table) {
+    try {
+      const { rows: eqRows } = await pool.query(
+        `SELECT * FROM ${table} WHERE id = $1`,
+        [task.entity_id]
+      );
+      equipment = eqRows[0] || null;
+    } catch (e) {
+      console.warn(
+        `[Controls][AI] Failed to load equipment for entity_type=${task.entity_type}, table=${table}:`,
+        e.message
+      );
+    }
+  }
+
+  return {
+    task: {
+      id: task.id,
+      site: task.site,
+      entity_id: task.entity_id,
+      entity_type: task.entity_type,
+      task_name: task.task_name,
+      task_code: task.task_code,
+      status: task.status,
+      next_control: task.next_control,
+      last_control: task.last_control,
+      frequency_months: task.frequency_months,
+    },
+    tsd: tsd
+      ? {
+          category_key: tsd.category.key,
+          category_label: tsd.category.label,
+          control_type: tsd.control.type,
+          frequency: tsd.control.frequency || null,
+          notes: tsd.control.notes || "",
+          checklist: tsd.control.checklist || [],
+          observations: tsd.control.observations || [],
+        }
+      : null,
+    equipment,
+    records: records.map((r) => ({
+      id: r.id,
+      performed_at: r.performed_at,
+      result_status: r.result_status,
+      comments: r.comments,
+    })),
+  };
+}
+
+// Analyse automatique d'une tâche
+router.post("/tasks/:id/analyze", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const client = openaiClient();
+    if (!client) {
+      return res.status(500).json({
+        ok: false,
+        error: "OPENAI_API_KEY missing for Controls AI",
+      });
+    }
+
+    const ctx = await buildTaskContext(id);
+    if (!ctx) {
+      return res.status(404).json({ ok: false, error: "Task not found" });
+    }
+
+    const sys = `Tu es un expert en maintenance, inspection et essais d'installations électriques (HT, TGBT, protections, batteries, UPS, éclairage de sécurité...).
+Tu aides un responsable maintenance à analyser un contrôle périodique issu d'une TSD (G2.1). 
+Ton objectif : fournir un avis opérationnel exploitable immédiatement pour la sûreté / conformité du site.`;
+
+    const user = `Contexte JSON (task_context) :
+${JSON.stringify(ctx, null, 2)}
+
+Produit une ANALYSE STRUCTURÉE en français, avec les sections numérotées :
+
+1. Synthèse rapide (2-3 phrases maximum)
+2. État du contrôle (à jour / en retard / bientôt dû) + dates clés
+3. Principaux risques techniques & sécurité pour ce type d'équipement
+4. Recommandations concrètes (actions à lancer, priorités)
+5. Suggestions de checks supplémentaires (si pertinents)
+6. Commentaires sur la fréquence actuelle (ok / à renforcer / à questionner)
+
+Tu t'adresses à un technicien / responsable maintenance.
+Pas de JSON, uniquement du texte clair et lisible.`;
+
+    const resp = await client.chat.completions.create({
+      model:
+        process.env.CONTROLS_OPENAI_MODEL ||
+        process.env.ATEX_OPENAI_MODEL ||
+        "gpt-4o-mini",
+      temperature: 0.25,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: user },
+      ],
+    });
+
+    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error("[Controls][AI] tasks/:id/analyze error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Assistant IA interactif sur une tâche
+router.post("/tasks/:id/assistant", async (req, res) => {
+  const { id } = req.params;
+  const { question = "" } = req.body || {};
+
+  try {
+    const client = openaiClient();
+    if (!client) {
+      return res.status(500).json({
+        ok: false,
+        error: "OPENAI_API_KEY missing for Controls AI",
+      });
+    }
+
+    const ctx = await buildTaskContext(id);
+    if (!ctx) {
+      return res.status(404).json({ ok: false, error: "Task not found" });
+    }
+
+    const sys = `Tu es un assistant IA spécialisé en maintenance électrique industrielle, conformité TSD et sûreté (HT, TGBT, protections, EPI, etc.).
+Tu réponds de manière précise, actionnable et orientée terrain.`;
+
+    const user = `Voici le contexte de la tâche (JSON compact) :
+${JSON.stringify(ctx, null, 2)}
+
+Question de l'utilisateur :
+"${question}"
+
+Consignes :
+- Réponds en français.
+- Donne une réponse structurée, opérationnelle (utilisable directement sur le terrain ou pour un plan d'actions).
+- Si une information manque dans le contexte, dis-le simplement et propose des hypothèses réalistes.`;
+
+    const resp = await client.chat.completions.create({
+      model:
+        process.env.CONTROLS_OPENAI_MODEL ||
+        process.env.ATEX_OPENAI_MODEL ||
+        "gpt-4o-mini",
+      temperature: 0.35,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: user },
+      ],
+    });
+
+    const answer = resp.choices?.[0]?.message?.content?.trim() || "";
+    res.json({ ok: true, answer });
+  } catch (e) {
+    console.error("[Controls][AI] tasks/:id/assistant error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ============================================================================
+// ROUTE: GET /hierarchy/tree
+// ============================================================================
+
+router.get("/hierarchy/tree", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const site = siteOf(req);
+    const statusFilter = String(req.query.status || "open").toLowerCase();
+
+    const filterTasks = (tasks) => {
+      if (!Array.isArray(tasks)) return [];
+      return tasks
+        .map((t) => ({
+          ...t,
+          status: computeStatus(t.next_control),
+        }))
+        .filter((t) => {
+          if (statusFilter === "all") return true;
+          if (statusFilter === "done") {
+            return !!t.last_control;
+          }
+          return ["Planned", "Pending", "Overdue"].includes(t.status);
+        });
+    };
+
+    const buildings = [];
+
+    const { rows: buildingRows } = await client.query(
+      `
+      SELECT DISTINCT building_code AS code FROM (
+        SELECT building_code FROM switchboards WHERE building_code IS NOT NULL AND site = $1
+        UNION
+        SELECT building_code FROM hv_equipments WHERE building_code IS NOT NULL AND site = $1
+      ) q
+      ORDER BY building_code
+    `,
+      [site]
+    );
+
+    for (const bRow of buildingRows) {
+      const building = { label: bRow.code, hv: [], switchboards: [] };
+
+      // ---------- HV ----------
+      const { rows: hvEquips } = await client.query(
+        `SELECT * FROM hv_equipments WHERE building_code = $1 AND site = $2`,
+        [bRow.code, site]
+      );
+
+      for (const hv of hvEquips) {
+        const { rows: hvPosCheck } = await client.query(
+          `SELECT EXISTS(
+            SELECT 1 FROM controls_task_positions ctp
+            JOIN controls_tasks ct ON ctp.task_id = ct.id
+            WHERE ct.entity_id = $1 
+              AND ct.entity_type = 'hvequipment'
+          ) as positioned`,
+          [hv.id]
+        );
+        const hvPositioned = hvPosCheck[0]?.positioned || false;
+
+        const { rows: hvTasksRaw } = await client.query(
+          `SELECT ct.*,
+             EXISTS(
+               SELECT 1 FROM controls_task_positions ctp
+               WHERE ctp.task_id = ct.id
+             ) as positioned
+           FROM controls_tasks ct
+           WHERE ct.entity_id = $1 
+             AND ct.entity_type = 'hvequipment'`,
+          [hv.id]
+        );
+        const hvTasks = filterTasks(hvTasksRaw);
+
+        const { rows: hvDevices } = await client.query(
+          `SELECT * FROM hv_devices WHERE hv_equipment_id = $1 AND site = $2`,
+          [hv.id, site]
+        );
+
+        const devices = [];
+        for (const d of hvDevices) {
+          const { rows: dvPosCheck } = await client.query(
+            `SELECT EXISTS(
+              SELECT 1 FROM controls_task_positions ctp
+              JOIN controls_tasks ct ON ctp.task_id = ct.id
+              WHERE ct.entity_id = $1
+                AND ct.entity_type = 'hvdevice'
+            ) as positioned`,
+            [d.id]
+          );
+
+          const { rows: devTasksRaw } = await client.query(
+            `SELECT ct.*,
+               EXISTS(
+                 SELECT 1 FROM controls_task_positions ctp
+                 WHERE ctp.task_id = ct.id
+               ) as positioned
+             FROM controls_tasks ct
+             WHERE ct.entity_id = $1 
+               AND ct.entity_type = 'hvdevice'`,
+            [d.id]
+          );
+          const devTasks = filterTasks(devTasksRaw);
+
+          const devicePositioned =
+            (dvPosCheck[0]?.positioned || false) || hvPositioned;
+
+          devices.push({
+            id: d.id,
+            label: d.name || d.device_type,
+            positioned: devicePositioned,
+            entity_type: "hvdevice",
+            tasks: devTasks,
+          });
+        }
+
+        building.hv.push({
+          id: hv.id,
+          label: hv.name,
+          positioned: hvPositioned,
+          entity_type: "hvequipment",
+          building_code: bRow.code,
+          tasks: hvTasks,
+          devices,
+        });
+      }
+
+      // ---------- SWITCHBOARDS ----------
+      const { rows: swRows } = await client.query(
+        `SELECT * FROM switchboards WHERE building_code = $1 AND site = $2`,
+        [bRow.code, site]
+      );
+
+      for (const sw of swRows) {
+        const { rows: swPosCheck } = await client.query(
+          `SELECT EXISTS(
+            SELECT 1 FROM controls_task_positions ctp
+            JOIN controls_tasks ct ON ctp.task_id = ct.id
+            WHERE ct.entity_id = $1
+              AND ct.entity_type = 'switchboard'
+          ) as positioned`,
+          [sw.id]
+        );
+
+        const { rows: swTasksRaw } = await client.query(
+          `SELECT ct.*,
+             EXISTS(
+               SELECT 1 FROM controls_task_positions ctp
+               WHERE ctp.task_id = ct.id
+             ) as positioned
+           FROM controls_tasks ct
+           WHERE ct.entity_id = $1 
+             AND ct.entity_type = 'switchboard'`,
+          [sw.id]
+        );
+        const swTasks = filterTasks(swTasksRaw);
+
+        const swPositioned = swPosCheck[0]?.positioned || false;
+
+        const swObj = {
+          id: sw.id,
+          label: sw.name,
+          positioned: swPositioned,
+          entity_type: "switchboard",
+          building_code: bRow.code,
+          tasks: swTasks,
+          devices: [],
+        };
+
+        const { rows: devRows } = await client.query(
+          `SELECT * FROM devices WHERE switchboard_id = $1 AND site = $2`,
+          [sw.id, site]
+        );
+
+        for (const d of devRows) {
+          const { rows: devTasksRaw } = await client.query(
+            `SELECT * FROM controls_tasks 
+             WHERE entity_id = $1 AND entity_type = 'device'`,
+            [d.id]
+          );
+          const devTasks = filterTasks(devTasksRaw).map((t) => ({
+            ...t,
+            positioned: swPositioned,
+          }));
+
+          swObj.devices.push({
+            id: d.id,
+            label: d.name || d.device_type,
+            positioned: swPositioned,
+            entity_type: "device",
+            tasks: devTasks,
+          });
+        }
+
+        if (swObj.tasks.length || swObj.devices.length) {
+          building.switchboards.push(swObj);
+        }
+      }
+
+      if (building.hv.length > 0 || building.switchboards.length > 0) {
+        buildings.push(building);
+      }
+    }
+
+    res.json({ buildings });
+  } catch (e) {
+    console.error("[Controls] hierarchy/tree error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
+// ROUTE: GET /tasks/:id/schema
+// ============================================================================
+
+router.get("/tasks/:id/schema", async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM controls_tasks WHERE id = $1`,
+      [id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const task = rows[0];
+    const tsd = findTSDControl(task.task_code);
+
+    if (!tsd) {
+      return res.json({
+        checklist: [],
+        observations: [],
+        notes: "Aucun schéma TSD trouvé",
+      });
+    }
+
+    const { category, control } = tsd;
+
+    const schema = {
+      category_key: category.key,
+      tsd_code: task.task_code,
+      checklist: (control.checklist || []).map((q, i) => ({
+        key: `${category.key}_${i}`,
+        label: typeof q === "string" ? q : q.label || q,
+      })),
+      observations: (control.observations || []).map((o, i) => ({
+        key: `${category.key}_obs_${i}`,
+        label: typeof o === "string" ? o : o.label || o,
+      })),
+      notes: control.notes || control.description || "",
+      frequency: control.frequency,
+    };
+
+    res.json(schema);
+  } catch (e) {
+    console.error("[Controls] tasks/:id/schema error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================================
+// ROUTE: PATCH /tasks/:id/close
+// ============================================================================
+
+router.patch("/tasks/:id/close", async (req, res) => {
+  const { id } = req.params;
+
+  const body = req.body || {};
+  const checklist = body.checklist || body.items || [];
+  const observations = body.observations || body.obs || {};
+  const comment = body.comment ?? body.comments ?? null;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows } = await client.query(
+      `SELECT * FROM controls_tasks WHERE id = $1`,
+      [id]
+    );
+
+    if (!rows.length) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const task = rows[0];
+    const tsd = findTSDControl(task.task_code);
+    const frequency = tsd?.control?.frequency;
+
+    const now = dayjs().format("YYYY-MM-DD");
+    const nextControl = frequency ? addFrequency(now, frequency) : null;
+
+    await client.query(
+      `INSERT INTO controls_records (
+        task_id,
+        performed_at,
+        checklist_result,
+        comments,
+        result_status,
+        site,
+        observations
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        id,
+        now,
+        JSON.stringify(checklist || []),
+        comment || null,
+        "Done",
+        task.site,
+        JSON.stringify(observations || {}),
+      ]
+    );
+
+    await client.query(
+      `UPDATE controls_tasks
+       SET last_control = $1,
+           next_control = $2,
+           status = $3,
+           updated_at = NOW()
+       WHERE id = $4`,
+      [now, nextControl, "Planned", id]
+    );
+
+    await client.query("COMMIT");
+
+    res.json({
+      success: true,
+      next_control: nextControl,
+    });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("[Controls] close task error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
+// IA — AUTO-LINK : MATCH INTELLIGENT TSD <-> ÉQUIPEMENTS
+// ============================================================================
+
+/**
+ * IA : pour une catégorie TSD donnée, suggère quels contrôles appliquer à quels équipements.
+ * - category : un objet de tsdLibrary.categories[i]
+ * - entities : rows de la table DB (id, name, device_type, switchboard_name, ...)
+//  Retour attendu (JSON IA) :
+//  { "items": [ { "equipment_id": 12, "controls": ["Visual Inspection", "Low-Voltage ACB – Annual"] }, ... ] }
+ */
+async function aiSuggestControlsForCategory(client, category, entities) {
+  if (!client || !entities.length) return null;
+
+  const controlsSummary = (category.controls || []).map((c) => ({
+    type: c.type,
+    description: c.description || "",
+    frequency: c.frequency || null,
+  }));
+
+  const equipmentsSummary = entities.map((e) => ({
+    id: e.id,
+    name:
+      e.name ||
+      e.device_type ||
+      e.switchboard_name ||
+      e.label ||
+      `${category.db_table} #${e.id}`,
+    device_type: e.device_type || null,
+    switchboard_type: e.switchboard_type || null,
+    rated_current:
+      e.rated_current ||
+      e.in ||
+      e.rating ||
+      e.nominal_current ||
+      null,
+    tags: e.tags || null,
+    building_code: e.building_code || e.building || null,
+  }));
+
+  const sys = `Tu es un assistant IA de maintenance électrique industrielle.
+Tu aides à appliquer une TSD (Testing & Inspection) à un parc d'équipements.
+
+On te donne :
+- une catégorie TSD (par ex. "Low voltage switchgear (<1000 V ac)") avec sa liste de contrôles standard,
+- une liste d'équipements (tableaux, cellules HT, devices, etc.) extraits d'une base de données.
+
+Objectif :
+- Pour CHAQUE équipement, décider quels contrôles de la TSD sont pertinents.
+- Certains équipements peuvent n'avoir qu'un sous-ensemble des contrôles (par ex. tous n'ont pas de protections à injection primaire, etc.).
+- Si tu n'as pas assez d'information pour distinguer, applique les contrôles "généraux" (inspection visuelle, tests de base) mais évite les contrôles manifestement hors sujet.
+
+Contraintes importantes :
+- Les noms de contrôles dans ta réponse DOIVENT correspondre EXACTEMENT aux champs "type" des contrôles TSD fournis.
+- Ne crée PAS de contrôles inventés.
+- Ne renvoie aucun texte hors JSON.`;
+
+  const user = `Catégorie TSD (JSON) :
+\`\`\`json
+${JSON.stringify(
+  {
+    key: category.key,
+    label: category.label,
+    controls: controlsSummary,
   },
-  "categories": [
+  null,
+  2
+)}
+\`\`\`
+
+Équipements (JSON) :
+\`\`\`json
+${JSON.stringify(equipmentsSummary, null, 2)}
+\`\`\`
+
+Réponds STRICTEMENT avec un JSON de la forme :
+
+{
+  "items": [
     {
-      "key": "lv_switchgear",
-      "label": "Low voltage switchgear (<1000 V ac)",
-      "db_table": "switchboards",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection",
-          "description": "Visual inspection with the switchgear energized and in normal operating condition.",
-          "frequency": {
-            "interval": 3,
-            "unit": "months"
-          },
-          "checklist": [
-            "Switchgear environment is clean, cool and dry",
-            "No abnormal noises, smells, vibration or heat",
-            "Arcing not detected (sound/voltage flicker)",
-            "No blistered/blackened paint; insulation looks normal (no signs of overheating)",
-            "Room temperature indicates no general overheating",
-            "No combustibles/unwanted material on or near switchgear",
-            "No damaged insulators",
-            "No pooled water, leaks, rodents, or environmental contaminants",
-            "IP2X protection maintained incl. inside cubicles opened without tools",
-            "All labels permanent, legible and accurate to drawing"
-          ],
-          "observations": [
-            "Relay indications (flags)",
-            "Voltage readings",
-            "Current readings",
-            "Damaged components (displays, meters, LEDs)"
-          ],
-          "notes": "For checklist items, record status using: Conforme / Non conforme / Non applicable."
-        },
-        {
-          "type": "Thermography",
-          "description": "Perform thermographic surveys of low voltage switchgear.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Solid insulation",
-            "Bolted connections",
-            "Switchgear contacts",
-            "Panel exterior",
-            "Accessible internal components"
-          ]
-        },
-        {
-          "type": "Low-Voltage Air Circuit Breakers (ACB) \u2013 Annual",
-          "description": "Functional and mechanical checks, lubrication per manufacturer.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Smooth operation; mechanism not binding",
-            "Correct alignment; no mechanical damage",
-            "No overheating; arc chutes OK; contacts OK",
-            "Insulation resistance of main contacts checked",
-            "Prove operation from protection devices",
-            "Charging mechanism and auxiliary features functional (interlocks, trip-free, anti-pumping, trip indicators)",
-            "Open/Close operation (manual & control system)",
-            "Lubricated per manufacturer"
-          ]
-        },
-        {
-          "type": "MCCB >400A \u2013 Annual",
-          "description": "Operation and settings.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Smooth operation; mechanism not binding",
-            "Protection settings correct vs latest electrical study"
-          ]
-        },
-        {
-          "type": "Motor Contactors \u2013 Annual",
-          "description": "For contactors >50 hp (37 kW).",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Mechanically exercised",
-            "Smooth operation; correct alignment; no mechanical damage",
-            "No overheating; arc barriers and contacts in good condition",
-            "Controls functionally OK",
-            "Lubricated per manufacturer"
-          ]
-        },
-        {
-          "type": "Automatic Transfer Switch \u2013 Annual",
-          "description": "Functional and mechanical checks, thermography, lubrication.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Simulate loss/return of normal power; verify transfer and interlocks",
-            "Thermography in both positions (no hot spots)",
-            "Smooth mechanical operation; mechanism not binding",
-            "Lubricated per manufacturer"
-          ]
-        },
-        {
-          "type": "Fused Switches \u2013 3\u20135 years",
-          "description": "Mechanical checks, lubrication, fuse rating and overheating check.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Physical condition of fuse housing/base",
-            "Smooth operation; mechanism not binding",
-            "Lubricated per manufacturer",
-            "Fuses of correct rating/characteristics (replace all 3 phases if one is blown)",
-            "No evidence of overheating"
-          ]
-        },
-        {
-          "type": "Low-Voltage ACB \u2013 Electrical Tests 3\u20135 years",
-          "description": "Trip/close coil voltages, insulation resistance, primary injection, time travel.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Trip/Close coils operate within manufacturer voltage (typically ~50% rated)",
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)",
-            "Primary current injection tests protective functions (pick-up/operate within tolerance)",
-            "Time travel curve recorded and compared to manufacturer and previous results"
-          ]
-        },
-        {
-          "type": "MCCB \u2013 Insulation Resistance 3\u20135 years",
-          "description": "IR >100 M\u03a9 at 1000Vdc.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Motor Contactors \u2013 Insulation Resistance 3\u20135 years",
-          "description": "IR >100 M\u03a9 at 1000Vdc.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Automatic Transfer Switch \u2013 Insulation Resistance 3\u20135 years",
-          "description": "IR >100 M\u03a9 at 1000Vdc.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Busbars and Cables \u2013 3\u20135 years",
-          "description": "Low resistance and insulation resistance checks.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Low Resistance of bolted connections \u2013 compare similar joints; no >50% difference; below manufacturer/max baseline",
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Protection Relays \u2013 3\u20135 years",
-          "description": "Secondary injection testing; settings per latest coordination study.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "All protective functions operate correctly via secondary injection",
-            "Relay settings match current protection coordination study"
-          ]
-        }
-      ]
+      "equipment_id": <id de l'équipement>,
+      "controls": ["Nom exact du contrôle 1", "Nom exact du contrôle 2", ...]
     },
-    {
-      "key": "lv_switchgear",
-      "label": "Low voltage switchgear (<1000 V ac)",
-      "db_table": "devices",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection",
-          "description": "Visual inspection with the switchgear energized and in normal operating condition.",
-          "frequency": {
-            "interval": 3,
-            "unit": "months"
-          },
-          "checklist": [
-            "Switchgear environment is clean, cool and dry",
-            "No abnormal noises, smells, vibration or heat",
-            "Arcing not detected (sound/voltage flicker)",
-            "No blistered/blackened paint; insulation looks normal (no signs of overheating)",
-            "Room temperature indicates no general overheating",
-            "No combustibles/unwanted material on or near switchgear",
-            "No damaged insulators",
-            "No pooled water, leaks, rodents, or environmental contaminants",
-            "IP2X protection maintained incl. inside cubicles opened without tools",
-            "All labels permanent, legible and accurate to drawing"
-          ],
-          "observations": [
-            "Relay indications (flags)",
-            "Voltage readings",
-            "Current readings",
-            "Damaged components (displays, meters, LEDs)"
-          ],
-          "notes": "For checklist items, record status using: Conforme / Non conforme / Non applicable."
-        },
-        {
-          "type": "Thermography",
-          "description": "Perform thermographic surveys of low voltage switchgear.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Solid insulation",
-            "Bolted connections",
-            "Switchgear contacts",
-            "Panel exterior",
-            "Accessible internal components"
-          ]
-        },
-        {
-          "type": "Low-Voltage Air Circuit Breakers (ACB) \u2013 Annual",
-          "description": "Functional and mechanical checks, lubrication per manufacturer.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Smooth operation; mechanism not binding",
-            "Correct alignment; no mechanical damage",
-            "No overheating; arc chutes OK; contacts OK",
-            "Insulation resistance of main contacts checked",
-            "Prove operation from protection devices",
-            "Charging mechanism and auxiliary features functional (interlocks, trip-free, anti-pumping, trip indicators)",
-            "Open/Close operation (manual & control system)",
-            "Lubricated per manufacturer"
-          ]
-        },
-        {
-          "type": "MCCB >400A \u2013 Annual",
-          "description": "Operation and settings.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Smooth operation; mechanism not binding",
-            "Protection settings correct vs latest electrical study"
-          ]
-        },
-        {
-          "type": "Motor Contactors \u2013 Annual",
-          "description": "For contactors >50 hp (37 kW).",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Mechanically exercised",
-            "Smooth operation; correct alignment; no mechanical damage",
-            "No overheating; arc barriers and contacts in good condition",
-            "Controls functionally OK",
-            "Lubricated per manufacturer"
-          ]
-        },
-        {
-          "type": "Automatic Transfer Switch \u2013 Annual",
-          "description": "Functional and mechanical checks, thermography, lubrication.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Simulate loss/return of normal power; verify transfer and interlocks",
-            "Thermography in both positions (no hot spots)",
-            "Smooth mechanical operation; mechanism not binding",
-            "Lubricated per manufacturer"
-          ]
-        },
-        {
-          "type": "Fused Switches \u2013 3\u20135 years",
-          "description": "Mechanical checks, lubrication, fuse rating and overheating check.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Physical condition of fuse housing/base",
-            "Smooth operation; mechanism not binding",
-            "Lubricated per manufacturer",
-            "Fuses of correct rating/characteristics (replace all 3 phases if one is blown)",
-            "No evidence of overheating"
-          ]
-        },
-        {
-          "type": "Low-Voltage ACB \u2013 Electrical Tests 3\u20135 years",
-          "description": "Trip/close coil voltages, insulation resistance, primary injection, time travel.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Trip/Close coils operate within manufacturer voltage (typically ~50% rated)",
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)",
-            "Primary current injection tests protective functions (pick-up/operate within tolerance)",
-            "Time travel curve recorded and compared to manufacturer and previous results"
-          ]
-        },
-        {
-          "type": "MCCB \u2013 Insulation Resistance 3\u20135 years",
-          "description": "IR >100 M\u03a9 at 1000Vdc.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Motor Contactors \u2013 Insulation Resistance 3\u20135 years",
-          "description": "IR >100 M\u03a9 at 1000Vdc.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Automatic Transfer Switch \u2013 Insulation Resistance 3\u20135 years",
-          "description": "IR >100 M\u03a9 at 1000Vdc.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Busbars and Cables \u2013 3\u20135 years",
-          "description": "Low resistance and insulation resistance checks.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "Low Resistance of bolted connections \u2013 compare similar joints; no >50% difference; below manufacturer/max baseline",
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Protection Relays \u2013 3\u20135 years",
-          "description": "Secondary injection testing; settings per latest coordination study.",
-          "frequency": {
-            "interval": 4,
-            "unit": "years"
-          },
-          "checklist": [
-            "All protective functions operate correctly via secondary injection",
-            "Relay settings match current protection coordination study"
-          ]
+    ...
+  ]
+}`;
+
+  const resp = await client.chat.completions.create({
+    model:
+      process.env.CONTROLS_OPENAI_MODEL ||
+      process.env.ATEX_OPENAI_MODEL ||
+      "gpt-4o-mini",
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: sys },
+      { role: "user", content: user },
+    ],
+  });
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(resp.choices?.[0]?.message?.content || "{}");
+  } catch {
+    parsed = null;
+  }
+
+  if (!parsed || !Array.isArray(parsed.items)) return null;
+  return parsed.items;
+}
+
+// ============================================================================
+// ROUTE: GET /bootstrap/auto-link
+// Bootstrap / resync TSD → controls_tasks pour un site
+// - NE SUPPRIME PLUS les tâches existantes
+// - Utilise l'IA (si dispo) pour choisir les contrôles par équipement
+// ============================================================================
+
+router.get("/bootstrap/auto-link", async (req, res) => {
+  const site = siteOf(req);
+  const client = await pool.connect();
+
+  // On peut désactiver l'IA avec ?ai=0 dans l'URL
+  const aiRequested = String(req.query.ai ?? "1") === "1";
+  const aiClient = aiRequested ? openaiClient() : null;
+  const useAI = !!aiClient;
+
+  try {
+    await client.query("BEGIN");
+
+    let created = 0;
+    let usedAI = false;
+    const warnings = [];
+
+    // Parcours de toutes les catégories de la TSD
+    for (const cat of tsdLibrary.categories || []) {
+      const tableName = cat.db_table;
+      if (!tableName) continue;
+
+      const controls = cat.controls || [];
+      if (!controls.length) continue;
+
+      // Pour certains types (ex: VSD), on veut détecter les équipements "suspects" sans contrôle
+      const vsdLikeMissing = [];
+
+      // Certaines catégories doivent TOUJOURS appliquer leurs contrôles
+      // sans passer par l'IA (ex: tableaux TGBT/DB, distribution boards)
+      const forceFullControls =
+        cat.key === "lv_switchgear" ||
+        cat.key === "lv_switchgear_devices" ||
+        cat.key === "distribution_boards";
+
+      // ------------------------------
+      // 1) Vérifier que la table existe + récupérer les équipements
+      // ------------------------------
+      let entities = [];
+
+      // 1.a) Vérifier si la table existe réellement
+      const { rows: tableCheck } = await client.query(
+        `SELECT EXISTS (
+           SELECT FROM information_schema.tables 
+           WHERE table_name = $1
+         )`,
+        [tableName]
+      );
+      const hasTable = tableCheck[0]?.exists;
+
+      if (!hasTable) {
+        console.warn(
+          `[Controls][auto-link] Table absente, catégorie ignorée: ${tableName}`
+        );
+        continue; // on passe à la catégorie suivante sans casser la transaction
+      }
+
+      // 1.b) Vérifier si la colonne "site" existe dans la table
+      const { rows: colCheck } = await client.query(
+        `SELECT EXISTS (
+           SELECT FROM information_schema.columns 
+           WHERE table_name = $1 AND column_name = 'site'
+         )`,
+        [tableName]
+      );
+      const hasSiteCol = colCheck[0]?.exists;
+
+      // 1.c) Récupérer les entités (filtrées par site si possible)
+      const { rows } = await client.query(
+        hasSiteCol
+          ? `SELECT * FROM ${tableName} WHERE site = $1`
+          : `SELECT * FROM ${tableName}`,
+        hasSiteCol ? [site] : []
+      );
+
+      entities = rows;
+      if (!entities.length) continue;
+
+      const entityType = entityTypeFromCategory(cat);
+
+      // ------------------------------
+      // 2) Index des contrôles TSD par "type_key" (snake_case)
+      // ------------------------------
+      const controlsByKey = {};
+      const controlsCatalogForAI = controls.map((c) => {
+        const typeKey = c.type
+          ? c.type.toLowerCase().replace(/\s+/g, "_")
+          : null;
+        if (typeKey) {
+          controlsByKey[typeKey] = c;
         }
-      ]
-    },
+        return {
+          type: c.type,
+          type_key: typeKey,
+          description: c.description || c.notes || "",
+          frequency: c.frequency || null,
+        };
+      });
+
+      // ------------------------------
+      // 3) Appel IA (optionnel) pour décider les contrôles par équipement
+      // ------------------------------
+      let decisionsByEquipment = [];
+      if (useAI) {
+        try {
+          usedAI = true;
+
+          const aiPayload = {
+            site,
+            db_table: tableName,
+            category: {
+              key: cat.key,
+              label: cat.label,
+            },
+            controls_catalog: controlsCatalogForAI,
+            equipments: entities.map((e) => ({
+              id: e.id,
+              raw: e, // on donne tout, l'IA se débrouille
+            })),
+          };
+
+          const sys = `
+    Tu es un ingénieur électricien / ingénieur maintenance industriel.
+    Tu connais très bien :
+    - les installations HT/MT/BT,
+    - les TGBT, tableaux de distribution, MCC, UPS, batteries, éclairage de sécurité,
+    - les zones ATEX / Hazardous Areas (IEC 60079).
+
+    Ton rôle :
+    À partir d'une liste d'équipements (issue d'une base de données) et d'un catalogue de contrôles (TSD),
+    tu dois décider quels contrôles appliquer à CHAQUE équipement.
+
+    RÈGLES IMPORTANTES (TRÈS STRICTES) :
+    - Tu parles "comme un électricien", tu comprends les abréviations :
+      TR1, TR2, TX, TGBT, DB, MCC, UPS, LV, HV, MV, Ex, Zone 1, Zone 2, etc.
+    - Tu comprends les tensions implicites :
+      - switchboards / distribution boards / TGBT < 1000 V ac
+      - high voltage / HV / transformateurs / cellules > 1000 V ac
+    - Tu es TRÈS CONSERVATEUR :
+      - si tu n'es pas sûr qu'un contrôle s'applique à un équipement, tu NE L'AJOUTES PAS.
+      - Tu préfères renvoyer une liste vide plutôt que mettre un contrôle incorrect.
+
+    Exemples de cohérence :
+    - Les contrôles "Cast Resin Transformers" ne s'appliquent qu'à des transformateurs résine HT.
+    - Les contrôles "Hazardous Areas (IEC 60079)" ne s'appliquent qu'à des équipements clairement en zone Ex / ATEX.
+    - Les contrôles "Emergency Lighting Systems" s'appliquent seulement si l'équipement est lié à l'éclairage de sécurité (BAES, blocs secours, etc.).
+    - Les contrôles "Battery Systems" s'appliquent à des systèmes de batteries (UPS, chargeurs, baies batteries...).
+    - Les contrôles "Fire Detection and Fire Alarm Systems" s'appliquent aux systèmes de détection incendie (SSI, détecteurs, centrales incendie), pas aux TGBT ou devices de puissance.
+    - Les contrôles "Distribution Boards (<1000 V ac)" s'appliquent uniquement aux tableaux de distribution (TGBT, DB, QGBT, QG, MCC, etc.), pas à un disjoncteur individuel.
+    - Les contrôles "Power Factor Correction (>1000 V ac)" s'appliquent uniquement aux équipements de type batterie de condensateurs / compensation de réactif (PFC, capacitor bank...), jamais aux autres cellules HT.
+    - Les contrôles "Variable Speed Drives" s'appliquent uniquement aux variateurs de vitesse (VSD, variateur, VFD, drive de moteur).
+
+    Si aucune correspondance évidente :
+    - Tu renvoies une liste vide de contrôles pour cet équipement.
+
+    Tu NE DOIS PAS inventer de nouveaux types de contrôles.
+    Tu NE DOIS utiliser que les contrôles présents dans controls_catalog (en utilisant leur "type_key").
+
+    Réponse STRICTEMENT en JSON, sans texte autour, au format :
     {
-      "key": "hv_switchgear",
-      "label": "High voltage switchgear (>1000 V ac)",
-      "db_table": "hv_devices",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
+      "decisions_by_equipment": [
         {
-          "type": "Visual Inspection",
-          "description": "Visual inspection with the switchgear energized.",
-          "frequency": {
-            "interval": 3,
-            "unit": "months"
-          },
-          "checklist": [
-            "Environment clean, cool, dry; no abnormal noises/smells/vibration/heat",
-            "Arcing not detected (sound/voltage flicker)",
-            "No blistered/blackened paint; insulation condition OK",
-            "Room temperature indicates no general overheating",
-            "No combustibles near switchgear",
-            "No damaged insulators",
-            "No pooled water/leaks/rodents/environmental contaminants"
-          ],
-          "observations": [
-            "Relay indications (flags)",
-            "Voltage readings (where possible)",
-            "Current readings (where possible)"
-          ]
+          "equipment_id": <id numérique>,
+          "controls": ["type_key1", "type_key2", ...]
         },
-        {
-          "type": "Thermography",
-          "description": "Non-intrusive thermographic survey; if heat detected, isolate and earth before intrusive access.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Busbar chamber covers",
-            "Cable boxes",
-            "Voltage transformers"
-          ]
-        },
-        {
-          "type": "Partial Discharge",
-          "description": "Routine pass/fail PD tests (e.g., UltraTEV\u00ae).",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Perform handheld PD test",
-            "Record results",
-            "Investigate any failed PD test"
-          ]
-        },
-        {
-          "type": "Circuit Breakers \u2013 Annual functional checks",
-          "description": "General condition and operation.",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Covers/frame/poles/racking device OK",
-            "Max number of operation cycles within limit",
-            "Key locking and pad locking operate",
-            "Racking interlock (red opening pushbutton) OK",
-            "Manual/electrical racking OK (motorized where applicable)",
-            "Manual and electrical Open/Close operate"
-          ]
-        },
-        {
-          "type": "Circuit Breakers \u2013 3\u20138 years maintenance",
-          "description": "IR, vacuum integrity, oil quality, over-potential, contact resistance, time-travel.",
-          "frequency": {
-            "interval": 6,
-            "unit": "years"
-          },
-          "checklist": [
-            "Insulation resistance > 2 G\u03a9 at 5000Vdc (open & closed)",
-            "Vacuum bottle over-potential per manufacturer (vacuum integrity)",
-            "Liquid Screening (bulk oil): dielectric strength >26kV; moisture <25ppm; PCB <50ppm (post fault, replace oil)",
-            "Dielectric over-potential per manufacturer (avoid damaging connected equipment)",
-            "Contact resistance \u2013 no pole deviates >50% vs lowest; within manufacturer limits",
-            "Time-travel curve recorded; compare to manufacturer/previous results"
-          ]
-        },
-        {
-          "type": "Insulators and Busbars \u2013 3\u20138 years",
-          "description": "Low resistance and insulation resistance.",
-          "frequency": {
-            "interval": 6,
-            "unit": "years"
-          },
-          "checklist": [
-            "Low Resistance across bolted connections; no >50% difference; below manufacturer max",
-            "Insulation resistance >2 G\u03a9 at 5000Vdc (phase-to-earth)"
-          ]
-        },
-        {
-          "type": "Voltage Transformers \u2013 3\u20138 years",
-          "description": "Visual inspection (energized & isolated), fuses, insulation.",
-          "frequency": {
-            "interval": 6,
-            "unit": "years"
-          },
-          "checklist": [
-            "Good visual condition; labelled; locked in service (energized)",
-            "Shutters in good condition (isolated)",
-            "Withdrawable mechanism free; primary contacts/spring/earth OK",
-            "Primary & secondary fuses correct and in good condition",
-            "Insulation resistance >5 G\u03a9 (dc, 1 minute)"
-          ]
-        },
-        {
-          "type": "Protection Relays \u2013 3\u20138 years",
-          "description": "Secondary current injection test; settings vs coordination study.",
-          "frequency": {
-            "interval": 6,
-            "unit": "years"
-          },
-          "checklist": [
-            "All protective functions verified via secondary injection",
-            "Settings match protection coordination study"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "pfc_hv",
-      "label": "Power Factor Correction (>1000 V ac)",
-      "db_table": "hv_devices",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection \u2013 3 months",
-          "frequency": {
-            "interval": 3,
-            "unit": "months"
-          },
-          "checklist": [
-            "Correct mode of operation (auto/manual)",
-            "Controller parameter settings and alarms OK (PF setpoint ~0.95)",
-            "Review PF trends and system performance"
-          ]
-        },
-        {
-          "type": "Annual Visual Inspection (after HV isolation)",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Capacitors/reactors/cabling: no overheating/damage",
-            "Cleanliness/ventilation/heating/filtration \u2013 replace filters as needed"
-          ]
-        },
-        {
-          "type": "Annual Capacitor Condition Test (after HV isolation)",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Measure capacitance of each phase of each step \u2013 within manufacturer limits",
-            "Isolate failing steps"
-          ]
-        },
-        {
-          "type": "Every 3 years \u2013 components & terminations",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Fuses & vacuum contactors: condition, ratings correct, free operation, no overheating; replace as needed",
-            "Cable terminations \u2013 check all phase & earth connections",
-            "Connection tightness \u2013 torque to manufacturer settings"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "transformers_fluid",
-      "label": "Fluid Immersed Transformers",
-      "db_table": "hv_equipments",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual inspections (Non-Intrusive)",
-          "frequency": {
-            "interval": 6,
-            "unit": "months"
-          },
-          "checklist": [
-            "Silica gel breathers checked/replaced as needed",
-            "No signs of abnormality (leaks, corrosion, contamination)",
-            "Earthing connections integrity"
-          ]
-        },
-        {
-          "type": "Annual Oil Sample Test",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Breakdown voltage, moisture content, Oil Quality Index",
-            "Trend results; increase sampling if abnormal",
-            "FURAN analysis yearly only if high CO/CO2 ratio observed"
-          ]
-        },
-        {
-          "type": "Annual Dissolved Gas Analysis (DGA)",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Screening tests and DGA (main & tap changer tanks)",
-            "Trend results; investigate/renew fluid if failed"
-          ]
-        },
-        {
-          "type": "Annual Paintwork",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "No rust/damage; touch up as needed"
-          ]
-        },
-        {
-          "type": "Annual Inspect Fluid Level",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Top up as needed",
-            "Record leaks and arrange repair"
-          ]
-        },
-        {
-          "type": "Annual Temperature Indicators",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Devices undamaged & sealed; reasonable temperature vs load and ambient",
-            "Alarm/trip settings correct",
-            "Record peak & reset"
-          ]
-        },
-        {
-          "type": "Annual Pressure Relief Device",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "No damage/water ingress"
-          ]
-        },
-        {
-          "type": "Annual Buchholz (Gas/Oil Actuator Relay)",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Valves in correct position",
-            "Chamber filled with liquid",
-            "If gas present, sample and release pressure"
-          ]
-        },
-        {
-          "type": "Annual Liquid Level Indicator",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Condition OK",
-            "Level reasonable vs last inspection",
-            "Record levels"
-          ]
-        },
-        {
-          "type": "Annual Vacuum/Pressure Gauge",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Condition OK",
-            "Vacuum/pressure maintained; record values"
-          ]
-        },
-        {
-          "type": "Annual HV & LV Cable Boxes",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Integrity of cable boxes & glands",
-            "Routine pass/fail PD tests (e.g., UltraTEV\u00ae) \u2013 investigate failures"
-          ]
-        },
-        {
-          "type": "Annual HV & LV Terminal Bushings",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Clean; no tracking/cracks/contaminants"
-          ]
-        },
-        {
-          "type": "Annual Cooling Fans & Pumps",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Fans/guards condition",
-            "Pump housing & gland",
-            "Temperature monitor setpoints correct",
-            "Operate fans and pumps"
-          ]
-        },
-        {
-          "type": "Annual On-load Tap Changers",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Record operation count",
-            "Inspect control panel for overheating/moisture ingress"
-          ]
-        },
-        {
-          "type": "Connection & fittings \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Torque checks on bolted connections/fittings",
-            "Inside cable boxes: no overheating/PD; replace gaskets when opened",
-            "Clean/inspect bushings"
-          ]
-        },
-        {
-          "type": "Off-circuit Tapping Switch \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Operate across all taps freely"
-          ]
-        },
-        {
-          "type": "Earth Connection Integrity \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Earth continuity test recorded"
-          ]
-        },
-        {
-          "type": "Insulation Resistance \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Winding-to-winding & winding-to-ground IR",
-            "HV: 5000V 1 min; LV: 1000V 1 min",
-            "IR >100 M\u03a9 (LV) and >1000 M\u03a9 (HV) \u2013 record"
-          ]
-        },
-        {
-          "type": "Low Resistance Test \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Bolted connection low-resistance \u2013 no >50% diff; <1 \u03a9 and/or within manufacturer limit"
-          ]
-        },
-        {
-          "type": "Protective Devices \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Test liquid/winding temperature indicators; Buchholz etc."
-          ]
-        },
-        {
-          "type": "Capacitive Bushings \u2013 Power Factor",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Power factor & capacitance within \u00b110% of nameplate",
-            "Hot collar watts-loss within manufacturer factory test",
-            "Consider winding power factor test (typical 3% fluid-filled; silicone ~0.5%)"
-          ]
-        },
-        {
-          "type": "External paint \u2013 refurbish if required",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "PCB Analysis",
-          "frequency": {
-            "interval": 60,
-            "unit": "months"
-          },
-          "checklist": [
-            "PCB content <50 ppm or per local regulations (stricter applies)"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "transformers_cast_resin",
-      "label": "Cast Resin Transformers",
-      "db_table": "hv_equipments",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Ventilation & Protection Devices",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "No damage/overheating on wiring to ventilation/protection devices",
-            "Reasonable temperature vs load & ambient",
-            "Functional check of protection (winding temp alarms/trips)",
-            "Functional check of cooling fans (if any)"
-          ]
-        },
-        {
-          "type": "Paintwork",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "No rust/damage; touch up"
-          ]
-        },
-        {
-          "type": "Cleanliness",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "No foreign matter on windings",
-            "Vacuum clean; blow inaccessible areas with compressed air/N2",
-            "Vent grills unobstructed"
-          ]
-        },
-        {
-          "type": "Insulating Distances",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Correct distances between cables and live parts"
-          ]
-        },
-        {
-          "type": "Cables & Busbars",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Fixings and connections OK",
-            "Glands secured & correctly made-off"
-          ]
-        },
-        {
-          "type": "Ingress Protection",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Compliance with original IP rating"
-          ]
-        },
-        {
-          "type": "Partial Discharge",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Handheld PD test (e.g., UltraTEV\u00ae); record results; investigate failures"
-          ]
-        },
-        {
-          "type": "HV & LV Cable Boxes",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Integrity of cable boxes; glands good",
-            "Routine PD tests & record; investigate failures"
-          ]
-        },
-        {
-          "type": "Cooling Fans",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Fans/guards condition",
-            "Temperature monitor setpoints correct"
-          ]
-        },
-        {
-          "type": "Connection & fittings \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Torque checks on bolted connections/fittings",
-            "Inside cable boxes: no overheating/PD"
-          ]
-        },
-        {
-          "type": "Earth Connection Integrity \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Earth continuity test recorded"
-          ]
-        },
-        {
-          "type": "Insulation Resistance \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Winding-to-winding & winding-to-ground IR",
-            "HV: 5000V 1 min; LV: 1000V 1 min",
-            "IR >100 M\u03a9 (LV) and >1000 M\u03a9 (HV); record"
-          ]
-        },
-        {
-          "type": "Low Resistance Test \u2013 Intrusive",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Bolted connection low-resistance \u2013 no >50% diff; <1 \u03a9 and/or within manufacturer"
-          ]
-        },
-        {
-          "type": "Protective Devices",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Test alarms/trips for winding temperature; over-current devices"
-          ]
-        },
-        {
-          "type": "Polarisation Index",
-          "frequency": {
-            "interval": 84,
-            "unit": "months"
-          },
-          "checklist": [
-            "10-minute/1-minute IR ratio (PI) \u2265 1.0; record"
-          ]
-        },
-        {
-          "type": "Power Factor (>1000 kVA)",
-          "frequency": {
-            "interval": 84,
-            "unit": "months"
-          },
-          "checklist": [
-            "CH/CHL <= 2%; CL <= 5%; record"
-          ]
-        },
-        {
-          "type": "Power Factor Tip-Up (>1000 kVA)",
-          "frequency": {
-            "interval": 84,
-            "unit": "months"
-          },
-          "checklist": [
-            "PF remains reasonably constant; tip-up \u2264 0.5%"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "motors_hv_or_large",
-      "label": "AC Induction Motors >1000 V ac or >400 kW",
-      "db_table": "hv_motors",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Routine Visual Inspection",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "checklist": [
-            "No unusual noises, vibrations, or excessive heat",
-            "Oil levels OK; no bearing lubrication leaks",
-            "No cooling water leaks; air inlets not blocked",
-            "No combustibles; good housekeeping",
-            "Foundations OK; shaft alignment OK; earth connections OK",
-            "Fan cowling/baffles OK; proper circuit identification; cables/glanding OK; fixing bolts OK",
-            "No corrosion, chemical attack, physical damage"
-          ]
-        },
-        {
-          "type": "Vibration measurements",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "checklist": [
-            "If no online vib analysis, measure shaft/bearing vibration (Acoustic Emission/Ultrasound acceptable)"
-          ]
-        },
-        {
-          "type": "Oil lubricated bearings \u2013 lube analysis",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Perform lubrication analysis (where economically viable)"
-          ]
-        },
-        {
-          "type": "Thermal Imaging",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Bearings, motor frame, terminal box, surge capacitors, cables, motor controller, VSD checked"
-          ]
-        },
-        {
-          "type": "Motor Terminal Box \u2013 visual during IR testing",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "No water ingress/corona discharge; earth connections OK"
-          ]
-        },
-        {
-          "type": "Stator Winding \u2013 Insulation Resistance",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Apply dc 1 min; IR \u2265 100 M\u03a9"
-          ]
-        },
-        {
-          "type": "Stator Winding \u2013 Polarisation Index",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "10/1 min IR ratio; PI \u2265 2 indicates clean/dry (much higher may indicate dryness/brittleness)"
-          ]
-        },
-        {
-          "type": "Stator Winding \u2013 DC conductivity",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Low-resistance ohmmeter; phase resistances within 1 \u03a9 of each other"
-          ]
-        },
-        {
-          "type": "Stator Winding \u2013 Power Factor",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "AC PF one phase at a time; epoxy mica \u22640.5%; asphaltic mica 3\u20135%",
-            "1% PF increase trend is serious; investigate",
-            "PF increase with \u2193capacitance \u21d2 thermal deterioration; PF increase with \u2191capacitance \u21d2 water absorption"
-          ]
-        },
-        {
-          "type": "Stator Winding \u2013 Power Factor Tip-Up",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "PF at ~20% and 100% phase-earth voltage; trend tip-up (increasing \u21d2 PD activity)"
-          ]
-        },
-        {
-          "type": "Stator Core \u2013 Visual",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "No hot spots"
-          ]
-        },
-        {
-          "type": "Stator Core \u2013 Air Gap",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Measure air gap"
-          ]
-        },
-        {
-          "type": "Stator Core \u2013 Loop Test",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Excite to 100% back-of-core flux; soak; ensure no thermal runaway; hot spots \u0394T 5\u201310\u00b0C indicate defects"
-          ]
-        },
-        {
-          "type": "Rotor Winding \u2013 Insulation Resistance",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Applies to wound rotor motors; IR \u2265 100 M\u03a9"
-          ]
-        },
-        {
-          "type": "Rotor \u2013 Polarisation Index",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Squirrel cage motors: PI per 10/1 min IR; \u22652 indicates clean/dry"
-          ]
-        },
-        {
-          "type": "Rotor \u2013 DC conductivity",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Wound rotor motors: phase resistances within 1 \u03a9"
-          ]
-        },
-        {
-          "type": "Slip rings/brushes \u2013 inspect",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Wear/damage"
-          ]
-        },
-        {
-          "type": "Squirrel cage \u2013 Growler Test",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "checklist": [
-            "Detect broken bars via growler method"
-          ]
-        },
-        {
-          "type": "Retaining rings \u2013 corrosion check",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "If fitted, check for corrosion"
-          ]
-        },
-        {
-          "type": "Rings in-situ \u2013 NDE",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Rings removed \u2013 NDE",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Cracking inspection \u2013 visual",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Fan blades/vanes \u2013 NDE for cracks",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Forging \u2013 NDE for cracks/inclusions",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Bearings \u2013 Insulation Resistance",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Only insulated bearings: 500Vdc; \u226550 M\u03a9 disassembled; \u22655 M\u03a9 assembled"
-          ]
-        },
-        {
-          "type": "Sleeve bearings \u2013 white metal surfaces",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Anti-friction bearings \u2013 cage/rolling elements",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Shaft surfaces",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Heater check",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Motor heater functioning properly"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "bus_duct_riser",
-      "label": "Bus Duct / Bus Riser (>800A, <1000 Vac)",
-      "db_table": "devices",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Safe access; protection against accidental contact with live parts",
-            "No arcing/burnt smell; no blistered/blackened paint; insulation OK",
-            "No damaged/missing insulators/supports/clamps; no distortion",
-            "No foreign objects, pooled water, leaks, rodents, contaminants",
-            "Heater settings/operation checked (measure current drawn)",
-            "No signs of circulating/leakage current"
-          ]
-        },
-        {
-          "type": "Thermography",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Terminations",
-            "Bolted connections",
-            "Earth connections",
-            "Tap-offs",
-            "Investigate any hot areas (intrusive maintenance may be required)"
-          ]
-        },
-        {
-          "type": "Operational checks of inline components",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Inline breaker/isolators/fusible units smooth operation; correct protection settings/fuse selection"
-          ]
-        },
-        {
-          "type": "Low Resistance / Earthing / Torque \u2013 5 yrs",
-          "frequency": {
-            "interval": 60,
-            "unit": "months"
-          },
-          "checklist": [
-            "Low Resistance across bolted connections (no >50% difference; below max/baseline)",
-            "Earthing resistance/integrity recorded & baseline checked",
-            "Torque checks per manufacturer (unless torque-free design)",
-            "Lubricate mechanisms per manufacturer"
-          ]
-        },
-        {
-          "type": "Inline/tap-off MCCB \u2013 IR",
-          "frequency": {
-            "interval": 60,
-            "unit": "months"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; P-P, P-E)"
-          ]
-        },
-        {
-          "type": "Fusible links \u2013 IR",
-          "frequency": {
-            "interval": 60,
-            "unit": "months"
-          },
-          "checklist": [
-            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; P-P, P-E)"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "pfc_lv",
-      "label": "Power Factor Correction (<1000 V ac)",
-      "db_table": "pfc",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection",
-          "frequency": {
-            "interval": 3,
-            "unit": "months"
-          },
-          "checklist": [
-            "Capacitors/contactors/resistors/reactors/cables \u2013 no overheating/damage",
-            "Cabinet moisture/cleanliness/ventilation/filtration OK; replace filters as needed",
-            "Ambient temperature acceptable",
-            "Measured PF/alarm \u2013 PF setpoint ~0.95",
-            "Check PF trends & harmonic levels"
-          ]
-        },
-        {
-          "type": "Capacitor Condition Test",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Measure capacitance of each capacitor/stage",
-            "If any capacitor degrades >10%, isolate & replace unless safety/monitoring systems per lifecycle policy"
-          ]
-        },
-        {
-          "type": "Thermography",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Capacitors/contactors/resistors/reactors/cabling \u2013 no overheating",
-            "Bolted connections/terminations",
-            "MCCBs/fuses",
-            "Thyristors or SCR modules"
-          ]
-        },
-        {
-          "type": "Fuses/MCCBs/Contactors/Resistors/Reactors",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Discharge resistors operate per manufacturer",
-            "No damage; correct ratings; free operation of MCCB/contactor",
-            "Fuses not blown (replace with correct rating)",
-            "No overheating; renew if needed"
-          ]
-        },
-        {
-          "type": "Thermal protection internal",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Cleanliness OK; settings per manufacturer; functional tests including fans"
-          ]
-        },
-        {
-          "type": "Controller settings & operations",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Capacitor stages operate; alarms & settings correct"
-          ]
-        },
-        {
-          "type": "Cable terminations",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "All phase/earth connections & terminations OK"
-          ]
-        },
-        {
-          "type": "Connection tightness",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Torque to manufacturer settings"
-          ]
-        },
-        {
-          "type": "Lifecycle Management \u2013 reference",
-          "notes": "Apply decision flow for replacements per TSD life cycle chart"
-        }
-      ]
-    },
-    {
-      "key": "distribution_boards",
-      "label": "Distribution Boards (<1000 V ac)",
-      "db_table": "switchboards",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection",
-          "frequency": {
-            "interval": 3,
-            "unit": "months"
-          },
-          "checklist": [
-            "Clean inside & outside",
-            "No exterior damage/corrosion",
-            "Access controlled panels",
-            "Doors earthed",
-            "Labels & circuit charts present & accurate"
-          ]
-        },
-        {
-          "type": "Identification & Circuit Charts",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Descriptions accurate; schedules updated as necessary",
-            "Labels securely fixed on door exterior"
-          ]
-        },
-        {
-          "type": "Ingress Protection",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "IP rating suitable for environment (note changes e.g., wet)",
-            "No missing gland plates/glands/plugs",
-            "Minimum IP2X protection against accidental contact; covers require tool to remove"
-          ]
-        },
-        {
-          "type": "Fuse Carriers & MCBs",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "No damage; ratings correct where practicable",
-            "Free operation of MCB mechanisms"
-          ]
-        },
-        {
-          "type": "Thermal Imaging",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Solid insulation; bolted connections; breakers & fuse holders; panel exterior; accessible internal components"
-          ]
-        },
-        {
-          "type": "Cable Insulation",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Condition OK; no overheating; identify/report causes"
-          ]
-        },
-        {
-          "type": "Cable Terminations",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "Check all phase/neutral/earth connections & terminations",
-            "Tightness OK; terminations supported by glands/clamps (not by connections)"
-          ]
-        },
-        {
-          "type": "Conduit & Cable Glands",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "Tightness OK; gland earth continuity OK"
-          ]
-        },
-        {
-          "type": "Earth-Fault Loop Impedance",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "At origin (unless calculated); each distribution board; all fixed equipment; all sockets; 10% of lighting outlets (farthest point)",
-            "Furthest point of every radial circuit",
-            "Values within IEC 60364 recommendations",
-            "Note: Earth loop test removes need for separate earth continuity tests"
-          ]
-        },
-        {
-          "type": "Residual Current Devices (RCDs)",
-          "frequency": {
-            "interval": 6,
-            "unit": "months"
-          },
-          "checklist": [
-            "Operation via test button (every 6 months)",
-            "Annual test using approved RCD tester"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "motors_lv",
-      "label": "AC Induction Motors <1000 V ac <400 kW",
-      "db_table": "motors",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Foundations; shaft alignment; earth connections; fan cowling; air filters; baffles; labels; cables/glanding; fixing bolts",
-            "No corrosion, chemical attack, physical damage",
-            "No incorrect/over lubrication of bearings; no undue dust buildup"
-          ]
-        },
-        {
-          "type": "Winding Resistance",
-          "frequency": {
-            "interval": 60,
-            "unit": "months"
-          },
-          "checklist": [
-            "Measure winding resistance; balanced"
-          ]
-        },
-        {
-          "type": "Insulation Resistance",
-          "frequency": {
-            "interval": 60,
-            "unit": "months"
-          },
-          "checklist": [
-            "Winding-to-earth IR for each phase; \u2265100 M\u03a9 corrected to 40\u00b0C"
-          ]
-        },
-        {
-          "type": "Starters/Inverters/Cabling \u2013 Checks",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "Tightness of all connections",
-            "No overheating in starter cubicle",
-            "Motor fuse rating characteristic correct vs drawing",
-            "Operation of motor protection devices",
-            "Fixed/moving contacts condition \u2013 replace as necessary",
-            "Control panel functions correctly; indicator lights OK"
-          ]
-        },
-        {
-          "type": "Earth Fault Loop Impedance",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "Phase-to-earth link at motor terminals; impedance less than specified by IEC 60364 / protective device"
-          ]
-        },
-        {
-          "type": "Motor Circuit Insulation",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "Phase-to-earth IR (motor+LV cabling); \u2265100 M\u03a9 corrected to 40\u00b0C",
-            "If VSD installed, test supply and motor cables separately"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "hazardous_areas",
-      "label": "Hazardous Areas (IEC 60079)",
-      "db_table": "ex_equipments",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Initial Inspection (100% \u2013 Detailed)",
-          "frequency": {
-            "interval": 0,
-            "unit": "months"
-          },
-          "notes": "Initial for all new hazardous location equipment; use Tables 3-1/3-2/3-3 (Detailed)"
-        },
-        {
-          "type": "Periodic \u2013 Portable (100% \u2013 Close)",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "notes": "\u22641 year for portable equipment"
-        },
-        {
-          "type": "Periodic \u2013 Fixed (100% \u2013 Close if ignition-capable, else 100% \u2013 Visual)",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          }
-        },
-        {
-          "type": "Sample \u2013 Detailed (10% of equipment)",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "notes": "Detailed inspection on 10% sample to adjust interval/grade"
-        },
-        {
-          "type": "Checklist \u2013 Table 3-1 (Ex d/e/n, Ex t/td)",
-          "checklist": [
-            "A1 Equipment appropriate to EPL/Zone requirements",
-            "A2 Equipment group correct",
-            "A3 Equipment temperature class correct (gas)",
-            "A4 Max surface temperature correct",
-            "A5 Degree of protection (IP) appropriate",
-            "A6 Equipment circuit identification correct",
-            "A7 Equipment circuit identification available",
-            "A8 Enclosure/glass/glass-to-metal sealing gaskets/compounds satisfactory",
-            "A9 No damages or unauthorised modifications (physical)",
-            "A10 No evidence of unauthorised modifications (visual)",
-            "A11 Cable entry devices/blanking elements correct type, complete, tight (physical & visual)",
-            "A12 Threaded covers correct, tight, secured (physical & visual)",
-            "A13 Joint surfaces clean/undamaged; gaskets satisfactory and positioned correctly",
-            "A14 Enclosure gaskets condition satisfactory",
-            "A15 No evidence of water/dust ingress (per IP rating)",
-            "A16 Dimensions of flanged joint gaps within limits (docs/standards/site docs)",
-            "A17 Electrical connections tight",
-            "A18 Unused terminals tightened",
-            "A19 Enclosed break & hermetically sealed devices undamaged",
-            "A20 Encapsulated components undamaged",
-            "A21 Flameproof components undamaged",
-            "A22 Restricted breathing enclosure satisfactory (type nR)",
-            "A23 Test port functional (type nR)",
-            "A24 Breathing operation satisfactory (type nR)",
-            "A25 Breathing & draining devices satisfactory",
-            "EQUIP-LIGHT-26 Fluorescent lamps not indicating EOL effects",
-            "EQUIP-LIGHT-27 HID lamps not indicating EOL effects",
-            "EQUIP-LIGHT-28 Lamp type/rating/pin configuration/position correct",
-            "EQUIP-MOTORS-29 Fans clearance; cooling undamaged; foundations no indent/cracks",
-            "EQUIP-MOTORS-30 Ventilation airflow not impeded",
-            "EQUIP-MOTORS-31 Motor insulation resistance satisfactory",
-            "B1 Cable type appropriate",
-            "B2 No obvious cable damage",
-            "B3 Sealing of trunking/ducts/pipes/conduits satisfactory",
-            "B4 Stopping boxes/cable boxes correctly filled",
-            "B5 Integrity of conduit system & mixed interface maintained",
-            "B6 Earthing connections/bonding satisfactory (physical & visual)",
-            "B7 Fault loop impedance (TN) or earthing resistance (IT) satisfactory",
-            "B8 Automatic protective devices set correctly (no auto-reset)",
-            "B9 Automatic protective devices operate within permitted limits",
-            "B10 Specific conditions of use complied with",
-            "B11 Cables not in use correctly terminated",
-            "B12 Obstructions near flameproof flanged joints per IEC 60079-14",
-            "B13 Variable voltage/frequency installation per documentation",
-            "HEATING-14 Temperature sensors function per documents",
-            "HEATING-15 Safety cut-off devices function per documents",
-            "HEATING-16 Safety cut-off setting sealed",
-            "HEATING-17 Reset possible with tool only",
-            "HEATING-18 Auto-reset not possible",
-            "HEATING-19 Reset under fault prevented",
-            "HEATING-20 Safety cut-off independent from control system",
-            "HEATING-21 Level switch installed/set if required",
-            "HEATING-22 Flow switch installed/set if required",
-            "MOTORS-23 Motor protection devices operate within permitted tE/tA limits",
-            "ENV-1 Equipment protected vs corrosion/weather/vibration/adverse factors",
-            "ENV-2 No undue accumulation of dust/dirt",
-            "ENV-3 Electrical insulation clean/dry"
-          ]
-        },
-        {
-          "type": "Checklist \u2013 Table 3-2 (Ex i)",
-          "checklist": [
-            "A1 Documentation appropriate to EPL/zone",
-            "A2 Installed equipment matches documentation (fixed)",
-            "A3 Category & group correct",
-            "A4 IP rating appropriate to Group III material present",
-            "A5 Temperature class correct",
-            "A6 Apparatus ambient temperature range correct",
-            "A7 Apparatus service temperature range correct",
-            "A8 Installation clearly labelled",
-            "A9 Enclosure/glass/glass-to-metal gaskets/compounds satisfactory",
-            "A10 Cable glands/blanking elements correct type, complete, tight (physical & visual)",
-            "A11 No unauthorised modifications",
-            "A12 No evidence of unauthorised modifications",
-            "A13 Energy limiting devices (barriers/isolators/relays) are approved type, installed per certification, earthed where required",
-            "A14 Enclosure gaskets condition satisfactory",
-            "A15 Electrical connections tight",
-            "A16 PCBs clean/undamaged",
-            "A17 Maximum Um of associated apparatus not exceeded",
-            "B1 Cables installed per documentation",
-            "B2 Cable screens earthed per documentation",
-            "B3 No obvious cable damage",
-            "B4 Sealing of trunking/ducts/pipes/conduits satisfactory",
-            "B5 Point-to-point connections correct (initial inspection)",
-            "B6 Earth continuity satisfactory (non-galvanically isolated circuits)",
-            "B7 Earthing maintains integrity of type of protection",
-            "B8 Intrinsically safe circuit earthing satisfactory",
-            "B9 Insulation resistance satisfactory",
-            "B10 Separation maintained between IS and non-IS circuits in common boxes/cubicles",
-            "B11 Short-circuit protection of power supply per documentation",
-            "B12 Specific conditions of use complied with",
-            "B13 Cables not in use correctly terminated",
-            "C1 Equipment protected vs corrosion/weather/vibration/adverse factors",
-            "C2 No undue external accumulation of dust/dirt"
-          ]
-        },
-        {
-          "type": "Checklist \u2013 Table 3-3 (Ex p/pD)",
-          "checklist": [
-            "A1 Equipment appropriate to EPL/zone",
-            "A2 Equipment group correct",
-            "A3 Temperature class/surface temperature correct",
-            "A4 Circuit identification correct",
-            "A5 Circuit identification available",
-            "A6 Enclosure/glass/gaskets/compounds satisfactory",
-            "A7 No unauthorised modifications",
-            "A8 No evidence of unauthorised modifications",
-            "A9 Lamp rating/type/position correct",
-            "B1 Cable type appropriate",
-            "B2 No obvious cable damage",
-            "B3 Earthing/bonding connections satisfactory (physical & visual)",
-            "B4 Fault loop impedance (TN) or earthing resistance (IT) satisfactory",
-            "B5 Automatic protective devices operate within limits",
-            "B6 Automatic protective devices set correctly",
-            "B7 Protective gas inlet temperature below maximum",
-            "B8 Ducts/pipes/enclosures in good condition",
-            "B9 Protective gas substantially free from contaminants",
-            "B10 Protective gas pressure/flow adequate",
-            "B11 Pressure/flow indicators/alarms/interlocks function correctly",
-            "B12 Spark/particle barriers of exhaust ducts satisfactory",
-            "B13 Specific conditions of use complied with",
-            "C1 Equipment protected vs corrosion/weather/vibration/adverse factors",
-            "C2 No undue external accumulation of dust/dirt"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "emergency_lighting",
-      "label": "Emergency Lighting Systems",
-      "db_table": "emergency_lighting",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Monthly Test",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "checklist": [
-            "If automatic testing: record short-duration results",
-            "Else: switch each luminaire/exit sign to emergency mode; ensure illumination",
-            "For central battery systems: check system monitors"
-          ]
-        },
-        {
-          "type": "Annual Test",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "If automatic testing: record full rated duration results",
-            "Else: test each luminaire/sign for full rated duration; restore normal supply; verify indicators & charging",
-            "Record date/results; lux measurements per design; adequate lighting levels where required"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "ups_small",
-      "label": "Uninterruptible Power Supply (<=5000 VA)",
-      "db_table": "ups",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Asset Data (CMMS) \u2013 Required",
-          "notes": "Keep Manufacturer/Model/SN, kVA size, install year, battery type/code, battery install year"
-        },
-        {
-          "type": "Ambient Conditions \u2013 Required",
-          "notes": "UPS within design ambient conditions"
-        },
-        {
-          "type": "Annual \u2013 Visual Inspection",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Unit functions within design; no outstanding alarms",
-            "Clean; vents/filters OK (replace as needed)"
-          ]
-        },
-        {
-          "type": "Annual \u2013 UPS Battery Test",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "notes": "Perform per Battery Systems section (3.2.16)"
-        },
-        {
-          "type": "Every 7th year \u2013 Asset Replacement",
-          "frequency": {
-            "interval": 84,
-            "unit": "months"
-          },
-          "checklist": [
-            "Plan/schedule UPS replacement"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "ups_large",
-      "label": "Uninterruptible Power Supply (>5000 VA)",
-      "db_table": "ups",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Asset Data (CMMS) \u2013 Required",
-          "notes": "Keep Manufacturer/Model/SN, kVA size, install year, battery type/code, battery install year"
-        },
-        {
-          "type": "Environment \u2013 Required",
-          "notes": "Clean; managed to ~21\u00b0C; RH \u226495%"
-        },
-        {
-          "type": "Annual \u2013 Visual Inspection",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "All components clean; within design specification",
-            "Fans/filters OK (replace/clean as necessary)"
-          ]
-        },
-        {
-          "type": "Annual \u2013 Environmental Checks",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Room temperature ~21\u00b0C, RH \u226495%",
-            "UPS airflow OK; no dust contamination inside"
-          ]
-        },
-        {
-          "type": "Annual \u2013 Mechanical/Electrical Inspection",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Inspect power/control terminations and system components",
-            "Identify components to replace next service visit"
-          ]
-        },
-        {
-          "type": "Annual \u2013 Functional/Operational Verification",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Review event/alarm logs",
-            "Input/output/bypass V/I within spec",
-            "Comms options operate properly",
-            "On-battery operation; transfer to/from static bypass",
-            "Parallel operation performance (if applicable)"
-          ]
-        },
-        {
-          "type": "Annual \u2013 Implement Updates",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Firmware upgrades implemented",
-            "Circuit board revisions checked/updated",
-            "Replace components per OEM intervals (AC/DC caps, cooling fans)"
-          ]
-        },
-        {
-          "type": "Annual \u2013 UPS Battery Test",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "notes": "Perform per Battery Systems section (3.2.16)"
-        },
-        {
-          "type": "6th year \u2013 Mid-life overhaul",
-          "frequency": {
-            "interval": 72,
-            "unit": "months"
-          },
-          "notes": "Follow manufacturer recommendations"
-        },
-        {
-          "type": "12th year \u2013 UPS replacement",
-          "frequency": {
-            "interval": 144,
-            "unit": "months"
-          },
-          "checklist": [
-            "Plan/schedule replacement"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "batteries",
-      "label": "Battery Systems",
-      "db_table": "ups_devices",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Charger \u2013 Monthly",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "checklist": [
-            "Cleanliness OK; indicators/meters OK; alarm logs checked; cooling fan OK"
-          ]
-        },
-        {
-          "type": "Charger \u2013 Quarterly",
-          "frequency": {
-            "interval": 3,
-            "unit": "months"
-          },
-          "checklist": [
-            "Power capacitors \u2013 no degradation/leaks/bloating/discoloration"
-          ]
-        },
-        {
-          "type": "Flooded Lead-Acid \u2013 Monthly",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "checklist": [
-            "Record charger V/I; electrolyte levels; no corrosion/leaks"
-          ]
-        },
-        {
-          "type": "Flooded Lead-Acid \u2013 Discharge Test",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Load discharge test per manufacturer (1\u20133 yrs)",
-            "Increase to annual if capacity deteriorates",
-            "Replace when capacity approaches 80% rated",
-            "Typical life 4\u20138 yrs at 20\u201325\u00b0C"
-          ]
-        },
-        {
-          "type": "Flooded Ni-Cad \u2013 Monthly",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "checklist": [
-            "Record charger V/I; electrolyte levels; no corrosion/leaks"
-          ]
-        },
-        {
-          "type": "Flooded Ni-Cad \u2013 Discharge Test",
-          "frequency": {
-            "interval": 24,
-            "unit": "months"
-          },
-          "checklist": [
-            "Load discharge test per manufacturer (1\u20133 yrs)",
-            "Increase to annual if capacity deteriorates",
-            "Replace when capacity approaches 80% rated",
-            "Typical life 20\u201325 yrs at 20\u201325\u00b0C"
-          ]
-        },
-        {
-          "type": "Sealed Lead Acid (VRLA) \u2013 Monthly",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "checklist": [
-            "Record charger V/I; ambient temperature; no corrosion/leaks/overheating/distorted cases"
-          ]
-        },
-        {
-          "type": "Sealed Lead Acid (VRLA) \u2013 Annual",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Load discharge test per manufacturer",
-            "Increase to 6-monthly if capacity deteriorates",
-            "Replace when capacity approaches 80% rated",
-            "Typical life 3\u20137 yrs at 20\u201325\u00b0C"
-          ]
-        }
-      ]
-    },
-    {
-      "key": "vsd",
-      "label": "Variable Speed Drives",
-      "db_table": "variable_speed_drives",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Visual Inspection",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Clean internal/external; vents/fans; no damage/corrosion",
-            "Controller alarms reviewed; ambient OK; no overheating",
-            "Correct permanent labelling"
-          ]
-        },
-        {
-          "type": "Ingress Protection",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "IP rating suitable; no missing gland plates/glands/plugs",
-            "Minimum IPXXB \u2013 no accessible live parts without tools"
-          ]
-        },
-        {
-          "type": "Ventilation",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Filters cleaned/replaced",
-            "Fans operate correctly"
-          ]
-        },
-        {
-          "type": "Thermal Imaging",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Panel exterior; accessible internal components/cables"
-          ]
-        },
-        {
-          "type": "Power Capacitors",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Capacitance within limits; replace if degraded >10%",
-            "Replace plastic can capacitors older than 10 years",
-            "If drive idle >1 year: restore capacitors per manufacturer"
-          ]
-        },
-        {
-          "type": "Cable Terminations",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "All phase/earth connections & terminations OK; tightness OK; supported by glands/clamps"
-          ]
-        },
-        {
-          "type": "Replace Fans",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "notes": "Replace per manufacturer recommendations"
-        }
-      ]
-    },
-    {
-      "key": "fire_detection_alarm",
-      "label": "Fire Detection and Fire Alarm Systems",
-      "db_table": "fire_detection",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Weekly User Test",
-          "frequency": {
-            "interval": 1,
-            "unit": "weeks"
-          },
-          "checklist": [
-            "Operate a manual call point during working hours; verify processing to sounders & ARC",
-            "Alternate call point each week; record in logbook",
-            "Keep test duration \u22641 minute to distinguish from real fire",
-            "If staged alarms (Alert/Evacuate), operate sequentially",
-            "If shift workers exist, do additional monthly test for those shifts"
-          ]
-        },
-        {
-          "type": "Periodic Inspection & Test (6\u201312 months)",
-          "frequency": {
-            "interval": 9,
-            "unit": "months"
-          },
-          "checklist": [
-            "Examine logbook; ensure recorded faults addressed",
-            "Visual check if building/occupancy changes affect compliance",
-            "Check false alarm records & 12-month rate; record actions",
-            "Verify fire functions by operating \u22651 detector/MCP per circuit; record which devices",
-            "Check operation of alarm devices; controls/indicators OK",
-            "Verify transmission to ARC (all signal types)",
-            "Test ancillary functions; simulate faults for indicators (where practicable)",
-            "Test printers, consumables; service radio systems per manufacturer",
-            "Report defects; update logbook; issue servicing certificate"
-          ]
-        },
-        {
-          "type": "Annual Inspection & Test",
-          "frequency": {
-            "interval": 12,
-            "unit": "months"
-          },
-          "checklist": [
-            "Test switch mechanism of every MCP",
-            "Examine all detectors for damage/paint/etc.; functionally test each",
-            "Heat detectors: test with safe heat source (no flame); special arrangements for fusible links",
-            "Point smoke detectors: test with suitable material per manufacturer (smoke enters chamber)",
-            "Beam detectors: introduce attenuation (filter/smoke)",
-            "Aspirating systems: confirm smoke enters detector chamber",
-            "CO detectors: confirm CO entry & alarm (observe safety)",
-            "Flame detectors: test with suitable radiation; follow manufacturer guidance",
-            "Analogue-value systems: confirm values within manufacturer range",
-            "Multi-sensor detectors: verify products of combustion reach sensors; fire signal produced",
-            "Verify visual alarm devices unobstructed & clean lenses",
-            "Visually confirm cable fixings secure/undamaged",
-            "Check standby power capacity remains suitable",
-            "Test interlocks (e.g., doors, AHUs)",
-            "Report defects; record inspection; servicing certificate"
-          ]
-        },
-        {
-          "type": "Batteries \u2013 Monthly/Annual",
-          "frequency": {
-            "interval": 1,
-            "unit": "months"
-          },
-          "notes": "Perform battery tests/maintenance per section 3.2.16 monthly and annually"
-        }
-      ]
-    },
-    {
-      "key": "earthing_systems",
-      "label": "Earthing Systems",
-      "db_table": "earthing",
-      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
-      "controls": [
-        {
-          "type": "Earth Electrode Resistance \u2013 Inspection & Test",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Inspect terminations for security and protective finish",
-            "Disconnect electrode from earthing system pre-test",
-            "Measure earth electrode resistance \u2013 never above 200 \u03a9; readings should be <100 \u03a9"
-          ]
-        },
-        {
-          "type": "Earthing Conductor Resistance (Continuity)",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "Inspect all protective/bonding connections are sound & secure",
-            "Measure conductor resistances with low resistance ohmmeter"
-          ]
-        },
-        {
-          "type": "Earth System Resistance Value Check",
-          "frequency": {
-            "interval": 48,
-            "unit": "months"
-          },
-          "checklist": [
-            "At each distribution stage check overall earthing system resistance with clamp-on tester (e.g., DET10C/20C)",
-            "Max resistances: HV=1 \u03a9; Electrical Power=5 \u03a9; Lightning=10 \u03a9; ESD=10 \u03a9"
-          ]
-        },
-        {
-          "type": "Lightning Protection Systems \u2013 Visual & Test",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Visual: air terminations, down conductors, earth pits, joints, connections, test points \u2013 no corrosion",
-            "Test: continuity with low resistance milli-ohmmeter; measure system resistance; test earth electrodes"
-          ]
-        },
-        {
-          "type": "Electrostatic Discharge (Static Earthing) \u2013 Visual & Test",
-          "frequency": {
-            "interval": 36,
-            "unit": "months"
-          },
-          "checklist": [
-            "Visual: conductor tapes, earth pits, joints, connections, test points/earth links, plant item connections",
-            "Test: continuity from plant to earth link with low resistance ohmmeter; measure system resistance; test electrodes"
-          ]
-        }
+        ...
       ]
     }
-  ]
-};
+          `.trim();
+
+          const user = `
+Contexte JSON :
+
+\`\`\`json
+${JSON.stringify(aiPayload, null, 2)}
+\`\`\`
+
+Consignes :
+- Pour chaque equipment_id, choisis UNIQUEMENT les contrôles dont le "type_key" correspond clairement.
+- Tu n'es PAS obligé de proposer des contrôles pour tous les équipements.
+- Si aucun contrôle n'est pertinent pour un équipement : retourne "controls": [] pour lui, ou ne le mets pas dans la liste.
+          `.trim();
+
+          const resp = await aiClient.chat.completions.create({
+            model:
+              process.env.CONTROLS_OPENAI_MODEL ||
+              process.env.ATEX_OPENAI_MODEL ||
+              "gpt-4o-mini",
+            temperature: 0.1,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: sys },
+              { role: "user", content: user },
+            ],
+          });
+
+          let parsed = {};
+          try {
+            parsed = JSON.parse(resp.choices?.[0]?.message?.content || "{}");
+          } catch {
+            parsed = {};
+          }
+
+          if (
+            parsed &&
+            Array.isArray(parsed.decisions_by_equipment)
+          ) {
+            decisionsByEquipment = parsed.decisions_by_equipment;
+          } else {
+            decisionsByEquipment = [];
+          }
+        } catch (e) {
+          console.error(
+            "[Controls][auto-link][AI] error on category:",
+            cat.label,
+            e
+          );
+          decisionsByEquipment = [];
+        }
+      }
+
+      // ------------------------------
+      // 4) Index IA : equipment_id → liste de type_key valides
+      // ------------------------------
+      const aiMap = new Map();
+      if (Array.isArray(decisionsByEquipment)) {
+        for (const item of decisionsByEquipment) {
+          if (!item || !item.equipment_id) continue;
+          const list = Array.isArray(item.controls) ? item.controls : [];
+          aiMap.set(
+            item.equipment_id,
+            list.filter(
+              (t) => typeof t === "string" && controlsByKey[t]
+            )
+          );
+        }
+      }
+
+      // ------------------------------
+      // 5) Création des tâches par équipement
+      // ------------------------------
+      for (const ent of entities) {
+        const label =
+          ent.name ||
+          ent.device_type ||
+          ent.switchboard_name ||
+          `${tableName} #${ent.id}`;
+
+        let controlsForThis = [];
+
+        if (useAI) {
+          // IA active : on n'applique que ce que l'IA a explicitement validé
+          if (aiMap.has(ent.id) && aiMap.get(ent.id).length) {
+            controlsForThis = aiMap
+              .get(ent.id)
+              .map((key) => controlsByKey[key])
+              .filter(Boolean);
+          } else {
+            // IA n'a rien dit pour cet équipement → aucun contrôle
+            controlsForThis = [];
+          }
+        } else {
+          // IA désactivée : on applique tous les contrôles de la catégorie
+          controlsForThis = controls;
+        }
+
+        // 5.a) Filtre métier backend : on enlève les contrôles incohérents
+        controlsForThis = controlsForThis.filter((ctrl) =>
+          isControlAllowedForEntity(cat, ctrl, ent)
+        );
+
+        // 5.b) Cas particulier VSD : warning si équipement "VSD-like" sans contrôle
+        if (cat.key === "vsd" && isVsdLikeEntity(ent) && controlsForThis.length === 0) {
+          vsdLikeMissing.push({
+            id: ent.id,
+            label,
+          });
+        }
+
+        // 5.c) Création des tâches
+        for (const ctrl of controlsForThis) {
+          if (!ctrl) continue;
+
+          const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
+
+          // Date initiale pseudo-aléatoire en 2026
+          const firstDate = generateInitialDate(ctrl.frequency || null);
+          // Prochaine échéance
+          const nextDate = addFrequency(firstDate, ctrl.frequency || null);
+
+          // Fréquence en mois (pour info / stats)
+          let freqMonths = null;
+          if (ctrl.frequency?.interval && ctrl.frequency?.unit) {
+            const { interval, unit } = ctrl.frequency;
+            if (unit === "months") freqMonths = interval;
+            else if (unit === "years") freqMonths = interval * 12;
+            else if (unit === "weeks") {
+              freqMonths = Math.round((interval * 7) / 30);
+            }
+          }
+
+          const result = await client.query(
+            `INSERT INTO controls_tasks
+               (site, entity_id, entity_type, task_name, task_code,
+                status, next_control, frequency_months)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+             ON CONFLICT DO NOTHING`,
+            [
+              site,
+              ent.id,
+              entityType,
+              `${cat.label} – ${ctrl.type}`,
+              taskCode,
+              "Planned",
+              nextDate || firstDate,
+              freqMonths,
+            ]
+          );
+
+          if (result.rowCount > 0) {
+            created++;
+          }
+        }
+      }
+
+      // ------------------------------
+      // 6) Warnings spécifiques catégorie (ex: VSD)
+      // ------------------------------
+      if (cat.key === "vsd" && vsdLikeMissing.length > 0) {
+        warnings.push({
+          category_key: cat.key,
+          category_label: cat.label,
+          type: "vsd_like_without_controls",
+          message:
+            "Certains équipements ressemblent à des variateurs de vitesse (VSD) mais aucun contrôle TSD 'Variable Speed Drives' n'a pu être appliqué. Vérifier le mapping / la TSD.",
+          equipments: vsdLikeMissing,
+        });
+      }
+    }
+
+    await client.query("COMMIT");
+
+    const modeLabel = useAI ? "avec IA" : "sans IA";
+    const msg = `Synchronisation OK (${modeLabel}) – ${created} tâches créées pour le site "${site}"`;
+    console.log("[Controls][auto-link]", msg);
+    res.json({ ok: true, created, message: msg, ai: useAI, warnings });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("[Controls][auto-link] ERROR:", e);
+    res.status(500).json({
+      ok: false,
+      error: e.message || "Erreur interne auto-link",
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
+// ROUTE: GET /missing-equipment
+// ============================================================================
+
+router.get("/missing-equipment", async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const site = siteOf(req);
+    const missing = [];
+    const existing = [];
+
+    for (const cat of tsdLibrary.categories) {
+      const tableName = cat.db_table;
+      if (!tableName) continue;
+
+      const { rows: tableCheck } = await client.query(
+        `SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = $1
+        )`,
+        [tableName]
+      );
+
+      const hasTable = tableCheck[0].exists;
+      const countControls = (cat.controls || []).length;
+
+      if (!hasTable) {
+        missing.push({
+          category_key: cat.key,
+          category: cat.label,
+          db_table: tableName,
+          reason: "table_absente",
+          count_controls: countControls,
+          count_in_tsd: countControls,
+        });
+        continue;
+      }
+
+      const { rows: colCheck } = await client.query(
+        `SELECT EXISTS (
+          SELECT FROM information_schema.columns 
+          WHERE table_name = $1 AND column_name = 'site'
+        )`,
+        [tableName]
+      );
+      const hasSiteCol = colCheck[0].exists;
+
+      const { rows: countRows } = await client.query(
+        hasSiteCol
+          ? `SELECT COUNT(*) as count FROM ${tableName} WHERE site = $1`
+          : `SELECT COUNT(*) as count FROM ${tableName}`,
+        hasSiteCol ? [site] : []
+      );
+
+      const count = parseInt(countRows[0].count, 10) || 0;
+
+      if (count === 0) {
+        missing.push({
+          category_key: cat.key,
+          category: cat.label,
+          db_table: tableName,
+          reason: "aucun_equipement",
+          count_controls: countControls,
+          count_in_tsd: countControls,
+        });
+      } else {
+        existing.push({
+          category_key: cat.key,
+          category: cat.label,
+          db_table: tableName,
+          count,
+          count_controls: countControls,
+          count_in_tsd: countControls,
+        });
+      }
+    }
+
+    res.json({ missing, existing });
+  } catch (e) {
+    console.error("[Controls] missing-equipment error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
+// ROUTE: GET /tsd  — expose la tsd_library brute (catalogue)
+// ============================================================================
+
+router.get("/tsd", async (_req, res) => {
+  try {
+    res.json(tsdLibrary);
+  } catch (e) {
+    console.error("[Controls] /tsd error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================================
+// ROUTES GESTION DES PLANS
+// ============================================================================
+
+// Upload ZIP de plans (PDF) vers table controls_plans
+router.post("/maps/uploadZip", uploadZip.single("zip"), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const site = siteOf(req);
+    const zipBuffer = req.file?.buffer;
+
+    if (!zipBuffer) {
+      return res.status(400).json({ error: "No ZIP file" });
+    }
+
+    const directory = await unzipper.Open.buffer(zipBuffer);
+    let uploadedCount = 0;
+
+    for (const file of directory.files) {
+      if (file.type === "Directory") continue;
+      if (!file.path.toLowerCase().endsWith(".pdf")) continue;
+
+      const fileName = path.basename(file.path);
+      const logicalName = fileName.replace(/\.pdf$/i, "");
+      const content = await file.buffer();
+
+      const { rows: existing } = await client.query(
+        `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
+        [logicalName, site]
+      );
+
+      if (existing.length) {
+        await client.query(
+          `UPDATE controls_plans 
+           SET content = $1, updated_at = NOW()
+           WHERE id = $2`,
+          [content, existing[0].id]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO controls_plans (site, logical_name, display_name, content, created_at)
+           VALUES ($1, $2, $3, $4, NOW())`,
+          [site, logicalName, logicalName, content]
+        );
+      }
+
+      uploadedCount++;
+    }
+
+    res.json({ success: true, uploaded: uploadedCount });
+  } catch (e) {
+    console.error("[Controls] uploadZip error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Liste des plans
+router.get("/maps/listPlans", async (req, res) => {
+  try {
+    const site = siteOf(req);
+
+    const { rows } = await pool.query(
+      `SELECT id, logical_name, display_name, created_at 
+       FROM controls_plans 
+       WHERE site = $1 
+       ORDER BY display_name`,
+      [site]
+    );
+
+    res.json({ plans: rows, items: rows });
+  } catch (e) {
+    console.error("[Controls] listPlans error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Renommer un plan
+router.put("/maps/renamePlan", async (req, res) => {
+  const { logical_name, display_name } = req.body;
+  const site = siteOf(req);
+
+  try {
+    await pool.query(
+      `UPDATE controls_plans 
+       SET display_name = $1 
+       WHERE logical_name = $2 AND site = $3`,
+      [display_name, logical_name, site]
+    );
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("[Controls] renamePlan error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Récupération d'un PDF de plan
+router.get("/maps/planFile", async (req, res) => {
+  const { logical_name, id } = req.query;
+  const site = siteOf(req);
+
+  try {
+    let query, params;
+
+    if (id) {
+      query = `SELECT content FROM controls_plans WHERE id = $1 AND site = $2`;
+      params = [id, site];
+    } else if (logical_name) {
+      query = `SELECT content FROM controls_plans WHERE logical_name = $1 AND site = $2`;
+      params = [logical_name, site];
+    } else {
+      return res.status(400).json({ error: "logical_name or id required" });
+    }
+
+    const { rows } = await pool.query(query, params);
+
+    if (!rows.length) {
+      console.log(
+        `[Controls] Plan not found: id=${id}, logical_name=${logical_name}, site=${site}`
+      );
+      return res.status(404).json({ error: "Plan not found" });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Cache-Control", "public, max-age=31536000");
+    res.send(rows[0].content);
+  } catch (e) {
+    console.error("[Controls] planFile error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Positions des contrôles sur plan
+router.get("/maps/positions", async (req, res) => {
+  let { logical_name, building, id, page_index = 0 } = req.query;
+  const site = siteOf(req);
+
+  try {
+    let planId;
+
+    if (id) {
+      planId = id;
+    } else if (logical_name) {
+      const { rows } = await pool.query(
+        `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
+        [logical_name, site]
+      );
+      if (!rows.length) {
+        console.log(
+          `[Controls] Plan not found for positions: logical_name=${logical_name}`
+        );
+        return res.json({ items: [] });
+      }
+      planId = rows[0].id;
+    } else if (building) {
+      const { rows } = await pool.query(
+        `SELECT id FROM controls_plans 
+         WHERE display_name ILIKE $1 AND site = $2 
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [`%${building}%`, site]
+      );
+      if (!rows.length) {
+        console.log(
+          `[Controls] No plan found for building in positions: ${building}`
+        );
+        return res.json({ items: [] });
+      }
+      planId = rows[0].id;
+    } else {
+      return res.json({ items: [] });
+    }
+
+    const { rows: positions } = await pool.query(
+      `SELECT 
+         ctp.task_id,
+         ctp.x_frac,
+         ctp.y_frac,
+         ct.task_name,
+         ct.status,
+         ct.next_control,
+         ct.entity_id,
+         ct.entity_type
+       FROM controls_task_positions ctp
+       JOIN controls_tasks ct ON ctp.task_id = ct.id
+       WHERE ctp.plan_id = $1 
+         AND ctp.page_index = $2`,
+      [planId, page_index]
+    );
+
+    res.json({
+      items: positions.map((p) => ({
+        task_id: p.task_id,
+        entity_id: p.entity_id,
+        entity_type: p.entity_type,
+        task_name: p.task_name,
+        x_frac: Number(p.x_frac),
+        y_frac: Number(p.y_frac),
+        status: computeStatus(p.next_control),
+      })),
+    });
+  } catch (e) {
+    console.error("[Controls] positions error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Définir / mettre à jour la position d'une tâche (ou d'un équipement complet)
+router.post("/maps/setPosition", async (req, res) => {
+  const {
+    task_id,
+    entity_id,
+    entity_type,
+    logical_name,
+    building,
+    page_index = 0,
+    x_frac,
+    y_frac,
+  } = req.body;
+  const site = siteOf(req);
+
+  const client = await pool.connect();
+  try {
+    let planId;
+
+    // 1) Identifier le plan à partir de logical_name ou building
+    if (logical_name) {
+      const key = String(logical_name);
+
+      // Si c'est un id numérique OU un UUID → on le traite comme un id de plan
+      if (/^\d+$/.test(key) || isUuid(key)) {
+        const { rows } = await client.query(
+          `SELECT id FROM controls_plans WHERE id = $1 AND site = $2`,
+          [key, site]
+        );
+        if (!rows.length) {
+          return res.status(404).json({ error: "Plan not found" });
+        }
+        planId = rows[0].id;
+      } else {
+        // Sinon : on considère que c'est un logical_name (comportement historique)
+        const { rows } = await client.query(
+          `SELECT id FROM controls_plans WHERE logical_name = $1 AND site = $2`,
+          [key, site]
+        );
+        if (!rows.length) {
+          return res.status(404).json({ error: "Plan not found" });
+        }
+        planId = rows[0].id;
+      }
+    } else if (building) {
+      const { rows } = await client.query(
+        `SELECT id FROM controls_plans 
+         WHERE display_name ILIKE $1 AND site = $2 
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [`%${building}%`, site]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ error: "Plan not found" });
+      }
+      planId = rows[0].id;
+    } else {
+      return res.status(400).json({ error: "Missing plan identifier" });
+    }
+
+    const pageIndexInt = Number(page_index) || 0;
+
+    // 2) Déterminer les task_id à positionner
+    let taskIds = [];
+
+    if (entity_id && entity_type) {
+      const { rows: taskRows } = await client.query(
+        `SELECT id FROM controls_tasks 
+         WHERE entity_id = $1 AND entity_type = $2 AND site = $3`,
+        [entity_id, entity_type, site]
+      );
+      taskIds = taskRows.map((r) => r.id);
+    } else if (task_id) {
+      taskIds = [task_id];
+    }
+
+    // 3) Upsert dans controls_task_positions
+    for (const tid of taskIds) {
+      const { rows: existing } = await client.query(
+        `SELECT id FROM controls_task_positions 
+         WHERE task_id = $1 AND plan_id = $2 AND page_index = $3`,
+        [tid, planId, pageIndexInt]
+      );
+
+      if (existing.length) {
+        await client.query(
+          `UPDATE controls_task_positions 
+           SET x_frac = $1, y_frac = $2, updated_at = NOW()
+           WHERE id = $3`,
+          [x_frac, y_frac, existing[0].id]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO controls_task_positions 
+           (task_id, plan_id, page_index, x_frac, y_frac, created_at)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [tid, planId, pageIndexInt, x_frac, y_frac]
+        );
+      }
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("[Controls] setPosition error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================================================
+// MOUNT & BOOT
+// ============================================================================
+
+const BASE_PATH = process.env.CONTROLS_BASE_PATH || "/api/controls";
+app.use(BASE_PATH, router);
+
+const PORT = Number(process.env.CONTROLS_PORT || 3011);
+const HOST = process.env.CONTROLS_HOST || "0.0.0.0";
+
+app.listen(PORT, HOST, () => {
+  console.log(
+    `[Controls] Server running on ${HOST}:${PORT} (BASE_PATH=${BASE_PATH})`
+  );
+});
+
+export default app;
