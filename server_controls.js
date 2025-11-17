@@ -367,6 +367,46 @@ function getDeviceFamily(ent) {
   return null;
 }
 
+// Famille HV d'un équipement (site/cellule transfo) à partir du nom / code
+function getHvEquipmentFamily(ent) {
+  const name = String(ent.name || "");
+  const code = String(ent.code || "");
+  const ctx = `${name} ${code}`.toLowerCase();
+
+  // Transfo résine / sec / dry-type
+  if (
+    ctx.includes("cast resin") ||
+    ctx.includes("dry-type") ||
+    ctx.includes("dry type") ||
+    ctx.includes("résine") ||
+    ctx.includes("resin") ||
+    /\btrs?\b/.test(ctx) ||           // ex : TRS1 = transfo sec
+    /\btr sec\b/.test(ctx)
+  ) {
+    return "cast_resin";
+  }
+
+  // Transfo fluide / huile / immergé
+  if (
+    ctx.includes("oil") ||
+    ctx.includes("huile") ||
+    ctx.includes("fluid") ||
+    ctx.includes("immersed") ||
+    ctx.includes("immergé") ||
+    ctx.includes("onaf") ||
+    ctx.includes("onan") ||
+    /\btri?\b/.test(ctx) ||           // ex : TRI1 = transfo immergé (si tu utilises ce code)
+    /\btr huile\b/.test(ctx)
+  ) {
+    return "fluid";
+  }
+
+  // Si rien ne matche :
+  // 👉 on peut décider d'un défaut. Le plus courant dans l'industrie, c'est le transfo fluide.
+  // Si tu préfères être strict et ne rien appliquer plutôt que d'assumer "fluid", remplace par `return null;`
+  return "fluid";
+}
+
 function isControlForDeviceFamily(ctrl, family) {
   const type = String(ctrl.type || "").toLowerCase();
 
@@ -441,6 +481,28 @@ function isControlForDeviceFamily(ctrl, family) {
 function isControlAllowedForEntity(cat, ctrl, ent) {
   const key = cat.key || "";
   const name = getEquipmentNameString(ent);
+
+  // ------------- HV Transformers (G2.1) -------------
+  // On fait le tri entre :
+  // - transformers_fluid        → transfos immergés (oil/fluid)
+  // - transformers_cast_resin   → transfos secs / résine
+  if (key === "transformers_fluid" || key === "transformers_cast_resin") {
+    const family = getHvEquipmentFamily(ent);
+
+    // Si on n'arrive pas à classer l'équipement HV, on peut choisir :
+    // - soit renvoyer false (aucun contrôle appliqué),
+    // - soit considérer `family` par défaut comme "fluid" dans getHvEquipmentFamily.
+    if (!family) {
+      return false;
+    }
+
+    if (key === "transformers_fluid") {
+      return family === "fluid";
+    }
+    if (key === "transformers_cast_resin") {
+      return family === "cast_resin";
+    }
+  }
 
   // Règle simple : pour la catégorie G2.1 "Distribution Boards" (3.2.10),
   // on applique TOUS les contrôles définis dans la TSD au niveau switchboard.
