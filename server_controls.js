@@ -184,11 +184,17 @@ function isVsdLikeEntity(ent) {
 
 // Courant assigné : on essaie de récupérer rated_current / In / rating / nominal_current
 function getRatedCurrent(ent) {
+  // On essaie d'abord les champs "classiques" utilisés par d'autres tables
   const candidates = [
     ent.rated_current,
     ent.in,
     ent.rating,
     ent.nominal_current,
+    // Spécifique à la table devices : calibre nominal en ampères
+    ent.in_amps,
+    // Pour certains appareillages (MCCB / disjoncteurs avec relais Micrologic),
+    // le calibre est aussi présent dans les settings (ir)
+    ent.settings && ent.settings.ir,
   ].filter((v) => v != null);
 
   if (!candidates.length) return null;
@@ -1182,7 +1188,6 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       // sans passer par l'IA (ex: tableaux TGBT/DB, distribution boards)
       const forceFullControls =
         cat.key === "lv_switchgear" ||
-        cat.key === "lv_switchgear_devices" ||
         cat.key === "distribution_boards";
 
       // ------------------------------
@@ -1400,7 +1405,10 @@ Consignes :
 
         let controlsForThis = [];
 
-        if (useAI) {
+        if (forceFullControls) {
+          // Catégories pour lesquelles on applique toujours tout le catalogue TSD
+          controlsForThis = controls;
+        } else if (useAI) {
           // IA active : on n'applique que ce que l'IA a explicitement validé
           if (aiMap.has(ent.id) && aiMap.get(ent.id).length) {
             controlsForThis = aiMap
@@ -1414,6 +1422,20 @@ Consignes :
         } else {
           // IA désactivée : on applique tous les contrôles de la catégorie
           controlsForThis = controls;
+        }
+
+        // Pour les devices BT, on force au minimum les contrôles génériques
+        if (cat.key === "lv_switchgear_devices") {
+          const baseKeys = ["visual_inspection", "thermography"]; // type → snake_case
+          for (const k of baseKeys) {
+            const baseCtrl = controlsByKey[k];
+            if (
+              baseCtrl &&
+              !controlsForThis.some((c) => c && c.type === baseCtrl.type)
+            ) {
+              controlsForThis.push(baseCtrl);
+            }
+          }
         }
 
         // 5.a) Filtre métier backend : on enlève les contrôles incohérents
