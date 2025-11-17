@@ -169,6 +169,34 @@ function getEquipmentNameString(ent) {
   return parts.join(" ").toLowerCase();
 }
 
+// Famille du device à partir de device_type / nom / référence
+function getDeviceFamily(ent) {
+  const devType = String(ent.device_type || "").toLowerCase();
+  const name = getEquipmentNameString(ent); // name + device_type + switchboard_name + description
+  const ref = String(ent.reference || "").toLowerCase();
+  const ctx = `${devType} ${name} ${ref}`;
+
+  if (/acb|air circuit breaker/.test(ctx)) return "acb";
+
+  if (/\bmccb\b/.test(ctx)) return "mccb";
+
+  // Option : traiter les MCB comme des “petits MCCB” pour l’IR 3–5 ans
+  if (/\bmcb\b/.test(ctx)) return "mcb";
+
+  if (/contactor|contacteur/.test(ctx)) return "motor_contactor";
+
+  if (/automatic transfer switch|ats\b|inverseur de source/.test(ctx))
+    return "ats";
+
+  if (/fused switch|sectionneur-fusible|switch-fuse|fusible/.test(ctx))
+    return "fused_switch";
+
+  if (/relay|relais/.test(ctx))
+    return "relay";
+
+  return null;
+}
+
 // Heuristique : est-ce que cet équipement ressemble à un variateur de vitesse ?
 function isVsdLikeEntity(ent) {
   const s = getEquipmentNameString(ent);
@@ -258,48 +286,71 @@ function getDeviceFamily(ent) {
   return null;
 }
 
-// Vérifie si un contrôle est cohérent avec la famille du device
 function isControlForDeviceFamily(ctrl, family) {
   const type = String(ctrl.type || "").toLowerCase();
 
-  // On enlève **toujours** les globaux pour les devices
+  //
+  // 1) On élimine systématiquement les contrôles globaux
+  //    Ces contrôles appartiennent à la section 3.2.10 (Distribution Boards)
+  //    → ne doivent JAMAIS apparaître au niveau device.
+  //
   if (
     type.includes("visual inspection") ||
     type.includes("thermography") ||
-    type.includes("busbars and cables")
+    type.includes("busbars and cables") ||
+    type.includes("connections") || // option : si tu veux aussi les exclure
+    type.includes("earth-fault loop impedance") ||
+    type.includes("identification & circuit charts") ||
+    type.includes("ingress protection") ||
+    type.includes("fuse carriers and mcbs") ||
+    type.includes("conduit and cable gland terminations") ||
+    type.includes("residual current devices")
   ) {
     return false;
   }
 
-  switch (family) {
-    case "acb":
-      // ACB : contrôles ACB uniquement
-      return (
-        type.includes("low-voltage air circuit breakers (acb)") ||
-        type.includes("low-voltage acb")
-      );
+  //
+  // 2) Mapping G2.1 strict
+  //    On se base uniquement sur les contrôles prévus dans 3.2.7.
+  //
 
-    case "mccb":
-    case "mcb":
-      // MCCB (et MCB si tu veux les traiter pareil pour l’IR)
-      return type.includes("mccb");
-
-    case "motor_contactor":
-      return type.includes("motor contactors");
-
-    case "ats":
-      return type.includes("automatic transfer switch");
-
-    case "fused_switch":
-      return type.includes("fused switches");
-
-    case "relay":
-      return type.includes("protection relays");
-
-    default:
-      // Famille inconnue → pas de contrôle spécifique
-      return false;
+  // ACB (Air Circuit Breaker)
+  if (family === "acb") {
+    return (
+      type.includes("low-voltage air circuit breakers (acb)") ||
+      type.includes("low-voltage acb")
+    );
   }
+
+  // MCCB & MCB
+  if (family === "mccb" || family === "mcb") {
+    return type.includes("mccb");
+  }
+
+  // Contactors
+  if (family === "motor_contactor") {
+    return type.includes("motor contactors");
+  }
+
+  // Automatic Transfer Switch (ATS)
+  if (family === "ats") {
+    return type.includes("automatic transfer switch");
+  }
+
+  // Fused Switches
+  if (family === "fused_switch") {
+    return type.includes("fused switches");
+  }
+
+  // Protection Relays
+  if (family === "relay") {
+    return type.includes("protection relays");
+  }
+
+  //
+  // 3) Famille inconnue → device non reconnu → aucun contrôle
+  //
+  return false;
 }
 
 /**
@@ -309,6 +360,15 @@ function isControlForDeviceFamily(ctrl, family) {
 function isControlAllowedForEntity(cat, ctrl, ent) {
   const key = cat.key || "";
   const name = getEquipmentNameString(ent);
+
+  // Spécial G2.1 :
+  // Pour les TGBT/DB (<1000 V), on utilise la catégorie "distribution_boards" (§3.2.10).
+  // On NE veut PAS que le pack générique "lv_switchgear" vienne rajouter des contrôles
+  // au niveau "switchboards" (sinon on duplique les tâches des disjoncteurs sur le tableau).
+  if (key === "lv_switchgear" && cat.db_table === "switchboards") {
+    return false;
+  }
+
 
   // 0) Filtre intensité de base (MCCB >400A, Bus Duct >800A, etc.)
   if (!isCurrentCompatible(ctrl, ent)) {
