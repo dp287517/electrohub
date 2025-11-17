@@ -442,6 +442,12 @@ function isControlAllowedForEntity(cat, ctrl, ent) {
   const key = cat.key || "";
   const name = getEquipmentNameString(ent);
 
+  // Règle simple : pour la catégorie G2.1 "Distribution Boards" (3.2.10),
+  // on applique TOUS les contrôles définis dans la TSD au niveau switchboard.
+  if (key === "distribution_boards") {
+    return true;
+  }
+
   // Spécial G2.1 :
   // Pour les TGBT/DB (<1000 V), on utilise la catégorie "distribution_boards" (§3.2.10).
   // On NE veut PAS que le pack générique "lv_switchgear" vienne rajouter des contrôles
