@@ -226,6 +226,82 @@ function isCurrentCompatible(ctrl, ent) {
   return true;
 }
 
+// Contrôles "globaux" de switchboard (TGBT/DB)
+function isGlobalSwitchgearControl(ctrl) {
+  const type = String(ctrl.type || "").toLowerCase();
+  if (type.includes("visual inspection")) return true;
+  if (type.includes("thermography")) return true;
+  if (type.includes("busbars and cables")) return true;
+  return false;
+}
+
+// Famille du device à partir de device_type / nom / référence
+function getDeviceFamily(ent) {
+  const devType = String(ent.device_type || "").toLowerCase();
+  const name = getEquipmentNameString(ent);
+  const ref = String(ent.reference || "").toLowerCase();
+  const ctx = `${devType} ${name} ${ref}`;
+
+  if (/acb|air circuit breaker/.test(ctx)) return "acb";
+  if (/mccb/.test(ctx)) return "mccb";
+  // Si tu veux traiter les MCB comme des MCCB pour l'IR, on les mappe aussi ici :
+  if (/mcb/.test(ctx)) return "mcb";
+
+  if (/contactor|contacteur/.test(ctx)) return "motor_contactor";
+  if (/ats|automatic transfer switch|inverseur de source/.test(ctx))
+    return "ats";
+  if (/fuse|fused switch|sectionneur-fusible|switch-fuse/.test(ctx))
+    return "fused_switch";
+  if (/relay|relais/.test(ctx))
+    return "relay";
+
+  return null;
+}
+
+// Vérifie si un contrôle est cohérent avec la famille du device
+function isControlForDeviceFamily(ctrl, family) {
+  const type = String(ctrl.type || "").toLowerCase();
+
+  // On enlève **toujours** les globaux pour les devices
+  if (
+    type.includes("visual inspection") ||
+    type.includes("thermography") ||
+    type.includes("busbars and cables")
+  ) {
+    return false;
+  }
+
+  switch (family) {
+    case "acb":
+      // ACB : contrôles ACB uniquement
+      return (
+        type.includes("low-voltage air circuit breakers (acb)") ||
+        type.includes("low-voltage acb")
+      );
+
+    case "mccb":
+    case "mcb":
+      // MCCB (et MCB si tu veux les traiter pareil pour l’IR)
+      return type.includes("mccb");
+
+    case "motor_contactor":
+      return type.includes("motor contactors");
+
+    case "ats":
+      return type.includes("automatic transfer switch");
+
+    case "fused_switch":
+      return type.includes("fused switches");
+
+    case "relay":
+      return type.includes("protection relays");
+
+    default:
+      // Famille inconnue → pas de contrôle spécifique
+      return false;
+  }
+}
+
 /**
  * Filtre métier : est-ce que le contrôle de cette catégorie peut s'appliquer
  * à cet équipement ?
@@ -1437,6 +1513,22 @@ Consignes :
               controlsForThis.push(baseCtrl);
             }
           }
+        }
+
+        // 5.z) Post-traitement par catégorie (switchboard vs devices)
+        if (cat.key === "lv_switchgear") {
+          // Au niveau TGBT/DB : on garde UNIQUEMENT les contrôles globaux
+          controlsForThis = controlsForThis.filter((ctrl) =>
+            isGlobalSwitchgearControl(ctrl)
+          );
+        }
+
+        if (cat.key === "lv_switchgear_devices") {
+          // Sur les devices : on enlève les globaux
+          const family = getDeviceFamily(ent);
+          controlsForThis = controlsForThis.filter((ctrl) =>
+            isControlForDeviceFamily(ctrl, family)
+          );
         }
 
         // 5.a) Filtre métier backend : on enlève les contrôles incohérents
