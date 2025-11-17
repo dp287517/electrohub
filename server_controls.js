@@ -169,34 +169,6 @@ function getEquipmentNameString(ent) {
   return parts.join(" ").toLowerCase();
 }
 
-// Famille du device à partir de device_type / nom / référence
-function getDeviceFamily(ent) {
-  const devType = String(ent.device_type || "").toLowerCase();
-  const name = getEquipmentNameString(ent); // name + device_type + switchboard_name + description
-  const ref = String(ent.reference || "").toLowerCase();
-  const ctx = `${devType} ${name} ${ref}`;
-
-  if (/acb|air circuit breaker/.test(ctx)) return "acb";
-
-  if (/\bmccb\b/.test(ctx)) return "mccb";
-
-  // Option : traiter les MCB comme des “petits MCCB” pour l’IR 3–5 ans
-  if (/\bmcb\b/.test(ctx)) return "mcb";
-
-  if (/contactor|contacteur/.test(ctx)) return "motor_contactor";
-
-  if (/automatic transfer switch|ats\b|inverseur de source/.test(ctx))
-    return "ats";
-
-  if (/fused switch|sectionneur-fusible|switch-fuse|fusible/.test(ctx))
-    return "fused_switch";
-
-  if (/relay|relais/.test(ctx))
-    return "relay";
-
-  return null;
-}
-
 // Heuristique : est-ce que cet équipement ressemble à un variateur de vitesse ?
 function isVsdLikeEntity(ent) {
   const s = getEquipmentNameString(ent);
@@ -261,29 +233,6 @@ function isGlobalSwitchgearControl(ctrl) {
   if (type.includes("thermography")) return true;
   if (type.includes("busbars and cables")) return true;
   return false;
-}
-
-// Famille du device à partir de device_type / nom / référence
-function getDeviceFamily(ent) {
-  const devType = String(ent.device_type || "").toLowerCase();
-  const name = getEquipmentNameString(ent);
-  const ref = String(ent.reference || "").toLowerCase();
-  const ctx = `${devType} ${name} ${ref}`;
-
-  if (/acb|air circuit breaker/.test(ctx)) return "acb";
-  if (/mccb/.test(ctx)) return "mccb";
-  // Si tu veux traiter les MCB comme des MCCB pour l'IR, on les mappe aussi ici :
-  if (/mcb/.test(ctx)) return "mcb";
-
-  if (/contactor|contacteur/.test(ctx)) return "motor_contactor";
-  if (/ats|automatic transfer switch|inverseur de source/.test(ctx))
-    return "ats";
-  if (/fuse|fused switch|sectionneur-fusible|switch-fuse/.test(ctx))
-    return "fused_switch";
-  if (/relay|relais/.test(ctx))
-    return "relay";
-
-  return null;
 }
 
 function getDeviceFamily(ent) {
