@@ -312,6 +312,17 @@ export const tsdLibrary = {
           ]
         },
         {
+          "type": "Residual Current Devices (RCDs)",
+          "frequency": {
+            "interval": 6,
+            "unit": "months"
+          },
+          "checklist": [
+            "Operation via test button (every 6 months)",
+            "Annual test using approved RCD tester"
+          ]
+        },
+        {
           "type": "Protection Relays – 3–5 years",
           "frequency": { "interval": 48, "unit": "months" },
           "checklist": [
@@ -1524,17 +1535,6 @@ export const tsdLibrary = {
             "Note: Earth loop test removes need for separate earth continuity tests"
           ]
         },
-        {
-          "type": "Residual Current Devices (RCDs)",
-          "frequency": {
-            "interval": 6,
-            "unit": "months"
-          },
-          "checklist": [
-            "Operation via test button (every 6 months)",
-            "Annual test using approved RCD tester"
-          ]
-        }
       ]
     },
     {
