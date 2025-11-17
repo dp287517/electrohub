@@ -218,6 +218,201 @@ export const tsdLibrary = {
       ]
     },
     {
+      "key": "lv_switchgear_devices",
+      "label": "Low voltage switchgear (<1000 V ac)",
+      "db_table": "devices",
+      "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
+      "controls": [
+        {
+          "type": "Visual Inspection",
+          "description": "Visual inspection with the switchgear energized and in normal operating condition.",
+          "frequency": {
+            "interval": 3,
+            "unit": "months"
+          },
+          "checklist": [
+            "Switchgear environment is clean, cool and dry",
+            "No abnormal noises, smells, vibration or heat",
+            "Arcing not detected (sound/voltage flicker)",
+            "No blistered/blackened paint; insulation looks normal (no signs of overheating)",
+            "Room temperature indicates no general overheating",
+            "No combustibles/unwanted material on or near switchgear",
+            "No damaged insulators",
+            "No pooled water, leaks, rodents, or environmental contaminants",
+            "IP2X protection maintained incl. inside cubicles opened without tools",
+            "All labels permanent, legible and accurate to drawing"
+          ],
+          "observations": [
+            "Relay indications (flags)",
+            "Voltage readings",
+            "Current readings",
+            "Damaged components (displays, meters, LEDs)"
+          ],
+          "notes": "For checklist items, record status using: Conforme / Non conforme / Non applicable."
+        },
+        {
+          "type": "Thermography",
+          "description": "Perform thermographic surveys of low voltage switchgear.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Solid insulation",
+            "Bolted connections",
+            "Switchgear contacts",
+            "Panel exterior",
+            "Accessible internal components"
+          ]
+        },
+        {
+          "type": "Low-Voltage Air Circuit Breakers (ACB) \u2013 Annual",
+          "description": "Functional and mechanical checks, lubrication per manufacturer.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Smooth operation; mechanism not binding",
+            "Correct alignment; no mechanical damage",
+            "No overheating; arc chutes OK; contacts OK",
+            "Insulation resistance of main contacts checked",
+            "Prove operation from protection devices",
+            "Charging mechanism and auxiliary features functional (interlocks, trip-free, anti-pumping, trip indicators)",
+            "Open/Close operation (manual & control system)",
+            "Lubricated per manufacturer"
+          ]
+        },
+        {
+          "type": "MCCB >400A \u2013 Annual",
+          "description": "Operation and settings.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Smooth operation; mechanism not binding",
+            "Protection settings correct vs latest electrical study"
+          ]
+        },
+        {
+          "type": "Motor Contactors \u2013 Annual",
+          "description": "For contactors >50 hp (37 kW).",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Mechanically exercised",
+            "Smooth operation; correct alignment; no mechanical damage",
+            "No overheating; arc barriers and contacts in good condition",
+            "Controls functionally OK",
+            "Lubricated per manufacturer"
+          ]
+        },
+        {
+          "type": "Automatic Transfer Switch \u2013 Annual",
+          "description": "Functional and mechanical checks, thermography, lubrication.",
+          "frequency": {
+            "interval": 12,
+            "unit": "months"
+          },
+          "checklist": [
+            "Simulate loss/return of normal power; verify transfer and interlocks",
+            "Thermography in both positions (no hot spots)",
+            "Smooth mechanical operation; mechanism not binding",
+            "Lubricated per manufacturer"
+          ]
+        },
+        {
+          "type": "Fused Switches \u2013 3\u20135 years",
+          "description": "Mechanical checks, lubrication, fuse rating and overheating check.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Physical condition of fuse housing/base",
+            "Smooth operation; mechanism not binding",
+            "Lubricated per manufacturer",
+            "Fuses of correct rating/characteristics (replace all 3 phases if one is blown)",
+            "No evidence of overheating"
+          ]
+        },
+        {
+          "type": "Low-Voltage ACB \u2013 Electrical Tests 3\u20135 years",
+          "description": "Trip/close coil voltages, insulation resistance, primary injection, time travel.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Trip/Close coils operate within manufacturer voltage (typically ~50% rated)",
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)",
+            "Primary current injection tests protective functions (pick-up/operate within tolerance)",
+            "Time travel curve recorded and compared to manufacturer and previous results"
+          ]
+        },
+        {
+          "type": "MCCB \u2013 Insulation Resistance 3\u20135 years",
+          "description": "IR >100 M\u03a9 at 1000Vdc.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Motor Contactors \u2013 Insulation Resistance 3\u20135 years",
+          "description": "IR >100 M\u03a9 at 1000Vdc.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Automatic Transfer Switch \u2013 Insulation Resistance 3\u20135 years",
+          "description": "IR >100 M\u03a9 at 1000Vdc.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (open & closed; phase-to-phase & phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Busbars and Cables \u2013 3\u20135 years",
+          "description": "Low resistance and insulation resistance checks.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "Low Resistance of bolted connections \u2013 compare similar joints; no >50% difference; below manufacturer/max baseline",
+            "Insulation resistance >100 M\u03a9 at 1000Vdc (phase-to-earth)"
+          ]
+        },
+        {
+          "type": "Protection Relays \u2013 3\u20135 years",
+          "description": "Secondary injection testing; settings per latest coordination study.",
+          "frequency": {
+            "interval": 4,
+            "unit": "years"
+          },
+          "checklist": [
+            "All protective functions operate correctly via secondary injection",
+            "Relay settings match current protection coordination study"
+          ]
+        }
+      ]
+    },
+    {
       "key": "hv_switchgear",
       "label": "High voltage switchgear (>1000 V ac)",
       "db_table": "hv_devices",
