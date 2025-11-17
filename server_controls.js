@@ -286,6 +286,138 @@ function getDeviceFamily(ent) {
   return null;
 }
 
+function getDeviceFamily(ent) {
+  const devType = String(ent.device_type || "");
+  const name = String(ent.name || "");
+  const ref = String(ent.reference || "");
+  const ctx = `${devType} ${name} ${ref}`.toLowerCase();
+
+  //
+  // 1) ACB – Low Voltage Air Circuit Breakers
+  //
+  // Exemples visés :
+  // - device_type contient "ACB" ou "Air Circuit Breaker"
+  // - références / noms : Masterpact, Emax, EntelliGuard, etc.
+  //
+  if (
+    /\bacb\b/.test(ctx) ||
+    ctx.includes("air circuit breaker") ||
+    ctx.includes("masterpact") ||     // Schneider LV ACB
+    ctx.includes("emax") ||           // ABB LV ACB
+    ctx.includes("entelliguard")      // GE / ABB ACB
+  ) {
+    return "acb";
+  }
+
+  //
+  // 2) MCCB – Molded Case Circuit Breakers
+  //
+  // Exemples visés :
+  // - device_type "MCCB"
+  // - références : NSX, NS, CVS, Compact NSX, etc.
+  //
+  if (
+    /\bmccb\b/.test(ctx) ||
+    /\bcompact nsx?\b/.test(ctx) ||
+    /\bnsx\b/.test(ctx) ||          // Schneider Compact NSX
+    /\bcompact ns\b/.test(ctx) ||   // Schneider Compact NS
+    /\bcvs\b/.test(ctx) ||          // Schneider CVS
+    /\bns\b/.test(ctx)              // plus large, mais reste MCCB chez Schneider
+  ) {
+    return "mccb";
+  }
+
+  //
+  // 3) MCB – Miniature Circuit Breakers
+  //
+  // Exemples visés :
+  // - device_type "MCB"
+  // - références Schneider Acti9 / iDT / A9F...
+  //   (iDT40T C20, A9F74320, iC60, etc.)
+  //
+  if (
+    /\bmcb\b/.test(ctx) ||
+    /\bacti9\b/.test(ctx) ||
+    /\bic60\b/.test(ctx) ||
+    /\bidt\b/.test(ctx) ||
+    /\ba9f\b/.test(ctx)
+  ) {
+    return "mcb";
+  }
+
+  //
+  // 4) Motor Contactors
+  //
+  // Exemples visés :
+  // - device_type contient "contactor"
+  // - références : LC1D, LC1F (Schneider), 3RT (Siemens), AF (ABB contactor)
+  //
+  if (
+    ctx.includes("contactor") ||
+    ctx.includes("contacteur") ||
+    /\blc1[df]\b/.test(ctx) ||   // LC1D, LC1F...
+    /\b3rt\b/.test(ctx) ||       // Siemens 3RT
+    /\baf\d/.test(ctx)           // ABB AFxx (AF09, AF16...)
+  ) {
+    return "motor_contactor";
+  }
+
+  //
+  // 5) Automatic Transfer Switch (ATS)
+  //
+  // Exemples visés :
+  // - device_type "ATS" ou "Automatic Transfer Switch"
+  // - références : Socomec ATyS, etc.
+  //
+  if (
+    /\bats\b/.test(ctx) ||
+    ctx.includes("automatic transfer switch") ||
+    ctx.includes("inverseur de source") ||
+    ctx.includes("source changeover") ||
+    /\batys\b/.test(ctx)          // Socomec ATyS
+  ) {
+    return "ats";
+  }
+
+  //
+  // 6) Fused Switches / Switch-Fuse / Sectionneur-fusible
+  //
+  if (
+    ctx.includes("fused switch") ||
+    ctx.includes("switch-fuse") ||
+    ctx.includes("switch fuse") ||
+    ctx.includes("fuse switch disconnector") ||
+    ctx.includes("switch disconnector fuse") ||
+    ctx.includes("sectionneur-fusible") ||
+    ctx.includes("sectionneur fusible")
+  ) {
+    return "fused_switch";
+  }
+
+  //
+  // 7) Protection Relays
+  //
+  // Exemples visés :
+  // - device_type contient "relay"
+  // - références : Sepam, MiCOM, Easergy, etc.
+  //
+  if (
+    ctx.includes("protection relay") ||
+    /\brelay\b/.test(ctx) ||
+    ctx.includes("sepam") ||
+    ctx.includes("micom") ||
+    ctx.includes("easergy") ||
+    /\brel\b\d{3}/.test(ctx)       // Rel670, etc.
+  ) {
+    return "relay";
+  }
+
+  //
+  // 8) Si rien ne matche → famille inconnue
+  //
+  return null;
+}
+
 function isControlForDeviceFamily(ctrl, family) {
   const type = String(ctrl.type || "").toLowerCase();
 
