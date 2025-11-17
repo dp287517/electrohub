@@ -235,6 +235,7 @@ function isGlobalSwitchgearControl(ctrl) {
   return false;
 }
 
+// Famille du device à partir de device_type / nom / référence
 function getDeviceFamily(ent) {
   const devType = String(ent.device_type || "").toLowerCase();
   const name = String(ent.name || "").toLowerCase();
@@ -245,9 +246,9 @@ function getDeviceFamily(ent) {
   if (
     ctx.includes(" acb") ||
     ctx.includes("air circuit breaker") ||
-    ctx.includes("masterpact") ||     // Schneider LV ACB
-    ctx.includes("emax") ||           // ABB LV ACB
-    ctx.includes("entelliguard")      // GE / ABB ACB
+    ctx.includes("masterpact") ||
+    ctx.includes("emax") ||
+    ctx.includes("entelliguard")
   ) {
     return "acb";
   }
@@ -256,23 +257,31 @@ function getDeviceFamily(ent) {
   if (
     ctx.includes("mccb") ||
     ctx.includes("compact nsx") ||
-    ctx.includes(" nsx") ||           // "nsx 160"
+    ctx.includes(" nsx") ||
     ctx.includes("compact ns") ||
-    ctx.includes(" cvs") ||           // Schneider CVS
-    ctx.includes(" ns ")              // " ns " dans une ref type NS160
+    ctx.includes(" cvs") ||
+    ctx.includes(" ns ")
   ) {
     return "mccb";
   }
 
-  // 3) MCB – Miniature / Low Voltage CB
+  // 3) MCB – Miniature / Low Voltage CB (y compris beaucoup de petits disj.)
   if (
     ctx.includes("mcb") ||
-    devType.includes("low voltage circuit breaker") || // <-- IMPORTANT pour PRINCIPAL & TEST xy
+    devType.includes("low voltage circuit breaker") ||
     ctx.includes("acti9") ||
     ctx.includes("ic60") ||
-    ctx.includes("idt") ||          // "idt40t" sera matché
-    ctx.includes("a9f") ||          // A9F74320
-    ctx.includes("2csf")            // ABB 2CSF204001R1250
+    ctx.includes("idt") ||
+    ctx.includes("a9f") ||
+    ctx.includes("2csf") ||
+    ctx.includes("rcbo") ||
+    ctx.includes("rccb") ||
+    ctx.includes("rccd") ||
+    ctx.includes("disjoncteur différentiel") ||
+    ctx.includes("disjoncteur diff") ||
+    ctx.includes("interrupteur différentiel") ||
+    ctx.includes("inter diff") ||
+    ctx.includes("residual current circuit breaker")
   ) {
     return "mcb";
   }
@@ -281,10 +290,10 @@ function getDeviceFamily(ent) {
   if (
     ctx.includes("contactor") ||
     ctx.includes("contacteur") ||
-    ctx.includes("lc1d") ||         // LC1D
-    ctx.includes("lc1f") ||         // LC1F
-    ctx.includes(" 3rt") ||         // Siemens 3RT
-    ctx.includes(" af")             // ABB AF09, AF16...
+    ctx.includes("lc1d") ||
+    ctx.includes("lc1f") ||
+    ctx.includes(" 3rt") ||
+    ctx.includes(" af")
   ) {
     return "motor_contactor";
   }
@@ -320,13 +329,63 @@ function getDeviceFamily(ent) {
     ctx.includes("sepam") ||
     ctx.includes("micom") ||
     ctx.includes("easergy") ||
-    /\brel\d{3}\b/.test(ctx)       // Rel670, etc.
+    /\brel\d{3}\b/.test(ctx)
   ) {
     return "relay";
   }
 
-  // 8) Rien de reconnu
+  // 8) Fallback "safe" : si ça ressemble à un disjoncteur non classé → MCB générique
+  if (
+    devType.includes("circuit breaker") ||
+    ctx.includes("disjoncteur") ||
+    ctx.includes("breaker")
+  ) {
+    return "mcb";
+  }
+
   return null;
+}
+
+// Est-ce que ce contrôle est un test RCD ?
+function isRcdControl(ctrl) {
+  const type = String(ctrl.type || "").toLowerCase();
+  return (
+    type.includes("residual current devices") ||
+    type.includes("rcd / rcbo / rccb") ||
+    type.includes("residual current device")
+  );
+}
+
+// Est-ce que ce device est un disjoncteur / interrupteur différentiel ?
+function isResidualCurrentDevice(ent) {
+  const devType = String(ent.device_type || "").toLowerCase();
+  const name = String(ent.name || "").toLowerCase();
+  const ref = String(ent.reference || "").toLowerCase();
+  const ctx = `${devType} ${name} ${ref}`;
+
+  if (
+    ctx.includes("rcbo") ||
+    ctx.includes("rccb") ||
+    ctx.includes("rccd") ||
+    ctx.includes("residual current circuit breaker") ||
+    ctx.includes("residual current device") ||
+    ctx.includes("disjoncteur différentiel") ||
+    ctx.includes("disjoncteur diff") ||
+    ctx.includes("interrupteur différentiel") ||
+    ctx.includes("inter diff")
+  ) {
+    return true;
+  }
+
+  if (
+    ref.startsWith("a9d") ||   // ex: Schneider Acti9 RCBO
+    ref.startsWith("a9n") ||   // certains inter diff / diff
+    ref.startsWith("2csr")     // ABB RCD/RCBO
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 // Famille HV d'un équipement (site/cellule transfo) à partir du nom / code
@@ -1653,56 +1712,98 @@ Consignes :
 
         let controlsForThis = [];
 
-        if (forceFullControls) {
-          // Catégories pour lesquelles on applique toujours tout le catalogue TSD
-          controlsForThis = controls;
-        } else if (useAI) {
-          // IA active : on n'applique que ce que l'IA a explicitement validé
-          if (aiMap.has(ent.id) && aiMap.get(ent.id).length) {
+        // ----------------------------
+        // Cas particulier : devices BT (lv_switchgear_devices)
+        // ----------------------------
+        if (cat.key === "lv_switchgear_devices") {
+          const family = getDeviceFamily(ent);
+          const isRcd = isResidualCurrentDevice(ent);
+
+          //
+          // 5.1) On essaie d'abord avec nos règles maison (famille + RCD)
+          //
+          const ruleBased = controls.filter((ctrl) => {
+            if (!ctrl) return false;
+
+            // Contrôles RCD : uniquement sur des différentiels
+            if (isRcdControl(ctrl)) {
+              return isRcd;
+            }
+
+            // Autres contrôles LV (ACB, MCCB, contactors, ATS, etc.)
+            if (!family) return false;
+            return isControlForDeviceFamily(ctrl, family);
+          });
+
+          if (ruleBased.length > 0) {
+            controlsForThis = ruleBased;
+          } else if (useAI && aiMap.has(ent.id) && aiMap.get(ent.id).length) {
+            //
+            // 5.2) Fallback IA : si nos règles ne savent pas quoi faire,
+            // on laisse OpenAI proposer les contrôles, puis on refiltre plus bas.
+            //
             controlsForThis = aiMap
               .get(ent.id)
               .map((key) => controlsByKey[key])
               .filter(Boolean);
           } else {
-            // IA n'a rien dit pour cet équipement → aucun contrôle
             controlsForThis = [];
           }
         } else {
-          // IA désactivée : on applique tous les contrôles de la catégorie
-          controlsForThis = controls;
-        }
-
-        // Pour les devices BT, on force au minimum les contrôles génériques
-        if (cat.key === "lv_switchgear_devices") {
-          const baseKeys = ["visual_inspection", "thermography"]; // type → snake_case
-          for (const k of baseKeys) {
-            const baseCtrl = controlsByKey[k];
-            if (
-              baseCtrl &&
-              !controlsForThis.some((c) => c && c.type === baseCtrl.type)
-            ) {
-              controlsForThis.push(baseCtrl);
+          // ----------------------------
+          // Cas général pour toutes les autres catégories
+          // ----------------------------
+          if (forceFullControls) {
+            // Catégories pour lesquelles on applique toujours tout le catalogue TSD
+            controlsForThis = controls;
+          } else if (useAI) {
+            // IA active : on n'applique que ce que l'IA a explicitement validé
+            if (aiMap.has(ent.id) && aiMap.get(ent.id).length) {
+              controlsForThis = aiMap
+                .get(ent.id)
+                .map((key) => controlsByKey[key])
+                .filter(Boolean);
+            } else {
+              controlsForThis = [];
             }
+          } else {
+            // IA désactivée : on applique toute la catégorie
+            controlsForThis = controls;
           }
         }
 
-        // 5.z) Post-traitement par catégorie (switchboard vs devices)
+        // ----------------------------
+        // 5.z) Post-traitement par catégorie
+        // ----------------------------
+
+        // LV SWICHGEAR (TGBT/DB) : on garde UNIQUEMENT les contrôles globaux
         if (cat.key === "lv_switchgear") {
-          // Au niveau TGBT/DB : on garde UNIQUEMENT les contrôles globaux
           controlsForThis = controlsForThis.filter((ctrl) =>
             isGlobalSwitchgearControl(ctrl)
           );
         }
 
+        // LV DEVICES : filtre final par famille + RCD,
+        // valable aussi bien pour le mode "règles" que pour le fallback IA.
         if (cat.key === "lv_switchgear_devices") {
-          // Sur les devices : on enlève les globaux
           const family = getDeviceFamily(ent);
-          controlsForThis = controlsForThis.filter((ctrl) =>
-            isControlForDeviceFamily(ctrl, family)
-          );
+          const isRcd = isResidualCurrentDevice(ent);
+
+          controlsForThis = controlsForThis.filter((ctrl) => {
+            if (!ctrl) return false;
+
+            // RCD → uniquement si device identifié comme différentiel
+            if (isRcdControl(ctrl)) {
+              return isRcd;
+            }
+
+            // Autres contrôles : uniquement si famille connue
+            if (!family) return false;
+            return isControlForDeviceFamily(ctrl, family);
+          });
         }
 
-        // 5.a) Filtre métier backend : on enlève les contrôles incohérents
+        // 5.a) Filtre métier backend global (intensité, catégorie, etc.)
         controlsForThis = controlsForThis.filter((ctrl) =>
           isControlAllowedForEntity(cat, ctrl, ent)
         );
