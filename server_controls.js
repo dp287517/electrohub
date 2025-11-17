@@ -46,6 +46,21 @@ app.use(express.json({ limit: "30mb" }));
 app.use(express.urlencoded({ extended: true, limit: "30mb" }));
 
 // ============================================================================
+// IMPORT TSD LIBRARY
+// ============================================================================
+let tsdLibrary;
+try {
+  const mod = await import("./tsd_library.js");
+  tsdLibrary = mod.tsdLibrary || mod.default;
+  console.log(
+    `[Controls] TSD library loaded (${tsdLibrary.categories.length} categories)`
+  );
+} catch (e) {
+  console.error("[Controls] Failed to load TSD library:", e);
+  process.exit(1);
+}
+
+// ============================================================================
 // HELPERS GÉNÉRAUX
 // ============================================================================
 
