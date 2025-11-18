@@ -1214,7 +1214,10 @@ app.get("/api/doors/doors/:id/history", async (req, res) => {
     const settings = await getSettings();
     const checks = rows.map((r) => {
       const items = normalizeItemsWithLabels(r.items || [], settings.checklist_template);
-      const username = r.closed_by_name || r.closed_by_email || "—";
+      const username =
+        r.closed_by_name && r.closed_by_email
+          ? `${r.closed_by_name} (${r.closed_by_email})`
+          : r.closed_by_name || r.closed_by_email || "—";
       const result = r.status === "ok" ? "conforme" : "non_conforme";
       const statusHist = STATUS.FAIT;
       const ncPdf =
