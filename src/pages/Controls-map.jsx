@@ -291,9 +291,11 @@ export default function ControlsMap({
   pageIndex = 0,
   onSelectTask,
   inModal = false,
-  pendingPlacement = null, // { entity_id, entity_type, label }
+  pendingPlacement = null,
   onPlacementComplete,
-  focusEntity = null, // { entity_id, entity_type } pour zoom + clignotement
+  focusEntity = null,
+  // 🔽 nouveau
+  statusFilter = "all", // "open" | "done" | "all"
 }) {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
@@ -349,18 +351,22 @@ export default function ControlsMap({
     return null;
   }, [plan, planKey, building]);
 
-  // Mode placement activé
   useEffect(() => {
     if (pendingPlacement) {
+      // On entre en mode "placement"
       placementModeRef.current = true;
       if (wrapRef.current) {
         wrapRef.current.classList.add("placement-mode-active");
       }
     } else {
+      // On sort du mode placement → on repasse en mode DRAG normal
       placementModeRef.current = false;
       if (wrapRef.current) {
         wrapRef.current.classList.remove("placement-mode-active");
       }
+      // ✅ important : on recharge les positions dans ce mode,
+      // pour recréer les marqueurs avec draggable = true
+      loadPositions();
     }
   }, [pendingPlacement]);
 
@@ -477,7 +483,17 @@ export default function ControlsMap({
     layer.clearLayers();
     markersIndexRef.current.clear();
 
-    (list || []).forEach((p) => {
+    const openStatuses = ["Planned", "Pending", "Overdue"];
+    const doneStatuses = ["Done"];
+
+    const filtered = (list || []).filter((p) => {
+      if (statusFilter === "all") return true;
+      if (statusFilter === "open") return openStatuses.includes(p.status);
+      if (statusFilter === "done") return doneStatuses.includes(p.status);
+      return true;
+    });
+
+    filtered.forEach((p) => {
       const latlng = toLatLngFrac(p.x, p.y, base);
       const icon = makeTaskIcon(p.status);
 
@@ -719,8 +735,8 @@ export default function ControlsMap({
               body: JSON.stringify(body),
             });
 
-            // On recharge immédiatement les positions
-            await loadPositions();
+            // ❌ plus de loadPositions() ici
+            // ✅ on laisse le parent fermer le mode placement
             onPlacementComplete?.();
           } catch (e) {
             console.error("[ControlsMap] setPosition (click) error", e);
