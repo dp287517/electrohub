@@ -1223,6 +1223,7 @@ function Doors() {
     { value: "non_conforme", label: "Non conforme" },
     { value: "na", label: "N/A" },
   ];
+
   async function ensureCurrentCheck() {
     if (!editing?.id) return;
     let check = editing.current_check;
@@ -1235,22 +1236,55 @@ function Doors() {
       setEditing(full?.door);
     }
   }
+
   function allFiveAnswered(items = []) {
     const values = (items || []).slice(0, 5).map((i) => i?.value);
-    return values.length === 5 &&
-      values.every((v) => v === "conforme" || v === "non_conforme" || v === "na");
+    return (
+      values.length === 5 &&
+      values.every(
+        (v) => v === "conforme" || v === "non_conforme" || v === "na"
+      )
+    );
   }
+
   async function saveChecklistItem(idx, field, value) {
     if (!editing?.id || !editing?.current_check) return;
+
     const items = [...(editing.current_check.items || [])];
     const prev = items[idx] || { index: idx };
     const next = { ...prev, index: idx };
+
     if (field === "value") next.value = value;
     if (field === "comment") next.comment = value;
+
     items[idx] = next;
+
+    // 🔁 On sauvegarde simplement l’état courant, sans clôturer
     const payload = { items };
-    if (allFiveAnswered(items)) payload.close = true;
+
     const res = await API.saveCheck(editing.id, editing.current_check.id, payload);
+    if (res?.door) {
+      setEditing(res.door);
+      if (res?.notice) setToast(res.notice);
+      await reload();
+      await reloadCalendar();
+      if (tab === "maps" && selectedPlan) await loadPositions(selectedPlan, planPage);
+    } else {
+      const full = await API.get(editing.id);
+      setEditing(full?.door);
+    }
+  }
+
+  async function closeCurrentCheck() {
+    if (!editing?.id || !editing?.current_check) return;
+
+    const items = editing.current_check.items || [];
+
+    const res = await API.saveCheck(editing.id, editing.current_check.id, {
+      items,
+      close: true, // ✅ clôture explicite
+    });
+
     if (res?.door) {
       setEditing(res.door);
       if (res?.notice) setToast(res.notice);
@@ -1842,38 +1876,65 @@ function Doors() {
             <div className="border rounded-2xl p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="font-semibold">Checklist</div>
-                {!editing.current_check && <Btn onClick={ensureCurrentCheck}>Démarrer un contrôle</Btn>}
+                {!editing.current_check && (
+                  <Btn onClick={ensureCurrentCheck}>Démarrer un contrôle</Btn>
+                )}
               </div>
+
               {!editing.current_check && (
-                <div className="text-sm text-gray-500">Lance un contrôle pour remplir les 5 points ci-dessous.</div>
+                <div className="text-sm text-gray-500">
+                  Lance un contrôle pour remplir les 5 points ci-dessous.
+                </div>
               )}
+
               {!!editing.current_check && (
-                <div className="space-y-3">
-                  {(editing.current_check.itemsView || settings.checklist_template || defaultTemplate).slice(0, 5).map((label, i) => {
-                    const val = editing.current_check.items?.[i]?.value || "";
-                    const comment = editing.current_check.items?.[i]?.comment || "";
-                    return (
-                      <div key={i} className="grid gap-2">
-                        <div className="grid md:grid-cols-[1fr,220px] gap-2 items-center">
-                          <div className="text-sm">{label}</div>
-                          <Select
-                            value={val}
-                            onChange={(v) => saveChecklistItem(i, "value", v)}
-                            options={baseOptions}
-                            placeholder="Sélectionner…"
-                          />
+                <div className="space-y-4">
+                  {(editing.current_check.itemsView ||
+                    settings.checklist_template ||
+                    defaultTemplate)
+                    .slice(0, 5)
+                    .map((label, i) => {
+                      const val = editing.current_check.items?.[i]?.value || "";
+                      const comment =
+                        editing.current_check.items?.[i]?.comment || "";
+                      return (
+                        <div key={i} className="grid gap-2">
+                          <div className="grid md:grid-cols-[1fr,220px] gap-2 items-center">
+                            <div className="text-sm">{label}</div>
+                            <Select
+                              value={val}
+                              onChange={(v) => saveChecklistItem(i, "value", v)}
+                              options={baseOptions}
+                              placeholder="Sélectionner…"
+                            />
+                          </div>
+                          <div className="md:col-span-2">
+                            <Textarea
+                              value={comment}
+                              onChange={(v) => saveChecklistItem(i, "comment", v)}
+                              placeholder="Commentaire (optionnel)"
+                              rows={2}
+                            />
+                          </div>
                         </div>
-                        <div className="md:col-span-2">
-                          <Textarea
-                            value={comment}
-                            onChange={(v) => saveChecklistItem(i, "comment", v)}
-                            placeholder="Commentaire (optionnel)"
-                            rows={2}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+
+                  {/* 🔹 Nouveau bloc : bouton de clôture */}
+                  <div className="pt-2 space-y-2">
+                    <Btn
+                      onClick={closeCurrentCheck}
+                      disabled={!allFiveAnswered(editing.current_check.items || [])}
+                    >
+                      Terminer le contrôle et envoyer dans l’historique
+                    </Btn>
+                    <div className="text-xs text-gray-500">
+                      Les réponses sont sauvegardées automatiquement à chaque
+                      modification. Le contrôle ne sera archivé que lorsque
+                      vous cliquerez sur ce bouton.
+                    </div>
+                  </div>
+
                   <div className="pt-2">
                     <a
                       href={API.nonConformPDF(editing.id)}
