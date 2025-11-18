@@ -299,6 +299,10 @@ export const api = {
     taskSchema: (id) =>
       get(`/api/controls/tasks/${encodeURIComponent(id)}/schema`),
 
+    taskHistory(id) {
+      return get(`/api/controls/tasks/${encodeURIComponent(id)}/history`);
+    },
+
     // Alias rétro-compat
     taskDetails: (id) =>
       get(`/api/controls/tasks/${encodeURIComponent(id)}/schema`),
@@ -322,6 +326,23 @@ export const api = {
 
     // Équipements manquants par rapport à la librairie TSD
     getMissingEquipment: () => get("/api/controls/missing-equipment"),
+
+    uploadTaskFiles({ taskId, entityId, entityType, files }) {
+      const fd = new FormData();
+      fd.append("task_id", taskId);
+      if (entityId) fd.append("entity_id", entityId);
+      if (entityType) fd.append("entity_type", entityType);
+      (files || []).forEach((f) => fd.append("files", f));
+
+      return upload("/api/controls/files/upload", fd);
+    },
+
+    listAttachments({ entityId, entityType }) {
+      const params = new URLSearchParams();
+      if (entityId) params.set("entity_id", entityId);
+      if (entityType) params.set("entity_type", entityType);
+      return get(`/api/controls/files?${params.toString()}`);
+    },
 
     // ============================ PLANS PDF ================================
 
