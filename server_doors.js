@@ -1071,7 +1071,9 @@ app.put(
         typeof wantsCloseRaw === "string"
           ? ["1", "true", "yes", "on"].includes(wantsCloseRaw.toLowerCase())
           : !!wantsCloseRaw;
-      const close = bodyClose || allFiveFilled(merged);
+
+      // ✅ On NE clôture plus automatiquement, uniquement si le front demande close=true
+      const close = bodyClose;
 
       const { email: userEmail, name: userName } = await currentUser(req);
 
