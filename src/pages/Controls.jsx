@@ -298,20 +298,22 @@ function TaskDetails({ task, onClose, onRefresh }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiAnswer, setAiAnswer] = useState("");
   const [aiQuestion, setAiQuestion] = useState("");
-  // 🔽 nouveaux
+
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
   const [openHistoryId, setOpenHistoryId] = useState(null);
 
+  // 1) Chargement du schéma, de l'historique et des pièces jointes quand la tâche change
   useEffect(() => {
     if (!task) return;
+
     setSchema(null);
     setAiAnswer("");
     setAiQuestion("");
 
-    // 1) Schéma TSD
+    // Schéma TSD
     api.controls
       .taskSchema(task.id)
       .then(setSchema)
@@ -319,7 +321,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
         console.error("[TaskDetails] schema error:", e);
       });
 
-    // 2) Historique
+    // Historique
     setHistory([]);
     setHistoryLoading(true);
     api.controls
@@ -333,17 +335,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
       })
       .finally(() => setHistoryLoading(false));
 
-    useEffect(() => {
-      if (!history || history.length === 0) return;
-
-      // On ouvre par défaut le plus récent
-      const sorted = [...history].sort(
-        (a, b) => new Date(b.performed_at) - new Date(a.performed_at)
-      );
-      setOpenHistoryId((prev) => prev ?? sorted[0]?.id ?? null);
-    }, [history]);
-
-    // 3) Pièces jointes / photos
+    // Pièces jointes / photos
     setAttachments([]);
     setAttachmentsLoading(true);
 
@@ -365,6 +357,20 @@ function TaskDetails({ task, onClose, onRefresh }) {
       setAttachmentsLoading(false);
     }
   }, [task]);
+
+  // 2) Effet séparé pour décider quel contrôle historique est "ouvert" par défaut
+  useEffect(() => {
+    if (!history || history.length === 0) {
+      setOpenHistoryId(null);
+      return;
+    }
+
+    const sorted = [...history].sort(
+      (a, b) => new Date(b.performed_at) - new Date(a.performed_at)
+    );
+    // On n’écrase pas le panneau ouvert si déjà choisi
+    setOpenHistoryId((prev) => prev ?? sorted[0]?.id ?? null);
+  }, [history]);
 
   const submit = async (data) => {
     setBusy(true);
@@ -427,7 +433,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
     (a, b) => new Date(b.performed_at) - new Date(a.performed_at)
   );
 
-  // On se fait une map clé -> question pour retrouver les libellés
+  // Map clé -> question du schéma pour retrouver les libellés
   const checklistSchemaByKey = {};
   (schema?.checklist || []).forEach((q) => {
     checklistSchemaByKey[q.key] = q;
@@ -437,7 +443,6 @@ function TaskDetails({ task, onClose, onRefresh }) {
     if (!raw) return [];
     let arr = raw;
 
-    // Si jamais c'est du texte JSON
     if (typeof raw === "string") {
       try {
         arr = JSON.parse(raw);
@@ -452,7 +457,6 @@ function TaskDetails({ task, onClose, onRefresh }) {
       .map((item, idx) => {
         if (!item) return null;
 
-        // Cas ultra simple (déjà une string)
         if (typeof item === "string") {
           return {
             key: `q${idx + 1}`,
