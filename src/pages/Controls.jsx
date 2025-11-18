@@ -298,18 +298,61 @@ function TaskDetails({ task, onClose, onRefresh }) {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiAnswer, setAiAnswer] = useState("");
   const [aiQuestion, setAiQuestion] = useState("");
+  // 🔽 nouveaux
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [attachments, setAttachments] = useState([]);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
 
   useEffect(() => {
     if (!task) return;
     setSchema(null);
     setAiAnswer("");
     setAiQuestion("");
+
+    // 1) Schéma TSD
     api.controls
       .taskSchema(task.id)
       .then(setSchema)
       .catch((e) => {
         console.error("[TaskDetails] schema error:", e);
       });
+
+    // 2) Historique
+    setHistory([]);
+    setHistoryLoading(true);
+    api.controls
+      .taskHistory(task.id)
+      .then((res) => {
+        const items = Array.isArray(res?.items) ? res.items : res || [];
+        setHistory(items);
+      })
+      .catch((e) => {
+        console.error("[TaskDetails] history error:", e);
+      })
+      .finally(() => setHistoryLoading(false));
+
+    // 3) Pièces jointes / photos
+    setAttachments([]);
+    setAttachmentsLoading(true);
+
+    if (task.entity_id && task.entity_type) {
+      api.controls
+        .listAttachments({
+          entityId: task.entity_id,
+          entityType: task.entity_type,
+        })
+        .then((res) => {
+          const items = Array.isArray(res?.items) ? res.items : res || [];
+          setAttachments(items);
+        })
+        .catch((e) => {
+          console.error("[TaskDetails] attachments error:", e);
+        })
+        .finally(() => setAttachmentsLoading(false));
+    } else {
+      setAttachmentsLoading(false);
+    }
   }, [task]);
 
   const submit = async (data) => {
@@ -428,6 +471,101 @@ function TaskDetails({ task, onClose, onRefresh }) {
               </Button>
             </div>
 
+          {/* Historique des contrôles */}
+            <div className="px-4 pb-4 border-t mt-2">
+              <div className="text-sm font-semibold mb-2">
+                Historique des contrôles
+              </div>
+
+              {historyLoading && (
+                <div className="text-xs text-gray-500">Chargement...</div>
+              )}
+
+              {!historyLoading && history.length === 0 && (
+                <div className="text-xs text-gray-400">
+                  Aucun contrôle réalisé pour le moment.
+                </div>
+              )}
+
+              {!historyLoading && history.length > 0 && (
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {history.map((h) => (
+                    <div
+                      key={h.id}
+                      className="border rounded-lg px-3 py-2 bg-gray-50 text-xs flex flex-col gap-1"
+                    >
+                      <div className="flex justify-between items-center">
+                        <span className="font-semibold">
+                          {fmtDate(h.performed_at)}
+                        </span>
+                        <span className="text-[11px] text-gray-600">
+                          Statut : {h.result_status || "—"}
+                        </span>
+                      </div>
+                      {h.comments && (
+                        <div className="text-gray-700">
+                          <span className="font-medium">Commentaire : </span>
+                          {h.comments}
+                        </div>
+                      )}
+                      {Array.isArray(h.checklist_result) && h.checklist_result.length > 0 && (
+                        <div className="text-gray-600">
+                          <span className="font-medium">Checklist : </span>
+                          {h.checklist_result.join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Pièces jointes / Photos */}
+            <div className="px-4 pb-4 border-t mt-2">
+              <div className="text-sm font-semibold mb-2">
+                Pièces jointes / Photos (équipement)
+              </div>
+
+              {attachmentsLoading && (
+                <div className="text-xs text-gray-500">Chargement...</div>
+              )}
+
+              {!attachmentsLoading && attachments.length === 0 && (
+                <div className="text-xs text-gray-400">
+                  Aucune pièce jointe pour cet équipement pour l&apos;instant.
+                </div>
+              )}
+
+              {!attachmentsLoading && attachments.length > 0 && (
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-1 text-xs">
+                  {attachments.map((f) => {
+                    const isImage = (f.mime_type || "").startsWith("image/");
+                    return (
+                      <div
+                        key={f.id}
+                        className="flex items-center justify-between gap-2 border rounded-lg px-2 py-1 bg-white"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span>{isImage ? "📷" : "📎"}</span>
+                          <span className="truncate" title={f.filename}>
+                            {f.filename}
+                          </span>
+                        </div>
+                        <a
+                          href={f.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-indigo-600 hover:underline shrink-0"
+                        >
+                          Ouvrir
+                        </a>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
             <p className="text-xs text-gray-500">
               L&apos;assistant IA peut t&apos;aider à résumer la situation,
               repérer les points de vigilance, proposer des priorités d&apos;action
@@ -487,14 +625,29 @@ function TreeNode({
   inheritsPosition,
   onPlanClick,
   building,
+  entity,
+  focusEntity,
 }) {
   const hasPlanInfo = positioned || needsPosition || inheritsPosition;
+
+  const isFocused =
+    focusEntity &&
+    entity &&
+    String(focusEntity.entity_type || "").toLowerCase() ===
+      String(entity.entity_type || "").toLowerCase() &&
+    String(focusEntity.entity_id) === String(
+      entity.entity_id || entity.id
+    );
 
   return (
     <div>
       <div
-        className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer ${
-          open ? "bg-indigo-50" : "hover:bg-gray-50"
+        className={`flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer border ${
+          isFocused
+            ? "bg-indigo-100 border-indigo-300"
+            : open
+            ? "bg-indigo-50 border-transparent"
+            : "hover:bg-gray-50 border-transparent"
         }`}
         onClick={toggle}
         style={{ marginLeft: level * 12 }}
@@ -539,6 +692,7 @@ function TreeNode({
   );
 }
 
+
 // ============================================================================
 // ARBORESCENCE (bâtiments / HV / TGBT / devices)
 // ============================================================================
@@ -548,10 +702,34 @@ function HierarchyTree({
   onSelectTask,
   onPlanAction,
   refreshKey,
+  focusEntity,
+  textFilter = "",
+  planFilter = "all",
+  typeFilter = "all",
 }) {
   const [tree, setTree] = useState(null);
   const [expanded, setExpanded] = useState({});
   const [loading, setLoading] = useState(false);
+  const normalizedText = textFilter.trim().toLowerCase();
+
+  const matchesText = (label, extra = "") => {
+    if (!normalizedText) return true;
+    const hay = `${label || ""} ${extra || ""}`.toLowerCase();
+    return hay.includes(normalizedText);
+  };
+
+  const matchesPlanFilter = (item) => {
+    const hasPlan = !!(
+      item?.plan_id ||
+      item?.plan_logical_name ||
+      item?.main_plan_id ||
+      item?.main_plan_logical_name
+    );
+    if (planFilter === "with") return hasPlan;
+    if (planFilter === "without") return !hasPlan;
+    return true;
+  };
+
 
   useEffect(() => {
     loadTree();
@@ -593,8 +771,27 @@ function HierarchyTree({
     <div className="space-y-3">
       {tree.buildings?.map((b, bi) => {
         const kB = `b-${bi}`;
-        const hvItems = b.hv || [];
-        const swItems = b.switchboards || [];
+        const hvItemsRaw = b.hv || [];
+        const swItemsRaw = b.switchboards || [];
+
+        // 🔽 filtration HV/LV + texte + plan
+        const hvItems =
+          typeFilter === "lv"
+            ? []
+            : hvItemsRaw.filter(
+                (hv) =>
+                  matchesText(hv.label) &&
+                  matchesPlanFilter(hv)
+              );
+
+        const swItems =
+          typeFilter === "hv"
+            ? []
+            : swItemsRaw.filter(
+                (sb) =>
+                  matchesText(sb.label) &&
+                  matchesPlanFilter(sb)
+              );
 
         // Compteurs par tâches
         const hvTaskCount = hvItems.reduce(
@@ -662,6 +859,7 @@ function HierarchyTree({
                   open={expanded[`${kB}-hv`]}
                   toggle={() => toggle(`${kB}-hv`)}
                   building={buildingLabel}
+                  focusEntity={focusEntity}
                 >
                   {hvItems.map((eq, i) => {
                     const hvEquipTaskCount = countTasksForFilter(eq.tasks);
@@ -693,12 +891,12 @@ function HierarchyTree({
                         toggle={() => toggle(`hv-${bi}-${i}`)}
                         level={1}
                         positioned={eq.positioned}
-                        needsPosition={
-                          !eq.positioned && hvEquipTaskCount > 0
-                        }
+                        needsPosition={!eq.positioned && hvEquipTaskCount > 0}
                         inheritsPosition={false}
                         building={buildingLabel}
                         onPlanClick={handlePlanClick}
+                        entity={eq}
+                        focusEntity={focusEntity}
                       >
                         {/* Tâches HV */}
                         {eq.tasks?.map((t) => (
@@ -783,20 +981,16 @@ function HierarchyTree({
                               }
                               count={deviceTaskCount}
                               equipmentCount={1}
-                              open={
-                                expanded[`hv-dev-${bi}-${i}-${di}`] || false
-                              }
-                              toggle={() =>
-                                toggle(`hv-dev-${bi}-${i}-${di}`)
-                              }
+                              open={expanded[`hv-dev-${bi}-${i}-${di}`] || false}
+                              toggle={() => toggle(`hv-dev-${bi}-${i}-${di}`)}
                               level={2}
                               positioned={positioned}
-                              needsPosition={
-                                !positioned && deviceTaskCount > 0
-                              }
+                              needsPosition={!positioned && deviceTaskCount > 0}
                               inheritsPosition={inheritsPosition}
                               building={buildingLabel}
                               onPlanClick={handlePlanClickDevice}
+                              entity={d}
+                              focusEntity={focusEntity}
                             >
                               {d.tasks?.map((t) => (
                                 <div
@@ -839,6 +1033,7 @@ function HierarchyTree({
                   open={expanded[`${kB}-sb`]}
                   toggle={() => toggle(`${kB}-sb`)}
                   building={buildingLabel}
+                  focusEntity={focusEntity}
                 >
                   {swItems.map((sb, i) => {
                     const sbTaskCount = countTasksForFilter(sb.tasks);
@@ -869,12 +1064,12 @@ function HierarchyTree({
                         toggle={() => toggle(`sb-${bi}-${i}`)}
                         level={1}
                         positioned={sb.positioned}
-                        needsPosition={
-                          !sb.positioned && sbTaskCount > 0
-                        }
+                        needsPosition={!sb.positioned && sbTaskCount > 0}
                         inheritsPosition={false}
                         building={buildingLabel}
                         onPlanClick={handlePlanClickSwitchboard}
+                        entity={sb}
+                        focusEntity={focusEntity}
                       >
                         {sb.tasks?.map((t) => (
                           <div
@@ -937,20 +1132,16 @@ function HierarchyTree({
                               title={`${d.label} (hérite position)`}
                               count={devTaskCount}
                               equipmentCount={1}
-                              open={
-                                expanded[`sb-dev-${bi}-${i}-${di}`] || false
-                              }
-                              toggle={() =>
-                                toggle(`sb-dev-${bi}-${i}-${di}`)
-                              }
+                              open={expanded[`sb-dev-${bi}-${i}-${di}`] || false}
+                              toggle={() => toggle(`sb-dev-${bi}-${i}-${di}`)}
                               level={2}
                               positioned={positioned}
-                              needsPosition={
-                                !positioned && devTaskCount > 0
-                              }
+                              needsPosition={!positioned && devTaskCount > 0}
                               inheritsPosition={inheritsPosition}
                               building={buildingLabel}
                               onPlanClick={handlePlanClickDevice}
+                              entity={d}
+                              focusEntity={focusEntity}
                             >
                               {d.tasks?.map((t) => (
                                 <div
@@ -1247,6 +1438,9 @@ export default function ControlsPage() {
   const [tab, setTab] = useState("tree");
   const [statusFilter, setStatusFilter] = useState("open");
   const [selectedTask, setSelectedTask] = useState(null);
+  const [textFilter, setTextFilter] = useState("");
+  const [planFilter, setPlanFilter] = useState("all"); // all | with | without
+  const [typeFilter, setTypeFilter] = useState("all"); // all | hv | lv
 
   const [showMap, setShowMap] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -1457,6 +1651,37 @@ export default function ControlsPage() {
           <TabsTrigger value="missing">Équipements manquants</TabsTrigger>
         </TabsList>
 
+        {/* 🔽 barre de filtres globale */}
+        <div className="flex flex-wrap gap-2 mt-2">
+          <input
+            type="text"
+            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 text-sm min-w-[200px]"
+            placeholder="Filtrer par texte (équipement, tâche...)"
+            value={textFilter}
+            onChange={(e) => setTextFilter(e.target.value)}
+          />
+
+          <select
+            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 text-sm"
+            value={planFilter}
+            onChange={(e) => setPlanFilter(e.target.value)}
+          >
+            <option value="all">Tous les équipements</option>
+            <option value="with">Avec plan</option>
+            <option value="without">Sans plan</option>
+          </select>
+
+          <select
+            className="px-3 py-2 rounded-xl bg-white ring-1 ring-black/10 text-sm"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+          >
+            <option value="all">HV + TGBT/DB</option>
+            <option value="hv">High Voltage uniquement</option>
+            <option value="lv">TGBT / DB uniquement</option>
+          </select>
+        </div>
+
         {/* Onglet Arborescence */}
         <TabsContent value="tree">
           <HierarchyTree
@@ -1464,6 +1689,9 @@ export default function ControlsPage() {
             onSelectTask={setSelectedTask}
             onPlanAction={handlePlanActionFromTree}
             refreshKey={refreshTrigger}
+            textFilter={textFilter}
+            planFilter={planFilter}
+            typeFilter={typeFilter}
           />
         </TabsContent>
 
@@ -1545,11 +1773,19 @@ export default function ControlsPage() {
                   }
                   onSelectTask={(task) => {
                     setSelectedTask(task);
+                    if (task?.entity_id && task?.entity_type) {
+                      setTab("tree");
+                      setFocusEntity({
+                        entity_id: task.entity_id,
+                        entity_type: task.entity_type,
+                      });
+                    }
                   }}
                   pendingPlacement={pendingPlacement}
                   onPlacementComplete={handlePlacementComplete}
                   focusEntity={focusEntity}
                   inModal={false}
+                  statusFilter={statusFilter}
                 />
               </div>
             </Card>
