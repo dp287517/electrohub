@@ -966,6 +966,7 @@ function Doors() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
 
   const [calendar, setCalendar] = useState({ events: [] });
   const [toast, setToast] = useState("");
@@ -1291,9 +1292,15 @@ function Doors() {
       await reload();
       await reloadCalendar();
       if (tab === "maps" && selectedPlan) await loadPositions(selectedPlan, planPage);
+
+      // ✅ forcer un refresh de l'historique
+      setHistoryRefreshKey((k) => k + 1);
     } else {
       const full = await API.get(editing.id);
       setEditing(full?.door);
+
+      // Même chose par sécurité
+      setHistoryRefreshKey((k) => k + 1);
     }
   }
 
@@ -1994,7 +2001,7 @@ function Doors() {
               </div>
             )}
 
-            <DoorHistory doorId={editing.id} />
+            <DoorHistory doorId={editing.id} refreshKey={historyRefreshKey} />
           </div>
         </Drawer>
       )}
@@ -2085,7 +2092,7 @@ function DoorHistory({ doorId }) {
       const r = await API.listHistory(doorId);
       setItems(r?.checks || []);
     })();
-  }, [doorId]);
+  }, [doorId, refreshKey]);
   if (!doorId) return null;
   return (
     <div className="border rounded-2xl p-3">
