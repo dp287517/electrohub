@@ -511,7 +511,30 @@ function TaskDetails({ task, onClose, onRefresh }) {
                       {Array.isArray(h.checklist_result) && h.checklist_result.length > 0 && (
                         <div className="text-gray-600">
                           <span className="font-medium">Checklist : </span>
-                          {h.checklist_result.join(", ")}
+                          {h.checklist_result
+                            .map((item) => {
+                              if (!item) return null;
+
+                              // Si jamais c'est déjà une chaîne (old data)
+                              if (typeof item === "string") return item;
+
+                              // Cas standard: { key, label, value }
+                              if (item.label && item.value != null) {
+                                return `${item.label} : ${item.value}`;
+                              }
+                              if (item.key && item.value != null) {
+                                return `${item.key} : ${item.value}`;
+                              }
+
+                              // Fallback "safe" au cas où la structure change plus tard
+                              try {
+                                return JSON.stringify(item);
+                              } catch {
+                                return String(item);
+                              }
+                            })
+                            .filter(Boolean)
+                            .join(", ")}
                         </div>
                       )}
                     </div>
