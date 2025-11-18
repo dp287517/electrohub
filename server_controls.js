@@ -60,6 +60,32 @@ try {
   process.exit(1);
 }
 
+// Helper générique : récupère le "plan principal" d'une entité (peu importe le type)
+async function getPlanForEntity(client, entityId, entityType) {
+  const { rows } = await client.query(
+    `
+    SELECT cp.id, cp.logical_name, cp.display_name
+    FROM controls_task_positions ctp
+    JOIN controls_tasks ct ON ctp.task_id = ct.id
+    JOIN controls_plans cp ON ctp.plan_id = cp.id
+    WHERE ct.entity_id = $1
+      AND ct.entity_type = $2
+    ORDER BY ctp.updated_at DESC
+    LIMIT 1
+    `,
+    [entityId, entityType]
+  );
+
+  if (!rows[0]) return null;
+
+  const p = rows[0];
+  return {
+    plan_id: p.id,
+    plan_logical_name: p.logical_name,
+    plan_display_name: p.display_name || p.logical_name,
+  };
+}
+
 // ============================================================================
 // HELPERS GÉNÉRAUX
 // ============================================================================
@@ -670,6 +696,9 @@ const multerFiles = multer({
   limits: { fileSize: 40 * 1024 * 1024 }, // 40 MB par fichier
 });
 
+// Upload pièces jointes de contrôles (stockage en base via buffer)
+const uploadFiles = multer({ storage: multer.memoryStorage() });
+
 // ============================================================================
 // IA — CLIENT OPENAI
 // ============================================================================
@@ -797,6 +826,24 @@ router.post(
     }
   }
 );
+
+// Historique d'une tâche
+router.get("/tasks/:id/history", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, performed_at, result_status, comments, checklist_result, observations
+       FROM controls_records
+       WHERE task_id = $1
+       ORDER BY performed_at DESC`,
+      [id]
+    );
+    res.json({ items: rows });
+  } catch (e) {
+    console.error("[Controls] tasks/:id/history error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Alias
 router.post("/ai/extract", multerFiles.array("files"), async (req, res) => {
@@ -1051,6 +1098,7 @@ router.get("/hierarchy/tree", async (req, res) => {
       );
 
       for (const hv of hvEquips) {
+        // Est-ce qu'au moins une tâche de cet équipement a une position ?
         const { rows: hvPosCheck } = await client.query(
           `SELECT EXISTS(
             SELECT 1 FROM controls_task_positions ctp
@@ -1062,26 +1110,35 @@ router.get("/hierarchy/tree", async (req, res) => {
         );
         const hvPositioned = hvPosCheck[0]?.positioned || false;
 
+        // 🔹 Si positionné, on récupère le plan générique
+        const hvPlan = hvPositioned
+          ? await getPlanForEntity(client, hv.id, "hvequipment")
+          : null;
+
+        // Tâches HV
         const { rows: hvTasksRaw } = await client.query(
           `SELECT ct.*,
-             EXISTS(
-               SELECT 1 FROM controls_task_positions ctp
-               WHERE ctp.task_id = ct.id
-             ) as positioned
-           FROM controls_tasks ct
-           WHERE ct.entity_id = $1 
-             AND ct.entity_type = 'hvequipment'`,
+            EXISTS(
+              SELECT 1 FROM controls_task_positions ctp
+              WHERE ctp.task_id = ct.id
+            ) as positioned
+          FROM controls_tasks ct
+          WHERE ct.entity_id = $1 
+            AND ct.entity_type = 'hvequipment'`,
           [hv.id]
         );
         const hvTasks = filterTasks(hvTasksRaw);
 
+        // Appareils HT rattachés
         const { rows: hvDevices } = await client.query(
           `SELECT * FROM hv_devices WHERE hv_equipment_id = $1 AND site = $2`,
           [hv.id, site]
         );
 
         const devices = [];
+
         for (const d of hvDevices) {
+          // Est-ce que l'appareil HT a une position propre ?
           const { rows: dvPosCheck } = await client.query(
             `SELECT EXISTS(
               SELECT 1 FROM controls_task_positions ctp
@@ -1092,21 +1149,26 @@ router.get("/hierarchy/tree", async (req, res) => {
             [d.id]
           );
 
+          const devicePositioned =
+            (dvPosCheck[0]?.positioned || false) || hvPositioned;
+
+          // Tâches de l'appareil HT
           const { rows: devTasksRaw } = await client.query(
             `SELECT ct.*,
-               EXISTS(
-                 SELECT 1 FROM controls_task_positions ctp
-                 WHERE ctp.task_id = ct.id
-               ) as positioned
-             FROM controls_tasks ct
-             WHERE ct.entity_id = $1 
-               AND ct.entity_type = 'hvdevice'`,
+              EXISTS(
+                SELECT 1 FROM controls_task_positions ctp
+                WHERE ctp.task_id = ct.id
+              ) as positioned
+            FROM controls_tasks ct
+            WHERE ct.entity_id = $1 
+              AND ct.entity_type = 'hvdevice'`,
             [d.id]
           );
           const devTasks = filterTasks(devTasksRaw);
 
-          const devicePositioned =
-            (dvPosCheck[0]?.positioned || false) || hvPositioned;
+          // 🔹 Plan de l'appareil HT : son propre plan, sinon on hérite du plan HV
+          const dvPlanRaw = await getPlanForEntity(client, d.id, "hvdevice");
+          const dvPlan = dvPlanRaw || hvPlan || null;
 
           devices.push({
             id: d.id,
@@ -1114,9 +1176,11 @@ router.get("/hierarchy/tree", async (req, res) => {
             positioned: devicePositioned,
             entity_type: "hvdevice",
             tasks: devTasks,
+            ...(dvPlan || {}), // plan_id, plan_logical_name, plan_display_name
           });
         }
 
+        // Objet HV dans l'arborescence
         building.hv.push({
           id: hv.id,
           label: hv.name,
@@ -1125,6 +1189,7 @@ router.get("/hierarchy/tree", async (req, res) => {
           building_code: bRow.code,
           tasks: hvTasks,
           devices,
+          ...(hvPlan || {}), // plan_id, plan_logical_name, plan_display_name
         });
       }
 
@@ -1135,6 +1200,7 @@ router.get("/hierarchy/tree", async (req, res) => {
       );
 
       for (const sw of swRows) {
+        // Est-ce qu'au moins une tâche du TGBT a une position ?
         const { rows: swPosCheck } = await client.query(
           `SELECT EXISTS(
             SELECT 1 FROM controls_task_positions ctp
@@ -1144,21 +1210,26 @@ router.get("/hierarchy/tree", async (req, res) => {
           ) as positioned`,
           [sw.id]
         );
+        const swPositioned = swPosCheck[0]?.positioned || false;
 
+        // 🔹 Plan du TGBT si positionné
+        const swPlan = swPositioned
+          ? await getPlanForEntity(client, sw.id, "switchboard")
+          : null;
+
+        // Tâches TGBT
         const { rows: swTasksRaw } = await client.query(
           `SELECT ct.*,
-             EXISTS(
-               SELECT 1 FROM controls_task_positions ctp
-               WHERE ctp.task_id = ct.id
-             ) as positioned
-           FROM controls_tasks ct
-           WHERE ct.entity_id = $1 
-             AND ct.entity_type = 'switchboard'`,
+            EXISTS(
+              SELECT 1 FROM controls_task_positions ctp
+              WHERE ctp.task_id = ct.id
+            ) as positioned
+          FROM controls_tasks ct
+          WHERE ct.entity_id = $1 
+            AND ct.entity_type = 'switchboard'`,
           [sw.id]
         );
         const swTasks = filterTasks(swTasksRaw);
-
-        const swPositioned = swPosCheck[0]?.positioned || false;
 
         const swObj = {
           id: sw.id,
@@ -1168,30 +1239,54 @@ router.get("/hierarchy/tree", async (req, res) => {
           building_code: bRow.code,
           tasks: swTasks,
           devices: [],
+          ...(swPlan || {}), // plan_id, plan_logical_name, plan_display_name
         };
 
+        // Appareils BT rattachés
         const { rows: devRows } = await client.query(
           `SELECT * FROM devices WHERE switchboard_id = $1 AND site = $2`,
           [sw.id, site]
         );
 
         for (const d of devRows) {
-          const { rows: devTasksRaw } = await client.query(
-            `SELECT * FROM controls_tasks 
-             WHERE entity_id = $1 AND entity_type = 'device'`,
+          // Est-ce que l'appareil BT a une position propre ?
+          const { rows: devPosCheck } = await client.query(
+            `SELECT EXISTS(
+              SELECT 1 FROM controls_task_positions ctp
+              JOIN controls_tasks ct ON ctp.task_id = ct.id
+              WHERE ct.entity_id = $1
+                AND ct.entity_type = 'device'
+            ) as positioned`,
             [d.id]
           );
-          const devTasks = filterTasks(devTasksRaw).map((t) => ({
-            ...t,
-            positioned: swPositioned,
-          }));
+          const devicePositioned =
+            (devPosCheck[0]?.positioned || false) || swPositioned;
+
+          // Tâches de l'appareil BT
+          const { rows: devTasksRaw } = await client.query(
+            `SELECT ct.*,
+              EXISTS(
+                SELECT 1 FROM controls_task_positions ctp
+                WHERE ctp.task_id = ct.id
+              ) as positioned
+            FROM controls_tasks ct
+            WHERE ct.entity_id = $1 
+              AND ct.entity_type = 'device'`,
+            [d.id]
+          );
+          const devTasks = filterTasks(devTasksRaw);
+
+          // 🔹 Plan de l'appareil BT : son propre plan, sinon on hérite du plan TGBT
+          const devPlanRaw = await getPlanForEntity(client, d.id, "device");
+          const devPlan = devPlanRaw || swPlan || null;
 
           swObj.devices.push({
             id: d.id,
             label: d.name || d.device_type,
-            positioned: swPositioned,
+            positioned: devicePositioned,
             entity_type: "device",
             tasks: devTasks,
+            ...(devPlan || {}), // plan_id, plan_logical_name, plan_display_name
           });
         }
 
@@ -1342,6 +1437,100 @@ router.patch("/tasks/:id/close", async (req, res) => {
     res.status(500).json({ error: e.message });
   } finally {
     client.release();
+  }
+});
+
+// ============================================================================
+// ROUTES FICHIERS CONTROLS (pièces jointes / photos)
+// ============================================================================
+
+// POST /files/upload
+router.post("/files/upload", uploadFiles.array("files"), async (req, res) => {
+  const { task_id, entity_id, entity_type } = req.body;
+  const site = siteOf(req);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const f of req.files || []) {
+      await client.query(
+        `INSERT INTO controls_files
+         (site, task_id, entity_id, entity_type, filename, mime_type, content, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+        [
+          site,
+          task_id || null,
+          entity_id || null,
+          entity_type || null,
+          f.originalname,
+          f.mimetype,
+          f.buffer,
+        ]
+      );
+    }
+    await client.query("COMMIT");
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query("ROLLBACK");
+    console.error("[Controls] files/upload error:", e);
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /files
+router.get("/files", async (req, res) => {
+  const site = siteOf(req);
+  const { entity_id, entity_type } = req.query;
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, filename, mime_type, created_at
+       FROM controls_files
+       WHERE site = $1
+         AND ($2::int IS NULL OR entity_id = $2::int)
+         AND ($3::text IS NULL OR entity_type = $3::text)
+       ORDER BY created_at DESC`,
+      [site, entity_id || null, entity_type || null]
+    );
+
+    const base =
+      process.env.CONTROLS_BASE_PATH || "/api/controls";
+
+    const items = rows.map((r) => ({
+      ...r,
+      url: `${base}/files/${r.id}`,
+    }));
+    res.json({ items });
+  } catch (e) {
+    console.error("[Controls] files list error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /files/:id
+router.get("/files/:id", async (req, res) => {
+  const { id } = req.params;
+  const site = siteOf(req);
+  try {
+    const { rows } = await pool.query(
+      `SELECT filename, mime_type, content
+       FROM controls_files
+       WHERE id = $1 AND site = $2`,
+      [id, site]
+    );
+    if (!rows.length) {
+      return res.status(404).send("Not found");
+    }
+    const f = rows[0];
+    res.setHeader("Content-Type", f.mime_type || "application/octet-stream");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${f.filename}"`
+    );
+    res.send(f.content);
+  } catch (e) {
+    console.error("[Controls] file download error:", e);
+    res.status(500).json({ error: e.message });
   }
 });
 
