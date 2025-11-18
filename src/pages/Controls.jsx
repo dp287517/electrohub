@@ -303,6 +303,7 @@ function TaskDetails({ task, onClose, onRefresh }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
+  const [openHistoryId, setOpenHistoryId] = useState(null);
 
   useEffect(() => {
     if (!task) return;
@@ -331,6 +332,16 @@ function TaskDetails({ task, onClose, onRefresh }) {
         console.error("[TaskDetails] history error:", e);
       })
       .finally(() => setHistoryLoading(false));
+
+    useEffect(() => {
+      if (!history || history.length === 0) return;
+
+      // On ouvre par défaut le plus récent
+      const sorted = [...history].sort(
+        (a, b) => new Date(b.performed_at) - new Date(a.performed_at)
+      );
+      setOpenHistoryId((prev) => prev ?? sorted[0]?.id ?? null);
+    }, [history]);
 
     // 3) Pièces jointes / photos
     setAttachments([]);
@@ -411,6 +422,77 @@ function TaskDetails({ task, onClose, onRefresh }) {
     }
   };
 
+  // On garde un historique trié du plus récent au plus ancien
+  const sortedHistory = [...history].sort(
+    (a, b) => new Date(b.performed_at) - new Date(a.performed_at)
+  );
+
+  // On se fait une map clé -> question pour retrouver les libellés
+  const checklistSchemaByKey = {};
+  (schema?.checklist || []).forEach((q) => {
+    checklistSchemaByKey[q.key] = q;
+  });
+
+  const normalizeChecklist = (raw) => {
+    if (!raw) return [];
+    let arr = raw;
+
+    // Si jamais c'est du texte JSON
+    if (typeof raw === "string") {
+      try {
+        arr = JSON.parse(raw);
+      } catch {
+        return [];
+      }
+    }
+
+    if (!Array.isArray(arr)) return [];
+
+    return arr
+      .map((item, idx) => {
+        if (!item) return null;
+
+        // Cas ultra simple (déjà une string)
+        if (typeof item === "string") {
+          return {
+            key: `q${idx + 1}`,
+            label: `Question ${idx + 1}`,
+            value: item,
+          };
+        }
+
+        const key = item.key || `q${idx + 1}`;
+        const value = item.value || item.status || "";
+        const schemaQ = checklistSchemaByKey[key];
+
+        return {
+          key,
+          label: schemaQ?.label || item.label || key,
+          value,
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const getBadgeVariantForValue = (v) => {
+    const val = (v || "").toLowerCase();
+    if (val.includes("non conforme")) return "danger";
+    if (val.includes("conforme")) return "success";
+    if (val.includes("non applicable")) return "secondary";
+    return "secondary";
+  };
+
+  const getGlobalStatusFromChecklist = (list) => {
+    if (!list || list.length === 0) return { label: "—", variant: "secondary" };
+    const hasNonConforme = list.some((i) =>
+      (i.value || "").toLowerCase().includes("non conforme")
+    );
+    if (hasNonConforme) {
+      return { label: "Non conforme", variant: "danger" };
+    }
+    return { label: "Conforme", variant: "success" };
+  };
+
   if (!task) return null;
 
   return (
@@ -471,74 +553,125 @@ function TaskDetails({ task, onClose, onRefresh }) {
               </Button>
             </div>
 
-          {/* Historique des contrôles */}
+            {/* Historique des contrôles */}
             <div className="px-4 pb-4 border-t mt-2">
-              <div className="text-sm font-semibold mb-2">
+              <div className="text-sm font-semibold mb-1">
                 Historique des contrôles
               </div>
+
+              {!historyLoading && sortedHistory.length > 0 && (
+                <div className="text-[11px] text-gray-600 mb-2">
+                  Dernier contrôle :{" "}
+                  <span className="font-semibold">
+                    {fmtDate(sortedHistory[0].performed_at)}
+                  </span>
+                </div>
+              )}
 
               {historyLoading && (
                 <div className="text-xs text-gray-500">Chargement...</div>
               )}
 
-              {!historyLoading && history.length === 0 && (
+              {!historyLoading && sortedHistory.length === 0 && (
                 <div className="text-xs text-gray-400">
                   Aucun contrôle réalisé pour le moment.
                 </div>
               )}
 
-              {!historyLoading && history.length > 0 && (
+              {!historyLoading && sortedHistory.length > 0 && (
                 <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                  {history.map((h) => (
-                    <div
-                      key={h.id}
-                      className="border rounded-lg px-3 py-2 bg-gray-50 text-xs flex flex-col gap-1"
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className="font-semibold">
-                          {fmtDate(h.performed_at)}
-                        </span>
-                        <span className="text-[11px] text-gray-600">
-                          Statut : {h.result_status || "—"}
-                        </span>
+                  {sortedHistory.map((h) => {
+                    const checklist = normalizeChecklist(h.checklist_result);
+                    const global = getGlobalStatusFromChecklist(checklist);
+                    const nonConformes = checklist.filter((i) =>
+                      (i.value || "")
+                        .toLowerCase()
+                        .includes("non conforme")
+                    ).length;
+
+                    const isOpen = openHistoryId === h.id;
+
+                    return (
+                      <div
+                        key={h.id}
+                        className="border rounded-lg bg-white text-xs overflow-hidden"
+                      >
+                        {/* en-tête cliquable */}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setOpenHistoryId((prev) =>
+                              prev === h.id ? null : h.id
+                            )
+                          }
+                          className="w-full px-3 py-2 flex items-center justify-between hover:bg-gray-50"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-gray-500">
+                              {isOpen ? "▾" : "▸"}
+                            </span>
+                            <span className="font-semibold">
+                              {fmtDate(h.performed_at)}
+                            </span>
+                            <Badge variant={global.variant}>
+                              {global.label}
+                            </Badge>
+                            <span className="text-[11px] text-gray-500">
+                              {checklist.length} questions
+                              {nonConformes > 0 &&
+                                ` • ${nonConformes} non conforme(s)`}
+                            </span>
+                          </div>
+                          {h.comments && (
+                            <span className="ml-2 text-[11px] text-gray-500 truncate max-w-[160px]">
+                              « {h.comments} »
+                            </span>
+                          )}
+                        </button>
+
+                        {/* détail déplié */}
+                        {isOpen && (
+                          <div className="border-t bg-gray-50 px-3 py-2 space-y-2">
+                            {checklist.length === 0 && (
+                              <div className="text-[11px] text-gray-400">
+                                Aucun détail de checklist enregistré pour ce
+                                contrôle.
+                              </div>
+                            )}
+
+                            {checklist.map((item) => (
+                              <div
+                                key={item.key}
+                                className="flex items-start justify-between gap-2"
+                              >
+                                <div className="flex-1">
+                                  <div className="text-[11px] text-gray-600">
+                                    {item.label}
+                                  </div>
+                                </div>
+                                <Badge
+                                  variant={getBadgeVariantForValue(item.value)}
+                                >
+                                  {item.value || "—"}
+                                </Badge>
+                              </div>
+                            ))}
+
+                            {h.comments && (
+                              <div className="pt-1 border-t border-dashed border-gray-200 mt-1">
+                                <div className="text-[11px] font-semibold text-gray-600 mb-1">
+                                  Commentaire
+                                </div>
+                                <div className="text-[11px] text-gray-800 whitespace-pre-wrap">
+                                  {h.comments}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      {h.comments && (
-                        <div className="text-gray-700">
-                          <span className="font-medium">Commentaire : </span>
-                          {h.comments}
-                        </div>
-                      )}
-                      {Array.isArray(h.checklist_result) && h.checklist_result.length > 0 && (
-                        <div className="text-gray-600">
-                          <span className="font-medium">Checklist : </span>
-                          {h.checklist_result
-                            .map((item) => {
-                              if (!item) return null;
-
-                              // Si jamais c'est déjà une chaîne (old data)
-                              if (typeof item === "string") return item;
-
-                              // Cas standard: { key, label, value }
-                              if (item.label && item.value != null) {
-                                return `${item.label} : ${item.value}`;
-                              }
-                              if (item.key && item.value != null) {
-                                return `${item.key} : ${item.value}`;
-                              }
-
-                              // Fallback "safe" au cas où la structure change plus tard
-                              try {
-                                return JSON.stringify(item);
-                              } catch {
-                                return String(item);
-                              }
-                            })
-                            .filter(Boolean)
-                            .join(", ")}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
