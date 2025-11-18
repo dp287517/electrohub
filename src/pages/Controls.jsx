@@ -975,6 +975,44 @@ function HierarchyTree({
           0
         );
 
+        // Compteurs par statut (Planned / Pending / Overdue) pour le bandeau bâtiment
+        const statusCounters = { planned: 0, pending: 0, overdue: 0 };
+
+        const accumulateStatus = (tasks) => {
+          if (!Array.isArray(tasks)) return;
+          tasks.forEach((t) => {
+            const s = t.status;
+            if (s === "Planned") statusCounters.planned += 1;
+            else if (s === "Pending") statusCounters.pending += 1;
+            else if (s === "Overdue") statusCounters.overdue += 1;
+          });
+        };
+
+        // HV : tâches équipement + tâches devices HT
+        hvItems.forEach((hv) => {
+          accumulateStatus(hv.tasks);
+          (hv.devices || []).forEach((d) => accumulateStatus(d.tasks));
+        });
+
+        // TGBT/DB : tâches tableau + tâches devices BT
+        swItems.forEach((sb) => {
+          accumulateStatus(sb.tasks);
+          (sb.devices || []).forEach((d) => accumulateStatus(d.tasks));
+        });
+
+        const hasOverdue = statusCounters.overdue > 0;
+        const hasPending = statusCounters.pending > 0;
+        const hasPlanned = statusCounters.planned > 0;
+
+        // Couleur de fond du bandeau selon l'état le plus critique
+        const buildingHeaderBg = hasOverdue
+          ? "bg-red-50"
+          : hasPending
+          ? "bg-amber-50"
+          : hasPlanned
+          ? "bg-emerald-50"
+          : "bg-gray-50";
+
         // Compteurs par équipements
         const hvEquipCount = hvItems.reduce(
           (a, hv) => a + 1 + (hv.devices?.length || 0),
@@ -991,21 +1029,49 @@ function HierarchyTree({
 
         return (
           <Card key={kB}>
-            <div className="px-4 py-3 bg-gray-50 flex items-center justify-between border-b">
+            <div
+              className={`px-4 py-3 flex items-center justify-between border-b ${buildingHeaderBg}`}
+            >
               <div className="flex items-center gap-3">
                 <div className="text-lg font-semibold">{buildingLabel}</div>
               </div>
-              <div className="text-xs text-gray-600 flex flex-wrap gap-3">
-                {hvEquipCount > 0 && (
-                  <span>
-                    HV: {hvEquipCount} équip. – {hvTaskCount} ctrl.
-                  </span>
-                )}
-                {swEquipCount > 0 && (
-                  <span>
-                    TGBT/DB: {swEquipCount} équip. – {swTaskCount} ctrl.
-                  </span>
-                )}
+
+              <div className="flex flex-col items-end gap-1 text-xs">
+                {/* Infos équipements / contrôles */}
+                <div className="text-gray-600 flex flex-wrap gap-3 justify-end">
+                  {hvEquipCount > 0 && (
+                    <span>
+                      HV: {hvEquipCount} équip. – {hvTaskCount} ctrl.
+                    </span>
+                  )}
+                  {swEquipCount > 0 && (
+                    <span>
+                      TGBT/DB: {swEquipCount} équip. – {swTaskCount} ctrl.
+                    </span>
+                  )}
+                </div>
+
+                {/* Bandeau d'état rapide : rouge / orange / vert */}
+                <div className="flex flex-wrap gap-2 justify-end">
+                  {statusCounters.overdue > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
+                      <span className="w-2 h-2 rounded-full bg-red-500" />
+                      {statusCounters.overdue} en retard
+                    </span>
+                  )}
+                  {statusCounters.pending > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold">
+                      <span className="w-2 h-2 rounded-full bg-amber-500" />
+                      {statusCounters.pending} ≤ 30 j
+                    </span>
+                  )}
+                  {statusCounters.planned > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                      {statusCounters.planned} planifié
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
