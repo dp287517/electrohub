@@ -904,56 +904,12 @@ app.post("/api/vsd/maps/setPosition", async (req, res) => {
 // -------------------------------------------------
 // IA (OpenAI)
 // -------------------------------------------------
-async function vsdExtractFromFiles(client, files = []) {
-  if (!client || !files?.length) return {};
-  const images = await Promise.all(
-    (files || []).map(async (f) => ({
-      name: f.originalname,
-      mime: f.mimetype,
-      data: (await fsp.readFile(f.path)).toString("base64"),
-    }))
-  );
-  const sys = `Tu es un assistant d'inspection VSD (Variateurs de Fréquence). Extrait des photos:
-- manufacturer
-- manufacturer_ref
-- power_kw
-- voltage
-- type
-Réponds en JSON strict.`;
-  const content = [
-    { role: "system", content: sys },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
-        ...images.map((im) => ({
-          type: "image_url",
-          image_url: { url: `data:${im.mime};base64,${im.data}` },
-        })),
-      ],
-    },
-  ];
-  const resp = await client.chat.completions.create({
-    model: process.env.VSD_OPENAI_MODEL || "gpt-4o-mini",
-    messages: content,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-  });
-  let data = {};
-  try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
-  return {
-    manufacturer: String(data.manufacturer || ""),
-    manufacturer_ref: String(data.manufacturer_ref || ""),
-    power_kw: data.power_kw || null,
-    voltage: String(data.voltage || ""),
-    type: String(data.type || ""),
-  };
-}
 function openaiClient() {
   const key = process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_VSD;
   if (!key) return null;
   return new OpenAI({ apiKey: key });
 }
+
 // POST /api/vsd/analyzePhotoBatch
 app.post("/api/vsd/analyzePhotoBatch", multerFiles.array("files"), async (req, res) => {
   try {
