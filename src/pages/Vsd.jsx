@@ -209,7 +209,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
   const aliveRef = useRef(true);
   const pointsRef = useRef(initialPoints); 
   
-  // ✅ NOUVEAU: Références pour préserver la vue Leaflet lors des re-renders
+  // ✅ CORRECTION DU ZOOM: Références pour préserver la vue Leaflet lors des re-renders
   const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
   const initialFitDoneRef = useRef(false);
   const userViewTouchedRef = useRef(false);
@@ -260,7 +260,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     const g = markersLayerRef.current;
     if (!map || !g || w === 0 || h === 0) return;
     
-    pointsRef.current = list; // Mise à jour de la ref interne
+    pointsRef.current = list; 
     g.clearLayers();
 
     (list || []).forEach((p) => {
@@ -330,7 +330,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         markersLayerRef.current = null;
         addBtnControlRef.current = null;
         initialFitDoneRef.current = false;
-        userViewTouchedRef.current = false; // Reset view on full map swap
+        userViewTouchedRef.current = false; 
     };
     cleanupMap();
 
@@ -427,14 +427,13 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         m.setMaxZoom(fitZoom + 6);
         m.setMaxBounds(bounds.pad(0.5));
         
-        // ✅ CONSERVATION DE LA VUE: n'appelle fitBounds que si c'est la première fois ou si l'utilisateur n'a pas touché l'ancienne vue
+        // CONSERVATION DE LA VUE
         if (!initialFitDoneRef.current || !userViewTouchedRef.current) {
             m.fitBounds(bounds, { padding: [8, 8] });
             lastViewRef.current.center = m.getCenter();
             lastViewRef.current.zoom = m.getZoom();
             initialFitDoneRef.current = true;
         } else {
-            // Si l'utilisateur a déjà interagi, utiliser les valeurs stockées
             m.setView(lastViewRef.current.center, lastViewRef.current.zoom, { animate: false });
         }
 
@@ -451,6 +450,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
       } catch (e) {
         if (String(e?.name) === "RenderingCancelledException") return;
         const msg = String(e?.message || "");
+        // Gestion de l'erreur PDF.js "Worker was terminated" due aux re-renders
         if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
         console.error("VSD Leaflet viewer error", e);
       }
@@ -471,7 +471,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         m.fitBounds(b, { padding: [8, 8] });
         initialFitDoneRef.current = true;
       } else {
-        // ✅ Conserve la vue utilisateur après un resize
+        // Conserve la vue utilisateur après un resize
         m.setView(keepCenter, keepZoom, { animate: false });
       }
     };
@@ -489,12 +489,10 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     };
   }, [fileUrl, pageIndex, disabled, drawMarkers, onClickPoint]);
   
-  // Maintient la ref pointsRef.current à jour avec les props du parent (initialPoints)
+  // Maintient la ref pointsRef.current à jour avec les props du parent
   useEffect(() => {
     pointsRef.current = initialPoints;
     if(mapRef.current && imgSize.w > 0) {
-        // ✅ Le map update logic appelle cette fonction via ref, 
-        // mais cet effet assure le redessin si initialPoints change.
         drawMarkers(initialPoints, imgSize.w, imgSize.h);
     }
   }, [initialPoints, drawMarkers, imgSize.w]);
@@ -511,7 +509,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
     
-    // ✅ Met à jour les refs de la vue après "Ajuster"
+    // Met à jour les refs de la vue après "Ajuster"
     lastViewRef.current.center = m.getCenter();
     lastViewRef.current.zoom = m.getZoom();
     initialFitDoneRef.current = true;
@@ -591,7 +589,7 @@ function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
                 : [];
             
             latestPositionsRef.current = list;
-            // ✅ Mise à jour impérative sans re-render du composant Vsd
+            // Mise à jour impérative sans re-render du composant Vsd
             viewerRef.current?.drawMarkers(list); 
         } catch(e) {
             console.error("Erreur chargement positions", e);
@@ -628,6 +626,55 @@ function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
         getLatestPositions: () => latestPositionsRef.current,
     };
 }
+
+// ✅ FONCTION MISE À JOUR : utilise les NOUVELLES colonnes DB
+function getNormalizedEquipment(eq) {
+    const base = {
+        id: null,
+        name: "",
+        tag: "", 
+        manufacturer: "",
+        model: "", 
+        reference: "", 
+        serial_number: "", 
+        voltage: "",
+        ip_address: "", 
+        protocol: "",
+        building: "",
+        floor: "", 
+        zone: "",
+        location: "", 
+        panel: "", 
+        status: "", // DB status (a_faire, en_retard, en_cours_30) - statut de contrôle
+        ui_status: "", // DB ui_status (en_service, hors_service, spare) - statut d'exploitation
+        criticality: "", 
+        comments: "", // Mappé à la colonne 'comment' du DB
+        ip_rating: "", 
+        power_kw: null,
+        current_a: null, 
+    };
+    
+    const clean = { ...base, ...eq };
+    
+    // Si la colonne 'comment' existe dans l'objet DB (eq), on l'utilise pour remplir le champ UI 'comments'
+    if (eq?.comment) {
+        clean.comments = String(eq.comment);
+    }
+
+    // Assure le nettoyage des zones/colonnes qui peuvent venir en objets ou null
+    for (const field of ["building", "zone", "tag", "model", "serial_number", "ip_address", "protocol", "floor", "panel", "location", "criticality", "ui_status", "comments", "ip_rating", "reference", "voltage"]) {
+      if (typeof clean[field] === "object" && clean[field] !== null) {
+        clean[field] = clean[field].name || clean[field].id || "";
+      } else if (clean[field] == null) {
+        clean[field] = "";
+      } else {
+        clean[field] = String(clean[field]);
+      }
+    }
+
+    return clean;
+}
+
 
 export default function Vsd() {
   const [tab, setTab] = useState("tree");
@@ -714,23 +761,11 @@ export default function Vsd() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, building, floor, zone]);
 
-  const mergeZones = (raw) => {
-    if (!raw) return raw;
-    const clean = { ...raw };
-    for (const field of ["building", "floor", "zone", "location"]) {
-      if (typeof clean[field] === "object" && clean[field] !== null) {
-        clean[field] = clean[field].name || clean[field].id || "";
-      } else if (clean[field] == null) {
-        clean[field] = "";
-      } else {
-        clean[field] = String(clean[field]);
-      }
-    }
-    return clean;
-  };
+  // Ancienne fonction mergeZones remplacée par getNormalizedEquipment
+  const mergeZones = getNormalizedEquipment; 
 
   async function openEdit(equipment, reloadFn) {
-    const base = mergeZones(equipment || {});
+    const base = getNormalizedEquipment(equipment || {});
     setEditing(base);
     initialRef.current = base;
     setDrawerOpen(true);
@@ -744,9 +779,10 @@ export default function Vsd() {
     if (base?.id) {
       try {
         const res = await api.vsd.getEquipment(base.id);
-        const fresh = mergeZones(res?.equipment || res || {});
+        
+        const fresh = getNormalizedEquipment(res?.equipment || res || {});
+        
         setEditing((cur) => {
-          // ✅ Fusion pour conserver les champs locaux (tag, model, floor, etc.)
           const next = { ...(cur || {}), ...fresh };
           initialRef.current = next;
           return next;
@@ -773,25 +809,11 @@ export default function Vsd() {
     const A = editing;
     const B = initialRef.current;
     const keys = [
-      "name",
-      "tag", 
-      "manufacturer",
-      "model", 
-      "reference", 
-      "serial_number", 
-      "voltage",
-      "ip_address", 
-      "protocol",
-      "building",
-      "floor", 
-      "zone",
-      "location", 
-      "panel", 
-      "status",
-      "criticality", 
-      "comments",
-      "ip_rating", 
+      "name", "tag", "manufacturer", "model", "reference", "serial_number", 
+      "voltage", "ip_address", "protocol", "building", "floor", "zone",
+      "location", "panel", "ui_status", "criticality", "comments", "ip_rating", 
     ];
+    // status est une colonne DB pour l'état de contrôle, mais ui_status est pour l'état d'exploitation
     if (keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""))) return true;
     if (Number(A?.power_kw) !== Number(B?.power_kw)) return true;
     if (Number(A?.current_a) !== Number(B?.current_a)) return true;
@@ -803,14 +825,13 @@ export default function Vsd() {
   async function saveBase() {
     if (!editing) return;
     
-    // Payload mappé selon le schéma DB de server_vsd.js
+    // ✅ Payload simplifié qui envoie chaque champ à sa colonne DB dédiée
     const payload = {
       name: editing.name || "",
       building: editing.building || "",
       zone: editing.zone || "",
       equipment: editing.equipment || "", 
-      // sub_equipment stocke floor OU panel, on prend floor en priorité si défini
-      sub_equipment: editing.floor || editing.panel || "",
+      sub_equipment: "", // Laissé vide, les champs sont désormais séparés (floor, panel)
       type: editing.type || "Variateur",
       manufacturer: editing.manufacturer || "",
       manufacturer_ref: editing.reference || "", 
@@ -818,8 +839,19 @@ export default function Vsd() {
       voltage: editing.voltage || "",
       current_nominal: editing.current_a ?? null, 
       ip_rating: editing.ip_rating || "",
-      // comment stocke comments OU location, on prend comments en priorité si défini
-      comment: editing.comments || editing.location || "", 
+      comment: editing.comments || "", // Mappe le champ UI 'Commentaires' à la colonne DB 'comment'
+      
+      // NOUVEAUX CHAMPS (lus et écrits par le serveur)
+      tag: editing.tag || "",
+      model: editing.model || "",
+      serial_number: editing.serial_number || "",
+      ip_address: editing.ip_address || "",
+      protocol: editing.protocol || "",
+      floor: editing.floor || "",
+      panel: editing.panel || "",
+      location: editing.location || "",
+      criticality: editing.criticality || "",
+      ui_status: editing.ui_status || "",
     };
 
     try {
@@ -831,15 +863,14 @@ export default function Vsd() {
       }
       const eq = updated?.equipment || updated || null;
       if (eq?.id) {
-        const fresh = mergeZones(eq);
+        const fresh = getNormalizedEquipment(eq);
         
-        // ✅ CORRECTION CRITIQUE: Utiliser la fonction pour garantir que `editing` est l'état le plus frais au moment du merge
         setEditing((currentEditing) => {
             const merged = {
-                ...(currentEditing || {}), // État local courant (contient tag, floor, model, etc.)
-                ...fresh,                  // Données DB du serveur (écrase name, building, zone, etc.)
+                ...(currentEditing || {}), 
+                ...fresh,                  
             };
-            initialRef.current = merged; // L'état initial devient l'état fusionné
+            initialRef.current = merged; 
             return merged;
         });
 
@@ -1002,7 +1033,6 @@ export default function Vsd() {
   );
 
   const handleClickPoint = useCallback((p) => {
-    // ✅ Le clic n'appelle que openEdit. openEdit ne déclenche plus de reloadpositions.
     openEdit({ id: p.equipment_id, name: p.name });
   }, []);
 
@@ -1295,6 +1325,9 @@ export default function Vsd() {
                 <Labeled label="Protocole">
                   <Input value={editing.protocol || ""} onChange={(v) => setEditing({ ...editing, protocol: v })} placeholder="Modbus, Profibus…" />
                 </Labeled>
+                <Labeled label="Indice IP">
+                  <Input value={editing.ip_rating || ""} onChange={(v) => setEditing({ ...editing, ip_rating: v })} placeholder="IP20, IP54…" />
+                </Labeled>
               </div>
             </div>
 
@@ -1322,10 +1355,10 @@ export default function Vsd() {
             <div className="border rounded-2xl p-3 bg-white">
               <div className="font-semibold mb-2">Statut & Criticité</div>
               <div className="grid sm:grid-cols-2 gap-3">
-                <Labeled label="Statut">
+                <Labeled label="Statut d'exploitation">
                   <Select
-                    value={editing.status || ""}
-                    onChange={(v) => setEditing({ ...editing, status: v })}
+                    value={editing.ui_status || ""}
+                    onChange={(v) => setEditing({ ...editing, ui_status: v })}
                     options={[
                       { value: "", label: "—" },
                       { value: "en_service", label: "En service" },
