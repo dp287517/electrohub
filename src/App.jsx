@@ -18,20 +18,10 @@ import Obsolescence from './pages/Obsolescence.jsx';
 import HighVoltage from './pages/High_voltage.jsx';
 import Diagram from './pages/Diagram.jsx';
 import Controls from './pages/Controls.jsx';
-
-// OIBT (existant)
 import Oibt from './pages/Oibt.jsx';
-
-// Project (NOUVEAU)
 import Project from './pages/Project.jsx';
-
-// 👇 NEW: Prestataires externes (Comp-Ext)
 import Comp from './pages/Comp.jsx';
-
-// 👇 NEW: Ask Veeva (Lecture & Q/R Documents)
 import AskVeeva from './pages/Ask_veeva.jsx';
-
-// 👇 NEW: Fire Doors (Portes coupe-feu)
 import Doors from './pages/Doors.jsx';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
@@ -70,21 +60,14 @@ export default function App() {
           <Route path="/app/hv" element={<ProtectedRoute><HighVoltage /></ProtectedRoute>} />
           <Route path="/app/diagram" element={<ProtectedRoute><Diagram /></ProtectedRoute>} />
           <Route path="/app/controls" element={<ProtectedRoute><Controls /></ProtectedRoute>} />
-
-          {/* OIBT (existant) */}
           <Route path="/app/oibt" element={<ProtectedRoute><Oibt /></ProtectedRoute>} />
-
-          {/* Project (NOUVEAU) */}
           <Route path="/app/projects" element={<ProtectedRoute><Project /></ProtectedRoute>} />
-
-          {/* 👇 NEW: Comp-Ext (Prestataires externes) */}
           <Route path="/app/comp-ext" element={<ProtectedRoute><Comp /></ProtectedRoute>} />
-
-          {/* 👇 NEW: Ask Veeva */}
           <Route path="/app/ask-veeva" element={<ProtectedRoute><AskVeeva /></ProtectedRoute>} />
-
-          {/* 👇 NEW: Fire Doors */}
           <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
+
+          {/* 👇 NEW: Variable Speed Drives */}
+          <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
 
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
