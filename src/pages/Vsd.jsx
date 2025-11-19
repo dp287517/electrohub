@@ -55,10 +55,6 @@ function pdfDocOpts(url) {
   return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
 }
 
-function isUuid(s) {
-  return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
-}
-
 /* ----------------------------- UI Components ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
@@ -202,7 +198,7 @@ function Toast({ text, onClose }) {
 }
 
 /* ----------------------------- VSD Leaflet Viewer (intégré) ----------------------------- */
-const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, onCreatePoint, disabled = false, mapUpdateTick }, ref) => {
+const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [], onReady, onMovePoint, onClickPoint, onCreatePoint, disabled = false }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const imageLayerRef = useRef(null);
@@ -211,13 +207,13 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null);
   const aliveRef = useRef(true);
+  const pointsRef = useRef(initialPoints); // Gère les points en interne pour la stabilité
 
   const lastJob = useRef({ key: null });
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
 
   const initialFitDoneRef = useRef(false);
-  const mapInitializedRef = useRef(false);
 
   const ICON_PX = 22;
 
@@ -255,235 +251,13 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
     map.addControl(addBtnControlRef.current);
   }
 
-  const cleanupMap = useCallback(() => {
-    const map = mapRef.current;
-    if (map && mapInitializedRef.current) {
-      try {
-        map.off();
-      } catch {}
-      try {
-        map.eachLayer((l) => {
-          try {
-            map.removeLayer(l);
-          } catch {}
-        });
-      } catch {}
-      try {
-        if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
-      } catch {}
-      try {
-        map.remove();
-      } catch {}
-    }
-    mapRef.current = null;
-    imageLayerRef.current = null;
-    markersLayerRef.current = null;
-    addBtnControlRef.current = null;
-    initialFitDoneRef.current = false;
-    mapInitializedRef.current = false;
-  }, []);
-
-  useEffect(() => {
-    if (disabled) return;
-    if (!fileUrl || !wrapRef.current) return;
-
-    let cancelled = false;
-    aliveRef.current = true;
-
-    const jobKey = `${fileUrl}::${pageIndex}`;
-    
-    // Si le plan est le même, nous ne faisons rien dans ce useEffect. 
-    // La mise à jour des marqueurs est gérée par le useEffect [points, imgSize].
-    if (lastJob.current.key === jobKey && mapRef.current) {
-        onReady?.();
-        return;
-    }
-    
-    // Le plan change ou c'est la première initialisation: on nettoie tout
-    lastJob.current.key = jobKey;
-    cleanupMap(); 
-
-    const cleanupPdf = async () => {
-      try {
-        renderTaskRef.current?.cancel();
-      } catch {}
-      try {
-        await loadingTaskRef.current?.destroy();
-      } catch {}
-      renderTaskRef.current = null;
-      loadingTaskRef.current = null;
-    };
-
-    (async () => {
-      try {
-        await cleanupPdf();
-        const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-        const dpr = window.devicePixelRatio || 1;
-
-        loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
-        const pdf = await loadingTaskRef.current.promise;
-        if (cancelled) return;
-
-        const page = await pdf.getPage(Number(pageIndex) + 1);
-        const baseVp = page.getViewport({ scale: 1 });
-
-        // Correction Qualité PDF: Augmenter la cible de rendu pour une meilleure qualité
-        const targetBitmapW = Math.min(4096, Math.max(2048, Math.floor(containerW * dpr * 1.5))); 
-        const safeScale = Math.min(3.0, Math.max(0.5, targetBitmapW / baseVp.width));
-        const viewport = page.getViewport({ scale: safeScale });
-
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        const ctx = canvas.getContext("2d", { alpha: true });
-
-        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
-        await renderTaskRef.current.promise;
-        if (cancelled) return;
-
-        const dataUrl = canvas.toDataURL("image/png");
-        setImgSize({ w: canvas.width, h: canvas.height });
-
-        // INITIALISATION DE LA CARTE
-        if (!mapRef.current) {
-          const m = L.map(wrapRef.current, {
-            crs: L.CRS.Simple,
-            zoomControl: false,
-            zoomAnimation: true,
-            fadeAnimation: false,
-            markerZoomAnimation: false,
-            scrollWheelZoom: true,
-            touchZoom: true,
-            tap: true,
-            preferCanvas: true,
-            center: [0, 0],
-            zoom: 0,
-          });
-          L.control.zoom({ position: "topright" }).addTo(m);
-          ensureAddButton(m);
-
-          m.on("click", (e) => {
-            if (!aliveRef.current) return;
-            const clicked = e.containerPoint;
-            const near = [];
-            const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
-            markersLayerRef.current?.eachLayer((mk) => {
-              const mp = m.latLngToContainerPoint(mk.getLatLng());
-              const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
-              if (dist <= pickRadius) near.push(mk.__meta);
-            });
-            if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
-            else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
-            else setPicker(null);
-          });
-
-          m.on("zoomstart", () => {
-            setPicker(null);
-          });
-          m.on("movestart", () => {
-            setPicker(null);
-          });
-
-          mapRef.current = m;
-          mapInitializedRef.current = true;
-        }
-
-        const map = mapRef.current;
-        const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-
-        // AJOUT DE L'IMAGE
-        if (imageLayerRef.current) {
-          map.removeLayer(imageLayerRef.current);
-          imageLayerRef.current = null;
-        }
-        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
-        imageLayerRef.current = layer;
-        layer.addTo(map);
-
-        await new Promise(requestAnimationFrame);
-        map.invalidateSize(false);
-
-        // AJUSTEMENT DES BORNES ET ZOOM
-        const fitZoom = map.getBoundsZoom(bounds, true);
-        map.options.zoomSnap = 0.1;
-        map.options.zoomDelta = 0.5;
-        map.setMinZoom(fitZoom - 1);
-        map.setMaxZoom(fitZoom + 6);
-        map.setMaxBounds(bounds.pad(0.5));
-        map.fitBounds(bounds, { padding: [8, 8] });
-        initialFitDoneRef.current = true;
-
-        if (!markersLayerRef.current) {
-          markersLayerRef.current = L.layerGroup().addTo(map);
-        }
-        // Le dessin initial des marqueurs sera déclenché par le useEffect [points, imgSize]
-
-        try {
-          map.scrollWheelZoom.enable();
-        } catch {}
-
-        try {
-          await pdf.cleanup();
-        } catch {}
-        onReady?.();
-      } catch (e) {
-        if (String(e?.name) === "RenderingCancelledException") return;
-        const msg = String(e?.message || "");
-        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) {
-          return;
-        }
-        console.error("VSD Leaflet viewer error", e);
-      }
-    })();
-
-    const onResize = () => {
-      const m = mapRef.current;
-      const layer = imageLayerRef.current;
-      if (!m || !layer) return;
-      const b = layer.getBounds();
-      const keepCenter = m.getCenter();
-      const keepZoom = m.getZoom();
-      m.invalidateSize(false);
-
-      if (!initialFitDoneRef.current) {
-        m.fitBounds(b, { padding: [8, 8] });
-        initialFitDoneRef.current = true;
-      } else {
-        m.setView(keepCenter, keepZoom, { animate: false });
-      }
-    };
-    window.addEventListener("resize", onResize);
-    window.addEventListener("orientationchange", onResize);
-
-    return () => {
-      cancelled = true;
-      aliveRef.current = false;
-      window.removeEventListener("resize", onResize);
-      window.removeEventListener("orientationchange", onResize);
-      try {
-        renderTaskRef.current?.cancel();
-      } catch {}
-      try {
-        loadingTaskRef.current?.destroy();
-      } catch {}
-      // Le nettoyage final doit être ici
-      cleanupMap(); 
-    };
-  }, [fileUrl, pageIndex, disabled, cleanupMap]);
-
-  useEffect(() => {
-    // Mise à jour des marqueurs (déclenché par [points] ou [imgSize])
-    if (!mapRef.current || !imgSize.w || !markersLayerRef.current) return;
-    drawMarkers(points, imgSize.w, imgSize.h);
-  }, [points, imgSize]);
-
-
-  function drawMarkers(list, w, h) {
+  // Fonction centrale pour dessiner les marqueurs (utilisée par useEffect et useImperativeHandle)
+  const drawMarkers = useCallback((list, w, h) => {
     const map = mapRef.current;
     const g = markersLayerRef.current;
-    if (!map || !g) return;
+    if (!map || !g || w === 0 || h === 0) return;
     
-    // Nettoyage des couches de marqueurs existantes
+    pointsRef.current = list; // Mise à jour de la ref interne
     g.clearLayers();
 
     (list || []).forEach((p) => {
@@ -525,12 +299,194 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
 
       mk.addTo(g);
     });
-  }
+  }, [onClickPoint, onMovePoint]);
 
-  const onPickEquipment = (d) => {
-    setPicker(null);
-    onClickPoint?.(d);
-  };
+  // Effet pour l'initialisation de la carte et du PDF (déclenché uniquement par fileUrl/pageIndex)
+  useEffect(() => {
+    if (disabled) return;
+    if (!fileUrl || !wrapRef.current) return;
+
+    let cancelled = false;
+    aliveRef.current = true;
+
+    const jobKey = `${fileUrl}::${pageIndex}`;
+    
+    if (lastJob.current.key === jobKey) {
+      // Si le même plan est re-monté (re-render du parent), ne rien faire de critique ici
+      onReady?.();
+      return;
+    }
+    
+    // NETTOYAGE COMPLET AVANT DE CHARGER UN NOUVEAU PLAN
+    const cleanupMap = () => {
+        const map = mapRef.current;
+        if (map) {
+          map.off();
+          map.remove();
+        }
+        mapRef.current = null;
+        imageLayerRef.current = null;
+        markersLayerRef.current = null;
+        addBtnControlRef.current = null;
+        initialFitDoneRef.current = false;
+    };
+    cleanupMap();
+
+    lastJob.current.key = jobKey;
+
+    const cleanupPdf = async () => {
+      try {
+        renderTaskRef.current?.cancel();
+      } catch {}
+      try {
+        await loadingTaskRef.current?.destroy();
+      } catch {}
+      renderTaskRef.current = null;
+      loadingTaskRef.current = null;
+    };
+    
+    (async () => {
+      try {
+        await cleanupPdf();
+        const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
+        const dpr = window.devicePixelRatio || 1;
+
+        loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
+        const pdf = await loadingTaskRef.current.promise;
+        if (cancelled) return;
+
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        const baseVp = page.getViewport({ scale: 1 });
+
+        const targetBitmapW = Math.min(4096, Math.max(2048, Math.floor(containerW * dpr * 1.5))); 
+        const safeScale = Math.min(3.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        const viewport = page.getViewport({ scale: safeScale });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const ctx = canvas.getContext("2d", { alpha: true });
+
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
+        await renderTaskRef.current.promise;
+        if (cancelled) return;
+
+        const dataUrl = canvas.toDataURL("image/png");
+        setImgSize({ w: canvas.width, h: canvas.height });
+
+        // INITIALISATION DE LA CARTE
+        const m = L.map(wrapRef.current, {
+          crs: L.CRS.Simple,
+          zoomControl: false,
+          zoomAnimation: true,
+          fadeAnimation: false,
+          markerZoomAnimation: false,
+          scrollWheelZoom: true,
+          touchZoom: true,
+          tap: true,
+          preferCanvas: true,
+          center: [0, 0],
+          zoom: 0,
+        });
+        L.control.zoom({ position: "topright" }).addTo(m);
+        ensureAddButton(m);
+
+        m.on("click", (e) => {
+          if (!aliveRef.current) return;
+          const clicked = e.containerPoint;
+          const near = [];
+          const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
+          // Utilise pointsRef.current pour la vérification des clics
+          markersLayerRef.current?.eachLayer((mk) => {
+            const mp = m.latLngToContainerPoint(mk.getLatLng());
+            const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
+            if (dist <= pickRadius) near.push(mk.__meta);
+          });
+          if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
+          else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
+          else setPicker(null);
+        });
+
+        m.on("zoomstart", () => { setPicker(null); });
+        m.on("movestart", () => { setPicker(null); });
+
+        mapRef.current = m;
+        const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
+
+        // AJOUT DE L'IMAGE
+        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
+        imageLayerRef.current = layer;
+        layer.addTo(m);
+
+        await new Promise(requestAnimationFrame);
+        m.invalidateSize(false);
+
+        const fitZoom = m.getBoundsZoom(bounds, true);
+        m.options.zoomSnap = 0.1;
+        m.options.zoomDelta = 0.5;
+        m.setMinZoom(fitZoom - 1);
+        m.setMaxZoom(fitZoom + 6);
+        m.setMaxBounds(bounds.pad(0.5));
+        m.fitBounds(bounds, { padding: [8, 8] });
+        initialFitDoneRef.current = true;
+
+        if (!markersLayerRef.current) {
+          markersLayerRef.current = L.layerGroup().addTo(m);
+        }
+        
+        // Dessin initial des marqueurs
+        drawMarkers(pointsRef.current, canvas.width, canvas.height);
+
+        try { m.scrollWheelZoom.enable(); } catch {}
+        try { await pdf.cleanup(); } catch {}
+        onReady?.();
+      } catch (e) {
+        if (String(e?.name) === "RenderingCancelledException") return;
+        const msg = String(e?.message || "");
+        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
+        console.error("VSD Leaflet viewer error", e);
+      }
+    })();
+
+    const onResize = () => {
+      const m = mapRef.current;
+      const layer = imageLayerRef.current;
+      if (!m || !layer) return;
+      const b = layer.getBounds();
+      const keepCenter = m.getCenter();
+      const keepZoom = m.getZoom();
+      m.invalidateSize(false);
+
+      if (!initialFitDoneRef.current) {
+        m.fitBounds(b, { padding: [8, 8] });
+        initialFitDone.current = true;
+      } else {
+        m.setView(keepCenter, keepZoom, { animate: false });
+      }
+    };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+
+    return () => {
+      cancelled = true;
+      aliveRef.current = false;
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      try { renderTaskRef.current?.cancel(); } catch {}
+      try { loadingTaskRef.current?.destroy(); } catch {}
+      cleanupMap();
+    };
+  }, [fileUrl, pageIndex, disabled, drawMarkers, onClickPoint]);
+  
+  // NOUVEAU: Maintient la ref pointsRef.current à jour avec les props du parent (initialPoints)
+  useEffect(() => {
+    pointsRef.current = initialPoints;
+    // Si la map est prête, dessiner les nouveaux points immédiatement
+    if(mapRef.current && imgSize.w > 0) {
+        drawMarkers(initialPoints, imgSize.w, imgSize.h);
+    }
+  }, [initialPoints, drawMarkers, imgSize.w]);
+
 
   const adjust = () => {
     const m = mapRef.current;
@@ -549,10 +505,10 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
       } catch {}
     }, 50);
   };
-  
-  // Expose la fonction de dessin des marqueurs via ref pour la mise à jour externe
+
   useImperativeHandle(ref, () => ({ 
     adjust,
+    // La méthode drawMarkers exposée pour que le hook parent puisse forcer l'update des marqueurs
     drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
   }));
 
@@ -593,9 +549,10 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
 
 /* ----------------------------- Page principale VSD ----------------------------- */
 
-// Nouveau hook pour gérer la logique de chargement et rafraîchissement des positions
-function useMapUpdateLogic(stableSelectedPlan, setPositions, viewerRef) {
+// NOUVEAU HOOK : Découplage de l'état des positions pour la stabilité de la carte
+function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
     const reloadPositionsRef = useRef(null);
+    const latestPositionsRef = useRef([]);
 
     const loadPositions = useCallback(async (plan, pageIdx = 0) => {
         if (!plan) return;
@@ -616,14 +573,15 @@ function useMapUpdateLogic(stableSelectedPlan, setPositions, viewerRef) {
                 }))
                 : [];
             
-            setPositions(list);
-            // CORRECTION: Mettre à jour les marqueurs via la ref sans forcer de re-render du Viewer
+            // Mise à jour de la référence et du Viewer (méthode impérative)
+            latestPositionsRef.current = list;
             viewerRef.current?.drawMarkers(list); 
         } catch(e) {
             console.error("Erreur chargement positions", e);
-            setPositions([]);
+            latestPositionsRef.current = [];
+            viewerRef.current?.drawMarkers([]);
         }
-    }, [setPositions, viewerRef]);
+    }, [viewerRef]);
 
     reloadPositionsRef.current = loadPositions;
 
@@ -634,7 +592,7 @@ function useMapUpdateLogic(stableSelectedPlan, setPositions, viewerRef) {
         // Chargement initial
         tick();
 
-        // CORRECTION: L'intervalle de rafraîchissement est conservé mais appelle la fonction de mise à jour des marqueurs via la ref
+        // Intervalle de rafraîchissement (8 secondes)
         const iv = setInterval(tick, 8000);
         
         const onVis = () => {
@@ -648,7 +606,10 @@ function useMapUpdateLogic(stableSelectedPlan, setPositions, viewerRef) {
         };
     }, [stableSelectedPlan]);
 
-    return { refreshPositions: (p, idx) => reloadPositionsRef.current(p, idx) };
+    return { 
+        refreshPositions: (p, idx) => reloadPositionsRef.current(p, idx),
+        getLatestPositions: () => latestPositionsRef.current,
+    };
 }
 
 export default function Vsd() {
@@ -673,14 +634,16 @@ export default function Vsd() {
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   
-  const [positions, setPositions] = useState([]);
+  // Remplacé par initialPoints (pour le montage) et le hook useMapUpdateLogic (pour les updates)
+  const [initialPoints, setInitialPoints] = useState([]); 
   const [pdfReady, setPdfReady] = useState(false);
   const viewerRef = useRef(null);
   
-  const [analyzingIA, setAnalyzingIA] = useState(false); // NOUVEAU: État pour le chargement IA
+  const [analyzingIA, setAnalyzingIA] = useState(false); // ✅ État pour le chargement IA
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
-  const { refreshPositions } = useMapUpdateLogic(stableSelectedPlan, setPositions, viewerRef);
+  // Utilisation du hook découplé pour gérer les positions
+  const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, viewerRef);
 
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
@@ -711,13 +674,15 @@ export default function Vsd() {
   async function reloadFiles(equipId) {
     if (!equipId) return;
     try {
+      // NOTE: L'API retourne bien les fichiers, mais le chemin dans vsd-files (get) ne semble pas être '/download'.
+      // Utiliser l'URL par défaut que l'API est censée fournir.
       const res = await api.vsd.listFiles(equipId).catch(() => ({}));
       const arr = Array.isArray(res?.files)
         ? res.files.map((f) => ({
             id: f.id,
             name: f.original_name || f.name || f.filename || `Fichier ${f.id}`,
             mime: f.mime,
-            url: f.download_url || f.inline_url || `${API_BASE}/api/vsd/files/${encodeURIComponent(f.id)}`,
+            url: f.download_url || f.inline_url || `/api/vsd/files/${encodeURIComponent(f.id)}`, // Récupère l'URL brute, l'API se charge du reste
           }))
         : [];
       setFiles(arr);
@@ -739,6 +704,7 @@ export default function Vsd() {
   const mergeZones = (raw) => {
     if (!raw) return raw;
     const clean = { ...raw };
+    // Normalisation des champs pour éviter les problèmes de type object / null / undefined
     for (const field of ["building", "floor", "zone", "location"]) {
       if (typeof clean[field] === "object" && clean[field] !== null) {
         clean[field] = clean[field].name || clean[field].id || "";
@@ -768,7 +734,7 @@ export default function Vsd() {
         const res = await api.vsd.getEquipment(base.id);
         const fresh = mergeZones(res?.equipment || res || {});
         setEditing((cur) => {
-          // CONSERVE les champs locaux (model, tag, floor...) lors de l'ouverture
+          // CONSERVE les champs locaux (tag, model, floor, etc.) qui ne sont pas persistés par le backend
           const next = { ...(cur || {}), ...fresh };
           initialRef.current = next;
           return next;
@@ -796,27 +762,27 @@ export default function Vsd() {
     const B = initialRef.current;
     const keys = [
       "name",
-      "tag", // Non DB, à conserver localement
+      "tag", // Non persisté, mais doit être vérifié pour le "dirty"
       "manufacturer",
-      "model", // Non DB, à conserver localement
-      "reference", // FE: reference, DB: manufacturer_ref
-      "serial_number", // Non DB, à conserver localement
+      "model", // Non persisté
+      "reference",
+      "serial_number",
       "voltage",
-      "ip_address", // Non DB, à conserver localement
+      "ip_address",
       "protocol",
       "building",
-      "floor", // Non DB, à conserver localement
+      "floor", // Non persisté
       "zone",
-      "location", // Non DB, à conserver localement
-      "panel", // Non DB, à conserver localement
-      "status",
-      "criticality", // Non DB, à conserver localement
+      "location", // Non persisté
+      "panel", // Non persisté
+      "status", // Non persisté
+      "criticality", // Non persisté
       "comments",
-      "ip_rating", // Mappé à ip_rating DB
+      "ip_rating", 
     ];
-    // Comparaison des chaînes
+    // Vérification des chaînes/champs locaux
     if (keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""))) return true;
-    // Comparaison des nombres
+    // Vérification des nombres (avec gestion de null/undefined)
     if (Number(A?.power_kw) !== Number(B?.power_kw)) return true;
     if (Number(A?.current_a) !== Number(B?.current_a)) return true;
     return false;
@@ -827,21 +793,24 @@ export default function Vsd() {
   async function saveBase() {
     if (!editing) return;
     
-    // Déclaration complète du payload pour l'envoi au backend (selon le schéma DB)
+    // ✅ CORRECTION MAJ: Payload mappé vers le schéma DB (server_vsd.js)
     const payload = {
       name: editing.name || "",
       building: editing.building || "",
       zone: editing.zone || "",
-      equipment: editing.equipment || "",
-      sub_equipment: editing.sub_equipment || editing.floor || editing.location || "", // Mappage possible pour le FE 'floor' et 'location'
-      type: editing.type || "",
+      // Mappage des champs UI vers les champs génériques du backend
+      equipment: editing.equipment || "", // Champ pour le logical_name du plan
+      sub_equipment: editing.floor || editing.panel || "", // Stocke étage/panel dans sub_equipment
+      type: editing.type || "Variateur",
       manufacturer: editing.manufacturer || "",
-      manufacturer_ref: editing.reference || editing.manufacturer_ref || "", // Utilisation de 'reference' FE pour 'manufacturer_ref' DB
+      manufacturer_ref: editing.reference || "", // Utilise "reference" de l'UI
       power_kw: editing.power_kw ?? null,
       voltage: editing.voltage || "",
-      current_nominal: editing.current_a ?? null, // Utilisation de 'current_a' FE pour 'current_nominal' DB
+      current_nominal: editing.current_a ?? null, // Utilise "current_a" de l'UI
       ip_rating: editing.ip_rating || "",
-      comment: editing.comments || editing.location || "", // Utilisation de 'comments' FE pour 'comment' DB
+      comment: editing.comments || editing.location || "", // Stocke commentaires/location dans comment
+      // Les champs comme tag, model, serial_number, ip_address, status, criticality, floor, location, panel
+      // sont des champs UI conservés par la fusion ci-dessous, mais non stockés par le backend VSD actuel.
     };
 
     try {
@@ -855,15 +824,15 @@ export default function Vsd() {
       if (eq?.id) {
         const fresh = mergeZones(eq);
         
-        // CORRECTION CRITIQUE: Fusionner l'état local actuel avec la réponse du serveur
-        // pour conserver les champs non-persistés (tag, model, floor, location, etc.)
+        // ✅ CORRECTION MAJEURE : Fusionner l'état local (editing) pour conserver les champs non persistés (tag, model, floor, etc.) 
+        // avec la réponse fraîche du serveur (fresh) pour conserver les champs DB.
         const merged = {
-          ...(editing || {}), // Conserver les champs non-DB du FE (tag, model, floor, etc.)
-          ...fresh,          // Écraser les champs DB avec les données du serveur
+          ...(editing || {}), 
+          ...fresh,          
         };
 
         setEditing(merged);
-        initialRef.current = merged; // L'état initial devient l'état fusionné
+        initialRef.current = merged; 
       }
       await reload();
       await refreshPositions(stableSelectedPlan, 0); 
@@ -921,7 +890,7 @@ export default function Vsd() {
     const list = Array.from(filesLike || []);
     if (!list.length) return;
     
-    setAnalyzingIA(true); // NOUVEAU: Début de l'analyse
+    setAnalyzingIA(true); // ✅ Début de l'analyse
     try {
       const res = await api.vsd.extractFromPhotos(list);
       const s = res?.extracted || res || {};
@@ -940,6 +909,7 @@ export default function Vsd() {
         applyIfValid("serial_number", s.serial_number); 
         applyIfValid("voltage", s.voltage);
         applyIfValid("protocol", s.protocol);
+        applyIfValid("ip_rating", s.ip_rating);
 
         if (s.power_kw != null && !isNaN(Number(s.power_kw))) {
           safe.power_kw = Number(s.power_kw);
@@ -956,7 +926,7 @@ export default function Vsd() {
       console.error("[VSD] Erreur analyse IA :", e);
       setToast("Analyse IA indisponible");
     } finally {
-        setAnalyzingIA(false); // NOUVEAU: Fin de l'analyse
+        setAnalyzingIA(false); // ✅ Fin de l'analyse
     }
   }
 
@@ -964,7 +934,18 @@ export default function Vsd() {
     setMapsLoading(true);
     try {
       const r = await api.vsdMaps.listPlans();
-      setPlans(Array.isArray(r?.plans) ? r.plans : []);
+      const planList = Array.isArray(r?.plans) ? r.plans : [];
+      setPlans(planList);
+
+      // Charge les positions initiales pour le plan sélectionné (si existe)
+      if (selectedPlan) {
+        const current = planList.find(p => p.logical_name === selectedPlan.logical_name);
+        if (current) {
+            setSelectedPlan(current);
+            await refreshPositions(current, 0);
+            setInitialPoints(getLatestPositions()); // Met à jour initialPoints
+        }
+      }
     } finally {
       setMapsLoading(false);
     }
@@ -1006,6 +987,7 @@ export default function Vsd() {
         x_frac: xy.x,
         y_frac: xy.y,
       });
+      // ✅ Utilise la fonction de rafraîchissement découplée
       await refreshPositions(stableSelectedPlan, 0); 
     },
     [stableSelectedPlan, refreshPositions]
@@ -1038,6 +1020,7 @@ export default function Vsd() {
         y_frac: 0.5,
       });
 
+      // ✅ Utilise la fonction de rafraîchissement découplée
       await refreshPositions(stableSelectedPlan, 0);
       viewerRef.current?.adjust();
       setToast(`VSD créé (« ${created?.equipment?.name || created?.name} ») au centre du plan ✅`);
@@ -1149,9 +1132,12 @@ export default function Vsd() {
               await api.vsdMaps.renamePlan(plan.logical_name, name);
               await loadPlans();
             }}
-            onPick={(plan) => {
+            onPick={async (plan) => {
               setSelectedPlan(plan);
-              setPdfReady(false); // Force le loader lors du changement de plan
+              setPdfReady(false); 
+              // Au moment de la sélection, on recharge les positions et on les met dans initialPoints pour le viewer
+              await refreshPositions(plan, 0);
+              setInitialPoints(getLatestPositions()); 
             }}
           />
 
@@ -1164,6 +1150,7 @@ export default function Vsd() {
                     variant="ghost"
                     onClick={() => {
                       setSelectedPlan(null);
+                      setInitialPoints([]); // 🧹 Nettoie les points à la fermeture
                     }}
                   >
                     Fermer le plan
@@ -1186,7 +1173,7 @@ export default function Vsd() {
                   key={selectedPlan.logical_name} 
                   fileUrl={api.vsdMaps.planFileUrlAuto(selectedPlan, { bust: true })}
                   pageIndex={0}
-                  points={positions}
+                  initialPoints={initialPoints} // Les points initiaux sont passés au montage
                   onReady={handlePdfReady}
                   onMovePoint={handleMovePoint}
                   onClickPoint={handleClickPoint}
@@ -1213,7 +1200,7 @@ export default function Vsd() {
                       multiple
                       className="hidden"
                       onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
-                      disabled={analyzingIA}
+                      disabled={analyzingIA} // Désactivation si l'analyse est en cours
                     />
                     {analyzingIA ? 'Analyse en cours...' : 'Analyser des photos (IA)'}
                   </label>
