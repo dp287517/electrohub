@@ -207,13 +207,16 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
   const [picker, setPicker] = useState(null);
   const aliveRef = useRef(true);
-  const pointsRef = useRef(initialPoints); // Gère les points en interne pour la stabilité
+  const pointsRef = useRef(initialPoints); 
+  
+  // ✅ NOUVEAU: Références pour préserver la vue Leaflet lors des re-renders
+  const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
+  const initialFitDoneRef = useRef(false);
+  const userViewTouchedRef = useRef(false);
 
   const lastJob = useRef({ key: null });
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
-
-  const initialFitDoneRef = useRef(false);
 
   const ICON_PX = 22;
 
@@ -251,7 +254,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     map.addControl(addBtnControlRef.current);
   }
 
-  // Fonction centrale pour dessiner les marqueurs (utilisée par useEffect et useImperativeHandle)
+  // Fonction centrale pour dessiner les marqueurs 
   const drawMarkers = useCallback((list, w, h) => {
     const map = mapRef.current;
     const g = markersLayerRef.current;
@@ -301,7 +304,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     });
   }, [onClickPoint, onMovePoint]);
 
-  // Effet pour l'initialisation de la carte et du PDF (déclenché uniquement par fileUrl/pageIndex)
+  // Effet pour l'initialisation de la carte et du PDF 
   useEffect(() => {
     if (disabled) return;
     if (!fileUrl || !wrapRef.current) return;
@@ -312,12 +315,10 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     const jobKey = `${fileUrl}::${pageIndex}`;
     
     if (lastJob.current.key === jobKey) {
-      // Si le même plan est re-monté (re-render du parent), ne rien faire de critique ici
       onReady?.();
       return;
     }
     
-    // NETTOYAGE COMPLET AVANT DE CHARGER UN NOUVEAU PLAN
     const cleanupMap = () => {
         const map = mapRef.current;
         if (map) {
@@ -329,18 +330,15 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         markersLayerRef.current = null;
         addBtnControlRef.current = null;
         initialFitDoneRef.current = false;
+        userViewTouchedRef.current = false; // Reset view on full map swap
     };
     cleanupMap();
 
     lastJob.current.key = jobKey;
 
     const cleanupPdf = async () => {
-      try {
-        renderTaskRef.current?.cancel();
-      } catch {}
-      try {
-        await loadingTaskRef.current?.destroy();
-      } catch {}
+      try { renderTaskRef.current?.cancel(); } catch {}
+      try { await loadingTaskRef.current?.destroy(); } catch {}
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
     };
@@ -385,8 +383,8 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
           touchZoom: true,
           tap: true,
           preferCanvas: true,
-          center: [0, 0],
-          zoom: 0,
+          center: lastViewRef.current.center,
+          zoom: lastViewRef.current.zoom,
         });
         L.control.zoom({ position: "topright" }).addTo(m);
         ensureAddButton(m);
@@ -396,7 +394,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
           const clicked = e.containerPoint;
           const near = [];
           const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
-          // Utilise pointsRef.current pour la vérification des clics
           markersLayerRef.current?.eachLayer((mk) => {
             const mp = m.latLngToContainerPoint(mk.getLatLng());
             const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
@@ -407,8 +404,10 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
           else setPicker(null);
         });
 
-        m.on("zoomstart", () => { setPicker(null); });
-        m.on("movestart", () => { setPicker(null); });
+        m.on("zoomstart", () => { setPicker(null); userViewTouchedRef.current = true; });
+        m.on("movestart", () => { setPicker(null); userViewTouchedRef.current = true; });
+        m.on("zoomend", () => { lastViewRef.current.zoom = m.getZoom(); });
+        m.on("moveend", () => { lastViewRef.current.center = m.getCenter(); });
 
         mapRef.current = m;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
@@ -427,14 +426,23 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         m.setMinZoom(fitZoom - 1);
         m.setMaxZoom(fitZoom + 6);
         m.setMaxBounds(bounds.pad(0.5));
-        m.fitBounds(bounds, { padding: [8, 8] });
-        initialFitDoneRef.current = true;
+        
+        // ✅ CONSERVATION DE LA VUE: n'appelle fitBounds que si c'est la première fois ou si l'utilisateur n'a pas touché l'ancienne vue
+        if (!initialFitDoneRef.current || !userViewTouchedRef.current) {
+            m.fitBounds(bounds, { padding: [8, 8] });
+            lastViewRef.current.center = m.getCenter();
+            lastViewRef.current.zoom = m.getZoom();
+            initialFitDoneRef.current = true;
+        } else {
+            // Si l'utilisateur a déjà interagi, utiliser les valeurs stockées
+            m.setView(lastViewRef.current.center, lastViewRef.current.zoom, { animate: false });
+        }
+
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(m);
         }
         
-        // Dessin initial des marqueurs
         drawMarkers(pointsRef.current, canvas.width, canvas.height);
 
         try { m.scrollWheelZoom.enable(); } catch {}
@@ -452,15 +460,18 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
       const m = mapRef.current;
       const layer = imageLayerRef.current;
       if (!m || !layer) return;
-      const b = layer.getBounds();
-      const keepCenter = m.getCenter();
-      const keepZoom = m.getZoom();
+      
+      const keepCenter = lastViewRef.current.center;
+      const keepZoom = lastViewRef.current.zoom;
+
       m.invalidateSize(false);
 
       if (!initialFitDoneRef.current) {
+        const b = layer.getBounds();
         m.fitBounds(b, { padding: [8, 8] });
-        initialFitDone.current = true;
+        initialFitDoneRef.current = true;
       } else {
+        // ✅ Conserve la vue utilisateur après un resize
         m.setView(keepCenter, keepZoom, { animate: false });
       }
     };
@@ -478,11 +489,12 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     };
   }, [fileUrl, pageIndex, disabled, drawMarkers, onClickPoint]);
   
-  // NOUVEAU: Maintient la ref pointsRef.current à jour avec les props du parent (initialPoints)
+  // Maintient la ref pointsRef.current à jour avec les props du parent (initialPoints)
   useEffect(() => {
     pointsRef.current = initialPoints;
-    // Si la map est prête, dessiner les nouveaux points immédiatement
     if(mapRef.current && imgSize.w > 0) {
+        // ✅ Le map update logic appelle cette fonction via ref, 
+        // mais cet effet assure le redessin si initialPoints change.
         drawMarkers(initialPoints, imgSize.w, imgSize.h);
     }
   }, [initialPoints, drawMarkers, imgSize.w]);
@@ -498,7 +510,13 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     const fitZoom = m.getBoundsZoom(b, true);
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
+    
+    // ✅ Met à jour les refs de la vue après "Ajuster"
+    lastViewRef.current.center = m.getCenter();
+    lastViewRef.current.zoom = m.getZoom();
     initialFitDoneRef.current = true;
+    userViewTouchedRef.current = false;
+
     setTimeout(() => {
       try {
         m.scrollWheelZoom?.enable();
@@ -508,7 +526,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
   useImperativeHandle(ref, () => ({ 
     adjust,
-    // La méthode drawMarkers exposée pour que le hook parent puisse forcer l'update des marqueurs
     drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
   }));
 
@@ -549,7 +566,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
 /* ----------------------------- Page principale VSD ----------------------------- */
 
-// NOUVEAU HOOK : Découplage de l'état des positions pour la stabilité de la carte
+// HOOK : Logique d'update de la carte (découplée de l'état Vsd)
 function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
     const reloadPositionsRef = useRef(null);
     const latestPositionsRef = useRef([]);
@@ -573,8 +590,8 @@ function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
                 }))
                 : [];
             
-            // Mise à jour de la référence et du Viewer (méthode impérative)
             latestPositionsRef.current = list;
+            // ✅ Mise à jour impérative sans re-render du composant Vsd
             viewerRef.current?.drawMarkers(list); 
         } catch(e) {
             console.error("Erreur chargement positions", e);
@@ -634,15 +651,13 @@ export default function Vsd() {
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   
-  // Remplacé par initialPoints (pour le montage) et le hook useMapUpdateLogic (pour les updates)
   const [initialPoints, setInitialPoints] = useState([]); 
   const [pdfReady, setPdfReady] = useState(false);
   const viewerRef = useRef(null);
   
-  const [analyzingIA, setAnalyzingIA] = useState(false); // ✅ État pour le chargement IA
+  const [analyzingIA, setAnalyzingIA] = useState(false); 
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
-  // Utilisation du hook découplé pour gérer les positions
   const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, viewerRef);
 
   const debouncer = useRef(null);
@@ -674,15 +689,13 @@ export default function Vsd() {
   async function reloadFiles(equipId) {
     if (!equipId) return;
     try {
-      // NOTE: L'API retourne bien les fichiers, mais le chemin dans vsd-files (get) ne semble pas être '/download'.
-      // Utiliser l'URL par défaut que l'API est censée fournir.
       const res = await api.vsd.listFiles(equipId).catch(() => ({}));
       const arr = Array.isArray(res?.files)
         ? res.files.map((f) => ({
             id: f.id,
             name: f.original_name || f.name || f.filename || `Fichier ${f.id}`,
             mime: f.mime,
-            url: f.download_url || f.inline_url || `/api/vsd/files/${encodeURIComponent(f.id)}`, // Récupère l'URL brute, l'API se charge du reste
+            url: f.download_url || f.inline_url || `/api/vsd/files/${encodeURIComponent(f.id)}`,
           }))
         : [];
       setFiles(arr);
@@ -704,7 +717,6 @@ export default function Vsd() {
   const mergeZones = (raw) => {
     if (!raw) return raw;
     const clean = { ...raw };
-    // Normalisation des champs pour éviter les problèmes de type object / null / undefined
     for (const field of ["building", "floor", "zone", "location"]) {
       if (typeof clean[field] === "object" && clean[field] !== null) {
         clean[field] = clean[field].name || clean[field].id || "";
@@ -734,7 +746,7 @@ export default function Vsd() {
         const res = await api.vsd.getEquipment(base.id);
         const fresh = mergeZones(res?.equipment || res || {});
         setEditing((cur) => {
-          // CONSERVE les champs locaux (tag, model, floor, etc.) qui ne sont pas persistés par le backend
+          // ✅ Fusion pour conserver les champs locaux (tag, model, floor, etc.)
           const next = { ...(cur || {}), ...fresh };
           initialRef.current = next;
           return next;
@@ -762,27 +774,25 @@ export default function Vsd() {
     const B = initialRef.current;
     const keys = [
       "name",
-      "tag", // Non persisté, mais doit être vérifié pour le "dirty"
+      "tag", 
       "manufacturer",
-      "model", // Non persisté
-      "reference",
-      "serial_number",
+      "model", 
+      "reference", 
+      "serial_number", 
       "voltage",
-      "ip_address",
+      "ip_address", 
       "protocol",
       "building",
-      "floor", // Non persisté
+      "floor", 
       "zone",
-      "location", // Non persisté
-      "panel", // Non persisté
-      "status", // Non persisté
-      "criticality", // Non persisté
+      "location", 
+      "panel", 
+      "status",
+      "criticality", 
       "comments",
       "ip_rating", 
     ];
-    // Vérification des chaînes/champs locaux
     if (keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""))) return true;
-    // Vérification des nombres (avec gestion de null/undefined)
     if (Number(A?.power_kw) !== Number(B?.power_kw)) return true;
     if (Number(A?.current_a) !== Number(B?.current_a)) return true;
     return false;
@@ -793,24 +803,23 @@ export default function Vsd() {
   async function saveBase() {
     if (!editing) return;
     
-    // ✅ CORRECTION MAJ: Payload mappé vers le schéma DB (server_vsd.js)
+    // Payload mappé selon le schéma DB de server_vsd.js
     const payload = {
       name: editing.name || "",
       building: editing.building || "",
       zone: editing.zone || "",
-      // Mappage des champs UI vers les champs génériques du backend
-      equipment: editing.equipment || "", // Champ pour le logical_name du plan
-      sub_equipment: editing.floor || editing.panel || "", // Stocke étage/panel dans sub_equipment
+      equipment: editing.equipment || "", 
+      // sub_equipment stocke floor OU panel, on prend floor en priorité si défini
+      sub_equipment: editing.floor || editing.panel || "",
       type: editing.type || "Variateur",
       manufacturer: editing.manufacturer || "",
-      manufacturer_ref: editing.reference || "", // Utilise "reference" de l'UI
+      manufacturer_ref: editing.reference || "", 
       power_kw: editing.power_kw ?? null,
       voltage: editing.voltage || "",
-      current_nominal: editing.current_a ?? null, // Utilise "current_a" de l'UI
+      current_nominal: editing.current_a ?? null, 
       ip_rating: editing.ip_rating || "",
-      comment: editing.comments || editing.location || "", // Stocke commentaires/location dans comment
-      // Les champs comme tag, model, serial_number, ip_address, status, criticality, floor, location, panel
-      // sont des champs UI conservés par la fusion ci-dessous, mais non stockés par le backend VSD actuel.
+      // comment stocke comments OU location, on prend comments en priorité si défini
+      comment: editing.comments || editing.location || "", 
     };
 
     try {
@@ -824,15 +833,16 @@ export default function Vsd() {
       if (eq?.id) {
         const fresh = mergeZones(eq);
         
-        // ✅ CORRECTION MAJEURE : Fusionner l'état local (editing) pour conserver les champs non persistés (tag, model, floor, etc.) 
-        // avec la réponse fraîche du serveur (fresh) pour conserver les champs DB.
-        const merged = {
-          ...(editing || {}), 
-          ...fresh,          
-        };
+        // ✅ CORRECTION CRITIQUE: Utiliser la fonction pour garantir que `editing` est l'état le plus frais au moment du merge
+        setEditing((currentEditing) => {
+            const merged = {
+                ...(currentEditing || {}), // État local courant (contient tag, floor, model, etc.)
+                ...fresh,                  // Données DB du serveur (écrase name, building, zone, etc.)
+            };
+            initialRef.current = merged; // L'état initial devient l'état fusionné
+            return merged;
+        });
 
-        setEditing(merged);
-        initialRef.current = merged; 
       }
       await reload();
       await refreshPositions(stableSelectedPlan, 0); 
@@ -890,7 +900,7 @@ export default function Vsd() {
     const list = Array.from(filesLike || []);
     if (!list.length) return;
     
-    setAnalyzingIA(true); // ✅ Début de l'analyse
+    setAnalyzingIA(true); 
     try {
       const res = await api.vsd.extractFromPhotos(list);
       const s = res?.extracted || res || {};
@@ -926,7 +936,7 @@ export default function Vsd() {
       console.error("[VSD] Erreur analyse IA :", e);
       setToast("Analyse IA indisponible");
     } finally {
-        setAnalyzingIA(false); // ✅ Fin de l'analyse
+        setAnalyzingIA(false); 
     }
   }
 
@@ -937,13 +947,12 @@ export default function Vsd() {
       const planList = Array.isArray(r?.plans) ? r.plans : [];
       setPlans(planList);
 
-      // Charge les positions initiales pour le plan sélectionné (si existe)
       if (selectedPlan) {
         const current = planList.find(p => p.logical_name === selectedPlan.logical_name);
         if (current) {
             setSelectedPlan(current);
             await refreshPositions(current, 0);
-            setInitialPoints(getLatestPositions()); // Met à jour initialPoints
+            setInitialPoints(getLatestPositions()); 
         }
       }
     } finally {
@@ -987,13 +996,13 @@ export default function Vsd() {
         x_frac: xy.x,
         y_frac: xy.y,
       });
-      // ✅ Utilise la fonction de rafraîchissement découplée
       await refreshPositions(stableSelectedPlan, 0); 
     },
     [stableSelectedPlan, refreshPositions]
   );
 
   const handleClickPoint = useCallback((p) => {
+    // ✅ Le clic n'appelle que openEdit. openEdit ne déclenche plus de reloadpositions.
     openEdit({ id: p.equipment_id, name: p.name });
   }, []);
 
@@ -1020,7 +1029,6 @@ export default function Vsd() {
         y_frac: 0.5,
       });
 
-      // ✅ Utilise la fonction de rafraîchissement découplée
       await refreshPositions(stableSelectedPlan, 0);
       viewerRef.current?.adjust();
       setToast(`VSD créé (« ${created?.equipment?.name || created?.name} ») au centre du plan ✅`);
@@ -1135,7 +1143,7 @@ export default function Vsd() {
             onPick={async (plan) => {
               setSelectedPlan(plan);
               setPdfReady(false); 
-              // Au moment de la sélection, on recharge les positions et on les met dans initialPoints pour le viewer
+              setInitialPoints([]); 
               await refreshPositions(plan, 0);
               setInitialPoints(getLatestPositions()); 
             }}
@@ -1150,7 +1158,7 @@ export default function Vsd() {
                     variant="ghost"
                     onClick={() => {
                       setSelectedPlan(null);
-                      setInitialPoints([]); // 🧹 Nettoie les points à la fermeture
+                      setInitialPoints([]); 
                     }}
                   >
                     Fermer le plan
@@ -1173,7 +1181,7 @@ export default function Vsd() {
                   key={selectedPlan.logical_name} 
                   fileUrl={api.vsdMaps.planFileUrlAuto(selectedPlan, { bust: true })}
                   pageIndex={0}
-                  initialPoints={initialPoints} // Les points initiaux sont passés au montage
+                  initialPoints={initialPoints} 
                   onReady={handlePdfReady}
                   onMovePoint={handleMovePoint}
                   onClickPoint={handleClickPoint}
@@ -1200,7 +1208,7 @@ export default function Vsd() {
                       multiple
                       className="hidden"
                       onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
-                      disabled={analyzingIA} // Désactivation si l'analyse est en cours
+                      disabled={analyzingIA}
                     />
                     {analyzingIA ? 'Analyse en cours...' : 'Analyser des photos (IA)'}
                   </label>
