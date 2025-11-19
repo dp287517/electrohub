@@ -54,6 +54,8 @@ const compExtTarget      = process.env.COMP_EXT_BASE_URL      || "http://127.0.0
 const askVeevaTarget     = process.env.ASK_VEEVA_BASE_URL     || "http://127.0.0.1:3015";
 // 🔵 Doors (portes coupe-feu) — microservice sur 3016  ✅ AJOUT
 const doorsTarget        = process.env.DOORS_BASE_URL         || "http://127.0.0.1:3016";
+// 🔵 VSD (Variateurs de fréquence) — microservice sur 3020  ✅ AJOUT
+const vsdTarget          = process.env.VSD_BASE_URL           || "http://127.0.0.1:3020";
 
 // petit helper pour créer des proxys homogènes
 function mkProxy(target, { withRestream = false } = {}) {
@@ -98,6 +100,8 @@ app.use("/api/comp-ext", mkProxy(compExtTarget, { withRestream: true }));
 
 // >>> Ask Veeva (ZIP + upload multipart) : re-stream INDISPENSABLE
 app.use("/api/ask-veeva", mkProxy(askVeevaTarget, { withRestream: true }));
+// >>> VSD (photos + pièces jointes) : re-stream INDISPENSABLE  ✅ AJOUT
+app.use("/api/vsd", mkProxy(vsdTarget, { withRestream: true }));
 
 // >>> Doors (photos + pièces jointes) : re-stream INDISPENSABLE  ✅ AJOUT
 app.use("/api/doors", mkProxy(doorsTarget, { withRestream: true }));
