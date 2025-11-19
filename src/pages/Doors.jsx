@@ -2084,16 +2084,19 @@ function FileCard({ f, onDelete }) {
     </div>
   );
 }
-function DoorHistory({ doorId }) {
+function DoorHistory({ doorId, refreshKey }) {
   const [items, setItems] = useState([]);
+
   useEffect(() => {
     if (!doorId) return;
     (async () => {
       const r = await API.listHistory(doorId);
       setItems(r?.checks || []);
     })();
-  }, [doorId, refreshKey]);
+  }, [doorId, refreshKey]); // maintenant refreshKey vient bien des props
+
   if (!doorId) return null;
+
   return (
     <div className="border rounded-2xl p-3">
       <div className="font-semibold mb-2">Historique des contrôles</div>
