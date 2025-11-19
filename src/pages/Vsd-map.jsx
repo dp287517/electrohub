@@ -95,8 +95,8 @@ function buildControlsPlanFileUrl(keyOrLogical) {
 
   let url =
     isUuid(key) || isNumericId(key)
-      ? `${API_BASE}/api/controls/maps/planFile?id=${encodeURIComponent(key)}`
-      : `${API_BASE}/api/controls/maps/planFile?logical_name=${encodeURIComponent(
+      ? `${API_BASE}/api/vsd/maps/planFile?id=${encodeURIComponent(key)}`
+      : `${API_BASE}/api/vsd/maps/planFile?logical_name=${encodeURIComponent(
           key
         )}`;
 
@@ -430,7 +430,7 @@ export default function ControlsMap({
       const headers = new Headers(userHeaders());
       headers.set("X-Site", site);
 
-      let url = `${API_BASE}/api/controls/maps/positions?page_index=${pageIndex}`;
+      let url = `${API_BASE}/api/vsd/maps/positions?page_index=${pageIndex}`;
 
       if (planKey) {
         if (isUuid(planKey) || isNumericId(planKey)) {
@@ -545,7 +545,7 @@ export default function ControlsMap({
             body.building = building;
           }
 
-          await fetch(`${API_BASE}/api/controls/maps/setPosition`, {
+          await fetch(`${API_BASE}/api/vsd/maps/setPosition`, {
             method: "POST",
             credentials: "include",
             headers,
@@ -728,7 +728,7 @@ export default function ControlsMap({
               body.building = building;
             }
 
-            await fetch(`${API_BASE}/api/controls/maps/setPosition`, {
+            await fetch(`${API_BASE}/api/vsd/maps/setPosition`, {
               method: "POST",
               credentials: "include",
               headers,
@@ -953,7 +953,7 @@ export function ControlsMapManager({ onPlanSelect }) {
       const headers = new Headers(userHeaders());
       headers.set("X-Site", site);
 
-      const res = await fetch(`${API_BASE}/api/controls/maps/listPlans`, {
+      const res = await fetch(`${API_BASE}/api/vsd/maps/listPlans`, {
         credentials: "include",
         headers,
       });
@@ -990,7 +990,7 @@ export function ControlsMapManager({ onPlanSelect }) {
       const formData = new FormData();
       formData.append("zip", file);
 
-      const res = await fetch(`${API_BASE}/api/controls/maps/uploadZip`, {
+      const res = await fetch(`${API_BASE}/api/vsd/maps/uploadZip`, {
         method: "POST",
         credentials: "include",
         headers,
@@ -1082,7 +1082,7 @@ function PlanCard({ plan, onSelect, onReload }) {
       headers.set("X-Site", site);
       headers.set("Content-Type", "application/json");
 
-      await fetch(`${API_BASE}/api/controls/maps/renamePlan`, {
+      await fetch(`${API_BASE}/api/vsd/maps/renamePlan`, {
         method: "PUT",
         credentials: "include",
         headers,
