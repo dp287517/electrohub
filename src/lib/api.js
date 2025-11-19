@@ -1183,6 +1183,141 @@ export const api = {
       post("/api/atex/bulk/rename", { field, from, to }),
   },
 
+  /** --- VSD (Variateurs de Fréquence) --- */
+  vsd: {
+    // Équipements
+    listEquipments: (params) => get("/api/vsd/equipments", params),
+    getEquipment: (id) => get(`/api/vsd/equipments/${encodeURIComponent(id)}`),
+    createEquipment: (payload) => post("/api/vsd/equipments", payload),
+    updateEquipment: (id, payload) =>
+      put(`/api/vsd/equipments/${encodeURIComponent(id)}`, payload),
+    deleteEquipment: (id) =>
+      del(`/api/vsd/equipments/${encodeURIComponent(id)}`),
+
+    // Photo principale
+    photoUrl: (id, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/vsd/equipments/${encodeURIComponent(id)}/photo`,
+        bust
+      ),
+    uploadPhoto: (id, file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload(`/api/vsd/equipments/${encodeURIComponent(id)}/photo`, fd);
+    },
+
+    // Contrôles
+    listChecks: (equipmentId) =>
+      get("/api/vsd/checks", { equipment_id: equipmentId }),
+    createCheck: (payload) => post("/api/vsd/checks", payload),
+    quickCheckEquipment: (id) =>
+      post("/api/vsd/checks", {
+        equipment_id: id,
+        status: "fait",
+        items: [],
+        result: "conforme",
+      }),
+
+    // Fichiers attachés
+    listFiles: (equipmentId) =>
+      get("/api/vsd/files", { equipment_id: equipmentId }),
+    uploadFiles: (equipmentId, files = []) => {
+      const fd = new FormData();
+      fd.append("equipment_id", equipmentId);
+      (files || []).forEach((f) => fd.append("files", f));
+      return upload("/api/vsd/files", fd);
+    },
+    deleteFile: (id) => del(`/api/vsd/files/${encodeURIComponent(id)}`),
+
+    // Calendrier & paramètres
+    calendar: () => get(`/api/vsd/calendar`),
+    settingsGet: () => get(`/api/vsd/settings`),
+    settingsSet: (payload) => put(`/api/vsd/settings`, payload),
+
+    // IA extraction (multi-photos)
+    extractFromPhotos: (files = []) => {
+      const fd = new FormData();
+      (files || []).forEach((f) => fd.append("files", f));
+      return upload(`/api/vsd/analyzePhotoBatch`, fd);
+    },
+
+    analyzePhotoBatch: (files = []) => api.vsd.extractFromPhotos(files),
+
+    // Historique (optionnel)
+    getEquipmentHistory: (id) =>
+      get(`/api/vsd/equipments/${encodeURIComponent(id)}/history`),
+
+    bulkRename: ({ field, from, to }) =>
+      post("/api/vsd/bulk/rename", { field, from, to }),
+  },
+
+  /** --- VSD MAPS (Plans PDF + positions) --- */
+  vsdMaps: {
+    uploadZip: (file) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      fd.append("zip", file);
+      if (email) fd.append("user_email", email);
+      if (name) fd.append("user_name", name);
+      return upload(`/api/vsd/maps/uploadZip`, fd);
+    },
+    listPlans: () => get(`/api/vsd/maps/listPlans`),
+    listPlansCompat: () => get(`/api/vsd/maps/plans`),
+    renamePlan: (logical_name, display_name) =>
+      put(`/api/vsd/maps/renamePlan`, { logical_name, display_name }),
+    planFileUrl: (logical_name, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/vsd/maps/planFile?logical_name=${encodeURIComponent(
+          logical_name
+        )}`,
+        bust
+      ),
+    planFileUrlById: (id, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/vsd/maps/planFile?id=${encodeURIComponent(id)}`,
+        bust
+      ),
+    planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const key =
+        typeof plan === "string"
+          ? plan
+          : plan?.id || plan?.logical_name || "";
+      const url =
+        isUuid(key) || isNumericId(key)
+          ? `${API_BASE}/api/vsd/maps/planFile?id=${encodeURIComponent(key)}`
+          : `${API_BASE}/api/vsd/maps/planFile?logical_name=${encodeURIComponent(
+              key
+            )}`;
+      return withBust(url, bust);
+    },
+    positions: (logical_name, page_index = 0) =>
+      get(`/api/vsd/maps/positions`, { logical_name, page_index }),
+    positionsAuto: (planOrKey, page_index = 0) => {
+      const key =
+        typeof planOrKey === "string"
+          ? planOrKey
+          : planOrKey?.id || planOrKey?.logical_name || "";
+      if (isUuid(key) || isNumericId(key))
+        return get(`/api/vsd/maps/positions`, { id: key, page_index });
+      return get(`/api/vsd/maps/positions`, {
+        logical_name: key,
+        page_index,
+      });
+    },
+    setPosition: (
+      equipmentId,
+      { logical_name, plan_id = null, page_index = 0, x_frac, y_frac }
+    ) =>
+      post(`/api/vsd/maps/setPosition`, {
+        equipment_id: equipmentId,
+        logical_name,
+        plan_id,
+        page_index,
+        x_frac,
+        y_frac,
+      }),
+  },
+
   /** --- 🔵 BUBBLE AUTH --- */
   bubble: {
     login: (token) => post("/api/auth/bubble", { token }),
