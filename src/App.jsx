@@ -34,6 +34,9 @@ import AskVeeva from './pages/Ask_veeva.jsx';
 // 👇 NEW: Fire Doors (Portes coupe-feu)
 import Doors from './pages/Doors.jsx';
 
+// 👇 NEW: VSD (Variateurs de fréquence)
+import Vsd from './pages/Vsd.jsx';
+
 export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
