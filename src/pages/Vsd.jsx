@@ -286,9 +286,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
           map.off();
         } catch {}
         try {
-          map.stop?.();
-        } catch {}
-        try {
           map.eachLayer((l) => {
             try {
               map.removeLayer(l);
@@ -327,8 +324,9 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
         const page = await pdf.getPage(Number(pageIndex) + 1);
         const baseVp = page.getViewport({ scale: 1 });
 
-        const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
-        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        // Correction Qualité PDF: Augmenter la cible de rendu pour une meilleure qualité
+        const targetBitmapW = Math.min(4096, Math.max(2048, Math.floor(containerW * dpr * 1.5))); 
+        const safeScale = Math.min(3.0, Math.max(0.5, targetBitmapW / baseVp.width));
         const viewport = page.getViewport({ scale: safeScale });
 
         const canvas = document.createElement("canvas");
@@ -354,6 +352,9 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
             touchZoom: true,
             tap: true,
             preferCanvas: true,
+            // Centrer initialement à (0, 0) avec un zoom minimal avant de charger l'image
+            center: [0, 0],
+            zoom: 0,
           });
           L.control.zoom({ position: "topright" }).addTo(m);
           ensureAddButton(m);
@@ -411,11 +412,10 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
         }
         drawMarkers(points, viewport.width, viewport.height);
 
-        setTimeout(() => {
-          try {
-            if (aliveRef.current) map.scrollWheelZoom.enable();
-          } catch {}
-        }, 60);
+        // Correction Leaflet/DOM: Suppression du setTimeout, laisser Leaflet gérer
+        try {
+          map.scrollWheelZoom.enable();
+        } catch {}
 
         try {
           await pdf.cleanup();
@@ -444,6 +444,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
         m.fitBounds(b, { padding: [8, 8] });
         initialFitDoneRef.current = true;
       } else {
+        // Correction Leaflet/DOM: Utiliser setView sans animation après un redimensionnement pour éviter les erreurs
         m.setView(keepCenter, keepZoom, { animate: false });
       }
     };
@@ -466,6 +467,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
   }, [fileUrl, pageIndex, disabled]);
 
   useEffect(() => {
+    // Mise à jour des marqueurs uniquement, sans redessiner la carte
     if (!mapRef.current || !imgSize.w) return;
     drawMarkers(points, imgSize.w, imgSize.h);
   }, [points, imgSize]);
@@ -581,6 +583,63 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
 });
 
 /* ----------------------------- Page principale VSD ----------------------------- */
+
+// Nouveau hook pour gérer la logique de chargement et rafraîchissement des positions
+function useMapUpdateLogic(stableSelectedPlan, setPositions) {
+    const reloadPositionsRef = useRef(null);
+
+    const loadPositions = useCallback(async (plan, pageIdx = 0) => {
+        if (!plan) return;
+        const key = plan.id || plan.logical_name || "";
+        try {
+            const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({ items: [] }));
+            let list = Array.isArray(r?.positions) // Correction: utiliser 'positions' comme dans le backend
+                ? r.positions.map((item) => ({
+                    equipment_id: item.equipment_id,
+                    name: item.name || item.equipment_name,
+                    x_frac: Number(item.x_frac ?? item.x ?? 0),
+                    y_frac: Number(item.y_frac ?? item.y ?? 0),
+                    x: Number(item.x_frac ?? item.x ?? 0),
+                    y: Number(item.y_frac ?? item.y ?? 0),
+                    building: item.building,
+                    floor: item.floor,
+                    zone: item.zone,
+                }))
+                : [];
+            setPositions(list);
+        } catch(e) {
+            console.error("Erreur chargement positions", e);
+            setPositions([]);
+        }
+    }, [setPositions]);
+
+    reloadPositionsRef.current = loadPositions;
+
+    useEffect(() => {
+        if (!stableSelectedPlan) return;
+        const tick = () => reloadPositionsRef.current(stableSelectedPlan, 0);
+
+        // Chargement initial
+        tick();
+
+        // Intervalle de rafraîchissement (8 secondes)
+        const iv = setInterval(tick, 8000);
+        
+        // Rafraîchissement lors du retour sur l'onglet
+        const onVis = () => {
+            if (!document.hidden) tick();
+        };
+        document.addEventListener("visibilitychange", onVis);
+
+        return () => {
+            clearInterval(iv);
+            document.removeEventListener("visibilitychange", onVis);
+        };
+    }, [stableSelectedPlan]);
+
+    return { refreshPositions: (p, idx) => reloadPositionsRef.current(p, idx) };
+}
+
 export default function Vsd() {
   const [tab, setTab] = useState("tree");
   const [items, setItems] = useState([]);
@@ -602,13 +661,13 @@ export default function Vsd() {
   const [plans, setPlans] = useState([]);
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
-  const [mapRefreshTick, setMapRefreshTick] = useState(0);
-
-  const [globalLoading, setGlobalLoading] = useState(false);
-
+  
   const [positions, setPositions] = useState([]);
   const [pdfReady, setPdfReady] = useState(false);
   const viewerRef = useRef(null);
+  
+  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
+  const { refreshPositions } = useMapUpdateLogic(stableSelectedPlan, setPositions);
 
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
@@ -624,7 +683,6 @@ export default function Vsd() {
   }
 
   async function reload() {
-    setGlobalLoading(true);
     setLoading(true);
     try {
       const res = await api.vsd.listEquipments({ q, building, floor, zone });
@@ -634,7 +692,6 @@ export default function Vsd() {
       setItems([]);
     } finally {
       setLoading(false);
-      setGlobalLoading(false);
     }
   }
 
@@ -647,7 +704,7 @@ export default function Vsd() {
             id: f.id,
             name: f.original_name || f.name || f.filename || `Fichier ${f.id}`,
             mime: f.mime,
-            url: f.download_url || f.inline_url || `${API_BASE}/api/vsd/files/${encodeURIComponent(f.id)}/download`,
+            url: f.download_url || f.inline_url || `${API_BASE}/api/vsd/files/${encodeURIComponent(f.id)}`,
           }))
         : [];
       setFiles(arr);
@@ -744,7 +801,11 @@ export default function Vsd() {
       "criticality",
       "comments",
     ];
-    return keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""));
+    // Attention: power_kw et current_a sont des nombres, on utilise donc la comparaison brute (null vs number)
+    if (keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""))) return true;
+    if (A?.power_kw !== B?.power_kw) return true;
+    if (A?.current_a !== B?.current_a) return true;
+    return false;
   }
 
   const dirty = isDirty();
@@ -753,25 +814,51 @@ export default function Vsd() {
     if (!editing) return;
     const payload = {
       name: editing.name || "",
-      tag: editing.tag || "",
-      manufacturer: editing.manufacturer || "",
-      model: editing.model || "",
-      reference: editing.reference || "",
-      serial_number: editing.serial_number || "",
-      power_kw: editing.power_kw ?? null,
-      current_a: editing.current_a ?? null,
-      voltage: editing.voltage || "",
-      ip_address: editing.ip_address || "",
-      protocol: editing.protocol || "",
-      building: editing.building || "",
-      floor: editing.floor || "",
+      building: editing.building || "", // Ajout des champs du backend qui manquaient ici
       zone: editing.zone || "",
-      location: editing.location || "",
-      panel: editing.panel || "",
-      status: editing.status || "",
-      criticality: editing.criticality || "",
-      comments: editing.comments || "",
+      equipment: editing.equipment || "",
+      sub_equipment: editing.sub_equipment || "",
+      type: editing.type || "",
+      manufacturer: editing.manufacturer || "",
+      manufacturer_ref: editing.manufacturer_ref || "",
+      power_kw: editing.power_kw ?? null,
+      voltage: editing.voltage || "",
+      current_nominal: editing.current_nominal ?? null,
+      ip_rating: editing.ip_rating || "",
+      comment: editing.comment || "",
+      // Mappage des champs du frontend vers les champs du backend (ex: floor -> sub_equipment, location -> comment/sub_equipment)
+      // J'utilise les champs du backend (equipment, sub_equipment, manufacturer_ref, ip_rating) qui existent déjà dans le PUT/POST du server_vsd.js, en utilisant les champs du FE comme source si les noms diffèrent.
+      // NOTE: Le FE Vsd.jsx utilise 'floor' et 'location', qui n'ont pas de mapping direct dans le payload d'origine, sauf si on les ajoute. Pour être sûr, je map les champs utilisés par le FE dans le PUT/POST du backend.
+      // Je conserve la structure pour éviter de casser la DB.
+      // Pour l'instant, je m'en tiens aux champs existants dans le backend PUT/POST pour garantir la cohérence:
+      // name, building, zone, equipment, sub_equipment, type, manufacturer, manufacturer_ref, power_kw, voltage, current_nominal, ip_rating, comment
+      // Je laisse les champs du FE 'floor', 'location', 'tag', 'model', 'serial_number', 'criticality', 'panel' dans l'état local uniquement s'ils ne correspondent pas aux champs du backend.
+      // Si on veut les enregistrer, il faut les ajouter au schéma DB et au PUT/POST du backend.
+      // Pour la démonstration, je me concentre sur les champs existants dans le backend 'server_vsd.js'.
+      
+      // Adaptation du FE à la structure DB:
+      // FE 'tag', 'model', 'serial_number' -> DB 'name', 'manufacturer_ref' (si réutilisable)
+      // FE 'floor', 'location', 'panel', 'criticality' ne sont pas dans le schéma DB vsd_equipments actuel.
+      
+      // Je vais donc ignorer les champs non supportés par la DB, et m'assurer que les champs utilisés dans le FE correspondent au schéma du backend.
+      
+      // Re-mapping selon le schéma actuel de vsd_equipments :
+      name: editing.name || "", // DB: name
+      building: editing.building || "", // DB: building
+      zone: editing.zone || "", // DB: zone
+      equipment: editing.equipment || "", // DB: equipment (Nom du plan si positionné)
+      sub_equipment: editing.sub_equipment || "", // DB: sub_equipment
+      type: editing.type || "", // DB: type
+      manufacturer: editing.manufacturer || "", // DB: manufacturer
+      manufacturer_ref: editing.manufacturer_ref || editing.reference || "", // DB: manufacturer_ref
+      power_kw: editing.power_kw ?? null, // DB: power_kw
+      voltage: editing.voltage || "", // DB: voltage
+      current_nominal: editing.current_a ?? null, // DB: current_nominal
+      ip_rating: editing.ip_rating || "", // DB: ip_rating
+      comment: editing.comment || editing.location || "", // DB: comment
+      // Les champs FE 'floor', 'location', 'tag', 'model', 'serial_number', 'panel', 'criticality' NE SONT PAS envoyés si non mappés.
     };
+
 
     try {
       let updated;
@@ -787,6 +874,7 @@ export default function Vsd() {
         initialRef.current = fresh;
       }
       await reload();
+      await refreshPositions(stableSelectedPlan, 0); // Rechargement forcé des positions
       setToast("Fiche enregistrée");
     } catch (e) {
       console.error("[VSD] Erreur lors de l'enregistrement :", e);
@@ -802,7 +890,7 @@ export default function Vsd() {
       await api.vsd.deleteEquipment(editing.id);
       closeEdit();
       await reload();
-      setMapRefreshTick((t) => t + 1);
+      await refreshPositions(stableSelectedPlan, 0); // Rechargement forcé des positions
       setToast("Équipement supprimé");
     } catch (e) {
       console.error(e);
@@ -853,10 +941,11 @@ export default function Vsd() {
           }
         };
 
+        // Mappage du retour IA vers les champs du FE/DB
         applyIfValid("manufacturer", s.manufacturer);
-        applyIfValid("model", s.model);
-        applyIfValid("reference", s.reference);
-        applyIfValid("serial_number", s.serial_number);
+        applyIfValid("model", s.model); // Pas dans la DB, mais dans l'état FE
+        applyIfValid("reference", s.reference); // FE: reference, DB: manufacturer_ref
+        applyIfValid("serial_number", s.serial_number); // Pas dans la DB, mais dans l'état FE
         applyIfValid("voltage", s.voltage);
         applyIfValid("protocol", s.protocol);
 
@@ -910,37 +999,7 @@ export default function Vsd() {
     });
     return tree;
   }, [items]);
-
-  async function loadPositions(plan, pageIdx = 0) {
-    if (!plan) return;
-    const key = plan.id || plan.logical_name || "";
-    try {
-      const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({ items: [] }));
-      let list = Array.isArray(r?.items)
-        ? r.items.map((item) => ({
-            equipment_id: item.equipment_id,
-            name: item.name || item.equipment_name,
-            x_frac: Number(item.x_frac ?? item.x ?? 0),
-            y_frac: Number(item.y_frac ?? item.y ?? 0),
-            x: Number(item.x_frac ?? item.x ?? 0),
-            y: Number(item.y_frac ?? item.y ?? 0),
-            building: item.building,
-            floor: item.floor,
-            zone: item.zone,
-          }))
-        : [];
-      setPositions(list);
-    } catch {
-      setPositions([]);
-    }
-  }
-
-  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
-
-  useEffect(() => {
-    if (stableSelectedPlan) loadPositions(stableSelectedPlan, 0);
-  }, [stableSelectedPlan, q, building, floor, zone, plans]);
-
+  
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
 
   const handleMovePoint = useCallback(
@@ -953,9 +1012,10 @@ export default function Vsd() {
         x_frac: xy.x,
         y_frac: xy.y,
       });
-      await loadPositions(stableSelectedPlan, 0);
+      // Correction: Recharger les positions après le mouvement
+      await refreshPositions(stableSelectedPlan, 0); 
     },
-    [stableSelectedPlan]
+    [stableSelectedPlan, refreshPositions]
   );
 
   const handleClickPoint = useCallback((p) => {
@@ -968,9 +1028,17 @@ export default function Vsd() {
       const payload = {
         name: "Nouveau VSD",
         building: "",
-        floor: "",
         zone: "",
-        location: "",
+        equipment: stableSelectedPlan.logical_name, // Stocke le nom du plan
+        sub_equipment: "",
+        type: "Variateur",
+        manufacturer: "",
+        manufacturer_ref: "",
+        power_kw: null,
+        voltage: "",
+        current_nominal: null,
+        ip_rating: "",
+        comment: "Point créé sur le plan " + stableSelectedPlan.logical_name,
       };
       const created = await api.vsd.createEquipment(payload);
       const id = created?.equipment?.id || created?.id;
@@ -984,7 +1052,8 @@ export default function Vsd() {
         y_frac: 0.5,
       });
 
-      await loadPositions(stableSelectedPlan, 0);
+      // Correction: Recharger les positions pour afficher le nouveau point
+      await refreshPositions(stableSelectedPlan, 0);
       viewerRef.current?.adjust();
       setToast(`VSD créé (« ${created?.equipment?.name || created?.name} ») au centre du plan ✅`);
 
@@ -994,22 +1063,6 @@ export default function Vsd() {
       setToast("Création impossible");
     }
   }
-
-  useEffect(() => {
-    if (tab !== "plans" || !stableSelectedPlan) return;
-    const tick = () => {
-      loadPositions(stableSelectedPlan, 0);
-    };
-    const iv = setInterval(tick, 8000);
-    const onVis = () => {
-      if (!document.hidden) tick();
-    };
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      clearInterval(iv);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, [tab, stableSelectedPlan, q, building, floor, zone]);
 
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1028,7 +1081,7 @@ export default function Vsd() {
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
 
-      {globalLoading && (
+      {loading && (
         <div className="fixed inset-0 bg-white/70 flex items-center justify-center z-[5000] backdrop-blur-sm">
           <div className="text-sm text-gray-600">Mise à jour en cours…</div>
         </div>
@@ -1113,7 +1166,6 @@ export default function Vsd() {
             }}
             onPick={(plan) => {
               setSelectedPlan(plan);
-              setMapRefreshTick((t) => t + 1);
             }}
           />
 
@@ -1126,7 +1178,6 @@ export default function Vsd() {
                     variant="ghost"
                     onClick={() => {
                       setSelectedPlan(null);
-                      setMapRefreshTick((t) => t + 1);
                     }}
                   >
                     Fermer le plan
@@ -1146,7 +1197,7 @@ export default function Vsd() {
 
                 <VsdLeafletViewer
                   ref={viewerRef}
-                  key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
+                  key={selectedPlan.logical_name} // Correction Leaflet: clé sur le nom logique uniquement
                   fileUrl={api.vsdMaps.planFileUrlAuto(selectedPlan, { bust: true })}
                   pageIndex={0}
                   points={positions}
@@ -1200,7 +1251,7 @@ export default function Vsd() {
                     Mettre à jour
                   </label>
                 </div>
-                <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
+                <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
                   {editing.photo_url ? (
                     <img src={api.vsd.photoUrl(editing.id, { bust: true })} alt="photo" className="w-full h-full object-cover" />
                   ) : (
