@@ -1,7 +1,8 @@
 // ==============================
-// server_vsd.js — VSD (Variateurs de Fréquence) CMMS microservice (ESM)
+// server_vsd.js — VSD database microservice (ESM)
 // Port par défaut: 3020
 // ==============================
+
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -12,43 +13,38 @@ import fsp from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
+
+// 🔹 MAPS / Plans
+import crypto from "crypto";
 import StreamZip from "node-stream-zip";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
-// --- OpenAI (extraction & conformité)
-const { OpenAI } = await import("openai");
+// pdf.js (legacy) pour compter les pages PDF, comme Doors 
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+
+function resolvePdfWorker() {
+  try {
+    return require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+  } catch {
+    return require.resolve("pdfjs-dist/build/pdf.worker.mjs");
+  }
+}
+pdfjsLib.GlobalWorkerOptions.workerSrc = resolvePdfWorker();
+const pdfjsPkgDir = path.dirname(require.resolve("pdfjs-dist/package.json"));
+const PDF_STANDARD_FONTS = path.join(pdfjsPkgDir, "standard_fonts/");
+
 dotenv.config();
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PORT = Number(process.env.VSD_PORT || 3020);
-const HOST = process.env.VSD_HOST || "0.0.0.0";
-// Dossiers data
-const DATA_DIR = process.env.VSD_DATA_DIR || path.resolve(__dirname, "./_data_vsd");
-const FILES_DIR = path.join(DATA_DIR, "files");
-const MAPS_INCOMING_DIR = path.join(DATA_DIR, "maps_incoming");
-const MAPS_DIR = path.join(DATA_DIR, "maps");
-for (const d of [DATA_DIR, FILES_DIR, MAPS_DIR, MAPS_INCOMING_DIR]) {
-  await fsp.mkdir(d, { recursive: true });
-}
-// -------------------------------------------------
+
+// ------------------------------
+// App & Config
+// ------------------------------
 const app = express();
-app.use(express.json({ limit: "25mb" }));
-app.use(express.urlencoded({ extended: true, limit: "25mb" }));
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-    allowedHeaders: [
-      "Content-Type",
-      "X-User-Email",
-      "X-User-Name",
-      "Authorization",
-      "X-Site",
-      "X-Confirm",
-    ],
-    exposedHeaders: ["Content-Disposition"],
-  })
-);
+app.set("trust proxy", 1);
+
+// 🔐 Helmet — CSP calquée sur Doors pour compatibilité pdf.js / Leaflet :contentReference[oaicite:2]{index=2}
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -60,27 +56,61 @@ app.use(
         "worker-src": ["'self'", "blob:"],
         "script-src": ["'self'", "'unsafe-inline'"],
         "style-src": ["'self'", "'unsafe-inline'"],
-        "connect-src": ["*"], // API cross-origin ok
+        "connect-src": ["'self'", "*"],
       },
     },
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
-function getUser(req) {
-  const name = req.header("X-User-Name") || null;
-  const email = req.header("X-User-Email") || null;
-  return { name, email };
-}
-// -------------------------------------------------
-const multerFiles = multer({
+
+// CORS élargi (headers identité) – même logique que Doors :contentReference[oaicite:3]{index=3}
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    allowedHeaders: [
+      "Content-Type",
+      "X-User-Email",
+      "X-User-Name",
+      "X-Site",
+      "Authorization",
+    ],
+    exposedHeaders: [],
+  })
+);
+
+app.use(express.json({ limit: "16mb" }));
+
+const PORT = Number(process.env.VSD_PORT || 3020);
+const HOST = process.env.VSD_HOST || "0.0.0.0";
+
+// ------------------------------
+// Storage layout
+// ------------------------------
+// ➜ On garde la même arborescence qu’avec Doors, mais isolée dans /uploads/vsd
+const DATA_ROOT = path.join(process.cwd(), "uploads", "vsd");
+const FILES_DIR = path.join(DATA_ROOT, "files");
+await fsp.mkdir(FILES_DIR, { recursive: true });
+
+// 🔹 MAPS — arborescence pour les plans des variateurs
+const MAPS_ROOT = path.join(DATA_ROOT, "maps");
+const MAPS_INCOMING_DIR = path.join(MAPS_ROOT, "incoming");
+const MAPS_STORE_DIR = path.join(MAPS_ROOT, "plans");
+await fsp.mkdir(MAPS_INCOMING_DIR, { recursive: true });
+await fsp.mkdir(MAPS_STORE_DIR, { recursive: true });
+
+// Multer fichiers standards (pièces jointes / photos)
+const uploadAny = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, FILES_DIR),
     filename: (_req, file, cb) =>
       cb(null, `${Date.now()}_${file.originalname.replace(/[^\w.\-]+/g, "_")}`),
   }),
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
-const multerZip = multer({
+
+// 🔹 MAPS — Upload ZIP (jusqu’à 300MB) comme pour Doors :contentReference[oaicite:4]{index=4}
+const uploadZip = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, MAPS_INCOMING_DIR),
     filename: (_req, file, cb) =>
@@ -88,813 +118,1029 @@ const multerZip = multer({
   }),
   limits: { fileSize: 300 * 1024 * 1024 },
 });
-// -------------------------------------------------
+
+// ------------------------------
+// DB
+// ------------------------------
 const { Pool } = pg;
 const pool = new Pool({
-  connectionString:
-    process.env.VSD_DATABASE_URL ||
-    process.env.DATABASE_URL ||
-    "postgres://postgres:postgres@localhost:5432/postgres",
-  max: 10,
+  connectionString: process.env.NEON_DATABASE_URL || process.env.DATABASE_URL,
   ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
 });
-// -------------------------------------------------
+
+// ------------------------------
+// Schema VSD
+// ------------------------------
 async function ensureSchema() {
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
-  await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
+  await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
+
+  // 💾 Table principale des variateurs de fréquence
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS vsd_equipments (
+    CREATE TABLE IF NOT EXISTS vsd_equipment (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL,
-      building TEXT DEFAULT '',
-      zone TEXT DEFAULT '',
-      equipment TEXT DEFAULT '', -- "Équipement (macro)" (nom du plan)
-      sub_equipment TEXT DEFAULT '', -- "Sous-Équipement" (nom de la forme)
-      type TEXT DEFAULT '',
-      manufacturer TEXT DEFAULT '',
-      manufacturer_ref TEXT DEFAULT '',
-      power_kw NUMERIC DEFAULT NULL,
-      voltage TEXT DEFAULT '',
-      current_nominal NUMERIC DEFAULT NULL,
-      ip_rating TEXT DEFAULT '',
-      comment TEXT DEFAULT '',
-      status TEXT DEFAULT 'a_faire',
-      installed_at TIMESTAMP NULL,
-      next_check_date DATE NULL,
-      photo_path TEXT DEFAULT NULL,
-      photo_content BYTEA NULL,
-      created_at TIMESTAMP DEFAULT now(),
-      updated_at TIMESTAMP DEFAULT now()
+      -- Identification
+      name TEXT NOT NULL,           -- Nom lisible (VSD AHU-01, etc.)
+      tag TEXT,                     -- Tag technique / code interne
+      manufacturer TEXT,
+      model TEXT,
+      reference TEXT,
+      serial_number TEXT,
+      -- Caractéristiques électriques
+      power_kw NUMERIC,
+      current_a NUMERIC,
+      voltage TEXT,
+      ip_address TEXT,
+      protocol TEXT,                -- Modbus, Profibus, Ethernet/IP, ...
+      -- Localisation
+      building TEXT,
+      floor TEXT,
+      zone TEXT,
+      location TEXT,                -- Local électrique / machine
+      panel TEXT,                   -- Tableau / coffret
+      -- Statut & méta
+      status TEXT,                  -- en_service, hors_service, spare...
+      criticality TEXT,             -- critique, important, standard...
+      comments TEXT,
+      -- Photo principale du variateur
+      photo_path TEXT,
+      photo_file_id UUID,
+      -- Métadonnées d'analyse IA (extraites depuis les photos)
+      ai_metadata JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
-    CREATE INDEX IF NOT EXISTS idx_vsd_eq_next ON vsd_equipments(next_check_date);
   `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS vsd_checks (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      equipment_id UUID NOT NULL REFERENCES vsd_equipments(id) ON DELETE CASCADE,
-      status TEXT NOT NULL DEFAULT 'a_faire',
-      date TIMESTAMP DEFAULT now(),
-      items JSONB DEFAULT '[]'::jsonb,
-      result TEXT DEFAULT NULL,
-      user_name TEXT DEFAULT '',
-      user_email TEXT DEFAULT '',
-      files JSONB DEFAULT '[]'::jsonb
-    );
-    CREATE INDEX IF NOT EXISTS idx_vsd_checks_eq ON vsd_checks(equipment_id);
-  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vsd_equipment_building ON vsd_equipment(building);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vsd_equipment_tree ON vsd_equipment(building, floor, zone);`);
+
+  // 📎 Fichiers attachés (fiches techniques, schémas, rapports…)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vsd_files (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      equipment_id UUID NOT NULL REFERENCES vsd_equipments(id) ON DELETE CASCADE,
-      original_name TEXT NOT NULL,
-      mime TEXT DEFAULT '',
-      file_path TEXT NOT NULL,
-      file_content BYTEA NULL,
-      uploaded_at TIMESTAMP DEFAULT now()
+      equipment_id UUID REFERENCES vsd_equipment(id) ON DELETE CASCADE,
+      kind TEXT,            -- 'photo', 'doc', 'plan', ...
+      filename TEXT,
+      path TEXT,
+      mime TEXT,
+      size_bytes BIGINT,
+      content BYTEA,
+      uploaded_at TIMESTAMPTZ DEFAULT now()
     );
-    CREATE INDEX IF NOT EXISTS idx_vsd_files_eq ON vsd_files(equipment_id);
   `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vsd_files_equipment ON vsd_files(equipment_id);`);
+
+  // 🕒 Historique des événements sur l’équipement
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vsd_history (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      equipment_id UUID REFERENCES vsd_equipment(id) ON DELETE CASCADE,
+      event_at TIMESTAMPTZ DEFAULT now(),
+      event_type TEXT,      -- 'creation', 'modification', 'maintenance', 'commentaire', ...
+      message TEXT,
+      user_email TEXT,
+      user_name TEXT,
+      details JSONB
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_vsd_history_equipment ON vsd_history(equipment_id);`);
+
+  // 🔹 MAPS — tables plans, noms, positions (copie simplifiée de Doors) :contentReference[oaicite:5]{index=5}
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vsd_plans (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       logical_name TEXT NOT NULL,
-      version INTEGER NOT NULL DEFAULT 1,
-      filename TEXT NOT NULL,
-      file_path TEXT NOT NULL,
-      page_count INTEGER DEFAULT 1,
-      content BYTEA NULL
+      version TEXT NOT NULL,
+      filename TEXT,
+      file_path TEXT,
+      page_count INT,
+      created_at TIMESTAMPTZ DEFAULT now()
     );
-    CREATE INDEX IF NOT EXISTS idx_vsd_plans_logical ON vsd_plans(logical_name);
   `);
+  await pool.query(`ALTER TABLE vsd_plans ADD COLUMN IF NOT EXISTS content BYTEA;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS vsd_plans_logical_idx ON vsd_plans(logical_name);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS vsd_plans_created_idx ON vsd_plans(created_at DESC);`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vsd_plan_names (
       logical_name TEXT PRIMARY KEY,
-      display_name TEXT NOT NULL
+      display_name TEXT
     );
   `);
+
+  // Positions des VSD sur les plans PDF
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vsd_positions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      equipment_id UUID NOT NULL REFERENCES vsd_equipments(id) ON DELETE CASCADE,
-      logical_name TEXT NOT NULL,
-      plan_id UUID NULL,
-      page_index INTEGER NOT NULL DEFAULT 0,
-      x_frac NUMERIC NOT NULL,
-      y_frac NUMERIC NOT NULL,
-      UNIQUE (equipment_id, logical_name, page_index)
+      equipment_id UUID REFERENCES vsd_equipment(id) ON DELETE CASCADE,
+      plan_logical_name TEXT NOT NULL,
+      page_index INT NOT NULL DEFAULT 0,
+      page_label TEXT,
+      x_frac NUMERIC,
+      y_frac NUMERIC,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
-    CREATE INDEX IF NOT EXISTS idx_vsd_positions_lookup ON vsd_positions(logical_name, page_index);
   `);
+  // Un VSD = 1 position par plan/page (écrasement si on le déplace)
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS vsd_settings (
-      id INTEGER PRIMARY KEY DEFAULT 1,
-      frequency TEXT NOT NULL DEFAULT '12_mois',
-      checklist_template JSONB NOT NULL DEFAULT '[
-        "État général du variateur (propreté, absence de poussière) ?",
-        "Ventilateurs de refroidissement fonctionnels ?",
-        "Affichage et voyants opérationnels ?",
-        "Connexions électriques serrées et en bon état ?",
-        "Absence de bruits ou vibrations anormaux ?",
-        "Paramètres de configuration conformes ?",
-        "Test de fonctionnement (démarrage/arrêt) ?",
-        "Relevé des alarmes et historique d''erreurs ?"
-      ]'::jsonb
-    );
-    INSERT INTO vsd_settings(id) VALUES (1)
-    ON CONFLICT (id) DO NOTHING;
-  `);
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS vsd_events (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      ts TIMESTAMP DEFAULT now(),
-      actor_name TEXT,
-      actor_email TEXT,
-      action TEXT NOT NULL,
-      details JSONB DEFAULT '{}'::jsonb
-    );
-    CREATE INDEX IF NOT EXISTS idx_vsd_events_ts ON vsd_events(ts DESC);
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'vsd_positions_uniq'
+      ) THEN
+        ALTER TABLE vsd_positions
+        ADD CONSTRAINT vsd_positions_uniq UNIQUE (equipment_id, plan_logical_name, page_index);
+      END IF;
+    END $$;
   `);
 }
-// -------------------------------------------------
+
+// ------------------------------
 // Helpers
-function eqStatusFromDue(due) {
-  if (!due) return "a_faire";
-  const d = new Date(due);
-  const now = new Date();
-  const diff = d - now;
-  const days = Math.floor(diff / 86400000);
-  if (days < 0) return "en_retard";
-  if (days <= 90) return "en_cours_30";
-  return "a_faire";
+// ------------------------------
+function safeEmail(s) {
+  if (!s) return null;
+  const x = String(s).trim().toLowerCase();
+  return /\S+@\S+\.\S+/.test(x) ? x : null;
 }
-function frequencyMonths(f) {
-  if (f === "6_mois") return 6;
-  if (f === "12_mois") return 12;
-  if (f === "24_mois") return 24;
-  if (f === "36_mois") return 36;
-  return 12;
+
+// Lecture cookie (copie de Doors) :contentReference[oaicite:6]{index=6}
+function readCookie(req, name) {
+  const raw = req.headers?.cookie || "";
+  const m = raw.match(new RegExp(`(?:^|; )${name}=([^;]+)`));
+  return m ? decodeURIComponent(m[1]) : null;
 }
-function nextCheckFrom(base, freq) {
-  const m = frequencyMonths(freq);
-  const d = base ? new Date(base) : new Date();
-  d.setMonth(d.getMonth() + m);
-  return d.toISOString().slice(0, 10);
-}
-async function logEvent(action, details = {}, user = {}) {
+
+// Identité utilisateur pour historiser les actions
+async function currentUser(req) {
+  const rawEmail =
+    req.headers["x-user-email"] ||
+    req.headers["x-auth-email"] ||
+    req.headers["x-forwarded-user"] ||
+    readCookie(req, "email") ||
+    null;
+
+  const rawName =
+    req.headers["x-user-name"] ||
+    req.headers["x-auth-name"] ||
+    req.headers["x-forwarded-user"] ||
+    readCookie(req, "name") ||
+    null;
+
+  let bodyEmail = null,
+    bodyName = null;
   try {
-    await pool.query(
-      `INSERT INTO vsd_events(action, details, actor_name, actor_email) VALUES($1,$2,$3,$4)`,
-      [action, details, user.name || null, user.email || null]
-    );
+    if (req.body) {
+      if (req.body._user && typeof req.body._user === "object") {
+        bodyEmail = (req.body._user.email || "").trim();
+        bodyName = (req.body._user.name || "").trim();
+      }
+      if (req.body.user_email) bodyEmail = String(req.body.user_email || "").trim();
+      if (req.body.user_name) bodyName = String(req.body.user_name || "").trim();
+    }
   } catch {}
+
+  const email = safeEmail(rawEmail || bodyEmail);
+  let name = (rawName || bodyName) ? String(rawName || bodyName).trim() : null;
+
+  // Pas de lookup DB ici, on reste simple côté VSD
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) {
+      name = base
+        .replace(/[._-]+/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .trim();
+    }
+  }
+  return { email, name };
 }
-// -------------------------------------------------
-// GET /api/vsd/equipments
+
+// MAPS helpers (copie de Doors) :contentReference[oaicite:7]{index=7}
+function nowISOStamp() {
+  const d = new Date();
+  return d.toISOString().slice(0, 16).replace("T", "_").replace(/:/g, "");
+}
+function parsePlanName(fn = "") {
+  const base = path.basename(fn).replace(/\.pdf$/i, "");
+  const m = base.split("__");
+  return { logical: m[0], version: m[1] || nowISOStamp() };
+}
+async function pdfPageCount(abs) {
+  const data = new Uint8Array(await fsp.readFile(abs));
+  const doc = await pdfjsLib.getDocument({
+    data,
+    standardFontDataUrl: PDF_STANDARD_FONTS,
+  }).promise;
+  const n = doc.numPages || 1;
+  await doc.cleanup();
+  return n;
+}
+
+function fileRowToClient(f) {
+  return {
+    id: f.id,
+    original_name: f.filename,
+    mime: f.mime || "application/octet-stream",
+    size_bytes: Number(f.size_bytes || 0),
+    url: `/api/vsd/files/${f.id}/download`,
+    download_url: `/api/vsd/files/${f.id}/download`,
+    inline_url: `/api/vsd/files/${f.id}/download`,
+  };
+}
+
+// Stub IA analyse photo VSD
+// 👉 Ici tu pourras plugger plus tard un service d’IA (OpenAI Vision, OCR local, etc.)
+// qui renverra un objet partiel { manufacturer, model, power_kw, voltage, ... } à injecter dans la DB.
+async function analyzeVsdPhoto(_buffer) {
+  // TODO: implémenter l’analyse réelle (OCR/vision) des plaques signalétiques de variateur
+  return {};
+}
+
+// ------------------------------
+// API: Healthcheck
+// ------------------------------
+app.get("/api/vsd/health", (_req, res) => {
+  res.json({ ok: true, service: "vsd", ts: new Date().toISOString() });
+});
+
+// ------------------------------
+// API: VSD — CRUD équipements
+// ------------------------------
+
+// Liste des variateurs avec filtres (pour l’onglet "VSD" + arbo par bâtiment)
 app.get("/api/vsd/equipments", async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT e.*,
-             (SELECT result FROM vsd_checks c
-              WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
-              ORDER BY c.date DESC NULLS LAST
-              LIMIT 1) AS last_result
-        FROM vsd_equipments e
-       ORDER BY e.name
-    `);
-    for (const r of rows) {
-      r.photo_url =
-        (r.photo_content && r.photo_content.length) || r.photo_path
-          ? `/api/vsd/equipments/${r.id}/photo`
-          : null;
-      r.status = eqStatusFromDue(r.next_check_date);
-      r.compliance_state =
-        r.last_result === "conforme"
-          ? "conforme"
-          : r.last_result === "non_conforme"
-          ? "non_conforme"
-          : "na";
+    const { q, building, floor, zone, status } = req.query || {};
+    const where = [];
+    const values = [];
+    let i = 1;
+
+    if (q) {
+      where.push(
+        `(name ILIKE $${i} OR tag ILIKE $${i} OR manufacturer ILIKE $${i} OR model ILIKE $${i} OR reference ILIKE $${i})`
+      );
+      values.push(`%${q}%`);
+      i++;
     }
-    res.json({ ok: true, equipments: rows });
+    if (building) {
+      where.push(`building = $${i++}`);
+      values.push(building);
+    }
+    if (floor) {
+      where.push(`floor = $${i++}`);
+      values.push(floor);
+    }
+    if (zone) {
+      where.push(`zone = $${i++}`);
+      values.push(zone);
+    }
+    if (status) {
+      where.push(`status = $${i++}`);
+      values.push(status);
+    }
+
+    const sql = `
+      SELECT id, name, tag,
+             building, floor, zone, location, panel,
+             manufacturer, model, status, criticality,
+             created_at, updated_at
+        FROM vsd_equipment
+       ${where.length ? "WHERE " + where.join(" AND ") : ""}
+       ORDER BY building NULLS LAST, floor NULLS LAST, zone NULLS LAST, name ASC
+    `;
+    const { rows } = await pool.query(sql, values);
+    res.json({ ok: true, items: rows, equipments: rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// GET /api/vsd/equipments/:id
-app.get("/api/vsd/equipments/:id", async (req, res) => {
-  try {
-    const id = String(req.params.id);
-    const { rows } = await pool.query(
-      `SELECT e.*,
-              (SELECT result FROM vsd_checks c
-               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
-               ORDER BY c.date DESC NULLS LAST
-               LIMIT 1) AS last_result
-         FROM vsd_equipments e WHERE e.id=$1`,
-      [id]
-    );
-    if (!rows[0]) return res.status(404).json({ ok: false, error: "Not found" });
-    const eq = rows[0];
-    eq.photo_url =
-      (eq.photo_content && eq.photo_content.length) || eq.photo_path
-        ? `/api/vsd/equipments/${id}/photo`
-        : null;
-    eq.status = eqStatusFromDue(eq.next_check_date);
-    eq.compliance_state =
-      eq.last_result === "conforme"
-        ? "conforme"
-        : eq.last_result === "non_conforme"
-        ? "non_conforme"
-        : "na";
-    res.json({ ok: true, equipment: eq });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// POST /api/vsd/equipments
+
+// Création d’un variateur
 app.post("/api/vsd/equipments", async (req, res) => {
   try {
-    const u = getUser(req);
     const {
-      name = "",
-      building = "",
-      zone = "",
-      equipment = "",
-      sub_equipment = "",
-      type = "",
-      manufacturer = "",
-      manufacturer_ref = "",
-      power_kw = null,
-      voltage = "",
-      current_nominal = null,
-      ip_rating = "",
-      comment = "",
-      installed_at = null,
-      next_check_date = null,
+      name,
+      tag,
+      manufacturer,
+      model,
+      reference,
+      serial_number,
+      power_kw,
+      current_a,
+      voltage,
+      ip_address,
+      protocol,
+      building,
+      floor,
+      zone,
+      location,
+      panel,
+      status,
+      criticality,
+      comments,
     } = req.body || {};
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ ok: false, error: "name_required" });
+    }
+
     const { rows } = await pool.query(
-      `INSERT INTO vsd_equipments(
-         name, building, zone, equipment, sub_equipment, type,
-         manufacturer, manufacturer_ref, power_kw, voltage, 
-         current_nominal, ip_rating, comment,
-         installed_at, next_check_date
-       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-       RETURNING *`,
+      `
+      INSERT INTO vsd_equipment(
+        name, tag,
+        manufacturer, model, reference, serial_number,
+        power_kw, current_a, voltage, ip_address, protocol,
+        building, floor, zone, location, panel,
+        status, criticality, comments
+      ) VALUES(
+        $1,$2,$3,$4,$5,$6,
+        $7,$8,$9,$10,$11,
+        $12,$13,$14,$15,$16,
+        $17,$18,$19
+      )
+      RETURNING *
+    `,
       [
-        name, building, zone, equipment, sub_equipment, type,
-        manufacturer, manufacturer_ref, power_kw, voltage,
-        current_nominal, ip_rating, comment,
-        installed_at || null,
-        next_check_date || null,
+        name,
+        tag,
+        manufacturer,
+        model,
+        reference,
+        serial_number,
+        power_kw,
+        current_a,
+        voltage,
+        ip_address,
+        protocol,
+        building,
+        floor,
+        zone,
+        location,
+        panel,
+        status,
+        criticality,
+        comments,
       ]
     );
+
     const eq = rows[0];
-    eq.photo_url = null;
-    eq.status = eqStatusFromDue(eq.next_check_date);
-    eq.compliance_state = "na";
-    await logEvent("vsd_equipment_created", { id: eq.id, name: eq.name }, u);
+
+    // Historique: création
+    const user = await currentUser(req);
+    await pool.query(
+      `INSERT INTO vsd_history(equipment_id, event_type, message, user_email, user_name, details)
+       VALUES($1,'creation',$2,$3,$4,$5)`,
+      [
+        eq.id,
+        `Création du variateur "${eq.name}"`,
+        user.email,
+        user.name,
+        { payload: req.body },
+      ]
+    );
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// PUT /api/vsd/equipments/:id
+
+// Détail d’un variateur
+app.get("/api/vsd/equipments/:id", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT *
+         FROM vsd_equipment
+        WHERE id = $1`,
+      [req.params.id]
+    );
+    const eq = rows[0];
+    if (!eq) return res.status(404).json({ ok: false, error: "not_found" });
+
+    // Photo URL générée côté serveur pour simplifier le front
+    const photo_url = eq.photo_path ? `/api/vsd/equipments/${eq.id}/photo` : null;
+
+    res.json({
+      ok: true,
+      equipment: {
+        ...eq,
+        photo_url,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Mise à jour d’un variateur
 app.put("/api/vsd/equipments/:id", async (req, res) => {
   try {
-    const id = String(req.params.id);
-    const u = getUser(req);
-    const {
-      name, building, zone, equipment, sub_equipment, type,
-      manufacturer, manufacturer_ref, power_kw, voltage,
-      current_nominal, ip_rating, comment,
-      installed_at, next_check_date,
-    } = req.body || {};
+    const allowedFields = [
+      "name",
+      "tag",
+      "manufacturer",
+      "model",
+      "reference",
+      "serial_number",
+      "power_kw",
+      "current_a",
+      "voltage",
+      "ip_address",
+      "protocol",
+      "building",
+      "floor",
+      "zone",
+      "location",
+      "panel",
+      "status",
+      "criticality",
+      "comments",
+      "ai_metadata",
+    ];
     const fields = [];
-    const vals = [];
-    let idx = 1;
-    if (name !== undefined) { fields.push(`name=$${idx++}`); vals.push(name); }
-    if (building !== undefined) { fields.push(`building=$${idx++}`); vals.push(building); }
-    if (zone !== undefined) { fields.push(`zone=$${idx++}`); vals.push(zone); }
-    if (equipment !== undefined) { fields.push(`equipment=$${idx++}`); vals.push(equipment); }
-    if (sub_equipment !== undefined) { fields.push(`sub_equipment=$${idx++}`); vals.push(sub_equipment); }
-    if (type !== undefined) { fields.push(`type=$${idx++}`); vals.push(type); }
-    if (manufacturer !== undefined) { fields.push(`manufacturer=$${idx++}`); vals.push(manufacturer); }
-    if (manufacturer_ref !== undefined) { fields.push(`manufacturer_ref=$${idx++}`); vals.push(manufacturer_ref); }
-    if (power_kw !== undefined) { fields.push(`power_kw=$${idx++}`); vals.push(power_kw); }
-    if (voltage !== undefined) { fields.push(`voltage=$${idx++}`); vals.push(voltage); }
-    if (current_nominal !== undefined) { fields.push(`current_nominal=$${idx++}`); vals.push(current_nominal); }
-    if (ip_rating !== undefined) { fields.push(`ip_rating=$${idx++}`); vals.push(ip_rating); }
-    if (comment !== undefined) { fields.push(`comment=$${idx++}`); vals.push(comment); }
-    if (installed_at !== undefined) { fields.push(`installed_at=$${idx++}`); vals.push(installed_at || null); }
-    if (next_check_date !== undefined) { fields.push(`next_check_date=$${idx++}`); vals.push(next_check_date || null); }
-    fields.push(`updated_at=now()`);
-    vals.push(id);
-    await pool.query(
-      `UPDATE vsd_equipments SET ${fields.join(", ")} WHERE id=$${idx}`,
-      vals
-    );
-    const { rows } = await pool.query(
-      `SELECT e.*,
-              (SELECT result FROM vsd_checks c
-               WHERE c.equipment_id=e.id AND c.status='fait' AND c.result IS NOT NULL
-               ORDER BY c.date DESC NULLS LAST
-               LIMIT 1) AS last_result
-         FROM vsd_equipments e WHERE e.id=$1`,
-      [id]
-    );
-    const eq = rows[0];
-    if (eq) {
-      eq.photo_url =
-        (eq.photo_content && eq.photo_content.length) || eq.photo_path
-          ? `/api/vsd/equipments/${id}/photo`
-          : null;
-      eq.status = eqStatusFromDue(eq.next_check_date);
-      eq.compliance_state =
-        eq.last_result === "conforme"
-          ? "conforme"
-          : eq.last_result === "non_conforme"
-          ? "non_conforme"
-          : "na";
+    const values = [];
+    let i = 1;
+
+    for (const key of allowedFields) {
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, key)) {
+        fields.push(`${key}=$${i++}`);
+        values.push(req.body[key]);
+      }
     }
-    await logEvent("vsd_equipment_updated", { id, fields: Object.keys(req.body) }, u);
+
+    if (!fields.length) {
+      return res.json({ ok: true }); // rien à faire
+    }
+
+    values.push(req.params.id);
+
+    await pool.query(
+      `UPDATE vsd_equipment SET ${fields.join(", ")}, updated_at=now() WHERE id=$${i}`,
+      values
+    );
+
+    const { rows } = await pool.query(`SELECT * FROM vsd_equipment WHERE id=$1`, [
+      req.params.id,
+    ]);
+    const eq = rows[0];
+
+    const user = await currentUser(req);
+    await pool.query(
+      `INSERT INTO vsd_history(equipment_id, event_type, message, user_email, user_name, details)
+       VALUES($1,'modification',$2,$3,$4,$5)`,
+      [
+        eq.id,
+        `Mise à jour du variateur "${eq.name}"`,
+        user.email,
+        user.name,
+        { payload: req.body },
+      ]
+    );
+
     res.json({ ok: true, equipment: eq });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// DELETE /api/vsd/equipments/:id
+
+// Suppression d’un variateur
 app.delete("/api/vsd/equipments/:id", async (req, res) => {
   try {
-    const id = String(req.params.id);
-    const u = getUser(req);
-    const { rows: old } = await pool.query(`SELECT name FROM vsd_equipments WHERE id=$1`, [id]);
-    await pool.query(`DELETE FROM vsd_equipments WHERE id=$1`, [id]);
-    await logEvent("vsd_equipment_deleted", { id, name: old[0]?.name }, u);
+    await pool.query(`DELETE FROM vsd_equipment WHERE id=$1`, [req.params.id]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// GET /api/vsd/equipments/:id/photo
+
+// ------------------------------
+// API: Photo principale + IA
+// ------------------------------
+
+// Upload de la photo du variateur (pour analyse / vignette)
+app.post(
+  "/api/vsd/equipments/:id/photo",
+  uploadAny.single("photo"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ ok: false, error: "photo_required" });
+      const buf = await fsp.readFile(req.file.path);
+
+      // Stockage de la photo dans vsd_files (comme fd_files) :contentReference[oaicite:8]{index=8}
+      const { rows: ins } = await pool.query(
+        `INSERT INTO vsd_files(equipment_id, kind, filename, path, mime, size_bytes, content)
+         VALUES($1,'photo',$2,$3,$4,$5,$6)
+         RETURNING id`,
+        [
+          req.params.id,
+          req.file.originalname,
+          req.file.path,
+          req.file.mimetype,
+          req.file.size,
+          buf,
+        ]
+      );
+      const fileId = ins[0].id;
+
+      // MAJ équipement
+      await pool.query(
+        `UPDATE vsd_equipment
+            SET photo_path=$1, photo_file_id=$2, updated_at=now()
+          WHERE id=$3`,
+        [req.file.path, fileId, req.params.id]
+      );
+
+      // 🔍 Tentative d'analyse automatique (stub pour l’instant)
+      let aiPatch = {};
+      try {
+        aiPatch = (await analyzeVsdPhoto(buf)) || {};
+      } catch (e) {
+        console.warn("analyzeVsdPhoto error:", e);
+      }
+
+      if (aiPatch && Object.keys(aiPatch).length) {
+        // Fusion des métadonnées IA dans la colonne JSONB
+        await pool.query(
+          `UPDATE vsd_equipment
+              SET ai_metadata = COALESCE(ai_metadata, '{}'::jsonb) || $1::jsonb,
+                  updated_at = now()
+            WHERE id=$2`,
+          [aiPatch, req.params.id]
+        );
+      }
+
+      const user = await currentUser(req);
+      await pool.query(
+        `INSERT INTO vsd_history(equipment_id, event_type, message, user_email, user_name, details)
+         VALUES($1,'photo',$2,$3,$4,$5)`,
+        [
+          req.params.id,
+          "Photo de variateur mise à jour",
+          user.email,
+          user.name,
+          { file_id: fileId, filename: req.file.originalname },
+        ]
+      );
+
+      res.json({ ok: true, analyzed: !!(aiPatch && Object.keys(aiPatch).length), aiPatch });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
+  }
+);
+
+// Lecture de la photo principale
 app.get("/api/vsd/equipments/:id/photo", async (req, res) => {
   try {
-    const id = String(req.params.id);
     const { rows } = await pool.query(
-      `SELECT photo_content, photo_path FROM vsd_equipments WHERE id=$1`,
-      [id]
+      `SELECT photo_path, photo_file_id FROM vsd_equipment WHERE id=$1`,
+      [req.params.id]
     );
-    if (!rows[0]) return res.status(404).json({ ok: false, error: "Not found" });
-    const { photo_content, photo_path } = rows[0];
-    if (photo_content && photo_content.length) {
-      res.set("Content-Type", "image/jpeg");
-      res.set("Cache-Control", "public, max-age=3600");
-      return res.send(photo_content);
+    const row = rows[0];
+    if (!row) return res.status(404).send("no_equipment");
+
+    // 1) DB (BLOB) en priorité
+    if (row.photo_file_id) {
+      const { rows: frows } = await pool.query(
+        `SELECT mime, content FROM vsd_files WHERE id=$1`,
+        [row.photo_file_id]
+      );
+      const f = frows[0];
+      if (f?.content) {
+        res.setHeader("Content-Type", f.mime || "image/*");
+        return res.end(f.content, "binary");
+      }
     }
-    if (photo_path && fs.existsSync(photo_path)) {
-      res.set("Content-Type", "image/jpeg");
-      res.set("Cache-Control", "public, max-age=3600");
-      return res.sendFile(path.resolve(photo_path));
+
+    // 2) Fichier disque
+    if (row.photo_path && fs.existsSync(row.photo_path)) {
+      res.setHeader("Content-Type", "image/*");
+      return res.sendFile(path.resolve(row.photo_path));
     }
-    res.status(404).json({ ok: false, error: "No photo" });
+
+    return res.status(404).send("no_photo");
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).send("err");
   }
 });
-// POST /api/vsd/equipments/:id/photo
-app.post("/api/vsd/equipments/:id/photo", multerFiles.single("photo"), async (req, res) => {
-  try {
-    const id = String(req.params.id);
-    const u = getUser(req);
-    if (!req.file) return res.status(400).json({ ok: false, error: "No file" });
-    const buf = await fsp.readFile(req.file.path);
-    await pool.query(
-      `UPDATE vsd_equipments SET photo_content=$1, photo_path=$2, updated_at=now() WHERE id=$3`,
-      [buf, req.file.path, id]
-    );
-    await logEvent("vsd_equipment_photo_updated", { id }, u);
-    res.json({ ok: true, photo_url: `/api/vsd/equipments/${id}/photo` });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// GET /api/vsd/checks
-app.get("/api/vsd/checks", async (req, res) => {
-  try {
-    const eqId = req.query.equipment_id;
-    let q = `SELECT * FROM vsd_checks`;
-    const vals = [];
-    if (eqId) {
-      q += ` WHERE equipment_id=$1`;
-      vals.push(String(eqId));
-    }
-    q += ` ORDER BY date DESC`;
-    const { rows } = await pool.query(q, vals);
-    res.json({ ok: true, checks: rows });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// POST /api/vsd/checks
-app.post("/api/vsd/checks", async (req, res) => {
-  try {
-    const u = getUser(req);
-    const {
-      equipment_id,
-      status = "fait",
-      items = [],
-      result = null,
-      date = new Date().toISOString(),
-    } = req.body || {};
-    const { rows } = await pool.query(
-      `INSERT INTO vsd_checks(equipment_id, status, date, items, result, user_name, user_email)
-       VALUES($1,$2,$3,$4,$5,$6,$7)
-       RETURNING *`,
-      [equipment_id, status, date, JSON.stringify(items), result, u.name || "", u.email || ""]
-    );
-    const check = rows[0];
-    if (status === "fait" && equipment_id) {
-      const { rows: setRows } = await pool.query(`SELECT frequency FROM vsd_settings WHERE id=1`);
-      const freq = setRows[0]?.frequency || "12_mois";
-      const next = nextCheckFrom(date, freq);
+
+// ------------------------------
+// API: Pièces jointes
+// ------------------------------
+app.post(
+  "/api/vsd/equipments/:id/files",
+  uploadAny.single("file"),
+  async (req, res) => {
+    try {
+      if (!req.file) return res.status(400).json({ ok: false, error: "file_required" });
+      const buf = await fsp.readFile(req.file.path);
       await pool.query(
-        `UPDATE vsd_equipments SET next_check_date=$1, updated_at=now() WHERE id=$2`,
-        [next, equipment_id]
+        `INSERT INTO vsd_files(equipment_id, kind, filename, path, mime, size_bytes, content)
+         VALUES($1,'doc',$2,$3,$4,$5,$6)`,
+        [
+          req.params.id,
+          req.file.originalname,
+          req.file.path,
+          req.file.mimetype,
+          req.file.size,
+          buf,
+        ]
       );
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
     }
-    await logEvent("vsd_check_created", { check_id: check.id, equipment_id, result }, u);
-    res.json({ ok: true, check });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
   }
-});
-// GET /api/vsd/calendar
-app.get("/api/vsd/calendar", async (req, res) => {
+);
+
+app.get("/api/vsd/equipments/:id/files", async (req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT id, name, next_check_date AS date FROM vsd_equipments
-       WHERE next_check_date IS NOT NULL
-       ORDER BY next_check_date
-    `);
-    const events = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      date: r.date,
-    }));
-    res.json({ ok: true, events });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// GET /api/vsd/settings
-app.get("/api/vsd/settings", async (req, res) => {
-  try {
-    const { rows } = await pool.query(`SELECT * FROM vsd_settings WHERE id=1`);
-    res.json({ ok: true, settings: rows[0] || { frequency: "12_mois", checklist_template: [] } });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// PUT /api/vsd/settings
-app.put("/api/vsd/settings", async (req, res) => {
-  try {
-    const u = getUser(req);
-    const { frequency, checklist_template } = req.body || {};
-    const fields = [];
-    const vals = [];
-    let idx = 1;
-    if (frequency) { fields.push(`frequency=$${idx++}`); vals.push(frequency); }
-    if (checklist_template) { fields.push(`checklist_template=$${idx++}`); vals.push(JSON.stringify(checklist_template)); }
-    if (fields.length) {
-      await pool.query(`UPDATE vsd_settings SET ${fields.join(", ")} WHERE id=1`, vals);
-    }
-    const { rows } = await pool.query(`SELECT * FROM vsd_settings WHERE id=1`);
-    await logEvent("vsd_settings_updated", { frequency, checklist_template }, u);
-    res.json({ ok: true, settings: rows[0] });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// FILES
-// GET /api/vsd/files
-app.get("/api/vsd/files", async (req, res) => {
-  try {
-    const eqId = req.query.equipment_id;
-    if (!eqId) return res.status(400).json({ ok: false, error: "equipment_id required" });
     const { rows } = await pool.query(
-      `SELECT id, equipment_id, original_name, mime, uploaded_at FROM vsd_files WHERE equipment_id=$1 ORDER BY uploaded_at DESC`,
-      [String(eqId)]
+      `SELECT id, filename, path, mime, size_bytes
+         FROM vsd_files
+        WHERE equipment_id=$1
+        ORDER BY uploaded_at DESC`,
+      [req.params.id]
     );
-    for (const f of rows) {
-      f.url = `/api/vsd/files/${f.id}`;
-    }
-    res.json({ ok: true, files: rows });
+    const files = rows.map(fileRowToClient);
+    res.json({ ok: true, files });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// POST /api/vsd/files
-app.post("/api/vsd/files", multerFiles.array("files"), async (req, res) => {
+
+app.get("/api/vsd/files/:fileId/download", async (req, res) => {
   try {
-    const u = getUser(req);
-    const eqId = req.body.equipment_id;
-    if (!eqId) return res.status(400).json({ ok: false, error: "equipment_id required" });
-    const inserted = [];
-    for (const f of req.files || []) {
-      const buf = await fsp.readFile(f.path);
-      const { rows } = await pool.query(
-        `INSERT INTO vsd_files(equipment_id, original_name, mime, file_path, file_content)
-         VALUES($1,$2,$3,$4,$5) RETURNING *`,
-        [eqId, f.originalname, f.mimetype, f.path, buf]
+    const { rows } = await pool.query(
+      `SELECT path, filename, mime, content FROM vsd_files WHERE id=$1`,
+      [req.params.fileId]
+    );
+    const f = rows[0];
+    if (!f) return res.status(404).send("file");
+
+    if (f.content) {
+      res.setHeader("Content-Type", f.mime || "application/octet-stream");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(f.filename)}"`
       );
-      inserted.push({ ...rows[0], url: `/api/vsd/files/${rows[0].id}` });
+      return res.end(f.content, "binary");
     }
-    await logEvent("vsd_files_uploaded", { equipment_id: eqId, count: inserted.length }, u);
-    res.json({ ok: true, files: inserted });
+    if (f.path && fs.existsSync(f.path)) {
+      res.setHeader("Content-Type", f.mime || "application/octet-stream");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename="${encodeURIComponent(f.filename)}"`
+      );
+      return res.sendFile(path.resolve(f.path));
+    }
+    return res.status(404).send("file");
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).send("err");
   }
 });
-// GET /api/vsd/files/:id
-app.get("/api/vsd/files/:id", async (req, res) => {
+
+app.delete("/api/vsd/files/:fileId", async (req, res) => {
   try {
-    const id = String(req.params.id);
     const { rows } = await pool.query(
-      `SELECT original_name, mime, file_content, file_path FROM vsd_files WHERE id=$1`,
-      [id]
+      `DELETE FROM vsd_files WHERE id=$1 RETURNING path`,
+      [req.params.fileId]
     );
-    if (!rows[0]) return res.status(404).json({ ok: false, error: "Not found" });
-    const { original_name, mime, file_content, file_path } = rows[0];
-    if (file_content && file_content.length) {
-      res.set("Content-Type", mime || "application/octet-stream");
-      res.set("Content-Disposition", `inline; filename="${original_name}"`);
-      return res.send(file_content);
-    }
-    if (file_path && fs.existsSync(file_path)) {
-      res.set("Content-Type", mime || "application/octet-stream");
-      res.set("Content-Disposition", `inline; filename="${original_name}"`);
-      return res.sendFile(path.resolve(file_path));
-    }
-    res.status(404).json({ ok: false, error: "No file" });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// DELETE /api/vsd/files/:id
-app.delete("/api/vsd/files/:id", async (req, res) => {
-  try {
-    const id = String(req.params.id);
-    const u = getUser(req);
-    await pool.query(`DELETE FROM vsd_files WHERE id=$1`, [id]);
-    await logEvent("vsd_file_deleted", { file_id: id }, u);
+    const p = rows[0]?.path;
+    if (p && fs.existsSync(p)) fs.unlink(p, () => {});
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// -------------------------------------------------
-// MAPS (Plans PDF)
-// -------------------------------------------------
-// POST /api/vsd/maps/uploadZip
-app.post("/api/vsd/maps/uploadZip", multerZip.single("zip"), async (req, res) => {
+
+// ------------------------------
+// API: Historique
+// ------------------------------
+app.get("/api/vsd/equipments/:id/history", async (req, res) => {
   try {
-    const u = getUser(req);
-    if (!req.file) return res.status(400).json({ ok: false, error: "No zip file" });
-    const zipPath = req.file.path;
-    const zip = new StreamZip.async({ file: zipPath });
+    const { rows } = await pool.query(
+      `SELECT id, event_at, event_type, message, user_email, user_name, details
+         FROM vsd_history
+        WHERE equipment_id=$1
+        ORDER BY event_at DESC`,
+      [req.params.id]
+    );
+    res.json({ ok: true, history: rows });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Ajout manuel d’un événement d’historique (commentaire, maintenance, etc.)
+app.post("/api/vsd/equipments/:id/history", async (req, res) => {
+  try {
+    const { event_type, message, details } = req.body || {};
+    if (!message) return res.status(400).json({ ok: false, error: "message_required" });
+
+    const user = await currentUser(req);
+    await pool.query(
+      `INSERT INTO vsd_history(equipment_id, event_type, message, user_email, user_name, details)
+       VALUES($1,$2,$3,$4,$5,$6)`,
+      [req.params.id, event_type || "commentaire", message, user.email, user.name, details || {}]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ------------------------------
+// API MAPS VSD — /api/vsd/maps/*
+// ------------------------------
+
+// Upload ZIP de plans (PDF)
+app.post("/api/vsd/maps/uploadZip", uploadZip.single("zip"), async (req, res) => {
+  const zipPath = req.file?.path;
+  if (!zipPath) return res.status(400).json({ ok: false, error: "zip_manquant" });
+
+  const zip = new StreamZip.async({ file: zipPath, storeEntries: true });
+  const imported = [];
+  try {
     const entries = await zip.entries();
-    const pdfs = Object.values(entries).filter((e) => !e.isDirectory && e.name.toLowerCase().endsWith(".pdf"));
-    const imported = [];
-    for (const e of pdfs) {
-      const buf = await zip.entryData(e);
-      const base = path.basename(e.name, ".pdf");
-      const logical = base.replace(/[^\w-]+/g, "_");
-      const dest = path.join(MAPS_DIR, `${Date.now()}_${base}.pdf`);
-      await fsp.writeFile(dest, buf);
-      const { rows: existing } = await pool.query(
-        `SELECT id, version FROM vsd_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
-        [logical]
+    const files = Object.values(entries).filter(
+      (e) => !e.isDirectory && /\.pdf$/i.test(e.name)
+    );
+
+    for (const entry of files) {
+      const tmpOut = path.join(MAPS_INCOMING_DIR, crypto.randomUUID() + ".pdf");
+      await zip.extract(entry.name, tmpOut);
+
+      const { logical, version } = parsePlanName(entry.name);
+      const dest = path.join(
+        MAPS_STORE_DIR,
+        `${logical}__${version}_${crypto.randomUUID()}.pdf`
       );
-      const nextVer = existing[0] ? existing[0].version + 1 : 1;
-      const { rows } = await pool.query(
-        `INSERT INTO vsd_plans(logical_name, version, filename, file_path, content, page_count)
-         VALUES($1,$2,$3,$4,$5,1) RETURNING *`,
-        [logical, nextVer, e.name, dest, buf]
-      );
+      await fsp.rename(tmpOut, dest);
+
+      const page_count = await pdfPageCount(dest).catch(() => 1);
+
+      let buf = null;
+      try {
+        buf = await fsp.readFile(dest);
+      } catch {
+        buf = null;
+      }
+
+      if (buf) {
+        await pool.query(
+          `INSERT INTO vsd_plans (logical_name, version, filename, file_path, page_count, content)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [logical, version, entry.name, dest, page_count, buf]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO vsd_plans (logical_name, version, filename, file_path, page_count)
+           VALUES ($1,$2,$3,$4,$5)`,
+          [logical, version, entry.name, dest, page_count]
+        );
+      }
+
       await pool.query(
-        `INSERT INTO vsd_plan_names(logical_name, display_name)
-         VALUES($1,$2)
-         ON CONFLICT(logical_name) DO NOTHING`,
-        [logical, base]
+        `INSERT INTO vsd_plan_names (logical_name, display_name)
+         VALUES ($1,$2) ON CONFLICT (logical_name) DO NOTHING`,
+        [logical, logical]
       );
-      imported.push(rows[0]);
+
+      imported.push({ logical_name: logical, version, page_count });
     }
-    await zip.close();
-    await logEvent("vsd_maps_zip_uploaded", { count: imported.length }, u);
+
     res.json({ ok: true, imported });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
+  } finally {
+    await zip.close().catch(() => {});
+    fs.rmSync(zipPath, { force: true });
   }
 });
-// GET /api/vsd/maps/listPlans
-app.get("/api/vsd/maps/listPlans", async (req, res) => {
+
+// Liste des plans (dernier par logical_name) + nb de VSD positionnés
+app.get("/api/vsd/maps/plans", async (_req, res) => {
   try {
-    const { rows } = await pool.query(`
-      SELECT DISTINCT ON (p.logical_name)
-             p.id, p.logical_name, p.version, p.filename, p.page_count,
-             COALESCE(pn.display_name, p.logical_name) AS display_name
-        FROM vsd_plans p
-        LEFT JOIN vsd_plan_names pn ON pn.logical_name=p.logical_name
-       ORDER BY p.logical_name, p.version DESC
-    `);
-    res.json({ ok: true, plans: rows });
+    const q = `
+      WITH latest AS (
+        SELECT DISTINCT ON (logical_name) id, logical_name, version, page_count, created_at
+          FROM vsd_plans
+         ORDER BY logical_name, created_at DESC
+      ),
+      names AS (
+        SELECT logical_name, COALESCE(display_name, logical_name) AS display_name
+          FROM vsd_plan_names
+      ),
+      counts AS (
+        SELECT plan_logical_name AS logical_name,
+               COUNT(DISTINCT equipment_id)::int AS equipments
+          FROM vsd_positions
+         GROUP BY plan_logical_name
+      )
+      SELECT l.id, l.logical_name, n.display_name, l.version, l.page_count,
+             COALESCE(c.equipments,0) AS equipments
+        FROM latest l
+   LEFT JOIN names n USING (logical_name)
+   LEFT JOIN counts c ON c.logical_name = l.logical_name
+    ORDER BY n.display_name ASC;
+    `;
+    const { rows } = await pool.query(q);
+    res.json({ ok: true, plans: rows, items: rows });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// GET /api/vsd/maps/planFile
-app.get("/api/vsd/maps/planFile", async (req, res) => {
+
+// Stream du PDF par logical_name
+app.get("/api/vsd/maps/plan/:logical/file", async (req, res) => {
   try {
-    const { logical_name, id } = req.query;
-    let q = `SELECT file_path, content, filename FROM vsd_plans WHERE `;
-    let val;
-    if (id) {
-      q += `id=$1`;
-      val = String(id);
-    } else if (logical_name) {
-      q += `logical_name=$1 ORDER BY version DESC LIMIT 1`;
-      val = String(logical_name);
-    } else {
-      return res.status(400).json({ ok: false, error: "id or logical_name required" });
+    const logical = String(req.params.logical || "");
+    if (!logical) return res.status(400).send("logical_name_required");
+    const { rows } = await pool.query(
+      `SELECT file_path, content
+         FROM vsd_plans
+        WHERE logical_name=$1
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [logical]
+    );
+    const row = rows[0];
+    const p = row?.file_path;
+    const buf = row?.content;
+
+    if (buf && buf.length) {
+      res.type("application/pdf");
+      return res.end(buf, "binary");
     }
-    const { rows } = await pool.query(q, [val]);
-    if (!rows[0]) return res.status(404).json({ ok: false, error: "Plan not found" });
-    const { content, file_path, filename } = rows[0];
-    if (content && content.length) {
-      res.set("Content-Type", "application/pdf");
-      res.set("Content-Disposition", `inline; filename="${filename || "plan.pdf"}"`);
-      res.set("Cache-Control", "public, max-age=3600");
-      return res.send(content);
+    if (p && fs.existsSync(p)) {
+      return res.type("application/pdf").sendFile(path.resolve(p));
     }
-    if (file_path && fs.existsSync(file_path)) {
-      res.set("Content-Type", "application/pdf");
-      res.set("Content-Disposition", `inline; filename="${filename || "plan.pdf"}"`);
-      res.set("Cache-Control", "public, max-age=3600");
-      return res.sendFile(path.resolve(file_path));
-    }
-    res.status(404).json({ ok: false, error: "No file" });
+    return res.status(404).send("not_found");
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).send("err");
   }
 });
-// PUT /api/vsd/maps/renamePlan
-app.put("/api/vsd/maps/renamePlan", async (req, res) => {
+
+// Stream du PDF par id (compat)
+app.get("/api/vsd/maps/plan-id/:id/file", async (req, res) => {
   try {
-    const u = getUser(req);
-    const { logical_name, display_name } = req.body || {};
-    if (!logical_name) return res.status(400).json({ ok: false, error: "logical_name required" });
+    const { rows } = await pool.query(
+      `SELECT file_path, content FROM vsd_plans WHERE id=$1`,
+      [req.params.id]
+    );
+    const row = rows[0];
+    const p = row?.file_path;
+    const buf = row?.content;
+
+    if (buf && buf.length) {
+      res.type("application/pdf");
+      return res.end(buf, "binary");
+    }
+    if (p && fs.existsSync(p)) {
+      return res.type("application/pdf").sendFile(path.resolve(p));
+    }
+    return res.status(404).send("not_found");
+  } catch (e) {
+    res.status(500).send("err");
+  }
+});
+
+// Renommage du display_name d’un logical_name
+app.put("/api/vsd/maps/plan/:logical/rename", async (req, res) => {
+  try {
+    const logical = String(req.params.logical || "");
+    const { display_name } = req.body || {};
+    if (!logical || !display_name) {
+      return res.status(400).json({ ok: false, error: "display_name_required" });
+    }
     await pool.query(
       `INSERT INTO vsd_plan_names(logical_name, display_name)
-       VALUES($1,$2)
-       ON CONFLICT(logical_name) DO UPDATE SET display_name=EXCLUDED.display_name`,
-      [logical_name, display_name || ""]
+       VALUES ($1,$2)
+       ON CONFLICT (logical_name) DO UPDATE SET display_name = EXCLUDED.display_name`,
+      [logical, String(display_name).trim()]
     );
-    await logEvent("vsd_plan_renamed", { logical_name, display_name }, u);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// GET /api/vsd/maps/positions
+
+// Liste des positions pour un plan/page (renvoie les VSD + localisation)
 app.get("/api/vsd/maps/positions", async (req, res) => {
   try {
-    const { logical_name, id, page_index = 0 } = req.query;
-    if (!logical_name && !id) return res.status(400).json({ ok: false, error: "logical_name or id required" });
-    let planKey = logical_name;
-    if (id) {
-      const { rows: pRows } = await pool.query(`SELECT logical_name FROM vsd_plans WHERE id=$1`, [String(id)]);
-      if (pRows[0]) planKey = pRows[0].logical_name;
+    const id = String(req.query.id || "");
+    const logicalParam = String(req.query.logical_name || "");
+    const pageIndex = Number(req.query.page_index || 0);
+
+    let logical = logicalParam;
+    if (!logical && /^[0-9a-fA-F-]{36}$/.test(id)) {
+      const { rows } = await pool.query(
+        `SELECT logical_name FROM vsd_plans WHERE id=$1 LIMIT 1`,
+        [id]
+      );
+      logical = rows?.[0]?.logical_name || "";
     }
+    if (!logical) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "logical_name ou id requis" });
+    }
+
     const { rows } = await pool.query(
-      `SELECT pos.equipment_id, pos.x_frac, pos.y_frac,
-              e.name, e.status, e.next_check_date
-         FROM vsd_positions pos
-         JOIN vsd_equipments e ON e.id=pos.equipment_id
-        WHERE pos.logical_name=$1 AND pos.page_index=$2`,
-      [planKey, Number(page_index)]
+      `
+      SELECT p.equipment_id,
+             e.name,
+             e.building,
+             e.floor,
+             e.zone,
+             e.location,
+             p.x_frac,
+             p.y_frac
+        FROM vsd_positions p
+        JOIN vsd_equipment e ON e.id = p.equipment_id
+       WHERE p.plan_logical_name=$1
+         AND p.page_index=$2
+       ORDER BY e.building NULLS LAST, e.floor NULLS LAST, e.name ASC
+      `,
+      [logical, pageIndex]
     );
-    for (const r of rows) {
-      r.status = eqStatusFromDue(r.next_check_date);
-    }
-    res.json({ ok: true, positions: rows });
+
+    const positions = rows.map((r) => ({
+      equipment_id: r.equipment_id,
+      name: r.name,
+      building: r.building,
+      floor: r.floor,
+      zone: r.zone,
+      location: r.location,
+      x_frac: Number(r.x_frac),
+      y_frac: Number(r.y_frac),
+    }));
+
+    res.json({ ok: true, positions });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// POST /api/vsd/maps/setPosition
-app.post("/api/vsd/maps/setPosition", async (req, res) => {
+
+// Enregistre / met à jour la position d’un VSD sur un plan/page
+app.put("/api/vsd/maps/positions/:equipmentId", async (req, res) => {
   try {
-    const u = getUser(req);
-    const {
-      equipment_id,
+    const equipmentId = req.params.equipmentId;
+    let {
       logical_name,
-      plan_id = null,
+      plan_id, // UUID → résolu en logical_name si fourni
       page_index = 0,
+      page_label = null,
       x_frac,
       y_frac,
+      x,
+      y,
     } = req.body || {};
-    if (!equipment_id || !logical_name || x_frac == null || y_frac == null) {
-      return res.status(400).json({ ok: false, error: "Missing fields" });
+
+    if ((!logical_name || String(logical_name).trim() === "") && plan_id &&
+        /^[0-9a-fA-F-]{36}$/.test(String(plan_id))) {
+      const { rows } = await pool.query(
+        `SELECT logical_name FROM vsd_plans WHERE id=$1 LIMIT 1`,
+        [plan_id]
+      );
+      logical_name = rows?.[0]?.logical_name || null;
     }
+
+    const xf = x_frac != null ? x_frac : x;
+    const yf = y_frac != null ? y_frac : y;
+
+    if (!logical_name || xf == null || yf == null) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "coords/logical_required" });
+    }
+
     await pool.query(
-      `INSERT INTO vsd_positions(equipment_id, logical_name, plan_id, page_index, x_frac, y_frac)
-       VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT(equipment_id, logical_name, page_index)
-       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, plan_id=EXCLUDED.plan_id`,
-      [equipment_id, logical_name, plan_id, Number(page_index), Number(x_frac), Number(y_frac)]
+      `INSERT INTO vsd_positions(equipment_id, plan_logical_name, page_index, page_label, x_frac, y_frac)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (equipment_id, plan_logical_name, page_index)
+       DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, page_label=EXCLUDED.page_label, updated_at=now()`,
+      [
+        equipmentId,
+        String(logical_name),
+        Number(page_index || 0),
+        page_label,
+        Number(xf),
+        Number(yf),
+      ]
     );
-    await pool.query(
-      `UPDATE vsd_equipments SET equipment=$1 WHERE id=$2`,
-      [logical_name, equipment_id]
-    );
-    await logEvent("vsd_position_set", { equipment_id, logical_name, page_index }, u);
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// -------------------------------------------------
-// IA (OpenAI)
-// -------------------------------------------------
-async function vsdExtractFromFiles(client, files = []) {
-  if (!client || !files?.length) return {};
-  const images = await Promise.all(
-    (files || []).map(async (f) => ({
-      name: f.originalname,
-      mime: f.mimetype,
-      data: (await fsp.readFile(f.path)).toString("base64"),
-    }))
-  );
-  const sys = `Tu es un assistant d'inspection VSD (Variateurs de Fréquence). Extrait des photos:
-- manufacturer
-- manufacturer_ref
-- power_kw
-- voltage
-- type
-Réponds en JSON strict.`;
-  const content = [
-    { role: "system", content: sys },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Analyse ces photos et renvoie uniquement un JSON." },
-        ...images.map((im) => ({
-          type: "image_url",
-          image_url: { url: `data:${im.mime};base64,${im.data}` },
-        })),
-      ],
-    },
-  ];
-  const resp = await client.chat.completions.create({
-    model: process.env.VSD_OPENAI_MODEL || "gpt-4o-mini",
-    messages: content,
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-  });
-  let data = {};
-  try { data = JSON.parse(resp.choices?.[0]?.message?.content || "{}"); } catch { data = {}; }
-  return {
-    manufacturer: String(data.manufacturer || ""),
-    manufacturer_ref: String(data.manufacturer_ref || ""),
-    power_kw: data.power_kw || null,
-    voltage: String(data.voltage || ""),
-    type: String(data.type || ""),
-  };
-}
-function openaiClient() {
-  const key = process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_VSD;
-  if (!key) return null;
-  return new OpenAI({ apiKey: key });
-}
-// POST /api/vsd/analyzePhotoBatch
-app.post("/api/vsd/analyzePhotoBatch", multerFiles.array("files"), async (req, res) => {
-  try {
-    const client = openaiClient();
-    const extracted = await vsdExtractFromFiles(client, req.files || []);
-    res.json({ ok: true, extracted });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// POST /api/vsd/extract
-app.post("/api/vsd/extract", multerFiles.array("files"), async (req, res) => {
-  try {
-    const client = openaiClient();
-    const extracted = await vsdExtractFromFiles(client, req.files || []);
-    res.json({ ok: true, extracted });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-// -------------------------------------------------
+
+// ------------------------------
+// Boot
+// ------------------------------
 await ensureSchema();
 app.listen(PORT, HOST, () => {
   console.log(`[vsd] listening on ${HOST}:${PORT}`);
