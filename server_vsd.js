@@ -249,12 +249,6 @@ async function logEvent(action, details = {}, user = {}) {
   } catch {}
 }
 
-function openaiClient() {
-  const key = process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_VSD;
-  if (!key) return null;
-  return new OpenAI({ apiKey: key });
-}
-
 async function vsdExtractFromFiles(client, files) {
   if (!client) throw new Error("OPENAI_API_KEY missing");
   if (!files?.length) throw new Error("no files");
@@ -318,17 +312,6 @@ Réponds en JSON strict avec ces champs uniquement.`;
     protocol: String(data.protocol || ""),
   };
 }
-
-// Route d'analyse IA (ajouter juste avant app.listen)
-app.post("/api/vsd/ai/analyzePhotoBatch", uploadAny.array("files"), async (req, res) => {
-  try {
-    const client = openaiClient();
-    const extracted = await vsdExtractFromFiles(client, req.files || []);
-    res.json({ ok: true, extracted });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
 
 // -------------------------------------------------
 // GET /api/vsd/equipments
