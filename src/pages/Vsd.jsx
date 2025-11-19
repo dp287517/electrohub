@@ -1,13 +1,65 @@
 // src/pages/Vsd.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, forwardRef, useCallback, useImperativeHandle } from "react";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
 dayjs.locale("fr");
 
+import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import "../styles/vsd-map.css";
+
 import { api, API_BASE } from "../lib/api.js";
 
-/* ----------------------------- UI utils ----------------------------- */
+/* ----------------------------- PDF.js Config ----------------------------- */
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
+
+/* ----------------------------- Helpers ----------------------------- */
+function getCookie(name) {
+  const m = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]+)"));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function getIdentity() {
+  let email = getCookie("email") || null;
+  let name = getCookie("name") || null;
+  try {
+    if (!email) email = localStorage.getItem("email") || localStorage.getItem("user.email") || null;
+    if (!name) name = localStorage.getItem("name") || localStorage.getItem("user.name") || null;
+    if ((!email || !name) && localStorage.getItem("user")) {
+      try {
+        const u = JSON.parse(localStorage.getItem("user"));
+        if (!email && u?.email) email = String(u.email);
+        if (!name && (u?.name || u?.displayName)) name = String(u.name || u.displayName);
+      } catch {}
+    }
+  } catch {}
+  if (!name && email) {
+    const base = String(email).split("@")[0] || "";
+    if (base) name = base.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim();
+  }
+  return { email, name };
+}
+
+function userHeaders() {
+  const { email, name } = getIdentity();
+  const h = {};
+  if (email) h["X-User-Email"] = email;
+  if (name) h["X-User-Name"] = name;
+  return h;
+}
+
+function pdfDocOpts(url) {
+  return { url, withCredentials: true, httpHeaders: userHeaders(), standardFontDataUrl: "/standard_fonts/" };
+}
+
+function isUuid(s) {
+  return typeof s === "string" && /^[0-9a-fA-F-]{36}$/.test(s);
+}
+
+/* ----------------------------- UI Components ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
     primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed",
@@ -92,7 +144,6 @@ function Labeled({ label, children }) {
   );
 }
 
-/* Drawer */
 function Drawer({ title, children, onClose, dirty = false }) {
   useEffect(() => {
     const handler = (e) => {
@@ -150,43 +201,415 @@ function Toast({ text, onClose }) {
   );
 }
 
+/* ----------------------------- VSD Leaflet Viewer (intégré) ----------------------------- */
+const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, onCreatePoint, disabled = false }, ref) => {
+  const wrapRef = useRef(null);
+  const mapRef = useRef(null);
+  const imageLayerRef = useRef(null);
+  const markersLayerRef = useRef(null);
+  const addBtnControlRef = useRef(null);
+  const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
+  const [picker, setPicker] = useState(null);
+  const aliveRef = useRef(true);
+
+  const lastJob = useRef({ key: null });
+  const loadingTaskRef = useRef(null);
+  const renderTaskRef = useRef(null);
+
+  const initialFitDoneRef = useRef(false);
+
+  const ICON_PX = 22;
+
+  function makeVsdIcon() {
+    const s = ICON_PX;
+    const html = `<div class="vsd-marker" style="width:${s}px;height:${s}px;"></div>`;
+    return L.divIcon({
+      className: "vsd-marker-inline",
+      html,
+      iconSize: [s, s],
+      iconAnchor: [Math.round(s / 2), Math.round(s / 2)],
+      popupAnchor: [0, -Math.round(s / 2)],
+    });
+  }
+
+  function ensureAddButton(map) {
+    if (addBtnControlRef.current) return;
+    const AddCtrl = L.Control.extend({
+      onAdd: function () {
+        const container = L.DomUtil.create("div", "leaflet-bar leaflet-control leaflet-control-addvsd");
+        const a = L.DomUtil.create("a", "", container);
+        a.href = "#";
+        a.title = "Créer un variateur au centre";
+        a.textContent = "+";
+        L.DomEvent.on(a, "click", (ev) => {
+          L.DomEvent.stop(ev);
+          onCreatePoint?.();
+        });
+        return container;
+      },
+      onRemove: function () {},
+      options: { position: "topright" },
+    });
+    addBtnControlRef.current = new AddCtrl();
+    map.addControl(addBtnControlRef.current);
+  }
+
+  useEffect(() => {
+    if (disabled) return;
+    if (!fileUrl || !wrapRef.current) return;
+
+    let cancelled = false;
+    aliveRef.current = true;
+
+    const jobKey = `${fileUrl}::${pageIndex}`;
+    if (lastJob.current.key === jobKey) {
+      onReady?.();
+      return;
+    }
+    lastJob.current.key = jobKey;
+
+    const cleanupPdf = async () => {
+      try {
+        renderTaskRef.current?.cancel();
+      } catch {}
+      try {
+        await loadingTaskRef.current?.destroy();
+      } catch {}
+      renderTaskRef.current = null;
+      loadingTaskRef.current = null;
+    };
+
+    const cleanupMap = () => {
+      const map = mapRef.current;
+      if (map) {
+        try {
+          map.off();
+        } catch {}
+        try {
+          map.stop?.();
+        } catch {}
+        try {
+          map.eachLayer((l) => {
+            try {
+              map.removeLayer(l);
+            } catch {}
+          });
+        } catch {}
+        try {
+          if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
+        } catch {}
+        try {
+          map.remove();
+        } catch {}
+      }
+      mapRef.current = null;
+      imageLayerRef.current = null;
+      if (markersLayerRef.current) {
+        try {
+          markersLayerRef.current.clearLayers();
+        } catch {}
+        markersLayerRef.current = null;
+      }
+      addBtnControlRef.current = null;
+      initialFitDoneRef.current = false;
+    };
+
+    (async () => {
+      try {
+        await cleanupPdf();
+        const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
+        const dpr = window.devicePixelRatio || 1;
+
+        loadingTaskRef.current = pdfjsLib.getDocument({ ...pdfDocOpts(fileUrl) });
+        const pdf = await loadingTaskRef.current.promise;
+        if (cancelled) return;
+
+        const page = await pdf.getPage(Number(pageIndex) + 1);
+        const baseVp = page.getViewport({ scale: 1 });
+
+        const targetBitmapW = Math.min(4096, Math.max(1024, Math.floor(containerW * dpr)));
+        const safeScale = Math.min(2.0, Math.max(0.5, targetBitmapW / baseVp.width));
+        const viewport = page.getViewport({ scale: safeScale });
+
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const ctx = canvas.getContext("2d", { alpha: true });
+
+        renderTaskRef.current = page.render({ canvasContext: ctx, viewport });
+        await renderTaskRef.current.promise;
+        if (cancelled) return;
+
+        const dataUrl = canvas.toDataURL("image/png");
+        setImgSize({ w: canvas.width, h: canvas.height });
+
+        if (!mapRef.current) {
+          const m = L.map(wrapRef.current, {
+            crs: L.CRS.Simple,
+            zoomControl: false,
+            zoomAnimation: true,
+            fadeAnimation: false,
+            markerZoomAnimation: false,
+            scrollWheelZoom: true,
+            touchZoom: true,
+            tap: true,
+            preferCanvas: true,
+          });
+          L.control.zoom({ position: "topright" }).addTo(m);
+          ensureAddButton(m);
+
+          m.on("click", (e) => {
+            if (!aliveRef.current) return;
+            const clicked = e.containerPoint;
+            const near = [];
+            const pickRadius = Math.max(18, Math.floor(ICON_PX / 2) + 6);
+            markersLayerRef.current?.eachLayer((mk) => {
+              const mp = m.latLngToContainerPoint(mk.getLatLng());
+              const dist = Math.hypot(mp.x - clicked.x, mp.y - clicked.y);
+              if (dist <= pickRadius) near.push(mk.__meta);
+            });
+            if (near.length === 1 && onClickPoint) onClickPoint(near[0]);
+            else if (near.length > 1) setPicker({ x: clicked.x, y: clicked.y, items: near });
+            else setPicker(null);
+          });
+
+          m.on("zoomstart", () => {
+            setPicker(null);
+          });
+          m.on("movestart", () => {
+            setPicker(null);
+          });
+
+          mapRef.current = m;
+        }
+
+        const map = mapRef.current;
+        const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
+
+        if (imageLayerRef.current) {
+          map.removeLayer(imageLayerRef.current);
+          imageLayerRef.current = null;
+        }
+        const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
+        imageLayerRef.current = layer;
+        layer.addTo(map);
+
+        await new Promise(requestAnimationFrame);
+        map.invalidateSize(false);
+
+        const fitZoom = map.getBoundsZoom(bounds, true);
+        map.options.zoomSnap = 0.1;
+        map.options.zoomDelta = 0.5;
+        map.setMinZoom(fitZoom - 1);
+        map.setMaxZoom(fitZoom + 6);
+        map.setMaxBounds(bounds.pad(0.5));
+        map.fitBounds(bounds, { padding: [8, 8] });
+        initialFitDoneRef.current = true;
+
+        if (!markersLayerRef.current) {
+          markersLayerRef.current = L.layerGroup().addTo(map);
+        }
+        drawMarkers(points, viewport.width, viewport.height);
+
+        setTimeout(() => {
+          try {
+            if (aliveRef.current) map.scrollWheelZoom.enable();
+          } catch {}
+        }, 60);
+
+        try {
+          await pdf.cleanup();
+        } catch {}
+        onReady?.();
+      } catch (e) {
+        if (String(e?.name) === "RenderingCancelledException") return;
+        const msg = String(e?.message || "");
+        if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) {
+          return;
+        }
+        console.error("VSD Leaflet viewer error", e);
+      }
+    })();
+
+    const onResize = () => {
+      const m = mapRef.current;
+      const layer = imageLayerRef.current;
+      if (!m || !layer) return;
+      const b = layer.getBounds();
+      const keepCenter = m.getCenter();
+      const keepZoom = m.getZoom();
+      m.invalidateSize(false);
+
+      if (!initialFitDoneRef.current) {
+        m.fitBounds(b, { padding: [8, 8] });
+        initialFitDoneRef.current = true;
+      } else {
+        m.setView(keepCenter, keepZoom, { animate: false });
+      }
+    };
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+
+    return () => {
+      cancelled = true;
+      aliveRef.current = false;
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      try {
+        renderTaskRef.current?.cancel();
+      } catch {}
+      try {
+        loadingTaskRef.current?.destroy();
+      } catch {}
+      cleanupMap();
+    };
+  }, [fileUrl, pageIndex, disabled]);
+
+  useEffect(() => {
+    if (!mapRef.current || !imgSize.w) return;
+    drawMarkers(points, imgSize.w, imgSize.h);
+  }, [points, imgSize]);
+
+  function drawMarkers(list, w, h) {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!markersLayerRef.current) {
+      markersLayerRef.current = L.layerGroup().addTo(map);
+    }
+    const g = markersLayerRef.current;
+    g.clearLayers();
+
+    (list || []).forEach((p) => {
+      const x = Number(p.x_frac ?? p.x ?? 0) * w;
+      const y = Number(p.y_frac ?? p.y ?? 0) * h;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+
+      const latlng = L.latLng(y, x);
+      const icon = makeVsdIcon();
+      const mk = L.marker(latlng, {
+        icon,
+        draggable: true,
+        autoPan: true,
+        bubblingMouseEvents: false,
+        keyboard: false,
+        riseOnHover: true,
+      });
+      mk.__meta = {
+        equipment_id: p.equipment_id,
+        name: p.name || p.equipment_name,
+        x_frac: p.x_frac,
+        y_frac: p.y_frac,
+      };
+
+      mk.on("click", () => {
+        setPicker(null);
+        onClickPoint?.(mk.__meta);
+      });
+
+      mk.on("dragend", () => {
+        if (!onMovePoint) return;
+        const ll = mk.getLatLng();
+        const xFrac = Math.min(1, Math.max(0, ll.lng / w));
+        const yFrac = Math.min(1, Math.max(0, ll.lat / h));
+        const xf = Math.round(xFrac * 1e6) / 1e6;
+        const yf = Math.round(yFrac * 1e6) / 1e6;
+        onMovePoint(p.equipment_id, { x: xf, y: yf });
+      });
+
+      mk.addTo(g);
+    });
+  }
+
+  const onPickEquipment = (d) => {
+    setPicker(null);
+    onClickPoint?.(d);
+  };
+
+  const adjust = () => {
+    const m = mapRef.current;
+    const layer = imageLayerRef.current;
+    if (!m || !layer) return;
+    const b = layer.getBounds();
+    m.scrollWheelZoom?.disable();
+    m.invalidateSize(false);
+    const fitZoom = m.getBoundsZoom(b, true);
+    m.setMinZoom(fitZoom - 1);
+    m.fitBounds(b, { padding: [8, 8] });
+    initialFitDoneRef.current = true;
+    setTimeout(() => {
+      try {
+        m.scrollWheelZoom?.enable();
+      } catch {}
+    }, 50);
+  };
+
+  useImperativeHandle(ref, () => ({ adjust }));
+
+  const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
+  const wrapperHeight = Math.max(320, Math.min(imgSize.h || 720, viewportH - 180));
+
+  return (
+    <div className="mt-3 relative">
+      <div className="flex items-center justify-end gap-2 mb-2">
+        <Btn variant="ghost" aria-label="Ajuster le zoom au plan" onClick={adjust}>
+          Ajuster
+        </Btn>
+      </div>
+      <div
+        ref={wrapRef}
+        className="leaflet-wrapper relative w-full border rounded-2xl bg-white shadow-sm overflow-hidden"
+        style={{ height: wrapperHeight }}
+      />
+      {picker && (
+        <div className="vsd-pick" style={{ left: Math.max(8, picker.x - 120), top: Math.max(8, picker.y - 8) }}>
+          {picker.items.slice(0, 8).map((it) => (
+            <button key={it.equipment_id} onClick={() => onPickEquipment(it)}>
+              {it.name || it.equipment_id}
+            </button>
+          ))}
+          {picker.items.length > 8 ? <div className="text-xs text-gray-500 px-1">…</div> : null}
+        </div>
+      )}
+      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
+        <span className="inline-flex items-center gap-1">
+          <span className="w-3 h-3 rounded-full vsd-marker" />
+          Variateur
+        </span>
+      </div>
+    </div>
+  );
+});
+
 /* ----------------------------- Page principale VSD ----------------------------- */
 export default function Vsd() {
-  // Onglets
   const [tab, setTab] = useState("tree");
-
-  // Liste équipements
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
 
-  // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
   const [building, setBuilding] = useState("");
   const [floor, setFloor] = useState("");
   const [zone, setZone] = useState("");
 
-  // Édition
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const initialRef = useRef(null);
 
-  // PJ list
   const [files, setFiles] = useState([]);
-
-  // Toast
   const [toast, setToast] = useState("");
 
-  // Plans
   const [plans, setPlans] = useState([]);
   const [mapsLoading, setMapsLoading] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [mapRefreshTick, setMapRefreshTick] = useState(0);
 
-  // Indicateur global
   const [globalLoading, setGlobalLoading] = useState(false);
 
-  /* ----------------------------- Helpers ----------------------------- */
+  const [positions, setPositions] = useState([]);
+  const [pdfReady, setPdfReady] = useState(false);
+  const viewerRef = useRef(null);
+
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
     if (debouncer.current) clearTimeout(debouncer.current);
@@ -215,7 +638,6 @@ export default function Vsd() {
     }
   }
 
-  // Fichiers
   async function reloadFiles(equipId) {
     if (!equipId) return;
     try {
@@ -244,7 +666,6 @@ export default function Vsd() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, building, floor, zone]);
 
-  /* ----------------------------- Édition ----------------------------- */
   const mergeZones = (raw) => {
     if (!raw) return raw;
     const clean = { ...raw };
@@ -303,10 +724,25 @@ export default function Vsd() {
     const A = editing;
     const B = initialRef.current;
     const keys = [
-      "name", "tag", "manufacturer", "model", "reference", "serial_number",
-      "power_kw", "current_a", "voltage", "ip_address", "protocol",
-      "building", "floor", "zone", "location", "panel",
-      "status", "criticality", "comments"
+      "name",
+      "tag",
+      "manufacturer",
+      "model",
+      "reference",
+      "serial_number",
+      "power_kw",
+      "current_a",
+      "voltage",
+      "ip_address",
+      "protocol",
+      "building",
+      "floor",
+      "zone",
+      "location",
+      "panel",
+      "status",
+      "criticality",
+      "comments",
     ];
     return keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""));
   }
@@ -374,7 +810,6 @@ export default function Vsd() {
     }
   }
 
-  /* ----------------------------- Photos / fichiers ----------------------------- */
   async function uploadMainPhoto(file) {
     if (!editing?.id || !file) return;
     try {
@@ -402,7 +837,6 @@ export default function Vsd() {
     }
   }
 
-  /* ----------------------------- IA Analyse photo ----------------------------- */
   async function analyzeFromPhotos(filesLike) {
     const list = Array.from(filesLike || []);
     if (!list.length) return;
@@ -443,7 +877,6 @@ export default function Vsd() {
     }
   }
 
-  /* ----------------------------- Plans ----------------------------- */
   async function loadPlans() {
     setMapsLoading(true);
     try {
@@ -468,7 +901,6 @@ export default function Vsd() {
     }
   }, [plans, mapsLoading, selectedPlan]);
 
-  /* ----------------------------- Arborescence par bâtiment ----------------------------- */
   const buildingTree = useMemo(() => {
     const tree = {};
     (items || []).forEach((item) => {
@@ -479,7 +911,106 @@ export default function Vsd() {
     return tree;
   }, [items]);
 
-  /* ----------------------------- UI ----------------------------- */
+  async function loadPositions(plan, pageIdx = 0) {
+    if (!plan) return;
+    const key = plan.id || plan.logical_name || "";
+    try {
+      const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({ items: [] }));
+      let list = Array.isArray(r?.items)
+        ? r.items.map((item) => ({
+            equipment_id: item.equipment_id,
+            name: item.name || item.equipment_name,
+            x_frac: Number(item.x_frac ?? item.x ?? 0),
+            y_frac: Number(item.y_frac ?? item.y ?? 0),
+            x: Number(item.x_frac ?? item.x ?? 0),
+            y: Number(item.y_frac ?? item.y ?? 0),
+            building: item.building,
+            floor: item.floor,
+            zone: item.zone,
+          }))
+        : [];
+      setPositions(list);
+    } catch {
+      setPositions([]);
+    }
+  }
+
+  const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
+
+  useEffect(() => {
+    if (stableSelectedPlan) loadPositions(stableSelectedPlan, 0);
+  }, [stableSelectedPlan, q, building, floor, zone, plans]);
+
+  const handlePdfReady = useCallback(() => setPdfReady(true), []);
+
+  const handleMovePoint = useCallback(
+    async (equipmentId, xy) => {
+      if (!stableSelectedPlan) return;
+      await api.vsdMaps.setPosition(equipmentId, {
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id,
+        page_index: 0,
+        x_frac: xy.x,
+        y_frac: xy.y,
+      });
+      await loadPositions(stableSelectedPlan, 0);
+    },
+    [stableSelectedPlan]
+  );
+
+  const handleClickPoint = useCallback((p) => {
+    openEdit({ id: p.equipment_id, name: p.name });
+  }, []);
+
+  async function createEquipmentAtCenter() {
+    if (!stableSelectedPlan) return;
+    try {
+      const payload = {
+        name: "Nouveau VSD",
+        building: "",
+        floor: "",
+        zone: "",
+        location: "",
+      };
+      const created = await api.vsd.createEquipment(payload);
+      const id = created?.equipment?.id || created?.id;
+      if (!id) throw new Error("Création VSD: ID manquant");
+
+      await api.vsdMaps.setPosition(id, {
+        logical_name: stableSelectedPlan.logical_name,
+        plan_id: stableSelectedPlan.id,
+        page_index: 0,
+        x_frac: 0.5,
+        y_frac: 0.5,
+      });
+
+      await loadPositions(stableSelectedPlan, 0);
+      viewerRef.current?.adjust();
+      setToast(`VSD créé (« ${created?.equipment?.name || created?.name} ») au centre du plan ✅`);
+
+      openEdit({ id, name: created?.equipment?.name || created?.name || "Nouveau VSD" });
+    } catch (e) {
+      console.error(e);
+      setToast("Création impossible");
+    }
+  }
+
+  useEffect(() => {
+    if (tab !== "plans" || !stableSelectedPlan) return;
+    const tick = () => {
+      loadPositions(stableSelectedPlan, 0);
+    };
+    const iv = setInterval(tick, 8000);
+    const onVis = () => {
+      if (!document.hidden) tick();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [tab, stableSelectedPlan, q, building, floor, zone]);
+
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
       <div className="flex flex-wrap gap-2">
@@ -541,12 +1072,9 @@ export default function Vsd() {
         </div>
       )}
 
-      {/* --------- Onglet Arborescence --------- */}
       {tab === "tree" && (
         <div className="space-y-4">
-          {loading && (
-            <div className="bg-white rounded-2xl border shadow-sm p-4 text-gray-500">Chargement…</div>
-          )}
+          {loading && <div className="bg-white rounded-2xl border shadow-sm p-4 text-gray-500">Chargement…</div>}
           {!loading && Object.keys(buildingTree).length === 0 && (
             <div className="bg-white rounded-2xl border shadow-sm p-4 text-gray-500">Aucun variateur.</div>
           )}
@@ -564,7 +1092,6 @@ export default function Vsd() {
         </div>
       )}
 
-      {/* --------- Onglet Plans --------- */}
       {tab === "plans" && (
         <div className="space-y-4">
           <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
@@ -593,9 +1120,7 @@ export default function Vsd() {
           {selectedPlan && (
             <div className="bg-white rounded-2xl border shadow-sm p-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="font-semibold truncate pr-3">
-                  {selectedPlan.display_name || selectedPlan.logical_name}
-                </div>
+                <div className="font-semibold truncate pr-3">{selectedPlan.display_name || selectedPlan.logical_name}</div>
                 <div className="flex items-center gap-2">
                   <Btn
                     variant="ghost"
@@ -609,25 +1134,37 @@ export default function Vsd() {
                 </div>
               </div>
 
-              <VsdMap
-                key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
-                plan={selectedPlan}
-                onOpenEquipment={openEdit}
-                onMetaChanged={async () => {
-                  await reload();
-                  setToast("Plans et équipements mis à jour");
-                }}
-              />
+              <div className="relative">
+                {!pdfReady && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/90 z-[99999] pointer-events-none">
+                    <div className="flex flex-col items-center gap-3 text-gray-700">
+                      <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-600"></div>
+                      <div className="text-sm font-medium">Chargement du plan…</div>
+                    </div>
+                  </div>
+                )}
+
+                <VsdLeafletViewer
+                  ref={viewerRef}
+                  key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
+                  fileUrl={api.vsdMaps.planFileUrlAuto(selectedPlan, { bust: true })}
+                  pageIndex={0}
+                  points={positions}
+                  onReady={handlePdfReady}
+                  onMovePoint={handleMovePoint}
+                  onClickPoint={handleClickPoint}
+                  onCreatePoint={createEquipmentAtCenter}
+                  disabled={false}
+                />
+              </div>
             </div>
           )}
         </div>
       )}
 
-      {/* --------- Drawer Édition --------- */}
       {drawerOpen && editing && (
         <Drawer title={`VSD • ${editing.name || "nouvel équipement"}`} onClose={closeEdit} dirty={dirty}>
           <div className="space-y-4">
-            {/* Ajout & Analyse IA */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="font-semibold">Ajout & Analyse IA</div>
@@ -649,7 +1186,6 @@ export default function Vsd() {
               </div>
             </div>
 
-            {/* Photo principale */}
             {editing?.id && (
               <div className="border rounded-2xl p-3">
                 <div className="flex items-center justify-between mb-2">
@@ -666,11 +1202,7 @@ export default function Vsd() {
                 </div>
                 <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
                   {editing.photo_url ? (
-                    <img
-                      src={api.vsd.photoUrl(editing.id, { bust: true })}
-                      alt="photo"
-                      className="w-full h-full object-cover"
-                    />
+                    <img src={api.vsd.photoUrl(editing.id, { bust: true })} alt="photo" className="w-full h-full object-cover" />
                   ) : (
                     <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
                   )}
@@ -678,7 +1210,6 @@ export default function Vsd() {
               </div>
             )}
 
-            {/* Identification */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="font-semibold mb-2">Identification</div>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -703,7 +1234,6 @@ export default function Vsd() {
               </div>
             </div>
 
-            {/* Caractéristiques électriques */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="font-semibold mb-2">Caractéristiques électriques</div>
               <div className="grid sm:grid-cols-3 gap-3">
@@ -730,16 +1260,11 @@ export default function Vsd() {
                   <Input value={editing.ip_address || ""} onChange={(v) => setEditing({ ...editing, ip_address: v })} />
                 </Labeled>
                 <Labeled label="Protocole">
-                  <Input
-                    value={editing.protocol || ""}
-                    onChange={(v) => setEditing({ ...editing, protocol: v })}
-                    placeholder="Modbus, Profibus…"
-                  />
+                  <Input value={editing.protocol || ""} onChange={(v) => setEditing({ ...editing, protocol: v })} placeholder="Modbus, Profibus…" />
                 </Labeled>
               </div>
             </div>
 
-            {/* Localisation */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="font-semibold mb-2">Localisation</div>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -761,7 +1286,6 @@ export default function Vsd() {
               </div>
             </div>
 
-            {/* Statut & Criticité */}
             <div className="border rounded-2xl p-3 bg-white">
               <div className="font-semibold mb-2">Statut & Criticité</div>
               <div className="grid sm:grid-cols-2 gap-3">
@@ -792,18 +1316,11 @@ export default function Vsd() {
               </div>
             </div>
 
-            {/* Commentaires */}
             <div className="border rounded-2xl p-3">
               <div className="font-semibold mb-2">Commentaires</div>
-              <Textarea
-                rows={3}
-                value={editing.comments || ""}
-                onChange={(v) => setEditing({ ...editing, comments: v })}
-                placeholder="Notes libres…"
-              />
+              <Textarea rows={3} value={editing.comments || ""} onChange={(v) => setEditing({ ...editing, comments: v })} placeholder="Notes libres…" />
             </div>
 
-            {/* Pièces jointes */}
             {editing?.id && (
               <div className="border rounded-2xl p-3 bg-white">
                 <div className="flex items-center justify-between mb-2">
@@ -822,13 +1339,7 @@ export default function Vsd() {
                   {files.length === 0 && <div className="text-xs text-gray-500">Aucune pièce jointe.</div>}
                   {files.map((f) => (
                     <div key={f.id} className="flex items-center justify-between text-sm border rounded-lg px-2 py-1">
-                      
-                        href={f.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-700 hover:underline truncate max-w-[70%]"
-                        title={f.name}
-                      >
+                      <a href={f.url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline truncate max-w-[70%]" title={f.name}>
                         {f.name}
                       </a>
                       <button
@@ -846,7 +1357,6 @@ export default function Vsd() {
               </div>
             )}
 
-            {/* Actions */}
             <div className="grid sm:grid-cols-2 gap-3">
               <Btn variant={dirty ? "warn" : "ghost"} className={dirty ? "animate-pulse" : ""} onClick={saveBase} disabled={!dirty}>
                 {dirty ? "Enregistrer la fiche" : "Aucune modif"}
@@ -864,7 +1374,7 @@ export default function Vsd() {
   );
 }
 
-/* ----------------------------- Sous-composants locaux ----------------------------- */
+/* ----------------------------- Sous-composants ----------------------------- */
 function BuildingSection({ buildingName, equipments = [], onOpenEquipment }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -969,9 +1479,7 @@ function PlanCard({ plan, onRename, onPick }) {
           <div className="text-4xl leading-none">PDF</div>
           <div className="text-[11px] mt-1">Plan</div>
         </div>
-        <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
-          {name}
-        </div>
+        <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">{name}</div>
       </div>
       <div className="p-3">
         {!edit ? (
