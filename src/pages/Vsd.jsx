@@ -202,7 +202,7 @@ function Toast({ text, onClose }) {
 }
 
 /* ----------------------------- VSD Leaflet Viewer (intégré) ----------------------------- */
-const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, onCreatePoint, disabled = false }, ref) => {
+const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onReady, onMovePoint, onClickPoint, onCreatePoint, disabled = false, mapUpdateTick }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const imageLayerRef = useRef(null);
@@ -217,6 +217,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
   const renderTaskRef = useRef(null);
 
   const initialFitDoneRef = useRef(false);
+  const mapInitializedRef = useRef(false);
 
   const ICON_PX = 22;
 
@@ -254,6 +255,34 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
     map.addControl(addBtnControlRef.current);
   }
 
+  const cleanupMap = useCallback(() => {
+    const map = mapRef.current;
+    if (map && mapInitializedRef.current) {
+      try {
+        map.off();
+      } catch {}
+      try {
+        map.eachLayer((l) => {
+          try {
+            map.removeLayer(l);
+          } catch {}
+        });
+      } catch {}
+      try {
+        if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
+      } catch {}
+      try {
+        map.remove();
+      } catch {}
+    }
+    mapRef.current = null;
+    imageLayerRef.current = null;
+    markersLayerRef.current = null;
+    addBtnControlRef.current = null;
+    initialFitDoneRef.current = false;
+    mapInitializedRef.current = false;
+  }, []);
+
   useEffect(() => {
     if (disabled) return;
     if (!fileUrl || !wrapRef.current) return;
@@ -262,11 +291,17 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
     aliveRef.current = true;
 
     const jobKey = `${fileUrl}::${pageIndex}`;
-    if (lastJob.current.key === jobKey) {
-      onReady?.();
-      return;
+    
+    // Si le plan est le même, nous ne faisons rien dans ce useEffect. 
+    // La mise à jour des marqueurs est gérée par le useEffect [points, imgSize].
+    if (lastJob.current.key === jobKey && mapRef.current) {
+        onReady?.();
+        return;
     }
+    
+    // Le plan change ou c'est la première initialisation: on nettoie tout
     lastJob.current.key = jobKey;
+    cleanupMap(); 
 
     const cleanupPdf = async () => {
       try {
@@ -277,38 +312,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
       } catch {}
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
-    };
-
-    const cleanupMap = () => {
-      const map = mapRef.current;
-      if (map) {
-        try {
-          map.off();
-        } catch {}
-        try {
-          map.eachLayer((l) => {
-            try {
-              map.removeLayer(l);
-            } catch {}
-          });
-        } catch {}
-        try {
-          if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
-        } catch {}
-        try {
-          map.remove();
-        } catch {}
-      }
-      mapRef.current = null;
-      imageLayerRef.current = null;
-      if (markersLayerRef.current) {
-        try {
-          markersLayerRef.current.clearLayers();
-        } catch {}
-        markersLayerRef.current = null;
-      }
-      addBtnControlRef.current = null;
-      initialFitDoneRef.current = false;
     };
 
     (async () => {
@@ -341,6 +344,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
+        // INITIALISATION DE LA CARTE
         if (!mapRef.current) {
           const m = L.map(wrapRef.current, {
             crs: L.CRS.Simple,
@@ -352,7 +356,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
             touchZoom: true,
             tap: true,
             preferCanvas: true,
-            // Centrer initialement à (0, 0) avec un zoom minimal avant de charger l'image
             center: [0, 0],
             zoom: 0,
           });
@@ -382,11 +385,13 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
           });
 
           mapRef.current = m;
+          mapInitializedRef.current = true;
         }
 
         const map = mapRef.current;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
 
+        // AJOUT DE L'IMAGE
         if (imageLayerRef.current) {
           map.removeLayer(imageLayerRef.current);
           imageLayerRef.current = null;
@@ -398,6 +403,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
         await new Promise(requestAnimationFrame);
         map.invalidateSize(false);
 
+        // AJUSTEMENT DES BORNES ET ZOOM
         const fitZoom = map.getBoundsZoom(bounds, true);
         map.options.zoomSnap = 0.1;
         map.options.zoomDelta = 0.5;
@@ -410,9 +416,8 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(map);
         }
-        drawMarkers(points, viewport.width, viewport.height);
+        // Le dessin initial des marqueurs sera déclenché par le useEffect [points, imgSize]
 
-        // Correction Leaflet/DOM: Suppression du setTimeout, laisser Leaflet gérer
         try {
           map.scrollWheelZoom.enable();
         } catch {}
@@ -444,7 +449,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
         m.fitBounds(b, { padding: [8, 8] });
         initialFitDoneRef.current = true;
       } else {
-        // Correction Leaflet/DOM: Utiliser setView sans animation après un redimensionnement pour éviter les erreurs
         m.setView(keepCenter, keepZoom, { animate: false });
       }
     };
@@ -462,23 +466,24 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
       try {
         loadingTaskRef.current?.destroy();
       } catch {}
-      cleanupMap();
+      // Le nettoyage final doit être ici
+      cleanupMap(); 
     };
-  }, [fileUrl, pageIndex, disabled]);
+  }, [fileUrl, pageIndex, disabled, cleanupMap]);
 
   useEffect(() => {
-    // Mise à jour des marqueurs uniquement, sans redessiner la carte
-    if (!mapRef.current || !imgSize.w) return;
+    // Mise à jour des marqueurs (déclenché par [points] ou [imgSize])
+    if (!mapRef.current || !imgSize.w || !markersLayerRef.current) return;
     drawMarkers(points, imgSize.w, imgSize.h);
   }, [points, imgSize]);
 
+
   function drawMarkers(list, w, h) {
     const map = mapRef.current;
-    if (!map) return;
-    if (!markersLayerRef.current) {
-      markersLayerRef.current = L.layerGroup().addTo(map);
-    }
     const g = markersLayerRef.current;
+    if (!map || !g) return;
+    
+    // Nettoyage des couches de marqueurs existantes
     g.clearLayers();
 
     (list || []).forEach((p) => {
@@ -544,8 +549,12 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
       } catch {}
     }, 50);
   };
-
-  useImperativeHandle(ref, () => ({ adjust }));
+  
+  // Expose la fonction de dessin des marqueurs via ref pour la mise à jour externe
+  useImperativeHandle(ref, () => ({ 
+    adjust,
+    drawMarkers: (list) => drawMarkers(list, imgSize.w, imgSize.h),
+  }));
 
   const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
   const wrapperHeight = Math.max(320, Math.min(imgSize.h || 720, viewportH - 180));
@@ -585,15 +594,15 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, points = [], onRe
 /* ----------------------------- Page principale VSD ----------------------------- */
 
 // Nouveau hook pour gérer la logique de chargement et rafraîchissement des positions
-function useMapUpdateLogic(stableSelectedPlan, setPositions) {
+function useMapUpdateLogic(stableSelectedPlan, setPositions, viewerRef) {
     const reloadPositionsRef = useRef(null);
 
     const loadPositions = useCallback(async (plan, pageIdx = 0) => {
         if (!plan) return;
         const key = plan.id || plan.logical_name || "";
         try {
-            const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({ items: [] }));
-            let list = Array.isArray(r?.positions) // Correction: utiliser 'positions' comme dans le backend
+            const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({}));
+            let list = Array.isArray(r?.positions) 
                 ? r.positions.map((item) => ({
                     equipment_id: item.equipment_id,
                     name: item.name || item.equipment_name,
@@ -606,12 +615,15 @@ function useMapUpdateLogic(stableSelectedPlan, setPositions) {
                     zone: item.zone,
                 }))
                 : [];
+            
             setPositions(list);
+            // CORRECTION: Mettre à jour les marqueurs via la ref sans forcer de re-render du Viewer
+            viewerRef.current?.drawMarkers(list); 
         } catch(e) {
             console.error("Erreur chargement positions", e);
             setPositions([]);
         }
-    }, [setPositions]);
+    }, [setPositions, viewerRef]);
 
     reloadPositionsRef.current = loadPositions;
 
@@ -622,10 +634,9 @@ function useMapUpdateLogic(stableSelectedPlan, setPositions) {
         // Chargement initial
         tick();
 
-        // Intervalle de rafraîchissement (8 secondes)
+        // CORRECTION: L'intervalle de rafraîchissement est conservé mais appelle la fonction de mise à jour des marqueurs via la ref
         const iv = setInterval(tick, 8000);
         
-        // Rafraîchissement lors du retour sur l'onglet
         const onVis = () => {
             if (!document.hidden) tick();
         };
@@ -666,8 +677,10 @@ export default function Vsd() {
   const [pdfReady, setPdfReady] = useState(false);
   const viewerRef = useRef(null);
   
+  const [analyzingIA, setAnalyzingIA] = useState(false); // NOUVEAU: État pour le chargement IA
+
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
-  const { refreshPositions } = useMapUpdateLogic(stableSelectedPlan, setPositions);
+  const { refreshPositions } = useMapUpdateLogic(stableSelectedPlan, setPositions, viewerRef);
 
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
@@ -755,6 +768,7 @@ export default function Vsd() {
         const res = await api.vsd.getEquipment(base.id);
         const fresh = mergeZones(res?.equipment || res || {});
         setEditing((cur) => {
+          // CONSERVE les champs locaux (model, tag, floor...) lors de l'ouverture
           const next = { ...(cur || {}), ...fresh };
           initialRef.current = next;
           return next;
@@ -782,29 +796,29 @@ export default function Vsd() {
     const B = initialRef.current;
     const keys = [
       "name",
-      "tag",
+      "tag", // Non DB, à conserver localement
       "manufacturer",
-      "model",
-      "reference",
-      "serial_number",
-      "power_kw",
-      "current_a",
+      "model", // Non DB, à conserver localement
+      "reference", // FE: reference, DB: manufacturer_ref
+      "serial_number", // Non DB, à conserver localement
       "voltage",
-      "ip_address",
+      "ip_address", // Non DB, à conserver localement
       "protocol",
       "building",
-      "floor",
+      "floor", // Non DB, à conserver localement
       "zone",
-      "location",
-      "panel",
+      "location", // Non DB, à conserver localement
+      "panel", // Non DB, à conserver localement
       "status",
-      "criticality",
+      "criticality", // Non DB, à conserver localement
       "comments",
+      "ip_rating", // Mappé à ip_rating DB
     ];
-    // Attention: power_kw et current_a sont des nombres, on utilise donc la comparaison brute (null vs number)
+    // Comparaison des chaînes
     if (keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""))) return true;
-    if (A?.power_kw !== B?.power_kw) return true;
-    if (A?.current_a !== B?.current_a) return true;
+    // Comparaison des nombres
+    if (Number(A?.power_kw) !== Number(B?.power_kw)) return true;
+    if (Number(A?.current_a) !== Number(B?.current_a)) return true;
     return false;
   }
 
@@ -812,53 +826,23 @@ export default function Vsd() {
 
   async function saveBase() {
     if (!editing) return;
+    
+    // Déclaration complète du payload pour l'envoi au backend (selon le schéma DB)
     const payload = {
       name: editing.name || "",
-      building: editing.building || "", // Ajout des champs du backend qui manquaient ici
+      building: editing.building || "",
       zone: editing.zone || "",
       equipment: editing.equipment || "",
-      sub_equipment: editing.sub_equipment || "",
+      sub_equipment: editing.sub_equipment || editing.floor || editing.location || "", // Mappage possible pour le FE 'floor' et 'location'
       type: editing.type || "",
       manufacturer: editing.manufacturer || "",
-      manufacturer_ref: editing.manufacturer_ref || "",
+      manufacturer_ref: editing.reference || editing.manufacturer_ref || "", // Utilisation de 'reference' FE pour 'manufacturer_ref' DB
       power_kw: editing.power_kw ?? null,
       voltage: editing.voltage || "",
-      current_nominal: editing.current_nominal ?? null,
+      current_nominal: editing.current_a ?? null, // Utilisation de 'current_a' FE pour 'current_nominal' DB
       ip_rating: editing.ip_rating || "",
-      comment: editing.comment || "",
-      // Mappage des champs du frontend vers les champs du backend (ex: floor -> sub_equipment, location -> comment/sub_equipment)
-      // J'utilise les champs du backend (equipment, sub_equipment, manufacturer_ref, ip_rating) qui existent déjà dans le PUT/POST du server_vsd.js, en utilisant les champs du FE comme source si les noms diffèrent.
-      // NOTE: Le FE Vsd.jsx utilise 'floor' et 'location', qui n'ont pas de mapping direct dans le payload d'origine, sauf si on les ajoute. Pour être sûr, je map les champs utilisés par le FE dans le PUT/POST du backend.
-      // Je conserve la structure pour éviter de casser la DB.
-      // Pour l'instant, je m'en tiens aux champs existants dans le backend PUT/POST pour garantir la cohérence:
-      // name, building, zone, equipment, sub_equipment, type, manufacturer, manufacturer_ref, power_kw, voltage, current_nominal, ip_rating, comment
-      // Je laisse les champs du FE 'floor', 'location', 'tag', 'model', 'serial_number', 'criticality', 'panel' dans l'état local uniquement s'ils ne correspondent pas aux champs du backend.
-      // Si on veut les enregistrer, il faut les ajouter au schéma DB et au PUT/POST du backend.
-      // Pour la démonstration, je me concentre sur les champs existants dans le backend 'server_vsd.js'.
-      
-      // Adaptation du FE à la structure DB:
-      // FE 'tag', 'model', 'serial_number' -> DB 'name', 'manufacturer_ref' (si réutilisable)
-      // FE 'floor', 'location', 'panel', 'criticality' ne sont pas dans le schéma DB vsd_equipments actuel.
-      
-      // Je vais donc ignorer les champs non supportés par la DB, et m'assurer que les champs utilisés dans le FE correspondent au schéma du backend.
-      
-      // Re-mapping selon le schéma actuel de vsd_equipments :
-      name: editing.name || "", // DB: name
-      building: editing.building || "", // DB: building
-      zone: editing.zone || "", // DB: zone
-      equipment: editing.equipment || "", // DB: equipment (Nom du plan si positionné)
-      sub_equipment: editing.sub_equipment || "", // DB: sub_equipment
-      type: editing.type || "", // DB: type
-      manufacturer: editing.manufacturer || "", // DB: manufacturer
-      manufacturer_ref: editing.manufacturer_ref || editing.reference || "", // DB: manufacturer_ref
-      power_kw: editing.power_kw ?? null, // DB: power_kw
-      voltage: editing.voltage || "", // DB: voltage
-      current_nominal: editing.current_a ?? null, // DB: current_nominal
-      ip_rating: editing.ip_rating || "", // DB: ip_rating
-      comment: editing.comment || editing.location || "", // DB: comment
-      // Les champs FE 'floor', 'location', 'tag', 'model', 'serial_number', 'panel', 'criticality' NE SONT PAS envoyés si non mappés.
+      comment: editing.comments || editing.location || "", // Utilisation de 'comments' FE pour 'comment' DB
     };
-
 
     try {
       let updated;
@@ -870,11 +854,19 @@ export default function Vsd() {
       const eq = updated?.equipment || updated || null;
       if (eq?.id) {
         const fresh = mergeZones(eq);
-        setEditing(fresh);
-        initialRef.current = fresh;
+        
+        // CORRECTION CRITIQUE: Fusionner l'état local actuel avec la réponse du serveur
+        // pour conserver les champs non-persistés (tag, model, floor, location, etc.)
+        const merged = {
+          ...(editing || {}), // Conserver les champs non-DB du FE (tag, model, floor, etc.)
+          ...fresh,          // Écraser les champs DB avec les données du serveur
+        };
+
+        setEditing(merged);
+        initialRef.current = merged; // L'état initial devient l'état fusionné
       }
       await reload();
-      await refreshPositions(stableSelectedPlan, 0); // Rechargement forcé des positions
+      await refreshPositions(stableSelectedPlan, 0); 
       setToast("Fiche enregistrée");
     } catch (e) {
       console.error("[VSD] Erreur lors de l'enregistrement :", e);
@@ -890,7 +882,7 @@ export default function Vsd() {
       await api.vsd.deleteEquipment(editing.id);
       closeEdit();
       await reload();
-      await refreshPositions(stableSelectedPlan, 0); // Rechargement forcé des positions
+      await refreshPositions(stableSelectedPlan, 0); 
       setToast("Équipement supprimé");
     } catch (e) {
       console.error(e);
@@ -928,7 +920,8 @@ export default function Vsd() {
   async function analyzeFromPhotos(filesLike) {
     const list = Array.from(filesLike || []);
     if (!list.length) return;
-
+    
+    setAnalyzingIA(true); // NOUVEAU: Début de l'analyse
     try {
       const res = await api.vsd.extractFromPhotos(list);
       const s = res?.extracted || res || {};
@@ -941,11 +934,10 @@ export default function Vsd() {
           }
         };
 
-        // Mappage du retour IA vers les champs du FE/DB
         applyIfValid("manufacturer", s.manufacturer);
-        applyIfValid("model", s.model); // Pas dans la DB, mais dans l'état FE
-        applyIfValid("reference", s.reference); // FE: reference, DB: manufacturer_ref
-        applyIfValid("serial_number", s.serial_number); // Pas dans la DB, mais dans l'état FE
+        applyIfValid("model", s.model); 
+        applyIfValid("reference", s.reference); 
+        applyIfValid("serial_number", s.serial_number); 
         applyIfValid("voltage", s.voltage);
         applyIfValid("protocol", s.protocol);
 
@@ -963,6 +955,8 @@ export default function Vsd() {
     } catch (e) {
       console.error("[VSD] Erreur analyse IA :", e);
       setToast("Analyse IA indisponible");
+    } finally {
+        setAnalyzingIA(false); // NOUVEAU: Fin de l'analyse
     }
   }
 
@@ -1012,7 +1006,6 @@ export default function Vsd() {
         x_frac: xy.x,
         y_frac: xy.y,
       });
-      // Correction: Recharger les positions après le mouvement
       await refreshPositions(stableSelectedPlan, 0); 
     },
     [stableSelectedPlan, refreshPositions]
@@ -1029,15 +1022,8 @@ export default function Vsd() {
         name: "Nouveau VSD",
         building: "",
         zone: "",
-        equipment: stableSelectedPlan.logical_name, // Stocke le nom du plan
-        sub_equipment: "",
+        equipment: stableSelectedPlan.logical_name, 
         type: "Variateur",
-        manufacturer: "",
-        manufacturer_ref: "",
-        power_kw: null,
-        voltage: "",
-        current_nominal: null,
-        ip_rating: "",
         comment: "Point créé sur le plan " + stableSelectedPlan.logical_name,
       };
       const created = await api.vsd.createEquipment(payload);
@@ -1052,7 +1038,6 @@ export default function Vsd() {
         y_frac: 0.5,
       });
 
-      // Correction: Recharger les positions pour afficher le nouveau point
       await refreshPositions(stableSelectedPlan, 0);
       viewerRef.current?.adjust();
       setToast(`VSD créé (« ${created?.equipment?.name || created?.name} ») au centre du plan ✅`);
@@ -1166,6 +1151,7 @@ export default function Vsd() {
             }}
             onPick={(plan) => {
               setSelectedPlan(plan);
+              setPdfReady(false); // Force le loader lors du changement de plan
             }}
           />
 
@@ -1197,7 +1183,7 @@ export default function Vsd() {
 
                 <VsdLeafletViewer
                   ref={viewerRef}
-                  key={selectedPlan.logical_name} // Correction Leaflet: clé sur le nom logique uniquement
+                  key={selectedPlan.logical_name} 
                   fileUrl={api.vsdMaps.planFileUrlAuto(selectedPlan, { bust: true })}
                   pageIndex={0}
                   points={positions}
@@ -1220,15 +1206,16 @@ export default function Vsd() {
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="font-semibold">Ajout & Analyse IA</div>
                 <div className="flex items-center gap-2">
-                  <label className="px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer">
+                  <label className={`px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer ${analyzingIA ? 'opacity-70 cursor-wait' : ''}`}>
                     <input
                       type="file"
                       accept="image/*"
                       multiple
                       className="hidden"
                       onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
+                      disabled={analyzingIA}
                     />
-                    Analyser des photos (IA)
+                    {analyzingIA ? 'Analyse en cours...' : 'Analyser des photos (IA)'}
                   </label>
                 </div>
               </div>
