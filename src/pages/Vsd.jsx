@@ -975,9 +975,6 @@ function applyZonesLocally(id, zones) {
         <Btn variant={tab === "controls" ? "primary" : "ghost"} onClick={() => setTab("controls")}>
           Contrôles
         </Btn>
-        <Btn variant={tab === "calendar" ? "primary" : "ghost"} onClick={() => setTab("calendar")}>
-          Calendrier
-        </Btn>
         <Btn variant={tab === "plans" ? "primary" : "ghost"} onClick={() => setTab("plans")}>
           Plans
         </Btn>
@@ -1198,20 +1195,6 @@ function applyZonesLocally(id, zones) {
                 </div>
               ))}
           </div>
-        </div>
-      )}
-      {/* --------- Onglet Calendrier --------- */}
-      {tab === "calendar" && (
-        <div className="bg-white rounded-2xl border shadow-sm p-4">
-          <MonthCalendar
-            events={calendar.events}
-            onDayClick={({ events }) => {
-              const first = events?.[0];
-              if (!first?.equipment_id) return;
-              const it = items.find((x) => x.id === first.equipment_id);
-              if (it) openEdit(it);
-            }}
-          />
         </div>
       )}
       {/* --------- Onglet Plans --------- */}
