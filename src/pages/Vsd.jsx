@@ -411,10 +411,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
         mapRef.current = m;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
-
-        // AJOUT DE L'IMAGE
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
-        imageLayerRef.current = layer;
         layer.addTo(m);
 
         await new Promise(requestAnimationFrame);
@@ -424,18 +421,20 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         m.options.zoomSnap = 0.1;
         m.options.zoomDelta = 0.5;
         m.setMinZoom(fitZoom - 1);
+
+        // ✅ d’abord on définit une vue valide
+        if (!initialFitDoneRef.current || !userViewTouchedRef.current) {
+          m.fitBounds(bounds, { padding: [8, 8] });
+          lastViewRef.current.center = m.getCenter();
+          lastViewRef.current.zoom = m.getZoom();
+          initialFitDoneRef.current = true;
+        } else {
+          m.setView(lastViewRef.current.center, lastViewRef.current.zoom, { animate: false });
+        }
+
+        // ✅ ensuite seulement on resserre max zoom / max bounds
         m.setMaxZoom(fitZoom + 6);
         m.setMaxBounds(bounds.pad(0.5));
-        
-        // CONSERVATION DE LA VUE
-        if (!initialFitDoneRef.current || !userViewTouchedRef.current) {
-            m.fitBounds(bounds, { padding: [8, 8] });
-            lastViewRef.current.center = m.getCenter();
-            lastViewRef.current.zoom = m.getZoom();
-            initialFitDoneRef.current = true;
-        } else {
-            m.setView(lastViewRef.current.center, lastViewRef.current.zoom, { animate: false });
-        }
 
 
         if (!markersLayerRef.current) {
@@ -487,7 +486,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
       try { loadingTaskRef.current?.destroy(); } catch {}
       cleanupMap();
     };
-  }, [fileUrl, pageIndex, disabled, drawMarkers, onClickPoint]);
+  }, [fileUrl, pageIndex, disabled]);
   
   // Maintient la ref pointsRef.current à jour avec les props du parent
   useEffect(() => {
@@ -566,65 +565,70 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
 // HOOK : Logique d'update de la carte (découplée de l'état Vsd)
 function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
-    const reloadPositionsRef = useRef(null);
-    const latestPositionsRef = useRef([]);
+  const reloadPositionsRef = useRef(null);
+  const latestPositionsRef = useRef([]);
 
-    const loadPositions = useCallback(async (plan, pageIdx = 0) => {
-        if (!plan) return;
-        const key = plan.id || plan.logical_name || "";
-        try {
-            const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({}));
-            let list = Array.isArray(r?.positions) 
-                ? r.positions.map((item) => ({
-                    equipment_id: item.equipment_id,
-                    name: item.name || item.equipment_name,
-                    x_frac: Number(item.x_frac ?? item.x ?? 0),
-                    y_frac: Number(item.y_frac ?? item.y ?? 0),
-                    x: Number(item.x_frac ?? item.x ?? 0),
-                    y: Number(item.y_frac ?? item.y ?? 0),
-                    building: item.building,
-                    floor: item.floor,
-                    zone: item.zone,
-                }))
-                : [];
-            
-            latestPositionsRef.current = list;
-            // Mise à jour impérative sans re-render du composant Vsd
-            viewerRef.current?.drawMarkers(list); 
-        } catch(e) {
-            console.error("Erreur chargement positions", e);
-            latestPositionsRef.current = [];
-            viewerRef.current?.drawMarkers([]);
-        }
-    }, [viewerRef]);
+  const loadPositions = useCallback(async (plan, pageIdx = 0) => {
+    if (!plan) return;
+    const key = plan.id || plan.logical_name || "";
+    try {
+      const r = await api.vsdMaps.positionsAuto(key, pageIdx).catch(() => ({}));
+      let list = Array.isArray(r?.positions)
+        ? r.positions.map((item) => ({
+            equipment_id: item.equipment_id,
+            name: item.name || item.equipment_name,
+            x_frac: Number(item.x_frac ?? item.x ?? 0),
+            y_frac: Number(item.y_frac ?? item.y ?? 0),
+            x: Number(item.x_frac ?? item.x ?? 0),
+            y: Number(item.y_frac ?? item.y ?? 0),
+            building: item.building,
+            floor: item.floor,
+            zone: item.zone,
+          }))
+        : [];
 
+      latestPositionsRef.current = list;
+      viewerRef.current?.drawMarkers(list);
+    } catch (e) {
+      console.error("Erreur chargement positions", e);
+      latestPositionsRef.current = [];
+      viewerRef.current?.drawMarkers([]);
+    }
+  }, [viewerRef]);
+
+  // 👉 on stocke la même fonction dans la ref
+  useEffect(() => {
     reloadPositionsRef.current = loadPositions;
+  }, [loadPositions]);
 
-    useEffect(() => {
-        if (!stableSelectedPlan) return;
-        const tick = () => reloadPositionsRef.current(stableSelectedPlan, 0);
+  useEffect(() => {
+    if (!stableSelectedPlan) return;
+    const tick = () => reloadPositionsRef.current?.(stableSelectedPlan, 0);
 
-        // Chargement initial
-        tick();
+    tick();
 
-        // Intervalle de rafraîchissement (8 secondes)
-        const iv = setInterval(tick, 8000);
-        
-        const onVis = () => {
-            if (!document.hidden) tick();
-        };
-        document.addEventListener("visibilitychange", onVis);
-
-        return () => {
-            clearInterval(iv);
-            document.removeEventListener("visibilitychange", onVis);
-        };
-    }, [stableSelectedPlan]);
-
-    return { 
-        refreshPositions: (p, idx) => reloadPositionsRef.current(p, idx),
-        getLatestPositions: () => latestPositionsRef.current,
+    const iv = setInterval(tick, 8000);
+    const onVis = () => {
+      if (!document.hidden) tick();
     };
+    document.addEventListener("visibilitychange", onVis);
+
+    return () => {
+      clearInterval(iv);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [stableSelectedPlan]);
+
+  // ✅ fonctions mémoïsées
+  const refreshPositions = useCallback((p, idx = 0) => {
+    return reloadPositionsRef.current?.(p, idx);
+  }, []);
+
+  const getLatestPositions = useCallback(() => {
+    return latestPositionsRef.current;
+  }, []);
+
+  return { refreshPositions, getLatestPositions };
 }
 
 // ✅ FONCTION MISE À JOUR : utilise les NOUVELLES colonnes DB
@@ -655,6 +659,20 @@ function getNormalizedEquipment(eq) {
     };
     
     const clean = { ...base, ...eq };
+    // ✅ Mapper les anciennes colonnes DB vers les champs UI
+    if (eq?.manufacturer_ref && !clean.reference) {
+      clean.reference = String(eq.manufacturer_ref);
+    }
+
+    if (eq?.current_nominal != null && clean.current_a == null) {
+      const n = Number(eq.current_nominal);
+      if (!Number.isNaN(n)) clean.current_a = n;
+    }
+
+    if (eq?.power_kw != null && clean.power_kw == null) {
+      const p = Number(eq.power_kw);
+      if (!Number.isNaN(p)) clean.power_kw = p;
+    }
     
     // Si la colonne 'comment' existe dans l'objet DB (eq), on l'utilise pour remplir le champ UI 'comments'
     if (eq?.comment) {
