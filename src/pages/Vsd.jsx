@@ -320,19 +320,30 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     }
     
     const cleanupMap = () => {
-        const map = mapRef.current;
-        if (map) {
-          map.off();
-          map.remove();
-        }
-        mapRef.current = null;
-        imageLayerRef.current = null;
-        markersLayerRef.current = null;
-        addBtnControlRef.current = null;
-        initialFitDoneRef.current = false;
-        userViewTouchedRef.current = false; 
-    };
-    cleanupMap();
+    const map = mapRef.current;
+    if (map) {
+      try { map.off(); } catch {}
+      try { map.stop?.(); } catch {}
+      try {
+        map.eachLayer((l) => {
+          try { map.removeLayer(l); } catch {}
+        });
+      } catch {}
+      try {
+        if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
+      } catch {}
+      try { map.remove(); } catch {}
+    }
+    mapRef.current = null;
+    imageLayerRef.current = null;
+    if (markersLayerRef.current) {
+      try { markersLayerRef.current.clearLayers(); } catch {}
+      markersLayerRef.current = null;
+    }
+    addBtnControlRef.current = null;
+    initialFitDoneRef.current = false;
+    userViewTouchedRef.current = false;
+  };
 
     lastJob.current.key = jobKey;
 
@@ -411,7 +422,17 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
         mapRef.current = m;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
+
+        // Si une ancienne couche existe (reload de plan / page), on l’enlève proprement
+        if (imageLayerRef.current) {
+          try {
+            m.removeLayer(imageLayerRef.current);
+          } catch {}
+          imageLayerRef.current = null;
+        }
+
         const layer = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1 });
+        imageLayerRef.current = layer;
         layer.addTo(m);
 
         await new Promise(requestAnimationFrame);
@@ -528,6 +549,11 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
   const viewportH = typeof window !== "undefined" ? window.innerHeight : 800;
   const wrapperHeight = Math.max(320, Math.min(imgSize.h || 720, viewportH - 180));
+
+  const onPickEquipment = useCallback((it) => {
+    setPicker(null);
+    onClickPoint?.(it);
+  }, [onClickPoint]);
 
   return (
     <div className="mt-3 relative">
