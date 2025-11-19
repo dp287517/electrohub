@@ -1,6 +1,5 @@
 // ==============================
 // server_vsd.js — VSD (Variateurs de Fréquence) CMMS microservice (ESM)
-// Port par défaut: 3020
 // ==============================
 import express from "express";
 import cors from "cors";
@@ -126,7 +125,7 @@ async function ensureSchema() {
       created_at TIMESTAMP DEFAULT now(),
       updated_at TIMESTAMP DEFAULT now(),
       
-      -- NOUVEAUX CHAMPS D'EXPLOITATION/UI (Ajoutés pour persistance)
+      -- NOUVEAUX CHAMPS D'EXPLOITATION/UI
       tag TEXT DEFAULT '',
       model TEXT DEFAULT '',
       serial_number TEXT DEFAULT '', 
@@ -139,7 +138,7 @@ async function ensureSchema() {
       ui_status TEXT DEFAULT ''
     );
     
-    -- AJOUT DES COLONNES MANQUANTES (pour les DB existantes après ALTER TABLE)
+    -- AJOUT DES COLONNES MANQUANTES (pour les DB existantes)
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='tag') THEN
         ALTER TABLE vsd_equipments ADD COLUMN tag TEXT DEFAULT '';
@@ -331,7 +330,7 @@ Réponds en JSON strict avec ces champs uniquement.`;
         ...images.map((im) => ({
           type: "image_url",
           image_url: { url: `data:${im.mime};base64,${im.data}` },
-        ))),
+        })),
       ],
     },
   ];
@@ -839,7 +838,7 @@ app.post("/api/vsd/maps/uploadZip", multerZip.single("zip"), async (req, res) =>
       await pool.query(
         `INSERT INTO vsd_plan_names(logical_name, display_name)
          VALUES($1,$2)
-         ON CONFLICT(logical_name) DO UPDATE SET display_name=$2`, // Fix: ensure display name updates
+         ON CONFLICT(logical_name) DO UPDATE SET display_name=EXCLUDED.display_name`,
         [logical, base]
       );
       imported.push(rows[0]);
