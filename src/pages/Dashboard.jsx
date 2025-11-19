@@ -18,6 +18,12 @@ const electricalApps = [
     description: 'Financial project management: business case, PIP, WBS, offers, orders, invoices, KPIs & AI',
     icon: '💳'
   },
+  {
+    label: 'Variable Speed Drives',
+    to: '/app/vsd',
+    description: 'VSD maintenance: frequency inverters, power ratings, checks & compliance',
+    icon: '⚙️'
+  },
 ];
 
 // 👉 Autres apps visibles en direct sur le dashboard
