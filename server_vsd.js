@@ -108,8 +108,8 @@ async function ensureSchema() {
       name TEXT NOT NULL,
       building TEXT DEFAULT '',
       zone TEXT DEFAULT '',
-      equipment TEXT DEFAULT '', -- "Équipement (macro)" (nom du plan)
-      sub_equipment TEXT DEFAULT '', -- "Sous-Équipement" (nom de la forme)
+      equipment TEXT DEFAULT '',
+      sub_equipment TEXT DEFAULT '',
       type TEXT DEFAULT '',
       manufacturer TEXT DEFAULT '',
       manufacturer_ref TEXT DEFAULT '',
@@ -124,10 +124,58 @@ async function ensureSchema() {
       photo_path TEXT DEFAULT NULL,
       photo_content BYTEA NULL,
       created_at TIMESTAMP DEFAULT now(),
-      updated_at TIMESTAMP DEFAULT now()
+      updated_at TIMESTAMP DEFAULT now(),
+      
+      -- NOUVEAUX CHAMPS D'EXPLOITATION/UI (Ajoutés pour persistance)
+      tag TEXT DEFAULT '',
+      model TEXT DEFAULT '',
+      serial_number TEXT DEFAULT '', 
+      ip_address TEXT DEFAULT '',
+      protocol TEXT DEFAULT '',
+      floor TEXT DEFAULT '',
+      panel TEXT DEFAULT '',
+      location TEXT DEFAULT '',
+      criticality TEXT DEFAULT '',
+      ui_status TEXT DEFAULT ''
     );
+    
+    -- AJOUT DES COLONNES MANQUANTES (pour les DB existantes après ALTER TABLE)
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='tag') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN tag TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='model') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN model TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='serial_number') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN serial_number TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='ip_address') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN ip_address TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='protocol') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN protocol TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='floor') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN floor TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='panel') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN panel TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='location') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN location TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='criticality') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN criticality TEXT DEFAULT '';
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='vsd_equipments' AND column_name='ui_status') THEN
+        ALTER TABLE vsd_equipments ADD COLUMN ui_status TEXT DEFAULT '';
+      END IF;
+    END $$;
+
     CREATE INDEX IF NOT EXISTS idx_vsd_eq_next ON vsd_equipments(next_check_date);
   `);
+  // ... (Autres tables non modifiées)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS vsd_checks (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -270,6 +318,7 @@ async function vsdExtractFromFiles(client, files) {
 - current_a (courant nominal en A, nombre décimal)
 - voltage (tension, ex: "400V")
 - protocol (protocole de communication: Modbus, Profibus, Ethernet/IP, etc.)
+- ip_rating (indice de protection IP)
 
 Réponds en JSON strict avec ces champs uniquement.`;
 
@@ -282,7 +331,7 @@ Réponds en JSON strict avec ces champs uniquement.`;
         ...images.map((im) => ({
           type: "image_url",
           image_url: { url: `data:${im.mime};base64,${im.data}` },
-        })),
+        ))),
       ],
     },
   ];
@@ -310,6 +359,7 @@ Réponds en JSON strict avec ces champs uniquement.`;
     current_a: data.current_a != null ? Number(data.current_a) : null,
     voltage: String(data.voltage || ""),
     protocol: String(data.protocol || ""),
+    ip_rating: String(data.ip_rating || ""),
   };
 }
 
@@ -395,14 +445,26 @@ app.post("/api/vsd/equipments", async (req, res) => {
       comment = "",
       installed_at = null,
       next_check_date = null,
+      // NOUVEAUX CHAMPS
+      tag = "",
+      model = "",
+      serial_number = "",
+      ip_address = "",
+      protocol = "",
+      floor = "",
+      panel = "",
+      location = "",
+      criticality = "",
+      ui_status = "",
     } = req.body || {};
     const { rows } = await pool.query(
       `INSERT INTO vsd_equipments(
          name, building, zone, equipment, sub_equipment, type,
          manufacturer, manufacturer_ref, power_kw, voltage, 
          current_nominal, ip_rating, comment,
-         installed_at, next_check_date
-       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         installed_at, next_check_date,
+         tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status
+       ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
        RETURNING *`,
       [
         name, building, zone, equipment, sub_equipment, type,
@@ -410,6 +472,7 @@ app.post("/api/vsd/equipments", async (req, res) => {
         current_nominal, ip_rating, comment,
         installed_at || null,
         next_check_date || null,
+        tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status
       ]
     );
     const eq = rows[0];
@@ -432,6 +495,8 @@ app.put("/api/vsd/equipments/:id", async (req, res) => {
       manufacturer, manufacturer_ref, power_kw, voltage,
       current_nominal, ip_rating, comment,
       installed_at, next_check_date,
+      // NOUVEAUX CHAMPS
+      tag, model, serial_number, ip_address, protocol, floor, panel, location, criticality, ui_status,
     } = req.body || {};
     const fields = [];
     const vals = [];
@@ -451,6 +516,18 @@ app.put("/api/vsd/equipments/:id", async (req, res) => {
     if (comment !== undefined) { fields.push(`comment=$${idx++}`); vals.push(comment); }
     if (installed_at !== undefined) { fields.push(`installed_at=$${idx++}`); vals.push(installed_at || null); }
     if (next_check_date !== undefined) { fields.push(`next_check_date=$${idx++}`); vals.push(next_check_date || null); }
+    // NOUVEAUX CHAMPS
+    if (tag !== undefined) { fields.push(`tag=$${idx++}`); vals.push(tag); }
+    if (model !== undefined) { fields.push(`model=$${idx++}`); vals.push(model); }
+    if (serial_number !== undefined) { fields.push(`serial_number=$${idx++}`); vals.push(serial_number); }
+    if (ip_address !== undefined) { fields.push(`ip_address=$${idx++}`); vals.push(ip_address); }
+    if (protocol !== undefined) { fields.push(`protocol=$${idx++}`); vals.push(protocol); }
+    if (floor !== undefined) { fields.push(`floor=$${idx++}`); vals.push(floor); }
+    if (panel !== undefined) { fields.push(`panel=$${idx++}`); vals.push(panel); }
+    if (location !== undefined) { fields.push(`location=$${idx++}`); vals.push(location); }
+    if (criticality !== undefined) { fields.push(`criticality=$${idx++}`); vals.push(criticality); }
+    if (ui_status !== undefined) { fields.push(`ui_status=$${idx++}`); vals.push(ui_status); }
+
     fields.push(`updated_at=now()`);
     vals.push(id);
     await pool.query(
@@ -762,7 +839,7 @@ app.post("/api/vsd/maps/uploadZip", multerZip.single("zip"), async (req, res) =>
       await pool.query(
         `INSERT INTO vsd_plan_names(logical_name, display_name)
          VALUES($1,$2)
-         ON CONFLICT(logical_name) DO NOTHING`,
+         ON CONFLICT(logical_name) DO UPDATE SET display_name=$2`, // Fix: ensure display name updates
         [logical, base]
       );
       imported.push(rows[0]);
@@ -855,7 +932,7 @@ app.get("/api/vsd/maps/positions", async (req, res) => {
     }
     const { rows } = await pool.query(
       `SELECT pos.equipment_id, pos.x_frac, pos.y_frac,
-              e.name, e.status, e.next_check_date
+              e.name, e.status, e.next_check_date, e.building, e.zone, e.floor, e.location
          FROM vsd_positions pos
          JOIN vsd_equipments e ON e.id=pos.equipment_id
         WHERE pos.logical_name=$1 AND pos.page_index=$2`,
