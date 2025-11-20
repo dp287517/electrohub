@@ -645,7 +645,7 @@ function isControlAllowedForEntity(cat, ctrl, ent) {
 
   // ------------- Variable Speed Drives -------------
   if (key === "vsd") {
-    return isVsdLikeEntity(ent);
+    return true;
   }
 
   // Par défaut : on laisse passer (IA + bon sens métier)
@@ -1757,6 +1757,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
         cat.key === "lv_switchgear" ||
         cat.key === "lv_switchgear_devices" ||
         cat.key === "distribution_boards";
+        cat.key === "vsd";
 
       // ------------------------------
       // 1) Vérifier que la table existe + récupérer les équipements
