@@ -66,7 +66,7 @@ export default function App() {
           <Route path="/app/comp-ext" element={<ProtectedRoute><Comp /></ProtectedRoute>} />
           <Route path="/app/ask-veeva" element={<ProtectedRoute><AskVeeva /></ProtectedRoute>} />
           <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
-          <Route path="/app/meca" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
+          <Route path="/app/meca" element={<ProtectedRoute><Meca /></ProtectedRoute>} />
 
           {/* 👇 NEW: Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
