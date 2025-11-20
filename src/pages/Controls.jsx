@@ -933,6 +933,7 @@ function HierarchyTree({
         const kB = `b-${bi}`;
         const hvItemsRaw = b.hv || [];
         const swItemsRaw = b.switchboards || [];
+        const vsdItemsRaw = b.vsds || [];
 
         // 🔽 filtration HV/LV + texte + plan
         const hvItems =
@@ -953,6 +954,14 @@ function HierarchyTree({
                   matchesPlanFilter(sb)
               );
 
+        const vsdItems =
+          typeFilter === "hv"
+            ? [] // si on filtre HV uniquement, on cache les VSD (BT)
+            : vsdItemsRaw.filter(
+                (v) => matchesText(v.label) && matchesPlanFilter(v)
+              );
+
+
         // Compteurs par tâches
         const hvTaskCount = hvItems.reduce(
           (a, hv) =>
@@ -972,6 +981,10 @@ function HierarchyTree({
               (x, d) => x + countTasksForFilter(d.tasks),
               0
             ),
+          0
+        );
+        const vsdTaskCount = vsdItems.reduce(
+          (a, v) => a + countTasksForFilter(v.tasks),
           0
         );
 
@@ -1000,6 +1013,11 @@ function HierarchyTree({
           (sb.devices || []).forEach((d) => accumulateStatus(d.tasks));
         });
 
+        // VSD : uniquement les tâches d'équipement
+        vsdItems.forEach((v) => {
+          accumulateStatus(v.tasks);
+        });
+
         const hasOverdue = statusCounters.overdue > 0;
         const hasPending = statusCounters.pending > 0;
         const hasPlanned = statusCounters.planned > 0;
@@ -1022,8 +1040,14 @@ function HierarchyTree({
           (a, sb) => a + 1 + (sb.devices?.length || 0),
           0
         );
+        const vsdEquipCount = vsdItems.length;
 
-        if (hvItems.length === 0 && swItems.length === 0) return null;
+        if (
+          hvItems.length === 0 &&
+          swItems.length === 0 &&
+          vsdItems.length === 0
+        )
+          return null;
 
         const buildingLabel = b.label;
 
@@ -1047,6 +1071,11 @@ function HierarchyTree({
                   {swEquipCount > 0 && (
                     <span>
                       TGBT/DB: {swEquipCount} équip. – {swTaskCount} ctrl.
+                    </span>
+                  )}
+                  {vsdEquipCount > 0 && (
+                    <span>
+                      VSD: {vsdEquipCount} équip. – {vsdTaskCount} ctrl.
                     </span>
                   )}
                 </div>
@@ -1395,6 +1424,80 @@ function HierarchyTree({
                             </TreeNode>
                           );
                         })}
+                      </TreeNode>
+                    );
+                  })}
+                </TreeNode>
+              )}
+              {/* SECTION VSD */}
+              {vsdItems.length > 0 && (
+                <TreeNode
+                  title="Variable Speed Drives"
+                  count={vsdTaskCount}
+                  equipmentCount={vsdEquipCount}
+                  open={expanded[`${kB}-vsd`]}
+                  toggle={() => toggle(`${kB}-vsd`)}
+                  building={buildingLabel}
+                  focusEntity={focusEntity}
+                >
+                  {vsdItems.map((vsd, i) => {
+                    const vTaskCount = countTasksForFilter(vsd.tasks);
+
+                    const handlePlanClickVsd = () =>
+                      onPlanAction?.({
+                        entity_id: vsd.id,
+                        entity_type: "vsd",
+                        label: vsd.label,
+                        building: buildingLabel,
+                        building_code: vsd.building_code || buildingLabel,
+                        positioned: vsd.positioned,
+                        plan_id: vsd.plan_id || vsd.main_plan_id,
+                        plan_logical_name:
+                          vsd.plan_logical_name || vsd.main_plan_logical_name,
+                        plan_display_name:
+                          vsd.plan_display_name ||
+                          vsd.main_plan_display_name,
+                      });
+
+                    return (
+                      <TreeNode
+                        key={vsd.id || i}
+                        title={vsd.label}
+                        count={vTaskCount}
+                        equipmentCount={1} // VSD = équipement terminal
+                        open={expanded[`vsd-${bi}-${i}`]}
+                        toggle={() => toggle(`vsd-${bi}-${i}`)}
+                        level={1}
+                        positioned={vsd.positioned}
+                        needsPosition={!vsd.positioned && vTaskCount > 0}
+                        inheritsPosition={false}
+                        building={buildingLabel}
+                        onPlanClick={handlePlanClickVsd}
+                        entity={vsd}
+                        focusEntity={focusEntity}
+                      >
+                        {vsd.tasks?.map((t) => (
+                          <div
+                            key={t.id}
+                            onClick={() => onSelectTask(t)}
+                            className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                          >
+                            <div className="flex flex-col">
+                              <span>{t.task_name}</span>
+                              {t.tsd_code && (
+                                <span className="text-[11px] text-gray-500">
+                                  {t.tsd_code}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <StatusPill status={t.status} />
+                              <span className="text-xs text-gray-500">
+                                {fmtDate(t.next_control)}
+                              </span>
+                            </div>
+                          </div>
+                        ))}
                       </TreeNode>
                     );
                   })}
