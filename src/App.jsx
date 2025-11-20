@@ -26,6 +26,7 @@ import Doors from './pages/Doors.jsx';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
+import Meca from './pages/Meca.jsx';
 
 export default function App() {
   return (
