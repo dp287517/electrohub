@@ -2058,7 +2058,7 @@ export const tsdLibrary = {
     {
       "key": "vsd",
       "label": "Variable Speed Drives",
-      "db_table": "variable_speed_drives",
+      "db_table": "vsd_equipments",
       "fallback_note_if_missing": "Equipment pending integration into Electrohub system.",
       "controls": [
         {
