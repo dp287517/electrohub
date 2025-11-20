@@ -1302,8 +1302,6 @@ router.get("/hierarchy/tree", async (req, res) => {
       }
 
       // ---------- VSD ----------
-      // On lit la table vsd_equipments (structure d'après ton JSON)
-      // colonnes utiles : id, name, building, equipment, ...
       let vsdRows = [];
       try {
         const { rows } = await client.query(
@@ -1350,17 +1348,17 @@ router.get("/hierarchy/tree", async (req, res) => {
         );
         const vsdTasks = filterTasks(vsdTasksRaw);
 
-        if (vsdTasks.length > 0) {
-          building.vsds.push({
-            id: v.id,
-            label: v.name || v.equipment || `VSD ${v.id}`,
-            positioned: vsdPositioned,
-            entity_type: "vsd",
-            building_code: bRow.code,
-            tasks: vsdTasks,
-            ...(vsdPlan || {}), // plan_id, plan_logical_name, plan_display_name
-          });
-        }
+        // ON A SUPPRIMÉ LE IF (vsdTasks.length > 0) ICI
+        // On ajoute l'équipement dans tous les cas
+        building.vsds.push({
+          id: v.id,
+          label: v.name || v.equipment || `VSD ${v.id}`,
+          positioned: vsdPositioned,
+          entity_type: "vsd",
+          building_code: bRow.code,
+          tasks: vsdTasks,
+          ...(vsdPlan || {}),
+        });
       }
 
       // ---------- Filtre final bâtiment ----------
@@ -1371,9 +1369,10 @@ router.get("/hierarchy/tree", async (req, res) => {
       ) {
         buildings.push(building);
       }
-    }
+    } // Fin de la boucle for (const bRow of buildingRows)
 
     res.json({ buildings });
+
   } catch (e) {
     console.error("[Controls] hierarchy/tree error:", e);
     res.status(500).json({ error: e.message });
