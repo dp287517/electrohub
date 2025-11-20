@@ -176,6 +176,9 @@ function entityTypeFromCategory(cat) {
       return "device";
     case "sites":
       return "site";
+    // VSD
+    case "vsd_equipments":
+      return "vsd";
     default:
       return t ? t.replace(/_/g, "") : "equipment";
   }
@@ -662,6 +665,9 @@ function tableFromEntityType(entityType) {
       return "devices";
     case "site":
       return "sites";
+    // VSD
+    case "vsd":
+      return "vsd_equipments";
     default:
       return null;
   }
@@ -1089,7 +1095,7 @@ router.get("/hierarchy/tree", async (req, res) => {
     );
 
     for (const bRow of buildingRows) {
-      const building = { label: bRow.code, hv: [], switchboards: [] };
+      const building = { label: bRow.code, hv: [], switchboards: [], vsds: [] };
 
       // ---------- HV ----------
       const { rows: hvEquips } = await client.query(
@@ -1295,7 +1301,74 @@ router.get("/hierarchy/tree", async (req, res) => {
         }
       }
 
-      if (building.hv.length > 0 || building.switchboards.length > 0) {
+      // ---------- VSD ----------
+      // On lit la table vsd_equipments (structure d'après ton JSON)
+      // colonnes utiles : id, name, building, equipment, ...
+      let vsdRows = [];
+      try {
+        const { rows } = await client.query(
+          `SELECT * FROM vsd_equipments WHERE building = $1`,
+          [bRow.code]
+        );
+        vsdRows = rows || [];
+      } catch (e) {
+        console.error(
+          "[Controls] hierarchy/tree VSD query error:",
+          e.message || e
+        );
+        vsdRows = [];
+      }
+
+      for (const v of vsdRows) {
+        // Est-ce que le VSD a au moins une tâche positionnée ?
+        const { rows: vsdPosCheck } = await client.query(
+          `SELECT EXISTS(
+            SELECT 1 FROM controls_task_positions ctp
+            JOIN controls_tasks ct ON ctp.task_id = ct.id
+            WHERE ct.entity_id = $1 
+              AND ct.entity_type = 'vsd'
+          ) as positioned`,
+          [v.id]
+        );
+        const vsdPositioned = vsdPosCheck[0]?.positioned || false;
+
+        const vsdPlan = vsdPositioned
+          ? await getPlanForEntity(client, v.id, "vsd")
+          : null;
+
+        // Tâches VSD
+        const { rows: vsdTasksRaw } = await client.query(
+          `SELECT ct.*,
+            EXISTS(
+              SELECT 1 FROM controls_task_positions ctp
+              WHERE ctp.task_id = ct.id
+            ) as positioned
+          FROM controls_tasks ct
+          WHERE ct.entity_id = $1 
+            AND ct.entity_type = 'vsd'`,
+          [v.id]
+        );
+        const vsdTasks = filterTasks(vsdTasksRaw);
+
+        if (vsdTasks.length > 0) {
+          building.vsds.push({
+            id: v.id,
+            label: v.name || v.equipment || `VSD ${v.id}`,
+            positioned: vsdPositioned,
+            entity_type: "vsd",
+            building_code: bRow.code,
+            tasks: vsdTasks,
+            ...(vsdPlan || {}), // plan_id, plan_logical_name, plan_display_name
+          });
+        }
+      }
+
+      // ---------- Filtre final bâtiment ----------
+      if (
+        building.hv.length > 0 ||
+        building.switchboards.length > 0 ||
+        building.vsds.length > 0
+      ) {
         buildings.push(building);
       }
     }
@@ -1892,7 +1965,10 @@ Consignes :
       // ------------------------------
       // 5) Création des tâches par équipement
       // ------------------------------
-      for (const ent of entities) {
+      // ⚠️ On passe en boucle indexée pour pouvoir lisser les VSD (5/jour)
+      for (let i = 0; i < entities.length; i++) {
+        const ent = entities[i];
+
         const label =
           ent.name ||
           ent.device_type ||
@@ -1965,7 +2041,7 @@ Consignes :
         // 5.z) Post-traitement par catégorie
         // ----------------------------
 
-        // LV SWICHGEAR (TGBT/DB) : on garde UNIQUEMENT les contrôles globaux
+        // LV SWITCHGEAR (TGBT/DB) : on garde UNIQUEMENT les contrôles globaux
         if (cat.key === "lv_switchgear") {
           controlsForThis = controlsForThis.filter((ctrl) =>
             isGlobalSwitchgearControl(ctrl)
@@ -2005,15 +2081,36 @@ Consignes :
           });
         }
 
-        // 5.c) Création des tâches
+        // ------------------------------------------------
+        // 5.c) Création des tâches avec lissage pour VSD
+        // ------------------------------------------------
+
+        // Pour les VSD, on applique la règle : 5 équipements max par jour.
+        // On décale la date de départ de (index / 5) jours.
+        let baseDateForEntity = null;
+        if (cat.key === "vsd") {
+          const VSD_PER_DAY = 5;
+          const dayOffset = Math.floor(i / VSD_PER_DAY);
+
+          // Ancre : lundi prochain
+          const startAnchor = dayjs().add(1, "week").startOf("week");
+          baseDateForEntity = startAnchor.add(dayOffset, "day");
+        }
+
         for (const ctrl of controlsForThis) {
           if (!ctrl) continue;
 
           const taskCode = ctrl.type.toLowerCase().replace(/\s+/g, "_");
 
-          // Date initiale pseudo-aléatoire en 2026
-          const firstDate = generateInitialDate(ctrl.frequency || null);
-          // Prochaine échéance
+          // Si VSD, on utilise notre date calculée, sinon la méthode standard
+          let firstDate;
+          if (cat.key === "vsd" && baseDateForEntity) {
+            firstDate = baseDateForEntity.format("YYYY-MM-DD");
+          } else {
+            firstDate = generateInitialDate(ctrl.frequency || null);
+          }
+
+          // Prochaine échéance (si frequency existe)
           const nextDate = addFrequency(firstDate, ctrl.frequency || null);
 
           // Fréquence en mois (pour info / stats)
@@ -2027,6 +2124,8 @@ Consignes :
             }
           }
 
+          // INSERTION (ON CONFLICT DO NOTHING préserve les dates existantes)
+          // La logique de lissage ne s'appliquera donc QUE sur les nouvelles tâches
           const result = await client.query(
             `INSERT INTO controls_tasks
                (site, entity_id, entity_type, task_name, task_code,
@@ -2040,7 +2139,8 @@ Consignes :
               `${cat.label} – ${ctrl.type}`,
               taskCode,
               "Planned",
-              nextDate || firstDate,
+              // Pour le premier contrôle, on utilise firstDate comme 'next_control'
+              firstDate,
               freqMonths,
             ]
           );
