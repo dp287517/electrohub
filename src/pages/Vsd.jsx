@@ -197,7 +197,7 @@ function Toast({ text, onClose }) {
   );
 }
 
-/* ----------------------------- VSD Leaflet Viewer (intégré) ----------------------------- */
+/* ----------------------------- VSD Leaflet Viewer ----------------------------- */
 const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [], onReady, onMovePoint, onClickPoint, onCreatePoint, disabled = false }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
@@ -209,7 +209,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
   const aliveRef = useRef(true);
   const pointsRef = useRef(initialPoints); 
   
-  // ✅ CORRECTION DU ZOOM: Références pour préserver la vue Leaflet lors des re-renders
+  // Zoom persistant
   const lastViewRef = useRef({ center: [0, 0], zoom: 0 });
   const initialFitDoneRef = useRef(false);
   const userViewTouchedRef = useRef(false);
@@ -254,7 +254,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     map.addControl(addBtnControlRef.current);
   }
 
-  // Fonction centrale pour dessiner les marqueurs 
   const drawMarkers = useCallback((list, w, h) => {
     const map = mapRef.current;
     const g = markersLayerRef.current;
@@ -304,7 +303,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     });
   }, [onClickPoint, onMovePoint]);
 
-  // Effet pour l'initialisation de la carte et du PDF 
   useEffect(() => {
     if (disabled) return;
     if (!fileUrl || !wrapRef.current) return;
@@ -314,36 +312,39 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
     const jobKey = `${fileUrl}::${pageIndex}`;
     
+    // Si même URL/page, on ne recharge pas tout
     if (lastJob.current.key === jobKey) {
       onReady?.();
       return;
     }
     
+    // Nettoyage complet de l'instance précédente
     const cleanupMap = () => {
-    const map = mapRef.current;
-    if (map) {
-      try { map.off(); } catch {}
-      try { map.stop?.(); } catch {}
-      try {
-        map.eachLayer((l) => {
-          try { map.removeLayer(l); } catch {}
-        });
-      } catch {}
-      try {
-        if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
-      } catch {}
-      try { map.remove(); } catch {}
-    }
-    mapRef.current = null;
-    imageLayerRef.current = null;
-    if (markersLayerRef.current) {
-      try { markersLayerRef.current.clearLayers(); } catch {}
-      markersLayerRef.current = null;
-    }
-    addBtnControlRef.current = null;
-    initialFitDoneRef.current = false;
-    userViewTouchedRef.current = false;
-  };
+      const map = mapRef.current;
+      if (map) {
+        // IMPORTANT : Arrêter le moteur de rendu/anim avant de détruire
+        try { map.stop(); } catch {} 
+        try { map.off(); } catch {}
+        try {
+          map.eachLayer((l) => {
+            try { map.removeLayer(l); } catch {}
+          });
+        } catch {}
+        try {
+            if (addBtnControlRef.current) map.removeControl(addBtnControlRef.current);
+        } catch {}
+        try { map.remove(); } catch {}
+      }
+      mapRef.current = null;
+      imageLayerRef.current = null;
+      if (markersLayerRef.current) {
+        try { markersLayerRef.current.clearLayers(); } catch {}
+        markersLayerRef.current = null;
+      }
+      addBtnControlRef.current = null;
+      initialFitDoneRef.current = false;
+      userViewTouchedRef.current = false;
+    };
 
     lastJob.current.key = jobKey;
 
@@ -383,7 +384,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         const dataUrl = canvas.toDataURL("image/png");
         setImgSize({ w: canvas.width, h: canvas.height });
 
-        // INITIALISATION DE LA CARTE
+        // --- INITIALISATION CARTE ---
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
@@ -423,11 +424,8 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         mapRef.current = m;
         const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
 
-        // Si une ancienne couche existe (reload de plan / page), on l’enlève proprement
         if (imageLayerRef.current) {
-          try {
-            m.removeLayer(imageLayerRef.current);
-          } catch {}
+          try { m.removeLayer(imageLayerRef.current); } catch {}
           imageLayerRef.current = null;
         }
 
@@ -436,6 +434,7 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         layer.addTo(m);
 
         await new Promise(requestAnimationFrame);
+        if (cancelled) return; // Check after wait
         m.invalidateSize(false);
 
         const fitZoom = m.getBoundsZoom(bounds, true);
@@ -443,20 +442,18 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         m.options.zoomDelta = 0.5;
         m.setMinZoom(fitZoom - 1);
 
-        // ✅ d’abord on définit une vue valide
         if (!initialFitDoneRef.current || !userViewTouchedRef.current) {
           m.fitBounds(bounds, { padding: [8, 8] });
           lastViewRef.current.center = m.getCenter();
           lastViewRef.current.zoom = m.getZoom();
           initialFitDoneRef.current = true;
         } else {
+          // Restaure la vue précédente
           m.setView(lastViewRef.current.center, lastViewRef.current.zoom, { animate: false });
         }
 
-        // ✅ ensuite seulement on resserre max zoom / max bounds
         m.setMaxZoom(fitZoom + 6);
         m.setMaxBounds(bounds.pad(0.5));
-
 
         if (!markersLayerRef.current) {
           markersLayerRef.current = L.layerGroup().addTo(m);
@@ -470,7 +467,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
       } catch (e) {
         if (String(e?.name) === "RenderingCancelledException") return;
         const msg = String(e?.message || "");
-        // Gestion de l'erreur PDF.js "Worker was terminated" due aux re-renders
         if (msg.includes("Worker was destroyed") || msg.includes("Worker was terminated")) return;
         console.error("VSD Leaflet viewer error", e);
       }
@@ -491,7 +487,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
         m.fitBounds(b, { padding: [8, 8] });
         initialFitDoneRef.current = true;
       } else {
-        // Conserve la vue utilisateur après un resize
         m.setView(keepCenter, keepZoom, { animate: false });
       }
     };
@@ -507,9 +502,8 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
       try { loadingTaskRef.current?.destroy(); } catch {}
       cleanupMap();
     };
-  }, [fileUrl, pageIndex, disabled]);
+  }, [fileUrl, pageIndex, disabled]); // NOTE : On ne met PAS onClickPoint ici car il est stable via useCallback
   
-  // Maintient la ref pointsRef.current à jour avec les props du parent
   useEffect(() => {
     pointsRef.current = initialPoints;
     if(mapRef.current && imgSize.w > 0) {
@@ -523,13 +517,12 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
     const layer = imageLayerRef.current;
     if (!m || !layer) return;
     const b = layer.getBounds();
-    m.scrollWheelZoom?.disable();
+    try { m.scrollWheelZoom?.disable(); } catch {}
     m.invalidateSize(false);
     const fitZoom = m.getBoundsZoom(b, true);
     m.setMinZoom(fitZoom - 1);
     m.fitBounds(b, { padding: [8, 8] });
     
-    // Met à jour les refs de la vue après "Ajuster"
     lastViewRef.current.center = m.getCenter();
     lastViewRef.current.zoom = m.getZoom();
     initialFitDoneRef.current = true;
@@ -589,7 +582,6 @@ const VsdLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [
 
 /* ----------------------------- Page principale VSD ----------------------------- */
 
-// HOOK : Logique d'update de la carte (découplée de l'état Vsd)
 function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
   const reloadPositionsRef = useRef(null);
   const latestPositionsRef = useRef([]);
@@ -622,7 +614,6 @@ function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
     }
   }, [viewerRef]);
 
-  // 👉 on stocke la même fonction dans la ref
   useEffect(() => {
     reloadPositionsRef.current = loadPositions;
   }, [loadPositions]);
@@ -645,7 +636,6 @@ function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
     };
   }, [stableSelectedPlan]);
 
-  // ✅ fonctions mémoïsées
   const refreshPositions = useCallback((p, idx = 0) => {
     return reloadPositionsRef.current?.(p, idx);
   }, []);
@@ -657,7 +647,6 @@ function useMapUpdateLogic(stableSelectedPlan, viewerRef) {
   return { refreshPositions, getLatestPositions };
 }
 
-// ✅ FONCTION MISE À JOUR : utilise les NOUVELLES colonnes DB
 function getNormalizedEquipment(eq) {
     const base = {
         id: null,
@@ -675,17 +664,17 @@ function getNormalizedEquipment(eq) {
         zone: "",
         location: "", 
         panel: "", 
-        status: "", // DB status (a_faire, en_retard, en_cours_30) - statut de contrôle
-        ui_status: "", // DB ui_status (en_service, hors_service, spare) - statut d'exploitation
+        status: "",
+        ui_status: "",
         criticality: "", 
-        comments: "", // Mappé à la colonne 'comment' du DB
+        comments: "",
         ip_rating: "", 
         power_kw: null,
         current_a: null, 
     };
     
     const clean = { ...base, ...eq };
-    // ✅ Mapper les anciennes colonnes DB vers les champs UI
+    
     if (eq?.manufacturer_ref && !clean.reference) {
       clean.reference = String(eq.manufacturer_ref);
     }
@@ -700,12 +689,10 @@ function getNormalizedEquipment(eq) {
       if (!Number.isNaN(p)) clean.power_kw = p;
     }
     
-    // Si la colonne 'comment' existe dans l'objet DB (eq), on l'utilise pour remplir le champ UI 'comments'
     if (eq?.comment) {
         clean.comments = String(eq.comment);
     }
 
-    // Assure le nettoyage des zones/colonnes qui peuvent venir en objets ou null
     for (const field of ["building", "zone", "tag", "model", "serial_number", "ip_address", "protocol", "floor", "panel", "location", "criticality", "ui_status", "comments", "ip_rating", "reference", "voltage"]) {
       if (typeof clean[field] === "object" && clean[field] !== null) {
         clean[field] = clean[field].name || clean[field].id || "";
@@ -749,6 +736,13 @@ export default function Vsd() {
   const [analyzingIA, setAnalyzingIA] = useState(false); 
 
   const stableSelectedPlan = useMemo(() => selectedPlan, [selectedPlan]);
+  
+  // FIX CRITIQUE POUR LE RESET DU ZOOM : On stabilise l'URL ici avec useMemo
+  const stableFileUrl = useMemo(() => {
+    if (!stableSelectedPlan) return null;
+    return api.vsdMaps.planFileUrlAuto(stableSelectedPlan, { bust: true });
+  }, [stableSelectedPlan]);
+
   const { refreshPositions, getLatestPositions } = useMapUpdateLogic(stableSelectedPlan, viewerRef);
 
   const debouncer = useRef(null);
@@ -808,7 +802,7 @@ export default function Vsd() {
   // Ancienne fonction mergeZones remplacée par getNormalizedEquipment
   const mergeZones = getNormalizedEquipment; 
 
-  async function openEdit(equipment, reloadFn) {
+  const openEdit = useCallback(async (equipment, reloadFn) => {
     const base = getNormalizedEquipment(equipment || {});
     setEditing(base);
     initialRef.current = base;
@@ -838,7 +832,7 @@ export default function Vsd() {
         setFiles([]);
       }
     }
-  }
+  }, []);
 
   function closeEdit() {
     setEditing(null);
@@ -857,7 +851,7 @@ export default function Vsd() {
       "voltage", "ip_address", "protocol", "building", "floor", "zone",
       "location", "panel", "ui_status", "criticality", "comments", "ip_rating", 
     ];
-    // status est une colonne DB pour l'état de contrôle, mais ui_status est pour l'état d'exploitation
+    
     if (keys.some((k) => String(A?.[k] ?? "") !== String(B?.[k] ?? ""))) return true;
     if (Number(A?.power_kw) !== Number(B?.power_kw)) return true;
     if (Number(A?.current_a) !== Number(B?.current_a)) return true;
@@ -869,13 +863,12 @@ export default function Vsd() {
   async function saveBase() {
     if (!editing) return;
     
-    // ✅ Payload simplifié qui envoie chaque champ à sa colonne DB dédiée
     const payload = {
       name: editing.name || "",
       building: editing.building || "",
       zone: editing.zone || "",
       equipment: editing.equipment || "", 
-      sub_equipment: "", // Laissé vide, les champs sont désormais séparés (floor, panel)
+      sub_equipment: "", 
       type: editing.type || "Variateur",
       manufacturer: editing.manufacturer || "",
       manufacturer_ref: editing.reference || "", 
@@ -883,9 +876,8 @@ export default function Vsd() {
       voltage: editing.voltage || "",
       current_nominal: editing.current_a ?? null, 
       ip_rating: editing.ip_rating || "",
-      comment: editing.comments || "", // Mappe le champ UI 'Commentaires' à la colonne DB 'comment'
+      comment: editing.comments || "", 
       
-      // NOUVEAUX CHAMPS (lus et écrits par le serveur)
       tag: editing.tag || "",
       model: editing.model || "",
       serial_number: editing.serial_number || "",
@@ -1061,6 +1053,7 @@ export default function Vsd() {
   
   const handlePdfReady = useCallback(() => setPdfReady(true), []);
 
+  // UTILISATION DE USECALLBACK POUR STABILISER LES HANDLERS
   const handleMovePoint = useCallback(
     async (equipmentId, xy) => {
       if (!stableSelectedPlan) return;
@@ -1078,9 +1071,9 @@ export default function Vsd() {
 
   const handleClickPoint = useCallback((p) => {
     openEdit({ id: p.equipment_id, name: p.name });
-  }, []);
+  }, [openEdit]);
 
-  async function createEquipmentAtCenter() {
+  const createEquipmentAtCenter = useCallback(async () => {
     if (!stableSelectedPlan) return;
     try {
       const payload = {
@@ -1112,7 +1105,7 @@ export default function Vsd() {
       console.error(e);
       setToast("Création impossible");
     }
-  }
+  }, [stableSelectedPlan, refreshPositions, openEdit]);
 
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1253,7 +1246,7 @@ export default function Vsd() {
                 <VsdLeafletViewer
                   ref={viewerRef}
                   key={selectedPlan.logical_name} 
-                  fileUrl={api.vsdMaps.planFileUrlAuto(selectedPlan, { bust: true })}
+                  fileUrl={stableFileUrl} 
                   pageIndex={0}
                   initialPoints={initialPoints} 
                   onReady={handlePdfReady}
