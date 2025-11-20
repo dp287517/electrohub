@@ -100,7 +100,7 @@ async function ensureSchema() {
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`);
   await pool.query(`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
   
-  // TABLE EQUIPEMENTS MECA
+  // TABLE EQUIPEMENTS MECA (Structure propre à la mécanique)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS meca_equipments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -119,7 +119,7 @@ async function ensureSchema() {
       tag TEXT DEFAULT '',
       year_of_manufacture TEXT DEFAULT '',
       
-      power_kw NUMERIC DEFAULT NULL,  -- Puissance moteur souvent utile en méca
+      power_kw NUMERIC DEFAULT NULL,  -- Puissance moteur
       
       comment TEXT DEFAULT '',
       criticality TEXT DEFAULT '',    -- critique, important, standard
@@ -389,9 +389,9 @@ app.post("/api/meca/equipments", async (req, res) => {
       ) VALUES($1,$2,$3,$4,$5, $6,$7,$8,$9,$10,$11,$12,$13, $14,$15,$16,$17)
       RETURNING *
     `, [
-      b.name, b.building, b.zone, b.floor, b.location,
-      b.device_type, b.fluid_type, b.manufacturer, b.model, b.serial_number, b.tag, b.year_of_manufacture, b.power_kw,
-      b.comment, b.criticality, b.ui_status, b.next_check_date || null
+      b.name || "", b.building || "", b.zone || "", b.floor || "", b.location || "",
+      b.device_type || "", b.fluid_type || "", b.manufacturer || "", b.model || "", b.serial_number || "", b.tag || "", b.year_of_manufacture || "", b.power_kw || null,
+      b.comment || "", b.criticality || "", b.ui_status || "", b.next_check_date || null
     ]);
     await logEvent("meca_created", { id: rows[0].id, name: rows[0].name }, u);
     res.json({ ok: true, equipment: rows[0] });
@@ -432,6 +432,10 @@ app.put("/api/meca/equipments/:id", async (req, res) => {
     await logEvent("meca_updated", { id }, u);
     
     const { rows } = await pool.query(`SELECT * FROM meca_equipments WHERE id=$1`, [id]);
+    if(rows[0]) {
+       rows[0].photo_url = (rows[0].photo_content || rows[0].photo_path) ? `/api/meca/equipments/${id}/photo` : null;
+       delete rows[0].photo_content;
+    }
     res.json({ ok: true, equipment: rows[0] });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
@@ -575,7 +579,7 @@ app.post("/api/meca/maps/setPosition", async(req, res) => {
     await pool.query(`
         INSERT INTO meca_positions(equipment_id, logical_name, plan_id, x_frac, y_frac)
         VALUES($1,$2,$3,$4,$5)
-        ON CONFLICT(equipment_id, logical_name, page_index) DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac
+        ON CONFLICT(equipment_id, logical_name, page_index) DO UPDATE SET x_frac=EXCLUDED.x_frac, y_frac=EXCLUDED.y_frac, plan_id=EXCLUDED.plan_id
     `, [equipment_id, logical_name, plan_id, x_frac, y_frac]);
     res.json({ok:true});
 });
