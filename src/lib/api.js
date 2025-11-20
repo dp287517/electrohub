@@ -1318,6 +1318,54 @@ export const api = {
       }),
   },
 
+  /** --- MECA (Maintenance Mécanique) --- */
+  meca: {
+    listEquipments: (params) => get("/api/meca/equipments", params),
+    getEquipment: (id) => get(`/api/meca/equipments/${encodeURIComponent(id)}`),
+    createEquipment: (payload) => post("/api/meca/equipments", payload),
+    updateEquipment: (id, payload) => put(`/api/meca/equipments/${encodeURIComponent(id)}`, payload),
+    deleteEquipment: (id) => del(`/api/meca/equipments/${encodeURIComponent(id)}`),
+    
+    photoUrl: (id, { bust = true } = {}) => withBust(`${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo`, bust),
+    uploadPhoto: (id, file) => {
+      const fd = new FormData(); fd.append("photo", file);
+      return upload(`/api/meca/equipments/${encodeURIComponent(id)}/photo`, fd);
+    },
+    
+    listFiles: (id) => get("/api/meca/files", { equipment_id: id }),
+    uploadFiles: (id, files = []) => {
+      const fd = new FormData(); fd.append("equipment_id", id);
+      (files || []).forEach((f) => fd.append("files", f));
+      return upload("/api/meca/files", fd);
+    },
+    deleteFile: (id) => del(`/api/meca/files/${encodeURIComponent(id)}`),
+
+    extractFromPhotos: (files = []) => {
+      const fd = new FormData(); (files || []).forEach((f) => fd.append("files", f));
+      return upload(`/api/meca/analyzePhotoBatch`, fd);
+    },
+  },
+
+  /** --- MECA MAPS --- */
+  mecaMaps: {
+    uploadZip: (file) => {
+      const fd = new FormData(); fd.append("zip", file);
+      return upload(`/api/meca/maps/uploadZip`, fd);
+    },
+    listPlans: () => get(`/api/meca/maps/listPlans`),
+    planFileUrlAuto: (plan, { bust = true } = {}) => {
+      const key = plan?.id || plan?.logical_name || (typeof plan === "string" ? plan : "");
+      const p = isUuid(key) ? `id=${key}` : `logical_name=${key}`;
+      return withBust(`${API_BASE}/api/meca/maps/planFile?${p}`, bust);
+    },
+    positionsAuto: (key) => {
+        const p = isUuid(key) ? {id:key} : {logical_name:key};
+        return get(`/api/meca/maps/positions`, p);
+    },
+    setPosition: (eqId, payload) => post(`/api/meca/maps/setPosition`, { equipment_id: eqId, ...payload }),
+    renamePlan: (logical, display) => put(`/api/meca/maps/renamePlan`, { logical_name: logical, display_name: display }),
+  },
+
   /** --- 🔵 BUBBLE AUTH --- */
   bubble: {
     login: (token) => post("/api/auth/bubble", { token }),
