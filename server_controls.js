@@ -148,10 +148,20 @@ function generateInitialDate(frequency) {
 }
 
 // Trouver le contrôle TSD par task_code (dérivé de type)
-function findTSDControl(taskCode) {
+function findTSDControl(taskCode, entityType = null) {
   if (!taskCode) return null;
   const canon = String(taskCode).toLowerCase();
+
+  // 1. On détermine la table associée à l'équipement (ex: 'vsd' -> 'vsd_equipments')
+  // (La fonction tableFromEntityType existe déjà plus bas dans votre fichier)
+  const targetTable = entityType ? tableFromEntityType(entityType) : null;
+
   for (const cat of tsdLibrary.categories) {
+    // SI on connaît la table cible, on saute les catégories qui ne correspondent pas
+    if (targetTable && cat.db_table !== targetTable) {
+      continue;
+    }
+
     for (const c of cat.controls || []) {
       const code = c.type.toLowerCase().replace(/\s+/g, "_");
       if (code === canon) {
@@ -159,6 +169,20 @@ function findTSDControl(taskCode) {
       }
     }
   }
+
+  // Fallback de sécurité : si on n'a rien trouvé avec le filtre strict, 
+  // on cherche partout (au cas où entityType serait mal renseigné)
+  if (targetTable) {
+    for (const cat of tsdLibrary.categories) {
+      for (const c of cat.controls || []) {
+        const code = c.type.toLowerCase().replace(/\s+/g, "_");
+        if (code === canon) {
+          return { category: cat, control: c };
+        }
+      }
+    }
+  }
+
   return null;
 }
 
@@ -884,7 +908,7 @@ async function buildTaskContext(taskId) {
   if (!taskRows.length) return null;
   const task = taskRows[0];
 
-  const tsd = findTSDControl(task.task_code);
+  const tsd = findTSDControl(task.task_code, task.entity_type);
 
   const { rows: records } = await pool.query(
     `SELECT * FROM controls_records 
@@ -1399,7 +1423,7 @@ router.get("/tasks/:id/schema", async (req, res) => {
     }
 
     const task = rows[0];
-    const tsd = findTSDControl(task.task_code);
+    const tsd = findTSDControl(task.task_code, task.entity_type);
 
     if (!tsd) {
       return res.json({
@@ -1460,7 +1484,7 @@ router.patch("/tasks/:id/close", async (req, res) => {
     }
 
     const task = rows[0];
-    const tsd = findTSDControl(task.task_code);
+    const tsd = findTSDControl(task.task_code, task.entity_type);
     const frequency = tsd?.control?.frequency;
 
     const now = dayjs().format("YYYY-MM-DD");
