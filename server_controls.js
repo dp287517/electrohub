@@ -1756,7 +1756,7 @@ router.get("/bootstrap/auto-link", async (req, res) => {
       const forceFullControls =
         cat.key === "lv_switchgear" ||
         cat.key === "lv_switchgear_devices" ||
-        cat.key === "distribution_boards";
+        cat.key === "distribution_boards"
         cat.key === "vsd";
 
       // ------------------------------
