@@ -1318,7 +1318,7 @@ export const api = {
       }),
   },
 
-  /** --- MECA (Maintenance Mécanique) --- */
+/** --- MECA (Maintenance Mécanique) --- */
   meca: {
     listEquipments: (params) => get("/api/meca/equipments", params),
     getEquipment: (id) => get(`/api/meca/equipments/${encodeURIComponent(id)}`),
@@ -1326,7 +1326,6 @@ export const api = {
     updateEquipment: (id, payload) => put(`/api/meca/equipments/${encodeURIComponent(id)}`, payload),
     deleteEquipment: (id) => del(`/api/meca/equipments/${encodeURIComponent(id)}`),
     
-    // Photos & Fichiers
     photoUrl: (id, { bust = true } = {}) => withBust(`${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo`, bust),
     uploadPhoto: (id, file) => {
       const fd = new FormData(); fd.append("photo", file);
@@ -1338,9 +1337,6 @@ export const api = {
       (files || []).forEach((f) => fd.append("files", f));
       return upload("/api/meca/files", fd);
     },
-    deleteFile: (id) => del(`/api/meca/files/${encodeURIComponent(id)}`),
-    
-    // IA
     extractFromPhotos: (files = []) => {
       const fd = new FormData(); (files || []).forEach((f) => fd.append("files", f));
       return upload(`/api/meca/analyzePhotoBatch`, fd);
@@ -1364,7 +1360,6 @@ export const api = {
         return get(`/api/meca/maps/positions`, p);
     },
     setPosition: (eqId, payload) => post(`/api/meca/maps/setPosition`, { equipment_id: eqId, ...payload }),
-    renamePlan: (logical, display) => put(`/api/meca/maps/renamePlan`, { logical_name: logical, display_name: display }),
   },
 
   /** --- 🔵 BUBBLE AUTH --- */
