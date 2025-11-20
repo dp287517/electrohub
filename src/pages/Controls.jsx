@@ -866,6 +866,7 @@ function HierarchyTree({
   textFilter = "",
   planFilter = "all",
   typeFilter = "all",
+  onSyncNeeded,
 }) {
   const [tree, setTree] = useState(null);
   const [expanded, setExpanded] = useState({});
@@ -900,6 +901,12 @@ function HierarchyTree({
     try {
       const data = await api.controls.hierarchyTree({ status: statusFilter });
       setTree(data);
+      if (onSyncNeeded && data.buildings) {
+        const hasEmptyVsd = data.buildings.some(b => 
+          b.vsds && b.vsds.some(v => !v.tasks || v.tasks.length === 0)
+        );
+        onSyncNeeded(hasEmptyVsd);
+      }
     } catch (e) {
       console.error("[HierarchyTree] error:", e);
       setTree({ buildings: [] });
@@ -1572,6 +1579,8 @@ export default function ControlsPage() {
   const [textFilter, setTextFilter] = useState("");
   const [planFilter, setPlanFilter] = useState("all"); // all | with | without
   const [typeFilter, setTypeFilter] = useState("all"); // all | hv | lv
+  //état au début du composant
+  const [hasPendingSync, setHasPendingSync] = useState(false);
 
   const [showMap, setShowMap] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
@@ -1757,10 +1766,11 @@ export default function ControlsPage() {
             <RefreshCw size={14} /> Actualiser
           </Button>
           <Button
-            variant="warning"
+            variant={hasPendingSync ? "default" : "warning"}
             size="sm"
             onClick={handleSyncTSD}
             disabled={syncing}
+            className={hasPendingSync ? "bg-amber-600 hover:bg-amber-700 text-white animate-pulse" : ""}
           >
             {syncing ? (
               <>
@@ -1824,6 +1834,7 @@ export default function ControlsPage() {
             textFilter={textFilter}
             planFilter={planFilter}
             typeFilter={typeFilter}
+            onSyncNeeded={setHasPendingSync}
           />
         </TabsContent>
 
