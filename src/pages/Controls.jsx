@@ -854,7 +854,7 @@ function TreeNode({
 
 
 // ============================================================================
-// ARBORESCENCE (bâtiments / HV / TGBT / devices)
+// ARBORESCENCE (bâtiments / HV / TGBT / devices) - CORRIGÉ
 // ============================================================================
 
 function HierarchyTree({
@@ -890,7 +890,6 @@ function HierarchyTree({
     return true;
   };
 
-
   useEffect(() => {
     loadTree();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -924,8 +923,8 @@ function HierarchyTree({
     ).length;
   };
 
-  if (loading && !tree) return <div className="text-gray-500">Chargement...</div>;
-  if (!tree) return <div className="text-gray-500">Aucune donnée.</div>;
+  if (loading && !tree) return <div className="text-gray-500 p-4"><Loader2 className="animate-spin inline mr-2"/>Chargement...</div>;
+  if (!tree) return <div className="text-gray-500 p-4">Aucune donnée.</div>;
 
   return (
     <div className="space-y-3">
@@ -935,34 +934,33 @@ function HierarchyTree({
         const swItemsRaw = b.switchboards || [];
         const vsdItemsRaw = b.vsds || [];
 
-        // 🔽 filtration HV/LV + texte + plan
+        // 🔽 CORRECTION FILTRAGE : Gestion stricte des types
+        
+        // HV : On affiche sauf si le filtre est LV ou VSD
         const hvItems =
-          typeFilter === "lv"
+          (typeFilter === "lv" || typeFilter === "vsd")
             ? []
             : hvItemsRaw.filter(
-                (hv) =>
-                  matchesText(hv.label) &&
-                  matchesPlanFilter(hv)
+                (hv) => matchesText(hv.label) && matchesPlanFilter(hv)
               );
 
+        // BT (Switchboards) : On affiche sauf si le filtre est HV ou VSD
         const swItems =
-          typeFilter === "hv"
+          (typeFilter === "hv" || typeFilter === "vsd")
             ? []
             : swItemsRaw.filter(
-                (sb) =>
-                  matchesText(sb.label) &&
-                  matchesPlanFilter(sb)
+                (sb) => matchesText(sb.label) && matchesPlanFilter(sb)
               );
 
+        // VSD : On affiche sauf si le filtre est HV ou LV
         const vsdItems =
-          typeFilter === "hv"
-            ? [] // si on filtre HV uniquement, on cache les VSD (BT)
+          (typeFilter === "hv" || typeFilter === "lv")
+            ? []
             : vsdItemsRaw.filter(
                 (v) => matchesText(v.label) && matchesPlanFilter(v)
               );
 
-
-        // Compteurs par tâches
+        // --- Calculs des compteurs (identique à avant) ---
         const hvTaskCount = hvItems.reduce(
           (a, hv) =>
             a +
@@ -988,9 +986,8 @@ function HierarchyTree({
           0
         );
 
-        // Compteurs par statut (Planned / Pending / Overdue) pour le bandeau bâtiment
+        // --- Statuts globaux pour le bandeau bâtiment ---
         const statusCounters = { planned: 0, pending: 0, overdue: 0 };
-
         const accumulateStatus = (tasks) => {
           if (!Array.isArray(tasks)) return;
           tasks.forEach((t) => {
@@ -1001,19 +998,14 @@ function HierarchyTree({
           });
         };
 
-        // HV : tâches équipement + tâches devices HT
         hvItems.forEach((hv) => {
           accumulateStatus(hv.tasks);
           (hv.devices || []).forEach((d) => accumulateStatus(d.tasks));
         });
-
-        // TGBT/DB : tâches tableau + tâches devices BT
         swItems.forEach((sb) => {
           accumulateStatus(sb.tasks);
           (sb.devices || []).forEach((d) => accumulateStatus(d.tasks));
         });
-
-        // VSD : uniquement les tâches d'équipement
         vsdItems.forEach((v) => {
           accumulateStatus(v.tasks);
         });
@@ -1022,7 +1014,6 @@ function HierarchyTree({
         const hasPending = statusCounters.pending > 0;
         const hasPlanned = statusCounters.planned > 0;
 
-        // Couleur de fond du bandeau selon l'état le plus critique
         const buildingHeaderBg = hasOverdue
           ? "bg-red-50"
           : hasPending
@@ -1031,7 +1022,6 @@ function HierarchyTree({
           ? "bg-emerald-50"
           : "bg-gray-50";
 
-        // Compteurs par équipements
         const hvEquipCount = hvItems.reduce(
           (a, hv) => a + 1 + (hv.devices?.length || 0),
           0
@@ -1042,6 +1032,7 @@ function HierarchyTree({
         );
         const vsdEquipCount = vsdItems.length;
 
+        // Si tout est vide après filtrage, on ne montre pas le bâtiment
         if (
           hvItems.length === 0 &&
           swItems.length === 0 &&
@@ -1056,12 +1047,9 @@ function HierarchyTree({
             <div
               className={`px-4 py-3 flex items-center justify-between border-b ${buildingHeaderBg}`}
             >
-              <div className="flex items-center gap-3">
-                <div className="text-lg font-semibold">{buildingLabel}</div>
-              </div>
+              <div className="text-lg font-semibold">{buildingLabel}</div>
 
               <div className="flex flex-col items-end gap-1 text-xs">
-                {/* Infos équipements / contrôles */}
                 <div className="text-gray-600 flex flex-wrap gap-3 justify-end">
                   {hvEquipCount > 0 && (
                     <span>
@@ -1070,7 +1058,7 @@ function HierarchyTree({
                   )}
                   {swEquipCount > 0 && (
                     <span>
-                      TGBT/DB: {swEquipCount} équip. – {swTaskCount} ctrl.
+                      BT: {swEquipCount} équip. – {swTaskCount} ctrl.
                     </span>
                   )}
                   {vsdEquipCount > 0 && (
@@ -1080,24 +1068,17 @@ function HierarchyTree({
                   )}
                 </div>
 
-                {/* Bandeau d'état rapide : rouge / orange / vert */}
                 <div className="flex flex-wrap gap-2 justify-end">
                   {statusCounters.overdue > 0 && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
                       <span className="w-2 h-2 rounded-full bg-red-500" />
-                      {statusCounters.overdue} en retard
+                      {statusCounters.overdue} retard
                     </span>
                   )}
                   {statusCounters.pending > 0 && (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold">
                       <span className="w-2 h-2 rounded-full bg-amber-500" />
-                      {statusCounters.pending} ≤ 30 j
-                    </span>
-                  )}
-                  {statusCounters.planned > 0 && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 font-semibold">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                      {statusCounters.planned} planifié
+                      {statusCounters.pending} bientôt
                     </span>
                   )}
                 </div>
@@ -1117,17 +1098,12 @@ function HierarchyTree({
                   focusEntity={focusEntity}
                 >
                   {hvItems.map((eq, i) => {
-                    const hvEquipTaskCount = countTasksForFilter(eq.tasks);
-                    const hvEquipEquipCount =
-                      1 + (eq.devices?.length || 0);
-
                     const handlePlanClick = () =>
                       onPlanAction?.({
                         entity_id: eq.id,
                         entity_type: eq.entity_type || "hvequipment",
                         label: eq.label,
                         building: buildingLabel,
-                        building_code: eq.building_code || buildingLabel,
                         positioned: eq.positioned,
                         plan_id: eq.plan_id || eq.main_plan_id,
                         plan_logical_name:
@@ -1140,139 +1116,51 @@ function HierarchyTree({
                       <TreeNode
                         key={eq.id || i}
                         title={eq.label}
-                        count={hvEquipTaskCount}
-                        equipmentCount={hvEquipEquipCount}
+                        count={countTasksForFilter(eq.tasks)}
+                        equipmentCount={1 + (eq.devices?.length || 0)}
                         open={expanded[`hv-${bi}-${i}`]}
                         toggle={() => toggle(`hv-${bi}-${i}`)}
                         level={1}
                         positioned={eq.positioned}
-                        needsPosition={!eq.positioned && hvEquipTaskCount > 0}
-                        inheritsPosition={false}
-                        building={buildingLabel}
+                        needsPosition={!eq.positioned && countTasksForFilter(eq.tasks) > 0}
                         onPlanClick={handlePlanClick}
                         entity={eq}
                         focusEntity={focusEntity}
                       >
-                        {/* Tâches HV */}
                         {eq.tasks?.map((t) => (
                           <div
                             key={t.id}
                             onClick={() => onSelectTask(t)}
                             className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
                           >
-                            <div className="flex flex-col">
-                              <span>{t.task_name}</span>
-                              {t.tsd_code && (
-                                <span className="text-[11px] text-gray-500">
-                                  {t.tsd_code} • {t.control_type || "Contrôle"}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <StatusPill status={t.status} />
-                              <span className="text-xs text-gray-500">
-                                {fmtDate(t.next_control)}
-                              </span>
-                            </div>
+                            <span>{t.task_name}</span>
+                            <StatusPill status={t.status} />
                           </div>
                         ))}
 
-                        {/* Devices HV */}
-                        {(eq.devices || []).map((d, di) => {
-                          const deviceTaskCount = countTasksForFilter(
-                            d.tasks
-                          );
-                          const inheritsPosition =
-                            !d.positioned && eq.positioned;
-                          const positioned = d.positioned || inheritsPosition;
-
-                          const planPayloadBase = {
-                            building: buildingLabel,
-                            building_code: d.building_code || eq.building_code || buildingLabel,
-                            plan_id:
-                              d.plan_id ||
-                              d.main_plan_id ||
-                              eq.plan_id ||
-                              eq.main_plan_id,
-                            plan_logical_name:
-                              d.plan_logical_name ||
-                              d.main_plan_logical_name ||
-                              eq.plan_logical_name ||
-                              eq.main_plan_logical_name,
-                            plan_display_name:
-                              d.plan_display_name ||
-                              d.main_plan_display_name ||
-                              eq.plan_display_name ||
-                              eq.main_plan_display_name,
-                          };
-
-                          const handlePlanClickDevice = () => {
-                            if (inheritsPosition) {
-                              onPlanAction?.({
-                                entity_id: eq.id,
-                                entity_type: eq.entity_type || "hvequipment",
-                                label: eq.label,
-                                positioned: eq.positioned,
-                                ...planPayloadBase,
-                              });
-                            } else {
-                              onPlanAction?.({
-                                entity_id: d.id,
-                                entity_type: d.entity_type || "hvdevice",
-                                label: d.label,
-                                positioned: positioned,
-                                ...planPayloadBase,
-                              });
-                            }
-                          };
-
-                          return (
-                            <TreeNode
-                              key={d.id || di}
-                              title={
-                                inheritsPosition
-                                  ? `${d.label} (hérite position)`
-                                  : d.label
-                              }
-                              count={deviceTaskCount}
-                              equipmentCount={1}
-                              open={expanded[`hv-dev-${bi}-${i}-${di}`] || false}
-                              toggle={() => toggle(`hv-dev-${bi}-${i}-${di}`)}
-                              level={2}
-                              positioned={positioned}
-                              needsPosition={!positioned && deviceTaskCount > 0}
-                              inheritsPosition={inheritsPosition}
-                              building={buildingLabel}
-                              onPlanClick={handlePlanClickDevice}
-                              entity={d}
-                              focusEntity={focusEntity}
-                            >
-                              {d.tasks?.map((t) => (
-                                <div
-                                  key={t.id}
-                                  onClick={() => onSelectTask(t)}
-                                  className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                                >
-                                  <div className="flex flex-col">
-                                    <span>{t.task_name}</span>
-                                    {t.tsd_code && (
-                                      <span className="text-[11px] text-gray-500">
-                                        {t.tsd_code} •{" "}
-                                        {t.control_type || "Contrôle"}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <StatusPill status={t.status} />
-                                    <span className="text-xs text-gray-500">
-                                      {fmtDate(t.next_control)}
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </TreeNode>
-                          );
-                        })}
+                        {(eq.devices || []).map((d, di) => (
+                          <TreeNode
+                            key={d.id || di}
+                            title={d.label}
+                            count={countTasksForFilter(d.tasks)}
+                            equipmentCount={1}
+                            level={2}
+                            open={true}
+                            entity={d}
+                            toggle={() => {}}
+                          >
+                            {d.tasks?.map((t) => (
+                              <div
+                                key={t.id}
+                                onClick={() => onSelectTask(t)}
+                                className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                              >
+                                <span>{t.task_name}</span>
+                                <StatusPill status={t.status} />
+                              </div>
+                            ))}
+                          </TreeNode>
+                        ))}
                       </TreeNode>
                     );
                   })}
@@ -1291,38 +1179,30 @@ function HierarchyTree({
                   focusEntity={focusEntity}
                 >
                   {swItems.map((sb, i) => {
-                    const sbTaskCount = countTasksForFilter(sb.tasks);
-                    const sbEquipCount = 1 + (sb.devices?.length || 0);
-
-                    const handlePlanClickSwitchboard = () =>
+                    const handlePlanClick = () =>
                       onPlanAction?.({
                         entity_id: sb.id,
                         entity_type: sb.entity_type || "switchboard",
                         label: sb.label,
                         building: buildingLabel,
-                        building_code: sb.building_code || buildingLabel,
                         positioned: sb.positioned,
                         plan_id: sb.plan_id || sb.main_plan_id,
                         plan_logical_name:
                           sb.plan_logical_name || sb.main_plan_logical_name,
-                        plan_display_name:
-                          sb.plan_display_name || sb.main_plan_display_name,
                       });
 
                     return (
                       <TreeNode
                         key={sb.id || i}
                         title={sb.label}
-                        count={sbTaskCount}
-                        equipmentCount={sbEquipCount}
+                        count={countTasksForFilter(sb.tasks)}
+                        equipmentCount={1 + (sb.devices?.length || 0)}
                         open={expanded[`sb-${bi}-${i}`]}
                         toggle={() => toggle(`sb-${bi}-${i}`)}
                         level={1}
                         positioned={sb.positioned}
-                        needsPosition={!sb.positioned && sbTaskCount > 0}
-                        inheritsPosition={false}
-                        building={buildingLabel}
-                        onPlanClick={handlePlanClickSwitchboard}
+                        needsPosition={!sb.positioned && countTasksForFilter(sb.tasks) > 0}
+                        onPlanClick={handlePlanClick}
                         entity={sb}
                         focusEntity={focusEntity}
                       >
@@ -1332,104 +1212,41 @@ function HierarchyTree({
                             onClick={() => onSelectTask(t)}
                             className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
                           >
-                            <div className="flex flex-col">
-                              <span>{t.task_name}</span>
-                              {t.tsd_code && (
-                                <span className="text-[11px] text-gray-500">
-                                  {t.tsd_code} • {t.control_type || "Contrôle"}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <StatusPill status={t.status} />
-                              <span className="text-xs text-gray-500">
-                                {fmtDate(t.next_control)}
-                              </span>
-                            </div>
+                            <span>{t.task_name}</span>
+                            <StatusPill status={t.status} />
                           </div>
                         ))}
 
-                        {(sb.devices || []).map((d, di) => {
-                          const devTaskCount = countTasksForFilter(d.tasks);
-                          // Devices TGBT héritent toujours de la position du switchboard (backend)
-                          const inheritsPosition = sb.positioned;
-                          const positioned = inheritsPosition;
-
-                          const handlePlanClickDevice = () =>
-                            onPlanAction?.({
-                              entity_id: sb.id,
-                              entity_type: sb.entity_type || "switchboard",
-                              label: sb.label,
-                              building: buildingLabel,
-                              building_code:
-                                sb.building_code || buildingLabel,
-                              positioned: sb.positioned,
-                              plan_id:
-                                d.plan_id ||
-                                d.main_plan_id ||
-                                sb.plan_id ||
-                                sb.main_plan_id,
-                              plan_logical_name:
-                                d.plan_logical_name ||
-                                d.main_plan_logical_name ||
-                                sb.plan_logical_name ||
-                                sb.main_plan_logical_name,
-                              plan_display_name:
-                                d.plan_display_name ||
-                                d.main_plan_display_name ||
-                                sb.plan_display_name ||
-                                sb.main_plan_display_name,
-                            });
-
-                          return (
-                            <TreeNode
-                              key={d.id || di}
-                              title={`${d.label} (hérite position)`}
-                              count={devTaskCount}
-                              equipmentCount={1}
-                              open={expanded[`sb-dev-${bi}-${i}-${di}`] || false}
-                              toggle={() => toggle(`sb-dev-${bi}-${i}-${di}`)}
-                              level={2}
-                              positioned={positioned}
-                              needsPosition={!positioned && devTaskCount > 0}
-                              inheritsPosition={inheritsPosition}
-                              building={buildingLabel}
-                              onPlanClick={handlePlanClickDevice}
-                              entity={d}
-                              focusEntity={focusEntity}
-                            >
-                              {d.tasks?.map((t) => (
-                                <div
-                                  key={t.id}
-                                  onClick={() => onSelectTask(t)}
-                                  className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
-                                >
-                                  <div className="flex flex-col">
-                                    <span>{t.task_name}</span>
-                                    {t.tsd_code && (
-                                      <span className="text-[11px] text-gray-500">
-                                        {t.tsd_code} •{" "}
-                                        {t.control_type || "Contrôle"}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <StatusPill status={t.status} />
-                                    <span className="text-xs text-gray-500">
-                                      {fmtDate(t.next_control)}
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </TreeNode>
-                          );
-                        })}
+                        {(sb.devices || []).map((d, di) => (
+                          <TreeNode
+                            key={d.id || di}
+                            title={d.label}
+                            count={countTasksForFilter(d.tasks)}
+                            equipmentCount={1}
+                            level={2}
+                            open={true}
+                            entity={d}
+                            toggle={() => {}}
+                          >
+                            {d.tasks?.map((t) => (
+                              <div
+                                key={t.id}
+                                onClick={() => onSelectTask(t)}
+                                className="px-3 py-2 rounded-md hover:bg-indigo-50 cursor-pointer flex items-center justify-between text-sm"
+                              >
+                                <span>{t.task_name}</span>
+                                <StatusPill status={t.status} />
+                              </div>
+                            ))}
+                          </TreeNode>
+                        ))}
                       </TreeNode>
                     );
                   })}
                 </TreeNode>
               )}
-              {/* SECTION VSD */}
+
+              {/* VARIABLE SPEED DRIVES (VSD) */}
               {vsdItems.length > 0 && (
                 <TreeNode
                   title="Variable Speed Drives"
@@ -1441,38 +1258,30 @@ function HierarchyTree({
                   focusEntity={focusEntity}
                 >
                   {vsdItems.map((vsd, i) => {
-                    const vTaskCount = countTasksForFilter(vsd.tasks);
-
-                    const handlePlanClickVsd = () =>
+                    const handlePlanClick = () =>
                       onPlanAction?.({
                         entity_id: vsd.id,
                         entity_type: "vsd",
                         label: vsd.label,
                         building: buildingLabel,
-                        building_code: vsd.building_code || buildingLabel,
                         positioned: vsd.positioned,
                         plan_id: vsd.plan_id || vsd.main_plan_id,
                         plan_logical_name:
                           vsd.plan_logical_name || vsd.main_plan_logical_name,
-                        plan_display_name:
-                          vsd.plan_display_name ||
-                          vsd.main_plan_display_name,
                       });
 
                     return (
                       <TreeNode
                         key={vsd.id || i}
                         title={vsd.label}
-                        count={vTaskCount}
-                        equipmentCount={1} // VSD = équipement terminal
+                        count={countTasksForFilter(vsd.tasks)}
+                        equipmentCount={1}
                         open={expanded[`vsd-${bi}-${i}`]}
                         toggle={() => toggle(`vsd-${bi}-${i}`)}
                         level={1}
                         positioned={vsd.positioned}
-                        needsPosition={!vsd.positioned && vTaskCount > 0}
-                        inheritsPosition={false}
-                        building={buildingLabel}
-                        onPlanClick={handlePlanClickVsd}
+                        needsPosition={!vsd.positioned && countTasksForFilter(vsd.tasks) > 0}
+                        onPlanClick={handlePlanClick}
                         entity={vsd}
                         focusEntity={focusEntity}
                       >
@@ -1484,18 +1293,11 @@ function HierarchyTree({
                           >
                             <div className="flex flex-col">
                               <span>{t.task_name}</span>
-                              {t.tsd_code && (
-                                <span className="text-[11px] text-gray-500">
-                                  {t.tsd_code}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <StatusPill status={t.status} />
-                              <span className="text-xs text-gray-500">
-                                {fmtDate(t.next_control)}
+                              <span className="text-[10px] text-gray-400">
+                                {t.tsd_code}
                               </span>
                             </div>
+                            <StatusPill status={t.status} />
                           </div>
                         ))}
                       </TreeNode>
@@ -1980,7 +1782,7 @@ export default function ControlsPage() {
           <TabsTrigger value="missing">Équipements manquants</TabsTrigger>
         </TabsList>
 
-        {/* 🔽 barre de filtres globale */}
+        {/* BARRE DE FILTRES */}
         <div className="flex flex-wrap gap-2 mt-2">
           <input
             type="text"
@@ -2005,9 +1807,10 @@ export default function ControlsPage() {
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
           >
-            <option value="all">HV + TGBT/DB</option>
-            <option value="hv">High Voltage uniquement</option>
-            <option value="lv">TGBT / DB uniquement</option>
+            <option value="all">Tout (HV + BT + VSD)</option>
+            <option value="hv">HV uniquement</option>
+            <option value="lv">BT uniquement</option>
+            <option value="vsd">VSD uniquement</option> {/* <--- AJOUT ICI */}
           </select>
         </div>
 
