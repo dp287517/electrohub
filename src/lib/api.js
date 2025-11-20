@@ -1326,12 +1326,12 @@ export const api = {
     updateEquipment: (id, payload) => put(`/api/meca/equipments/${encodeURIComponent(id)}`, payload),
     deleteEquipment: (id) => del(`/api/meca/equipments/${encodeURIComponent(id)}`),
     
+    // Photos & Fichiers
     photoUrl: (id, { bust = true } = {}) => withBust(`${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo`, bust),
     uploadPhoto: (id, file) => {
       const fd = new FormData(); fd.append("photo", file);
       return upload(`/api/meca/equipments/${encodeURIComponent(id)}/photo`, fd);
     },
-    
     listFiles: (id) => get("/api/meca/files", { equipment_id: id }),
     uploadFiles: (id, files = []) => {
       const fd = new FormData(); fd.append("equipment_id", id);
@@ -1339,7 +1339,8 @@ export const api = {
       return upload("/api/meca/files", fd);
     },
     deleteFile: (id) => del(`/api/meca/files/${encodeURIComponent(id)}`),
-
+    
+    // IA
     extractFromPhotos: (files = []) => {
       const fd = new FormData(); (files || []).forEach((f) => fd.append("files", f));
       return upload(`/api/meca/analyzePhotoBatch`, fd);
