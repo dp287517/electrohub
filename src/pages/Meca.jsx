@@ -8,7 +8,7 @@ import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-// On réutilise le CSS existant des VSD pour la carte car c'est le même style
+// On utilise le CSS global mais on surcharge les couleurs inline ou via classes
 import "../styles/vsd-map.css";
 
 import { api } from "../lib/api.js";
@@ -17,29 +17,29 @@ import { api } from "../lib/api.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
-/* ----------------------------- UI Components (Clones) ----------------------------- */
+/* ----------------------------- UI Components (Thème Orange/Amber) ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
-    primary: "bg-cyan-600 text-white hover:bg-cyan-700 shadow-sm disabled:opacity-50",
+    primary: "bg-orange-600 text-white hover:bg-orange-700 shadow-sm disabled:opacity-50",
     ghost: "bg-white text-black border hover:bg-gray-50 disabled:opacity-50",
     danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 disabled:opacity-50",
-    subtle: "bg-cyan-50 text-cyan-700 border border-cyan-200 hover:bg-cyan-100 disabled:opacity-50",
+    subtle: "bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 disabled:opacity-50",
     warn: "bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50",
   };
   return <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>{children}</button>;
 }
 
 function Input({ value, onChange, className = "", ...p }) {
-  return <input className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-cyan-100 bg-white text-black ${className}`} value={value ?? ""} onChange={(e) => onChange?.(e.target.value)} {...p} />;
+  return <input className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-orange-100 bg-white text-black ${className}`} value={value ?? ""} onChange={(e) => onChange?.(e.target.value)} {...p} />;
 }
 
 function Textarea({ value, onChange, className = "", ...p }) {
-  return <textarea className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-cyan-100 bg-white text-black ${className}`} value={value ?? ""} onChange={(e) => onChange?.(e.target.value)} {...p} />;
+  return <textarea className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-orange-100 bg-white text-black ${className}`} value={value ?? ""} onChange={(e) => onChange?.(e.target.value)} {...p} />;
 }
 
 function Select({ value, onChange, options = [], className = "", placeholder }) {
   return (
-    <select className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-cyan-100 bg-white text-black ${className}`} value={value ?? ""} onChange={(e) => onChange?.(e.target.value)}>
+    <select className={`border rounded-lg px-3 py-2 text-sm w-full focus:ring focus:ring-orange-100 bg-white text-black ${className}`} value={value ?? ""} onChange={(e) => onChange?.(e.target.value)}>
       {placeholder != null && <option value="">{placeholder}</option>}
       {options.map((o) => typeof o === "string" ? <option key={o} value={o}>{o}</option> : <option key={o.value} value={o.value}>{o.label}</option>)}
     </select>
@@ -60,7 +60,7 @@ function Drawer({ title, children, onClose }) {
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[760px] bg-white shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold truncate pr-3 text-cyan-800">{title}</h3>
+          <h3 className="font-semibold truncate pr-3 text-orange-800">{title}</h3>
           <Btn variant="ghost" onClick={onClose}>Fermer</Btn>
         </div>
         {children}
@@ -69,17 +69,17 @@ function Drawer({ title, children, onClose }) {
   );
 }
 
-/* ----------------------------- Map Viewer (Reused Logic) ----------------------------- */
-// Note: On utilise exactement la même logique Leaflet que VSD.
+/* ----------------------------- Map Viewer ----------------------------- */
 const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [], onReady, onMovePoint, onClickPoint, onCreatePoint }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const markersLayerRef = useRef(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
 
+  // Marqueur Orange pour la Mécanique
   function makeIcon() {
     const s = 22;
-    const html = `<div style="width:${s}px;height:${s}px;background:#0891b2;border:2px solid white;border-radius:50%;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>`;
+    const html = `<div style="width:${s}px;height:${s}px;background:#ea580c;border:2px solid white;border-radius:50%;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>`;
     return L.divIcon({ className: "meca-marker", html, iconSize: [s, s], iconAnchor: [s/2, s/2] });
   }
 
@@ -107,13 +107,12 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
     let active = true;
     
     (async () => {
-      // Nettoyage sommaire
       if(mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       
       const task = pdfjsLib.getDocument(fileUrl);
       const pdf = await task.promise;
       const page = await pdf.getPage(pageIndex + 1);
-      const vp = page.getViewport({ scale: 2 }); // Qualité décente
+      const vp = page.getViewport({ scale: 2 });
       const cvs = document.createElement("canvas");
       cvs.width = vp.width; cvs.height = vp.height;
       await page.render({ canvasContext: cvs.getContext("2d"), viewport: vp }).promise;
@@ -129,10 +128,9 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
       markersLayerRef.current = L.layerGroup().addTo(m);
       mapRef.current = m;
       
-      // Bouton ajout centre
       const AddCtrl = L.Control.extend({
         onAdd: () => {
-          const btn = L.DomUtil.create("button", "bg-white border p-1 shadow font-bold rounded");
+          const btn = L.DomUtil.create("button", "bg-white border p-1 shadow font-bold rounded text-orange-600");
           btn.innerHTML = "+";
           btn.onclick = (e) => { L.DomEvent.stop(e); onCreatePoint?.(); };
           return btn;
@@ -145,7 +143,7 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
       onReady?.();
     })();
     return () => { active = false; };
-  }, [fileUrl, pageIndex]); // eslint-disable-line
+  }, [fileUrl, pageIndex]);
 
   return <div ref={wrapRef} className="w-full h-[600px] border rounded-xl bg-gray-50 relative z-0" />;
 });
@@ -159,10 +157,12 @@ function getNormalized(eq) {
     manufacturer: eq.manufacturer || "",
     model: eq.model || "",
     serial_number: eq.serial_number || "",
+    // CHAMPS MECA SPECIFIQUES
     device_type: eq.device_type || "",
     fluid_type: eq.fluid_type || "",
     year_of_manufacture: eq.year_of_manufacture || "",
     power_kw: eq.power_kw ?? null,
+    
     building: eq.building || "",
     floor: eq.floor || "",
     zone: eq.zone || "",
@@ -192,20 +192,19 @@ export default function Meca() {
   const [filters, setFilters] = useState({ q: "", building: "" });
 
   async function reload() {
+    // Appel explicite à api.meca
     const res = await api.meca.listEquipments(filters);
     setItems(res.equipments || []);
   }
 
   useEffect(() => { reload(); }, [filters]);
 
-  // Files
   async function loadFiles(id) {
     if(!id) return;
     const res = await api.meca.listFiles(id);
     setFiles(res.files || []);
   }
 
-  // Open Editor
   const openEdit = (item) => {
     setEditing(getNormalized(item));
     setDrawerOpen(true);
@@ -213,29 +212,24 @@ export default function Meca() {
     else setFiles([]);
   };
 
-  // Save
   async function save() {
     if (!editing) return;
     try {
       let res;
       if (editing.id) res = await api.meca.updateEquipment(editing.id, editing);
       else res = await api.meca.createEquipment(editing);
-      
       setEditing(getNormalized(res.equipment));
       reload();
-      alert("Enregistré !");
-    } catch (e) { console.error(e); alert("Erreur"); }
+    } catch (e) { console.error(e); alert("Erreur lors de l'enregistrement"); }
   }
 
-  // Delete
   async function del() {
-    if(!confirm("Supprimer ?")) return;
+    if(!confirm("Supprimer cet équipement mécanique ?")) return;
     await api.meca.deleteEquipment(editing.id);
     setDrawerOpen(false);
     reload();
   }
 
-  // IA
   async function analyze(fileList) {
     setAnalyzing(true);
     try {
@@ -246,19 +240,18 @@ export default function Meca() {
         manufacturer: ex.manufacturer || prev.manufacturer,
         model: ex.model || prev.model,
         serial_number: ex.serial_number || prev.serial_number,
+        // Mapping spécifique MECA
         device_type: ex.device_type || prev.device_type,
-        year_of_manufacture: ex.year_of_manufacture || prev.year_of_manufacture,
         fluid_type: ex.fluid_type || prev.fluid_type,
+        year_of_manufacture: ex.year_of_manufacture || prev.year_of_manufacture,
         power_kw: ex.power_kw ?? prev.power_kw
       }));
     } catch (e) { alert("Erreur IA"); }
     setAnalyzing(false);
   }
 
-  // Photo Upload
   async function uploadPhoto(f) {
     await api.meca.uploadPhoto(editing.id, f);
-    // Refresh photo url hack
     setEditing(prev => ({...prev, photo_url: api.meca.photoUrl(prev.id, {bust:true})}));
     reload();
   }
@@ -286,21 +279,20 @@ export default function Meca() {
   const createOnMap = async () => {
       const res = await api.meca.createEquipment({ 
           name: "Nouvel Équipement", 
-          location: `Plan ${selectedPlan.display_name}` 
+          location: `Plan ${selectedPlan.display_name}`,
+          device_type: "Non défini"
       });
       await api.mecaMaps.setPosition(res.equipment.id, {
           logical_name: selectedPlan.logical_name,
           plan_id: selectedPlan.id,
           x_frac: 0.5, y_frac: 0.5
       });
-      // Refresh
       const r = await api.mecaMaps.positionsAuto(selectedPlan.logical_name);
       setPositions(r.positions);
       viewerRef.current?.drawMarkers(r.positions);
       openEdit(res.equipment);
   };
 
-  // --- RENDER ---
   const grouped = useMemo(() => {
     const g = {};
     items.forEach(i => {
@@ -314,7 +306,7 @@ export default function Meca() {
   return (
     <div className="max-w-7xl mx-auto p-4 space-y-6">
       <div className="flex justify-between items-end">
-        <h1 className="text-3xl font-bold text-cyan-900">Maintenance Mécanique</h1>
+        <h1 className="text-3xl font-bold text-orange-900">Maintenance Mécanique</h1>
         <div className="flex gap-2">
           <Btn variant={tab==="tree"?"primary":"ghost"} onClick={()=>setTab("tree")}>Liste</Btn>
           <Btn variant={tab==="plans"?"primary":"ghost"} onClick={()=>setTab("plans")}>Plans</Btn>
@@ -323,7 +315,7 @@ export default function Meca() {
 
       {/* FILTRES */}
       <div className="bg-white p-3 rounded-xl border flex gap-3">
-          <Input placeholder="Rechercher..." value={filters.q} onChange={v=>setFilters({...filters, q:v})} />
+          <Input placeholder="Rechercher (Nom, Tag, Marque)..." value={filters.q} onChange={v=>setFilters({...filters, q:v})} />
           <Input placeholder="Bâtiment" value={filters.building} onChange={v=>setFilters({...filters, building:v})} />
           <Btn onClick={()=>openEdit({})}>+ Créer</Btn>
       </div>
@@ -338,13 +330,13 @@ export default function Meca() {
               </div>
               <div className="divide-y">
                 {grouped[b].map(item => (
-                  <div key={item.id} className="p-3 flex justify-between items-center hover:bg-cyan-50/30">
+                  <div key={item.id} className="p-3 flex justify-between items-center hover:bg-orange-50/30">
                     <div className="flex gap-3 items-center">
-                        <div className="w-12 h-12 bg-gray-200 rounded overflow-hidden">
-                            {item.photo_url && <img src={item.photo_url} className="w-full h-full object-cover" alt="" />}
+                        <div className="w-12 h-12 bg-gray-200 rounded overflow-hidden flex items-center justify-center text-gray-400 text-xs">
+                            {item.photo_url ? <img src={item.photo_url} className="w-full h-full object-cover" alt="" /> : "Photo"}
                         </div>
                         <div>
-                            <div className="font-bold text-cyan-900">{item.name} <span className="text-gray-400 font-normal text-xs">({item.device_type || "N/A"})</span></div>
+                            <div className="font-bold text-orange-900">{item.name} <span className="text-gray-400 font-normal text-xs">({item.device_type || "N/A"})</span></div>
                             <div className="text-xs text-gray-500">{item.floor} • {item.zone} • {item.location}</div>
                         </div>
                     </div>
@@ -396,29 +388,33 @@ export default function Meca() {
             <div className="space-y-5">
                 {/* Photo & IA */}
                 <div className="flex gap-4">
-                    <div className="w-32 h-32 bg-gray-100 rounded-lg border overflow-hidden relative shrink-0">
-                        {editing.photo_url && <img src={editing.photo_url} className="w-full h-full object-cover" alt="" />}
+                    <div className="w-32 h-32 bg-gray-100 rounded-lg border overflow-hidden relative shrink-0 flex items-center justify-center">
+                        {editing.photo_url ? <img src={editing.photo_url} className="w-full h-full object-cover" alt="" /> : <span className="text-xs text-gray-400">No Photo</span>}
                         <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e=>e.target.files[0] && uploadPhoto(e.target.files[0])} />
                     </div>
-                    <div className="flex-1 bg-cyan-50 p-3 rounded-xl border border-cyan-100">
-                        <div className="text-sm font-bold text-cyan-800 mb-2">Assistant IA</div>
-                        <label className="block w-full text-center py-2 bg-white border border-cyan-200 rounded cursor-pointer hover:bg-cyan-100 text-sm">
-                            {analyzing ? "Analyse..." : "Analyser une photo"}
+                    <div className="flex-1 bg-orange-50 p-3 rounded-xl border border-orange-100">
+                        <div className="text-sm font-bold text-orange-800 mb-2">Assistant IA Méca</div>
+                        <label className="block w-full text-center py-2 bg-white border border-orange-200 rounded cursor-pointer hover:bg-orange-100 text-sm">
+                            {analyzing ? "Analyse en cours..." : "Analyser une photo"}
                             <input type="file" multiple className="hidden" onChange={e=>e.target.files.length && analyze(e.target.files)} />
                         </label>
-                        <div className="text-xs text-cyan-600 mt-2">Détecte : Type, Marque, Modèle, Année, Fluide...</div>
+                        <div className="text-xs text-orange-600 mt-2">Détecte : Type, Marque, Modèle, Fluide, Puissance...</div>
                     </div>
                 </div>
 
-                {/* Champs */}
+                {/* Champs Mécaniques */}
                 <div className="grid sm:grid-cols-2 gap-3">
                     <Labeled label="Nom"><Input value={editing.name} onChange={v=>setEditing({...editing, name:v})} /></Labeled>
-                    <Labeled label="Tag"><Input value={editing.tag} onChange={v=>setEditing({...editing, tag:v})} /></Labeled>
+                    <Labeled label="Tag / Repère"><Input value={editing.tag} onChange={v=>setEditing({...editing, tag:v})} /></Labeled>
                 </div>
                 
                 <div className="grid sm:grid-cols-2 gap-3">
-                    <Labeled label="Type Appareil"><Input placeholder="ex: Pompe, Ventilateur" value={editing.device_type} onChange={v=>setEditing({...editing, device_type:v})} /></Labeled>
-                    <Labeled label="Type Fluide"><Input placeholder="ex: Eau glacée, Huile" value={editing.fluid_type} onChange={v=>setEditing({...editing, fluid_type:v})} /></Labeled>
+                    <Labeled label="Type d'Appareil">
+                        <Input placeholder="ex: Pompe, Ventilateur, Compresseur" value={editing.device_type} onChange={v=>setEditing({...editing, device_type:v})} />
+                    </Labeled>
+                    <Labeled label="Type de Fluide">
+                        <Input placeholder="ex: Eau, Huile, Air comprimé" value={editing.fluid_type} onChange={v=>setEditing({...editing, fluid_type:v})} />
+                    </Labeled>
                 </div>
 
                 <div className="grid sm:grid-cols-3 gap-3">
@@ -429,7 +425,7 @@ export default function Meca() {
 
                 <div className="grid sm:grid-cols-2 gap-3">
                      <Labeled label="Année Fab."><Input value={editing.year_of_manufacture} onChange={v=>setEditing({...editing, year_of_manufacture:v})} /></Labeled>
-                     <Labeled label="Puissance (kW)"><Input type="number" value={editing.power_kw} onChange={v=>setEditing({...editing, power_kw:v})} /></Labeled>
+                     <Labeled label="Puissance (kW)"><Input type="number" step="0.1" value={editing.power_kw} onChange={v=>setEditing({...editing, power_kw:v})} /></Labeled>
                 </div>
 
                 <div className="border-t pt-4 grid sm:grid-cols-3 gap-3">
@@ -456,7 +452,7 @@ export default function Meca() {
                     <div className="font-bold text-sm">Pièces Jointes</div>
                     <div className="flex flex-wrap gap-2">
                         {files.map(f => <a key={f.id} href={f.url} target="_blank" className="text-xs bg-gray-100 px-2 py-1 rounded border hover:bg-gray-200 truncate max-w-[150px]">{f.original_name}</a>)}
-                         <label className="text-xs bg-cyan-50 text-cyan-700 px-2 py-1 rounded border border-cyan-200 cursor-pointer hover:bg-cyan-100">
+                         <label className="text-xs bg-orange-50 text-orange-700 px-2 py-1 rounded border border-orange-200 cursor-pointer hover:bg-orange-100">
                             + Ajouter
                             <input type="file" multiple className="hidden" onChange={e=>e.target.files.length && api.meca.uploadFiles(editing.id, Array.from(e.target.files)).then(()=>loadFiles(editing.id))} />
                         </label>
