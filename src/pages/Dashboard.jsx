@@ -24,6 +24,12 @@ const electricalApps = [
     description: 'VSD maintenance: frequency inverters, power ratings, checks & compliance',
     icon: '⚙️'
   },
+  {
+    label: 'Mechanical Equipments',
+    to: '/app/meca',
+    description: 'Maintenance of pumps, fans, motors & mechanical assets.',
+    icon: '⚙️' // Icône engrenage
+  },
 ];
 
 // 👉 Autres apps visibles en direct sur le dashboard
