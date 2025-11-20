@@ -1318,48 +1318,120 @@ export const api = {
       }),
   },
 
-/** --- MECA (Maintenance Mécanique) --- */
+  /** --- MECA (Équipements électromécaniques) --- */
   meca: {
+    // LISTE / GET / CREATE / UPDATE / DELETE
     listEquipments: (params) => get("/api/meca/equipments", params),
     getEquipment: (id) => get(`/api/meca/equipments/${encodeURIComponent(id)}`),
     createEquipment: (payload) => post("/api/meca/equipments", payload),
-    updateEquipment: (id, payload) => put(`/api/meca/equipments/${encodeURIComponent(id)}`, payload),
-    deleteEquipment: (id) => del(`/api/meca/equipments/${encodeURIComponent(id)}`),
-    
-    photoUrl: (id, { bust = true } = {}) => withBust(`${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo`, bust),
+    updateEquipment: (id, payload) =>
+      put(`/api/meca/equipments/${encodeURIComponent(id)}`, payload),
+    deleteEquipment: (id) =>
+      del(`/api/meca/equipments/${encodeURIComponent(id)}`),
+
+    // PHOTO PRINCIPALE
+    photoUrl: (id, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/meca/equipments/${encodeURIComponent(id)}/photo`,
+        bust
+      ),
+
     uploadPhoto: (id, file) => {
-      const fd = new FormData(); fd.append("photo", file);
+      const fd = new FormData();
+      fd.append("photo", file);
       return upload(`/api/meca/equipments/${encodeURIComponent(id)}/photo`, fd);
     },
-    listFiles: (id) => get("/api/meca/files", { equipment_id: id }),
-    uploadFiles: (id, files = []) => {
-      const fd = new FormData(); fd.append("equipment_id", id);
+
+    // FICHIERS ATTACHÉS
+    listFiles: (equipmentId) =>
+      get("/api/meca/files", { equipment_id: equipmentId }),
+
+    uploadFiles: (equipmentId, files = []) => {
+      const fd = new FormData();
+      fd.append("equipment_id", equipmentId);
       (files || []).forEach((f) => fd.append("files", f));
       return upload("/api/meca/files", fd);
     },
-    extractFromPhotos: (files = []) => {
-      const fd = new FormData(); (files || []).forEach((f) => fd.append("files", f));
-      return upload(`/api/meca/analyzePhotoBatch`, fd);
-    },
+
+    deleteFile: (fileId) =>
+      del(`/api/meca/files/${encodeURIComponent(fileId)}`),
   },
 
-  /** --- MECA MAPS --- */
+  /** --- MECA MAPS (Plans PDF + positions) --- */
   mecaMaps: {
     uploadZip: (file) => {
-      const fd = new FormData(); fd.append("zip", file);
+      const fd = new FormData();
+      fd.append("zip", file);
       return upload(`/api/meca/maps/uploadZip`, fd);
     },
+
     listPlans: () => get(`/api/meca/maps/listPlans`),
+
+    renamePlan: (logical_name, display_name) =>
+      put(`/api/meca/maps/renamePlan`, { logical_name, display_name }),
+
+    planFileUrl: (logical_name, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/meca/maps/planFile?logical_name=${encodeURIComponent(
+          logical_name
+        )}`,
+        bust
+      ),
+
+    planFileUrlById: (id, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/meca/maps/planFile?id=${encodeURIComponent(id)}`,
+        bust
+      ),
+
     planFileUrlAuto: (plan, { bust = true } = {}) => {
-      const key = plan?.id || plan?.logical_name || (typeof plan === "string" ? plan : "");
-      const p = isUuid(key) ? `id=${key}` : `logical_name=${key}`;
-      return withBust(`${API_BASE}/api/meca/maps/planFile?${p}`, bust);
+      const key =
+        typeof plan === "string"
+          ? plan
+          : plan?.id || plan?.logical_name || "";
+
+      const url =
+        isUuid(key) || isNumericId(key)
+          ? `${API_BASE}/api/meca/maps/planFile?id=${encodeURIComponent(key)}`
+          : `${API_BASE}/api/meca/maps/planFile?logical_name=${encodeURIComponent(
+              key
+            )}`;
+
+      return withBust(url, bust);
     },
-    positionsAuto: (key) => {
-        const p = isUuid(key) ? {id:key} : {logical_name:key};
-        return get(`/api/meca/maps/positions`, p);
+
+    // POSITIONS SUR PLAN
+    positions: (logical_name, page_index = 0) =>
+      get(`/api/meca/maps/positions`, { logical_name, page_index }),
+
+    positionsById: (id, page_index = 0) =>
+      get(`/api/meca/maps/positions`, { id, page_index }),
+
+    positionsAuto: (planOrKey, page_index = 0) => {
+      const key =
+        typeof planOrKey === "string"
+          ? planOrKey
+          : planOrKey?.id || planOrKey?.logical_name || "";
+
+      if (isUuid(key) || isNumericId(key))
+        return get(`/api/meca/maps/positions`, { id: key, page_index });
+
+      return get(`/api/meca/maps/positions`, {
+        logical_name: key,
+        page_index,
+      });
     },
-    setPosition: (eqId, payload) => post(`/api/meca/maps/setPosition`, { equipment_id: eqId, ...payload }),
+
+    // SET POSITION
+    setPosition: (equipmentId, { logical_name, plan_id, page_index = 0, x_frac, y_frac }) =>
+      post(`/api/meca/maps/setPosition`, {
+        equipment_id: equipmentId,
+        logical_name,
+        plan_id,
+        page_index,
+        x_frac,
+        y_frac,
+      }),
   },
 
   /** --- 🔵 BUBBLE AUTH --- */
