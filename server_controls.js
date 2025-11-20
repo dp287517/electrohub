@@ -1560,7 +1560,7 @@ router.get("/files", async (req, res) => {
       `SELECT id, filename, mime_type, created_at
        FROM controls_files
        WHERE site = $1
-         AND ($2::int IS NULL OR entity_id = $2::int)
+         AND ($2::text IS NULL OR entity_id = $2::text) -- On traite l'ID comme du texte
          AND ($3::text IS NULL OR entity_type = $3::text)
        ORDER BY created_at DESC`,
       [site, entity_id || null, entity_type || null]
