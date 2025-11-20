@@ -8,23 +8,20 @@ import * as pdfjsLib from "pdfjs-dist/build/pdf.mjs";
 import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-// On utilise le CSS global mais on surcharge les couleurs inline ou via classes
-import "../styles/vsd-map.css";
+import "../styles/vsd-map.css"; // On garde le CSS map pour la structure
 
 import { api } from "../lib/api.js";
 
 /* ----------------------------- PDF.js Config ----------------------------- */
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
-pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
 
-/* ----------------------------- UI Components (Thème Orange/Amber) ----------------------------- */
+/* ----------------------------- UI Components (Orange Theme) ----------------------------- */
 function Btn({ children, variant = "primary", className = "", ...p }) {
   const map = {
     primary: "bg-orange-600 text-white hover:bg-orange-700 shadow-sm disabled:opacity-50",
     ghost: "bg-white text-black border hover:bg-gray-50 disabled:opacity-50",
     danger: "bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 disabled:opacity-50",
     subtle: "bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100 disabled:opacity-50",
-    warn: "bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50",
   };
   return <button className={`px-3 py-2 rounded-lg text-sm transition ${map[variant] || map.primary} ${className}`} {...p}>{children}</button>;
 }
@@ -69,16 +66,22 @@ function Drawer({ title, children, onClose }) {
   );
 }
 
-/* ----------------------------- Map Viewer ----------------------------- */
+function Toast({ text, onClose }) {
+  useEffect(() => { if(text) setTimeout(onClose, 4000); }, [text]);
+  if (!text) return null;
+  return <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2000] px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>;
+}
+
+/* ----------------------------- Map Viewer (Couleur Orange) ----------------------------- */
 const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = [], onReady, onMovePoint, onClickPoint, onCreatePoint }, ref) => {
   const wrapRef = useRef(null);
   const mapRef = useRef(null);
   const markersLayerRef = useRef(null);
   const [imgSize, setImgSize] = useState({ w: 0, h: 0 });
 
-  // Marqueur Orange pour la Mécanique
   function makeIcon() {
     const s = 22;
+    // MARQUEUR ORANGE (#ea580c)
     const html = `<div style="width:${s}px;height:${s}px;background:#ea580c;border:2px solid white;border-radius:50%;box-shadow:0 2px 4px rgba(0,0,0,0.3);"></div>`;
     return L.divIcon({ className: "meca-marker", html, iconSize: [s, s], iconAnchor: [s/2, s/2] });
   }
@@ -105,7 +108,6 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
   useEffect(() => {
     if(!fileUrl || !wrapRef.current) return;
     let active = true;
-    
     (async () => {
       if(mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       
@@ -119,7 +121,6 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
       
       if(!active) return;
       setImgSize({ w: vp.width, h: vp.height });
-
       const m = L.map(wrapRef.current, { crs: L.CRS.Simple, minZoom: -2, maxZoom: 2, zoomControl: false });
       const bounds = [[0,0], [vp.height, vp.width]];
       L.imageOverlay(cvs.toDataURL(), bounds).addTo(m);
@@ -130,7 +131,7 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
       
       const AddCtrl = L.Control.extend({
         onAdd: () => {
-          const btn = L.DomUtil.create("button", "bg-white border p-1 shadow font-bold rounded text-orange-600");
+          const btn = L.DomUtil.create("button", "bg-white border p-1 shadow font-bold rounded text-orange-600 text-lg w-8 h-8 flex items-center justify-center");
           btn.innerHTML = "+";
           btn.onclick = (e) => { L.DomEvent.stop(e); onCreatePoint?.(); };
           return btn;
@@ -138,7 +139,6 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
         options: { position: 'topright' }
       });
       m.addControl(new AddCtrl());
-
       drawMarkers(initialPoints, vp.width, vp.height);
       onReady?.();
     })();
@@ -149,6 +149,7 @@ const MecaLeafletViewer = forwardRef(({ fileUrl, pageIndex = 0, initialPoints = 
 });
 
 /* ----------------------------- Main Page ----------------------------- */
+// Normalisation des données (champs Meca uniquement)
 function getNormalized(eq) {
   return {
     id: eq.id || null,
@@ -161,7 +162,7 @@ function getNormalized(eq) {
     device_type: eq.device_type || "",
     fluid_type: eq.fluid_type || "",
     year_of_manufacture: eq.year_of_manufacture || "",
-    power_kw: eq.power_kw ?? null,
+    power_kw: eq.power_kw ?? "",
     
     building: eq.building || "",
     floor: eq.floor || "",
@@ -177,10 +178,16 @@ function getNormalized(eq) {
 export default function Meca() {
   const [tab, setTab] = useState("tree");
   const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [filters, setFilters] = useState({ q: "", building: "", floor: "", zone: "" });
+
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [files, setFiles] = useState([]);
   const [analyzing, setAnalyzing] = useState(false);
+  const [toast, setToast] = useState("");
   
   // Maps
   const [plans, setPlans] = useState([]);
@@ -188,23 +195,25 @@ export default function Meca() {
   const [positions, setPositions] = useState([]);
   const viewerRef = useRef(null);
 
-  // Filtres
-  const [filters, setFilters] = useState({ q: "", building: "" });
-
+  // Chargement Liste
   async function reload() {
-    // Appel explicite à api.meca
-    const res = await api.meca.listEquipments(filters);
-    setItems(res.equipments || []);
+    setLoading(true);
+    try {
+      const res = await api.meca.listEquipments(filters);
+      setItems(res.equipments || []);
+    } finally { setLoading(false); }
   }
 
   useEffect(() => { reload(); }, [filters]);
 
+  // Fichiers
   async function loadFiles(id) {
     if(!id) return;
     const res = await api.meca.listFiles(id);
     setFiles(res.files || []);
   }
 
+  // Ouverture Drawer
   const openEdit = (item) => {
     setEditing(getNormalized(item));
     setDrawerOpen(true);
@@ -212,6 +221,7 @@ export default function Meca() {
     else setFiles([]);
   };
 
+  // Sauvegarde
   async function save() {
     if (!editing) return;
     try {
@@ -219,41 +229,47 @@ export default function Meca() {
       if (editing.id) res = await api.meca.updateEquipment(editing.id, editing);
       else res = await api.meca.createEquipment(editing);
       setEditing(getNormalized(res.equipment));
-      reload();
+      await reload();
+      setToast("Enregistré !");
     } catch (e) { console.error(e); alert("Erreur lors de l'enregistrement"); }
   }
 
+  // Suppression
   async function del() {
     if(!confirm("Supprimer cet équipement mécanique ?")) return;
     await api.meca.deleteEquipment(editing.id);
     setDrawerOpen(false);
-    reload();
+    await reload();
+    setToast("Supprimé");
   }
 
+  // IA
   async function analyze(fileList) {
     setAnalyzing(true);
     try {
       const res = await api.meca.extractFromPhotos(Array.from(fileList));
-      const ex = res.extracted;
+      const ex = res.extracted || {};
       setEditing(prev => ({
         ...prev,
         manufacturer: ex.manufacturer || prev.manufacturer,
         model: ex.model || prev.model,
         serial_number: ex.serial_number || prev.serial_number,
-        // Mapping spécifique MECA
         device_type: ex.device_type || prev.device_type,
         fluid_type: ex.fluid_type || prev.fluid_type,
         year_of_manufacture: ex.year_of_manufacture || prev.year_of_manufacture,
         power_kw: ex.power_kw ?? prev.power_kw
       }));
+      setToast("Données extraites par IA");
     } catch (e) { alert("Erreur IA"); }
     setAnalyzing(false);
   }
 
   async function uploadPhoto(f) {
+    if(!editing.id) return alert("Sauvegardez d'abord");
     await api.meca.uploadPhoto(editing.id, f);
     setEditing(prev => ({...prev, photo_url: api.meca.photoUrl(prev.id, {bust:true})}));
-    reload();
+    await reload();
+    setToast("Photo mise à jour");
   }
 
   // --- MAPS LOGIC ---
@@ -293,96 +309,98 @@ export default function Meca() {
       openEdit(res.equipment);
   };
 
-  const grouped = useMemo(() => {
-    const g = {};
-    items.forEach(i => {
-      const k = i.building || "Autre";
-      if(!g[k]) g[k] = [];
-      g[k].push(i);
+  // Groupement pour l'Arbre
+  const buildingTree = useMemo(() => {
+    const tree = {};
+    items.forEach((item) => {
+      const b = (item.building || "Sans bâtiment").trim();
+      if (!tree[b]) tree[b] = [];
+      tree[b].push(item);
     });
-    return g;
+    return tree;
   }, [items]);
 
   return (
-    <div className="max-w-7xl mx-auto p-4 space-y-6">
-      <div className="flex justify-between items-end">
-        <h1 className="text-3xl font-bold text-orange-900">Maintenance Mécanique</h1>
-        <div className="flex gap-2">
-          <Btn variant={tab==="tree"?"primary":"ghost"} onClick={()=>setTab("tree")}>Liste</Btn>
-          <Btn variant={tab==="plans"?"primary":"ghost"} onClick={()=>setTab("plans")}>Plans</Btn>
+    <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
+      <Toast text={toast} onClose={() => setToast("")} />
+
+      <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-orange-900">Maintenance Mécanique</h1>
         </div>
+        <div className="flex items-center gap-2">
+          <Btn variant="ghost" onClick={() => setFiltersOpen((v) => !v)}>
+            {filtersOpen ? "Masquer filtres" : "Filtres"}
+          </Btn>
+          <Btn onClick={() => openEdit({})}>+ Créer</Btn>
+        </div>
+      </header>
+
+      {/* ONGLETS */}
+      <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2 flex gap-2">
+        <Btn variant={tab === "tree" ? "primary" : "ghost"} onClick={() => setTab("tree")}>🏢 Arborescence</Btn>
+        <Btn variant={tab === "plans" ? "primary" : "ghost"} onClick={() => setTab("plans")}>🗺️ Plans</Btn>
       </div>
 
       {/* FILTRES */}
-      <div className="bg-white p-3 rounded-xl border flex gap-3">
-          <Input placeholder="Rechercher (Nom, Tag, Marque)..." value={filters.q} onChange={v=>setFilters({...filters, q:v})} />
-          <Input placeholder="Bâtiment" value={filters.building} onChange={v=>setFilters({...filters, building:v})} />
-          <Btn onClick={()=>openEdit({})}>+ Créer</Btn>
-      </div>
+      {filtersOpen && (
+        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-3">
+          <div className="grid md:grid-cols-4 gap-3">
+            <Input value={filters.q} onChange={v=>setFilters({...filters, q:v})} placeholder="Recherche..." />
+            <Input value={filters.building} onChange={v=>setFilters({...filters, building:v})} placeholder="Bâtiment" />
+            <Input value={filters.floor} onChange={v=>setFilters({...filters, floor:v})} placeholder="Étage" />
+            <Input value={filters.zone} onChange={v=>setFilters({...filters, zone:v})} placeholder="Zone" />
+          </div>
+        </div>
+      )}
 
+      {/* VUE ARBORESCENCE */}
       {tab === "tree" && (
         <div className="space-y-4">
-          {Object.keys(grouped).sort().map(b => (
-            <div key={b} className="bg-white rounded-xl border shadow-sm overflow-hidden">
-              <div className="bg-gray-50 px-4 py-2 font-bold border-b flex justify-between">
-                  <span>{b}</span>
-                  <Badge>{grouped[b].length}</Badge>
-              </div>
-              <div className="divide-y">
-                {grouped[b].map(item => (
-                  <div key={item.id} className="p-3 flex justify-between items-center hover:bg-orange-50/30">
-                    <div className="flex gap-3 items-center">
-                        <div className="w-12 h-12 bg-gray-200 rounded overflow-hidden flex items-center justify-center text-gray-400 text-xs">
-                            {item.photo_url ? <img src={item.photo_url} className="w-full h-full object-cover" alt="" /> : "Photo"}
-                        </div>
-                        <div>
-                            <div className="font-bold text-orange-900">{item.name} <span className="text-gray-400 font-normal text-xs">({item.device_type || "N/A"})</span></div>
-                            <div className="text-xs text-gray-500">{item.floor} • {item.zone} • {item.location}</div>
-                        </div>
-                    </div>
-                    <Btn variant="subtle" onClick={()=>openEdit(item)}>Ouvrir</Btn>
-                  </div>
-                ))}
-              </div>
-            </div>
+          {Object.keys(buildingTree).sort().map((b) => (
+            <MecaBuildingSection 
+              key={b} 
+              buildingName={b} 
+              equipments={buildingTree[b]} 
+              onOpenEquipment={openEdit} 
+            />
           ))}
         </div>
       )}
 
+      {/* VUE PLANS */}
       {tab === "plans" && (
-          <div className="space-y-4">
-              {!selectedPlan ? (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      <div className="border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center p-6 cursor-pointer hover:bg-gray-50 relative">
-                          <span className="text-gray-500">+ Importer ZIP</span>
-                          <input type="file" className="absolute inset-0 opacity-0" onChange={e=>e.target.files[0] && api.mecaMaps.uploadZip(e.target.files[0]).then(()=>api.mecaMaps.listPlans().then(r=>setPlans(r.plans)))} />
-                      </div>
-                      {plans.map(p => (
-                          <div key={p.id} onClick={()=>setSelectedPlan(p)} className="bg-white border rounded-xl p-4 cursor-pointer hover:shadow-md">
-                              <div className="font-bold">{p.display_name}</div>
-                              <div className="text-xs text-gray-400">PDF</div>
-                          </div>
-                      ))}
-                  </div>
-              ) : (
-                  <div className="bg-white border rounded-xl p-4">
-                      <div className="flex justify-between mb-2">
-                          <h3 className="font-bold">{selectedPlan.display_name}</h3>
-                          <Btn variant="ghost" onClick={()=>setSelectedPlan(null)}>Retour</Btn>
-                      </div>
-                      <MecaLeafletViewer 
-                        ref={viewerRef}
-                        fileUrl={api.mecaMaps.planFileUrlAuto(selectedPlan)}
-                        initialPoints={positions}
-                        onMovePoint={onMovePoint}
-                        onClickPoint={(p) => openEdit(items.find(i=>i.id===p.equipment_id) || {id:p.equipment_id})}
-                        onCreatePoint={createOnMap}
-                      />
-                  </div>
-              )}
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl border shadow-sm p-3 flex justify-between">
+             <div className="font-bold text-orange-900">Plans PDF</div>
+             <label className="cursor-pointer text-sm text-orange-600 hover:underline">
+                Importer un ZIP
+                <input type="file" className="hidden" onChange={e=>e.target.files[0] && api.mecaMaps.uploadZip(e.target.files[0]).then(()=>api.mecaMaps.listPlans().then(r=>setPlans(r.plans)))} />
+             </label>
           </div>
+
+          {!selectedPlan ? (
+             <PlanCards plans={plans} onPick={(p) => { setSelectedPlan(p); }} />
+          ) : (
+             <div className="bg-white rounded-2xl border shadow-sm p-3">
+                <div className="flex justify-between mb-2">
+                   <div className="font-bold">{selectedPlan.display_name}</div>
+                   <Btn variant="ghost" onClick={()=>setSelectedPlan(null)}>Fermer le plan</Btn>
+                </div>
+                <MecaLeafletViewer 
+                  ref={viewerRef}
+                  fileUrl={api.mecaMaps.planFileUrlAuto(selectedPlan)}
+                  initialPoints={positions}
+                  onMovePoint={onMovePoint}
+                  onClickPoint={(p) => openEdit(items.find(i=>i.id===p.equipment_id) || {id:p.equipment_id})}
+                  onCreatePoint={createOnMap}
+                />
+             </div>
+          )}
+        </div>
       )}
 
+      {/* DRAWER ÉDITION */}
       {drawerOpen && editing && (
         <Drawer title={editing.name || "Nouveau"} onClose={()=>setDrawerOpen(false)}>
             <div className="space-y-5">
@@ -466,6 +484,84 @@ export default function Meca() {
             </div>
         </Drawer>
       )}
+    </section>
+  );
+}
+
+/* ----------------------------- Sub-Components (Restored from VSD Logic) ----------------------------- */
+
+function MecaBuildingSection({ buildingName, equipments = [], onOpenEquipment }) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
+      <button
+        className="w-full px-4 py-3 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition"
+        onClick={() => setCollapsed((v) => !v)}
+      >
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-orange-900">{buildingName}</span>
+          <Badge>{equipments.length}</Badge>
+        </div>
+        <span className="text-gray-500">{collapsed ? "▼" : "▲"}</span>
+      </button>
+
+      {!collapsed && (
+        <div className="divide-y">
+          {equipments.map((eq) => (
+            <div key={eq.id} className="p-4 hover:bg-orange-50/30 transition">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center shrink-0">
+                    {eq.photo_url ? (
+                      <img src={eq.photo_url} alt={eq.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-[11px] text-gray-500 p-1 text-center">Photo</span>
+                    )}
+                  </div>
+                  <div>
+                    <button className="text-orange-700 font-semibold hover:underline text-left" onClick={() => onOpenEquipment(eq)}>
+                      {eq.name || eq.tag || "Équipement"}
+                    </button>
+                    <div className="text-xs text-gray-500 mt-0.5">
+                      {eq.floor ? `${eq.floor} • ` : ""}
+                      {eq.zone ? `${eq.zone} • ` : ""}
+                      {eq.location || "—"}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      {eq.device_type || "Type inconnu"} {eq.manufacturer ? `• ${eq.manufacturer}` : ""} {eq.fluid_type ? `• ${eq.fluid_type}` : ""}
+                    </div>
+                  </div>
+                </div>
+                <Btn variant="subtle" onClick={() => onOpenEquipment(eq)}>
+                  Ouvrir
+                </Btn>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlanCards({ plans = [], onPick }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+      {!plans.length && <div className="text-gray-500 col-span-full">Aucun plan importé.</div>}
+      {plans.map((p) => (
+        <div key={p.id} onClick={() => onPick(p)} className="border rounded-2xl bg-white shadow-sm hover:shadow transition cursor-pointer overflow-hidden group">
+          <div className="aspect-video bg-gray-100 flex items-center justify-center group-hover:bg-orange-50 transition">
+            <div className="text-center text-gray-400 group-hover:text-orange-400">
+              <div className="text-4xl">📄</div>
+              <div className="text-xs mt-1">PDF</div>
+            </div>
+          </div>
+          <div className="p-3">
+             <div className="font-bold truncate" title={p.display_name}>{p.display_name}</div>
+             <div className="text-xs text-gray-400">v{p.version}</div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
