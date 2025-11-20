@@ -113,7 +113,7 @@ function computeStatus(next_control) {
   const diffDays = next.diff(now, "day");
 
   if (diffDays < 0) return "Overdue";
-  if (diffDays <= 30) return "Pending";
+  if (diffDays <= 90) return "Pending";
   return "Planned";
 }
 
@@ -1464,6 +1464,7 @@ router.patch("/tasks/:id/close", async (req, res) => {
     const frequency = tsd?.control?.frequency;
 
     const now = dayjs().format("YYYY-MM-DD");
+    const baseDate = task.next_control || now;
     const nextControl = frequency ? addFrequency(now, frequency) : null;
 
     await client.query(
