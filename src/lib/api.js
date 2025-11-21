@@ -1434,54 +1434,43 @@ export const api = {
       }),
   },
 
-  /** --- DCF (Assistant DCF / SAP plans) v2 --- */
+  /** --- DCF ASSISTANT --- */
   dcf: {
     health: () => get("/api/dcf/health"),
 
-    // Fichiers Excel DCF
-    listFiles: () => get("/api/dcf/files"),
-    
-    getFile: (id) => get(`/api/dcf/files/${encodeURIComponent(id)}`),
-    
-    // Upload MULTI-fichiers (v2)
-    uploadExcelMulti: (formData) => {
-      // formData doit contenir les fichiers sous la clé "files"
-      return upload("/api/dcf/uploadExcelMulti", formData);
-    },
-    
-    // Upload simple (rétro-compat)
+    // Upload Excel (multi & simple)
+    uploadExcelMulti: (formData) =>
+      upload("/api/dcf/uploadExcelMulti", formData),
+
     uploadExcel: (file) => {
       const fd = new FormData();
       fd.append("file", file);
       return upload("/api/dcf/uploadExcel", fd);
     },
 
-    // Pièces jointes (images SAP avec OCR automatique)
+    listFiles: () => get("/api/dcf/files"),
+    getFile: (id) => get(`/api/dcf/files/${id}`),
+
+    // Validation des DCF
+    validate: ({ fileIds, mode = "auto" }) =>
+      post("/api/dcf/validate", { fileIds, mode }),
+
+    // Upload pièces jointes (captures SAP)
     uploadAttachments: (files = [], sessionId = null) => {
       const fd = new FormData();
-      if (sessionId) fd.append("session_id", sessionId);
       (files || []).forEach((f) => fd.append("files", f));
+      if (sessionId) fd.append("session_id", sessionId);
       return upload("/api/dcf/attachments/upload", fd);
     },
 
-    // Sessions de chat
-    listSessions: () => get("/api/dcf/sessions"),
-    
-    startSession: (title, contextFileIds = []) => 
-      post("/api/dcf/startSession", { 
-        title, 
-        context_file_ids: contextFileIds 
-      }),
-    
-    getSession: (id) => get(`/api/dcf/session/${encodeURIComponent(id)}`),
-
-    // Chat v2 avec multi-contextes et modes
-    chat: ({ 
-      sessionId = null, 
-      message, 
-      fileIds = [], 
+    // Chat IA
+    chat: ({
+      sessionId = null,
+      message,
+      fileIds = [],
       attachmentIds = [],
-      mode = "chat" // "chat" | "validation" | "guidage" | "sap"
+      mode = "guidage", // "guidage" | "chat" | "validation"
+      useCase = null,
     }) =>
       post("/api/dcf/chat", {
         sessionId,
@@ -1489,14 +1478,15 @@ export const api = {
         fileIds,
         attachmentIds,
         mode,
+        useCase,
       }),
 
-    // Validation automatique DCF
-    validate: ({ fileIds = [], mode = "auto" }) =>
-      post("/api/dcf/validate", {
-        fileIds,
-        mode,
-      }),
+    // Sessions
+    startSession: ({ title, context_file_ids = [] } = {}) =>
+      post("/api/dcf/startSession", { title, context_file_ids }),
+
+    listSessions: () => get("/api/dcf/sessions"),
+    getSession: (id) => get(`/api/dcf/session/${id}`),
   },
 
   /** --- 🔵 BUBBLE AUTH --- */
