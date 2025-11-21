@@ -1090,9 +1090,26 @@ function setupHandleDrag(map, onMoveCallback) {
     const ly = geomEdit.layer;
     const base = baseLayerRef.current;
     const dims = getPlanDims(base);
+    const m = mapRef.current;
 
     try {
-      // --- 1️⃣ Extraction des nouvelles coordonnées ---
+      // --- 1️⃣ NETTOYAGE COMPLET IMMÉDIAT (avant API call) ---
+      clearEditHandles();
+      document.body.classList.remove("editing-geom");
+      document.body.style.userSelect = "";
+      
+      // Nettoyer TOUS les event handlers potentiellement actifs
+      if (m) {
+        m.dragging.enable();
+        m.off("mousemove");
+        m.off("mouseup");
+        m.off("mousedown");
+        m.scrollWheelZoom?.enable();
+        m.touchZoom?.enable();
+        m.doubleClickZoom?.enable();
+      }
+
+      // --- 2️⃣ Extraction et envoi au backend ---
       if (geomEdit.kind === "rect") {
         const b = ly.getBounds();
         const { W, H, bounds } = dims;
@@ -1126,18 +1143,21 @@ function setupHandleDrag(map, onMoveCallback) {
         await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
       }
 
-      // --- 2️⃣ Réinitialisation du mode édition ---
+      // --- 3️⃣ Réinitialisation de l'état React ---
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-      clearEditHandles();
-      document.body.classList.remove("editing-geom");
-      document.body.style.userSelect = ""; // 🔧 rétablit comportement normal
 
-      // --- 3️⃣ Recharge les zones mises à jour ---
+      // --- 4️⃣ Recharge les zones (après cleanup complet) ---
       await reloadAll();
-      // --- 3️⃣ bis : Réactive Leaflet immédiatement pour éviter blocage ---
-      resetAfterGeomEdit(mapRef.current);
 
-      // --- 4️⃣ Feedback visuel (toast temporaire) ---
+      // --- 5️⃣ Forcer Leaflet à recalculer la taille ---
+      if (m) {
+        try {
+          m.invalidateSize(false);
+          await new Promise(requestAnimationFrame);
+        } catch {}
+      }
+
+      // --- 6️⃣ Feedback visuel ---
       const toast = document.createElement("div");
       toast.textContent = "Forme enregistrée";
       Object.assign(toast.style, {
@@ -1159,15 +1179,22 @@ function setupHandleDrag(map, onMoveCallback) {
 
     } catch (e) {
       console.error("[ATEX] saveGeomEdit error", e);
+      alert("Erreur lors de l'enregistrement de la forme");
     } finally {
-      // --- 5️⃣ Toujours restaurer un état stable ---
+      // --- 7️⃣ Sécurité : toujours restaurer un état stable ---
       try {
-        const m = mapRef.current;
-        resetAfterGeomEdit(m);
         clearEditHandles();
         setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+        if (m) {
+          m.dragging.enable();
+          m.off("mousemove");
+          m.off("mouseup");
+          m.off("mousedown");
+        }
+        document.body.classList.remove("editing-geom");
+        document.body.style.userSelect = "";
       } catch (err) {
-        console.warn("[ATEX] Cleanup après édition échoué:", err);
+        console.warn("[ATEX] Cleanup final échoué:", err);
       } finally {
         end();
       }
@@ -1707,6 +1734,7 @@ function setupHandleDrag(map, onMoveCallback) {
   const EditorPopover = editorPos?.screen ? (
     <div className="fixed z-[7000]" style={editorStyle}>
       <SubAreaEditor
+        key={editorPos?.shapeId || `new-${Date.now()}`}
         initial={editorInit}
         onSave={onSaveSubarea}
         onCancel={() => {
