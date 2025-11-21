@@ -1350,9 +1350,13 @@ function setupHandleDrag(map, onMoveCallback) {
         }
       });
 
-      // Assurer l'ordre visuel des couches
-      g.bringToBack(); 
-      markersLayerRef.current?.bringToFront();
+      // Assurer l'ordre visuel des couches (si l'API existe)
+      if (g && typeof g.bringToBack === "function") {
+        g.bringToBack();
+      }
+      if (markersLayerRef.current && typeof markersLayerRef.current.bringToFront === "function") {
+        markersLayerRef.current.bringToFront();
+      }
       
     } catch (e) {
       console.error("[ATEX] drawSubareas error", e);
