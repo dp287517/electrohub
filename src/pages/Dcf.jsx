@@ -1,6 +1,6 @@
 // src/pages/Dcf.jsx
 import React, { useEffect, useState } from "react";
-import api from "../lib/api.js";
+import { api } from "../lib/api.js";
 
 export default function DcfPage() {
   const [tab, setTab] = useState("chat"); // "files" | "chat"
