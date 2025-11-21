@@ -1434,6 +1434,39 @@ export const api = {
       }),
   },
 
+    /** --- DCF (Assistant DCF / SAP plans) --- */
+  dcf: {
+    health: () => get("/api/dcf/health"),
+
+    // Fichiers Excel DCF
+    listFiles: () => get("/api/dcf/files"),
+    uploadExcel: (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload("/api/dcf/uploadExcel", fd);
+    },
+
+    // Pièces jointes (images SAP, PDF…)
+    uploadAttachments: (files = [], sessionId = null) => {
+      const fd = new FormData();
+      if (sessionId) fd.append("session_id", sessionId);
+      (files || []).forEach((f) => fd.append("files", f));
+      return upload("/api/dcf/attachments/upload", fd);
+    },
+
+    // Sessions de chat
+    startSession: (title) => post("/api/dcf/startSession", { title }),
+    getSession: (id) => get(`/api/dcf/session/${encodeURIComponent(id)}`),
+
+    chat: ({ sessionId = null, message, fileId = null, attachmentIds = [] }) =>
+      post("/api/dcf/chat", {
+        sessionId,
+        message,
+        fileId,
+        attachmentIds,
+      }),
+  },
+
   /** --- 🔵 BUBBLE AUTH --- */
   bubble: {
     login: (token) => post("/api/auth/bubble", { token }),
