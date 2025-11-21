@@ -1672,55 +1672,70 @@ function AtexZipImport({ disabled, onDone }) {
 }
 /* ----------------------------- Vue Arborescence Plans ----------------------------- */
 function PlanTree({ plans = [], onRename, onPick }) {
-  // 1. Grouper par Bâtiment -> Zone
-  const tree = useMemo(() => {
-    const t = {};
-    plans.forEach((p) => {
-      const bat = (p.building || "Non classé").trim() || "Non classé";
-      const zone = (p.zone || "Autres").trim() || "Autres";
-      
-      if (!t[bat]) t[bat] = {};
-      if (!t[bat][zone]) t[bat][zone] = [];
-      t[bat][zone].push(p);
-    });
-    // Trier les clés (alphabétique)
-    const sortedBats = Object.keys(t).sort();
-    const result = sortedBats.map((bat) => {
-      const zonesObj = t[bat];
-      const sortedZones = Object.keys(zonesObj).sort().map((z) => ({
-        name: z,
-        items: zonesObj[z].sort((a, b) => (a.display_name || a.logical_name).localeCompare(b.display_name || b.logical_name))
-      }));
-      return { name: bat, zones: sortedZones };
-    });
-    return result;
+  const grouped = useMemo(() => {
+    const byKey = new Map();
+    for (const p of plans) {
+      const batKey = p.building?.trim() || "Autres bâtiments";
+      const zoneKey = p.zone?.trim() || "Zone non renseignée";
+      const g = byKey.get(batKey) || { key: batKey, zones: new Map() };
+      const z = g.zones.get(zoneKey) || { name: zoneKey, items: [] };
+      z.items.push(p);
+      g.zones.set(zoneKey, z);
+      byKey.set(batKey, g);
+    }
+    return Array.from(byKey.values()).map((g) => ({
+      key: g.key,
+      zones: Array.from(g.zones.values()),
+    }));
   }, [plans]);
 
-  if (!plans.length) return <div className="text-gray-500 italic">Aucun plan importé.</div>;
+  if (!grouped.length) {
+    return (
+      <div className="text-sm text-gray-500 italic">
+        Aucun plan ATEX chargé pour le moment.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
-      {tree.map((bat) => (
-        <details key={bat.name} className="group bg-white border rounded-xl shadow-sm overflow-hidden" open>
-          <summary className="flex items-center gap-2 px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100 transition select-none">
-            <span className="transform group-open:rotate-90 transition-transform text-gray-400">▶</span>
-            <span className="font-bold text-gray-800">🏢 {bat.name}</span>
-            <span className="text-xs text-gray-500 px-2 py-0.5 bg-white border rounded-full">
-              {bat.zones.reduce((acc, z) => acc + z.items.length, 0)} plans
+      {grouped.map((bat) => (
+        // 🔹 Bâtiment : fermé par défaut (pas de `open`)
+        <details
+          key={bat.key}
+          className="border rounded-lg bg-white shadow-sm"
+        >
+          <summary className="flex items-center justify-between px-3 py-2 cursor-pointer select-none bg-gray-50">
+            <span className="font-medium text-sm text-gray-800">
+              🏢 {bat.key}
+            </span>
+            <span className="text-xs text-gray-500">
+              {bat.zones.reduce((n, z) => n + z.items.length, 0)} plan(s)
             </span>
           </summary>
-          <div className="p-3 space-y-3">
+
+          <div className="p-3 space-y-2">
             {bat.zones.map((z) => (
-              <div key={z.name} className="pl-4 border-l-2 border-gray-100 ml-2">
-                <div className="text-sm font-semibold text-gray-600 mb-2 flex items-center gap-2">
-                  📍 {z.name}
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+              // 🔹 Zone : sous-dépliant, fermé par défaut
+              <details
+                key={z.name || "no-zone"}
+                className="pl-2 border-l border-dashed border-gray-200"
+              >
+                <summary className="flex items-center justify-between cursor-pointer text-sm text-gray-700">
+                  <span>
+                    📍 {z.name || "Zone non renseignée"}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {z.items.length} plan(s)
+                  </span>
+                </summary>
+
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {z.items.map((p) => (
                     <PlanCard key={p.id || p.logical_name} plan={p} onRename={onRename} onPick={onPick} />
                   ))}
                 </div>
-              </div>
+              </details>
             ))}
           </div>
         </details>
