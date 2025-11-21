@@ -1572,14 +1572,16 @@ function setupHandleDrag(map, onMoveCallback) {
           } finally { end(); }
         }
 
-  /* ----------------------------- DnD: création + upload ----------------------------- */
+/* ----------------------------- DnD: création + upload ----------------------------- */
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
+
     const onDrop = async (e) => {
       prevent(e);
-      if (!baseLayerRef.current) return;
+      if (!baseLayerRef.current || !plan) return; // Sécurité ajoutée ici
+      
       const files = e.dataTransfer?.files;
       // position du drop -> latlng
       let xf = null, yf = null;
@@ -1594,6 +1596,7 @@ function setupHandleDrag(map, onMoveCallback) {
           xf = frac.xf; yf = frac.yf;
         }
       } catch {}
+      
       // fallback: centroïde dernière zone ou centre plan
       if (xf == null || yf == null) {
         const last = lastSubareaId ? subareasById[lastSubareaId] : null;
@@ -1605,8 +1608,10 @@ function setupHandleDrag(map, onMoveCallback) {
         const frac = fromLatLngToFrac(center, baseLayerRef.current);
         xf = frac.xf; yf = frac.yf;
       }
+      
       await createEquipmentAtFrac(xf, yf, files);
     };
+
     el.addEventListener("dragenter", prevent);
     el.addEventListener("dragover", prevent);
     el.addEventListener("dragleave", prevent);
@@ -1617,7 +1622,8 @@ function setupHandleDrag(map, onMoveCallback) {
       el.removeEventListener("dragleave", prevent);
       el.removeEventListener("drop", onDrop);
     };
-  }, [lastSubareaId, subareasById]);
+    // === CORRECTION ICI : ajout de [plan, pageIndex] ===
+  }, [lastSubareaId, subareasById, plan, pageIndex]);
   /* ----------------------------- RENDER ----------------------------- */
   const viewerHeight = Math.min(
     (typeof window !== "undefined" ? window.innerHeight : 900) - 140,
