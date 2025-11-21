@@ -200,19 +200,16 @@ export default function DcfPage() {
   async function handleSend(e) {
     e?.preventDefault();
     if (!input.trim()) return;
+
     setSending(true);
     setError("");
     setInfo("");
 
-    try:
-    {
+    try {
       // Upload pièces jointes si présentes
       let attachmentIds = [];
       if (attachments.length) {
-        const res = await api.dcf.uploadAttachments(
-          attachments,
-          sessionId
-        );
+        const res = await api.dcf.uploadAttachments(attachments, sessionId);
         attachmentIds = (res?.items || []).map((it) => it.id);
       }
 
@@ -237,6 +234,7 @@ export default function DcfPage() {
         { role: "user", content: input.trim() },
         { role: "assistant", content: answer },
       ];
+
       setMessages(newMsgs);
       setInput("");
       setAttachments([]);
