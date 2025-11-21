@@ -1145,6 +1145,19 @@ function setupHandleDrag(map, onMoveCallback) {
       // --- 3️⃣ Envoi au backend ---
       await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
 
+      // 🔁 Reindex après changement de géométrie
+      try {
+        if (plan?.logical_name && api.atexMaps?.reindexZones) {
+          await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
+          indexedRef.current = {
+            key: `${plan.logical_name}::${pageIndex}`,
+            done: true,
+          };
+        }
+      } catch (e) {
+        console.warn("[ATEX] reindexZones after saveGeomEdit failed", e);
+      }
+
       // --- 4️⃣ Feedback visuel (Ton Toast Bleu) ---
       const toast = document.createElement("div");
       toast.textContent = "Forme enregistrée";
@@ -1439,6 +1452,20 @@ function setupHandleDrag(map, onMoveCallback) {
             }
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
+
+            // 🔁 Reindex zones après création
+            try {
+              if (plan?.logical_name && api.atexMaps?.reindexZones) {
+                await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
+                indexedRef.current = {
+                  key: `${plan.logical_name}::${pageIndex}`,
+                  done: true,
+                };
+              }
+            } catch (e) {
+              console.warn("[ATEX] reindexZones after createSubarea (rect/circle) failed", e);
+            }
+
           } catch (e) {
             console.error("[ATEX] Subarea create failed", e);
             alert("Erreur création zone");
@@ -1498,6 +1525,18 @@ function setupHandleDrag(map, onMoveCallback) {
             });
             const zid = created?.id || created?.subarea?.id;
             if (zid) setLastSubareaId(zid);
+            // 🔁 Reindex zones après création
+            try {
+              if (plan?.logical_name && api.atexMaps?.reindexZones) {
+                await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
+                indexedRef.current = {
+                  key: `${plan.logical_name}::${pageIndex}`,
+                  done: true,
+                };
+              }
+            } catch (e) {
+              console.warn("[ATEX] reindexZones after createSubarea (poly) failed", e);
+            }
           } catch (e) {
             console.error("[ATEX] Subarea poly create failed", e);
             alert("Erreur création polygone");
@@ -1558,11 +1597,24 @@ function setupHandleDrag(map, onMoveCallback) {
           }
         }
 
+        // 🔁 Reindexer les zones pour mettre à jour zoning_gas/zoning_dust
+        try {
+          if (plan?.logical_name && api.atexMaps?.reindexZones) {
+            await api.atexMaps.reindexZones(plan.logical_name, pageIndex);
+            indexedRef.current = {
+              key: `${plan.logical_name}::${pageIndex}`,
+              done: true,
+            };
+          }
+        } catch (e) {
+          console.warn("[ATEX] reindexZones after onSaveSubarea failed", e);
+        }
+
         setEditorPos(null);
         await reloadAll();
-        }
-        } finally { end(); }
-        }
+      }
+    } finally { end(); }
+  }
 
         async function onDeleteSubarea() {
           const end = timeStart("onDeleteSubarea");
@@ -1791,8 +1843,23 @@ function setupHandleDrag(map, onMoveCallback) {
         initial={editorInit}
         onSave={onSaveSubarea}
         onCancel={() => {
+          // callback éventuel spécifique (création via dessin, etc.)
           editorPos?.onCancel?.();
           setEditorPos(null);
+
+          // 🔒 SÉCURITÉ : si jamais on était resté en mode édition de forme, on le coupe
+          try {
+            resetAfterGeomEdit(mapRef.current);
+          } catch {}
+          setGeomEdit((g) => ({
+            ...g,
+            active: false,
+            kind: null,
+            shapeId: null,
+            layer: null,
+          }));
+          document.body.classList.remove("editing-geom");
+          document.body.style.userSelect = "";
         }}
         onStartGeomEdit={
           editorPos?.layer && editorPos?.kind
