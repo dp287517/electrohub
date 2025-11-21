@@ -1228,13 +1228,13 @@ function applyZonesLocally(id, zones) {
             />
           </div>
 
-          <PlanCards
+          {/* ✅ REMPLACEMENT ICI : On utilise PlanTree au lieu de PlanCards */}
+          <PlanTree
             plans={plans}
             onRename={async (plan, name) => {
               await api.atexMaps.renamePlan(plan.logical_name, name);
               await loadPlans();
             }}
-            // ✅ Correction : forcer un remount même si on rouvre le même plan
             onPick={(plan) => {
               setSelectedPlan(plan);
               setMapRefreshTick((t) => t + 1);
@@ -1251,7 +1251,6 @@ function applyZonesLocally(id, zones) {
                   <Btn
                     variant="ghost"
                     onClick={() => {
-                      // ✅ Correction : fermeture propre du plan
                       setSelectedPlan(null);
                       setMapRefreshTick((t) => t + 1);
                     }}
@@ -1261,7 +1260,6 @@ function applyZonesLocally(id, zones) {
                 </div>
               </div>
 
-              {/* ✅ Correction : clé unique qui se renouvelle à chaque ouverture */}
               <AtexMap
                 key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
                 plan={selectedPlan}
@@ -1278,7 +1276,7 @@ function applyZonesLocally(id, zones) {
                   }
                 }}
                 onMetaChanged={async () => {
-                  await reload(); // 🔄 recharge les équipements dans la liste principale
+                  await reload();
                   setToast("Plans et équipements mis à jour");
                 }}
               />
@@ -1672,6 +1670,64 @@ function AtexZipImport({ disabled, onDone }) {
     </div>
   );
 }
+/* ----------------------------- Vue Arborescence Plans ----------------------------- */
+function PlanTree({ plans = [], onRename, onPick }) {
+  // 1. Grouper par Bâtiment -> Zone
+  const tree = useMemo(() => {
+    const t = {};
+    plans.forEach((p) => {
+      const bat = (p.building || "Non classé").trim() || "Non classé";
+      const zone = (p.zone || "Autres").trim() || "Autres";
+      
+      if (!t[bat]) t[bat] = {};
+      if (!t[bat][zone]) t[bat][zone] = [];
+      t[bat][zone].push(p);
+    });
+    // Trier les clés (alphabétique)
+    const sortedBats = Object.keys(t).sort();
+    const result = sortedBats.map((bat) => {
+      const zonesObj = t[bat];
+      const sortedZones = Object.keys(zonesObj).sort().map((z) => ({
+        name: z,
+        items: zonesObj[z].sort((a, b) => (a.display_name || a.logical_name).localeCompare(b.display_name || b.logical_name))
+      }));
+      return { name: bat, zones: sortedZones };
+    });
+    return result;
+  }, [plans]);
+
+  if (!plans.length) return <div className="text-gray-500 italic">Aucun plan importé.</div>;
+
+  return (
+    <div className="space-y-3">
+      {tree.map((bat) => (
+        <details key={bat.name} className="group bg-white border rounded-xl shadow-sm overflow-hidden" open>
+          <summary className="flex items-center gap-2 px-4 py-3 bg-gray-50 cursor-pointer hover:bg-gray-100 transition select-none">
+            <span className="transform group-open:rotate-90 transition-transform text-gray-400">▶</span>
+            <span className="font-bold text-gray-800">🏢 {bat.name}</span>
+            <span className="text-xs text-gray-500 px-2 py-0.5 bg-white border rounded-full">
+              {bat.zones.reduce((acc, z) => acc + z.items.length, 0)} plans
+            </span>
+          </summary>
+          <div className="p-3 space-y-3">
+            {bat.zones.map((z) => (
+              <div key={z.name} className="pl-4 border-l-2 border-gray-100 ml-2">
+                <div className="text-sm font-semibold text-gray-600 mb-2 flex items-center gap-2">
+                  📍 {z.name}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                  {z.items.map((p) => (
+                    <PlanCard key={p.id || p.logical_name} plan={p} onRename={onRename} onPick={onPick} />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -1738,3 +1794,4 @@ function PlanCard({ plan, onRename, onPick }) {
     </div>
   );
 }
+
