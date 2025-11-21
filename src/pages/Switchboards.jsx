@@ -1,12 +1,12 @@
-// src/pages/Switchboards.jsx
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import { get, post, put, del } from '../lib/api.js';
+// src/pages/Switchboards.jsx - VERSION HIÉRARCHIQUE COMPLÈTE
+import { useEffect, useState } from 'react';
+import { get, post, put, del, upload } from '../lib/api.js';
 import {
-  Edit, Copy, Trash, Download, Plus, Search, Info, HelpCircle,
-  ChevronDown, ChevronRight, ChevronLeft, X
+  Edit, Copy, Trash, Plus, Search, ChevronDown, ChevronRight, X,
+  Building2, Layers, Zap, Menu, HelpCircle, AlertCircle, CheckCircle2
 } from 'lucide-react';
 
-/** Utilities */
+/** ============================== UTILITIES ============================== */
 const regimes = ['TN-S', 'TN-C-S', 'IT', 'TT'];
 const deviceTypes = [
   'High Voltage Cell', 'High Voltage Disconnect Switch', 'High Voltage Circuit Breaker', 'Transformer',
@@ -18,60 +18,6 @@ function useUserSite() {
     const user = JSON.parse(localStorage.getItem('eh_user') || '{}');
     return user?.site || '';
   } catch { return ''; }
-}
-
-function Pill({ children, color = 'blue' }) {
-  const colors = {
-    blue: 'bg-blue-100 text-blue-800 border-blue-200',
-    green: 'bg-green-100 text-green-800 border-green-200',
-    red: 'bg-red-100 text-red-800 border-red-200'
-  };
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${colors[color]}`}>
-      {children}
-    </span>
-  );
-}
-
-function Tooltip({ children, content }) {
-  return (
-    <div className="relative inline-block group">
-      <div className="peer">{children}</div>
-      <div className="absolute z-10 invisible peer-hover:visible bg-gray-800 text-white text-xs rounded py-1 px-2 -top-8 left-1/2 transform -translate-x-1/2 whitespace-nowrap">
-        {content}
-        <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
-      </div>
-    </div>
-  );
-}
-
-function Modal({ open, onClose, children, title }) {
-  if (!open) return null;
- 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-4xl max-h-[90vh] bg-white rounded-2xl shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-gray-100">
-          <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg hover:bg-gray-200 transition-colors"
-          >
-            <X size={20} />
-          </button>
-        </div>
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-120px)]">{children}</div>
-        <div className="flex justify-end px-6 py-4 border-t bg-gray-50 gap-2">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 const emptySwitchboardForm = {
@@ -97,16 +43,8 @@ const emptyDeviceForm = {
   trip_unit: '',
   position_number: '',
   settings: {
-    ir: null,
-    tr: null,
-    isd: null,
-    tsd: null,
-    ii: null,
-    ig: null,
-    tg: null,
-    zsi: false,
-    erms: false,
-    curve_type: ''
+    ir: null, tr: null, isd: null, tsd: null, ii: null, ig: null, tg: null,
+    zsi: false, erms: false, curve_type: ''
   },
   is_main_incoming: false,
   parent_id: null,
@@ -115,26 +53,491 @@ const emptyDeviceForm = {
   photos: []
 };
 
+function Pill({ children, color = 'blue' }) {
+  const colors = {
+    blue: 'bg-blue-100 text-blue-800',
+    green: 'bg-green-100 text-green-800',
+    red: 'bg-red-100 text-red-800',
+    yellow: 'bg-yellow-100 text-yellow-800'
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${colors[color]}`}>
+      {children}
+    </span>
+  );
+}
+
+function Modal({ open, onClose, children, title, size = 'max-w-4xl' }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 overflow-y-auto">
+      <div className={`w-full ${size} bg-white rounded-2xl shadow-2xl my-8`}>
+        <div className="flex items-center justify-between px-6 py-4 border-b bg-gradient-to-r from-gray-50 to-gray-100">
+          <h3 className="text-xl font-semibold text-gray-800">{title}</h3>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-gray-200 transition-colors">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="overflow-y-auto" style={{ maxHeight: 'calc(90vh - 140px)' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/** ============================== TREE SIDEBAR ============================== */
+function TreeSidebar({ 
+  buildings, 
+  selectedSwitchboard, 
+  onSelectSwitchboard, 
+  expandedBuildings, 
+  toggleBuilding,
+  expandedFloors, 
+  toggleFloor,
+  collapsed,
+  onToggleCollapse,
+  onAddSwitchboard,
+  onEditSwitchboard,
+  searchQuery,
+  onSearchChange
+}) {
+  if (collapsed) {
+    return (
+      <div className="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4 gap-4">
+        <button
+          onClick={onToggleCollapse}
+          className="p-3 rounded-lg hover:bg-gray-100 transition-colors"
+          title="Expand sidebar"
+        >
+          <Menu size={20} className="text-gray-700" />
+        </button>
+        <button
+          onClick={onAddSwitchboard}
+          className="p-3 rounded-lg bg-green-50 hover:bg-green-100 text-green-600 transition-colors"
+          title="Add Switchboard"
+        >
+          <Plus size={20} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-80 bg-white border-r border-gray-200 flex flex-col h-full">
+      {/* Header */}
+      <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Building2 size={20} className="text-blue-600" />
+            <h2 className="font-semibold text-gray-900">Arborescence</h2>
+          </div>
+          <button
+            onClick={onToggleCollapse}
+            className="p-1.5 rounded-lg hover:bg-white/50 transition-colors"
+            title="Collapse sidebar"
+          >
+            <Menu size={18} className="text-gray-700" />
+          </button>
+        </div>
+        
+        {/* Search */}
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => onSearchChange(e.target.value)}
+            placeholder="Rechercher..."
+            className="w-full pl-10 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          />
+        </div>
+        
+        <button
+          onClick={onAddSwitchboard}
+          className="mt-3 w-full flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-lg hover:from-green-600 hover:to-green-700 transition-all shadow-sm"
+        >
+          <Plus size={16} />
+          <span className="text-sm font-medium">Nouveau Tableau</span>
+        </button>
+      </div>
+
+      {/* Tree */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {buildings.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            <Building2 size={48} className="mx-auto mb-2 opacity-20" />
+            <p className="text-sm">Aucun tableau</p>
+          </div>
+        ) : (
+          buildings.map(building => (
+            <BuildingNode
+              key={building.name}
+              building={building}
+              expanded={expandedBuildings[building.name]}
+              onToggle={() => toggleBuilding(building.name)}
+              expandedFloors={expandedFloors}
+              onToggleFloor={toggleFloor}
+              selectedSwitchboard={selectedSwitchboard}
+              onSelectSwitchboard={onSelectSwitchboard}
+              onEditSwitchboard={onEditSwitchboard}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BuildingNode({ 
+  building, 
+  expanded, 
+  onToggle, 
+  expandedFloors, 
+  onToggleFloor,
+  selectedSwitchboard,
+  onSelectSwitchboard,
+  onEditSwitchboard
+}) {
+  return (
+    <div className="rounded-lg border border-gray-200 overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between p-3 hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+          <Building2 size={18} className="text-blue-600" />
+          <span className="font-medium text-gray-900">{building.name || 'Sans Bâtiment'}</span>
+        </div>
+        <Pill color="blue">{building.count}</Pill>
+      </button>
+      
+      {expanded && (
+        <div className="border-t border-gray-200 bg-gray-50">
+          {building.floors.map(floor => (
+            <FloorNode
+              key={floor.name}
+              floor={floor}
+              buildingName={building.name}
+              expanded={expandedFloors[`${building.name}-${floor.name}`]}
+              onToggle={() => onToggleFloor(building.name, floor.name)}
+              selectedSwitchboard={selectedSwitchboard}
+              onSelectSwitchboard={onSelectSwitchboard}
+              onEditSwitchboard={onEditSwitchboard}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FloorNode({ 
+  floor, 
+  buildingName, 
+  expanded, 
+  onToggle,
+  selectedSwitchboard,
+  onSelectSwitchboard,
+  onEditSwitchboard
+}) {
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between p-2.5 pl-8 hover:bg-gray-100 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          <Layers size={16} className="text-indigo-600" />
+          <span className="text-sm font-medium text-gray-900">{floor.name || 'Sans Étage'}</span>
+        </div>
+        <Pill color="blue">{floor.count}</Pill>
+      </button>
+      
+      {expanded && (
+        <div className="bg-white">
+          {floor.switchboards.map(sb => (
+            <div
+              key={sb.id}
+              className={`flex items-center justify-between p-2.5 pl-14 hover:bg-blue-50 cursor-pointer transition-colors border-l-2 ${
+                selectedSwitchboard?.id === sb.id
+                  ? 'bg-blue-50 border-blue-500'
+                  : 'border-transparent'
+              }`}
+              onClick={() => onSelectSwitchboard(sb)}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <Zap size={14} className="text-green-600 flex-shrink-0" />
+                  <span className="text-sm font-medium text-gray-900 truncate">{sb.name}</span>
+                </div>
+                <div className="text-xs text-gray-500 ml-5">{sb.code}</div>
+              </div>
+              <div className="flex items-center gap-1 ml-2">
+                {sb.is_principal && <Pill color="green">P</Pill>}
+                <button
+                  onClick={e => {
+                    e.stopPropagation();
+                    onEditSwitchboard(sb);
+                  }}
+                  className="p-1 rounded hover:bg-blue-100 transition-colors"
+                  title="Modifier"
+                >
+                  <Edit size={12} className="text-blue-600" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** ============================== DEVICES PANEL ============================== */
+function DevicesPanel({ 
+  switchboard, 
+  devices, 
+  onAddDevice, 
+  onEditDevice, 
+  onDuplicateDevice, 
+  onDeleteDevice,
+  onSetMainDevice,
+  onRefresh
+}) {
+  if (!switchboard) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <Zap size={64} className="mx-auto mb-4 text-gray-300" />
+          <p className="text-lg font-medium text-gray-600 mb-2">Sélectionnez un tableau</p>
+          <p className="text-sm text-gray-500">Choisissez un tableau dans l'arborescence pour voir ses dispositifs</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Tri intelligent : Main incoming d'abord, puis par position
+  const sortedDevices = [...devices].sort((a, b) => {
+    if (a.is_main_incoming && !b.is_main_incoming) return -1;
+    if (!a.is_main_incoming && b.is_main_incoming) return 1;
+    
+    const posA = a.position_number || '';
+    const posB = b.position_number || '';
+    return posA.localeCompare(posB, undefined, { numeric: true, sensitivity: 'base' });
+  });
+
+  return (
+    <div className="flex-1 flex flex-col bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 p-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-2">
+              <h2 className="text-2xl font-bold text-gray-900">{switchboard.name}</h2>
+              {switchboard.is_principal && <Pill color="green">Principal</Pill>}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
+              <span className="flex items-center gap-1">
+                <Building2 size={14} />
+                {switchboard.meta?.building_code || '—'}
+              </span>
+              <span className="flex items-center gap-1">
+                <Layers size={14} />
+                {switchboard.meta?.floor || '—'}
+              </span>
+              {switchboard.meta?.room && (
+                <span>Salle {switchboard.meta.room}</span>
+              )}
+              <span className="flex items-center gap-1">
+                <Zap size={14} />
+                {switchboard.code}
+              </span>
+              {switchboard.regime_neutral && (
+                <Pill color="blue">{switchboard.regime_neutral}</Pill>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={onAddDevice}
+            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all shadow-lg hover:shadow-xl"
+          >
+            <Plus size={18} />
+            <span className="font-medium">Ajouter un dispositif</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Devices List */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {sortedDevices.length === 0 ? (
+          <div className="text-center py-12 bg-white rounded-xl border-2 border-dashed border-gray-300">
+            <Zap size={48} className="mx-auto mb-3 text-gray-300" />
+            <p className="text-lg font-medium text-gray-600 mb-1">Aucun dispositif</p>
+            <p className="text-sm text-gray-500 mb-4">Ajoutez votre premier dispositif à ce tableau</p>
+            <button
+              onClick={onAddDevice}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
+            >
+              <Plus size={16} />
+              Ajouter un dispositif
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {sortedDevices.map(device => (
+              <DeviceCard
+                key={device.id}
+                device={device}
+                onEdit={() => onEditDevice(device)}
+                onDuplicate={() => onDuplicateDevice(device.id)}
+                onDelete={() => onDeleteDevice(device.id)}
+                onSetMain={isMain => onSetMainDevice(device.id, isMain)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DeviceCard({ device, onEdit, onDuplicate, onDelete, onSetMain }) {
+  return (
+    <div className={`bg-white rounded-xl border-2 p-5 hover:shadow-md transition-all ${
+      device.is_main_incoming ? 'border-green-400 bg-green-50/30' : 'border-gray-200'
+    }`}>
+      <div className="flex flex-col lg:flex-row justify-between gap-4">
+        {/* Info principale */}
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            {device.is_main_incoming && (
+              <Pill color="green">MAIN INCOMING</Pill>
+            )}
+            {device.position_number && (
+              <Pill color="yellow">Pos: {device.position_number}</Pill>
+            )}
+            <Pill color="blue">{device.device_type}</Pill>
+            {device.downstream_switchboard_id && (
+              <Pill color="blue">→ SB</Pill>
+            )}
+          </div>
+          
+          <h3 className="text-lg font-semibold text-gray-900 mb-2 truncate">
+            {device.name || `${device.manufacturer || '—'} ${device.reference || ''}`.trim() || 'Sans nom'}
+          </h3>
+          
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-2 text-sm">
+            <div>
+              <span className="text-gray-500 text-xs">Fabricant</span>
+              <div className="font-medium">{device.manufacturer || '—'}</div>
+            </div>
+            <div>
+              <span className="text-gray-500 text-xs">Référence</span>
+              <div className="font-medium">{device.reference || '—'}</div>
+            </div>
+            <div>
+              <span className="text-gray-500 text-xs">Courant nominal</span>
+              <div className="font-medium">{device.in_amps || '—'}A</div>
+            </div>
+            <div>
+              <span className="text-gray-500 text-xs">Pouvoir de coupure</span>
+              <div className="font-medium">Icu: {device.icu_ka || '—'}kA</div>
+            </div>
+            <div>
+              <span className="text-gray-500 text-xs">Pôles</span>
+              <div className="font-medium">{device.poles || '—'}P</div>
+            </div>
+            <div>
+              <span className="text-gray-500 text-xs">Tension</span>
+              <div className="font-medium">{device.voltage_v || '—'}V</div>
+            </div>
+            {device.trip_unit && (
+              <div className="col-span-2">
+                <span className="text-gray-500 text-xs">Déclencheur</span>
+                <div className="font-medium truncate">{device.trip_unit}</div>
+              </div>
+            )}
+          </div>
+
+          {/* Settings preview */}
+          {device.settings && Object.values(device.settings).some(v => v !== null && v !== false && v !== '') && (
+            <div className="mt-3 pt-3 border-t border-gray-100">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-600">
+                {device.settings.ir !== null && <span>Ir: {device.settings.ir}×In</span>}
+                {device.settings.tr !== null && <span>Tr: {device.settings.tr}s</span>}
+                {device.settings.isd !== null && <span>Isd: {device.settings.isd}×Ir</span>}
+                {device.settings.curve_type && <span>Courbe: {device.settings.curve_type}</span>}
+                {device.settings.zsi && <span className="text-green-600">ZSI</span>}
+                {device.settings.erms && <span className="text-blue-600">ERMS</span>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex lg:flex-col items-center lg:items-end gap-2">
+          <button
+            onClick={onEdit}
+            className="p-2.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+            title="Modifier"
+          >
+            <Edit size={18} />
+          </button>
+          <button
+            onClick={onDuplicate}
+            className="p-2.5 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+            title="Dupliquer"
+          >
+            <Copy size={18} />
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-2.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            title="Supprimer"
+          >
+            <Trash size={18} />
+          </button>
+          <button
+            onClick={() => onSetMain(!device.is_main_incoming)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
+              device.is_main_incoming
+                ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                : 'bg-green-100 text-green-700 hover:bg-green-200'
+            }`}
+          >
+            {device.is_main_incoming ? 'Retirer Main' : 'Définir Main'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ============================== MAIN COMPONENT ============================== */
 export default function Switchboards() {
   const site = useUserSite();
-  const [rows, setRows] = useState([]);
+  
+  // Data state
   const [allSwitchboards, setAllSwitchboards] = useState([]);
-  const [q, setQ] = useState({ q: '', building: '', floor: '', room: '', sort: 'created_at', dir: 'desc', page: 1 });
+  const [selectedSwitchboard, setSelectedSwitchboard] = useState(null);
+  const [devices, setDevices] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Tree state
+  const [expandedBuildings, setExpandedBuildings] = useState({});
+  const [expandedFloors, setExpandedFloors] = useState({});
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Modals
   const [openSwitchboard, setOpenSwitchboard] = useState(false);
   const [editingSwitchboard, setEditingSwitchboard] = useState(null);
   const [switchboardForm, setSwitchboardForm] = useState(emptySwitchboardForm);
-  const [busy, setBusy] = useState(false);
-  const [total, setTotal] = useState(0);
-  const pageSize = 18;
-
-  // Device states
-  const [expandedPanels, setExpandedPanels] = useState({});
-  const [devices, setDevices] = useState({});
   const [openDevice, setOpenDevice] = useState(false);
   const [editingDevice, setEditingDevice] = useState(null);
   const [deviceForm, setDeviceForm] = useState(emptyDeviceForm);
-  const [currentPanelId, setCurrentPanelId] = useState(null);
-  const [deviceReferences, setDeviceReferences] = useState([]);
+  
+  // Device helpers
   const [deviceSearchBusy, setDeviceSearchBusy] = useState(false);
   const [photoFile, setPhotoFile] = useState(null);
   const [parentSuggestions, setParentSuggestions] = useState([]);
@@ -143,49 +546,26 @@ export default function Switchboards() {
   const [showParentSuggestions, setShowParentSuggestions] = useState(false);
   const [showDownstreamSuggestions, setShowDownstreamSuggestions] = useState(false);
   const [showReferenceSuggestions, setShowReferenceSuggestions] = useState(false);
-
-  // Search inputs - CORRECTION: Parent vide par défaut
   const [parentSearchInput, setParentSearchInput] = useState('');
   const [downstreamSearchInput, setDownstreamSearchInput] = useState('');
+  const [quickAiQuery, setQuickAiQuery] = useState('');
 
-  // Chat sidebar
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatBusy, setChatBusy] = useState(false);
-
-  // AI Tips state
-  const [aiTip, setAiTip] = useState('');
-  const [aiTipLoading, setAiTipLoading] = useState(false);
-  const [aiTipOpen, setAiTipOpen] = useState(false);
-
-  // Compteur devices (amélioration 1)
-  const [deviceCounts, setDeviceCounts] = useState({});
-
-  // Toasts (amélioration 3)
-  const [toast, setToast] = useState(null); // { type: 'success'|'error'|'info', msg: string }
+  // UI state
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState(null);
+  
   const notify = (msg, type='success') => {
     setToast({ msg, type });
-    setTimeout(() => setToast(null), 2500);
+    setTimeout(() => setToast(null), 3000);
   };
-
-  // Quick AI Search (amélioration 4)
-  const [quickAiQuery, setQuickAiQuery] = useState('');
 
   // Debounce hook
   const useDebounce = (value, delay) => {
     const [debouncedValue, setDebouncedValue] = useState(value);
-   
     useEffect(() => {
-      const handler = setTimeout(() => {
-        setDebouncedValue(value);
-      }, delay);
-     
-      return () => {
-        clearTimeout(handler);
-      };
+      const handler = setTimeout(() => setDebouncedValue(value), delay);
+      return () => clearTimeout(handler);
     }, [value, delay]);
-   
     return debouncedValue;
   };
 
@@ -193,148 +573,131 @@ export default function Switchboards() {
   const debouncedParentQuery = useDebounce(parentSearchInput, 300);
   const debouncedDownstreamQuery = useDebounce(downstreamSearchInput, 300);
 
-  const loadSwitchboards = async () => {
-    try {
-      if (!site) return;
-      const params = new URLSearchParams({ ...q, pageSize, site }).toString();
-      const data = await get(`/api/switchboard/boards?${params}`);
-      setRows(data?.data || []);
-      setTotal(data?.total || 0);
-      // Amélioration 1 : charger les counts après les rows
-      const ids = (data?.data || []).map(r => r.id);
-      loadDeviceCounts(ids);
-    } catch (e) {
-      console.error('Load switchboards failed:', e);
-      notify('Failed to load switchboards. Please refresh the page.', 'error');
-    }
-  };
-
+  /** ============================== API CALLS ============================== */
   const loadAllSwitchboards = async () => {
     try {
       if (!site) return;
       const params = new URLSearchParams({ site, pageSize: 1000 }).toString();
       const data = await get(`/api/switchboard/boards?${params}`);
       setAllSwitchboards(data?.data || []);
+      
+      // Auto-expand first building & floor
+      if (data?.data?.length > 0) {
+        const buildings = buildHierarchy(data.data);
+        if (buildings.length > 0) {
+          const firstBuilding = buildings[0].name;
+          setExpandedBuildings({ [firstBuilding]: true });
+          if (buildings[0].floors.length > 0) {
+            const firstFloor = buildings[0].floors[0].name;
+            setExpandedFloors({ [`${firstBuilding}-${firstFloor}`]: true });
+          }
+        }
+      }
     } catch (e) {
-      console.error('Load all switchboards failed:', e);
+      console.error('Load switchboards failed:', e);
+      notify('Échec du chargement des tableaux', 'error');
     }
   };
 
-  const loadDevices = async (panelId) => {
+  const loadDevices = async (switchboardId) => {
     try {
-      if (!site) return;
-      const params = new URLSearchParams({ switchboard_id: panelId, site }).toString();
+      if (!site || !switchboardId) return;
+      const params = new URLSearchParams({ switchboard_id: switchboardId, site }).toString();
       const data = await get(`/api/switchboard/devices?${params}`);
-      setDevices(prev => ({ ...prev, [panelId]: data?.data || [] }));
+      setDevices(data?.data || []);
     } catch (e) {
       console.error('Load devices failed:', e);
-    }
-  };
-
-  // Amélioration 1 : loader pour les counts
-  const loadDeviceCounts = async (ids=[]) => {
-    try {
-      const param = ids.length ? `?ids=${ids.join(',')}&site=${encodeURIComponent(site)}`
-                               : `?site=${encodeURIComponent(site)}`;
-      const data = await get(`/api/switchboard/devices-count${param}`);
-      setDeviceCounts(data.counts || {});
-    } catch (e) {
-      console.error('Load device counts failed:', e);
-    }
-  };
-
-  const loadDeviceReferences = async () => {
-    try {
-      if (!site) return;
-      const params = new URLSearchParams({ site }).toString();
-      const data = await get(`/api/switchboard/device-references?${params}`);
-      setDeviceReferences(data.data || []);
-    } catch (e) {
-      console.error('Load device references failed:', e);
-    }
-  };
-
-  // NOUVELLE FONCTION: Charger le nom du parent pour l'édition
-  const loadParentName = async (parentId) => {
-    if (!parentId || !currentPanelId || !site) return '';
-    try {
-      const params = new URLSearchParams({
-        query: '',
-        switchboard_id: currentPanelId,
-        site
-      }).toString();
-      const data = await get(`/api/switchboard/search-parents?${params}`);
-      const parent = data.suggestions?.find(p => p.id === parentId);
-      return parent ? `${parent.name} (${parent.manufacturer} ${parent.reference})`.trim() : '';
-    } catch (e) {
-      console.error('Load parent name failed:', e);
-      return '';
-    }
-  };
-
-  // NOUVELLE FONCTION: Charger le nom du downstream pour l'édition
-  const loadDownstreamName = async (downstreamId) => {
-    if (!downstreamId || !site) return '';
-    try {
-      const params = new URLSearchParams({ query: '', site }).toString();
-      const data = await get(`/api/switchboard/search-downstreams?${params}`);
-      const downstream = data.suggestions?.find(sb => sb.id === downstreamId);
-      return downstream ? `${downstream.name} (${downstream.code})`.trim() : '';
-    } catch (e) {
-      console.error('Load downstream name failed:', e);
-      return '';
+      notify('Échec du chargement des dispositifs', 'error');
     }
   };
 
   useEffect(() => {
-    if (site) {
-      loadSwitchboards();
-      loadAllSwitchboards();
-      loadDeviceReferences();
-    }
-  }, [q.page, q.sort, q.dir, q.q, q.building, q.floor, q.room, site]);
+    if (site) loadAllSwitchboards();
+  }, [site]);
 
-  const toggleExpand = async (panelId) => {
-    const isExpanded = expandedPanels[panelId];
-    setExpandedPanels(prev => ({ ...prev, [panelId]: !isExpanded }));
-   
-    if (!isExpanded && !devices[panelId]) {
-      await loadDevices(panelId);
-    }
+  useEffect(() => {
+    if (selectedSwitchboard) loadDevices(selectedSwitchboard.id);
+  }, [selectedSwitchboard]);
+
+  /** ============================== HIERARCHY BUILDER ============================== */
+  const buildHierarchy = (switchboards) => {
+    const filtered = searchQuery
+      ? switchboards.filter(sb =>
+          sb.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          sb.code.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+      : switchboards;
+
+    const buildingsMap = {};
+    
+    filtered.forEach(sb => {
+      const building = sb.meta?.building_code || 'Sans Bâtiment';
+      const floor = sb.meta?.floor || 'Sans Étage';
+      
+      if (!buildingsMap[building]) {
+        buildingsMap[building] = { name: building, floors: {}, count: 0 };
+      }
+      
+      if (!buildingsMap[building].floors[floor]) {
+        buildingsMap[building].floors[floor] = { name: floor, switchboards: [], count: 0 };
+      }
+      
+      buildingsMap[building].floors[floor].switchboards.push(sb);
+      buildingsMap[building].floors[floor].count++;
+      buildingsMap[building].count++;
+    });
+
+    return Object.values(buildingsMap).map(building => ({
+      ...building,
+      floors: Object.values(building.floors)
+    }));
+  };
+
+  const buildings = buildHierarchy(allSwitchboards);
+
+  /** ============================== ACTIONS ============================== */
+  const toggleBuilding = (name) => {
+    setExpandedBuildings(prev => ({ ...prev, [name]: !prev[name] }));
+  };
+
+  const toggleFloor = (buildingName, floorName) => {
+    const key = `${buildingName}-${floorName}`;
+    setExpandedFloors(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleSelectSwitchboard = (sb) => {
+    setSelectedSwitchboard(sb);
   };
 
   const resetSwitchboardModal = () => {
     setEditingSwitchboard(null);
-    setSwitchboardForm({
-      ...emptySwitchboardForm,
-      meta: { ...emptySwitchboardForm.meta, site }
-    });
+    setSwitchboardForm({ ...emptySwitchboardForm, meta: { ...emptySwitchboardForm.meta, site } });
     setOpenSwitchboard(true);
   };
 
-  const onEditSwitchboard = (row) => {
-    setEditingSwitchboard(row);
+  const handleEditSwitchboard = (sb) => {
+    setEditingSwitchboard(sb);
     setSwitchboardForm({
-      name: row.name || '',
-      code: row.code || '',
+      name: sb.name || '',
+      code: sb.code || '',
       meta: {
-        site: row.meta?.site || site,
-        building_code: row.meta?.building_code || '',
-        floor: row.meta?.floor || '',
-        room: row.meta?.room || '',
+        site: sb.meta?.site || site,
+        building_code: sb.meta?.building_code || '',
+        floor: sb.meta?.floor || '',
+        room: sb.meta?.room || ''
       },
-      regime_neutral: row.regime_neutral || 'TN-S',
-      is_principal: !!row.is_principal,
+      regime_neutral: sb.regime_neutral || 'TN-S',
+      is_principal: !!sb.is_principal,
       modes: {
-        bypass: !!row.modes?.bypass,
-        maintenance_mode: !!row.modes?.maintenance_mode,
-        bus_coupling: !!row.modes?.bus_coupling,
-        genset_backup: !!row.modes?.genset_backup,
-        ups_backup: !!row.modes?.ups_backup,
+        bypass: !!sb.modes?.bypass,
+        maintenance_mode: !!sb.modes?.maintenance_mode,
+        bus_coupling: !!sb.modes?.bus_coupling,
+        genset_backup: !!sb.modes?.genset_backup,
+        ups_backup: !!sb.modes?.ups_backup
       },
       quality: {
-        thd: row.quality?.thd ?? '',
-        flicker: row.quality?.flicker ?? ''
+        thd: sb.quality?.thd ?? '',
+        flicker: sb.quality?.flicker ?? ''
       }
     });
     setOpenSwitchboard(true);
@@ -342,106 +705,65 @@ export default function Switchboards() {
 
   const saveSwitchboard = async () => {
     if (!switchboardForm.name.trim() || !switchboardForm.code.trim()) {
-      return notify('Name and Code are required', 'error');
+      return notify('Nom et code requis', 'error');
     }
-
     setBusy(true);
     try {
       if (editingSwitchboard) {
         await put(`/api/switchboard/boards/${editingSwitchboard.id}?site=${encodeURIComponent(site)}`, switchboardForm);
-        notify('Switchboard updated successfully!', 'success');
+        notify('Tableau mis à jour', 'success');
       } else {
         await post(`/api/switchboard/boards?site=${encodeURIComponent(site)}`, switchboardForm);
-        notify('Switchboard created successfully!', 'success');
+        notify('Tableau créé', 'success');
       }
       setOpenSwitchboard(false);
-      await loadSwitchboards();
+      await loadAllSwitchboards();
     } catch (e) {
-      console.error('Save switchboard failed:', e);
-      notify('Failed to save switchboard: ' + (e.message || 'Unknown error'), 'error');
+      console.error(e);
+      notify('Erreur: ' + (e.message || 'Unknown'), 'error');
     } finally {
       setBusy(false);
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
-  const duplicateSwitchboard = async (id) => {
-    try {
-      await post(`/api/switchboard/boards/${id}/duplicate?site=${encodeURIComponent(site)}`);
-      await loadSwitchboards();
-      notify('Switchboard duplicated successfully!', 'success');
-    } catch (e) {
-      console.error('Duplicate failed:', e);
-      notify('Failed to duplicate switchboard', 'error');
-    }
-  };
-
-  // CORRECTION: Suppression des confirm() - action directe avec toast
-  const removeSwitchboard = async (id) => {
-    try {
-      await del(`/api/switchboard/boards/${id}?site=${encodeURIComponent(site)}`);
-      await loadSwitchboards();
-      notify('Switchboard deleted successfully!', 'success');
-    } catch (e) {
-      console.error('Delete failed:', e);
-      notify('Failed to delete switchboard', 'error');
-    }
-  };
-
-  // Device functions
-  const resetDeviceModal = (panelId) => {
-    setCurrentPanelId(panelId);
+  const resetDeviceModal = () => {
     setEditingDevice(null);
-    setDeviceForm({
-      ...emptyDeviceForm,
-      name: '',
-      position_number: ''
-    });
+    setDeviceForm({ ...emptyDeviceForm });
     setPhotoFile(null);
+    setParentSearchInput('');
+    setDownstreamSearchInput('');
+    setQuickAiQuery('');
     setReferenceSuggestions([]);
     setShowReferenceSuggestions(false);
-    setParentSearchInput(''); // CORRECTION: Toujours vide pour création
-    setDownstreamSearchInput(''); // CORRECTION: Toujours vide pour création
-    setQuickAiQuery(''); // CORRECTION: Vide pour création
     setOpenDevice(true);
   };
 
-  // CORRECTION MAJEURE: Persistance complète + chargement parent/downstream
-  const onEditDevice = async (device, panelId) => {
-    setCurrentPanelId(panelId);
+  const handleEditDevice = async (device) => {
     setEditingDevice(device);
-   
-    // Charger les noms parent/downstream en parallèle
-    const [parentName, downstreamName] = await Promise.all([
-      loadParentName(device.parent_id),
-      loadDownstreamName(device.downstream_switchboard_id)
-    ]);
-
-    const safeSettings = device.settings || {};
     
-    // CORRECTION: Préserver NULL pour tous les champs
+    const safeSettings = device.settings || {};
     setDeviceForm({
       name: device.name || '',
       device_type: device.device_type || 'Low Voltage Circuit Breaker',
       manufacturer: device.manufacturer || '',
       reference: device.reference || '',
-      in_amps: device.in_amps !== null && device.in_amps !== undefined ? Number(device.in_amps) : null,
-      icu_ka: device.icu_ka !== null && device.icu_ka !== undefined ? Number(device.icu_ka) : null,
-      ics_ka: device.ics_ka !== null && device.ics_ka !== undefined ? Number(device.ics_ka) : null,
-      poles: device.poles !== null && device.poles !== undefined ? Number(device.poles) : null,
-      voltage_v: device.voltage_v !== null && device.voltage_v !== undefined ? Number(device.voltage_v) : null,
+      in_amps: device.in_amps !== null ? Number(device.in_amps) : null,
+      icu_ka: device.icu_ka !== null ? Number(device.icu_ka) : null,
+      ics_ka: device.ics_ka !== null ? Number(device.ics_ka) : null,
+      poles: device.poles !== null ? Number(device.poles) : null,
+      voltage_v: device.voltage_v !== null ? Number(device.voltage_v) : null,
       trip_unit: device.trip_unit || '',
       position_number: device.position_number || '',
       settings: {
-        ir: safeSettings.ir !== null && safeSettings.ir !== undefined ? Number(safeSettings.ir) : null,
-        tr: safeSettings.tr !== null && safeSettings.tr !== undefined ? Number(safeSettings.tr) : null,
-        isd: safeSettings.isd !== null && safeSettings.isd !== undefined ? Number(safeSettings.isd) : null,
-        tsd: safeSettings.tsd !== null && safeSettings.tsd !== undefined ? Number(safeSettings.tsd) : null,
-        ii: safeSettings.ii !== null && safeSettings.ii !== undefined ? Number(safeSettings.ii) : null,
-        ig: safeSettings.ig !== null && safeSettings.ig !== undefined ? Number(safeSettings.ig) : null,
-        tg: safeSettings.tg !== null && safeSettings.tg !== undefined ? Number(safeSettings.tg) : null,
-        zsi: safeSettings.zsi !== null && safeSettings.zsi !== undefined ? Boolean(safeSettings.zsi) : false,
-        erms: safeSettings.erms !== null && safeSettings.erms !== undefined ? Boolean(safeSettings.erms) : false,
+        ir: safeSettings.ir !== null ? Number(safeSettings.ir) : null,
+        tr: safeSettings.tr !== null ? Number(safeSettings.tr) : null,
+        isd: safeSettings.isd !== null ? Number(safeSettings.isd) : null,
+        tsd: safeSettings.tsd !== null ? Number(safeSettings.tsd) : null,
+        ii: safeSettings.ii !== null ? Number(safeSettings.ii) : null,
+        ig: safeSettings.ig !== null ? Number(safeSettings.ig) : null,
+        tg: safeSettings.tg !== null ? Number(safeSettings.tg) : null,
+        zsi: Boolean(safeSettings.zsi),
+        erms: Boolean(safeSettings.erms),
         curve_type: safeSettings.curve_type || ''
       },
       is_main_incoming: Boolean(device.is_main_incoming),
@@ -450,220 +772,75 @@ export default function Switchboards() {
       pv_tests: null,
       photos: []
     });
-   
-    // CORRECTION: Parent vide par défaut, seulement suggestions si on tape
-    setParentSearchInput(parentName || '');
-    setDownstreamSearchInput(downstreamName || '');
+    
+    setParentSearchInput('');
+    setDownstreamSearchInput('');
     setPhotoFile(null);
-    setQuickAiQuery(''); // CORRECTION: Ne pré-remplit pas automatiquement
-    setReferenceSuggestions([]);
-    setShowReferenceSuggestions(false);
+    setQuickAiQuery('');
     setOpenDevice(true);
-  };
-
-  const safeUploadStrip = (form) => {
-    const { pv_tests, photos, ...rest } = form;
-    return { ...rest, pv_tests: null, photos: [] };
   };
 
   const saveDevice = async () => {
     if (!deviceForm.name.trim()) {
-      return notify('Device name is required', 'error');
+      return notify('Nom du dispositif requis', 'error');
     }
-    if (deviceForm.in_amps <= 0) {
-      return notify('Rated current must be greater than 0', 'error');
+    if (!deviceForm.in_amps || deviceForm.in_amps <= 0) {
+      return notify('Courant nominal invalide', 'error');
     }
     setBusy(true);
     try {
-      const payload = {
-        ...safeUploadStrip(deviceForm),
-        switchboard_id: currentPanelId
-      };
+      const { pv_tests, photos, ...payload } = deviceForm;
+      payload.switchboard_id = selectedSwitchboard.id;
+      
       if (editingDevice) {
         await put(`/api/switchboard/devices/${editingDevice.id}?site=${encodeURIComponent(site)}`, payload);
-        notify('Device updated successfully!', 'success');
+        notify('Dispositif mis à jour', 'success');
       } else {
         await post(`/api/switchboard/devices?site=${encodeURIComponent(site)}`, payload);
-        notify('Device created successfully!', 'success');
+        notify('Dispositif créé', 'success');
       }
       setOpenDevice(false);
-      setPhotoFile(null);
-      await loadDevices(currentPanelId);
-      await loadDeviceReferences();
+      await loadDevices(selectedSwitchboard.id);
     } catch (e) {
-      console.error('Save device failed:', e);
-      notify('Failed to save device: ' + (e.message || 'Unknown error'), 'error');
+      console.error(e);
+      notify('Erreur: ' + (e.message || 'Unknown'), 'error');
     } finally {
       setBusy(false);
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
-  const duplicateDevice = async (id, panelId) => {
+  const duplicateDevice = async (id) => {
     try {
       await post(`/api/switchboard/devices/${id}/duplicate?site=${encodeURIComponent(site)}`);
-      await loadDevices(panelId);
-      await loadDeviceReferences();
-      notify('Device duplicated successfully!', 'success');
+      await loadDevices(selectedSwitchboard.id);
+      notify('Dispositif dupliqué', 'success');
     } catch (e) {
-      console.error('Duplicate device failed:', e);
-      notify('Failed to duplicate device', 'error');
+      notify('Erreur de duplication', 'error');
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
-  const removeDevice = async (id, panelId) => {
+  const deleteDevice = async (id) => {
     try {
       await del(`/api/switchboard/devices/${id}?site=${encodeURIComponent(site)}`);
-      await loadDevices(panelId);
-      notify('Device deleted successfully!', 'success');
+      await loadDevices(selectedSwitchboard.id);
+      notify('Dispositif supprimé', 'success');
     } catch (e) {
-      console.error('Delete device failed:', e);
-      notify('Failed to delete device', 'error');
+      notify('Erreur de suppression', 'error');
     }
   };
 
-  // CORRECTION: Suppression des confirm() - action directe avec toast
-  const setMainDevice = async (id, panelId, isMain) => {
+  const setMainDevice = async (id, isMain) => {
     try {
       await put(`/api/switchboard/devices/${id}/set-main?site=${encodeURIComponent(site)}`, { is_main_incoming: isMain });
-      await loadDevices(panelId);
-      getAiTip(`User set device as main incoming: ${isMain ? 'enabled' : 'disabled'}.`);
-      notify(`Device ${isMain ? 'set as main incoming' : 'unset as main incoming'} successfully!`, 'success');
+      await loadDevices(selectedSwitchboard.id);
+      notify(`Main incoming ${isMain ? 'défini' : 'retiré'}`, 'success');
     } catch (e) {
-      console.error('Set main failed:', e);
-      notify('Failed to update main incoming status', 'error');
+      notify('Erreur', 'error');
     }
   };
 
-  // Fonctions de sélection des suggestions
-  const selectParent = (parent) => {
-    setDeviceForm(f => ({ ...f, parent_id: parent.id }));
-    setParentSearchInput(`${parent.name} (${parent.manufacturer} ${parent.reference})`.trim());
-    setShowParentSuggestions(false);
-    notify('Parent device selected', 'success');
-  };
-
-  const selectDownstream = (sb) => {
-    setDeviceForm(f => ({ ...f, downstream_switchboard_id: sb.id }));
-    setDownstreamSearchInput(`${sb.name} (${sb.code})`.trim());
-    setShowDownstreamSuggestions(false);
-    notify('Downstream switchboard selected', 'success');
-  };
-
-  const selectReferenceSuggestion = (ref) => {
-    setDeviceForm(prev => ({
-      ...prev,
-      manufacturer: ref.manufacturer || prev.manufacturer,
-      reference: ref.reference || prev.reference,
-      device_type: ref.device_type || prev.device_type,
-      in_amps: ref.in_amps !== null ? Number(ref.in_amps) : prev.in_amps,
-      icu_ka: ref.icu_ka !== null ? Number(ref.icu_ka) : prev.icu_ka,
-      ics_ka: ref.ics_ka !== null ? Number(ref.ics_ka) : prev.ics_ka,
-      poles: ref.poles !== null ? Number(ref.poles) : prev.poles,
-      voltage_v: ref.voltage_v !== null ? Number(ref.voltage_v) : prev.voltage_v,
-      trip_unit: ref.trip_unit || prev.trip_unit,
-      settings: { ...prev.settings, curve_type: ref.settings?.curve_type || prev.settings.curve_type }
-    }));
-    setShowReferenceSuggestions(false);
-    notify(`Device specs loaded from database`, 'success');
-  };
-
-  // Reference Search - FIXED
-  const searchDeviceReference = async () => {
-    if (!deviceForm.reference.trim()) {
-      return notify('Please enter a reference to search', 'info');
-    }
-   
-    setDeviceSearchBusy(true);
-    try {
-      const query = `${deviceForm.manufacturer || ''} ${deviceForm.reference}`.trim();
-      const data = await post(`/api/switchboard/search-device?site=${encodeURIComponent(site)}`, { query });
-     
-      if (data && data.manufacturer) {
-        setDeviceForm(prev => ({
-          ...prev,
-          manufacturer: data.manufacturer || prev.manufacturer,
-          device_type: data.device_type || prev.device_type,
-          in_amps: data.in_amps !== null ? Number(data.in_amps) : prev.in_amps,
-          icu_ka: data.icu_ka !== null ? Number(data.icu_ka) : prev.icu_ka,
-          ics_ka: data.ics_ka !== null ? Number(data.ics_ka) : prev.ics_ka,
-          poles: data.poles !== null ? Number(data.poles) : prev.poles,
-          voltage_v: data.voltage_v !== null ? Number(data.voltage_v) : prev.voltage_v,
-          trip_unit: data.trip_unit || prev.trip_unit,
-          settings: {
-            ...prev.settings,
-            ...data.settings,
-            ir: data.settings?.ir !== null ? Number(data.settings.ir) : prev.settings.ir,
-            tr: data.settings?.tr !== null ? Number(data.settings.tr) : prev.settings.tr,
-            isd: data.settings?.isd !== null ? Number(data.settings.isd) : prev.settings.isd,
-            tsd: data.settings?.tsd !== null ? Number(data.settings.tsd) : prev.settings.tsd,
-            ii: data.settings?.ii !== null ? Number(data.settings.ii) : prev.settings.ii,
-            ig: data.settings?.ig !== null ? Number(data.settings.ig) : prev.settings.ig,
-            tg: data.settings?.tg !== null ? Number(data.settings.tg) : prev.settings.tg,
-            zsi: data.settings?.zsi !== undefined ? Boolean(data.settings.zsi) : prev.settings.zsi,
-            erms: data.settings?.erms !== undefined ? Boolean(data.settings.erms) : prev.settings.erms,
-            curve_type: data.settings?.curve_type || prev.settings.curve_type
-          },
-          is_main_incoming: Boolean(data.is_main_incoming)
-        }));
-        setShowReferenceSuggestions(false);
-        notify(`✅ AI filled all fields for ${data.manufacturer} ${data.reference}!`, 'success');
-        return;
-      }
-     
-      notify('AI search completed. No exact match found.', 'info');
-     
-    } catch (e) {
-      console.error('AI device search failed:', e);
-      notify('AI search failed, trying database search...', 'info');
-    } finally {
-      setDeviceSearchBusy(false);
-    }
-   
-    // Fallback to DB search
-    await searchReferencesDB(deviceForm.reference);
-  };
-
-  const searchReferencesDB = async (query) => {
-    if (!query.trim()) {
-      setReferenceSuggestions([]);
-      setShowReferenceSuggestions(false);
-      return;
-    }
-
-    try {
-      const params = new URLSearchParams({ query, site }).toString();
-      const data = await get(`/api/switchboard/search-references?${params}`);
-      setReferenceSuggestions(data.suggestions || []);
-      setShowReferenceSuggestions(true);
-
-      if (data.auto_fill) {
-        const autoFill = data.auto_fill;
-        setDeviceForm(prev => ({
-          ...prev,
-          manufacturer: autoFill.manufacturer || prev.manufacturer,
-          reference: autoFill.reference || prev.reference,
-          device_type: autoFill.device_type || prev.device_type,
-          in_amps: autoFill.in_amps !== null && !isNaN(autoFill.in_amps) ? Number(autoFill.in_amps) : prev.in_amps,
-          icu_ka: autoFill.icu_ka !== null && !isNaN(autoFill.icu_ka) ? Number(autoFill.icu_ka) : prev.icu_ka,
-          ics_ka: autoFill.ics_ka !== null && !isNaN(autoFill.ics_ka) ? Number(autoFill.ics_ka) : prev.ics_ka,
-          poles: autoFill.poles !== null && !isNaN(autoFill.poles) ? Number(autoFill.poles) : prev.poles,
-          voltage_v: autoFill.voltage_v !== null && !isNaN(autoFill.voltage_v) ? Number(autoFill.voltage_v) : prev.voltage_v,
-          trip_unit: autoFill.trip_unit || prev.trip_unit,
-          settings: { ...prev.settings, curve_type: autoFill.settings?.curve_type || prev.settings.curve_type }
-        }));
-        notify(`✅ Auto-filled from database: ${autoFill.manufacturer} ${autoFill.reference}`, 'success');
-      }
-    } catch (e) {
-      console.error('Database reference search failed:', e);
-      notify('Failed to load reference suggestions. Please try again.', 'error');
-    }
-  };
-
-  // Quick AI Search (amélioration 4)
   const quickAiSearch = async () => {
-    if (!quickAiQuery.trim()) return notify('Enter a query first', 'info');
+    if (!quickAiQuery.trim()) return notify('Entrez une requête', 'info');
     setDeviceSearchBusy(true);
     try {
       const data = await post(`/api/switchboard/search-device?site=${encodeURIComponent(site)}`, { query: quickAiQuery });
@@ -679,371 +856,141 @@ export default function Switchboards() {
           poles: data.poles !== null ? Number(data.poles) : prev.poles,
           voltage_v: data.voltage_v !== null ? Number(data.voltage_v) : prev.voltage_v,
           trip_unit: data.trip_unit || prev.trip_unit,
-          settings: {
-            ...prev.settings,
-            ir: data.settings?.ir !== null ? Number(data.settings.ir) : prev.settings.ir,
-            tr: data.settings?.tr !== null ? Number(data.settings.tr) : prev.settings.tr,
-            isd: data.settings?.isd !== null ? Number(data.settings.isd) : prev.settings.isd,
-            tsd: data.settings?.tsd !== null ? Number(data.settings.tsd) : prev.settings.tsd,
-            ii: data.settings?.ii !== null ? Number(data.settings.ii) : prev.settings.ii,
-            ig: data.settings?.ig !== null ? Number(data.settings.ig) : prev.settings.ig,
-            tg: data.settings?.tg !== null ? Number(data.settings.tg) : prev.settings.tg,
-            zsi: data.settings?.zsi !== undefined ? Boolean(data.settings.zsi) : prev.settings.zsi,
-            erms: data.settings?.erms !== undefined ? Boolean(data.settings.erms) : prev.settings.erms,
-            curve_type: data.settings?.curve_type || prev.settings.curve_type
-          }
+          settings: { ...prev.settings, ...data.settings }
         }));
-        notify(`AI filled specs for ${data.manufacturer} ${data.reference}`, 'success');
+        notify('Spécifications IA complétées', 'success');
       } else {
-        notify('AI search done but no exact match', 'info');
+        notify('Aucune correspondance exacte', 'info');
       }
     } catch (e) {
-      console.error(e);
-      notify('AI search failed', 'error');
+      notify('Recherche IA échouée', 'error');
     } finally {
       setDeviceSearchBusy(false);
     }
   };
 
-  // CORRECTION MAJEURE: Analyse photo avec pré-remplissage Quick AI Search
   const analyzePhoto = async () => {
-    if (!photoFile) {
-      return notify('Please select a photo first', 'info');
-    }
+    if (!photoFile) return notify('Sélectionnez une photo', 'info');
     setDeviceSearchBusy(true);
     try {
-      const formData = new FormData();
-      formData.append('photo', photoFile);
-      const switchboardIdParam = currentPanelId && Number.isInteger(currentPanelId) ? `&switchboard_id=${encodeURIComponent(currentPanelId)}` : '';
-      const response = await fetch(`/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}${switchboardIdParam}`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData
-      });
-      const data = await response.json();
+      const fd = new FormData();
+      fd.append('photo', photoFile);
+      const res = await fetch(
+        `/api/switchboard/analyze-photo?site=${encodeURIComponent(site)}&switchboard_id=${encodeURIComponent(selectedSwitchboard.id)}`,
+        { method: 'POST', credentials: 'include', body: fd }
+      );
+      const data = await res.json();
       if (data.error) {
-        notify(`Photo analysis failed: ${data.error}`, 'error');
-        return;
-      }
-      // Pré-remplir uniquement Quick AI Search avec manufacturer + reference
-      if (data.manufacturer && data.reference) {
-        const quickQuery = `${data.manufacturer} ${data.reference}`.trim();
-        setQuickAiQuery(quickQuery);
-        notify(`✅ Photo analyzed! Quick AI Search ready: "${quickQuery}". Click "Search (AI)" to complete fields.`, 'success');
+        notify(`Analyse échouée: ${data.error}`, 'error');
+      } else if (data.manufacturer && data.reference) {
+        setQuickAiQuery(`${data.manufacturer} ${data.reference}`.trim());
+        notify(`Photo analysée! Recherche IA prête: "${data.manufacturer} ${data.reference}"`, 'success');
       } else {
-        notify('Photo analyzed but no clear manufacturer or reference identified.', 'info');
-      }
-      // Si un device a été créé automatiquement, recharger les devices
-      if (data.created) {
-        await loadDevices(currentPanelId);
-        notify(`✅ Created new device: ${data.manufacturer} ${data.reference}. Added to switchboard!`, 'success');
-        setOpenDevice(false);
+        notify('Photo analysée mais aucun fabricant/référence identifié', 'info');
       }
       setPhotoFile(null);
     } catch (e) {
-      console.error('Photo analysis failed:', e);
-      notify('Photo analysis failed: ' + (e.message || 'Unknown error'), 'error');
+      notify('Analyse photo échouée', 'error');
     } finally {
       setDeviceSearchBusy(false);
     }
   };
 
-  // AI Tip function
-  const getAiTip = async (context) => {
-    if (!context) return;
-    setAiTipLoading(true);
-    try {
-      const response = await post(`/api/switchboard/ai-tip?site=${encodeURIComponent(site)}`, { query: context });
-      setAiTip(response.tip || 'No tip available');
-      setAiTipOpen(true);
-    } catch (e) {
-      console.error('AI tip failed:', e);
-      setAiTip('AI tip unavailable');
-    } finally {
-      setAiTipLoading(false);
-    }
-  };
-
-  // Chat functions
-  const sendChatMessage = async () => {
-    if (!chatInput.trim() || chatBusy) return;
-    
-    const userMessage = chatInput.trim();
-    setChatMessages(prev => [...prev, { role: 'user', content: userMessage }]);
-    setChatInput('');
-    setChatBusy(true);
-    
-    try {
-      const response = await post(`/api/switchboard/ai-tip?site=${encodeURIComponent(site)}`, { 
-        query: `Electrical engineering question: ${userMessage}` 
-      });
-      const aiResponse = response.tip || 'Sorry, I could not generate a response.';
-      setChatMessages(prev => [...prev, { role: 'assistant', content: aiResponse }]);
-    } catch (e) {
-      console.error('Chat failed:', e);
-      setChatMessages(prev => [...prev, { 
-        role: 'assistant', 
-        content: 'Sorry, I encountered an error. Please try again.' 
-      }]);
-    } finally {
-      setChatBusy(false);
-    }
-  };
-
-  // Search handlers
+  // Search handlers (debounced)
   useEffect(() => {
-    if (debouncedParentQuery && currentPanelId) {
-      const searchParents = async () => {
+    if (debouncedParentQuery && selectedSwitchboard) {
+      (async () => {
         try {
-          const params = new URLSearchParams({
-            query: debouncedParentQuery,
-            switchboard_id: currentPanelId,
-            site
-          }).toString();
+          const params = new URLSearchParams({ query: debouncedParentQuery, switchboard_id: selectedSwitchboard.id, site }).toString();
           const data = await get(`/api/switchboard/search-parents?${params}`);
           setParentSuggestions(data.suggestions || []);
           setShowParentSuggestions(true);
         } catch (e) {
-          console.error('Parent search failed:', e);
+          console.error(e);
         }
-      };
-      searchParents();
+      })();
     } else {
       setParentSuggestions([]);
       setShowParentSuggestions(false);
     }
-  }, [debouncedParentQuery, currentPanelId, site]);
+  }, [debouncedParentQuery, selectedSwitchboard, site]);
 
   useEffect(() => {
     if (debouncedDownstreamQuery) {
-      const searchDownstreams = async () => {
+      (async () => {
         try {
-          const params = new URLSearchParams({
-            query: debouncedDownstreamQuery,
-            site
-          }).toString();
+          const params = new URLSearchParams({ query: debouncedDownstreamQuery, site }).toString();
           const data = await get(`/api/switchboard/search-downstreams?${params}`);
           setDownstreamSuggestions(data.suggestions || []);
           setShowDownstreamSuggestions(true);
         } catch (e) {
-          console.error('Downstream search failed:', e);
+          console.error(e);
         }
-      };
-      searchDownstreams();
+      })();
     } else {
       setDownstreamSuggestions([]);
       setShowDownstreamSuggestions(false);
     }
   }, [debouncedDownstreamQuery, site]);
 
-  useEffect(() => {
-    searchReferencesDB(debouncedReferenceQuery);
-  }, [debouncedReferenceQuery, site]);
+  const selectParent = (parent) => {
+    setDeviceForm(f => ({ ...f, parent_id: parent.id }));
+    setParentSearchInput(`${parent.name} (${parent.manufacturer} ${parent.reference})`.trim());
+    setShowParentSuggestions(false);
+    notify('Dispositif parent sélectionné', 'success');
+  };
 
-  // Render
+  const selectDownstream = (sb) => {
+    setDeviceForm(f => ({ ...f, downstream_switchboard_id: sb.id }));
+    setDownstreamSearchInput(`${sb.name} (${sb.code})`.trim());
+    setShowDownstreamSuggestions(false);
+    notify('Tableau aval sélectionné', 'success');
+  };
+
+  /** ============================== RENDER ============================== */
   return (
-    <section className="p-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">Switchboards</h1>
-          <p className="text-gray-600 mt-1">Manage electrical switchboards and devices</p>
-        </div>
-        <div className="flex gap-3">
-          <button
-            onClick={resetSwitchboardModal}
-            className="btn bg-gradient-to-r from-green-500 to-green-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl transition-all"
-          >
-            <Plus size={18} className="mr-2" /> Add Switchboard
-          </button>
-          <button
-            onClick={() => setSidebarOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
-          >
-            <Search size={18} /> AI Assistant
-          </button>
-        </div>
-      </div>
+    <div className="flex h-screen overflow-hidden bg-gray-50">
+      {/* Tree Sidebar */}
+      <TreeSidebar
+        buildings={buildings}
+        selectedSwitchboard={selectedSwitchboard}
+        onSelectSwitchboard={handleSelectSwitchboard}
+        expandedBuildings={expandedBuildings}
+        toggleBuilding={toggleBuilding}
+        expandedFloors={expandedFloors}
+        toggleFloor={toggleFloor}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        onAddSwitchboard={resetSwitchboardModal}
+        onEditSwitchboard={handleEditSwitchboard}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+      />
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Search</label>
-            <input
-              type="text"
-              value={q.q}
-              onChange={e => setQ(prev => ({ ...prev, q: e.target.value, page: 1 }))}
-              placeholder="Name or code..."
-              className="input w-full"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Building</label>
-            <input
-              type="text"
-              value={q.building}
-              onChange={e => setQ(prev => ({ ...prev, building: e.target.value, page: 1 }))}
-              placeholder="Building code..."
-              className="input w-full"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Location</label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={q.floor}
-                onChange={e => setQ(prev => ({ ...prev, floor: e.target.value, page: 1 }))}
-                placeholder="Floor..."
-                className="input flex-1"
-              />
-              <input
-                type="text"
-                value={q.room}
-                onChange={e => setQ(prev => ({ ...prev, room: e.target.value, page: 1 }))}
-                placeholder="Room..."
-                className="input flex-1"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Switchboards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {rows.map(row => (
-          <div key={row.id} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-all">
-            <div className="p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <h3 className="font-semibold text-lg text-gray-900 truncate">{row.name}</h3>
-                  <p className="text-sm text-gray-500 mt-1">{row.code}</p>
-                </div>
-                <div className="flex items-center gap-2 ml-3 flex-shrink-0">
-                  <button
-                    onClick={() => onEditSwitchboard(row)}
-                    className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                  >
-                    <Edit size={16} />
-                  </button>
-                  <button
-                    onClick={() => duplicateSwitchboard(row.id)}
-                    className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                  >
-                    <Copy size={16} />
-                  </button>
-                  <button
-                    onClick={() => removeSwitchboard(row.id)}
-                    className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                  >
-                    <Trash size={16} />
-                  </button>
-                </div>
-              </div>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Location</span>
-                  <span>{`${row.meta.building_code || '—'} / ${row.meta.floor || '—'} / ${row.meta.room || '—'}`}</span>
-                </div>
-                {row.regime_neutral && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Neutral</span>
-                    <span className="font-medium">{row.regime_neutral}</span>
-                  </div>
-                )}
-                {row.is_principal && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Type</span>
-                    <Pill color="green">Principal</Pill>
-                  </div>
-                )}
-                <div className="flex justify-between pt-3 border-t border-gray-100">
-                  <span className="text-gray-500">Created</span>
-                  <span className="text-xs text-gray-400">{new Date(row.created_at).toLocaleDateString()}</span>
-                </div>
-                {/* Amélioration 1: Compteur devices */}
-                <div className="flex justify-between pt-2">
-                  <span className="text-gray-500">Devices</span>
-                  <span className="font-medium">{deviceCounts[row.id] || 0}</span>
-                </div>
-              </div>
-              
-              {/* CORRECTION MAJEURE: Bouton Add Device + Toggle Expand */}
-              <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => resetDeviceModal(row.id)}
-                  className="flex-1 p-3 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium text-blue-700"
-                >
-                  <Plus size={16} /> Add Device
-                </button>
-                <button
-                  onClick={() => toggleExpand(row.id)}
-                  className="px-4 py-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition-colors flex items-center justify-center gap-2 text-sm font-medium"
-                >
-                  {expandedPanels[row.id] ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-                  {expandedPanels[row.id] ? 'Hide' : 'Show'} Devices
-                </button>
-              </div>
-            </div>
-            
-            {/* Devices Panel */}
-            {expandedPanels[row.id] && (
-              <div className="border-t border-gray-200 bg-gray-50">
-                <DeviceTree 
-                  devices={devices[row.id] || []} 
-                  panelId={row.id} 
-                  onEdit={onEditDevice}
-                  onDuplicate={duplicateDevice}
-                  onDelete={removeDevice}
-                  onSetMain={setMainDevice}
-                  level={0}
-                  site={site}
-                />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Pagination */}
-      {total > pageSize && (
-        <div className="flex items-center justify-between mt-8">
-          <div className="text-sm text-gray-700">
-            Showing {(q.page - 1) * pageSize + 1} to {Math.min(q.page * pageSize, total)} of {total} results
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setQ(prev => ({ ...prev, page: Math.max(1, prev.page - 1) }))}
-              disabled={q.page === 1}
-              className="p-2 text-gray-500 hover:text-gray-700 disabled:opacity-50"
-            >
-              <ChevronLeft size={16} />
-            </button>
-            <span className="px-3 py-1 bg-gray-100 rounded text-sm">{q.page}</span>
-            <button
-              onClick={() => setQ(prev => ({ ...prev, page: prev.page + 1 }))}
-              disabled={q.page * pageSize >= total}
-              className="p-2 text-gray-500 hover:text-gray-700 disabled:opacity-50"
-            >
-              <ChevronRight size={16} />
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Devices Panel */}
+      <DevicesPanel
+        switchboard={selectedSwitchboard}
+        devices={devices}
+        onAddDevice={resetDeviceModal}
+        onEditDevice={handleEditDevice}
+        onDuplicateDevice={duplicateDevice}
+        onDeleteDevice={deleteDevice}
+        onSetMainDevice={setMainDevice}
+        onRefresh={() => selectedSwitchboard && loadDevices(selectedSwitchboard.id)}
+      />
 
       {/* Switchboard Modal */}
-      <Modal open={openSwitchboard} onClose={() => setOpenSwitchboard(false)} title={editingSwitchboard ? 'Edit Switchboard' : 'New Switchboard'}>
-        <div className="space-y-6">
+      <Modal open={openSwitchboard} onClose={() => setOpenSwitchboard(false)} title={editingSwitchboard ? 'Modifier le tableau' : 'Nouveau tableau'}>
+        <div className="p-6 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Name *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Nom *</label>
               <input
                 type="text"
                 value={switchboardForm.name}
                 onChange={e => setSwitchboardForm(f => ({ ...f, name: e.target.value }))}
-                className="input w-full"
-                placeholder="Switchboard name"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Nom du tableau"
               />
             </div>
             <div>
@@ -1052,728 +999,382 @@ export default function Switchboards() {
                 type="text"
                 value={switchboardForm.code}
                 onChange={e => setSwitchboardForm(f => ({ ...f, code: e.target.value }))}
-                className="input w-full"
-                placeholder="Unique code"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Code unique"
               />
             </div>
           </div>
+          
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Building</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Bâtiment</label>
               <input
                 type="text"
                 value={switchboardForm.meta.building_code}
-                onChange={e => setSwitchboardForm(f => ({ 
-                  ...f, 
-                  meta: { ...f.meta, building_code: e.target.value } 
-                }))}
-                className="input w-full"
-                placeholder="Building code"
+                onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, building_code: e.target.value } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Code bâtiment"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Floor</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Étage</label>
               <input
                 type="text"
                 value={switchboardForm.meta.floor}
-                onChange={e => setSwitchboardForm(f => ({ 
-                  ...f, 
-                  meta: { ...f.meta, floor: e.target.value } 
-                }))}
-                className="input w-full"
-                placeholder="Floor level"
+                onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, floor: e.target.value } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Niveau"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Room</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Salle</label>
               <input
                 type="text"
                 value={switchboardForm.meta.room}
-                onChange={e => setSwitchboardForm(f => ({ 
-                  ...f, 
-                  meta: { ...f.meta, room: e.target.value } 
-                }))}
-                className="input w-full"
-                placeholder="Room number"
+                onChange={e => setSwitchboardForm(f => ({ ...f, meta: { ...f.meta, room: e.target.value } }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="N° salle"
               />
             </div>
           </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Neutral Regime</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Régime de neutre</label>
               <select
                 value={switchboardForm.regime_neutral}
                 onChange={e => setSwitchboardForm(f => ({ ...f, regime_neutral: e.target.value }))}
-                className="input w-full"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               >
-                {regimes.map(regime => (
-                  <option key={regime} value={regime}>{regime}</option>
-                ))}
+                {regimes.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
             </div>
             <div className="flex items-end">
-              <label className="flex items-center gap-2">
+              <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={switchboardForm.is_principal}
                   onChange={e => setSwitchboardForm(f => ({ ...f, is_principal: e.target.checked }))}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-5 w-5"
                 />
-                <span className="text-sm font-medium text-gray-700">Principal Switchboard</span>
+                <span className="text-sm font-medium text-gray-700">Tableau principal</span>
               </label>
             </div>
           </div>
-        </div>
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <div className="flex justify-end gap-3">
+
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
             <button
-              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
               onClick={() => setOpenSwitchboard(false)}
               disabled={busy}
+              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
-              Cancel
+              Annuler
             </button>
             <button
-              className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
-              disabled={busy || !switchboardForm.name.trim() || !switchboardForm.code.trim()}
               onClick={saveSwitchboard}
+              disabled={busy || !switchboardForm.name.trim() || !switchboardForm.code.trim()}
+              className="px-6 py-2 text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 transition-all shadow-lg"
             >
-              {busy ? (
-                <span className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Saving...
-                </span>
-              ) : editingSwitchboard ? 'Update Switchboard' : 'Create Switchboard'}
+              {busy ? 'Enregistrement...' : editingSwitchboard ? 'Mettre à jour' : 'Créer'}
             </button>
           </div>
         </div>
       </Modal>
 
       {/* Device Modal */}
-      <Modal open={openDevice} onClose={() => setOpenDevice(false)} title={editingDevice ? 'Edit Device' : 'New Device'}>
-        <div className="space-y-6">
-          {/* Photo Upload + Quick AI Search */}
+      <Modal open={openDevice} onClose={() => setOpenDevice(false)} title={editingDevice ? 'Modifier le dispositif' : 'Nouveau dispositif'} size="max-w-5xl">
+        <div className="p-6 space-y-6">
+          {/* AI Quick Tools */}
           <div className="p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl border border-indigo-200">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-end">
-              <div className="lg:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Upload Device Photo</label>
-                <div className="flex items-center gap-3">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">📸 Analyse photo</label>
+                <div className="flex items-center gap-2">
                   <input
                     type="file"
                     accept="image/*"
                     onChange={e => setPhotoFile(e.target.files?.[0] || null)}
-                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
+                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                   />
                   <button
                     onClick={analyzePhoto}
                     disabled={deviceSearchBusy || !photoFile}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm disabled:opacity-50"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm disabled:opacity-50 whitespace-nowrap"
                   >
-                    {deviceSearchBusy ? 'Analyzing...' : 'Analyze Photo'}
+                    {deviceSearchBusy ? '⏳' : 'Analyser'}
                   </button>
                 </div>
-                {photoFile && (
-                  <p className="text-xs text-gray-500 mt-1">Selected: {photoFile.name}</p>
-                )}
               </div>
-              <div className="lg:col-span-1">
-                <label className="block text-sm font-medium text-gray-700 mb-2">Quick AI Search</label>
-                <div className="relative">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">🤖 Recherche IA rapide</label>
+                <div className="flex gap-2">
                   <input
                     value={quickAiQuery}
                     onChange={e => setQuickAiQuery(e.target.value)}
-                    placeholder="e.g. Schneider LV429310 100A MCCB"
-                    className="input w-full pr-10"
+                    placeholder="ex: Schneider LV429310"
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                   />
                   <button
                     onClick={quickAiSearch}
                     disabled={deviceSearchBusy || !quickAiQuery.trim()}
-                    className="absolute right-1 top-1/2 transform -translate-y-1/2 p-1 text-indigo-600 hover:bg-indigo-100 rounded disabled:opacity-50"
-                    title="AI Complete Fields"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm disabled:opacity-50"
                   >
-                    <Search size={16} />
+                    Rechercher
                   </button>
                 </div>
-                {deviceSearchBusy && (
-                  <p className="text-xs text-indigo-600 mt-1 flex items-center gap-1">
-                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-600"></div>
-                    AI searching...
-                  </p>
-                )}
               </div>
             </div>
           </div>
 
+          {/* Device Form */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Device Name</label>
+            <div className="lg:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Nom du dispositif *</label>
               <input
                 type="text"
                 value={deviceForm.name}
                 onChange={e => setDeviceForm(f => ({ ...f, name: e.target.value }))}
-                className="input w-full"
-                placeholder="Device name (optional)"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                placeholder="Nom descriptif"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Position Number</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Position</label>
               <input
                 type="text"
                 value={deviceForm.position_number}
                 onChange={e => setDeviceForm(f => ({ ...f, position_number: e.target.value }))}
-                className="input w-full"
-                placeholder="e.g., Slot 12 or A3 (optional)"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                placeholder="ex: A12"
               />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Device Type</label>
-              <select
-                value={deviceForm.device_type}
-                onChange={e => setDeviceForm(f => ({ ...f, device_type: e.target.value }))}
-                className="input w-full"
-              >
-                {deviceTypes.map(type => (
-                  <option key={type} value={type}>{type}</option>
-                ))}
-              </select>
             </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <div className="relative">
-              <label className="block text-sm font-medium text-gray-700 mb-2">Manufacturer</label>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Type de dispositif</label>
+              <select
+                value={deviceForm.device_type}
+                onChange={e => setDeviceForm(f => ({ ...f, device_type: e.target.value }))}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              >
+                {deviceTypes.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Fabricant</label>
               <input
                 type="text"
                 value={deviceForm.manufacturer}
                 onChange={e => setDeviceForm(f => ({ ...f, manufacturer: e.target.value }))}
-                className="input w-full pr-8"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 placeholder="Schneider"
               />
-              <button
-                onClick={searchDeviceReference}
-                disabled={deviceSearchBusy || !deviceForm.reference.trim()}
-                className="absolute right-2 top-9 transform -translate-y-1/2 p-1 text-blue-600 hover:bg-blue-50 rounded disabled:opacity-50"
-                title="AI Search"
-              >
-                <Search size={14} />
-              </button>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Reference *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Référence *</label>
               <input
                 type="text"
                 value={deviceForm.reference}
                 onChange={e => setDeviceForm(f => ({ ...f, reference: e.target.value }))}
-                className="input w-full"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 placeholder="LV429310"
               />
             </div>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Rated Current (A) *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Courant nominal (A) *</label>
               <input
                 type="number"
                 min="0"
                 value={deviceForm.in_amps ?? ''}
                 onChange={e => setDeviceForm(f => ({ ...f, in_amps: e.target.value === '' ? null : Number(e.target.value) }))}
-                className="input w-full"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 placeholder="100"
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Breaking Capacity Icu (kA)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Icu (kA)</label>
               <input
                 type="number"
                 step="0.1"
                 value={deviceForm.icu_ka ?? ''}
                 onChange={e => setDeviceForm(f => ({ ...f, icu_ka: e.target.value === '' ? null : Number(e.target.value) }))}
-                className="input w-full"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 placeholder="25"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Ics (kA)</label>
-              <input
-                type="number"
-                step="0.1"
-                value={deviceForm.ics_ka ?? ''}
-                onChange={e => setDeviceForm(f => ({ ...f, ics_ka: e.target.value === '' ? null : Number(e.target.value) }))}
-                className="input w-full"
-                placeholder="20"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Poles</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Pôles</label>
               <input
                 type="number"
                 min="1"
                 value={deviceForm.poles ?? ''}
                 onChange={e => setDeviceForm(f => ({ ...f, poles: e.target.value === '' ? null : Number(e.target.value) }))}
-                className="input w-full"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 placeholder="3"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Voltage (V)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Tension (V)</label>
               <input
                 type="number"
                 value={deviceForm.voltage_v ?? ''}
                 onChange={e => setDeviceForm(f => ({ ...f, voltage_v: e.target.value === '' ? null : Number(e.target.value) }))}
-                className="input w-full"
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
                 placeholder="400"
               />
             </div>
           </div>
 
-          {/* Parent Device Search - CORRECTION: Vide par défaut */}
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Parent Device (Upstream)</label>
+          {/* Parent & Downstream */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="relative">
-              <input
-                type="text"
-                value={parentSearchInput}
-                onChange={e => {
-                  setParentSearchInput(e.target.value);
-                  setDeviceForm(f => ({ ...f, parent_id: null }));
-                  setShowParentSuggestions(e.target.value.trim().length > 0); // CORRECTION: Seulement si on tape
-                }}
-                onFocus={() => {
-                  if (parentSearchInput.trim().length > 0) {
-                    setShowParentSuggestions(true);
-                  }
-                }}
-                className="input w-full pr-8"
-                placeholder="Search parent device... (optional)"
-              />
-              <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <label className="block text-sm font-medium text-gray-700 mb-2">Dispositif parent (amont)</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={parentSearchInput}
+                  onChange={e => {
+                    setParentSearchInput(e.target.value);
+                    setDeviceForm(f => ({ ...f, parent_id: null }));
+                  }}
+                  className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="Rechercher..."
+                />
+                <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              </div>
               {showParentSuggestions && parentSuggestions.length > 0 && (
                 <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                  {parentSuggestions.map((parent, idx) => (
-                    <div
-                      key={idx}
-                      className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
-                      onClick={() => selectParent(parent)}
-                    >
-                      <div className="font-medium text-sm">{parent.name}</div>
-                      <div className="text-xs text-gray-500 flex gap-2">
-                        <span className="bg-gray-100 px-2 py-0.5 rounded text-xs">{parent.device_type}</span>
-                        <span>{parent.manufacturer} {parent.reference}</span>
-                      </div>
+                  {parentSuggestions.map((p, i) => (
+                    <div key={i} className="px-4 py-2 hover:bg-gray-50 cursor-pointer" onClick={() => selectParent(p)}>
+                      <div className="font-medium text-sm">{p.name}</div>
+                      <div className="text-xs text-gray-500">{p.manufacturer} {p.reference}</div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-          </div>
-
-          {/* Downstream Switchboard Search */}
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-gray-700 mb-2">Downstream Switchboard</label>
             <div className="relative">
-              <input
-                type="text"
-                value={downstreamSearchInput}
-                onChange={e => {
-                  setDownstreamSearchInput(e.target.value);
-                  setDeviceForm(f => ({ ...f, downstream_switchboard_id: null }));
-                  setShowDownstreamSuggestions(e.target.value.trim().length > 0);
-                }}
-                onFocus={() => {
-                  if (downstreamSearchInput.trim().length > 0) {
-                    setShowDownstreamSuggestions(true);
-                  }
-                }}
-                className="input w-full pr-8"
-                placeholder="Search downstream switchboard... (optional)"
-              />
-              <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <label className="block text-sm font-medium text-gray-700 mb-2">Tableau aval</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={downstreamSearchInput}
+                  onChange={e => {
+                    setDownstreamSearchInput(e.target.value);
+                    setDeviceForm(f => ({ ...f, downstream_switchboard_id: null }));
+                  }}
+                  className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="Rechercher..."
+                />
+                <Search size={16} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              </div>
               {showDownstreamSuggestions && downstreamSuggestions.length > 0 && (
                 <div className="absolute z-20 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-40 overflow-y-auto">
-                  {downstreamSuggestions.map((sb, idx) => (
-                    <div
-                      key={idx}
-                      className="px-4 py-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
-                      onClick={() => selectDownstream(sb)}
-                    >
+                  {downstreamSuggestions.map((sb, i) => (
+                    <div key={i} className="px-4 py-2 hover:bg-gray-50 cursor-pointer" onClick={() => selectDownstream(sb)}>
                       <div className="font-medium text-sm">{sb.name}</div>
-                      <div className="text-xs text-gray-500 flex gap-2">
-                        <span className="bg-gray-100 px-2 py-0.5 rounded text-xs">{sb.code}</span>
-                        <span>{sb.building_code}</span>
-                      </div>
+                      <div className="text-xs text-gray-500">{sb.code}</div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-
-            {/* Reference Suggestions */}
-            {showReferenceSuggestions && referenceSuggestions.length > 0 && (
-              <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-                <p className="text-xs text-blue-800 mb-2">Similar devices found:</p>
-                <div className="space-y-1 max-h-20 overflow-y-auto">
-                  {referenceSuggestions.map((ref, idx) => (
-                    <div
-                      key={idx}
-                      className="text-xs p-2 bg-white rounded border cursor-pointer hover:bg-blue-50"
-                      onClick={() => selectReferenceSuggestion(ref)}
-                    >
-                      {ref.manufacturer} {ref.reference} ({ref.in_amps}A, {ref.device_type})
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
 
-          {/* Main Incoming with AI Tip */}
-          <div className="md:col-span-2">
-            <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <div className="flex items-center gap-2 cursor-pointer flex-1" onClick={() => {
-                const isMain = !deviceForm.is_main_incoming;
-                setDeviceForm(f => ({ ...f, is_main_incoming: isMain }));
-                getAiTip(`User set device as main incoming: ${isMain ? 'enabled' : 'disabled'}. Provide advice on next steps.`);
-              }}>
-                <input
-                  type="checkbox"
-                  checked={deviceForm.is_main_incoming}
-                  onChange={() => {}} // Handled by parent div click
-                  className="rounded border-blue-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
-                />
-                <span className="font-medium text-blue-900">Main Incoming Device</span>
-              </div>
-              {aiTip && (
-                <button
-                  className="text-blue-600 hover:text-blue-700 text-sm ml-auto"
-                  onClick={() => setAiTipOpen(!aiTipOpen)}
-                >
-                  {aiTipOpen ? 'Hide' : 'AI Tip'}
-                </button>
-              )}
-              {aiTipOpen && (
-                <div className="ml-auto bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-72 absolute right-0 mt-2 z-10">
-                  <p className="text-sm text-gray-700 mb-3 whitespace-pre-wrap">{aiTip}</p>
-                  <button
-                    className="text-xs text-gray-500 hover:text-gray-700 w-full text-left"
-                    onClick={() => setAiTipOpen(false)}
-                  >
-                    Close tip
-                  </button>
-                </div>
-              )}
-            </div>
+          {/* Main Incoming */}
+          <div className="flex items-center gap-2 p-4 bg-green-50 rounded-lg border border-green-200">
+            <input
+              type="checkbox"
+              checked={deviceForm.is_main_incoming}
+              onChange={e => setDeviceForm(f => ({ ...f, is_main_incoming: e.target.checked }))}
+              className="rounded border-gray-300 text-green-600 focus:ring-green-500 h-5 w-5"
+            />
+            <span className="font-medium text-green-900">Main Incoming Device</span>
           </div>
 
-          {/* Quick Protection Settings */}
-          <div className="md:col-span-2">
-            <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-1">
-              Protection Settings
+          {/* Protection Settings */}
+          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <h4 className="font-medium text-gray-900 mb-3 flex items-center gap-2">
+              Réglages de protection
               <HelpCircle size={14} className="text-gray-400" />
             </h4>
-            <Tooltip content="Basic LSIG protection parameters">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <label className="text-xs text-gray-500 mb-1 block">Ir (xIn)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    className="input text-sm"
-                    value={deviceForm.settings.ir ?? ''}
-                    onChange={e => setDeviceForm(f => ({
-                      ...f,
-                      settings: { ...f.settings, ir: e.target.value === '' ? null : Number(e.target.value) }
-                    }))}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500 mb-1 block">Tr (s)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0"
-                    className="input text-sm"
-                    value={deviceForm.settings.tr ?? ''}
-                    onChange={e => setDeviceForm(f => ({
-                      ...f,
-                      settings: { ...f.settings, tr: e.target.value === '' ? null : Number(e.target.value) }
-                    }))}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500 mb-1 block">Isd (xIr)</label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="1"
-                    className="input text-sm"
-                    value={deviceForm.settings.isd ?? ''}
-                    onChange={e => setDeviceForm(f => ({
-                      ...f,
-                      settings: { ...f.settings, isd: e.target.value === '' ? null : Number(e.target.value) }
-                    }))}
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500 mb-1 block">Curve Type</label>
-                  <input
-                    className="input text-sm"
-                    value={deviceForm.settings.curve_type}
-                    onChange={e => setDeviceForm(f => ({
-                      ...f,
-                      settings: { ...f.settings, curve_type: e.target.value }
-                    }))}
-                    placeholder="B/C/D"
-                  />
-                </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Ir (×In)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={deviceForm.settings.ir ?? ''}
+                  onChange={e => setDeviceForm(f => ({ ...f, settings: { ...f.settings, ir: e.target.value === '' ? null : Number(e.target.value) }}))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
               </div>
-            </Tooltip>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Tr (s)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={deviceForm.settings.tr ?? ''}
+                  onChange={e => setDeviceForm(f => ({ ...f, settings: { ...f.settings, tr: e.target.value === '' ? null : Number(e.target.value) }}))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Isd (×Ir)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={deviceForm.settings.isd ?? ''}
+                  onChange={e => setDeviceForm(f => ({ ...f, settings: { ...f.settings, isd: e.target.value === '' ? null : Number(e.target.value) }}))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Courbe</label>
+                <input
+                  type="text"
+                  value={deviceForm.settings.curve_type}
+                  onChange={e => setDeviceForm(f => ({ ...f, settings: { ...f.settings, curve_type: e.target.value }}))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  placeholder="B/C/D"
+                />
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <div className="flex justify-end gap-3">
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-200">
             <button
-              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors shadow-sm"
               onClick={() => setOpenDevice(false)}
               disabled={busy}
+              className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
             >
-              Cancel
+              Annuler
             </button>
             <button
-              className="btn bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg shadow-lg hover:shadow-xl disabled:opacity-50 transition-all"
-              disabled={busy || !deviceForm.name.trim() || deviceForm.in_amps <= 0}
               onClick={saveDevice}
+              disabled={busy || !deviceForm.name.trim() || !deviceForm.in_amps}
+              className="px-6 py-2 text-sm font-medium text-white bg-gradient-to-r from-blue-500 to-blue-600 rounded-lg hover:from-blue-600 hover:to-blue-700 disabled:opacity-50 transition-all shadow-lg"
             >
-              {busy ? (
-                <span className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Saving...
-                </span>
-              ) : editingDevice ? 'Update Device' : 'Create Device'}
+              {busy ? 'Enregistrement...' : editingDevice ? 'Mettre à jour' : 'Créer'}
             </button>
           </div>
         </div>
       </Modal>
 
-      {/* AI Assistant Sidebar - amélioration 6 */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-40 bg-black/50" onClick={() => setSidebarOpen(false)}>
-          <div
-            className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl transform transition-transform duration-300"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gradient-to-r from-indigo-50 to-purple-50">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-100 rounded-lg">
-                  <Search size={20} className="text-indigo-600" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900">AI Assistant</h3>
-                  <p className="text-xs text-gray-500">Ask about devices & standards</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setSidebarOpen(false)}
-                className="p-1 rounded-lg hover:bg-gray-100 transition-colors"
-              >
-                <X size={20} />
-              </button>
-            </div>
-           
-            <div className="p-4 overflow-y-auto overscroll-contain h-[calc(100vh-140px)] space-y-4">
-              {chatMessages.length === 0 ? (
-                <div className="text-center text-gray-500 py-8">
-                  <Search size={48} className="mx-auto mb-4 opacity-30" />
-                  <p className="text-sm mb-2">Ask me anything about electrical engineering</p>
-                  <div className="text-xs text-gray-400 space-y-1">
-                    <div>"Find Schneider 100A MCCB specs"</div>
-                    <div>"What is TN-S grounding?"</div>
-                    <div>"MCB vs MCCB differences"</div>
-                  </div>
-                </div>
-              ) : (
-                chatMessages.map((message, idx) => (
-                  <div
-                    key={idx}
-                    className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[85%] p-3 rounded-xl ${
-                        message.role === 'user'
-                          ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white'
-                          : 'bg-gray-100 text-gray-900'
-                      }`}
-                    >
-                      <div className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</div>
-                    </div>
-                  </div>
-                ))
-              )}
-             
-              {chatBusy && (
-                <div className="flex justify-start">
-                  <div className="bg-gray-100 p-3 rounded-xl">
-                    <div className="flex items-center gap-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900"></div>
-                      <span className="text-sm text-gray-500">AI Assistant is thinking...</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Amélioration 6 : footer sticky pour mobile */}
-            <div className="p-4 border-t border-gray-200 sticky bottom-0 bg-white pb-[max(1rem,env(safe-area-inset-bottom))]">
-              <div className="flex gap-2">
-                <input
-                  className="input flex-1 pr-10"
-                  value={chatInput}
-                  onChange={e => setChatInput(e.target.value)}
-                  onKeyPress={e => e.key === 'Enter' && !chatBusy && sendChatMessage()}
-                  placeholder="Ask about devices, standards, configurations..."
-                  disabled={chatBusy}
-                  onFocus={e => { e.currentTarget.scrollIntoView({ block:'nearest', behavior:'smooth' }); }}
-                />
-                <Search size={16} className="absolute right-12 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <button
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all shadow-sm ${
-                    chatBusy || !chatInput.trim()
-                      ? 'bg-gray-300 cursor-not-allowed'
-                      : 'bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-600 hover:to-indigo-700 text-white'
-                  }`}
-                  disabled={chatBusy || !chatInput.trim()}
-                  onClick={sendChatMessage}
-                >
-                  {chatBusy ? '...' : 'Send'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Amélioration 3 : UI des toasts */}
+      {/* Toast */}
       {toast && (
-        <div className={`fixed bottom-4 right-4 z-[60] px-4 py-3 rounded-lg shadow-lg text-sm
-          ${toast.type==='success' ? 'bg-green-600 text-white' :
-            toast.type==='error' ? 'bg-red-600 text-white' : 'bg-gray-900 text-white'}`}>
+        <div className={`fixed bottom-6 right-6 z-50 px-6 py-4 rounded-xl shadow-2xl text-sm font-medium flex items-center gap-3 ${
+          toast.type === 'success' ? 'bg-green-600 text-white' :
+          toast.type === 'error' ? 'bg-red-600 text-white' :
+          'bg-gray-900 text-white'
+        }`}>
+          {toast.type === 'success' && <CheckCircle2 size={18} />}
+          {toast.type === 'error' && <AlertCircle size={18} />}
           {toast.msg}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function DeviceTree({ devices, panelId, onEdit, onDuplicate, onDelete, onSetMain, level = 0, site }) {
-  return (
-    <div className={`space-y-3 ${level > 0 ? 'ml-6 border-l border-gray-200 pl-4' : ''}`}>
-      {devices.map(device => (
-        <div key={device.id} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-sm transition-all">
-          <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-            <div className="flex-1 min-w-0">
-              <div className="flex flex-col sm:flex-row sm:items-center gap-2 mb-2">
-                <span className="font-semibold text-gray-900 text-sm truncate max-w-[200px] sm:max-w-none">
-                  {device.name || `${device.manufacturer || '—'} ${device.reference || ''}`.trim() || 'Unnamed Device'}
-                </span>
-                <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  {device.device_type}
-                </span>
-                {device.is_main_incoming && (
-                  <Pill color="green">MAIN INCOMING</Pill>
-                )}
-                {device.downstream_switchboard_id && (
-                  <Pill color="blue">SB #{device.downstream_switchboard_id}</Pill>
-                )}
-              </div>
-              <div className="text-xs text-gray-500 flex flex-wrap gap-3">
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.in_amps || '—'}A
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  Icu: {device.icu_ka || '—'}kA
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  {device.poles || '—'}P
-                </span>
-                <span className="flex items-center gap-1">
-                  <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                  Pos: {device.position_number || '—'}
-                </span>
-                {device.settings?.curve_type && (
-                  <span className="flex items-center gap-1">
-                    <span className="w-1 h-1 bg-gray-400 rounded-full"></span>
-                    {device.settings.curve_type}
-                  </span>
-                )}
-              </div>
-            </div>
-           
-            <div className="flex items-center gap-2 flex-shrink-0">
-              <button
-                onClick={() => onEdit(device, panelId)}
-                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                title="Edit Device"
-              >
-                <Edit size={16} />
-              </button>
-              <button
-                onClick={() => onDuplicate(device.id, panelId)}
-                className="p-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                title="Duplicate Device"
-              >
-                <Copy size={16} />
-              </button>
-              <button
-                onClick={() => onDelete(device.id, panelId)}
-                className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                title="Delete Device"
-              >
-                <Trash size={16} />
-              </button>
-              <button
-                onClick={() => onSetMain(device.id, panelId, !device.is_main_incoming)}
-                className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
-                  device.is_main_incoming
-                    ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                    : 'bg-green-100 text-green-700 hover:bg-green-200'
-                }`}
-              >
-                {device.is_main_incoming ? 'Unset Main' : 'Set Main'}
-              </button>
-            </div>
-          </div>
-         
-          {/* Children */}
-          {device.children && device.children.length > 0 && (
-            <div className={`mt-4 pt-3 border-t border-gray-100 ${level > 1 ? 'ml-4 pl-4 border-l border-gray-300' : ''}`}>
-              <DeviceTree
-                devices={device.children}
-                panelId={panelId}
-                onEdit={onEdit}
-                onDuplicate={onDuplicate}
-                onDelete={onDelete}
-                onSetMain={onSetMain}
-                level={level + 1}
-                site={site}
-              />
-            </div>
-          )}
-        </div>
-      ))}
-     
-      {devices.length === 0 && (
-        <div className="text-center py-6 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
-          <Plus size={24} className="mx-auto text-gray-400 mb-2" />
-          <p className="text-sm text-gray-500">No devices yet</p>
-          <p className="text-xs text-gray-400">Add your first device using the button above</p>
         </div>
       )}
     </div>
