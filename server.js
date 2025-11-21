@@ -57,6 +57,7 @@ const doorsTarget        = process.env.DOORS_BASE_URL         || "http://127.0.0
 // 🔵 VSD (Variateurs de fréquence) — microservice sur 3020  ✅ AJOUT
 const vsdTarget          = process.env.VSD_BASE_URL           || "http://127.0.0.1:3020";
 const mecaTarget = process.env.MECA_BASE_URL || "http://127.0.0.1:3021";
+const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
 
 // petit helper pour créer des proxys homogènes
 function mkProxy(target, { withRestream = false } = {}) {
@@ -92,6 +93,7 @@ app.use("/api/hv",           mkProxy(hvTarget));
 app.use("/api/diagram",      mkProxy(diagramTarget));
 app.use("/api/controls",     mkProxy(controlsTarget));   // <-- corrige le 404 Controls
 app.use("/api/oibt",         mkProxy(oibtTarget));
+app.use("/api/dcf", mkProxy(dcfTarget, { withRestream: true }));
 
 // >>> Projects : proxy bavard + re-stream (si un jour body était déjà parsé)
 app.use("/api/projects", mkProxy(projectsTarget, { withRestream: true }));
