@@ -1434,19 +1434,29 @@ export const api = {
       }),
   },
 
-    /** --- DCF (Assistant DCF / SAP plans) --- */
+  /** --- DCF (Assistant DCF / SAP plans) v2 --- */
   dcf: {
     health: () => get("/api/dcf/health"),
 
     // Fichiers Excel DCF
     listFiles: () => get("/api/dcf/files"),
+    
+    getFile: (id) => get(`/api/dcf/files/${encodeURIComponent(id)}`),
+    
+    // Upload MULTI-fichiers (v2)
+    uploadExcelMulti: (formData) => {
+      // formData doit contenir les fichiers sous la clé "files"
+      return upload("/api/dcf/uploadExcelMulti", formData);
+    },
+    
+    // Upload simple (rétro-compat)
     uploadExcel: (file) => {
       const fd = new FormData();
       fd.append("file", file);
       return upload("/api/dcf/uploadExcel", fd);
     },
 
-    // Pièces jointes (images SAP, PDF…)
+    // Pièces jointes (images SAP avec OCR automatique)
     uploadAttachments: (files = [], sessionId = null) => {
       const fd = new FormData();
       if (sessionId) fd.append("session_id", sessionId);
@@ -1455,15 +1465,37 @@ export const api = {
     },
 
     // Sessions de chat
-    startSession: (title) => post("/api/dcf/startSession", { title }),
+    listSessions: () => get("/api/dcf/sessions"),
+    
+    startSession: (title, contextFileIds = []) => 
+      post("/api/dcf/startSession", { 
+        title, 
+        context_file_ids: contextFileIds 
+      }),
+    
     getSession: (id) => get(`/api/dcf/session/${encodeURIComponent(id)}`),
 
-    chat: ({ sessionId = null, message, fileId = null, attachmentIds = [] }) =>
+    // Chat v2 avec multi-contextes et modes
+    chat: ({ 
+      sessionId = null, 
+      message, 
+      fileIds = [], 
+      attachmentIds = [],
+      mode = "chat" // "chat" | "validation" | "guidage" | "sap"
+    }) =>
       post("/api/dcf/chat", {
         sessionId,
         message,
-        fileId,
+        fileIds,
         attachmentIds,
+        mode,
+      }),
+
+    // Validation automatique DCF
+    validate: ({ fileIds = [], mode = "auto" }) =>
+      post("/api/dcf/validate", {
+        fileIds,
+        mode,
       }),
   },
 
