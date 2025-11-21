@@ -54,6 +54,12 @@ const otherApps = [
     description: 'Annual checks, QR codes, nonconformities & SAP follow-ups',
     icon: '🚪'
   },
+  {
+    label: 'Dcf',
+    to: '/app/dcf',
+    description: 'SAP Support',
+    icon: '📊'
+  },
 ];
 
 export default function Dashboard() {
