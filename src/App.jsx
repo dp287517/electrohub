@@ -23,6 +23,7 @@ import Project from './pages/Project.jsx';
 import Comp from './pages/Comp.jsx';
 import AskVeeva from './pages/Ask_veeva.jsx';
 import Doors from './pages/Doors.jsx';
+import Dcf from './pages/Dcf.jsx';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
@@ -67,6 +68,7 @@ export default function App() {
           <Route path="/app/ask-veeva" element={<ProtectedRoute><AskVeeva /></ProtectedRoute>} />
           <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
           <Route path="/app/meca" element={<ProtectedRoute><Meca /></ProtectedRoute>} />
+          <Route path="/app/dcf" element={<ProtectedRoute><Dcf /></ProtectedRoute>} />
 
           {/* 👇 NEW: Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
