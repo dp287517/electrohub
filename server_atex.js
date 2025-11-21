@@ -731,31 +731,46 @@ app.post("/api/atex/maps/uploadZip", multerZip.single("zip"), async (req, res) =
       const files = Object.values(entries).filter(
         (e) => !e.isDirectory && /\.pdf$/i.test(e.name)
       );
-      for (const entry of files) {
+for (const entry of files) {
         const rawName = entry.name.split("/").pop();
         const { name: baseName } = path.parse(rawName || entry.name);
         const base = baseName || "plan";
         const logical = base.replace(/[^\w.-]+/g, "_").toLowerCase();
         const version = Math.floor(Date.now() / 1000);
         const dest = path.join(MAPS_DIR, `${logical}__${version}.pdf`);
+        
+        // === CORRECTION IMPORTANTE ICI ===
+        // On récupère les infos de la version précédente avant d'insérer la nouvelle
+        const { rows: prev } = await pool.query(
+          `SELECT building, zone FROM atex_plans WHERE logical_name=$1 ORDER BY version DESC LIMIT 1`,
+          [logical]
+        );
+        const existingBuilding = prev?.[0]?.building || "";
+        const existingZone = prev?.[0]?.zone || "";
+        // ================================
+
         await fsp.mkdir(path.dirname(dest), { recursive: true });
         await zip.extract(entry.name, dest);
+        
         let buf = null;
         try { buf = await fsp.readFile(dest); } catch { buf = null; }
         const page_count = 1;
+
+        // On insère en remettant les infos building/zone récupérées juste avant
         if (buf) {
           await pool.query(
-            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, content)
-             VALUES ($1,$2,$3,$4,$5,$6)`,
-            [logical, version, path.basename(dest), dest, page_count, buf]
+            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, content, building, zone)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [logical, version, path.basename(dest), dest, page_count, buf, existingBuilding, existingZone]
           );
         } else {
           await pool.query(
-            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count)
-             VALUES ($1,$2,$3,$4,$5)`,
-            [logical, version, path.basename(dest), dest, page_count]
+            `INSERT INTO atex_plans (logical_name, version, filename, file_path, page_count, building, zone)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+            [logical, version, path.basename(dest), dest, page_count, existingBuilding, existingZone]
           );
         }
+        
         await pool.query(
           `INSERT INTO atex_plan_names (logical_name, display_name) VALUES ($1,$2)
            ON CONFLICT (logical_name) DO NOTHING`,
@@ -908,28 +923,59 @@ function pointInPoly(px, py, points) {
   }
   return inside;
 }
+// Helper surface approximative pour le tri backend
+function getArea(z) {
+  if (z.kind === "rect") {
+    return Math.abs((Number(z.x2) - Number(z.x1)) * (Number(z.y2) - Number(z.y1)));
+  }
+  if (z.kind === "circle") {
+    return Math.PI * (Number(z.r) ** 2);
+  }
+  if (z.kind === "poly" && Array.isArray(z.points) && z.points.length > 2) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [x, y] of z.points) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    return (maxX - minX) * (maxY - minY);
+  }
+  return Infinity;
+}
+
 async function detectZonesForPoint(logical_name, page_index, x_frac, y_frac) {
-  // Priorité à la DERNIÈRE forme créée (DESC)
+  // 1. Récupérer TOUTES les zones de cette page
   const { rows } = await pool.query(
     `SELECT id, kind, x1,y1,x2,y2,cx,cy,r,points,zoning_gas,zoning_dust,name
-     FROM atex_subareas WHERE logical_name=$1 AND page_index=$2
-     ORDER BY created_at DESC`,
+     FROM atex_subareas WHERE logical_name=$1 AND page_index=$2`,
     [logical_name, page_index]
   );
+
+  // 2. Filtrer celles qui contiennent le point
+  const candidates = [];
   for (const z of rows) {
-    if (z.kind === "rect" && pointInRect(x_frac, y_frac, z.x1, z.y1, z.x2, z.y2)) {
-      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id, subarea_name: (z.name||"").trim()||null };
-    }
-    if (z.kind === "circle" && pointInCircle(x_frac, y_frac, z.cx, z.cy, z.r)) {
-      return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id, subarea_name: (z.name||"").trim()||null };
-    }
-    if (z.kind === "poly" && Array.isArray(z.points)) {
-      const pts = z.points;
-      if (pts?.length && pointInPoly(x_frac, y_frac, pts)) {
-        return { zoning_gas: z.zoning_gas, zoning_dust: z.zoning_dust, subarea_id: z.id, subarea_name: (z.name||"").trim()||null };
-      }
+    let inside = false;
+    if (z.kind === "rect" && pointInRect(x_frac, y_frac, z.x1, z.y1, z.x2, z.y2)) inside = true;
+    else if (z.kind === "circle" && pointInCircle(x_frac, y_frac, z.cx, z.cy, z.r)) inside = true;
+    else if (z.kind === "poly" && Array.isArray(z.points) && pointInPoly(x_frac, y_frac, z.points)) inside = true;
+    
+    if (inside) {
+      candidates.push({ ...z, area: getArea(z) });
     }
   }
+
+  // 3. TRI CRITIQUE : La plus PETITE surface gagne (c'est la zone la plus précise)
+  candidates.sort((a, b) => a.area - b.area);
+
+  if (candidates.length > 0) {
+    const winner = candidates[0]; 
+    return { 
+      zoning_gas: winner.zoning_gas, 
+      zoning_dust: winner.zoning_dust, 
+      subarea_id: winner.id, 
+      subarea_name: (winner.name || "").trim() || null 
+    };
+  }
+
   return { zoning_gas: null, zoning_dust: null, subarea_id: null, subarea_name: null };
 }
 async function updateEquipmentContext({ equipment_id, logical_name, zoning_gas, zoning_dust, subarea_id, subarea_name_hint }) {
