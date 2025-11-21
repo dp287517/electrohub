@@ -1081,11 +1081,13 @@ function setupHandleDrag(map, onMoveCallback) {
     document.addEventListener("keydown", escHandler);
   }
 
-  /* --------------------------------------------------------------------------
-    SAUVEGARDE DE LA FORME
+/* --------------------------------------------------------------------------
+    SAUVEGARDE DE LA FORME (CORRIGÉE ANTI-FREEZE)
     -------------------------------------------------------------------------- */
   async function saveGeomEdit() {
+    // Vérifications de base
     if (!geomEdit.active || !geomEdit.layer || !geomEdit.shapeId || !baseLayerRef.current) return;
+    
     const end = timeStart("saveGeomEdit");
     const ly = geomEdit.layer;
     const base = baseLayerRef.current;
@@ -1093,45 +1095,43 @@ function setupHandleDrag(map, onMoveCallback) {
     const m = mapRef.current;
 
     try {
-      // --- 1️⃣ NETTOYAGE COMPLET IMMÉDIAT (avant API call) ---
+      // --- 1️⃣ NETTOYAGE PRÉVENTIF IMMÉDIAT ---
+      // On libère l'interface tout de suite pour éviter la sensation de blocage
       clearEditHandles();
       document.body.classList.remove("editing-geom");
       document.body.style.userSelect = "";
       
-      // Nettoyer TOUS les event handlers potentiellement actifs
+      // Nettoyer TOUS les event handlers potentiellement actifs sur la carte
       if (m) {
         m.dragging.enable();
         m.off("mousemove");
         m.off("mouseup");
         m.off("mousedown");
-        m.scrollWheelZoom?.enable();
-        m.touchZoom?.enable();
-        m.doubleClickZoom?.enable();
       }
 
-      // --- 2️⃣ Extraction et envoi au backend ---
+      // --- 2️⃣ Préparation des données (Extraction) ---
+      let payload = {};
+
       if (geomEdit.kind === "rect") {
         const b = ly.getBounds();
         const { W, H, bounds } = dims;
-        const payload = {
+        payload = {
           kind: "rect",
           x1: (b.getWest() - bounds.getWest()) / W,
           y1: (b.getSouth() - bounds.getSouth()) / H,
           x2: (b.getEast() - bounds.getWest()) / W,
           y2: (b.getNorth() - bounds.getSouth()) / H,
         };
-        await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
       } else if (geomEdit.kind === "circle") {
         const c = ly.getLatLng();
         const r = ly.getRadius();
         const { W, H, bounds } = dims;
-        const payload = {
+        payload = {
           kind: "circle",
           cx: (c.lng - bounds.getWest()) / W,
           cy: (c.lat - bounds.getSouth()) / H,
           r: r / Math.min(W, H),
         };
-        await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
       } else if (geomEdit.kind === "poly") {
         const latlngs = ly.getLatLngs()[0] || [];
         const { W, H, bounds } = dims;
@@ -1139,32 +1139,20 @@ function setupHandleDrag(map, onMoveCallback) {
           (ll.lng - bounds.getWest()) / W,
           (ll.lat - bounds.getSouth()) / H,
         ]);
-        const payload = { kind: "poly", points };
-        await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
+        payload = { kind: "poly", points };
       }
 
-      // --- 3️⃣ Réinitialisation de l'état React ---
-      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+      // --- 3️⃣ Envoi au backend ---
+      await api.atexMaps.updateSubarea(geomEdit.shapeId, payload);
 
-      // --- 4️⃣ Recharge les zones (après cleanup complet) ---
-      await reloadAll();
-
-      // --- 5️⃣ Forcer Leaflet à recalculer la taille ---
-      if (m) {
-        try {
-          m.invalidateSize(false);
-          await new Promise(requestAnimationFrame);
-        } catch {}
-      }
-
-      // --- 6️⃣ Feedback visuel ---
+      // --- 4️⃣ Feedback visuel (Ton Toast Bleu) ---
       const toast = document.createElement("div");
       toast.textContent = "Forme enregistrée";
       Object.assign(toast.style, {
         position: "fixed",
         bottom: "20px",
         right: "20px",
-        background: "#2563eb",
+        background: "#2563eb", // Bleu
         color: "white",
         padding: "8px 12px",
         borderRadius: "8px",
@@ -1177,27 +1165,47 @@ function setupHandleDrag(map, onMoveCallback) {
       setTimeout(() => (toast.style.opacity = "0"), 2000);
       setTimeout(() => toast.remove(), 2600);
 
+      // --- 5️⃣ Recharger les données ---
+      await reloadAll();
+
+      // Force un petit rafraîchissement Leaflet si besoin
+      if (m) {
+        try {
+          m.invalidateSize(false);
+          await new Promise(requestAnimationFrame);
+        } catch {}
+      }
+
     } catch (e) {
       console.error("[ATEX] saveGeomEdit error", e);
       alert("Erreur lors de l'enregistrement de la forme");
     } finally {
-      // --- 7️⃣ Sécurité : toujours restaurer un état stable ---
-      try {
-        clearEditHandles();
-        setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
-        if (m) {
-          m.dragging.enable();
-          m.off("mousemove");
-          m.off("mouseup");
-          m.off("mousedown");
-        }
-        document.body.classList.remove("editing-geom");
-        document.body.style.userSelect = "";
-      } catch (err) {
-        console.warn("[ATEX] Cleanup final échoué:", err);
-      } finally {
-        end();
+      // --- 6️⃣ SÉCURITÉ FINALE (ANTI-FREEZE) ---
+      // C'est ici qu'on s'assure que la carte est débloquée quoi qu'il arrive
+      
+      setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
+
+      if (m) {
+        // Réactive tout ce qui est interactif
+        m.dragging.enable();
+        m.touchZoom.enable();
+        m.doubleClickZoom.enable();
+        m.scrollWheelZoom.enable();
+        m.boxZoom.enable();
+        m.keyboard.enable();
+        if (m.tap) m.tap.enable();
+
+        // Tue les écouteurs fantômes une dernière fois
+        m.off("mousemove");
+        m.off("mousedown");
+        m.off("mouseup");
       }
+
+      // Reset CSS global
+      document.body.classList.remove("editing-geom");
+      document.body.style.userSelect = "auto"; // Rétablit la sélection de texte
+
+      end();
     }
   }
 
@@ -1229,6 +1237,29 @@ function setupHandleDrag(map, onMoveCallback) {
     inter.forEach((el) => (el.style.pointerEvents = "auto"));
   }
 
+  // Helper pour estimer la taille de la zone (pour l'ordre d'affichage)
+  function getAreaApprox(sa, dims) {
+    const W = dims?.W || 1000;
+    const H = dims?.H || 1000;
+    
+    if (sa.kind === "rect") {
+      return Math.abs((sa.x2 ?? 0) - (sa.x1 ?? 0)) * W * Math.abs((sa.y2 ?? 0) - (sa.y1 ?? 0)) * H;
+    }
+    if (sa.kind === "circle") {
+      const r = (sa.r ?? 0) * Math.min(W, H);
+      return Math.PI * r * r;
+    }
+    if (sa.kind === "poly" && Array.isArray(sa.points)) {
+       // Estimation simple via Bounding Box
+       let minX=1, maxX=0, minY=1, maxY=0;
+       sa.points.forEach(([x,y]) => {
+         if(x<minX) minX=x; if(x>maxX) maxX=x;
+         if(y<minY) minY=y; if(y>maxY) maxY=y;
+       });
+       return (maxX-minX)*W * (maxY-minY)*H;
+    }
+    return 999999999; // Fallback très grand
+  }
 
   function drawSubareas(items) {
     const end = timeStart("drawSubareas");
@@ -1241,12 +1272,21 @@ function setupHandleDrag(map, onMoveCallback) {
 
       const g = subareasLayerRef.current;
       g.clearLayers();
-      clearEditHandles();
+      clearEditHandles(); 
       setGeomEdit({ active: false, kind: null, shapeId: null, layer: null });
 
-      const { W, H, bounds } = getPlanDims(base);
+      const dims = getPlanDims(base);
+      const { W, H, bounds } = dims;
 
-      (items || []).forEach((sa) => {
+      // === CORRECTION ICI ===
+      // On trie pour dessiner les GRANDES zones d'abord (au fond)
+      // et les PETITES zones ensuite (au dessus, pour pouvoir cliquer dessus)
+      const sortedItems = [...(items || [])].sort((a, b) => {
+        return getAreaApprox(b, dims) - getAreaApprox(a, dims);
+      });
+      // ======================
+
+      sortedItems.forEach((sa) => {
         let layer = null;
         const style = colorForSubarea(sa);
 
@@ -1274,8 +1314,10 @@ function setupHandleDrag(map, onMoveCallback) {
         layer.__meta = sa;
         layer.addTo(g);
 
-        // Éditeur local quand on clique sur la zone
         layer.on("click", (e) => {
+          // Empêche le clic de "traverser" vers la grande zone dessous
+          L.DomEvent.stopPropagation(e); 
+          
           setEditorInit({
             id: sa.id,
             name: sa.name || "",
@@ -1292,25 +1334,26 @@ function setupHandleDrag(map, onMoveCallback) {
           });
         });
 
-        // Label texte
+        // Label
         if (sa?.name) {
-          const center =
-            layer.getBounds?.().getCenter?.() || layer.getLatLng?.() || null;
+          const center = layer.getBounds?.().getCenter?.() || layer.getLatLng?.() || null;
           if (center) {
             L.marker(center, {
               interactive: false,
               pane: "zonesPane",
               icon: L.divIcon({
                 className: "atex-subarea-label",
-                html: `<div class="px-2 py-1 rounded bg-white/90 border shadow text-[11px]">${sa.name}</div>`,
+                html: `<div class="px-2 py-1 rounded bg-white/90 border shadow text-[11px] truncate max-w-[100px]">${sa.name}</div>`,
               }),
             }).addTo(g);
           }
         }
       });
 
-      g.bringToFront?.();
-      markersLayerRef.current?.bringToFront?.();
+      // Assurer l'ordre visuel des couches
+      g.bringToBack(); 
+      markersLayerRef.current?.bringToFront();
+      
     } catch (e) {
       console.error("[ATEX] drawSubareas error", e);
     } finally {
