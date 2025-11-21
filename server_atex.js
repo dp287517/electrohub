@@ -792,20 +792,34 @@ app.get("/api/atex/maps/listPlans", async (_req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT DISTINCT ON (p.logical_name)
-             p.id, p.logical_name, p.version, COALESCE(p.page_count,1) AS page_count,
-             (SELECT display_name FROM atex_plan_names n WHERE n.logical_name=p.logical_name LIMIT 1) AS display_name
+             p.id,
+             p.logical_name,
+             p.version,
+             COALESCE(p.page_count, 1) AS page_count,
+             p.building,
+             p.zone,
+             (SELECT display_name
+                FROM atex_plan_names n
+               WHERE n.logical_name = p.logical_name
+               LIMIT 1) AS display_name
       FROM atex_plans p
       ORDER BY p.logical_name, p.version DESC
     `);
+
     const plans = rows.map((r) => ({
-      id: r.id, // UUID
+      id: r.id,
       logical_name: r.logical_name,
       version: Number(r.version || 1),
       page_count: Number(r.page_count || 1),
       display_name: r.display_name || r.logical_name,
+      building: r.building || "",
+      zone: r.zone || "",
     }));
+
     res.json({ plans, items: plans });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 // Alias compat (si l’ancien front appelle encore /plans)
 app.get("/api/atex/maps/plans", (req, res) =>
@@ -1170,9 +1184,13 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
       zoning_gas = null, zoning_dust = null,
       logical_name, plan_id = null, page_index = 0,
     } = req.body || {};
+
     if (!logical_name || !kind) return res.status(400).json({ ok: false, error: "missing params" });
     if (!["rect","circle","poly"].includes(kind)) return res.status(400).json({ ok:false, error:"invalid kind" });
+
     const planIdSafe = isUuid(plan_id) ? plan_id : null;
+    
+    // 1. CRÉATION DE LA ZONE
     const { rows } = await pool.query(
       `INSERT INTO atex_subareas
         (logical_name, plan_id, page_index, kind, x1,y1,x2,y2,cx,cy,r,points,name,zoning_gas,zoning_dust)
@@ -1187,9 +1205,62 @@ app.post("/api/atex/maps/subareas", async (req, res) => {
     );
     const created = rows[0];
     await pool.query(`UPDATE atex_subareas SET updated_at=now() WHERE id=$1`, [created.id]);
+    
+    // --- 2. AUTO-LINK : Mettre à jour les équipements déjà présents dans cette zone ---
+    try {
+      // Récupérer tous les équipements sur cette page du plan
+      const { rows: positions } = await pool.query(
+        `SELECT equipment_id, x_frac, y_frac FROM atex_positions 
+         WHERE logical_name=$1 AND page_index=$2`,
+        [logical_name, Number(page_index)]
+      );
+
+      const insideIds = [];
+      
+      // Vérifier quels équipements sont DANS la nouvelle forme
+      for (const p of positions) {
+        const x = Number(p.x_frac);
+        const y = Number(p.y_frac);
+        let inside = false;
+
+        if (kind === "rect") inside = pointInRect(x, y, x1, y1, x2, y2);
+        else if (kind === "circle") inside = pointInCircle(x, y, cx, cy, r);
+        else if (kind === "poly" && Array.isArray(points)) inside = pointInPoly(x, y, points);
+
+        if (inside) {
+          insideIds.push(p.equipment_id);
+        }
+      }
+
+      // Si des équipements sont trouvés, on met à jour leur fiche
+      if (insideIds.length > 0) {
+        await pool.query(
+          `UPDATE atex_equipments
+           SET sub_equipment=$1,
+               zoning_gas=$2,
+               zoning_dust=$3,
+               updated_at=now()
+           WHERE id = ANY($4::uuid[])`,
+          [
+            name || "",          // Nom de la sous-zone
+            zoning_gas,          // Zone Gaz (ex: 1)
+            zoning_dust,         // Zone Poussière (ex: 21)
+            insideIds            // Liste des ID concernés
+          ]
+        );
+        console.log(`[ATEX] Auto-link: ${insideIds.length} équipements mis à jour avec la nouvelle zone "${name}"`);
+      }
+    } catch (err) {
+      console.warn("[ATEX] Erreur auto-link (ignored):", err);
+    }
+    // --------------------------------------------------------------------------------
+
     await logEvent(req, "subarea.create", { id: created.id, logical_name, page_index, kind, name, zoning_gas, zoning_dust });
     res.json({ ok:true, subarea: created, created: true });
-  } catch (e) { res.status(500).json({ ok:false, error:e.message }); }
+
+  } catch (e) { 
+    res.status(500).json({ ok:false, error:e.message }); 
+  }
 });
 app.put("/api/atex/maps/subareas/:id", async (req, res) => {
   try {
