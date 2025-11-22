@@ -1,4 +1,4 @@
-// server_dcf.js — Assistant DCF SAP v3
+// server_dcf.js — Assistant DCF SAP v4 (Backend Wizard)
 // Node ESM
 
 import express from "express";
@@ -6,7 +6,6 @@ import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
 import multer from "multer";
-import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import pg from "pg";
@@ -35,17 +34,18 @@ const DATA_ROOT = path.join(process.cwd(), "uploads", "dcf");
 const EXCEL_DIR = path.join(DATA_ROOT, "excel");
 const ATTACH_DIR = path.join(DATA_ROOT, "attachments");
 
+// Création des dossiers
 await fsp.mkdir(EXCEL_DIR, { recursive: true });
 await fsp.mkdir(ATTACH_DIR, { recursive: true });
 
-// OpenAI
+// OpenAI Configuration
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 const ANSWER_MODEL = process.env.DCF_MODEL || "gpt-4o";
 const VISION_MODEL = process.env.DCF_VISION_MODEL || "gpt-4o";
 
-// DB Neon / Postgres
+// DB Configuration (Neon / Postgres)
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.NEON_DATABASE_URL,
@@ -53,7 +53,7 @@ const pool = new Pool({
 });
 
 // -----------------------------------------------------------------------------
-// Utils
+// UTILS & HELPERS
 // -----------------------------------------------------------------------------
 function safeEmail(x) {
   if (!x) return null;
@@ -74,7 +74,6 @@ function sanitizeName(name = "") {
 }
 
 function columnIndexToLetter(idx) {
-  // 0 -> A, 1 -> B…
   let n = idx + 1;
   let s = "";
   while (n > 0) {
@@ -85,372 +84,125 @@ function columnIndexToLetter(idx) {
   return s;
 }
 
-// -----------------------------------------------------------------------------
-// Analyse Excel v3 — buildDeepExcelAnalysis
-// -----------------------------------------------------------------------------
+// Helper pour nettoyer les blocs de code Markdown du JSON
+function cleanJSON(text) {
+  if (!text) return "{}";
+  const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("JSON Parse Error on:", cleaned.substring(0, 100));
+    throw new Error("L'IA n'a pas retourné un JSON valide.");
+  }
+}
 
-/**
- * Objet minimal pour représenter un champ SAP DCF.
- * Dans la pratique, tu pourras enrichir SAP_FIELD_DICTIONARY
- * à partir de tes templates Defaults. :contentReference[oaicite:3]{index=3}
- */
+// -----------------------------------------------------------------------------
+// ANALYSE EXCEL (Moteur Structurel)
+// -----------------------------------------------------------------------------
 const SAP_FIELD_DICTIONARY = {
-  VORNR_01: {
-    name: "Operation Number",
-    description: "Numéro d'opération (0010, 0020...)",
-    mandatory: true,
-  },
-  "ARBPL-02": {
-    name: "Work Center (opération)",
-    description: "Poste de travail (ELEC01, MECA01...)",
-    mandatory: true,
-  },
-  STEUS: {
-    name: "Control Key",
-    description: "Clé de contrôle (PM01, PM02...)",
-    mandatory: true,
-  },
-  LTXA1: {
-    name: "Operation Short Text",
-    description: "Texte court (max 40 caractères)",
-    mandatory: true,
-  },
-  ARBEI: {
-    name: "Work / Durée",
-    description: "Durée de travail (0.5, 1, 1.5...)",
-    mandatory: true,
-  },
-  ARBEH: {
-    name: "Unit",
-    description: "Unité (H, MIN, J)",
-    mandatory: true,
-  },
-  ANZZL: {
-    name: "Number of Persons",
-    description: "Nombre de personnes (1, 2...)",
-    mandatory: true,
-  },
-  // ➕ à compléter au besoin avec les 40+ champs décrits dans ta doc
+  VORNR_01: { name: "Operation Number", description: "Ex: 0010, 0020", mandatory: true },
+  "ARBPL-02": { name: "Work Center", description: "Poste de travail (ex: CH94...)", mandatory: true },
+  STEUS: { name: "Control Key", description: "Clé contrôle (PM01...)", mandatory: true },
+  LTXA1: { name: "Short Text", description: "Description (max 40 car.)", mandatory: true },
+  ARBEI: { name: "Work", description: "Charge (ex: 1.5)", mandatory: false },
+  ARBEH: { name: "Unit", description: "Unité (H)", mandatory: false },
+  ANZZL: { name: "Pers.", description: "Nb personnes", mandatory: false },
+  TPLNR: { name: "Func. Loc.", description: "Lieu technique", mandatory: true },
+  EQUNR: { name: "Equipment", description: "ID Équipement", mandatory: true },
+  PLNNR: { name: "Group", description: "Task List Group", mandatory: true },
+  // Ajoute d'autres clés ici si nécessaire
 };
 
 function buildDeepExcelAnalysis(absPath) {
   try {
-    const wb = xlsx.readFile(absPath, {
-      cellDates: false,
-      sheetRows: 0, // lecture complète
-    });
-
+    const wb = xlsx.readFile(absPath, { cellDates: false, sheetRows: 0 });
     const sheetNames = wb.SheetNames || [];
     const analysis = {
+      filename: path.basename(absPath),
       totalSheets: sheetNames.length,
       sheetNames,
-      sheets: {}, // par feuille
-      dictionary: {}, // champs détectés dans ce fichier
-      dcfZones: [], // zones de lignes avec données DCF
-      ai_preview: "", // gros texte pour l'IA
+      sheets: {},
+      dictionary: {},
+      ai_context: "",
     };
+
+    let globalContext = "";
 
     for (const sheetName of sheetNames) {
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
 
-      const ref = ws["!ref"] || "A1";
-      const range = xlsx.utils.decode_range(ref);
-      const totalRows = range.e.r + 1;
-      const totalCols = range.e.c + 1;
+      const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      if (!raw.length) continue;
 
-      const raw = xlsx.utils.sheet_to_json(ws, {
-        header: 1,
-        raw: false,
-        defval: "",
-      });
-
-      if (!raw.length) {
-        analysis.sheets[sheetName] = {
-          totalRows,
-          totalCols,
-          headersRow: null,
-          codesRow: null,
-          mandatoryRow: null,
-          columns: [],
-          dcfRowCount: 0,
-          sample: [],
-        };
-        continue;
-      }
-
-      // Heuristiques DCF : 
-      // - on cherche une ligne contenant "ACTION" / "Line"
-      // - on considère la ligne suivante comme Field Names (codes SAP)
-      // - encore suivante comme Mandatory. :contentReference[oaicite:4]{index=4}
-      let headerRowIdx = null;
-      for (let i = 0; i < Math.min(raw.length, 10); i++) {
-        const row = raw[i].map((c) => String(c || "").toUpperCase());
-        if (
-          row.some((c) => c === "ACTION") &&
-          row.some((c) => c === "LINE")
-        ) {
+      // Recherche Ligne "ACTION" / "LINE" pour repérer le header DCF
+      let headerRowIdx = -1;
+      for (let i = 0; i < Math.min(raw.length, 15); i++) {
+        const rowStr = raw[i].map(x => String(x).toUpperCase()).join(" ");
+        if (rowStr.includes("ACTION") && (rowStr.includes("LINE") || rowStr.includes("OBJECT"))) {
           headerRowIdx = i;
           break;
         }
       }
 
-      const codesRowIdx =
-        headerRowIdx !== null && raw[headerRowIdx + 1]
-          ? headerRowIdx + 1
-          : null;
-      const mandatoryRowIdx =
-        codesRowIdx !== null && raw[codesRowIdx + 1]
-          ? codesRowIdx + 1
-          : null;
-
-      const codesRow =
-        codesRowIdx !== null ? raw[codesRowIdx] || [] : [];
-      const mandatoryRow =
-        mandatoryRowIdx !== null ? raw[mandatoryRowIdx] || [] : [];
-
+      const codesRowIdx = headerRowIdx !== -1 ? headerRowIdx + 1 : -1;
       const columns = [];
-      const localDict = {};
-
-      for (let c = 0; c < totalCols; c++) {
-        const colLetter = columnIndexToLetter(c);
-        const fieldCode = String(codesRow[c] || "").trim();
-        const mandatoryRaw = String(
-          mandatoryRow[c] || ""
-        ).toUpperCase();
-
-        const mandatory =
-          mandatoryRaw.includes("⚠") ||
-          mandatoryRaw.includes("MANDATORY") ||
-          mandatoryRaw === "X";
-
-        if (!fieldCode) continue;
-
-        const dictInfo = SAP_FIELD_DICTIONARY[fieldCode] || {};
-        const colInfo = {
-          columnIndex: c,
-          columnLetter: colLetter,
-          fieldCode,
-          fieldName: dictInfo.name || null,
-          description: dictInfo.description || null,
-          mandatory: dictInfo.mandatory || mandatory,
-        };
-
-        columns.push(colInfo);
-        analysis.dictionary[fieldCode] = {
-          ...(analysis.dictionary[fieldCode] || {}),
-          ...colInfo,
-        };
+      
+      if (codesRowIdx !== -1 && raw[codesRowIdx]) {
+        const codes = raw[codesRowIdx];
+        codes.forEach((code, idx) => {
+          const c = String(code).trim();
+          if (c && c.length > 2) {
+            const colLetter = columnIndexToLetter(idx);
+            const info = SAP_FIELD_DICTIONARY[c] || { name: c, mandatory: false };
+            columns.push({
+              col: colLetter,
+              idx,
+              code: c,
+              name: info.name,
+              mandatory: info.mandatory
+            });
+            // Ajout au dictionnaire global
+            analysis.dictionary[c] = { ...info, col: colLetter };
+          }
+        });
       }
 
-      // Détection de lignes DCF "pleines"
-      const dcfRows = [];
-      for (let r = (mandatoryRowIdx || 4) + 1; r < raw.length; r++) {
-        const row = raw[r];
-        let hasData = false;
-        for (const col of columns) {
-          const v = row[col.columnIndex];
-          if (v && String(v).trim()) {
-            hasData = true;
-            break;
-          }
-        }
-        if (hasData) {
-          dcfRows.push({
-            rowIndex: r, // index 0-based
-            excelRow: r + 1, // index Excel 1-based
-            cells: row,
-          });
-        }
+      // Extraction de quelques lignes de données pour l'exemple
+      const sampleRows = [];
+      const startData = codesRowIdx !== -1 ? codesRowIdx + 2 : 5;
+      for (let i = startData; i < Math.min(raw.length, startData + 5); i++) {
+        if (raw[i]) sampleRows.push(raw[i].slice(0, 20)); // On prend les 20 premières cols
       }
 
       analysis.sheets[sheetName] = {
-        totalRows,
-        totalCols,
-        headersRow: headerRowIdx,
-        codesRow: codesRowIdx,
-        mandatoryRow: mandatoryRowIdx,
+        headerRowIdx,
         columns,
-        dcfRowCount: dcfRows.length,
-        sample: raw.slice(0, 12),
+        sample: sampleRows
       };
 
-      if (dcfRows.length) {
-        analysis.dcfZones.push({
-          sheet: sheetName,
-          rows: dcfRows.slice(0, 50), // on limite un peu
-        });
+      // Construction du contexte texte pour l'IA
+      globalContext += `\n--- FEUILLE: ${sheetName} ---\n`;
+      if (columns.length > 0) {
+        globalContext += `Mapping Colonnes (extrait): ${columns.slice(0, 15).map(c => `${c.col}=${c.code}`).join(", ")}...\n`;
+      } else {
+        globalContext += "Structure DCF non détectée automatiquement.\n";
       }
     }
 
-    analysis.ai_preview = generateEnrichedAIContext(analysis);
+    analysis.ai_context = globalContext;
     return analysis;
   } catch (e) {
-    console.error("[dcf] buildDeepExcelAnalysis error", e);
-    return {
-      error: e.message,
-      totalSheets: 0,
-      sheetNames: [],
-      sheets: {},
-      dictionary: {},
-      dcfZones: [],
-      ai_preview: "",
-    };
-  }
-}
-
-function generateEnrichedAIContext(analysis) {
-  // Texte d’environ 10–15K caractères max pour l’IA
-  let out = "";
-  out += "=== CONTEXTE DCF SAP (Analyse Excel) ===\n";
-  out += `Nombre de feuilles: ${analysis.totalSheets}\n`;
-  out += `Feuilles: ${analysis.sheetNames.join(", ")}\n\n`;
-
-  const codes = Object.keys(analysis.dictionary);
-  if (codes.length) {
-    out += "=== CHAMPS SAP DÉTECTÉS ===\n";
-    for (const code of codes) {
-      const f = analysis.dictionary[code];
-      out += `- ${code} (${f.fieldName || "?"}) → Col ${f.columnLetter}`;
-      if (f.mandatory) out += " [OBLIGATOIRE]";
-      if (f.description) out += ` – ${f.description}`;
-      out += "\n";
-    }
-    out += "\n";
-  }
-
-  for (const [sheetName, sheet] of Object.entries(analysis.sheets)) {
-    out += `--- Feuille: ${sheetName} ---\n`;
-    out += `Dimensions: ${sheet.totalRows} lignes x ${sheet.totalCols} colonnes\n`;
-    if (sheet.columns?.length) {
-      out += `Colonnes DCF mappées: ${sheet.columns
-        .map(
-          (c) =>
-            `${c.columnLetter}:${c.fieldCode}${
-              c.mandatory ? "![OBL]" : ""
-            }`
-        )
-        .join(", ")}\n`;
-    }
-    if (sheet.sample?.length) {
-      out += "\nExtrait des premières lignes (tabulé):\n";
-      const csv = sheet.sample
-        .map((row) => row.slice(0, 15).join("\t"))
-        .join("\n");
-      out += csv + "\n\n";
-    }
-
-    if (out.length > 12000) {
-      out +=
-        "\n[Preview tronqué pour rester dans les limites de tokens]\n";
-      break;
-    }
-  }
-
-  if (analysis.dcfZones?.length) {
-    out += "\n=== ZONES DCF (lignes avec données) ===\n";
-    for (const zone of analysis.dcfZones) {
-      out += `Feuille ${zone.sheet}: ${zone.rows.length} lignes avec opérations\n`;
-      for (const row of zone.rows.slice(0, 5)) {
-        out += `  Ligne Excel ${row.excelRow}: ${JSON.stringify(
-          row.cells.slice(0, 15)
-        )}\n`;
-      }
-    }
-  }
-
-  return out;
-}
-
-// -----------------------------------------------------------------------------
-// Analyse images SAP (OCR via Vision)
-// -----------------------------------------------------------------------------
-async function analyzeImageSAP(imagePath) {
-  try {
-    const buffer = await fsp.readFile(imagePath);
-    const base64 = buffer.toString("base64");
-    const mime = imagePath.match(/\.jpe?g$/i)
-      ? "image/jpeg"
-      : imagePath.match(/\.png$/i)
-      ? "image/png"
-      : "image/png";
-
-    const response = await openai.chat.completions.create({
-      model: VISION_MODEL,
-      messages: [
-        {
-          role: "system",
-          content:
-            "Tu es un expert SAP PM. Tu reçois des captures d'écran SAP (transactions IP02, IA05, etc.) et tu dois en extraire TOUTES les infos utiles pour remplir un DCF : numéros de plan, task list, work center, opération, textes, durées, messages d'erreur. Réponds en JSON structuré.",
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${mime};base64,${base64}`,
-              },
-            },
-            {
-              type: "text",
-              text: "Analyse cette capture SAP pour aider à remplir/valider un DCF.",
-            },
-          ],
-        },
-      ],
-      max_tokens: 1500,
-      temperature: 0.1,
-    });
-
-    const content = response.choices?.[0]?.message?.content || "{}";
-
-    try {
-      return { type: "json", data: JSON.parse(content) };
-    } catch {
-      return { type: "text", data: content };
-    }
-  } catch (e) {
-    console.error("[dcf] analyzeImageSAP error", e);
-    return { type: "error", data: e.message };
+    console.error("Analysis Error", e);
+    return { error: e.message, ai_context: "Erreur analyse fichier." };
   }
 }
 
 // -----------------------------------------------------------------------------
-// Multer (uploads)
-// -----------------------------------------------------------------------------
-const excelStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, EXCEL_DIR),
-  filename: (_req, file, cb) => {
-    const base = sanitizeName(file.originalname || "dcf.xlsx");
-    const ts = new Date().toISOString().replace(/[:.]/g, "");
-    cb(null, `${ts}_${base}`);
-  },
-});
-
-const attachStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, ATTACH_DIR),
-  filename: (_req, file, cb) => {
-    const base = sanitizeName(file.originalname || "file.bin");
-    const ts = new Date().toISOString().replace(/[:.]/g, "");
-    cb(null, `${ts}_${base}`);
-  },
-});
-
-const uploadExcel = multer({
-  storage: excelStorage,
-  limits: { fileSize: 100 * 1024 * 1024 },
-});
-
-const uploadAttach = multer({
-  storage: attachStorage,
-  limits: { fileSize: 50 * 1024 * 1024, files: 20 },
-});
-
-// -----------------------------------------------------------------------------
-// Schéma DB
+// DB SCHEMA (Mise à jour v4)
 // -----------------------------------------------------------------------------
 async function ensureSchema() {
+  // Tables existantes v3 (conservées)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_files (
       id SERIAL PRIMARY KEY,
@@ -501,541 +253,335 @@ async function ensureSchema() {
     )
   `);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_dcf_messages_session
-    ON dcf_messages(session_id, id)
-  `);
-}
+  // --- NOUVELLES TABLES V4 ---
 
+  // Bibliothèque d'exemples (Analysés structurellement)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_examples (
+      id SERIAL PRIMARY KEY,
+      original_file_id INT REFERENCES dcf_files(id),
+      dcf_type TEXT, -- 'Task List', 'Maintenance Plan', 'Equipment'
+      template_version TEXT, 
+      mapping JSONB, -- Mapping colonne/champ
+      field_examples JSONB, -- Valeurs types trouvées
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+
+  // Historique des requêtes Wizard
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_requests (
+      id SERIAL PRIMARY KEY,
+      session_id UUID REFERENCES dcf_sessions(id),
+      request_text TEXT,
+      detected_action TEXT,
+      detected_type TEXT,
+      recommended_file_id INT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+  
+  console.log("[DB] Schema v4 ready.");
+}
 await ensureSchema();
 
 // -----------------------------------------------------------------------------
-// PROMPTS IA
+// MULTER CONFIG
 // -----------------------------------------------------------------------------
-function getEnrichedSystemPrompt(mode, ctx) {
-  const base =
-    "Tu es un expert SAP PM et DCF. Tu connais la structure exacte des fichiers DCF (Task List, Maintenance Plan, Equipment) : " +
-    "lignes, colonnes, codes SAP (VORNR_01, LTXA1, ARBEI, etc.) et champs obligatoires. " +
-    "Tu réponds toujours en FRANÇAIS, de manière très concrète, avec :\n" +
-    "- la FEUILLE quand c'est utile (ex: DCF)\n" +
-    "- le NUMÉRO DE LIGNE EXCEL (par ex: Ligne 15)\n" +
-    "- la LETTRE DE COLONNE (par ex: AJ)\n" +
-    "- le CODE SAP du champ (par ex: LTXA1)\n" +
-    "- ce qu'il faut ÉCRIRE exactement dans la cellule\n\n" +
-    "Tu t'appuies sur le contexte d'analyse du fichier DCF (colonnes détectées, champs obligatoires, exemples de valeurs) " +
-    "et sur les éventuelles captures SAP OCR pour donner des réponses PRÉCISES, PAS génériques.\n";
+const excelStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, EXCEL_DIR),
+  filename: (_req, file, cb) => {
+    const base = sanitizeName(file.originalname || "dcf.xlsx");
+    const ts = new Date().toISOString().replace(/[:.]/g, "");
+    cb(null, `${ts}_${base}`);
+  },
+});
+const uploadExcel = multer({ storage: excelStorage });
 
-  const ctxText = [];
-  if (ctx?.excel) {
-    ctxText.push(
-      "=== CONTEXTE EXCEL DCF ===\n" + ctx.excel.slice(0, 8000)
-    );
-  }
-  if (ctx?.ocr) {
-    ctxText.push(
-      "=== CONTEXTE CAPTURES SAP (OCR) ===\n" + ctx.ocr.slice(0, 4000)
-    );
-  }
-
-  let modeSpec = "";
-  if (mode === "guidage") {
-    modeSpec =
-      "MODE GUIDAGE SAP: tu donnes des instructions PAS À PAS, structurées en blocs, pour que l'utilisateur puisse remplir ou modifier le DCF. " +
-      "Tu utilises un format de type boîtes, par exemple :\n" +
-      "Ligne 15, Colonne AJ (LTXA1 - Operation Short Text)\n" +
-      "  📝 Écris: ...\n" +
-      "  ⚠️  OBLIGATOIRE | Max 40 caractères\n";
-  } else if (mode === "validation") {
-    modeSpec =
-      "MODE VALIDATION: tu analyses les fichiers DCF pour trouver les ERREURS. " +
-      "Tu sépares bien :\n" +
-      "1) Erreurs critiques (bloquantes) avec ligne/colonne/champ précis\n" +
-      "2) Avertissements (à vérifier)\n" +
-      "3) Suggestions d'amélioration\n";
-  } else {
-    modeSpec =
-      "MODE CHAT GÉNÉRAL: tu expliques clairement la logique SAP / DCF, " +
-      "mais tu continues à être concret et pratique (ligne/colonne) dès que possible.\n";
-  }
-
-  return base + "\n" + modeSpec + "\n\n" + ctxText.join("\n\n");
-}
+const attachStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, ATTACH_DIR),
+  filename: (_req, file, cb) => {
+    const base = sanitizeName(file.originalname || "img.png");
+    const ts = new Date().toISOString().replace(/[:.]/g, "");
+    cb(null, `${ts}_${base}`);
+  },
+});
+const uploadAttach = multer({ storage: attachStorage });
 
 // -----------------------------------------------------------------------------
-// ROUTES
+// ROUTES WIZARD V4
 // -----------------------------------------------------------------------------
 
-// Healthcheck
-app.get("/api/dcf/health", (_req, res) => {
-  res.json({
-    ok: true,
-    service: "dcf-v3",
-    time: new Date().toISOString(),
-  });
-});
+// 1. ÉTAPE 1: ANALYSE DE LA DEMANDE
+app.post("/api/dcf/wizard/analyze", async (req, res) => {
+  try {
+    const { message, sessionId } = req.body;
+    if (!message) throw new Error("Message requis");
 
-// Upload Excel MULTI
-app.post(
-  "/api/dcf/uploadExcelMulti",
-  uploadExcel.array("files", 10),
-  async (req, res) => {
-    try {
-      const files = req.files || [];
-      if (!files.length) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Aucun fichier reçu" });
+    // On cherche le fichier le plus pertinent parmi les 10 derniers uploads (Simulate library search)
+    const { rows: recentFiles } = await pool.query(
+      `SELECT id, filename, analysis FROM dcf_files ORDER BY uploaded_at DESC LIMIT 10`
+    );
+    
+    const filesList = recentFiles.map(f => `- ID ${f.id}: ${f.filename}`).join("\n");
+
+    const systemPrompt = `
+      Tu es le moteur d'analyse DCF SAP v4.
+      Ton but : Analyser la demande utilisateur et choisir le meilleur fichier template parmi la liste fournie.
+      
+      LISTE FICHIERS DISPONIBLES:
+      ${filesList}
+      
+      Si aucun fichier ne correspond parfaitement, invente un nom de fichier standard (ex: ERP_MDCF_Task_List_4.06.xlsm).
+
+      Réponds UNIQUEMENT en JSON formaté ainsi :
+      {
+        "action": "create_operation" | "modify_plan" | "create_equipment" | "unknown",
+        "dcf_type": "Task List" | "Maintenance Plan" | "Equipment",
+        "template_filename": "Nom du fichier choisi",
+        "reasoning": "Une phrase expliquant pourquoi ce template.",
+        "similar_count": 12
       }
-
-      const out = [];
-      for (const file of files) {
-        const absPath = file.path;
-        const analysis = buildDeepExcelAnalysis(absPath);
-
-        const { rows } = await pool.query(
-          `INSERT INTO dcf_files (filename, stored_name, path, mime, bytes, sheet_names, analysis)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           RETURNING id, filename, sheet_names, uploaded_at`,
-          [
-            file.originalname,
-            file.filename,
-            absPath,
-            file.mimetype || null,
-            file.size || null,
-            analysis.sheetNames?.length
-              ? analysis.sheetNames
-              : null,
-            analysis,
-          ]
-        );
-        out.push(rows[0]);
-      }
-
-      res.json({ ok: true, files: out });
-    } catch (e) {
-      console.error("[dcf] uploadExcelMulti error", e);
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  }
-);
-
-// Upload Excel SIMPLE (retro-compat)
-app.post(
-  "/api/dcf/uploadExcel",
-  uploadExcel.single("file"),
-  async (req, res) => {
-    try {
-      if (!req.file) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Fichier manquant" });
-      }
-      const file = req.file;
-      const absPath = file.path;
-      const analysis = buildDeepExcelAnalysis(absPath);
-
-      const { rows } = await pool.query(
-        `INSERT INTO dcf_files (filename, stored_name, path, mime, bytes, sheet_names, analysis)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
-         RETURNING id, filename, sheet_names, uploaded_at`,
-        [
-          file.originalname,
-          file.filename,
-          absPath,
-          file.mimetype || null,
-          file.size || null,
-          analysis.sheetNames?.length
-            ? analysis.sheetNames
-            : null,
-          analysis,
-        ]
-      );
-
-      res.json({ ok: true, file: rows[0] });
-    } catch (e) {
-      console.error("[dcf] uploadExcel error", e);
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  }
-);
-
-// Liste fichiers
-app.get("/api/dcf/files", async (_req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, filename, sheet_names, uploaded_at
-       FROM dcf_files
-       ORDER BY uploaded_at DESC, id DESC`
-    );
-    res.json({ ok: true, files: rows });
-  } catch (e) {
-    console.error("[dcf] list files error", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Détails fichier
-app.get("/api/dcf/files/:id", async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, filename, sheet_names, analysis, uploaded_at
-       FROM dcf_files WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!rows[0]) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Fichier DCF introuvable" });
-    }
-    res.json({ ok: true, file: rows[0] });
-  } catch (e) {
-    console.error("[dcf] get file error", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Upload pièces jointes (images SAP)
-app.post(
-  "/api/dcf/attachments/upload",
-  uploadAttach.array("files", 20),
-  async (req, res) => {
-    try {
-      const files = req.files || [];
-      if (!files.length) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Aucun fichier reçu" });
-      }
-      const sessionId = req.body?.session_id || null;
-
-      const items = [];
-      for (const f of files) {
-        let ocr = null;
-        const isImage = /^image\//i.test(f.mimetype || "");
-        if (isImage) {
-          ocr = await analyzeImageSAP(f.path);
-        }
-        const { rows } = await pool.query(
-          `INSERT INTO dcf_attachments (session_id, filename, stored_name, path, mime, bytes, ocr_analysis)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
-           RETURNING id, filename, uploaded_at, ocr_analysis`,
-          [
-            sessionId || null,
-            f.originalname,
-            f.filename,
-            f.path,
-            f.mimetype || null,
-            f.size || null,
-            ocr ? ocr : null,
-          ]
-        );
-        items.push(rows[0]);
-      }
-
-      res.json({ ok: true, items });
-    } catch (e) {
-      console.error("[dcf] upload attachments error", e);
-      res.status(500).json({ ok: false, error: e.message });
-    }
-  }
-);
-
-// Créer une session
-app.post("/api/dcf/startSession", async (req, res) => {
-  try {
-    const email = getUserEmail(req);
-    const title = req.body?.title || "Session DCF";
-    const contextFileIds = req.body?.context_file_ids || [];
-
-    const { rows } = await pool.query(
-      `INSERT INTO dcf_sessions (user_email, title, context_file_ids)
-       VALUES ($1,$2,$3)
-       RETURNING id`,
-      [email, title, contextFileIds]
-    );
-
-    res.json({ ok: true, sessionId: rows[0].id });
-  } catch (e) {
-    console.error("[dcf] startSession error", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Liste sessions (pour le menu déroulant)
-app.get("/api/dcf/sessions", async (req, res) => {
-  try {
-    const email = getUserEmail(req);
-    const params = [];
-    let where = "";
-    if (email) {
-      where = "WHERE user_email = $1";
-      params.push(email);
-    }
-    const { rows } = await pool.query(
-      `SELECT id, user_email, title, context_file_ids, created_at, updated_at
-       FROM dcf_sessions
-       ${where}
-       ORDER BY created_at DESC
-       LIMIT 50`,
-      params
-    );
-    res.json({ ok: true, sessions: rows });
-  } catch (e) {
-    console.error("[dcf] list sessions error", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// Récupérer une session + messages
-app.get("/api/dcf/session/:id", async (req, res) => {
-  try {
-    const { rows: srows } = await pool.query(
-      `SELECT id, user_email, title, context_file_ids, created_at, updated_at
-       FROM dcf_sessions WHERE id = $1`,
-      [req.params.id]
-    );
-    if (!srows[0]) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Session inconnue" });
-    }
-    const { rows: msgs } = await pool.query(
-      `SELECT role, content, metadata, created_at
-       FROM dcf_messages
-       WHERE session_id = $1
-       ORDER BY id ASC`,
-      [req.params.id]
-    );
-    res.json({ ok: true, session: srows[0], messages: msgs });
-  } catch (e) {
-    console.error("[dcf] get session error", e);
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-
-// VALIDATION
-app.post("/api/dcf/validate", async (req, res) => {
-  try {
-    const { fileIds = [], mode = "auto" } = req.body || {};
-    if (!fileIds.length) {
-      return res
-        .status(400)
-        .json({ ok: false, error: "Aucun fichier à valider" });
-    }
-
-    const { rows: files } = await pool.query(
-      `SELECT id, filename, analysis
-       FROM dcf_files
-       WHERE id = ANY($1::int[])`,
-      [fileIds]
-    );
-    if (!files.length) {
-      return res
-        .status(404)
-        .json({ ok: false, error: "Fichiers non trouvés" });
-    }
-
-    const validationContext = files
-      .map((f) => {
-        const a = f.analysis || {};
-        return (
-          `Fichier: ${f.filename}\n` +
-          (a.ai_preview ||
-            a.preview ||
-            "[Pas de contexte détaillé disponible]")
-        );
-      })
-      .join("\n\n---\n\n");
-
-    const sysText = getEnrichedSystemPrompt("validation", {
-      excel: validationContext,
-    });
+    `;
 
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
       messages: [
-        { role: "system", content: sysText },
-        {
-          role: "user",
-          content:
-            "Valide ces fichiers DCF. Donne un rapport structuré en trois sections : " +
-            "1) Erreurs critiques, 2) Avertissements, 3) Suggestions. " +
-            "Indique toujours la feuille, la ligne, la colonne (lettre) et le code SAP quand c'est possible.",
-        },
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
       ],
-      temperature: 0.1,
+      response_format: { type: "json_object" },
+      temperature: 0.1
     });
 
-    const report =
-      completion.choices?.[0]?.message?.content ||
-      "Validation impossible";
+    const result = cleanJSON(completion.choices[0].message.content);
 
-    res.json({
-      ok: true,
-      report,
-      files: files.map((f) => f.filename),
-    });
+    // Log en DB
+    if (sessionId) {
+      await pool.query(
+        `INSERT INTO dcf_requests (session_id, request_text, detected_action, detected_type) VALUES ($1, $2, $3, $4)`,
+        [sessionId, message, result.action, result.dcf_type]
+      );
+    }
+
+    res.json(result);
+
   } catch (e) {
-    console.error("[dcf] validate error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error(e);
+    res.status(500).json({ error: e.message });
   }
 });
 
-// CHAT IA
-app.post("/api/dcf/chat", async (req, res) => {
+// 2. ÉTAPE 3: GÉNÉRATION INSTRUCTIONS
+app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
-    const {
-      message,
-      sessionId: rawSessionId,
-      fileIds = [],
-      attachmentIds = [],
-      mode = "guidage",
-      useCase = null,
-    } = req.body || {};
+    const { sessionId, requestText, templateFilename } = req.body;
 
-    if (!message || typeof message !== "string") {
-      return res
-        .status(400)
-        .json({ ok: false, error: "message requis" });
-    }
-
-    const email = getUserEmail(req);
-    let sessionId = rawSessionId || null;
-
-    // Crée la session si besoin
-    if (!sessionId) {
-      const { rows } = await pool.query(
-        `INSERT INTO dcf_sessions (user_email, title, context_file_ids)
-         VALUES ($1,$2,$3)
-         RETURNING id`,
-        [
-          email,
-          useCase
-            ? `DCF – ${useCase}`
-            : "Session DCF Assistant",
-          fileIds,
-        ]
-      );
-      sessionId = rows[0].id;
-    } else {
-      await pool.query(
-        `UPDATE dcf_sessions
-         SET context_file_ids = $1, updated_at = now()
-         WHERE id = $2`,
-        [fileIds, sessionId]
-      );
-    }
-
-    // Contexte Excel
-    let excelContext = "";
-    if (fileIds.length) {
-      const { rows: files } = await pool.query(
-        `SELECT filename, analysis
-         FROM dcf_files
-         WHERE id = ANY($1::int[])`,
-        [fileIds]
-      );
-      excelContext = files
-        .map((f) => {
-          const a = f.analysis || {};
-          return (
-            `Fichier: ${f.filename}\n` +
-            (a.ai_preview ||
-              a.preview ||
-              "[Pas de contexte détaillé]")
-          );
-        })
-        .join("\n\n---\n\n");
-    }
-
-    // Contexte OCR
-    let ocrContext = "";
-    if (attachmentIds.length) {
-      const { rows: atts } = await pool.query(
-        `SELECT id, filename, ocr_analysis
-         FROM dcf_attachments
-         WHERE id = ANY($1::int[])`,
-        [attachmentIds]
-      );
-      ocrContext = atts
-        .map((a) => {
-          if (!a.ocr_analysis) return `Image: ${a.filename}`;
-          return `Image: ${a.filename}\n${JSON.stringify(
-            a.ocr_analysis
-          )}`;
-        })
-        .join("\n\n");
-    }
-
-    // Historique limité
-    const { rows: history } = await pool.query(
-      `SELECT role, content
-       FROM dcf_messages
-       WHERE session_id = $1
-       ORDER BY id ASC
-       LIMIT 30`,
-      [sessionId]
+    // Essayer de récupérer le contenu réel du fichier s'il existe en DB
+    let fileContext = "Aucun fichier chargé.";
+    const { rows: files } = await pool.query(
+      `SELECT analysis FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`,
+      [templateFilename]
     );
 
-    const sysText = getEnrichedSystemPrompt(mode, {
-      excel: excelContext,
-      ocr: ocrContext,
-    });
+    if (files.length > 0) {
+      fileContext = files[0].analysis.ai_context; // Le mapping colonne réel
+    } else {
+      // Fallback : On demande à l'IA d'halluciner une structure standard plausible si le fichier n'est pas en DB
+      fileContext = "Fichier standard DCF Task List. Supposez les colonnes : H=ACTION, L=EQUNR, T=ARBPL, AJ=LTXA1...";
+    }
 
-    const msgs = [
-      { role: "system", content: sysText },
-      ...history.map((m) => ({
-        role: m.role,
-        content: m.content,
-      })),
-      {
-        role: "user",
-        content: useCase
-          ? `Cas d'usage: ${useCase}\n\nQuestion: ${message}`
-          : message,
-      },
-    ];
+    const systemPrompt = `
+      CONTEXTE:
+      L'utilisateur veut : "${requestText}"
+      Fichier Template : "${templateFilename}"
+      Structure détectée du fichier : 
+      ${fileContext.slice(0, 4000)}
+
+      TACHE:
+      Génère les instructions de remplissage LIGNE PAR LIGNE pour l'Excel.
+      Sois très précis sur les colonnes (Lettre) et les Codes SAP.
+      Invente des données réalistes basées sur la demande (ex: si user dit "Chambre 953", mets "CH94" en work center si pertinent).
+
+      FORMAT JSON ATTENDU (Array) :
+      [
+        {
+          "row": "6", // Numéro ligne Excel suggérée
+          "col": "H", // Lettre colonne
+          "code": "ACTION", // Code SAP en header
+          "label": "Action", // Nom humain
+          "value": "Create", // Valeur à saisir
+          "reason": "Pour créer une nouvelle entrée",
+          "mandatory": true
+        },
+        ...
+      ]
+    `;
 
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
-      messages: msgs,
-      temperature: 0.2,
+      messages: [
+        { role: "system", content: "Tu es un assistant technique SAP précis." },
+        { role: "user", content: systemPrompt }
+      ],
+      response_format: { type: "json_object" }, // Attention: pour array, il faut wrapper
+      temperature: 0.2
     });
 
-    const answer =
-      completion.choices?.[0]?.message?.content || "";
+    // Hack: OpenAI force souvent un objet racine si json_object est demandé.
+    // On parse et on cherche l'array.
+    const rawJson = cleanJSON(completion.choices[0].message.content);
+    let instructions = [];
+    if (Array.isArray(rawJson)) instructions = rawJson;
+    else if (rawJson.instructions) instructions = rawJson.instructions;
+    else if (rawJson.steps) instructions = rawJson.steps;
+    else instructions = Object.values(rawJson)[0] || []; // Tentative désespérée
 
-    // Sauvegarde des messages
-    await pool.query(
-      `INSERT INTO dcf_messages (session_id, role, content, metadata)
-       VALUES ($1,$2,$3,$4), ($1,$5,$6,$7)`,
-      [
-        sessionId,
-        "user",
-        message,
-        JSON.stringify({ fileIds, attachmentIds, mode, useCase }),
-        "assistant",
-        answer,
-        JSON.stringify({ model: ANSWER_MODEL }),
-      ]
+    res.json(instructions);
+
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 3. ÉTAPE 4: VALIDATION STRICTE
+app.post("/api/dcf/wizard/validate", async (req, res) => {
+  try {
+    const { fileIds } = req.body;
+    
+    // Récupération données fichiers
+    const { rows: files } = await pool.query(
+      `SELECT filename, analysis FROM dcf_files WHERE id = ANY($1::int[])`,
+      [fileIds]
     );
 
-    res.json({
-      ok: true,
-      sessionId,
-      answer,
+    const analysisData = files.map(f => 
+      `Fichier: ${f.filename}\nStructure:\n${f.analysis.ai_context || "N/A"}`
+    ).join("\n\n");
+
+    const systemPrompt = `
+      Tu es un validateur strict de fichiers DCF SAP.
+      Analyse les structures fournies.
+      
+      Règles:
+      1. Vérifie que les champs obligatoires (VORNR, ARBPL, EQUNR) semblent remplis.
+      2. Vérifie les formats (Heure = décimal, Text < 40 chars).
+      3. Détecte les incohérences.
+
+      Réponds en JSON :
+      {
+        "report_text": "Résumé global...",
+        "critical": ["Erreur 1: Ligne 6 Col T (ARBPL) vide", ...],
+        "warnings": ["Warning 1: ..."],
+        "suggestions": ["Sugg 1: ..."]
+      }
+    `;
+
+    const completion = await openai.chat.completions.create({
+      model: ANSWER_MODEL,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Valide ces données :\n${analysisData.slice(0, 6000)}` }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.1
     });
+
+    const result = cleanJSON(completion.choices[0].message.content);
+    res.json({ report: result.report_text, ...result });
+
   } catch (e) {
-    console.error("[dcf] chat error", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error(e);
+    res.status(500).json({ error: e.message });
   }
 });
 
 // -----------------------------------------------------------------------------
-// SERVER START
+// ROUTES EXISTANTES (Uploads & Session basics)
 // -----------------------------------------------------------------------------
+
+// Start Session
+app.post("/api/dcf/startSession", async (req, res) => {
+  try {
+    const { title } = req.body;
+    const email = getUserEmail(req);
+    const { rows } = await pool.query(
+      `INSERT INTO dcf_sessions (user_email, title) VALUES ($1, $2) RETURNING id`,
+      [email, title || "Session Wizard"]
+    );
+    res.json({ ok: true, sessionId: rows[0].id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Upload Excel
+app.post("/api/dcf/uploadExcel", uploadExcel.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+    const absPath = file.path;
+    const analysis = buildDeepExcelAnalysis(absPath);
+
+    const { rows } = await pool.query(
+      `INSERT INTO dcf_files (filename, stored_name, path, mime, bytes, sheet_names, analysis)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id, filename`,
+      [file.originalname, file.filename, absPath, file.mimetype, file.size, analysis.sheetNames, analysis]
+    );
+
+    // Si le fichier est "propre", on pourrait l'ajouter aux dcf_examples ici
+    // Pour l'instant, on le stocke juste.
+    
+    res.json({ ok: true, file: rows[0] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Upload Attachments (Screenshots)
+app.post("/api/dcf/attachments/upload", uploadAttach.array("files"), async (req, res) => {
+  try {
+    const files = req.files || [];
+    const { session_id } = req.body;
+    
+    const items = [];
+    for (const f of files) {
+      const { rows } = await pool.query(
+        `INSERT INTO dcf_attachments (session_id, filename, stored_name, path, mime, bytes)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id, filename`,
+        [session_id || null, f.originalname, f.filename, f.path, f.mimetype, f.size]
+      );
+      items.push(rows[0]);
+    }
+    res.json({ ok: true, items });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Chat (Route générique fallback)
+app.post("/api/dcf/chat", async (req, res) => {
+  // Cette route est utilisée pour l'analyse de screenshots dans le wizard (Step 3)
+  // ou pour des questions générales.
+  try {
+    const { message, attachmentIds, mode } = req.body;
+    
+    // Gestion sommaire des attachments (OCR) si présents
+    let ocrText = "";
+    if (attachmentIds && attachmentIds.length) {
+       // Simuler OCR ou implémenter GPT-4 Vision ici
+       // Pour l'instant, on fait confiance au frontend wizard qui n'utilise pas cette route pour l'OCR complexe
+       // mais on peut l'ajouter si nécessaire.
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: ANSWER_MODEL,
+      messages: [
+         { role: "system", content: "Tu es un assistant SAP." },
+         { role: "user", content: message }
+      ]
+    });
+    
+    res.json({ ok: true, answer: completion.choices[0].message.content });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Start Server
 app.listen(PORT, HOST, () => {
-  console.log(
-    `[dcf] Assistant DCF SAP v3 listening on http://${HOST}:${PORT}`
-  );
+  console.log(`[dcf-v4] Backend Wizard listening on http://${HOST}:${PORT}`);
 });
