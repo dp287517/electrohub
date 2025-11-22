@@ -1434,11 +1434,11 @@ export const api = {
       }),
   },
 
-  /** --- DCF ASSISTANT --- */
+  /** --- DCF ASSISTANT v4 --- */
   dcf: {
     health: () => get("/api/dcf/health"),
 
-    // Upload Excel (multi & simple)
+    // --- GESTION DES FICHIERS ---
     uploadExcelMulti: (formData) =>
       upload("/api/dcf/uploadExcelMulti", formData),
 
@@ -1451,11 +1451,12 @@ export const api = {
     listFiles: () => get("/api/dcf/files"),
     getFile: (id) => get(`/api/dcf/files/${id}`),
 
-    // Validation des DCF
-    validate: ({ fileIds, mode = "auto" }) =>
-      post("/api/dcf/validate", { fileIds, mode }),
+    // --- SESSIONS ---
+    startSession: (payload) => post("/api/dcf/startSession", payload),
+    listSessions: () => get("/api/dcf/sessions"),
+    getSession: (id) => get(`/api/dcf/session/${id}`),
 
-    // Upload pièces jointes (captures SAP)
+    // --- COMMON / UPLOADS ---
     uploadAttachments: (files = [], sessionId = null) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
@@ -1463,13 +1464,13 @@ export const api = {
       return upload("/api/dcf/attachments/upload", fd);
     },
 
-    // Chat IA
+    // --- CHAT GÉNÉRAL (Fallback & Questions libres) ---
     chat: ({
       sessionId = null,
       message,
       fileIds = [],
       attachmentIds = [],
-      mode = "guidage", // "guidage" | "chat" | "validation"
+      mode = "guidage",
       useCase = null,
     }) =>
       post("/api/dcf/chat", {
@@ -1481,12 +1482,27 @@ export const api = {
         useCase,
       }),
 
-    // Sessions
-    startSession: ({ title, context_file_ids = [] } = {}) =>
-      post("/api/dcf/startSession", { title, context_file_ids }),
+    // --- NOUVEAU : WIZARD v4 (Routes spécifiques) ---
+    wizard: {
+      // Étape 1 : Analyse de la demande -> Choix du template
+      analyze: (message, sessionId) =>
+        post("/api/dcf/wizard/analyze", { message, sessionId }),
 
-    listSessions: () => get("/api/dcf/sessions"),
-    getSession: (id) => get(`/api/dcf/session/${id}`),
+      // Étape 3 : Génération des instructions ligne par ligne
+      instructions: (sessionId, requestText, templateFilename) =>
+        post("/api/dcf/wizard/instructions", {
+          sessionId,
+          requestText,
+          templateFilename,
+        }),
+
+      // Étape 4 : Validation stricte
+      validate: (fileIds) => post("/api/dcf/wizard/validate", { fileIds }),
+    },
+
+    // Alias rétro-compatible pour la validation standard
+    validate: ({ fileIds, mode = "auto" }) =>
+      post("/api/dcf/validate", { fileIds, mode }),
   },
 
   /** --- 🔵 BUBBLE AUTH --- */
