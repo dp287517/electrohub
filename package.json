@@ -20,6 +20,7 @@
     "express-rate-limit": "^7.4.0",
     "node-stream-zip": "^1.15.0",
     "bcryptjs": "^2.4.3",
+    "react-icons": "^5.4.0",
     "concurrently": "^9.0.1",
     "archiver": "^6.0.2",
     "cookie-parser": "^1.4.6",
