@@ -1434,7 +1434,7 @@ export const api = {
       }),
   },
 
-  /** --- DCF ASSISTANT v5 (Ultimate) --- */
+  /** --- DCF ASSISTANT v6 (Ultimate & Charles Protocol) --- */
   dcf: {
     health: () => get("/api/dcf/health"),
 
@@ -1464,7 +1464,7 @@ export const api = {
       return upload("/api/dcf/attachments/upload", fd);
     },
 
-    // --- CHAT GÉNÉRAL (Fallback & Questions libres) ---
+    // --- CHAT GÉNÉRAL (Fallback) ---
     chat: ({
       sessionId = null,
       message,
@@ -1482,14 +1482,13 @@ export const api = {
         useCase,
       }),
 
-    // --- WIZARD v5 (Routes Intelligentes) ---
+    // --- WIZARD v6 (Intelligence & Automation) ---
     wizard: {
-      // Étape 1 : Analyse de la demande -> Choix du template
+      // Étape 1 : Analyse (Protocole Charles : Multi-fichiers / Manuel / Standard)
       analyze: (message, sessionId) =>
         post("/api/dcf/wizard/analyze", { message, sessionId }),
 
-      // Étape 3 : Génération des instructions (avec support Vision pour les images)
-      // Note : on ajoute le paramètre attachmentIds par rapport à la v4
+      // Étape 3 : Instructions (Guidage + Vision SAP)
       instructions: (sessionId, requestText, templateFilename, attachmentIds = []) =>
         post("/api/dcf/wizard/instructions", {
           sessionId,
@@ -1498,8 +1497,7 @@ export const api = {
           attachmentIds,
         }),
 
-      // Étape 3 (Bonus) : Génération du fichier Excel rempli (Auto-fill)
-      // Cette fonction est spéciale car elle retourne un fichier binaire (Blob) et non du JSON
+      // Étape 3 (Bonus) : Génération Fichier (Support XLSX et XLSM)
       autofill: async (templateFilename, instructions) => {
         const site = currentSite(); 
         const headers = identityHeaders(new Headers({ "X-Site": site }));
@@ -1516,14 +1514,17 @@ export const api = {
           const text = await res.text().catch(() => "");
           throw new Error(text || `HTTP ${res.status}`);
         }
-        return res.blob(); // Retourne le fichier binaire prêt à être téléchargé
+        return res.blob(); // Retourne le fichier binaire
       },
 
-      // Étape 4 : Validation stricte
+      // Étape 4 : Validation (Prédictive + Structurelle)
       validate: (fileIds) => post("/api/dcf/wizard/validate", { fileIds }),
+
+      // Module Futur : Reverse DCF (Expliquer un fichier existant)
+      explain: (fileId) => post("/api/dcf/wizard/explain", { fileId }),
     },
 
-    // Alias rétro-compatible pour la validation standard
+    // Alias rétro-compatible
     validate: ({ fileIds, mode = "auto" }) =>
       post("/api/dcf/validate", { fileIds, mode }),
   },
