@@ -117,7 +117,7 @@ const FieldInstruction = ({
   </div>
 );
 
-// --- MAIN WIZARD V7.1 (Avec Gestion Bibliothèque) ---
+// --- MAIN WIZARD V7.4 (Avec Gestion Bibliothèque) ---
 
 export default function DCFWizard() {
   const [step, setStep] = useState(1);
@@ -183,7 +183,7 @@ export default function DCFWizard() {
   useEffect(() => {
     const init = async () => {
       try {
-        const res = await api.dcf.startSession({ title: "Wizard DCF v7" });
+        const res = await api.dcf.startSession({ title: "Wizard DCF v7.4" });
         if (res?.sessionId) setSessionId(res.sessionId);
         refreshLibrary();
       } catch (e) {
@@ -220,7 +220,6 @@ export default function DCFWizard() {
       alert("Erreur upload: " + e2.message);
     } finally {
       setUploadingLib(false);
-      // reset input pour permettre ré-upload d'un même fichier
       e.target.value = "";
     }
   };
@@ -249,7 +248,7 @@ export default function DCFWizard() {
     setAttachmentIds([]);
     setScreenshots([]);
     try {
-      // garde la compat filename (backend actuel)
+      // compat filename (backend actuel)
       const data = await api.dcf.wizard.instructions(
         sessionId,
         requestText,
@@ -337,7 +336,6 @@ export default function DCFWizard() {
       validationFiles.forEach((f) => fd.append("files", f));
 
       const upRes = await api.dcf.uploadExcelMulti(fd);
-      // compat multi/mono
       const uploaded = upRes?.files || (upRes?.file ? [upRes.file] : []);
       const fileIds = uploaded.map((f) => f.id).filter(Boolean);
 
@@ -354,7 +352,6 @@ export default function DCFWizard() {
 
   // --- RENDERERS ---
 
-  // SECTION : ADMIN / LIBRARY
   const renderLibrary = () => (
     <div className="bg-slate-100 border-b border-slate-200 p-4 animate-slide-down mb-6 rounded-xl">
       <div className="flex justify-between items-center mb-4">
@@ -371,7 +368,6 @@ export default function DCFWizard() {
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
-        {/* Upload Zone */}
         <Card className="p-6 border-dashed border-2 border-blue-200 bg-blue-50 flex flex-col items-center justify-center text-center">
           <FaUpload className="text-blue-400 text-3xl mb-2" />
           <p className="text-sm font-bold text-blue-800 mb-1">
@@ -397,7 +393,6 @@ export default function DCFWizard() {
           </label>
         </Card>
 
-        {/* File List */}
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden max-h-48 overflow-y-auto custom-scrollbar">
           {libraryFiles.length === 0 ? (
             <div className="p-4 text-center text-gray-400 text-sm italic">
@@ -447,7 +442,7 @@ export default function DCFWizard() {
         />
         <div className="flex justify-between items-center mt-2">
           <div className="text-xs text-gray-400 italic">
-            <FaRobot className="inline mr-1" /> Analyse par IA SAP v7
+            <FaRobot className="inline mr-1" /> Analyse par IA SAP v7.4
           </div>
           <button
             onClick={handleAnalyzeRequest}
@@ -760,7 +755,7 @@ export default function DCFWizard() {
         <div className="space-y-4 h-full">
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-gray-800 uppercase tracking-wide text-sm">
-              Rapport Qualité v7
+              Rapport Qualité v7.4
             </h3>
             {validationReport && (
               <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold">
@@ -836,8 +831,6 @@ export default function DCFWizard() {
     </div>
   );
 
-  // --- RENDER FINAL ---
-
   return (
     <div className="min-h-screen bg-slate-50 pb-20 font-sans text-gray-900">
       <div className="max-w-7xl mx-auto px-4 py-8">
@@ -852,7 +845,7 @@ export default function DCFWizard() {
             Assistant DCF <span className="text-blue-600">v7 Ultimate</span>
           </h1>
           <p className="text-slate-500 text-sm font-medium">
-            Architecture "Full Database" • Génération Automatique • Vision SAP
+            Architecture "Full Database" • Génération Automatique • Vision SAP • Memory v7.4
           </p>
         </header>
 
