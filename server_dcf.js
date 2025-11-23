@@ -1,9 +1,11 @@
-// server_dcf.js — Assistant DCF SAP v7.4.3
-// FULL FIX:
+// server_dcf.js — Assistant DCF SAP v7.4.4
+// FULL FIX + Memory:
 // - Conserve toutes les routes v7.x
 // - Fix stack overflow: suppression du spread push(...bigArray)
+// - Stockage DB "analysisLite" (pas de gros JSON)
 // - Analyse Excel robuste SAP
-// - Mémoire relationnelle (Plan/Equip/TaskList) + historique des noms
+// - Mémoire relationnelle (WARPL/EQUNR/TaskList + TPLNR Functional Location)
+// - Historique changement de noms
 // - Log sessions dans dcf_messages (dcf_steps n'existe pas dans ta DB)
 // Node ESM
 
@@ -89,7 +91,7 @@ function extractMaybeNumber(text) {
 }
 
 // -----------------------------------------------------------------------------
-// 3. SAFE MIGRATIONS (création tables mémoire si absent)
+// 3. DB SAFE MIGRATIONS (tables mémoire)
 // -----------------------------------------------------------------------------
 
 async function ensureMemoryTables() {
@@ -184,8 +186,7 @@ function findHeaderRow(raw) {
  * - extracted_values (FULL)
  * - rows_index (FULL)
  *
- * ✅ FIX: on ne fait plus push(...extracted) (spread),
- * ce qui provoquait le stack overflow sur gros fichiers.
+ * ✅ FIX: pas de push(...bigArray)
  */
 function buildDeepExcelAnalysis(buffer, originalName = "") {
   const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
@@ -237,7 +238,6 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
         const v = rowArr[colDef.idx];
         const val = String(v ?? "").trim();
         if (val !== "") {
-          // ✅ push 1 par 1 (pas de spread)
           analysis.extracted_values.push({
             sheet: sheetName,
             row: rowNumber,
@@ -282,7 +282,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
 }
 
 /**
- * réduit l’analyse pour stockage DB (évite gros JSON en base)
+ * réduit l’analyse pour stockage DB
  */
 function shrinkAnalysisForDB(analysis) {
   return {
@@ -338,7 +338,9 @@ async function indexEntityMemory(fileId, analysis) {
       for (const rowKey of Object.keys(rowsIndex)) {
         const row = rowsIndex[rowKey];
 
-        // --- Maintenance Plan
+        // -------------------------------------------------------------------
+        // 1) Maintenance Plan (WARPL -> WPTXT)
+        // -------------------------------------------------------------------
         if (row.WARPL) {
           const keyValue = String(row.WARPL).trim();
           const nameValue = String(
@@ -400,7 +402,9 @@ async function indexEntityMemory(fileId, analysis) {
           );
         }
 
-        // --- Equipment
+        // -------------------------------------------------------------------
+        // 2) Equipment (EQUNR -> EQKTX)
+        // -------------------------------------------------------------------
         if (row.EQUNR) {
           const keyValue = String(row.EQUNR).trim();
           const nameValue = String(
@@ -457,7 +461,9 @@ async function indexEntityMemory(fileId, analysis) {
           );
         }
 
-        // --- Task list générique
+        // -------------------------------------------------------------------
+        // 3) Task list (PLNNR/TLNUM -> KTEXT)
+        // -------------------------------------------------------------------
         if (row.PLNNR || row.PLNAL || row.TLNUM) {
           const keyValue = String(
             row.PLNNR || row.TLNUM || row.PLNAL || ""
@@ -509,6 +515,65 @@ async function indexEntityMemory(fileId, analysis) {
                 "PLNNR",
                 keyValue,
                 newName ? "KTEXT" : null,
+                newName,
+                extra
+              ]
+            );
+          }
+        }
+
+        // -------------------------------------------------------------------
+        // 4) Functional Location (TPLNR -> texte)
+        // -------------------------------------------------------------------
+        if (row.TPLNR) {
+          const keyValue = String(row.TPLNR).trim();
+          if (keyValue) {
+            const nameValue = String(
+              row.PLTXT || row.PLTEXT || row.TPLTX || row.FLTEXT || row.FLTXT || ""
+            ).trim();
+
+            const extra = {};
+            if (row.WERKS) extra.WERKS = row.WERKS;
+            if (row.BEGRU) extra.BEGRU = row.BEGRU;
+
+            const prev = await client.query(
+              `
+              SELECT name_value
+              FROM dcf_entity_memory
+              WHERE entity_type='functional_location' AND key_code='TPLNR' AND key_value=$1
+              LIMIT 1
+            `,
+              [keyValue]
+            );
+            const prevName = prev.rows[0]?.name_value || null;
+            const newName = nameValue || null;
+
+            if (prevName && newName && prevName !== newName) {
+              await client.query(
+                `
+                INSERT INTO dcf_entity_name_history(entity_type, key_code, key_value, old_name_value, new_name_value)
+                VALUES ($1,$2,$3,$4,$5)
+              `,
+                ["functional_location", "TPLNR", keyValue, prevName, newName]
+              );
+            }
+
+            await client.query(
+              `
+              INSERT INTO dcf_entity_memory(entity_type, key_code, key_value, name_code, name_value, extra)
+              VALUES ($1,$2,$3,$4,$5,$6)
+              ON CONFLICT(entity_type, key_code, key_value)
+              DO UPDATE SET
+                name_value = COALESCE(EXCLUDED.name_value, dcf_entity_memory.name_value),
+                extra = dcf_entity_memory.extra || EXCLUDED.extra,
+                seen_count = dcf_entity_memory.seen_count + 1,
+                last_seen_at = now()
+            `,
+              [
+                "functional_location",
+                "TPLNR",
+                keyValue,
+                newName ? "PLTXT" : null,
                 newName,
                 extra
               ]
@@ -646,7 +711,6 @@ Réponds en JSON STRICT uniquement:
         [sessionId, message, out]
       );
 
-      // log dans dcf_messages (table existante)
       await pool.query(
         `
         INSERT INTO dcf_messages (session_id, role, content)
@@ -916,7 +980,7 @@ Réponds en JSON STRICT:
 });
 
 // -----------------------------------------------------------------------------
-// 8. UPLOAD ROUTES (stack overflow FIX)
+// 8. UPLOAD ROUTES
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
@@ -947,7 +1011,7 @@ app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
         req.file.mimetype,
         req.file.size,
         analysisFull.sheetNames,
-        analysisLite,     // DB reçoit version légère
+        analysisLite,
         req.file.buffer
       ]
     );
@@ -1199,7 +1263,7 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.3 Full Fix" })
+  res.json({ status: "ok", version: "7.4.4 Full Fix + TPLNR Memory" })
 );
 
 // -----------------------------------------------------------------------------
@@ -1207,5 +1271,5 @@ app.get("/api/dcf/health", (req, res) =>
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.3] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.4.4] Backend démarré sur http://${HOST}:${PORT}`);
 });
