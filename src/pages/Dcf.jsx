@@ -91,7 +91,7 @@ const FieldInstruction = ({ row, col, code, label, value, reason, mandatory }) =
   </div>
 );
 
-// --- MAIN WIZARD V6 ---
+// --- MAIN WIZARD V7 (Database Storage Edition) ---
 
 export default function DCFWizard() {
   const [step, setStep] = useState(1);
@@ -101,14 +101,14 @@ export default function DCFWizard() {
   // STEP 1 Data
   const [requestText, setRequestText] = useState("");
 
-  // STEP 2 Data (Recommandation Multi-fichiers)
+  // STEP 2 Data (Recommandation)
   const [analysis, setAnalysis] = useState(null);
   
   // STEP 3 Data (Guidage & Vision)
   const [activeFile, setActiveFile] = useState(null);
   const [instructions, setInstructions] = useState([]);
-  const [attachmentIds, setAttachmentIds] = useState([]); // IDs des screenshots uploadés
-  const [screenshots, setScreenshots] = useState([]); // Objets Files pour l'UI
+  const [attachmentIds, setAttachmentIds] = useState([]); 
+  const [screenshots, setScreenshots] = useState([]); 
   const [autofillLoading, setAutofillLoading] = useState(false);
 
   // STEP 4 Data (Validation)
@@ -119,7 +119,7 @@ export default function DCFWizard() {
   useEffect(() => {
     const init = async () => {
       try {
-        const res = await api.dcf.startSession({ title: "Wizard DCF v6" });
+        const res = await api.dcf.startSession({ title: "Wizard DCF v7" });
         if (res?.sessionId) setSessionId(res.sessionId);
       } catch (e) { console.error(e); }
     };
@@ -128,7 +128,7 @@ export default function DCFWizard() {
 
   // --- HANDLERS ---
 
-  // 1. ANALYSER LA DEMANDE (Appel au backend v6 avec protocole Charles)
+  // 1. ANALYSER LA DEMANDE
   const handleAnalyzeRequest = async () => {
     if (!requestText.trim()) return;
     setLoading(true);
@@ -144,16 +144,15 @@ export default function DCFWizard() {
     }
   };
 
-  // 2. CHOISIR UN FICHIER -> CHARGER INSTRUCTIONS
+  // 2. CHOISIR UN FICHIER
   const handleSelectFile = async (fileObj) => {
     setActiveFile(fileObj);
     setLoading(true);
     setInstructions([]);
-    setAttachmentIds([]); // Reset screenshots pour ce nouveau fichier
+    setAttachmentIds([]); 
     setScreenshots([]);
     
     try {
-      // Premier chargement sans screenshot
       const data = await api.dcf.wizard.instructions(
         sessionId, 
         requestText, 
@@ -169,22 +168,20 @@ export default function DCFWizard() {
     }
   };
 
-  // 3. UPLOAD SCREENSHOT -> RE-GÉNÉRATION INTELLIGENTE
+  // 3. UPLOAD SCREENSHOT (Vision DB)
   const handleScreenshotUpload = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
     
     setLoading(true);
-    setScreenshots(prev => [...prev, ...files]); // UI Update
+    setScreenshots(prev => [...prev, ...files]); 
 
     try {
-      // A. Upload (Le backend v6 indexe l'image immédiatement pour la vision)
       const upRes = await api.dcf.uploadAttachments(files, sessionId);
       const newIds = upRes.items.map(i => i.id);
       const allIds = [...attachmentIds, ...newIds];
       setAttachmentIds(allIds);
 
-      // B. Re-demander les instructions avec le contexte Vision
       const data = await api.dcf.wizard.instructions(
         sessionId,
         requestText,
@@ -200,34 +197,34 @@ export default function DCFWizard() {
     }
   };
 
-  // 3 bis. AUTO-FILL : GÉNÉRER LE FICHIER REMPLI
+  // 3 bis. AUTO-FILL (Download Blob depuis DB)
   const handleAutofill = async () => {
     if (!instructions.length) return;
     setAutofillLoading(true);
     try {
-      // Appel à la route v6 qui gère les XLSM
       const blob = await api.dcf.wizard.autofill(activeFile.template_filename, instructions);
       
-      // Trigger download
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // Conserver l'extension d'origine si possible, sinon xlsx par défaut
+      
       const ext = activeFile.template_filename.endsWith('.xlsm') ? '.xlsm' : '.xlsx';
       a.download = `FILLED_${activeFile.template_filename.replace('.xlsm', '').replace('.xlsx', '')}${ext}`;
+      
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
     } catch (e) {
-      alert("Erreur génération fichier: " + e.message);
+      console.error(e);
+      alert("Erreur lors de la génération du fichier : " + e.message);
     } finally {
       setAutofillLoading(false);
     }
   };
 
-  // 4. VALIDATION FINALE
+  // 4. VALIDATION
   const handleValidationUpload = (e) => {
     const files = Array.from(e.target.files);
     if (files.length) setValidationFiles(files);
@@ -243,7 +240,6 @@ export default function DCFWizard() {
       const upRes = await api.dcf.uploadExcelMulti(fd);
       const fileIds = upRes.files.map(f => f.id);
       
-      // Appel validation v6 (qui inclura la validation prédictive)
       const valRes = await api.dcf.wizard.validate(fileIds);
       setValidationReport(valRes);
     } catch (e) {
@@ -271,7 +267,7 @@ export default function DCFWizard() {
         />
         <div className="flex justify-between items-center mt-2">
           <div className="text-xs text-gray-400 italic">
-            <FaRobot className="inline mr-1"/> Analyse par IA SAP v6
+            <FaRobot className="inline mr-1"/> Analyse par IA SAP v7
           </div>
           <button
             onClick={handleAnalyzeRequest}
@@ -287,7 +283,6 @@ export default function DCFWizard() {
   );
 
   const renderStep2_Recommend = () => {
-    // SCÉNARIO 1 : PAS DE DCF (Règle Charles 1)
     if (analysis?.is_manual) {
       return (
         <div className="animate-fade-in text-center py-12 max-w-2xl mx-auto">
@@ -316,7 +311,6 @@ export default function DCFWizard() {
       );
     }
 
-    // SCÉNARIO 2 : FICHIERS REQUIS (Règle Charles 2, 3, 4)
     return (
       <div className="animate-fade-in space-y-8">
         <div className="text-center max-w-3xl mx-auto">
@@ -389,7 +383,7 @@ export default function DCFWizard() {
         </div>
         
         <div className="flex gap-3">
-          {/* BOUTON MAGIQUE AUTO-FILL (v5/v6) */}
+          {/* BOUTON MAGIQUE AUTO-FILL */}
           <button 
             onClick={handleAutofill}
             disabled={autofillLoading || loading || !instructions.length}
@@ -456,7 +450,7 @@ export default function DCFWizard() {
           <div className="sticky top-6">
             <Card className="p-6 bg-gradient-to-b from-blue-50 to-white border-blue-200 shadow-md">
               <h3 className="text-sm font-bold text-blue-900 mb-3 flex items-center gap-2">
-                <FaCamera className="text-blue-600 text-lg"/> Capture SAP (Vision v6)
+                <FaCamera className="text-blue-600 text-lg"/> Capture SAP (Vision)
               </h3>
               <p className="text-xs text-blue-800 mb-5 leading-relaxed font-medium">
                 Ne recopie pas les données ! Fais un screenshot de ta fenêtre SAP (ex: IP02, IA05) et dépose-le ici. L'IA va lire les ID et remplir le fichier pour toi.
@@ -562,7 +556,7 @@ export default function DCFWizard() {
         {/* Rapport */}
         <div className="space-y-4 h-full">
           <div className="flex items-center justify-between">
-             <h3 className="font-bold text-gray-800 uppercase tracking-wide text-sm">Rapport Qualité v6</h3>
+             <h3 className="font-bold text-gray-800 uppercase tracking-wide text-sm">Rapport Qualité v7</h3>
              {validationReport && (
                <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold">
                  Predictive Check Active
@@ -636,10 +630,10 @@ export default function DCFWizard() {
         {/* Header */}
         <header className="mb-10 text-center">
           <h1 className="text-3xl font-extrabold text-slate-800 mb-2 tracking-tight">
-            Assistant DCF <span className="text-blue-600">v6 Ultimate</span>
+            Assistant DCF <span className="text-blue-600">v7 Ultimate</span>
           </h1>
           <p className="text-slate-500 text-sm font-medium">
-            Architecture "Charles Protocol" • Génération Automatique • Vision SAP
+            Architecture "Full Database" • Génération Automatique • Vision SAP
           </p>
         </header>
 
