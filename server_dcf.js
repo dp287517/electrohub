@@ -1,5 +1,5 @@
-// server_dcf.js — Assistant DCF SAP v7 (Full Database Storage)
-// FIX: Plus aucune dépendance au système de fichiers (évite l'erreur ENOENT sur Render)
+// server_dcf.js — Assistant DCF SAP v7.2 (Correctif Upload Constraint)
+// FIX: Génération obligatoire de 'stored_name' pour satisfaire la contrainte NOT NULL de la DB
 // Node ESM
 
 import express from "express";
@@ -7,7 +7,7 @@ import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
 import multer from "multer";
-import pg from "pg"; // Client Postgres
+import pg from "pg"; 
 import { fileURLToPath } from "url";
 import OpenAI from "openai";
 import xlsx from "xlsx";
@@ -48,6 +48,7 @@ function cleanJSON(text) {
   catch (e) { return { error: "Invalid JSON", raw: text }; }
 }
 
+function sanitizeName(name = "") { return String(name).replace(/[^\w.\-]+/g, "_"); }
 function safeEmail(x) { return x && /\S+@\S+\.\S+/.test(x) ? String(x).trim().toLowerCase() : null; }
 function getUserEmail(req) { return safeEmail(req.headers["x-user-email"] || req.headers["x-user_email"]); }
 
@@ -77,7 +78,6 @@ const SAP_FIELD_DICTIONARY = {
 
 function buildDeepExcelAnalysis(fileBuffer, originalName) {
   try {
-    // Lecture depuis le buffer (RAM) au lieu du disque
     const wb = xlsx.read(fileBuffer, { type: "buffer", cellDates: false, sheetRows: 0 });
     
     const analysis = {
@@ -92,7 +92,6 @@ function buildDeepExcelAnalysis(fileBuffer, originalName) {
     for (const sheetName of analysis.sheetNames) {
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
-      // Conversion en JSON pour analyse structure
       const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
       if (!raw.length) continue;
 
@@ -116,7 +115,6 @@ function buildDeepExcelAnalysis(fileBuffer, originalName) {
           }
         });
 
-        // Extraction valeurs pour indexation
         const dataStart = headerRowIdx + 3;
         for (let r = dataStart; r < raw.length; r++) {
           const row = raw[r];
@@ -160,26 +158,24 @@ async function analyzeImageSAP(fileBuffer, mimeType) {
 }
 
 // -----------------------------------------------------------------------------
-// 3. BASE DE DONNÉES (Schema v7 - Avec File Data)
+// 3. BASE DE DONNÉES
 // -----------------------------------------------------------------------------
 async function ensureSchema() {
-  // Table Fichiers (Avec stockage binaire BYTEA)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_files (
       id SERIAL PRIMARY KEY,
       filename TEXT NOT NULL,
+      stored_name TEXT NOT NULL, -- Obligatoire
+      path TEXT,                 -- Peut être null maintenant
       mime TEXT,
       bytes BIGINT,
       sheet_names TEXT[],
       analysis JSONB,
       uploaded_at TIMESTAMPTZ DEFAULT now(),
-      file_data BYTEA,
-      stored_name TEXT,
-      path TEXT 
+      file_data BYTEA
     )
   `);
 
-  // Sessions
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_sessions (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -191,7 +187,6 @@ async function ensureSchema() {
     )
   `);
 
-  // Messages
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_messages (
       id BIGSERIAL PRIMARY KEY,
@@ -203,23 +198,21 @@ async function ensureSchema() {
     )
   `);
 
-  // Attachments (Avec stockage binaire BYTEA)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_attachments (
       id SERIAL PRIMARY KEY,
       session_id UUID NULL REFERENCES dcf_sessions(id) ON DELETE SET NULL,
       filename TEXT NOT NULL,
+      stored_name TEXT NOT NULL, -- Obligatoire
+      path TEXT,
       mime TEXT,
       bytes BIGINT,
       ocr_analysis JSONB,
       uploaded_at TIMESTAMPTZ DEFAULT now(),
-      file_data BYTEA,
-      stored_name TEXT,
-      path TEXT
+      file_data BYTEA
     )
   `);
 
-  // Requests (Historique Wizard)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_requests (
       id SERIAL PRIMARY KEY,
@@ -231,7 +224,6 @@ async function ensureSchema() {
     )
   `);
 
-  // Index
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_values_index (
       id SERIAL PRIMARY KEY,
@@ -244,13 +236,11 @@ async function ensureSchema() {
     )
   `);
 
-  // MIGRATION DE SECURITE
-  // On s'assure que les colonnes BYTEA existent bien
   try { await pool.query(`ALTER TABLE dcf_files ADD COLUMN IF NOT EXISTS file_data BYTEA`); } catch(e) {}
   try { await pool.query(`ALTER TABLE dcf_attachments ADD COLUMN IF NOT EXISTS file_data BYTEA`); } catch(e) {}
   try { await pool.query(`ALTER TABLE dcf_requests ADD COLUMN IF NOT EXISTS response_json JSONB`); } catch(e) {}
 
-  console.log("[DB] Schema v7 (Full Database Storage) ready.");
+  console.log("[DB] Schema v7.2 (Correctif Upload) ready.");
 }
 await ensureSchema();
 
@@ -276,24 +266,21 @@ async function indexFileValues(fileId, analysis) {
 }
 
 // -----------------------------------------------------------------------------
-// 4. MULTER (MEMORY STORAGE - CRITIQUE)
+// 4. MULTER (MEMORY STORAGE)
 // -----------------------------------------------------------------------------
-// On stocke dans la RAM (buffer) pour envoyer directement à la DB
 const upload = multer({ 
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 } // 50MB max
+  limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 // -----------------------------------------------------------------------------
-// 5. ROUTES WIZARD v7
+// 5. ROUTES WIZARD
 // -----------------------------------------------------------------------------
 
-// ANALYSE (Pas de changement logique, juste accès DB propre)
 app.post("/api/dcf/wizard/analyze", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
     
-    // On récupère la liste des fichiers (juste les noms)
     const { rows: recentFiles } = await pool.query(`SELECT id, filename FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT 50`);
     const filesList = recentFiles.map(f => `- ${f.filename} (ID: ${f.id})`).join("\n");
 
@@ -339,23 +326,19 @@ app.post("/api/dcf/wizard/analyze", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// INSTRUCTIONS (Avec Vision DB)
 app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
     const { requestText, templateFilename, attachmentIds } = req.body;
 
-    // 1. Contexte Fichier
     let fileContext = "";
     const { rows: files } = await pool.query(`SELECT analysis FROM dcf_files WHERE filename = $1 LIMIT 1`, [templateFilename]);
     if (files.length) fileContext = files[0].analysis.ai_context || "";
 
-    // 2. Contexte Vision (Lecture depuis DB buffer)
     let visionContext = "";
     if (attachmentIds?.length) {
       const { rows: atts } = await pool.query(`SELECT ocr_analysis, file_data, mime FROM dcf_attachments WHERE id = ANY($1::int[])`, [attachmentIds]);
       for (const att of atts) {
         let text = att.ocr_analysis;
-        // Si pas d'analyse pré-calculée, on le fait à la volée avec le buffer
         if ((!text || typeof text !== 'string') && att.file_data) {
            text = await analyzeImageSAP(att.file_data, att.mime);
         }
@@ -384,22 +367,17 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// AUTO-FILL (Lecture DB -> Buffer -> DB)
 app.post("/api/dcf/wizard/autofill", async (req, res) => {
   try {
     const { templateFilename, instructions } = req.body;
     
-    // 1. Charger fichier depuis DB
     const { rows: files } = await pool.query(`SELECT file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`, [templateFilename]);
     if (!files.length || !files[0].file_data) throw new Error("Fichier introuvable en base (Veuillez le ré-uploader).");
 
     const isMacro = templateFilename.toLowerCase().endsWith(".xlsm");
-    
-    // Lecture Buffer
     const wb = xlsx.read(files[0].file_data, { type: "buffer", cellFormula: false });
     const ws = wb.Sheets[wb.SheetNames[0]]; 
 
-    // Application
     if (instructions && Array.isArray(instructions)) {
       instructions.forEach(step => {
         if (step.col && step.row) {
@@ -409,7 +387,6 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
       });
     }
 
-    // Export
     const bookType = isMacro ? "xlsm" : "xlsx";
     const newFilename = `FILLED_${templateFilename}`;
     const buffer = xlsx.write(wb, { type: 'buffer', bookType: bookType });
@@ -422,7 +399,6 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
   }
 });
 
-// VALIDATION
 app.post("/api/dcf/wizard/validate", async (req, res) => {
   try {
     const { fileIds } = req.body;
@@ -443,21 +419,27 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// 6. ROUTES GLOBALES (UPLOAD EN DB)
+// 6. ROUTES GLOBALES (CORRECTIF UPLOAD)
 // -----------------------------------------------------------------------------
 
-// Upload Excel : Buffer -> DB
+// Upload Excel
 app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
   try {
     const analysis = buildDeepExcelAnalysis(req.file.buffer, req.file.originalname);
+    // FIX CRITIQUE : On génère un 'stored_name' bidon pour satisfaire la contrainte DB
+    const storedName = `${Date.now()}_${sanitizeName(req.file.originalname)}`;
+    
     const { rows } = await pool.query(
-      `INSERT INTO dcf_files (filename, mime, bytes, sheet_names, analysis, file_data) 
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, filename`, 
-      [req.file.originalname, req.file.mimetype, req.file.size, analysis.sheetNames, analysis, req.file.buffer]
+      `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename`, 
+      [req.file.originalname, storedName, req.file.mimetype, req.file.size, analysis.sheetNames, analysis, req.file.buffer]
     );
     await indexFileValues(rows[0].id, analysis);
     res.json({ ok: true, file: rows[0] });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { 
+    console.error(e);
+    res.status(500).json({ error: e.message }); 
+  }
 });
 
 // Upload Multi
@@ -466,10 +448,12 @@ app.post("/api/dcf/uploadExcelMulti", upload.array("files"), async (req, res) =>
     const out = [];
     for (const f of req.files) {
       const analysis = buildDeepExcelAnalysis(f.buffer, f.originalname);
+      const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`; // FIX CRITIQUE
+      
       const { rows } = await pool.query(
-        `INSERT INTO dcf_files (filename, mime, bytes, sheet_names, analysis, file_data) 
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, filename`, 
-        [f.originalname, f.mimetype, f.size, analysis.sheetNames, analysis, f.buffer]
+        `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename`, 
+        [f.originalname, storedName, f.mimetype, f.size, analysis.sheetNames, analysis, f.buffer]
       );
       await indexFileValues(rows[0].id, analysis);
       out.push(rows[0]);
@@ -484,19 +468,19 @@ app.post("/api/dcf/startSession", async (req, res) => {
   res.json({ ok: true, sessionId: rows[0].id });
 });
 
-// Upload Attachments (Images) : Buffer -> DB
+// Upload Attachments
 app.post("/api/dcf/attachments/upload", upload.array("files"), async (req, res) => {
   try {
     const items = [];
     for (const f of req.files) {
       let ocr = null;
-      // Analyse immédiate
       if (f.mimetype.startsWith("image/")) ocr = await analyzeImageSAP(f.buffer, f.mimetype);
+      const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`; // FIX CRITIQUE
       
       const { rows } = await pool.query(
-        `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, ocr_analysis, file_data) 
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, 
-        [req.body.session_id, f.originalname, f.mimetype, f.size, ocr, f.buffer]
+        `INSERT INTO dcf_attachments (session_id, filename, stored_name, mime, bytes, ocr_analysis, file_data) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, 
+        [req.body.session_id, f.originalname, storedName, f.mimetype, f.size, ocr, f.buffer]
       );
       items.push(rows[0]);
     }
@@ -504,7 +488,6 @@ app.post("/api/dcf/attachments/upload", upload.array("files"), async (req, res) 
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Chat
 app.post("/api/dcf/chat", async (req, res) => {
   try {
     const completion = await openai.chat.completions.create({
@@ -520,14 +503,13 @@ app.get("/api/dcf/sessions", async (req, res) => {
   res.json({ ok: true, sessions: rows });
 });
 
-// Liste fichiers (sans le blob lourd)
 app.get("/api/dcf/files", async (req, res) => {
   const { rows } = await pool.query(`SELECT id, filename, uploaded_at FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT 50`);
   res.json({ ok: true, files: rows });
 });
 
-app.get("/api/dcf/health", (req, res) => res.json({ status: "ok", version: "7.0 FullDB" }));
+app.get("/api/dcf/health", (req, res) => res.json({ status: "ok", version: "7.2 Fix" }));
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7] Backend Full Database démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.2] Backend FullDB + Constraint Fix démarré sur http://${HOST}:${PORT}`);
 });
