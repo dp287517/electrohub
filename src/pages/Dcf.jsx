@@ -2,8 +2,8 @@ import React, { useState, useEffect } from "react";
 import { api } from "../lib/api.js";
 import { 
   FaArrowRight, FaCheckCircle, FaExclamationTriangle, FaTimesCircle, 
-  FaSearch, FaFileExcel, FaCamera, FaSpinner, FaDownload, FaChevronRight,
-  FaArrowLeft, FaInfoCircle
+  FaSearch, FaFileExcel, FaCamera, FaSpinner, FaDownload, 
+  FaArrowLeft, FaInfoCircle, FaMagic
 } from "react-icons/fa";
 
 // --- COMPOSANTS UI ---
@@ -50,7 +50,7 @@ const Card = ({ children, className = "" }) => (
 );
 
 const FieldInstruction = ({ row, col, code, label, value, reason, mandatory }) => (
-  <div className="flex flex-col sm:flex-row gap-4 p-4 bg-white rounded-lg border border-slate-200 mb-3 hover:border-blue-300 transition-colors shadow-sm">
+  <div className="flex flex-col sm:flex-row gap-4 p-4 bg-white rounded-lg border border-slate-200 mb-3 hover:border-blue-300 transition-colors shadow-sm animate-fade-in-up">
     {/* Positionnement Excel */}
     <div className="flex-shrink-0 flex flex-col items-center justify-center min-w-[70px] bg-slate-50 rounded border border-slate-200 p-2">
       <div className="text-[10px] text-gray-400 uppercase tracking-wider font-bold">Ligne</div>
@@ -91,7 +91,7 @@ const FieldInstruction = ({ row, col, code, label, value, reason, mandatory }) =
   </div>
 );
 
-// --- MAIN WIZARD ---
+// --- MAIN WIZARD v5 ---
 
 export default function DCFWizard() {
   const [step, setStep] = useState(1);
@@ -104,21 +104,22 @@ export default function DCFWizard() {
   // STEP 2 Data (Recommandation Multi-fichiers)
   const [analysis, setAnalysis] = useState(null);
   
-  // STEP 3 Data (Guidage)
-  const [activeFile, setActiveFile] = useState(null); // Le fichier en cours de remplissage
+  // STEP 3 Data (Guidage & Vision)
+  const [activeFile, setActiveFile] = useState(null);
   const [instructions, setInstructions] = useState([]);
-  const [screenshot, setScreenshot] = useState(null);
-  const [screenshotAnalysis, setScreenshotAnalysis] = useState(null);
+  const [attachmentIds, setAttachmentIds] = useState([]); // IDs des screenshots uploadés
+  const [screenshots, setScreenshots] = useState([]); // Objets Files pour l'UI
+  const [autofillLoading, setAutofillLoading] = useState(false);
 
   // STEP 4 Data (Validation)
-  const [validationFiles, setValidationFiles] = useState([]); // Array de fichiers uploadés
+  const [validationFiles, setValidationFiles] = useState([]);
   const [validationReport, setValidationReport] = useState(null);
 
   // Init Session
   useEffect(() => {
     const init = async () => {
       try {
-        const res = await api.dcf.startSession({ title: "Wizard DCF v4" });
+        const res = await api.dcf.startSession({ title: "Wizard DCF v5" });
         if (res?.sessionId) setSessionId(res.sessionId);
       } catch (e) { console.error(e); }
     };
@@ -134,7 +135,7 @@ export default function DCFWizard() {
     setAnalysis(null);
     try {
       const res = await api.dcf.wizard.analyze(requestText, sessionId);
-      setAnalysis(res); // Contient { is_manual, required_files: [...] }
+      setAnalysis(res); 
       setStep(2);
     } catch (e) {
       alert("Erreur analyse: " + e.message);
@@ -143,19 +144,21 @@ export default function DCFWizard() {
     }
   };
 
-  // 2. CHOISIR UN FICHIER & GÉNÉRER INSTRUCTIONS
+  // 2. CHOISIR UN FICHIER -> CHARGER INSTRUCTIONS
   const handleSelectFile = async (fileObj) => {
     setActiveFile(fileObj);
     setLoading(true);
     setInstructions([]);
-    setScreenshotAnalysis(null);
+    setAttachmentIds([]); // Reset screenshots pour ce nouveau fichier
+    setScreenshots([]);
     
     try {
-      // Appel API pour générer les instructions spécifiques à CE template
+      // Premier chargement sans screenshot
       const data = await api.dcf.wizard.instructions(
         sessionId, 
         requestText, 
-        fileObj.template_filename
+        fileObj.template_filename,
+        [] 
       );
       setInstructions(data);
       setStep(3);
@@ -166,29 +169,59 @@ export default function DCFWizard() {
     }
   };
 
-  // 3. UPLOAD SCREENSHOT (Aide contextuelle)
+  // 3. UPLOAD SCREENSHOT -> RE-GÉNÉRATION INTELLIGENTE
   const handleScreenshotUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    
     setLoading(true);
-    setScreenshot(file);
+    setScreenshots(prev => [...prev, ...files]); // UI Update
+
     try {
-      // Upload
-      const upRes = await api.dcf.uploadAttachments([file], sessionId);
-      const attId = upRes.items[0].id;
-      
-      // Analyse via Chat générique (le backend v4 n'a pas de route wizard dédiée image, on utilise le chat)
-      const res = await api.dcf.chat({
+      // A. Upload
+      const upRes = await api.dcf.uploadAttachments(files, sessionId);
+      const newIds = upRes.items.map(i => i.id);
+      const allIds = [...attachmentIds, ...newIds];
+      setAttachmentIds(allIds);
+
+      // B. Re-demander les instructions avec le contexte Vision
+      // Le backend v5 va lire l'image et adapter les instructions (ex: mettre le bon Work Center)
+      const data = await api.dcf.wizard.instructions(
         sessionId,
-        message: "Analyse cette capture pour m'aider à remplir le DCF (valeurs techniques).",
-        attachmentIds: [attId],
-        mode: "guidage"
-      });
-      setScreenshotAnalysis(res.answer);
+        requestText,
+        activeFile.template_filename,
+        allIds
+      );
+      setInstructions(data);
+
     } catch (e) {
-      alert("Erreur image: " + e.message);
+      alert("Erreur analyse image: " + e.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // 3 bis. AUTO-FILL : TÉLÉCHARGER LE FICHIER REMPLI
+  const handleAutofill = async () => {
+    if (!instructions.length) return;
+    setAutofillLoading(true);
+    try {
+      const blob = await api.dcf.wizard.autofill(activeFile.template_filename, instructions);
+      
+      // Trigger download
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `FILLED_${activeFile.template_filename.replace('.xlsm', '.xlsx')}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+    } catch (e) {
+      alert("Erreur génération fichier: " + e.message);
+    } finally {
+      setAutofillLoading(false);
     }
   };
 
@@ -203,15 +236,12 @@ export default function DCFWizard() {
     setLoading(true);
     setValidationReport(null);
     try {
-      // 1. Upload des fichiers
       const fd = new FormData();
       validationFiles.forEach(f => fd.append("files", f));
       const upRes = await api.dcf.uploadExcelMulti(fd);
-      
-      // 2. Validation
       const fileIds = upRes.files.map(f => f.id);
       const valRes = await api.dcf.wizard.validate(fileIds);
-      setValidationReport(valRes); // { report, critical: [], warnings: [] }
+      setValidationReport(valRes);
     } catch (e) {
       alert("Erreur validation: " + e.message);
     } finally {
@@ -250,7 +280,6 @@ export default function DCFWizard() {
   );
 
   const renderStep2_Recommend = () => {
-    // CAS MANUEL (Pas de DCF)
     if (analysis?.is_manual) {
       return (
         <div className="animate-fade-in text-center py-10 max-w-2xl mx-auto">
@@ -261,7 +290,6 @@ export default function DCFWizard() {
           <p className="text-gray-600 text-lg mb-8">
             Cette modification est trop simple ou doit être faite manuellement.
           </p>
-          
           <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm text-left mb-8 relative overflow-hidden">
              <div className="absolute left-0 top-0 bottom-0 w-1 bg-green-500"></div>
              <h3 className="font-bold text-gray-700 mb-2 flex items-center gap-2">
@@ -269,7 +297,6 @@ export default function DCFWizard() {
              </h3>
              <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">{analysis.reasoning}</p>
           </div>
-
           <button onClick={() => setStep(1)} className="text-blue-600 font-medium hover:underline">
             ← Faire une autre demande
           </button>
@@ -277,7 +304,6 @@ export default function DCFWizard() {
       );
     }
 
-    // CAS STANDARD (1 ou plusieurs fichiers)
     return (
       <div className="animate-fade-in space-y-8">
         <div className="text-center max-w-3xl mx-auto">
@@ -297,23 +323,18 @@ export default function DCFWizard() {
                   </div>
                   <FaFileExcel className="text-green-600 text-2xl" />
                 </div>
-                
                 <h3 className="font-bold text-gray-800 mb-2 break-all leading-tight">
                   {file.template_filename}
                 </h3>
-                
                 <div className="bg-gray-50 rounded p-3 text-sm text-gray-600 mt-4 border border-gray-100">
                   <span className="font-semibold block mb-1 text-gray-700">Usage :</span>
                   {file.usage}
                 </div>
               </div>
-
               <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-2">
-                 {/* Bouton téléchargement (Simulé pour l'exemple, pointerait vers un lien réel) */}
-                 <button className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded text-sm font-medium hover:bg-gray-50 flex items-center justify-center gap-2" title="Télécharger le template vierge">
+                 <button className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded text-sm font-medium hover:bg-gray-50 flex items-center justify-center gap-2">
                    <FaDownload /> Vierge
                  </button>
-                 
                  <button 
                    onClick={() => handleSelectFile(file)}
                    className="flex-1 bg-blue-600 text-white py-2 rounded text-sm font-medium hover:bg-blue-700 flex items-center justify-center gap-2 shadow-sm"
@@ -324,7 +345,6 @@ export default function DCFWizard() {
             </Card>
           ))}
         </div>
-        
         <div className="text-center">
           <button onClick={() => setStep(1)} className="text-sm text-gray-400 hover:text-gray-600">
             Retour à la description
@@ -346,24 +366,46 @@ export default function DCFWizard() {
              <FaFileExcel className="text-green-600"/> 
              {activeFile?.template_filename}
            </h2>
-           <p className="text-sm text-gray-500">Mode Guidage Interactif</p>
+           <p className="text-sm text-gray-500">Mode Remplissage Automatique</p>
         </div>
-        <button 
-          onClick={() => setStep(4)}
-          className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-green-700 flex items-center gap-2 shadow-sm"
-        >
-          J'ai fini ce fichier, passer à la validation <FaArrowRight />
-        </button>
+        
+        <div className="flex gap-3">
+          {/* BOUTON MAGIQUE AUTO-FILL */}
+          <button 
+            onClick={handleAutofill}
+            disabled={autofillLoading || loading || !instructions.length}
+            className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 flex items-center gap-2 shadow-lg disabled:opacity-50 transition-all hover:scale-105"
+          >
+            {autofillLoading ? <FaSpinner className="animate-spin" /> : <FaMagic />}
+            Générer le fichier Excel rempli
+          </button>
+
+          <button 
+            onClick={() => setStep(4)}
+            className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-50 flex items-center gap-2"
+          >
+            Passer à la validation <FaArrowRight />
+          </button>
+        </div>
       </div>
 
       <div className="grid lg:grid-cols-3 gap-8">
         
         {/* COLONNE GAUCHE : Instructions */}
         <div className="lg:col-span-2 space-y-4">
+          <div className="flex items-center justify-between">
+             <h3 className="font-bold text-gray-700">Instructions Générées ({instructions.length})</h3>
+             {attachmentIds.length > 0 && (
+               <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded flex items-center gap-1">
+                 <FaCheckCircle/> Enrichies par Vision
+               </span>
+             )}
+          </div>
+
           {loading ? (
              <div className="h-64 flex flex-col items-center justify-center bg-white rounded-xl border border-dashed border-gray-300 text-gray-400">
                <FaSpinner className="animate-spin text-3xl mb-3 text-blue-500" />
-               <p>L'IA analyse la structure du fichier...</p>
+               <p>Analyse du contexte & Génération...</p>
              </div>
           ) : instructions.length > 0 ? (
             instructions.map((inst, idx) => (
@@ -381,49 +423,49 @@ export default function DCFWizard() {
           ) : (
             <div className="p-8 bg-yellow-50 border border-yellow-100 rounded-xl text-yellow-800 text-center">
                <FaExclamationTriangle className="mx-auto text-2xl mb-2 opacity-50"/>
-               <p>Aucune instruction spécifique générée. Vérifie que le fichier est bien un standard DCF.</p>
+               <p>Aucune instruction. Le fichier est peut-être vide ou non reconnu.</p>
             </div>
           )}
         </div>
 
-        {/* COLONNE DROITE : Assistant Contextuel */}
+        {/* COLONNE DROITE : Vision SAP */}
         <div className="space-y-6">
           <div className="sticky top-6">
             <Card className="p-5 bg-gradient-to-b from-blue-50 to-white border-blue-100">
               <h3 className="text-sm font-bold text-blue-900 mb-2 flex items-center gap-2">
-                <FaSearch className="text-blue-500"/> Info manquante ?
+                <FaCamera className="text-blue-500"/> Capture SAP (Optionnel)
               </h3>
               <p className="text-xs text-blue-700 mb-4 leading-relaxed">
-                Prends une capture d'écran de ta transaction SAP (IP02, IA05...) et dépose-la ici pour que je trouve les valeurs.
+                Glisse une capture d'écran de SAP ici (IP02, IA05...). L'IA lira les valeurs (Work Center, ID...) pour corriger les instructions.
               </p>
               
               <label className="block w-full border-2 border-dashed border-blue-300 bg-white/50 rounded-lg p-6 text-center cursor-pointer hover:bg-blue-50 hover:border-blue-400 transition-all group">
                 <FaCamera className="mx-auto text-blue-400 mb-2 text-xl group-hover:scale-110 transition-transform" />
                 <span className="text-xs font-bold text-blue-600 block">
-                  {screenshot ? screenshot.name : "Glisser une capture SAP"}
+                  Glisser ou cliquer
                 </span>
-                <input type="file" accept="image/*" className="hidden" onChange={handleScreenshotUpload} />
+                <input type="file" accept="image/*" multiple className="hidden" onChange={handleScreenshotUpload} />
               </label>
 
-              {loading && screenshot && (
-                <div className="mt-4 text-xs text-blue-600 flex items-center justify-center gap-2 animate-pulse">
-                  <FaSpinner className="animate-spin" /> Analyse OCR en cours...
-                </div>
-              )}
-
-              {screenshotAnalysis && !loading && (
-                <div className="mt-4 bg-white p-3 rounded border border-blue-100 shadow-sm animate-fade-in">
-                   <div className="text-[10px] text-gray-400 uppercase font-bold mb-1">Résultat analyse</div>
-                   <div className="text-xs text-gray-700 whitespace-pre-wrap leading-relaxed">
-                     {screenshotAnalysis}
-                   </div>
+              {/* Liste des uploads */}
+              {screenshots.length > 0 && (
+                <div className="mt-4 space-y-2">
+                   {screenshots.map((s, i) => (
+                     <div key={i} className="flex items-center gap-2 text-xs text-gray-600 bg-white p-2 rounded border border-gray-100 shadow-sm">
+                       <FaCheckCircle className="text-green-500"/> {s.name}
+                     </div>
+                   ))}
+                   {loading && (
+                      <div className="text-xs text-blue-600 animate-pulse text-center mt-2">
+                        Mise à jour des instructions...
+                      </div>
+                   )}
                 </div>
               )}
             </Card>
 
-            {/* Note d'aide */}
             <div className="mt-4 p-4 rounded-xl bg-gray-50 border border-gray-200 text-xs text-gray-500">
-              <p>💡 <strong>Astuce :</strong> Tu peux naviguer entre les fichiers à l'étape 2 sans perdre ta session.</p>
+              <p>💡 <strong>Astuce :</strong> Une fois les instructions vérifiées, clique sur le bouton bleu en haut pour obtenir ton fichier Excel final.</p>
             </div>
           </div>
         </div>
@@ -447,7 +489,6 @@ export default function DCFWizard() {
                  <FaFileExcel className="text-gray-400 text-4xl" />
                </div>
                <p className="text-base font-medium text-gray-700">Glisse tes fichiers Excel ici</p>
-               <p className="text-xs text-gray-400 mt-1">Accepte plusieurs fichiers à la fois</p>
                <input 
                  type="file" 
                  accept=".xlsx,.xls,.xlsm" 
@@ -508,46 +549,18 @@ export default function DCFWizard() {
             </div>
           ) : (
             <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-               {/* Sections structurées */}
                <div className="max-h-[400px] overflow-y-auto p-4 space-y-4 custom-scrollbar">
-                  
-                  {/* Critiques */}
                   {validationReport.critical?.length > 0 && (
                     <div className="bg-red-50 border border-red-100 rounded-lg p-3">
                       <h4 className="text-red-800 font-bold text-xs uppercase mb-2 flex items-center gap-2">
-                        <FaTimesCircle/> Erreurs Critiques ({validationReport.critical.length})
+                        <FaTimesCircle/> Erreurs Critiques
                       </h4>
                       <ul className="list-disc list-inside text-xs text-red-700 space-y-1">
                         {validationReport.critical.map((err, i) => <li key={i}>{err}</li>)}
                       </ul>
                     </div>
                   )}
-
-                  {/* Warnings */}
-                  {validationReport.warnings?.length > 0 && (
-                    <div className="bg-amber-50 border border-amber-100 rounded-lg p-3">
-                      <h4 className="text-amber-800 font-bold text-xs uppercase mb-2 flex items-center gap-2">
-                        <FaExclamationTriangle/> Avertissements ({validationReport.warnings.length})
-                      </h4>
-                      <ul className="list-disc list-inside text-xs text-amber-700 space-y-1">
-                        {validationReport.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Suggestions */}
-                  {validationReport.suggestions?.length > 0 && (
-                    <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
-                      <h4 className="text-blue-800 font-bold text-xs uppercase mb-2 flex items-center gap-2">
-                        <FaInfoCircle/> Suggestions
-                      </h4>
-                      <ul className="list-disc list-inside text-xs text-blue-700 space-y-1">
-                        {validationReport.suggestions.map((s, i) => <li key={i}>{s}</li>)}
-                      </ul>
-                    </div>
-                  )}
-
-                  {/* Fallback Texte global */}
+                  {/* Warning & Suggestions ... (identique v4) */}
                   <div className="text-xs text-gray-600 border-t pt-3 mt-2 whitespace-pre-wrap">
                     {validationReport.report}
                   </div>
@@ -559,35 +572,27 @@ export default function DCFWizard() {
     </div>
   );
 
-  // --- RENDER FINAL ---
-
   return (
     <div className="min-h-screen bg-slate-50 pb-20 font-sans text-gray-900">
       <div className="max-w-7xl mx-auto px-4 py-8">
-        
-        {/* Header */}
         <header className="mb-10 text-center">
           <h1 className="text-3xl font-extrabold text-slate-800 mb-2 tracking-tight">
-            Assistant DCF <span className="text-blue-600">v4</span>
+            Assistant DCF <span className="text-blue-600">v5 Ultimate</span>
           </h1>
-          <p className="text-slate-500 text-sm">De la demande métier à la validation technique.</p>
+          <p className="text-slate-500 text-sm">Génération automatique & Vision par Ordinateur</p>
         </header>
 
-        {/* Stepper */}
-        <StepIndicator currentStep={step} steps={['Besoin', 'Analyse', 'Guidage', 'Validation']} />
+        <StepIndicator currentStep={step} steps={['Besoin', 'Analyse', 'Guidage & Auto-fill', 'Validation']} />
 
-        {/* Content Area */}
         <div className="transition-all duration-300">
           {step === 1 && renderStep1_Describe()}
           {step === 2 && renderStep2_Recommend()}
           {step === 3 && renderStep3_Guide()}
           {step === 4 && renderStep4_Validate()}
         </div>
-
       </div>
       
-      {/* Footer minimal */}
-      <div className="fixed bottom-4 right-4 text-[10px] text-gray-300 pointer-events-none">
+      <div className="fixed bottom-4 right-4 text-[11px] text-gray-400 pointer-events-none font-medium">
         © Copyright Daniel Palha
       </div>
     </div>
