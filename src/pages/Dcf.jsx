@@ -18,7 +18,9 @@ import {
   FaUpload
 } from "react-icons/fa";
 
-// --- COMPOSANTS UI ---
+// -----------------------------------------------------------------------------
+// UI COMPONENTS
+// -----------------------------------------------------------------------------
 
 const StepIndicator = ({ currentStep, steps }) => (
   <div className="mb-8 px-4">
@@ -114,42 +116,43 @@ const FieldInstruction = ({
   </div>
 );
 
-// --- MAIN WIZARD V7.4.4 ---
+// -----------------------------------------------------------------------------
+// MAIN WIZARD v7.4.6 FRONTEND
+// -----------------------------------------------------------------------------
 
 export default function DCFWizard() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState(null);
 
-  // LIBRARY MANAGEMENT
+  // LIBRARY
   const [showLibrary, setShowLibrary] = useState(false);
   const [libraryFiles, setLibraryFiles] = useState([]);
   const [uploadingLib, setUploadingLib] = useState(false);
 
-  // STEP 1 Data
+  // STEP 1
   const [requestText, setRequestText] = useState("");
 
-  // STEP 2 Data
+  // STEP 2
   const [analysis, setAnalysis] = useState(null);
 
-  // STEP 3 Data
+  // STEP 3
   const [activeFile, setActiveFile] = useState(null);
   const [instructions, setInstructions] = useState([]);
   const [attachmentIds, setAttachmentIds] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const [autofillLoading, setAutofillLoading] = useState(false);
 
-  // STEP 4 Data
+  // STEP 4
   const [validationFiles, setValidationFiles] = useState([]);
   const [validationReport, setValidationReport] = useState(null);
 
   const mountedRef = useRef(true);
 
-  // ---------------------------
+  // ---------------------------------------------------------------------------
   // Helpers robustes
-  // ---------------------------
+  // ---------------------------------------------------------------------------
 
-  // Normalise une suggestion / warning potentiellement objet -> string
   const toLine = (x) => {
     if (typeof x === "string") return x;
     if (!x || typeof x !== "object") return String(x ?? "");
@@ -165,7 +168,20 @@ export default function DCFWizard() {
     return line || JSON.stringify(x);
   };
 
-  // Normalise instructions (au cas où un champ arrive objet)
+  // ✅ useCase frontend (mêmes règles que backend)
+  const inferUseCase = (text = "") => {
+    const m = String(text).toLowerCase();
+    if (/(décommission|decommission|retirer|supprimer équipement|retirer equipement)/.test(m))
+      return "decommission";
+    if (/(ajout|ajouter|rajouter|créer|creer).*(opération|operation|contrôle|controle|inspection|check).*(plan)/.test(m))
+      return "add_operation_in_plan";
+    if (/(ajout|ajouter|rajouter).*(équipement|equipement).*(plan)/.test(m))
+      return "add_equipment_in_plan";
+    if (/(modif|modifier|changer).*(texte|short text|long text)/.test(m))
+      return "text_only_change";
+    return "unknown";
+  };
+
   const normalizedInstructions = useMemo(() => {
     if (!Array.isArray(instructions)) return [];
     return instructions.map((inst) => ({
@@ -180,7 +196,6 @@ export default function DCFWizard() {
     }));
   }, [instructions]);
 
-  // Normalise l’analyse pour éviter crash UI
   const normalizedAnalysis = useMemo(() => {
     if (!analysis || typeof analysis !== "object") return null;
     const required = Array.isArray(analysis.required_files)
@@ -191,7 +206,6 @@ export default function DCFWizard() {
     return { ...analysis, required_files: required };
   }, [analysis]);
 
-  // Normalise report complet pour éviter crash UI
   const normalizedValidation = useMemo(() => {
     if (!validationReport || typeof validationReport !== "object") return null;
     return {
@@ -202,15 +216,15 @@ export default function DCFWizard() {
     };
   }, [validationReport]);
 
-  // ---------------------------
+  // ---------------------------------------------------------------------------
   // Init
-  // ---------------------------
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     mountedRef.current = true;
 
     const init = async () => {
       try {
-        const res = await api.dcf.startSession({ title: "Wizard DCF v7.4.4" });
+        const res = await api.dcf.startSession({ title: "Wizard DCF v7.4.6" });
         if (mountedRef.current && res?.sessionId) setSessionId(res.sessionId);
         refreshLibrary();
       } catch (e) {
@@ -223,7 +237,6 @@ export default function DCFWizard() {
     return () => {
       mountedRef.current = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshLibrary = async () => {
@@ -236,7 +249,9 @@ export default function DCFWizard() {
     }
   };
 
-  // --- HANDLERS LIBRARY ---
+  // ---------------------------------------------------------------------------
+  // Library handlers
+  // ---------------------------------------------------------------------------
 
   const handleLibraryUpload = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -257,7 +272,9 @@ export default function DCFWizard() {
     }
   };
 
-  // --- HANDLERS WIZARD ---
+  // ---------------------------------------------------------------------------
+  // Wizard handlers
+  // ---------------------------------------------------------------------------
 
   const handleAnalyzeRequest = async () => {
     if (!requestText.trim()) return;
@@ -336,10 +353,19 @@ export default function DCFWizard() {
 
     setAutofillLoading(true);
     try {
+      const safeSteps = normalizedInstructions.map((s) => ({
+        ...s,
+        row: String(s.row || "").trim(),
+        col: String(s.col || "").trim(),
+        code: String(s.code || "").trim(),
+        value: s.value ?? ""
+      }));
+
       const blob = await api.dcf.wizard.autofill(
         activeFile.template_filename,
-        normalizedInstructions
+        safeSteps
       );
+
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -366,7 +392,7 @@ export default function DCFWizard() {
     const files = Array.from(e.target.files || []);
     if (files.length) {
       setValidationFiles(files);
-      setValidationReport(null); // ✅ reset report si nouveaux fichiers
+      setValidationReport(null);
     }
   };
 
@@ -374,6 +400,7 @@ export default function DCFWizard() {
     if (!validationFiles.length) return;
     setLoading(true);
     setValidationReport(null);
+
     try {
       const fd = new FormData();
       validationFiles.forEach((f) => fd.append("files", f));
@@ -384,7 +411,11 @@ export default function DCFWizard() {
 
       if (!fileIds.length) throw new Error("Aucun fichier valide reçu du serveur.");
 
-      const valRes = await api.dcf.wizard.validate(fileIds);
+      const useCase = inferUseCase(requestText);
+
+      // ✅ backend v7.4.6 supporte useCase pour validate
+      const valRes = await api.dcf.wizard.validate(fileIds, useCase);
+
       if (!mountedRef.current) return;
       setValidationReport(valRes);
     } catch (e) {
@@ -394,14 +425,13 @@ export default function DCFWizard() {
     }
   };
 
-  // Tentative téléchargement template vierge (future-proof)
+  // Future-proof blank download
   const downloadBlankTemplate = async (file) => {
     try {
       if (!file?.file_id && !file?.id) {
         alert("Template vierge indisponible (id manquant).");
         return;
       }
-      // si route future existe: /api/dcf/files/:id qui renvoie blob
       const id = file.file_id || file.id;
       const res = await api.dcf.getFile(id);
       if (res instanceof Blob) {
@@ -421,7 +451,9 @@ export default function DCFWizard() {
     }
   };
 
-  // --- RENDERERS ---
+  // ---------------------------------------------------------------------------
+  // Renderers
+  // ---------------------------------------------------------------------------
 
   const renderLibrary = () => (
     <div className="bg-slate-100 border-b border-slate-200 p-4 animate-slide-down mb-6 rounded-xl">
@@ -513,7 +545,7 @@ export default function DCFWizard() {
         />
         <div className="flex justify-between items-center mt-2">
           <div className="text-xs text-gray-400 italic">
-            <FaRobot className="inline mr-1" /> Analyse par IA SAP v7.4.4
+            <FaRobot className="inline mr-1" /> Analyse IA SAP v7.4.6
           </div>
           <button
             onClick={handleAnalyzeRequest}
@@ -547,7 +579,7 @@ export default function DCFWizard() {
               <FaInfoCircle className="text-emerald-500" /> L'avis de l'Expert :
             </h3>
             <p className="text-gray-700 whitespace-pre-wrap leading-relaxed text-base">
-              {normalizedAnalysis.reasoning}
+              {toLine(normalizedAnalysis.reasoning)}
             </p>
           </div>
           <button
@@ -560,21 +592,45 @@ export default function DCFWizard() {
       );
     }
 
+    const files = normalizedAnalysis?.required_files || [];
+    if (files.length === 0) {
+      return (
+        <div className="animate-fade-in text-center py-12 max-w-2xl mx-auto">
+          <div className="inline-flex items-center justify-center w-24 h-24 bg-yellow-100 text-yellow-600 rounded-full mb-6 text-5xl shadow-sm">
+            <FaExclamationTriangle />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-800 mb-3">
+            Aucun template recommandé
+          </h2>
+          <p className="text-gray-600 text-base mb-8 font-medium">
+            Vérifie ta demande ou ajoute les templates nécessaires dans la bibliothèque.
+          </p>
+          <button
+            onClick={() => {
+              setShowLibrary(true);
+              setStep(1);
+            }}
+            className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold shadow-md hover:bg-blue-700"
+          >
+            Ouvrir la bibliothèque
+          </button>
+        </div>
+      );
+    }
+
     return (
       <div className="animate-fade-in space-y-8">
         <div className="text-center max-w-3xl mx-auto">
           <h2 className="text-2xl font-bold text-gray-800 mb-2">
-            {normalizedAnalysis?.required_files?.length > 1
-              ? "Pack de fichiers nécessaire"
-              : "Fichier recommandé"}
+            {files.length > 1 ? "Pack de fichiers nécessaire" : "Fichier recommandé"}
           </h2>
           <p className="text-gray-600 bg-blue-50 inline-block px-4 py-1 rounded-full text-sm border border-blue-100">
-            {normalizedAnalysis?.reasoning}
+            {toLine(normalizedAnalysis?.reasoning)}
           </p>
         </div>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
-          {normalizedAnalysis?.required_files?.map((file, idx) => (
+          {files.map((file, idx) => (
             <Card
               key={idx}
               className="flex flex-col h-full border-t-4 border-t-blue-500 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1"
@@ -582,18 +638,18 @@ export default function DCFWizard() {
               <div className="p-6 flex-1">
                 <div className="flex items-start justify-between mb-4">
                   <div className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">
-                    {file.type}
+                    {toLine(file.type)}
                   </div>
                   <FaFileExcel className="text-emerald-600 text-3xl" />
                 </div>
                 <h3 className="font-bold text-gray-800 mb-3 break-words leading-tight text-lg">
-                  {file.template_filename}
+                  {toLine(file.template_filename)}
                 </h3>
                 <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-600 mt-2 border border-gray-100">
                   <span className="font-bold block mb-1 text-gray-800 text-xs uppercase">
                     Action prévue :
                   </span>
-                  {file.usage}
+                  {toLine(file.usage)}
                 </div>
               </div>
               <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
@@ -638,7 +694,7 @@ export default function DCFWizard() {
           <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2 mt-1">
             <FaFileExcel className="text-emerald-600" />{" "}
             <span className="truncate max-w-md">
-              {activeFile?.template_filename}
+              {toLine(activeFile?.template_filename)}
             </span>
           </h2>
         </div>
@@ -709,9 +765,8 @@ export default function DCFWizard() {
                 (Vision)
               </h3>
               <p className="text-xs text-blue-800 mb-5 leading-relaxed font-medium">
-                Ne recopie pas les données ! Fais un screenshot de ta fenêtre SAP
-                (ex: IP02, IA05) et dépose-le ici. L'IA va lire les ID et remplir
-                le fichier pour toi.
+                Ne recopie pas les données ! Fais un screenshot SAP
+                (ex: IP02, IA05). L'IA va lire les ID et mettre à jour les instructions.
               </p>
               <label className="block w-full border-2 border-dashed border-blue-300 bg-white/80 rounded-xl p-8 text-center cursor-pointer hover:bg-blue-50 hover:border-blue-500 transition-all group relative overflow-hidden">
                 <div className="relative z-10">
@@ -826,10 +881,11 @@ export default function DCFWizard() {
             </div>
           )}
         </Card>
+
         <div className="space-y-4 h-full">
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-gray-800 uppercase tracking-wide text-sm">
-              Rapport Qualité v7.4.4
+              Rapport Qualité v7.4.6
             </h3>
             {validationReport && (
               <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold">
@@ -905,6 +961,9 @@ export default function DCFWizard() {
     </div>
   );
 
+  // ---------------------------------------------------------------------------
+  // Main render
+  // ---------------------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-50 pb-20 font-sans text-gray-900">
       <div className="max-w-7xl mx-auto px-4 py-8">
@@ -919,7 +978,7 @@ export default function DCFWizard() {
             Assistant DCF <span className="text-blue-600">v7 Ultimate</span>
           </h1>
           <p className="text-slate-500 text-sm font-medium">
-            Architecture "Full Database" • Génération Automatique • Vision SAP • Memory v7.4.4
+            Architecture "Full Database" • Génération Automatique • Vision SAP • Memory v7.4.6
           </p>
         </header>
 
