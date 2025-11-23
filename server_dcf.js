@@ -36,7 +36,7 @@ const EXCEL_DIR = path.join(DATA_ROOT, "excel");
 const ATTACH_DIR = path.join(DATA_ROOT, "attachments");
 const OUTPUT_DIR = path.join(DATA_ROOT, "output");
 
-// Création des dossiers
+// Création des dossiers (Système de fichiers)
 await fsp.mkdir(EXCEL_DIR, { recursive: true });
 await fsp.mkdir(ATTACH_DIR, { recursive: true });
 await fsp.mkdir(OUTPUT_DIR, { recursive: true });
@@ -175,17 +175,77 @@ async function analyzeImageSAP(imagePath) {
 }
 
 // -----------------------------------------------------------------------------
-// 3. BASE DE DONNÉES (Schema v6)
+// 3. BASE DE DONNÉES (Schema Complet & Explicite)
 // -----------------------------------------------------------------------------
 async function ensureSchema() {
-  // Tables Core
-  await pool.query(`CREATE TABLE IF NOT EXISTS dcf_files (id SERIAL PRIMARY KEY, filename TEXT, path TEXT, analysis JSONB, uploaded_at TIMESTAMPTZ DEFAULT now(), stored_name TEXT, mime TEXT, bytes BIGINT, sheet_names TEXT[])`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS dcf_sessions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_email TEXT, title TEXT, context_file_ids INT[], created_at TIMESTAMPTZ DEFAULT now())`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS dcf_messages (id BIGSERIAL PRIMARY KEY, session_id UUID REFERENCES dcf_sessions(id) ON DELETE CASCADE, role TEXT, content TEXT, metadata JSONB, created_at TIMESTAMPTZ DEFAULT now())`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS dcf_attachments (id SERIAL PRIMARY KEY, session_id UUID, filename TEXT, stored_name TEXT, path TEXT, mime TEXT, bytes BIGINT, ocr_analysis JSONB, uploaded_at TIMESTAMPTZ DEFAULT now())`);
-  await pool.query(`CREATE TABLE IF NOT EXISTS dcf_requests (id SERIAL PRIMARY KEY, session_id UUID, request_text TEXT, detected_action TEXT, response_json JSONB, created_at TIMESTAMPTZ DEFAULT now())`);
+  
+  // 1. Table des fichiers uploadés
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_files (
+      id SERIAL PRIMARY KEY,
+      filename TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      path TEXT NOT NULL,
+      mime TEXT,
+      bytes BIGINT,
+      sheet_names TEXT[],
+      analysis JSONB,
+      uploaded_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
 
-  // Table v6 : Index des valeurs (Predictive Validation)
+  // 2. Table des sessions (Conversations)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_sessions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_email TEXT,
+      title TEXT,
+      context_file_ids INT[],
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+
+  // 3. Table des messages (Chat)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_messages (
+      id BIGSERIAL PRIMARY KEY,
+      session_id UUID REFERENCES dcf_sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      metadata JSONB,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+
+  // 4. Table des pièces jointes (Images/Screenshots)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_attachments (
+      id SERIAL PRIMARY KEY,
+      session_id UUID NULL REFERENCES dcf_sessions(id) ON DELETE SET NULL,
+      filename TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      path TEXT NOT NULL,
+      mime TEXT,
+      bytes BIGINT,
+      ocr_analysis JSONB,
+      uploaded_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+
+  // 5. Table des requêtes Wizard (Historique v4/v5/v6)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_requests (
+      id SERIAL PRIMARY KEY,
+      session_id UUID REFERENCES dcf_sessions(id),
+      request_text TEXT,
+      detected_action TEXT,
+      response_json JSONB,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+
+  // 6. Table d'Indexation des Valeurs (Cerveau v6)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_values_index (
       id SERIAL PRIMARY KEY,
@@ -198,10 +258,14 @@ async function ensureSchema() {
     )
   `);
 
-  // Migration de sécurité
-  try { await pool.query(`ALTER TABLE dcf_requests ADD COLUMN IF NOT EXISTS response_json JSONB`); } catch (e) {}
-
-  console.log("[DB] Schema v6 (Indexation) ready.");
+  // Migration de sécurité (Au cas où une vieille version existe)
+  try { 
+    await pool.query(`ALTER TABLE dcf_requests ADD COLUMN IF NOT EXISTS response_json JSONB`); 
+  } catch (e) {
+    console.log("Migration check: ", e.message);
+  }
+  
+  console.log("[DB] Schema v6 (Complet & Explicite) ready.");
 }
 await ensureSchema();
 
@@ -231,14 +295,17 @@ async function indexFileValues(fileId, analysis) {
 // -----------------------------------------------------------------------------
 // 4. MULTER CONFIG
 // -----------------------------------------------------------------------------
-const uploadExcel = multer({ storage: multer.diskStorage({
+const excelStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, EXCEL_DIR),
   filename: (req, file, cb) => cb(null, `${Date.now()}_${sanitizeName(file.originalname)}`)
-})});
-const uploadAttach = multer({ storage: multer.diskStorage({
+});
+const uploadExcel = multer({ storage: excelStorage });
+
+const attachStorage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, ATTACH_DIR),
   filename: (req, file, cb) => cb(null, `${Date.now()}_${sanitizeName(file.originalname)}`)
-})});
+});
+const uploadAttach = multer({ storage: attachStorage });
 
 // -----------------------------------------------------------------------------
 // 5. LOGIQUE WIZARD V6 (PROTOCOLES STRICTES)
@@ -459,7 +526,7 @@ app.post("/api/dcf/wizard/explain", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// 6. ROUTES GLOBALES
+// 6. ROUTES GLOBALES (Upload, Health, etc.)
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/uploadExcel", uploadExcel.single("file"), async (req, res) => {
