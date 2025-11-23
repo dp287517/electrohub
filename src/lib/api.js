@@ -1434,7 +1434,7 @@ export const api = {
       }),
   },
 
-/** --- DCF ASSISTANT v7.4.4 (Ultimate, Database Storage & Memory) --- */
+/** --- DCF ASSISTANT v7.4.6 (Ultimate, Database Storage & Memory) --- */
 dcf: {
   health: () => get("/api/dcf/health"),
 
@@ -1527,9 +1527,9 @@ dcf: {
       return res.blob();
     },
 
-    // Étape 4 : Validation
-    validate: (fileIds) =>
-      post("/api/dcf/wizard/validate", { fileIds }),
+    // Étape 4 : Validation ✅ updated pour v7.4.6
+    validate: (fileIds, useCase = null) =>
+      post("/api/dcf/wizard/validate", { fileIds, useCase }),
 
     // Module : Reverse DCF (optionnel si route absente)
     explain: (fileId) =>
