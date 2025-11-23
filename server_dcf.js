@@ -186,7 +186,7 @@ function buildDeepExcelAnalysis(absPath) {
 }
 
 // -----------------------------------------------------------------------------
-// BASE DE DONNÉES (Schema v4)
+// DB SCHEMA (Mise à jour v4 - Avec Migration Auto)
 // -----------------------------------------------------------------------------
 async function ensureSchema() {
   // Tables existantes (v3)
@@ -251,6 +251,15 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ DEFAULT now()
     )
   `);
+
+  // --- MIGRATION AUTOMATIQUE (Correction de ton erreur) ---
+  // Si la table existait déjà sans la colonne 'response_json', on l'ajoute.
+  try {
+    await pool.query(`ALTER TABLE dcf_requests ADD COLUMN IF NOT EXISTS response_json JSONB`);
+    console.log("[DB] Migration: colonne response_json vérifiée.");
+  } catch (e) {
+    console.warn("[DB] Migration warning (response_json):", e.message);
+  }
   
   console.log("[DB] Schema v4 ready.");
 }
