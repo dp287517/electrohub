@@ -702,13 +702,32 @@ Réponds en JSON STRICT uniquement:
 
     const out = cleanJSON(completion.choices[0].message.content);
 
+    // ✅ CORRECTION: insertion compatible avec TON schéma dcf_requests
     if (sessionId) {
+      const detectedType =
+        (Array.isArray(out?.required_files) && out.required_files[0]?.type) ||
+        null;
+
+      const recommendedFileId =
+        (Array.isArray(out?.required_files) &&
+          out.required_files[0]?.file_id) ||
+        null;
+
       await pool.query(
         `
-        INSERT INTO dcf_requests (session_id, user_request, analysis_json)
-        VALUES ($1, $2, $3)
+        INSERT INTO dcf_requests
+          (session_id, request_text, detected_action, detected_type, recommended_file_id, response_json)
+        VALUES
+          ($1, $2, $3, $4, $5, $6)
       `,
-        [sessionId, message, out]
+        [
+          sessionId,
+          message,
+          out?.action || null,
+          detectedType,
+          recommendedFileId,
+          out
+        ]
       );
 
       await pool.query(
