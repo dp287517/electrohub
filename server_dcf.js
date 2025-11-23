@@ -1,9 +1,10 @@
-// server_dcf.js — Assistant DCF SAP v7.4.7
-// FULL FIX + Memory + Protocole Charles renforcé + Validate Smart + ACTION Multi-Cols
+// server_dcf.js — Assistant DCF SAP v7.4.8
+// FULL FIX + Memory + Protocole Charles + Validate Smart + ACTION Multi-Cols + Instructions ACTION-aware
 // - Pré-routage métier (ajout opération/contrôle dans plan existant => TL+MP)
 // - Validation scope-aware: ignore lignes sans vraie action SAP
 // - ACTION peut être dans ACTION, ACTION_01, ACTION_02, ACTION_03...
 // - Only whitelist actions: Insert | Change | Delete
+// - Instructions: IA guidée vers ACTION_0X + remap auto
 // - Instructions length-aware (SAP max lengths + troncature auto)
 // - Analyse Excel robuste SAP + mémoire relationnelle + historique noms
 
@@ -658,7 +659,72 @@ function enforceSapLengthsOnSteps(steps = []) {
 }
 
 // -----------------------------------------------------------------------------
-// 8. WIZARD ROUTES
+// 8. ACTION COLUMN DETECTION (NEW v7.4.8)
+// -----------------------------------------------------------------------------
+
+function detectPreferredActionCode(analysisLiteOrFull) {
+  // scan columns in sheets
+  const sheets = analysisLiteOrFull?.sheets || [];
+  const allCodes = [];
+  for (const sh of sheets) {
+    for (const c of sh.columns || []) {
+      if (c?.code) allCodes.push(String(c.code).toUpperCase());
+    }
+  }
+  // prefer ACTION_02 then ACTION_01 then any ACTION_x then ACTION
+  if (allCodes.includes("ACTION_02")) return "ACTION_02";
+  if (allCodes.includes("ACTION_01")) return "ACTION_01";
+  const anyActionX = allCodes.find((c) => /^ACTION_\d+$/i.test(c));
+  if (anyActionX) return anyActionX;
+  return "ACTION";
+}
+
+function findColumnByCode(analysis, wantedCode) {
+  const sheets = analysis?.sheets || [];
+  const w = String(wantedCode).toUpperCase();
+  for (const sh of sheets) {
+    for (const col of sh.columns || []) {
+      if (String(col.code).toUpperCase() === w) {
+        return { sheet: sh.name, col: col.col };
+      }
+    }
+  }
+  return null;
+}
+
+function remapActionStepsToPreferred(steps, analysisFull, preferredActionCode) {
+  const allowed = new Set(["insert", "change", "delete"]);
+  const pref = String(preferredActionCode || "ACTION").toUpperCase();
+  if (!steps.length) return steps;
+
+  return steps.map((s) => {
+    const code = String(s.code || "").toUpperCase();
+    const val = String(s.value || "").trim().toLowerCase();
+
+    const isActionStep =
+      /^ACTION(_\d+)?$/i.test(code) && allowed.has(val);
+
+    if (!isActionStep) return s;
+    if (code === pref) return s;
+
+    const targetPos = findColumnByCode(analysisFull, pref);
+    if (!targetPos) {
+      // If we can't find the column, at least normalize code
+      return { ...s, code: pref };
+    }
+
+    return {
+      ...s,
+      code: pref,
+      col: targetPos.col,
+      sheet: targetPos.sheet || s.sheet,
+      reason: `${s.reason ? s.reason + " | " : ""}Action SAP remappée automatiquement vers ${pref}.`
+    };
+  });
+}
+
+// -----------------------------------------------------------------------------
+// 9. WIZARD ROUTES
 // -----------------------------------------------------------------------------
 
 // ✅ ANALYZE renforcé + pré-routage TL+MP
@@ -860,7 +926,7 @@ Réponds en JSON STRICT uniquement:
   }
 });
 
-// ✅ INSTRUCTIONS renforcées + longueur SAP
+// ✅ INSTRUCTIONS renforcées + longueur SAP + ACTION aware
 app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
     const { sessionId, requestText, templateFilename, attachmentIds = [] } =
@@ -868,7 +934,7 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
 
     const { rows } = await pool.query(
       `
-      SELECT id, filename, analysis
+      SELECT id, filename, analysis, file_data
       FROM dcf_files
       WHERE filename = $1
       ORDER BY uploaded_at DESC
@@ -882,7 +948,18 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
     }
 
     const file = rows[0];
-    const fileContext = file.analysis?.ai_context || "";
+
+    // rebuild full analysis for accurate col letters
+    const analysisFull = file.file_data
+      ? buildDeepExcelAnalysis(file.file_data, file.filename)
+      : null;
+
+    const fileContext = file.analysis?.ai_context || analysisFull?.ai_context || "";
+
+    // ✅ detect preferred ACTION column for THIS template
+    const preferredActionCode = detectPreferredActionCode(
+      file.analysis || analysisFull
+    );
 
     let visionContext = "";
     if (attachmentIds.length) {
@@ -927,6 +1004,11 @@ CONTRAINTES SAP IMPORTANTES:
 - WPTXT / PLTXT / EQKTX : max 40 caractères
 Si un texte dépasse, TRONQUE et mets le reste dans la “reason” comme long text.
 
+ACTION SAP (IMPORTANT):
+- Dans ce template, la vraie colonne d'action SAP est: ${preferredActionCode}.
+- Quand tu dois mettre Insert/Change/Delete, écris TOUJOURS dans ${preferredActionCode}.
+- N'utilise pas ACTION (simple) si elle sert à un usage métier.
+
 INSTRUCTIONS:
 - Génère une liste d'étapes ligne par ligne pour remplir le DCF.
 - Chaque étape doit pointer une cellule (row, col) et un code champ.
@@ -966,6 +1048,15 @@ Réponds en JSON STRICT:
 
     // ✅ post-traitement longueur SAP
     steps = enforceSapLengthsOnSteps(steps);
+
+    // ✅ NEW v7.4.8: remap action steps to preferred ACTION col
+    if (analysisFull) {
+      steps = remapActionStepsToPreferred(
+        steps,
+        analysisFull,
+        preferredActionCode
+      );
+    }
 
     if (sessionId) {
       await pool.query(
@@ -1087,7 +1178,6 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       for (const key of Object.keys(rowsIndex)) {
         const row = rowsIndex[key];
 
-        // récupère toutes les colonnes ACTION, ACTION_01, ACTION_02, ACTION_03...
         const actionKeys = Object.keys(row).filter(k =>
           /^ACTION(_\d+)?$/i.test(k)
         );
@@ -1200,7 +1290,7 @@ Réponds JSON STRICT:
 });
 
 // -----------------------------------------------------------------------------
-// 9. UPLOAD ROUTES
+// 10. UPLOAD ROUTES
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
@@ -1303,7 +1393,7 @@ app.post(
 );
 
 // -----------------------------------------------------------------------------
-// 10. SESSIONS
+// 11. SESSIONS
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/startSession", async (req, res) => {
@@ -1352,7 +1442,7 @@ app.get("/api/dcf/sessions", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// 11. ATTACHMENTS (SAP screenshots)
+// 12. ATTACHMENTS (SAP screenshots)
 // -----------------------------------------------------------------------------
 
 app.post(
@@ -1438,7 +1528,7 @@ app.post(
 );
 
 // -----------------------------------------------------------------------------
-// 12. GENERIC CHAT
+// 13. GENERIC CHAT
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/chat", async (req, res) => {
@@ -1461,7 +1551,7 @@ app.post("/api/dcf/chat", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// 13. FILES LIST + HEALTH
+// 14. FILES LIST + HEALTH
 // -----------------------------------------------------------------------------
 
 app.get("/api/dcf/files", async (req, res) => {
@@ -1483,13 +1573,13 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.7 Validate ACTION Multi-Cols" })
+  res.json({ status: "ok", version: "7.4.8 Validate+Instructions ACTION-aware" })
 );
 
 // -----------------------------------------------------------------------------
-// 14. START
+// 15. START
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.7] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.4.8] Backend démarré sur http://${HOST}:${PORT}`);
 });
