@@ -225,12 +225,12 @@ export default function DCFWizard() {
     <div className="animate-fade-in max-w-2xl mx-auto">
       <div className="text-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Que veux-tu faire ?</h2>
-        <p className="text-gray-500">Décris ta tâche comme tu le ferais à Charles.</p>
+        <p className="text-gray-500">Décris ta tâche comme tu le ferais à un spécialiste SAP.</p>
       </div>
 
       <Card className="p-6">
         <textarea
-          className="w-full h-32 p-4 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-700 text-base mb-4"
+          className="w-full h-32 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-900 bg-white placeholder-gray-500 text-base mb-4 shadow-inner"
           placeholder="Ex: Je dois retirer la cuve C1602 et ses plans de maintenance..."
           value={requestText}
           onChange={(e) => setRequestText(e.target.value)}
