@@ -1,7 +1,7 @@
-// server_dcf.js — Assistant DCF SAP v7.4.2
+// server_dcf.js — Assistant DCF SAP v7.4.3
 // FULL FIX:
 // - Conserve toutes les routes v7.x
-// - Fix stack overflow: analysisLite en DB, analysisFull pour indexation
+// - Fix stack overflow: suppression du spread push(...bigArray)
 // - Analyse Excel robuste SAP
 // - Mémoire relationnelle (Plan/Equip/TaskList) + historique des noms
 // - Log sessions dans dcf_messages (dcf_steps n'existe pas dans ta DB)
@@ -138,7 +138,7 @@ ensureMemoryTables().catch(() =>
 );
 
 // -----------------------------------------------------------------------------
-// 4. EXCEL ANALYSIS ROBUSTE
+// 4. EXCEL ANALYSIS ROBUSTE (FIX STACK OVERFLOW)
 // -----------------------------------------------------------------------------
 
 function columnIndexToLetter(idx) {
@@ -183,6 +183,9 @@ function findHeaderRow(raw) {
  * - codes/labels flexibles
  * - extracted_values (FULL)
  * - rows_index (FULL)
+ *
+ * ✅ FIX: on ne fait plus push(...extracted) (spread),
+ * ce qui provoquait le stack overflow sur gros fichiers.
  */
 function buildDeepExcelAnalysis(buffer, originalName = "") {
   const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
@@ -224,7 +227,8 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     const dataStartIdx = headerRowIdx + 3;
     const dataRows = raw.slice(dataStartIdx);
 
-    const extracted = [];
+    let extractedCount = 0;
+
     dataRows.forEach((rowArr, ridx) => {
       const rowNumber = dataStartIdx + ridx + 1;
       const rowKey = `${sheetName}::${rowNumber}`;
@@ -233,7 +237,8 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
         const v = rowArr[colDef.idx];
         const val = String(v ?? "").trim();
         if (val !== "") {
-          extracted.push({
+          // ✅ push 1 par 1 (pas de spread)
+          analysis.extracted_values.push({
             sheet: sheetName,
             row: rowNumber,
             col: colDef.col,
@@ -241,13 +246,14 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
             label: colDef.label,
             value: val
           });
+
           if (!analysis.rows_index[rowKey]) analysis.rows_index[rowKey] = {};
           analysis.rows_index[rowKey][colDef.code] = val;
+
+          extractedCount++;
         }
       }
     });
-
-    analysis.extracted_values.push(...extracted);
 
     const sheetContext =
       `SHEET "${sheetName}"\n` +
@@ -267,7 +273,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       codesRowIdx: looksLikeCodes(row1) ? headerRowIdx + 2 : headerRowIdx + 1,
       columns,
       dataStartRow: dataStartIdx + 1,
-      extracted_count: extracted.length
+      extracted_count: extractedCount
     });
   }
 
@@ -276,7 +282,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
 }
 
 /**
- * NEW FIX: réduit l’analyse pour stockage DB (évite stack overflow)
+ * réduit l’analyse pour stockage DB (évite gros JSON en base)
  */
 function shrinkAnalysisForDB(analysis) {
   return {
@@ -640,7 +646,7 @@ Réponds en JSON STRICT uniquement:
         [sessionId, message, out]
       );
 
-      // NEW: log dans dcf_messages (table existante)
+      // log dans dcf_messages (table existante)
       await pool.query(
         `
         INSERT INTO dcf_messages (session_id, role, content)
@@ -754,7 +760,6 @@ Réponds en JSON STRICT:
     const steps = Array.isArray(out.steps) ? out.steps : [];
 
     if (sessionId) {
-      // log steps dans dcf_messages (pas de dcf_steps chez toi)
       await pool.query(
         `
         INSERT INTO dcf_messages (session_id, role, content)
@@ -911,7 +916,7 @@ Réponds en JSON STRICT:
 });
 
 // -----------------------------------------------------------------------------
-// 8. UPLOAD ROUTES (FIX STACK OVERFLOW)
+// 8. UPLOAD ROUTES (stack overflow FIX)
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
@@ -942,7 +947,7 @@ app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
         req.file.mimetype,
         req.file.size,
         analysisFull.sheetNames,
-        analysisLite,     // ✅ DB reçoit version légère
+        analysisLite,     // DB reçoit version légère
         req.file.buffer
       ]
     );
@@ -992,7 +997,7 @@ app.post(
             f.mimetype,
             f.size,
             analysisFull.sheetNames,
-            analysisLite,  // ✅ version légère en DB
+            analysisLite,
             f.buffer
           ]
         );
@@ -1194,7 +1199,7 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.2 Full Fix" })
+  res.json({ status: "ok", version: "7.4.3 Full Fix" })
 );
 
 // -----------------------------------------------------------------------------
@@ -1202,5 +1207,5 @@ app.get("/api/dcf/health", (req, res) =>
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.2] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.4.3] Backend démarré sur http://${HOST}:${PORT}`);
 });
