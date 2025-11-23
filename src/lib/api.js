@@ -1434,7 +1434,7 @@ export const api = {
       }),
   },
 
-/** --- DCF ASSISTANT v7 (Ultimate & Database Storage) --- */
+/** --- DCF ASSISTANT v7.4 (Ultimate, Database Storage & Memory) --- */
 dcf: {
   health: () => get("/api/dcf/health"),
 
@@ -1450,23 +1450,23 @@ dcf: {
 
   listFiles: () => get("/api/dcf/files"),
 
-  // NOTE: route non présente dans le backend v7.3 fourni.
-  // Je ne supprime rien; si tu ajoutes /api/dcf/files/:id plus tard, ça marchera direct.
+  // NOTE: route pas (encore) présente dans le backend fourni.
+  // On garde pour compat future.
   getFile: (id) => get(`/api/dcf/files/${id}`),
 
   // --- SESSIONS ---
   startSession: (payload) => post("/api/dcf/startSession", payload),
   listSessions: () => get("/api/dcf/sessions"),
 
-  // NOTE: route non présente dans le backend v7.3 fourni.
-  // Je ne supprime rien; si tu ajoutes /api/dcf/session/:id plus tard, ça marchera direct.
+  // NOTE: route pas (encore) présente dans le backend fourni.
+  // On garde pour compat future.
   getSession: (id) => get(`/api/dcf/session/${id}`),
 
   // --- COMMON / UPLOADS ---
   uploadAttachments: (files = [], sessionId = null) => {
     const fd = new FormData();
     (files || []).forEach((f) => fd.append("files", f));
-    // ✅ corrigé: le backend lit req.body.sessionId (pas session_id)
+    // ✅ backend v7.4 lit req.body.sessionId
     if (sessionId) fd.append("sessionId", sessionId);
     return upload("/api/dcf/attachments/upload", fd);
   },
@@ -1489,13 +1489,13 @@ dcf: {
       useCase,
     }),
 
-  // --- WIZARD v7 (Intelligence & Automation) ---
+  // --- WIZARD v7.4 (Intelligence & Automation + Memory Injection) ---
   wizard: {
-    // Étape 1 : Analyse (Protocole Charles)
+    // Étape 1 : Analyse (Protocole Charles + mémoire métier injectée côté serveur)
     analyze: (message, sessionId) =>
       post("/api/dcf/wizard/analyze", { message, sessionId }),
 
-    // Étape 3 : Instructions (Guidage + Vision SAP)
+    // Étape 3 : Instructions (Guidage + Vision SAP + mémoire métier injectée côté serveur)
     instructions: (
       sessionId,
       requestText,
@@ -1535,13 +1535,13 @@ dcf: {
       post("/api/dcf/wizard/validate", { fileIds }),
 
     // Module : Reverse DCF (Expliquer un fichier existant)
-    // NOTE: route non présente dans le backend v7.3 fourni.
+    // NOTE: route pas (encore) présente dans le backend fourni.
     explain: (fileId) =>
       post("/api/dcf/wizard/explain", { fileId }),
   },
 
   // Alias rétro-compatible
-  // NOTE: /api/dcf/validate non présent dans backend v7.3 fourni
+  // NOTE: /api/dcf/validate pas (encore) présent dans backend fourni
   validate: ({ fileIds, mode = "auto" }) =>
     post("/api/dcf/validate", { fileIds, mode }),
 },
