@@ -1434,7 +1434,7 @@ export const api = {
       }),
   },
 
-  /** --- DCF ASSISTANT v6 (Ultimate & Charles Protocol) --- */
+/** --- DCF ASSISTANT v7 (Ultimate & Database Storage) --- */
   dcf: {
     health: () => get("/api/dcf/health"),
 
@@ -1482,9 +1482,9 @@ export const api = {
         useCase,
       }),
 
-    // --- WIZARD v6 (Intelligence & Automation) ---
+    // --- WIZARD v7 (Intelligence & Automation) ---
     wizard: {
-      // Étape 1 : Analyse (Protocole Charles : Multi-fichiers / Manuel / Standard)
+      // Étape 1 : Analyse (Protocole Charles)
       analyze: (message, sessionId) =>
         post("/api/dcf/wizard/analyze", { message, sessionId }),
 
@@ -1498,8 +1498,9 @@ export const api = {
         }),
 
       // Étape 3 (Bonus) : Génération Fichier (Support XLSX et XLSM)
+      // Cette fonction retourne un BLOB (Fichier) et non du JSON
       autofill: async (templateFilename, instructions) => {
-        const site = currentSite(); 
+        const site = currentSite(); // Fonction interne à api.js
         const headers = identityHeaders(new Headers({ "X-Site": site }));
         headers.set("Content-Type", "application/json");
 
@@ -1517,10 +1518,10 @@ export const api = {
         return res.blob(); // Retourne le fichier binaire
       },
 
-      // Étape 4 : Validation (Prédictive + Structurelle)
+      // Étape 4 : Validation
       validate: (fileIds) => post("/api/dcf/wizard/validate", { fileIds }),
 
-      // Module Futur : Reverse DCF (Expliquer un fichier existant)
+      // Module : Reverse DCF (Expliquer un fichier existant)
       explain: (fileId) => post("/api/dcf/wizard/explain", { fileId }),
     },
 
