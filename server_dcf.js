@@ -1,8 +1,10 @@
-// server_dcf.js — Assistant DCF SAP v7.4
-// - Conserve toutes les routes existantes v7.3
-// - Analyse Excel robuste (codes/labels flexibles)
-// - Mémoire relationnelle Plans / Equipments / Task Lists
-// - Titre de plan changeant -> update + historique
+// server_dcf.js — Assistant DCF SAP v7.4.2
+// FULL FIX:
+// - Conserve toutes les routes v7.x
+// - Fix stack overflow: analysisLite en DB, analysisFull pour indexation
+// - Analyse Excel robuste SAP
+// - Mémoire relationnelle (Plan/Equip/TaskList) + historique des noms
+// - Log sessions dans dcf_messages (dcf_steps n'existe pas dans ta DB)
 // Node ESM
 
 import express from "express";
@@ -24,9 +26,7 @@ const HOST = process.env.DCF_HOST || "127.0.0.1";
 const PORT = Number(process.env.DCF_PORT || 3030);
 
 const DATABASE_URL = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
-if (!DATABASE_URL) {
-  console.error("❌ NEON_DATABASE_URL / DATABASE_URL manquante");
-}
+if (!DATABASE_URL) console.error("❌ NEON_DATABASE_URL / DATABASE_URL manquante");
 
 const { Pool } = pg;
 const pool = new Pool({
@@ -36,7 +36,6 @@ const pool = new Pool({
 
 // OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 const ANSWER_MODEL = process.env.DCF_ANSWER_MODEL || "gpt-4o-mini";
 const VISION_MODEL = process.env.DCF_VISION_MODEL || "gpt-4o-mini";
 
@@ -44,29 +43,25 @@ const VISION_MODEL = process.env.DCF_VISION_MODEL || "gpt-4o-mini";
 const MAX_FILES_LIBRARY = 50;
 const MAX_CONTEXT_CHARS = 12000;
 const MAX_ATTACHMENT_TEXT = 6000;
-const MAX_MEMORY_HINTS = 50;   // inject dans prompts
-const MAX_NUMBERS_SCAN = 40;   // numbers extraits d'un message
+const MAX_MEMORY_HINTS = 50;
+const MAX_NUMBERS_SCAN = 40;
 
 // -----------------------------------------------------------------------------
 // 1. EXPRESS SETUP
 // -----------------------------------------------------------------------------
 
 const app = express();
-
 app.use(helmet());
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "20mb" }));
 
 // -----------------------------------------------------------------------------
-// 2. HELPERS JSON / SANITIZE
+// 2. HELPERS
 // -----------------------------------------------------------------------------
 
 function cleanJSON(text = "") {
   try {
-    const cleaned = text
-      .trim()
-      .replace(/```json/gi, "")
-      .replace(/```/g, "");
+    const cleaned = text.trim().replace(/```json/gi, "").replace(/```/g, "");
     return JSON.parse(cleaned);
   } catch {
     return { error: "Invalid JSON", raw: text };
@@ -78,9 +73,7 @@ function sanitizeName(name = "") {
 }
 
 function safeEmail(x) {
-  return x && /\S+@\S+\.\S+/.test(x)
-    ? String(x).trim().toLowerCase()
-    : null;
+  return x && /\S+@\S+\.\S+/.test(x) ? String(x).trim().toLowerCase() : null;
 }
 
 function getUserEmail(req) {
@@ -91,28 +84,30 @@ function clampStr(s, n) {
   return String(s ?? "").slice(0, n);
 }
 
+function extractMaybeNumber(text) {
+  return (String(text || "").match(/\b\d{4,12}\b/g) || []).slice(0, MAX_NUMBERS_SCAN);
+}
+
 // -----------------------------------------------------------------------------
-// 3. DB MIGRATIONS "SAFE" (création tables mémoire si absent)
+// 3. SAFE MIGRATIONS (création tables mémoire si absent)
 // -----------------------------------------------------------------------------
 
 async function ensureMemoryTables() {
-  // Table mémoire relationnelle
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_entity_memory (
       id SERIAL PRIMARY KEY,
-      entity_type TEXT NOT NULL,          -- maintenance_plan | equipment | task_list
-      key_code TEXT NOT NULL,             -- ex WARPL, EQUNR, PLNNR
-      key_value TEXT NOT NULL,            -- ex 30482007
-      name_code TEXT,                     -- ex WPTXT
-      name_value TEXT,                    -- ex Plan Text
-      extra JSONB DEFAULT '{}'::jsonb,    -- ex {TPLNR:..., EQUNR:...}
+      entity_type TEXT NOT NULL,
+      key_code TEXT NOT NULL,
+      key_value TEXT NOT NULL,
+      name_code TEXT,
+      name_value TEXT,
+      extra JSONB DEFAULT '{}'::jsonb,
       seen_count INT DEFAULT 1,
       last_seen_at TIMESTAMP DEFAULT now(),
       UNIQUE(entity_type, key_code, key_value)
     );
   `);
 
-  // Historique léger des noms (si le titre change)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_entity_name_history (
       id SERIAL PRIMARY KEY,
@@ -125,7 +120,6 @@ async function ensureMemoryTables() {
     );
   `);
 
-  // Index valeurs (si tu veux l’utiliser)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_values_index (
       id SERIAL PRIMARY KEY,
@@ -139,12 +133,12 @@ async function ensureMemoryTables() {
   `);
 }
 
-ensureMemoryTables().catch(() => {
-  console.warn("⚠️ Impossible de créer les tables mémoire (non bloquant).");
-});
+ensureMemoryTables().catch(() =>
+  console.warn("⚠️ Impossible de créer les tables mémoire (non bloquant).")
+);
 
 // -----------------------------------------------------------------------------
-// 4. EXCEL ANALYSIS (robuste SAP DCF)
+// 4. EXCEL ANALYSIS ROBUSTE
 // -----------------------------------------------------------------------------
 
 function columnIndexToLetter(idx) {
@@ -164,7 +158,6 @@ function looksLikeCodes(row) {
     .filter(Boolean)
     .slice(0, 80);
   if (!cells.length) return false;
-  // Heuristique: beaucoup de tokens UPPER/num/underscore
   const codeLike = cells.filter((c) => /^[A-Z0-9_]{3,}$/.test(c)).length;
   return codeLike / cells.length > 0.35;
 }
@@ -181,18 +174,15 @@ function findHeaderRow(raw) {
       return r;
     }
   }
-  // fallback première ligne non vide
-  const idx = raw.findIndex((r) =>
-    r.some((c) => String(c).trim() !== "")
-  );
+  const idx = raw.findIndex((r) => r.some((c) => String(c).trim() !== ""));
   return idx === -1 ? 0 : idx;
 }
 
 /**
  * Analyse SAP DCF robuste:
- * - trouve header
- * - détecte où sont les codes vs labels (row header ou row+1)
- * - génère extracted_values + rows_index relationnel
+ * - codes/labels flexibles
+ * - extracted_values (FULL)
+ * - rows_index (FULL)
  */
 function buildDeepExcelAnalysis(buffer, originalName = "") {
   const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
@@ -202,7 +192,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     ai_context: "",
     sheets: [],
     extracted_values: [],
-    rows_index: {} // NEW: regroupement par ligne (sheet::row -> {FIELD: value})
+    rows_index: {}
   };
 
   let globalContext = "";
@@ -218,9 +208,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
 
     const row0 = raw[headerRowIdx] || [];
     const row1 = raw[headerRowIdx + 1] || [];
-    const row2 = raw[headerRowIdx + 2] || [];
 
-    // NEW: codes/labels flexibles
     const codesRow = looksLikeCodes(row1) ? row1 : row0;
     const labelsRow = looksLikeCodes(row1) ? row0 : row1;
 
@@ -229,22 +217,16 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       const c = String(code).trim();
       if (c.length > 1 && /[A-Za-z0-9]/.test(c)) {
         const label = String(labelsRow[idx] || "").trim();
-        columns.push({
-          idx,
-          col: columnIndexToLetter(idx),
-          code: c,
-          label
-        });
+        columns.push({ idx, col: columnIndexToLetter(idx), code: c, label });
       }
     });
 
-    // data start: on saute 3 lignes après header (comme avant)
     const dataStartIdx = headerRowIdx + 3;
     const dataRows = raw.slice(dataStartIdx);
 
     const extracted = [];
     dataRows.forEach((rowArr, ridx) => {
-      const rowNumber = dataStartIdx + ridx + 1; // Excel 1-indexed
+      const rowNumber = dataStartIdx + ridx + 1;
       const rowKey = `${sheetName}::${rowNumber}`;
 
       for (const colDef of columns) {
@@ -259,7 +241,6 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
             label: colDef.label,
             value: val
           });
-
           if (!analysis.rows_index[rowKey]) analysis.rows_index[rowKey] = {};
           analysis.rows_index[rowKey][colDef.code] = val;
         }
@@ -294,8 +275,21 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
   return analysis;
 }
 
+/**
+ * NEW FIX: réduit l’analyse pour stockage DB (évite stack overflow)
+ */
+function shrinkAnalysisForDB(analysis) {
+  return {
+    filename: analysis.filename,
+    sheetNames: analysis.sheetNames,
+    ai_context: analysis.ai_context,
+    sheets: analysis.sheets,
+    extracted_count: analysis.extracted_values?.length || 0
+  };
+}
+
 // -----------------------------------------------------------------------------
-// 5. INDEXATION DB (valeurs + mémoire relationnelle)
+// 5. INDEXATION DB
 // -----------------------------------------------------------------------------
 
 async function indexFileValues(fileId, analysis) {
@@ -325,21 +319,9 @@ async function indexFileValues(fileId, analysis) {
     } finally {
       client.release();
     }
-  } catch {
-    // silent fail
-  }
+  } catch {}
 }
 
-function extractMaybeNumber(text) {
-  return (String(text || "").match(/\b\d{4,12}\b/g) || []).slice(0, MAX_NUMBERS_SCAN);
-}
-
-/**
- * NEW: Indexation relationnelle par ligne:
- * - Maintenance Plan: WARPL (id) + WPTXT (nom) + TPLNR (func loc) + EQUNR etc
- * - Equipment: EQUNR + EQKTX/SHORTTEXT + TPLNR etc
- * - Task List: PLNNR/PLNAL + KTEXT/TLTXT (selon template)
- */
 async function indexEntityMemory(fileId, analysis) {
   try {
     const rowsIndex = analysis.rows_index || {};
@@ -350,17 +332,15 @@ async function indexEntityMemory(fileId, analysis) {
       for (const rowKey of Object.keys(rowsIndex)) {
         const row = rowsIndex[rowKey];
 
-        // -------------------------
-        // MAINTENANCE PLAN
-        // -------------------------
+        // --- Maintenance Plan
         if (row.WARPL) {
           const keyValue = String(row.WARPL).trim();
           const nameValue = String(
             row.WPTXT ||
-            row.PLTEXT ||
-            row.PLTXT ||
-            row.PLANNAM ||
-            ""
+              row.PLTEXT ||
+              row.PLTXT ||
+              row.PLANNAM ||
+              ""
           ).trim();
 
           const extra = {};
@@ -370,7 +350,6 @@ async function indexEntityMemory(fileId, analysis) {
           if (row.STRAT) extra.STRAT = row.STRAT;
           if (row.WERKS) extra.WERKS = row.WERKS;
 
-          // check si nom a changé
           const prev = await client.query(
             `
             SELECT name_value 
@@ -380,12 +359,10 @@ async function indexEntityMemory(fileId, analysis) {
           `,
             [keyValue]
           );
-
           const prevName = prev.rows[0]?.name_value || null;
           const newName = nameValue || null;
 
           if (prevName && newName && prevName !== newName) {
-            // Historise le changement
             await client.query(
               `
               INSERT INTO dcf_entity_name_history(entity_type, key_code, key_value, old_name_value, new_name_value)
@@ -417,9 +394,7 @@ async function indexEntityMemory(fileId, analysis) {
           );
         }
 
-        // -------------------------
-        // EQUIPMENT
-        // -------------------------
+        // --- Equipment
         if (row.EQUNR) {
           const keyValue = String(row.EQUNR).trim();
           const nameValue = String(
@@ -432,7 +407,6 @@ async function indexEntityMemory(fileId, analysis) {
           if (row.BEGRU) extra.BEGRU = row.BEGRU;
           if (row.WERKS) extra.WERKS = row.WERKS;
 
-          // check si nom a changé
           const prev = await client.query(
             `
             SELECT name_value 
@@ -477,11 +451,11 @@ async function indexEntityMemory(fileId, analysis) {
           );
         }
 
-        // -------------------------
-        // TASK LIST (générique)
-        // -------------------------
-        if (row.PLNNR || row.PLNAL || row.TLNUM || row.GSTRP) {
-          const keyValue = String(row.PLNNR || row.TLNUM || row.PLNAL || "").trim();
+        // --- Task list générique
+        if (row.PLNNR || row.PLNAL || row.TLNUM) {
+          const keyValue = String(
+            row.PLNNR || row.TLNUM || row.PLNAL || ""
+          ).trim();
           if (keyValue) {
             const nameValue = String(
               row.KTEXT || row.TLTXT || row.LTXA1 || row.PLNNTXT || ""
@@ -539,9 +513,7 @@ async function indexEntityMemory(fileId, analysis) {
     } finally {
       client.release();
     }
-  } catch {
-    // silent fail
-  }
+  } catch {}
 }
 
 async function fetchMemoryHintsFromText(text) {
@@ -576,7 +548,7 @@ async function fetchMemoryHintsFromText(text) {
 }
 
 // -----------------------------------------------------------------------------
-// 6. MULTER (MEMORY STORAGE)
+// 6. MULTER
 // -----------------------------------------------------------------------------
 
 const upload = multer({
@@ -585,10 +557,9 @@ const upload = multer({
 });
 
 // -----------------------------------------------------------------------------
-// 7. ROUTES WIZARD
+// 7. WIZARD ROUTES
 // -----------------------------------------------------------------------------
 
-// Analyze request -> files required
 app.post("/api/dcf/wizard/analyze", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
@@ -608,7 +579,6 @@ app.post("/api/dcf/wizard/analyze", async (req, res) => {
       .map((f) => `- ${f.filename} (ID: ${f.id})`)
       .join("\n");
 
-    // NEW: mémoire relationnelle injectée
     const memHints = await fetchMemoryHintsFromText(message);
     const memBlock = memHints.length
       ? `\nMEMOIRE METIER (si pertinente):\n${memHints.join("\n")}\n`
@@ -669,6 +639,15 @@ Réponds en JSON STRICT uniquement:
       `,
         [sessionId, message, out]
       );
+
+      // NEW: log dans dcf_messages (table existante)
+      await pool.query(
+        `
+        INSERT INTO dcf_messages (session_id, role, content)
+        VALUES ($1, 'assistant', $2)
+      `,
+        [sessionId, JSON.stringify(out)]
+      );
     }
 
     res.json(out);
@@ -678,7 +657,6 @@ Réponds en JSON STRICT uniquement:
   }
 });
 
-// Instructions from template + optional SAP screenshots
 app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
     const { sessionId, requestText, templateFilename, attachmentIds = [] } =
@@ -702,7 +680,6 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
     const file = rows[0];
     const fileContext = file.analysis?.ai_context || "";
 
-    // OCR / vision context
     let visionContext = "";
     if (attachmentIds.length) {
       const { rows: att } = await pool.query(
@@ -720,7 +697,6 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
         .slice(0, MAX_ATTACHMENT_TEXT);
     }
 
-    // NEW: mémoire relationnelle injectée
     const memHints = await fetchMemoryHintsFromText(requestText);
     const memBlock = memHints.length
       ? `\nMEMOIRE METIER (si pertinente):\n${memHints.join("\n")}\n`
@@ -778,12 +754,13 @@ Réponds en JSON STRICT:
     const steps = Array.isArray(out.steps) ? out.steps : [];
 
     if (sessionId) {
+      // log steps dans dcf_messages (pas de dcf_steps chez toi)
       await pool.query(
         `
-        INSERT INTO dcf_steps (session_id, template_id, steps_json)
-        VALUES ($1, $2, $3)
+        INSERT INTO dcf_messages (session_id, role, content)
+        VALUES ($1, 'assistant', $2)
       `,
-        [sessionId, file.id, steps]
+        [sessionId, JSON.stringify({ type: "steps", templateFilename, steps })]
       );
     }
 
@@ -794,7 +771,6 @@ Réponds en JSON STRICT:
   }
 });
 
-// Autofill
 app.post("/api/dcf/wizard/autofill", async (req, res) => {
   try {
     const { templateFilename, instructions } = req.body;
@@ -816,7 +792,6 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
 
     const tpl = rows[0];
     const wb = xlsx.read(tpl.file_data, { type: "buffer" });
-
     const steps = Array.isArray(instructions) ? instructions : [];
 
     for (const inst of steps) {
@@ -829,10 +804,7 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
       if (!ws) continue;
 
       const cellAddress = `${inst.col}${inst.row}`;
-      ws[cellAddress] = {
-        t: "s",
-        v: String(inst.value ?? "")
-      };
+      ws[cellAddress] = { t: "s", v: String(inst.value ?? "") };
     }
 
     const isXlsm = String(tpl.filename).toLowerCase().endsWith(".xlsm");
@@ -859,7 +831,6 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
   }
 });
 
-// Validate filled excels
 app.post("/api/dcf/wizard/validate", async (req, res) => {
   try {
     const { fileIds } = req.body;
@@ -913,7 +884,6 @@ Réponds en JSON STRICT:
 
     let out = cleanJSON(completion.choices[0].message.content);
 
-    // Normalisation robuste
     const toLine = (x) => {
       if (typeof x === "string") return x;
       if (!x || typeof x !== "object") return String(x ?? "");
@@ -941,18 +911,18 @@ Réponds en JSON STRICT:
 });
 
 // -----------------------------------------------------------------------------
-// 8. ROUTES LIBRARY UPLOAD
+// 8. UPLOAD ROUTES (FIX STACK OVERFLOW)
 // -----------------------------------------------------------------------------
 
-// Upload single template
 app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Aucun fichier." });
 
-    const analysis = buildDeepExcelAnalysis(
+    const analysisFull = buildDeepExcelAnalysis(
       req.file.buffer,
       req.file.originalname
     );
+    const analysisLite = shrinkAnalysisForDB(analysisFull);
 
     const storedName = `${Date.now()}_${sanitizeName(req.file.originalname)}`;
     const relPath = storedName;
@@ -971,16 +941,16 @@ app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
         relPath,
         req.file.mimetype,
         req.file.size,
-        analysis.sheetNames,
-        analysis,
+        analysisFull.sheetNames,
+        analysisLite,     // ✅ DB reçoit version légère
         req.file.buffer
       ]
     );
 
     const fileId = rows[0].id;
 
-    await indexFileValues(fileId, analysis);
-    await indexEntityMemory(fileId, analysis); // NEW
+    await indexFileValues(fileId, analysisFull);
+    await indexEntityMemory(fileId, analysisFull);
 
     res.json({ ok: true, file: rows[0] });
   } catch (e) {
@@ -989,7 +959,6 @@ app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
   }
 });
 
-// Upload multi templates
 app.post(
   "/api/dcf/uploadExcelMulti",
   upload.array("files"),
@@ -1002,7 +971,9 @@ app.post(
 
       const out = [];
       for (const f of files) {
-        const analysis = buildDeepExcelAnalysis(f.buffer, f.originalname);
+        const analysisFull = buildDeepExcelAnalysis(f.buffer, f.originalname);
+        const analysisLite = shrinkAnalysisForDB(analysisFull);
+
         const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`;
         const relPath = storedName;
 
@@ -1020,16 +991,16 @@ app.post(
             relPath,
             f.mimetype,
             f.size,
-            analysis.sheetNames,
-            analysis,
+            analysisFull.sheetNames,
+            analysisLite,  // ✅ version légère en DB
             f.buffer
           ]
         );
 
         const fileId = rows[0].id;
 
-        await indexFileValues(fileId, analysis);
-        await indexEntityMemory(fileId, analysis); // NEW
+        await indexFileValues(fileId, analysisFull);
+        await indexEntityMemory(fileId, analysisFull);
 
         out.push(rows[0]);
       }
@@ -1178,7 +1149,7 @@ app.post(
 );
 
 // -----------------------------------------------------------------------------
-// 11. GENERIC CHAT (debug)
+// 11. GENERIC CHAT
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/chat", async (req, res) => {
@@ -1223,7 +1194,7 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4 Memory+Robust" })
+  res.json({ status: "ok", version: "7.4.2 Full Fix" })
 );
 
 // -----------------------------------------------------------------------------
@@ -1231,7 +1202,5 @@ app.get("/api/dcf/health", (req, res) =>
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(
-    `[dcf-v7.4] Backend FullDB démarré sur http://${HOST}:${PORT}`
-  );
+  console.log(`[dcf-v7.4.2] Backend démarré sur http://${HOST}:${PORT}`);
 });
