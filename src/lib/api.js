@@ -1435,100 +1435,116 @@ export const api = {
   },
 
 /** --- DCF ASSISTANT v7 (Ultimate & Database Storage) --- */
-  dcf: {
-    health: () => get("/api/dcf/health"),
+dcf: {
+  health: () => get("/api/dcf/health"),
 
-    // --- GESTION DES FICHIERS ---
-    uploadExcelMulti: (formData) =>
-      upload("/api/dcf/uploadExcelMulti", formData),
+  // --- GESTION DES FICHIERS ---
+  uploadExcelMulti: (formData) =>
+    upload("/api/dcf/uploadExcelMulti", formData),
 
-    uploadExcel: (file) => {
-      const fd = new FormData();
-      fd.append("file", file);
-      return upload("/api/dcf/uploadExcel", fd);
-    },
+  uploadExcel: (file) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return upload("/api/dcf/uploadExcel", fd);
+  },
 
-    listFiles: () => get("/api/dcf/files"),
-    getFile: (id) => get(`/api/dcf/files/${id}`),
+  listFiles: () => get("/api/dcf/files"),
 
-    // --- SESSIONS ---
-    startSession: (payload) => post("/api/dcf/startSession", payload),
-    listSessions: () => get("/api/dcf/sessions"),
-    getSession: (id) => get(`/api/dcf/session/${id}`),
+  // NOTE: route non présente dans le backend v7.3 fourni.
+  // Je ne supprime rien; si tu ajoutes /api/dcf/files/:id plus tard, ça marchera direct.
+  getFile: (id) => get(`/api/dcf/files/${id}`),
 
-    // --- COMMON / UPLOADS ---
-    uploadAttachments: (files = [], sessionId = null) => {
-      const fd = new FormData();
-      (files || []).forEach((f) => fd.append("files", f));
-      if (sessionId) fd.append("session_id", sessionId);
-      return upload("/api/dcf/attachments/upload", fd);
-    },
+  // --- SESSIONS ---
+  startSession: (payload) => post("/api/dcf/startSession", payload),
+  listSessions: () => get("/api/dcf/sessions"),
 
-    // --- CHAT GÉNÉRAL (Fallback) ---
-    chat: ({
-      sessionId = null,
+  // NOTE: route non présente dans le backend v7.3 fourni.
+  // Je ne supprime rien; si tu ajoutes /api/dcf/session/:id plus tard, ça marchera direct.
+  getSession: (id) => get(`/api/dcf/session/${id}`),
+
+  // --- COMMON / UPLOADS ---
+  uploadAttachments: (files = [], sessionId = null) => {
+    const fd = new FormData();
+    (files || []).forEach((f) => fd.append("files", f));
+    // ✅ corrigé: le backend lit req.body.sessionId (pas session_id)
+    if (sessionId) fd.append("sessionId", sessionId);
+    return upload("/api/dcf/attachments/upload", fd);
+  },
+
+  // --- CHAT GÉNÉRAL (Fallback) ---
+  chat: ({
+    sessionId = null,
+    message,
+    fileIds = [],
+    attachmentIds = [],
+    mode = "guidage",
+    useCase = null,
+  }) =>
+    post("/api/dcf/chat", {
+      sessionId,
       message,
-      fileIds = [],
-      attachmentIds = [],
-      mode = "guidage",
-      useCase = null,
-    }) =>
-      post("/api/dcf/chat", {
+      fileIds,
+      attachmentIds,
+      mode,
+      useCase,
+    }),
+
+  // --- WIZARD v7 (Intelligence & Automation) ---
+  wizard: {
+    // Étape 1 : Analyse (Protocole Charles)
+    analyze: (message, sessionId) =>
+      post("/api/dcf/wizard/analyze", { message, sessionId }),
+
+    // Étape 3 : Instructions (Guidage + Vision SAP)
+    instructions: (
+      sessionId,
+      requestText,
+      templateFilename,
+      attachmentIds = []
+    ) =>
+      post("/api/dcf/wizard/instructions", {
         sessionId,
-        message,
-        fileIds,
+        requestText,
+        templateFilename,
         attachmentIds,
-        mode,
-        useCase,
       }),
 
-    // --- WIZARD v7 (Intelligence & Automation) ---
-    wizard: {
-      // Étape 1 : Analyse (Protocole Charles)
-      analyze: (message, sessionId) =>
-        post("/api/dcf/wizard/analyze", { message, sessionId }),
+    // Étape 3 (Bonus) : Génération Fichier (Support XLSX et XLSM)
+    // Cette fonction retourne un BLOB (Fichier) et non du JSON
+    autofill: async (templateFilename, instructions) => {
+      const site = currentSite(); // Fonction interne à api.js
+      const headers = identityHeaders(new Headers({ "X-Site": site }));
+      headers.set("Content-Type", "application/json");
 
-      // Étape 3 : Instructions (Guidage + Vision SAP)
-      instructions: (sessionId, requestText, templateFilename, attachmentIds = []) =>
-        post("/api/dcf/wizard/instructions", {
-          sessionId,
-          requestText,
-          templateFilename,
-          attachmentIds,
-        }),
+      const res = await fetch(`${API_BASE}/api/dcf/wizard/autofill`, {
+        method: "POST",
+        headers,
+        credentials: "include",
+        body: JSON.stringify({ templateFilename, instructions }),
+      });
 
-      // Étape 3 (Bonus) : Génération Fichier (Support XLSX et XLSM)
-      // Cette fonction retourne un BLOB (Fichier) et non du JSON
-      autofill: async (templateFilename, instructions) => {
-        const site = currentSite(); // Fonction interne à api.js
-        const headers = identityHeaders(new Headers({ "X-Site": site }));
-        headers.set("Content-Type", "application/json");
-
-        const res = await fetch(`${API_BASE}/api/dcf/wizard/autofill`, {
-          method: "POST",
-          headers,
-          credentials: "include",
-          body: JSON.stringify({ templateFilename, instructions }),
-        });
-
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(text || `HTTP ${res.status}`);
-        }
-        return res.blob(); // Retourne le fichier binaire
-      },
-
-      // Étape 4 : Validation
-      validate: (fileIds) => post("/api/dcf/wizard/validate", { fileIds }),
-
-      // Module : Reverse DCF (Expliquer un fichier existant)
-      explain: (fileId) => post("/api/dcf/wizard/explain", { fileId }),
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.blob(); // Retourne le fichier binaire
     },
 
-    // Alias rétro-compatible
-    validate: ({ fileIds, mode = "auto" }) =>
-      post("/api/dcf/validate", { fileIds, mode }),
+    // Étape 4 : Validation
+    validate: (fileIds) =>
+      post("/api/dcf/wizard/validate", { fileIds }),
+
+    // Module : Reverse DCF (Expliquer un fichier existant)
+    // NOTE: route non présente dans le backend v7.3 fourni.
+    explain: (fileId) =>
+      post("/api/dcf/wizard/explain", { fileId }),
   },
+
+  // Alias rétro-compatible
+  // NOTE: /api/dcf/validate non présent dans backend v7.3 fourni
+  validate: ({ fileIds, mode = "auto" }) =>
+    post("/api/dcf/validate", { fileIds, mode }),
+},
 
   /** --- 🔵 BUBBLE AUTH --- */
   bubble: {
