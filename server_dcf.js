@@ -1,13 +1,9 @@
-// server_dcf.js — Assistant DCF SAP v7.4.5
-// FULL FIX + Memory + Protocole Charles renforcé
-// - Conserve toutes les routes v7.x
-// - Fix stack overflow: suppression du spread push(...bigArray)
-// - Stockage DB "analysisLite" (pas de gros JSON)
-// - Analyse Excel robuste SAP
-// - Mémoire relationnelle (WARPL/EQUNR/TaskList + TPLNR Functional Location)
-// - Historique changement de noms
-// - Log sessions dans dcf_messages (dcf_steps n'existe pas dans ta DB)
-// Node ESM
+// server_dcf.js — Assistant DCF SAP v7.4.6
+// FULL FIX + Memory + Protocole Charles renforcé + Validate/Instructions Smart
+// - Pré-routage métier (ajout opération/contrôle dans plan existant => TL+MP)
+// - Validation scope-aware: ignore lignes ACTION vides, ne check que lignes actives
+// - Instructions length-aware: KTEXT/LTXA1/TEXT1 max SAP + troncature auto
+// - Analyse Excel robuste SAP + mémoire relationnelle + historique noms
 
 import express from "express";
 import cors from "cors";
@@ -90,6 +86,19 @@ function extractMaybeNumber(text) {
   return (String(text || "").match(/\b\d{4,12}\b/g) || []).slice(0, MAX_NUMBERS_SCAN);
 }
 
+function extractUseCaseFromText(message = "") {
+  const m = String(message).toLowerCase();
+  if (/(décommission|decommission|retirer|supprimer équipement|retirer equipement)/.test(m))
+    return "decommission";
+  if (/(ajout|ajouter|rajouter|créer|creer).*(opération|operation|contrôle|controle|inspection|check).*(plan)/.test(m))
+    return "add_operation_in_plan";
+  if (/(ajout|ajouter|rajouter).*(équipement|equipement).*(plan)/.test(m))
+    return "add_equipment_in_plan";
+  if (/(modif|modifier|changer).*(texte|short text|long text)/.test(m))
+    return "text_only_change";
+  return "unknown";
+}
+
 // -----------------------------------------------------------------------------
 // 3. DB SAFE MIGRATIONS (tables mémoire)
 // -----------------------------------------------------------------------------
@@ -140,7 +149,7 @@ ensureMemoryTables().catch(() =>
 );
 
 // -----------------------------------------------------------------------------
-// 4. EXCEL ANALYSIS ROBUSTE (FIX STACK OVERFLOW)
+// 4. EXCEL ANALYSIS ROBUSTE
 // -----------------------------------------------------------------------------
 
 function columnIndexToLetter(idx) {
@@ -180,14 +189,6 @@ function findHeaderRow(raw) {
   return idx === -1 ? 0 : idx;
 }
 
-/**
- * Analyse SAP DCF robuste:
- * - codes/labels flexibles
- * - extracted_values (FULL)
- * - rows_index (FULL)
- *
- * ✅ FIX: pas de push(...bigArray)
- */
 function buildDeepExcelAnalysis(buffer, originalName = "") {
   const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
   const analysis = {
@@ -281,9 +282,6 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
   return analysis;
 }
 
-/**
- * réduit l’analyse pour stockage DB
- */
 function shrinkAnalysisForDB(analysis) {
   return {
     filename: analysis.filename,
@@ -620,23 +618,53 @@ const upload = multer({
 });
 
 // -----------------------------------------------------------------------------
-// 7. WIZARD ROUTES
+// 7. LENGTH NORMALIZATION (Instructions)
 // -----------------------------------------------------------------------------
 
-/**
- * ✅ ANALYZE v7.4.5 (Protocole Charles renforcé)
- * - Pré-routage métier : ajout opération/contrôle dans plan existant => TL + MP
- * - Prompt IA enrichi
- * - Insert dcf_requests compatible avec TON schéma (request_text, response_json, etc.)
- */
+const SAP_MAXLEN = {
+  KTEXT: 40,
+  LTXA1: 40,
+  TEXT1: 132,
+  WPTXT: 40,
+  PLTXT: 40,
+  EQKTX: 40
+};
+
+function enforceSapLengthsOnSteps(steps = []) {
+  return steps.map((s) => {
+    const code = String(s.code || "").trim().toUpperCase();
+    const maxLen = SAP_MAXLEN[code];
+    if (!maxLen) return s;
+
+    const val = String(s.value ?? "");
+    if (val.length <= maxLen) return s;
+
+    const truncated = val.slice(0, maxLen);
+    const overflow = val.slice(maxLen);
+
+    return {
+      ...s,
+      value: truncated,
+      reason: `${
+        s.reason ? s.reason + " | " : ""
+      }Texte tronqué SAP (max ${maxLen}). Reste à mettre en long text: "${overflow.slice(
+        0,
+        80
+      )}${overflow.length > 80 ? "…" : ""}"`
+    };
+  });
+}
+
+// -----------------------------------------------------------------------------
+// 8. WIZARD ROUTES
+// -----------------------------------------------------------------------------
+
+// ✅ ANALYZE renforcé + pré-routage TL+MP
 app.post("/api/dcf/wizard/analyze", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
     const msgLower = String(message || "").toLowerCase();
 
-    // ------------------------------------------------------------
-    // 1) PRE-ROUTAGE METIER (ANTI-ERREURS IA)
-    // ------------------------------------------------------------
     const planNums = msgLower.match(/\b\d{6,12}\b/g) || [];
     const hasPlanWord =
       /plan\s*(de)?\s*(maintenance)?/.test(msgLower) ||
@@ -649,7 +677,6 @@ app.post("/api/dcf/wizard/analyze", async (req, res) => {
     const isAddOperationInExistingPlan =
       wantsAddOperation && hasPlanWord && planNums.length > 0;
 
-    // Si on détecte ce cas, on force TL + MP sans laisser l’IA hésiter
     if (isAddOperationInExistingPlan) {
       const { rows: tlFile } = await pool.query(
         `SELECT id, filename FROM dcf_files 
@@ -719,9 +746,6 @@ app.post("/api/dcf/wizard/analyze", async (req, res) => {
       return res.json(forcedOut);
     }
 
-    // ------------------------------------------------------------
-    // 2) LLM NORMAL FLOW
-    // ------------------------------------------------------------
     const { rows: recentFiles } = await pool.query(
       `
       SELECT id, filename 
@@ -834,6 +858,7 @@ Réponds en JSON STRICT uniquement:
   }
 });
 
+// ✅ INSTRUCTIONS renforcées + longueur SAP
 app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
     const { sessionId, requestText, templateFilename, attachmentIds = [] } =
@@ -894,11 +919,18 @@ ${clampStr(fileContext, 5000)}
 DONNÉES SAP (Vision OCR si dispo):
 ${visionContext || "N/A"}
 
+CONTRAINTES SAP IMPORTANTES:
+- KTEXT / LTXA1 (short text TL) : max 40 caractères
+- TEXT1 (texte long court SAP) : max 132 caractères
+- WPTXT / PLTXT / EQKTX : max 40 caractères
+Si un texte dépasse, TRONQUE et mets le reste dans la “reason” comme long text.
+
 INSTRUCTIONS:
 - Génère une liste d'étapes ligne par ligne pour remplir le DCF.
 - Chaque étape doit pointer une cellule (row, col) et un code champ.
 - Valeur prêtes à copier/coller.
 - mandatory=true si c’est obligatoire.
+- Si le champ est optionnel (ex: EQUNR dans ajout opération plan), mets mandatory=false.
 
 Réponds en JSON STRICT:
 {
@@ -928,7 +960,10 @@ Réponds en JSON STRICT:
     });
 
     const out = cleanJSON(completion.choices[0].message.content);
-    const steps = Array.isArray(out.steps) ? out.steps : [];
+    let steps = Array.isArray(out.steps) ? out.steps : [];
+
+    // ✅ post-traitement longueur SAP
+    steps = enforceSapLengthsOnSteps(steps);
 
     if (sessionId) {
       await pool.query(
@@ -1007,39 +1042,94 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
   }
 });
 
+// ✅ VALIDATE intelligent scope-aware + ACTION-only
 app.post("/api/dcf/wizard/validate", async (req, res) => {
   try {
-    const { fileIds } = req.body;
+    const { fileIds, useCase = null } = req.body;
     if (!Array.isArray(fileIds) || !fileIds.length) {
       return res.status(400).json({ error: "fileIds manquant." });
     }
 
+    // On récupère les buffers pour reconstruire l’analyse FULL
     const { rows: files } = await pool.query(
       `
-      SELECT id, filename, analysis
+      SELECT id, filename, analysis, file_data
       FROM dcf_files
       WHERE id = ANY($1::int[])
     `,
       [fileIds]
     );
 
-    const context = files
-      .map(
-        (f) =>
-          `Fichier: ${f.filename}\nStructure:\n${
-            f.analysis?.ai_context || ""
-          }`
-      )
-      .join("\n\n")
-      .slice(0, MAX_CONTEXT_CHARS);
+    if (!files.length) {
+      return res.status(404).json({ error: "Aucun fichier trouvé." });
+    }
+
+    const rebuilt = files.map((f) => {
+      let full = null;
+      try {
+        if (f.file_data) {
+          full = buildDeepExcelAnalysis(f.file_data, f.filename);
+        }
+      } catch {
+        full = null;
+      }
+      return { ...f, analysis_full: full };
+    });
+
+    function getActiveRows(fullAnalysis) {
+      const rowsIndex = fullAnalysis?.rows_index || {};
+      const active = [];
+      for (const key of Object.keys(rowsIndex)) {
+        const row = rowsIndex[key];
+        const action = String(row.ACTION || row.Action || "").trim();
+        if (action) {
+          active.push({ key, action, row });
+        }
+      }
+      return active;
+    }
+
+    const activeRowsByFile = rebuilt.map((f) => ({
+      id: f.id,
+      filename: f.filename,
+      active_rows: getActiveRows(f.analysis_full)
+    }));
+
+    // Si aucune ligne active => avertissement doux
+    const noActive = activeRowsByFile.every((f) => !f.active_rows.length);
+    if (noActive) {
+      return res.json({
+        report:
+          "Aucune ligne ACTION détectée : rien à valider. Si tu attends une modif, vérifie que ACTION=Insert/Change/Delete est bien renseigné.",
+        critical: [],
+        warnings: [],
+        suggestions: []
+      });
+    }
+
+    const context = JSON.stringify(activeRowsByFile).slice(0, MAX_CONTEXT_CHARS);
 
     const prompt = `
-Valide ces fichiers DCF SAP et détecte incohérences.
+Tu valides des fichiers DCF SAP.
 
-CONTEXTE:
+IMPORTANT:
+- Ignore toutes les lignes où ACTION est vide.
+- Ne contrôle QUE les lignes actives (ACTION=Insert/Change/Delete).
+- Les champs obligatoires varient selon le cas d'usage.
+
+Cas d'usage: ${useCase || "unknown"}.
+
+Règles spécifiques:
+- add_operation_in_plan:
+  * Task List: EQUNR optionnel si non fourni par l’utilisateur.
+  * Maintenance Plan: WARPL requis uniquement sur les lignes ACTION.
+- text_only_change: ne pas exiger EQUNR/WARPL si pas liés à l'action.
+- decommission: exiger cohérence TL+MP+Equipment sur lignes ACTION.
+
+Données actives:
 ${context}
 
-Réponds en JSON STRICT:
+Réponds JSON STRICT:
 {
   "report": "résumé global",
   "critical": ["erreurs bloquantes"],
@@ -1051,7 +1141,7 @@ Réponds en JSON STRICT:
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
       messages: [
-        { role: "system", content: "Validateur SAP DCF." },
+        { role: "system", content: "Validateur SAP DCF scope-aware." },
         { role: "user", content: prompt }
       ],
       response_format: { type: "json_object" },
@@ -1087,7 +1177,7 @@ Réponds en JSON STRICT:
 });
 
 // -----------------------------------------------------------------------------
-// 8. UPLOAD ROUTES
+// 9. UPLOAD ROUTES
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
@@ -1190,7 +1280,7 @@ app.post(
 );
 
 // -----------------------------------------------------------------------------
-// 9. SESSIONS
+// 10. SESSIONS
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/startSession", async (req, res) => {
@@ -1239,7 +1329,7 @@ app.get("/api/dcf/sessions", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// 10. ATTACHMENTS (SAP screenshots)
+// 11. ATTACHMENTS (SAP screenshots)
 // -----------------------------------------------------------------------------
 
 app.post(
@@ -1325,7 +1415,7 @@ app.post(
 );
 
 // -----------------------------------------------------------------------------
-// 11. GENERIC CHAT
+// 12. GENERIC CHAT
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/chat", async (req, res) => {
@@ -1348,7 +1438,7 @@ app.post("/api/dcf/chat", async (req, res) => {
 });
 
 // -----------------------------------------------------------------------------
-// 12. FILES LIST + HEALTH
+// 13. FILES LIST + HEALTH
 // -----------------------------------------------------------------------------
 
 app.get("/api/dcf/files", async (req, res) => {
@@ -1370,13 +1460,13 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.5 Protocole Charles + TL/MP forced" })
+  res.json({ status: "ok", version: "7.4.6 Validate Smart + SAP Length Safe" })
 );
 
 // -----------------------------------------------------------------------------
-// 13. START
+// 14. START
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.5] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.4.6] Backend démarré sur http://${HOST}:${PORT}`);
 });
