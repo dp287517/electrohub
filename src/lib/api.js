@@ -1434,7 +1434,7 @@ export const api = {
       }),
   },
 
-  /** --- DCF ASSISTANT v4 --- */
+  /** --- DCF ASSISTANT v5 (Ultimate) --- */
   dcf: {
     health: () => get("/api/dcf/health"),
 
@@ -1482,19 +1482,42 @@ export const api = {
         useCase,
       }),
 
-    // --- NOUVEAU : WIZARD v4 (Routes spécifiques) ---
+    // --- WIZARD v5 (Routes Intelligentes) ---
     wizard: {
       // Étape 1 : Analyse de la demande -> Choix du template
       analyze: (message, sessionId) =>
         post("/api/dcf/wizard/analyze", { message, sessionId }),
 
-      // Étape 3 : Génération des instructions ligne par ligne
-      instructions: (sessionId, requestText, templateFilename) =>
+      // Étape 3 : Génération des instructions (avec support Vision pour les images)
+      // Note : on ajoute le paramètre attachmentIds par rapport à la v4
+      instructions: (sessionId, requestText, templateFilename, attachmentIds = []) =>
         post("/api/dcf/wizard/instructions", {
           sessionId,
           requestText,
           templateFilename,
+          attachmentIds,
         }),
+
+      // Étape 3 (Bonus) : Génération du fichier Excel rempli (Auto-fill)
+      // Cette fonction est spéciale car elle retourne un fichier binaire (Blob) et non du JSON
+      autofill: async (templateFilename, instructions) => {
+        const site = currentSite(); 
+        const headers = identityHeaders(new Headers({ "X-Site": site }));
+        headers.set("Content-Type", "application/json");
+
+        const res = await fetch(`${API_BASE}/api/dcf/wizard/autofill`, {
+          method: "POST",
+          headers,
+          credentials: "include",
+          body: JSON.stringify({ templateFilename, instructions }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        return res.blob(); // Retourne le fichier binaire prêt à être téléchargé
+      },
 
       // Étape 4 : Validation stricte
       validate: (fileIds) => post("/api/dcf/wizard/validate", { fileIds }),
