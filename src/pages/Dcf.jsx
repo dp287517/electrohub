@@ -588,7 +588,7 @@ export default function DCFWizard() {
       
       {/* Footer minimal */}
       <div className="fixed bottom-4 right-4 text-[10px] text-gray-300 pointer-events-none">
-        Powered by OpenAI & Node.js
+        © Copyright Daniel Palha
       </div>
     </div>
   );
