@@ -1,5 +1,5 @@
-// server_dcf.js — Assistant DCF SAP v7.4.4
-// FULL FIX + Memory:
+// server_dcf.js — Assistant DCF SAP v7.4.5
+// FULL FIX + Memory + Protocole Charles renforcé
 // - Conserve toutes les routes v7.x
 // - Fix stack overflow: suppression du spread push(...bigArray)
 // - Stockage DB "analysisLite" (pas de gros JSON)
@@ -295,7 +295,7 @@ function shrinkAnalysisForDB(analysis) {
 }
 
 // -----------------------------------------------------------------------------
-// 5. INDEXATION DB
+// 5. INDEXATION DB (values + mémoire entités)
 // -----------------------------------------------------------------------------
 
 async function indexFileValues(fileId, analysis) {
@@ -338,9 +338,7 @@ async function indexEntityMemory(fileId, analysis) {
       for (const rowKey of Object.keys(rowsIndex)) {
         const row = rowsIndex[rowKey];
 
-        // -------------------------------------------------------------------
         // 1) Maintenance Plan (WARPL -> WPTXT)
-        // -------------------------------------------------------------------
         if (row.WARPL) {
           const keyValue = String(row.WARPL).trim();
           const nameValue = String(
@@ -402,9 +400,7 @@ async function indexEntityMemory(fileId, analysis) {
           );
         }
 
-        // -------------------------------------------------------------------
         // 2) Equipment (EQUNR -> EQKTX)
-        // -------------------------------------------------------------------
         if (row.EQUNR) {
           const keyValue = String(row.EQUNR).trim();
           const nameValue = String(
@@ -461,9 +457,7 @@ async function indexEntityMemory(fileId, analysis) {
           );
         }
 
-        // -------------------------------------------------------------------
         // 3) Task list (PLNNR/TLNUM -> KTEXT)
-        // -------------------------------------------------------------------
         if (row.PLNNR || row.PLNAL || row.TLNUM) {
           const keyValue = String(
             row.PLNNR || row.TLNUM || row.PLNAL || ""
@@ -522,9 +516,7 @@ async function indexEntityMemory(fileId, analysis) {
           }
         }
 
-        // -------------------------------------------------------------------
         // 4) Functional Location (TPLNR -> texte)
-        // -------------------------------------------------------------------
         if (row.TPLNR) {
           const keyValue = String(row.TPLNR).trim();
           if (keyValue) {
@@ -631,10 +623,105 @@ const upload = multer({
 // 7. WIZARD ROUTES
 // -----------------------------------------------------------------------------
 
+/**
+ * ✅ ANALYZE v7.4.5 (Protocole Charles renforcé)
+ * - Pré-routage métier : ajout opération/contrôle dans plan existant => TL + MP
+ * - Prompt IA enrichi
+ * - Insert dcf_requests compatible avec TON schéma (request_text, response_json, etc.)
+ */
 app.post("/api/dcf/wizard/analyze", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
+    const msgLower = String(message || "").toLowerCase();
 
+    // ------------------------------------------------------------
+    // 1) PRE-ROUTAGE METIER (ANTI-ERREURS IA)
+    // ------------------------------------------------------------
+    const planNums = msgLower.match(/\b\d{6,12}\b/g) || [];
+    const hasPlanWord =
+      /plan\s*(de)?\s*(maintenance)?/.test(msgLower) ||
+      /maintenance\s*plan/.test(msgLower);
+
+    const wantsAddOperation =
+      /(ajout|ajouter|rajoute|rajouter|crée|creer|insère|inserer|intègre|integrer|ajouter une|ajouter le)\b/.test(msgLower) &&
+      /(opération|operation|contrôle|controle|check|vérif|verif|inspection|test)/.test(msgLower);
+
+    const isAddOperationInExistingPlan =
+      wantsAddOperation && hasPlanWord && planNums.length > 0;
+
+    // Si on détecte ce cas, on force TL + MP sans laisser l’IA hésiter
+    if (isAddOperationInExistingPlan) {
+      const { rows: tlFile } = await pool.query(
+        `SELECT id, filename FROM dcf_files 
+         WHERE filename ILIKE '%task list%' 
+         ORDER BY uploaded_at DESC LIMIT 1`
+      );
+      const { rows: mpFile } = await pool.query(
+        `SELECT id, filename FROM dcf_files 
+         WHERE filename ILIKE '%maintenance plan%' 
+         ORDER BY uploaded_at DESC LIMIT 1`
+      );
+
+      const forcedOut = {
+        action: "add_operation_in_plan",
+        is_manual: false,
+        reasoning:
+          "Ajout d’une opération/contrôle dans un plan existant : protocole SAP = créer/ajouter l’opération dans la Task List puis rattacher au Maintenance Plan.",
+        required_files: [
+          tlFile[0]
+            ? {
+                type: "Task List",
+                template_filename: tlFile[0].filename,
+                file_id: tlFile[0].id,
+                usage:
+                  "Créer/ajouter l’opération (short text, long text, durée, nb personnes, workcenter)."
+              }
+            : null,
+          mpFile[0]
+            ? {
+                type: "Maintenance Plan",
+                template_filename: mpFile[0].filename,
+                file_id: mpFile[0].id,
+                usage:
+                  `Rattacher la nouvelle opération au plan ${planNums[0]} (ou mettre à jour la TL liée).`
+              }
+            : null
+        ].filter(Boolean)
+      };
+
+      if (sessionId) {
+        await pool.query(
+          `
+          INSERT INTO dcf_requests
+            (session_id, request_text, detected_action, detected_type, recommended_file_id, response_json)
+          VALUES
+            ($1,$2,$3,$4,$5,$6)
+        `,
+          [
+            sessionId,
+            message,
+            forcedOut.action,
+            forcedOut.required_files?.[0]?.type || null,
+            forcedOut.required_files?.[0]?.file_id || null,
+            forcedOut
+          ]
+        );
+
+        await pool.query(
+          `
+          INSERT INTO dcf_messages (session_id, role, content)
+          VALUES ($1,'assistant',$2)
+        `,
+          [sessionId, JSON.stringify(forcedOut)]
+        );
+      }
+
+      return res.json(forcedOut);
+    }
+
+    // ------------------------------------------------------------
+    // 2) LLM NORMAL FLOW
+    // ------------------------------------------------------------
     const { rows: recentFiles } = await pool.query(
       `
       SELECT id, filename 
@@ -659,12 +746,14 @@ app.post("/api/dcf/wizard/analyze", async (req, res) => {
 Tu es l'Expert Technique SAP DCF.
 
 RÈGLES MÉTIER STRICTES (Protocole Charles):
-1) MODIFICATION TEXTE uniquement -> is_manual=true.
-2) AJOUT D'OPÉRATION -> Fichier Task List.
-3) AJOUT D'ÉQUIPEMENT DANS PLAN -> Fichier Maintenance Plan.
-4) DÉCOMMISSIONNEMENT -> 3 fichiers: Task List + Maintenance Plan + Equipment.
+1) MODIFICATION TEXTE uniquement (short/long text sans ajout/suppression d'opération) -> is_manual=true.
+2) AJOUT / CREATION d'OPÉRATION dans une TL -> DCF Task List.
+3) AJOUT d'une OPÉRATION/CONTRÔLE dans un PLAN EXISTANT -> DCF Task List + DCF Maintenance Plan.
+4) AJOUT d'ÉQUIPEMENT dans un PLAN -> DCF Maintenance Plan + DCF Equipment si nouvel équipement.
+5) DÉCOMMISSIONNEMENT -> DCF Task List + DCF Maintenance Plan + DCF Equipment.
+6) Si doute entre (1) et (3) : privilégie DCF (is_manual=false).
 
-Tu dois choisir parmi la bibliothèque UTILE ci-dessous.
+Tu dois choisir uniquement parmi la bibliothèque ci-dessous.
 `;
 
     const userPrompt = `
@@ -702,7 +791,6 @@ Réponds en JSON STRICT uniquement:
 
     const out = cleanJSON(completion.choices[0].message.content);
 
-    // ✅ CORRECTION: insertion compatible avec TON schéma dcf_requests
     if (sessionId) {
       const detectedType =
         (Array.isArray(out?.required_files) && out.required_files[0]?.type) ||
@@ -1282,7 +1370,7 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.4 Full Fix + TPLNR Memory" })
+  res.json({ status: "ok", version: "7.4.5 Protocole Charles + TL/MP forced" })
 );
 
 // -----------------------------------------------------------------------------
@@ -1290,5 +1378,5 @@ app.get("/api/dcf/health", (req, res) =>
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.4] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.4.5] Backend démarré sur http://${HOST}:${PORT}`);
 });
