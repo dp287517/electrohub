@@ -1,8 +1,10 @@
-// server_dcf.js — Assistant DCF SAP v7.4.6
-// FULL FIX + Memory + Protocole Charles renforcé + Validate/Instructions Smart
+// server_dcf.js — Assistant DCF SAP v7.4.7
+// FULL FIX + Memory + Protocole Charles renforcé + Validate Smart + ACTION Multi-Cols
 // - Pré-routage métier (ajout opération/contrôle dans plan existant => TL+MP)
-// - Validation scope-aware: ignore lignes ACTION vides, ne check que lignes actives
-// - Instructions length-aware: KTEXT/LTXA1/TEXT1 max SAP + troncature auto
+// - Validation scope-aware: ignore lignes sans vraie action SAP
+// - ACTION peut être dans ACTION, ACTION_01, ACTION_02, ACTION_03...
+// - Only whitelist actions: Insert | Change | Delete
+// - Instructions length-aware (SAP max lengths + troncature auto)
 // - Analyse Excel robuste SAP + mémoire relationnelle + historique noms
 
 import express from "express";
@@ -1042,7 +1044,7 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
   }
 });
 
-// ✅ VALIDATE intelligent scope-aware + ACTION-only
+// ✅ VALIDATE intelligent scope-aware + ACTION multi-colonnes
 app.post("/api/dcf/wizard/validate", async (req, res) => {
   try {
     const { fileIds, useCase = null } = req.body;
@@ -1050,7 +1052,6 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       return res.status(400).json({ error: "fileIds manquant." });
     }
 
-    // On récupère les buffers pour reconstruire l’analyse FULL
     const { rows: files } = await pool.query(
       `
       SELECT id, filename, analysis, file_data
@@ -1064,6 +1065,7 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       return res.status(404).json({ error: "Aucun fichier trouvé." });
     }
 
+    // Rebuild FULL analysis depuis file_data
     const rebuilt = files.map((f) => {
       let full = null;
       try {
@@ -1076,14 +1078,36 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       return { ...f, analysis_full: full };
     });
 
+    // ✅ PATCH ACTION MULTI-COLONNES + whitelist
     function getActiveRows(fullAnalysis) {
       const rowsIndex = fullAnalysis?.rows_index || {};
       const active = [];
+      const allowed = new Set(["insert", "change", "delete"]);
+
       for (const key of Object.keys(rowsIndex)) {
         const row = rowsIndex[key];
-        const action = String(row.ACTION || row.Action || "").trim();
-        if (action) {
-          active.push({ key, action, row });
+
+        // récupère toutes les colonnes ACTION, ACTION_01, ACTION_02, ACTION_03...
+        const actionKeys = Object.keys(row).filter(k =>
+          /^ACTION(_\d+)?$/i.test(k)
+        );
+
+        let foundAction = null;
+        for (const ak of actionKeys) {
+          const val = String(row[ak] || "").trim().toLowerCase();
+          if (allowed.has(val)) {
+            foundAction = { action: val, col: ak };
+            break;
+          }
+        }
+
+        if (foundAction) {
+          active.push({
+            key,
+            action: foundAction.action,
+            action_col: foundAction.col,
+            row
+          });
         }
       }
       return active;
@@ -1095,12 +1119,11 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       active_rows: getActiveRows(f.analysis_full)
     }));
 
-    // Si aucune ligne active => avertissement doux
     const noActive = activeRowsByFile.every((f) => !f.active_rows.length);
     if (noActive) {
       return res.json({
         report:
-          "Aucune ligne ACTION détectée : rien à valider. Si tu attends une modif, vérifie que ACTION=Insert/Change/Delete est bien renseigné.",
+          "Aucune vraie ACTION SAP détectée (Insert/Change/Delete). Vérifie que tes lignes modifiées ont bien ACTION_01/02/03 = Insert/Change/Delete selon le template.",
         critical: [],
         warnings: [],
         suggestions: []
@@ -1113,9 +1136,9 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
 Tu valides des fichiers DCF SAP.
 
 IMPORTANT:
-- Ignore toutes les lignes où ACTION est vide.
-- Ne contrôle QUE les lignes actives (ACTION=Insert/Change/Delete).
-- Les champs obligatoires varient selon le cas d'usage.
+- Ignore toutes les lignes sans vraie action SAP.
+- Les actions SAP peuvent être dans ACTION, ACTION_01, ACTION_02, ACTION_03...
+- Ne contrôle QUE les lignes avec Insert/Change/Delete.
 
 Cas d'usage: ${useCase || "unknown"}.
 
@@ -1460,7 +1483,7 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.6 Validate Smart + SAP Length Safe" })
+  res.json({ status: "ok", version: "7.4.7 Validate ACTION Multi-Cols" })
 );
 
 // -----------------------------------------------------------------------------
@@ -1468,5 +1491,5 @@ app.get("/api/dcf/health", (req, res) =>
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.6] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.4.7] Backend démarré sur http://${HOST}:${PORT}`);
 });
