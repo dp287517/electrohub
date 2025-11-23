@@ -1434,7 +1434,7 @@ export const api = {
       }),
   },
 
-/** --- DCF ASSISTANT v7.4 (Ultimate, Database Storage & Memory) --- */
+/** --- DCF ASSISTANT v7.4.4 (Ultimate, Database Storage & Memory) --- */
 dcf: {
   health: () => get("/api/dcf/health"),
 
@@ -1450,23 +1450,21 @@ dcf: {
 
   listFiles: () => get("/api/dcf/files"),
 
-  // NOTE: route pas (encore) présente dans le backend fourni.
-  // On garde pour compat future.
+  // Route optionnelle (pas bloquant si absente côté backend)
   getFile: (id) => get(`/api/dcf/files/${id}`),
 
   // --- SESSIONS ---
   startSession: (payload) => post("/api/dcf/startSession", payload),
   listSessions: () => get("/api/dcf/sessions"),
 
-  // NOTE: route pas (encore) présente dans le backend fourni.
-  // On garde pour compat future.
+  // Route optionnelle (pas bloquant si absente côté backend)
   getSession: (id) => get(`/api/dcf/session/${id}`),
 
   // --- COMMON / UPLOADS ---
   uploadAttachments: (files = [], sessionId = null) => {
     const fd = new FormData();
     (files || []).forEach((f) => fd.append("files", f));
-    // ✅ backend v7.4 lit req.body.sessionId
+    // backend lit req.body.sessionId
     if (sessionId) fd.append("sessionId", sessionId);
     return upload("/api/dcf/attachments/upload", fd);
   },
@@ -1489,13 +1487,13 @@ dcf: {
       useCase,
     }),
 
-  // --- WIZARD v7.4 (Intelligence & Automation + Memory Injection) ---
+  // --- WIZARD v7.4.x ---
   wizard: {
-    // Étape 1 : Analyse (Protocole Charles + mémoire métier injectée côté serveur)
+    // Étape 1 : Analyse
     analyze: (message, sessionId) =>
       post("/api/dcf/wizard/analyze", { message, sessionId }),
 
-    // Étape 3 : Instructions (Guidage + Vision SAP + mémoire métier injectée côté serveur)
+    // Étape 3 : Instructions
     instructions: (
       sessionId,
       requestText,
@@ -1509,10 +1507,9 @@ dcf: {
         attachmentIds,
       }),
 
-    // Étape 3 (Bonus) : Génération Fichier (Support XLSX et XLSM)
-    // Cette fonction retourne un BLOB (Fichier) et non du JSON
+    // Étape 3 (Bonus) : Génération fichier (retourne un BLOB)
     autofill: async (templateFilename, instructions) => {
-      const site = currentSite(); // Fonction interne à api.js
+      const site = currentSite();
       const headers = identityHeaders(new Headers({ "X-Site": site }));
       headers.set("Content-Type", "application/json");
 
@@ -1527,21 +1524,19 @@ dcf: {
         const text = await res.text().catch(() => "");
         throw new Error(text || `HTTP ${res.status}`);
       }
-      return res.blob(); // Retourne le fichier binaire
+      return res.blob();
     },
 
     // Étape 4 : Validation
     validate: (fileIds) =>
       post("/api/dcf/wizard/validate", { fileIds }),
 
-    // Module : Reverse DCF (Expliquer un fichier existant)
-    // NOTE: route pas (encore) présente dans le backend fourni.
+    // Module : Reverse DCF (optionnel si route absente)
     explain: (fileId) =>
       post("/api/dcf/wizard/explain", { fileId }),
   },
 
-  // Alias rétro-compatible
-  // NOTE: /api/dcf/validate pas (encore) présent dans backend fourni
+  // Alias rétro-compatible (optionnel si route absente)
   validate: ({ fileIds, mode = "auto" }) =>
     post("/api/dcf/validate", { fileIds, mode }),
 },
