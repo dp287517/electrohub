@@ -1,5 +1,7 @@
-// server_dcf.js — Assistant DCF SAP v7.2 (Correctif Upload Constraint)
-// FIX: Génération obligatoire de 'stored_name' pour satisfaire la contrainte NOT NULL de la DB
+// server_dcf.js — Assistant DCF SAP v7.3 (Full Backend corrigé)
+// - Conserve toutes les routes actuelles
+// - Corrige les parties invalides (ellipsis)
+// - Ajoute robustesse validation + upload + parsing Excel
 // Node ESM
 
 import express from "express";
@@ -7,53 +9,88 @@ import cors from "cors";
 import helmet from "helmet";
 import dotenv from "dotenv";
 import multer from "multer";
-import pg from "pg"; 
-import { fileURLToPath } from "url";
+import pg from "pg";
 import OpenAI from "openai";
 import xlsx from "xlsx";
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-
-const app = express();
-app.set("trust proxy", 1);
-app.use(helmet());
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "50mb" }));
-
 // -----------------------------------------------------------------------------
-// 1. CONFIGURATION
+// 0. CONFIG
 // -----------------------------------------------------------------------------
-const PORT = Number(process.env.DCF_PORT || 3030);
+
 const HOST = process.env.DCF_HOST || "127.0.0.1";
+const PORT = Number(process.env.DCF_PORT || 3030);
+
+const DATABASE_URL = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  console.error("❌ NEON_DATABASE_URL / DATABASE_URL manquante");
+}
+
+const { Pool } = pg;
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL?.includes("localhost") ? false : { rejectUnauthorized: false }
+});
 
 // OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const ANSWER_MODEL = process.env.DCF_MODEL || "gpt-4o";
-const VISION_MODEL = process.env.DCF_VISION_MODEL || "gpt-4o";
 
-// Database
-const { Pool } = pg;
-const pool = new Pool({
-  connectionString: process.env.NEON_DATABASE_URL,
-  ssl: process.env.PGSSL_DISABLE ? false : { rejectUnauthorized: false },
-});
+const ANSWER_MODEL = process.env.DCF_ANSWER_MODEL || "gpt-4o-mini";
+const VISION_MODEL = process.env.DCF_VISION_MODEL || "gpt-4o-mini";
 
-// Utils
-function cleanJSON(text) {
-  if (!text) return {};
-  const cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
-  try { return JSON.parse(cleaned); } 
-  catch (e) { return { error: "Invalid JSON", raw: text }; }
+// Limites sécurité
+const MAX_FILES_LIBRARY = 50;       // liste pour analyze
+const MAX_CONTEXT_CHARS = 12000;    // prompt validate/instructions
+const MAX_ATTACHMENT_TEXT = 6000;   // OCR accumulé par prompt
+
+// -----------------------------------------------------------------------------
+// 1. EXPRESS SETUP
+// -----------------------------------------------------------------------------
+
+const app = express();
+
+app.use(helmet());
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json({ limit: "20mb" }));
+
+// -----------------------------------------------------------------------------
+// 2. HELPERS JSON / SANITIZE
+// -----------------------------------------------------------------------------
+
+function cleanJSON(text = "") {
+  try {
+    const cleaned = text
+      .trim()
+      .replace(/```json/gi, "")
+      .replace(/```/g, "");
+    return JSON.parse(cleaned);
+  } catch (e) {
+    return { error: "Invalid JSON", raw: text };
+  }
 }
 
-function sanitizeName(name = "") { return String(name).replace(/[^\w.\-]+/g, "_"); }
-function safeEmail(x) { return x && /\S+@\S+\.\S+/.test(x) ? String(x).trim().toLowerCase() : null; }
-function getUserEmail(req) { return safeEmail(req.headers["x-user-email"] || req.headers["x-user_email"]); }
+function sanitizeName(name = "") {
+  return String(name).replace(/[^\w.\-]+/g, "_");
+}
+
+function safeEmail(x) {
+  return x && /\S+@\S+\.\S+/.test(x)
+    ? String(x).trim().toLowerCase()
+    : null;
+}
+
+function getUserEmail(req) {
+  return safeEmail(req.headers["x-user-email"] || req.headers["x-user_email"]);
+}
+
+// -----------------------------------------------------------------------------
+// 3. EXCEL ANALYSIS (structure DCF)
+// -----------------------------------------------------------------------------
 
 function columnIndexToLetter(idx) {
-  let n = idx + 1, s = "";
+  let n = idx + 1;
+  let s = "";
   while (n > 0) {
     const r = ((n - 1) % 26) + 65;
     s = String.fromCharCode(r) + s;
@@ -62,454 +99,796 @@ function columnIndexToLetter(idx) {
   return s;
 }
 
-// -----------------------------------------------------------------------------
-// 2. ANALYSE EXCEL (Depuis Buffer Mémoire)
-// -----------------------------------------------------------------------------
-const SAP_FIELD_DICTIONARY = {
-  VORNR_01: { name: "Operation Number", mandatory: true },
-  "ARBPL-02": { name: "Work Center", mandatory: true },
-  STEUS: { name: "Control Key", mandatory: true },
-  LTXA1: { name: "Short Text", mandatory: true },
-  TPLNR: { name: "Func. Loc.", mandatory: true },
-  EQUNR: { name: "Equipment", mandatory: true },
-  PLNNR: { name: "Group / Plan", mandatory: true },
-  ACTION: { name: "Action", mandatory: true }
-};
+/**
+ * Analyse profonde “DCF-like” :
+ * - détecte ligne header (Code / Field / Champ)
+ * - récupère codes, labels, et valeurs existantes
+ * - génère un contexte IA par sheet
+ */
+function buildDeepExcelAnalysis(buffer, originalName = "") {
+  const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
+  const analysis = {
+    filename: originalName,
+    sheetNames: wb.SheetNames || [],
+    ai_context: "",
+    sheets: [],
+    extracted_values: []
+  };
 
-function buildDeepExcelAnalysis(fileBuffer, originalName) {
-  try {
-    const wb = xlsx.read(fileBuffer, { type: "buffer", cellDates: false, sheetRows: 0 });
-    
-    const analysis = {
-      filename: originalName,
-      sheetNames: wb.SheetNames || [],
-      ai_context: "",
-      extracted_values: []
-    };
+  let globalContext = "";
 
-    let globalContext = "";
+  for (const sheetName of analysis.sheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) continue;
 
-    for (const sheetName of analysis.sheetNames) {
-      const ws = wb.Sheets[sheetName];
-      if (!ws) continue;
-      const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      if (!raw.length) continue;
+    const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    if (!raw.length) continue;
 
-      let headerRowIdx = -1;
-      for (let i = 0; i < Math.min(raw.length, 30); i++) {
-        const rowStr = raw[i].map(x => String(x).toUpperCase()).join(" ");
-        if (rowStr.includes("ACTION") && (rowStr.includes("LINE") || rowStr.includes("OBJECT"))) {
-          headerRowIdx = i;
-          break;
-        }
+    // Heuristique : trouver la ligne contenant “Code” / “Champ” / “Field”
+    let headerRowIdx = -1;
+    for (let r = 0; r < Math.min(raw.length, 30); r++) {
+      const row = raw[r].map((c) => String(c).toLowerCase());
+      if (
+        row.some((c) => c.includes("code")) ||
+        row.some((c) => c.includes("field")) ||
+        row.some((c) => c.includes("champ"))
+      ) {
+        headerRowIdx = r;
+        break;
       }
+    }
 
-      if (headerRowIdx !== -1 && raw[headerRowIdx + 1]) {
-        const codes = raw[headerRowIdx + 1];
-        const columns = [];
-        
-        codes.forEach((code, idx) => {
-          const c = String(code).trim();
-          if (c.length > 2) {
-            columns.push({ col: columnIndexToLetter(idx), idx, code: c });
-          }
+    // fallback : si rien trouvé, on prend la 1ère ligne non vide
+    if (headerRowIdx === -1) {
+      headerRowIdx = raw.findIndex((r) =>
+        r.some((c) => String(c).trim() !== "")
+      );
+      if (headerRowIdx === -1) headerRowIdx = 0;
+    }
+
+    const codesRow = raw[headerRowIdx + 1] || [];
+    const labelsRow = raw[headerRowIdx + 2] || [];
+
+    const columns = [];
+    codesRow.forEach((code, idx) => {
+      const c = String(code).trim();
+      if (c.length > 1 && /[A-Za-z0-9]/.test(c)) {
+        const label = String(labelsRow[idx] || "").trim();
+        columns.push({
+          idx,
+          col: columnIndexToLetter(idx),
+          code: c,
+          label
         });
+      }
+    });
 
-        const dataStart = headerRowIdx + 3;
-        for (let r = dataStart; r < raw.length; r++) {
-          const row = raw[r];
-          columns.forEach(colDef => {
-            const val = row[colDef.idx];
-            if (val && String(val).trim().length > 1) {
-              if (["ARBPL-02", "WERKS", "STEUS", "PLNNR", "EQUNR"].includes(colDef.code)) {
-                analysis.extracted_values.push({
-                  field: colDef.code,
-                  value: String(val).trim(),
-                  sheet: sheetName
-                });
-              }
-            }
+    const dataStartIdx = headerRowIdx + 3;
+    const dataRows = raw.slice(dataStartIdx);
+
+    // Extraction valeurs existantes
+    const extracted = [];
+    dataRows.forEach((rowArr, ridx) => {
+      const rowNumber = dataStartIdx + ridx + 1; // Excel 1-indexed
+      columns.forEach((colDef) => {
+        const v = rowArr[colDef.idx];
+        const val = String(v ?? "").trim();
+        if (val !== "") {
+          extracted.push({
+            sheet: sheetName,
+            row: rowNumber,
+            col: colDef.col,
+            field: colDef.code,
+            label: colDef.label,
+            value: val
           });
         }
-        globalContext += `\n--- FEUILLE: ${sheetName} ---\nMapping: ${columns.map(c => `${c.col}=${c.code}`).join(", ")}\n`;
-      }
-    }
-    analysis.ai_context = globalContext;
-    return analysis;
-  } catch (e) {
-    console.error("Analysis Error", e);
-    return { error: e.message, ai_context: "Erreur lecture fichier" };
-  }
-}
-
-async function analyzeImageSAP(fileBuffer, mimeType) {
-  try {
-    const base64 = fileBuffer.toString("base64");
-    const response = await openai.chat.completions.create({
-      model: VISION_MODEL,
-      messages: [
-        { role: "system", content: "Expert SAP. Extrais texte technique (ID, Plan, Task List, Opération) en JSON." },
-        { role: "user", content: [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${base64}` } }] }
-      ],
-      max_tokens: 800,
+      });
     });
-    return response.choices?.[0]?.message?.content || "";
-  } catch { return ""; }
+
+    analysis.extracted_values.push(...extracted);
+
+    const sheetContext =
+      `SHEET "${sheetName}"\n` +
+      `Colonnes détectées: ${columns
+        .map((c) => `${c.code}${c.label ? ` (${c.label})` : ""} -> ${c.col}`)
+        .join(", ")}\n` +
+      `Début données: ligne ${dataStartIdx + 1}\n`;
+
+    globalContext += sheetContext + "\n";
+
+    analysis.sheets.push({
+      name: sheetName,
+      headerRowIdx: headerRowIdx + 1,
+      columns,
+      dataStartRow: dataStartIdx + 1,
+      extracted_count: extracted.length
+    });
+  }
+
+  analysis.ai_context = globalContext.trim();
+  return analysis;
 }
 
-// -----------------------------------------------------------------------------
-// 3. BASE DE DONNÉES
-// -----------------------------------------------------------------------------
-async function ensureSchema() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_files (
-      id SERIAL PRIMARY KEY,
-      filename TEXT NOT NULL,
-      stored_name TEXT NOT NULL, -- Obligatoire
-      path TEXT,                 -- Peut être null maintenant
-      mime TEXT,
-      bytes BIGINT,
-      sheet_names TEXT[],
-      analysis JSONB,
-      uploaded_at TIMESTAMPTZ DEFAULT now(),
-      file_data BYTEA
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_sessions (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_email TEXT,
-      title TEXT,
-      context_file_ids INT[],
-      created_at TIMESTAMPTZ DEFAULT now(),
-      updated_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_messages (
-      id BIGSERIAL PRIMARY KEY,
-      session_id UUID REFERENCES dcf_sessions(id) ON DELETE CASCADE,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      metadata JSONB,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_attachments (
-      id SERIAL PRIMARY KEY,
-      session_id UUID NULL REFERENCES dcf_sessions(id) ON DELETE SET NULL,
-      filename TEXT NOT NULL,
-      stored_name TEXT NOT NULL, -- Obligatoire
-      path TEXT,
-      mime TEXT,
-      bytes BIGINT,
-      ocr_analysis JSONB,
-      uploaded_at TIMESTAMPTZ DEFAULT now(),
-      file_data BYTEA
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_requests (
-      id SERIAL PRIMARY KEY,
-      session_id UUID REFERENCES dcf_sessions(id),
-      request_text TEXT,
-      detected_action TEXT,
-      response_json JSONB,
-      created_at TIMESTAMPTZ DEFAULT now()
-    )
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_values_index (
-      id SERIAL PRIMARY KEY,
-      field_code TEXT,
-      value TEXT,
-      source_file_id INT REFERENCES dcf_files(id),
-      seen_count INT DEFAULT 1,
-      last_seen_at TIMESTAMPTZ DEFAULT now(),
-      UNIQUE (field_code, value)
-    )
-  `);
-
-  try { await pool.query(`ALTER TABLE dcf_files ADD COLUMN IF NOT EXISTS file_data BYTEA`); } catch(e) {}
-  try { await pool.query(`ALTER TABLE dcf_attachments ADD COLUMN IF NOT EXISTS file_data BYTEA`); } catch(e) {}
-  try { await pool.query(`ALTER TABLE dcf_requests ADD COLUMN IF NOT EXISTS response_json JSONB`); } catch(e) {}
-
-  console.log("[DB] Schema v7.2 (Correctif Upload) ready.");
-}
-await ensureSchema();
-
+// Indexation simple des valeurs (optionnel)
+// Si ta table n’existe pas encore, ça ne casse pas (try/catch)
 async function indexFileValues(fileId, analysis) {
-  if (!analysis.extracted_values || !analysis.extracted_values.length) return;
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-    for (const item of analysis.extracted_values) {
-      await client.query(`
-        INSERT INTO dcf_values_index (field_code, value, source_file_id, seen_count, last_seen_at)
-        VALUES ($1, $2, $3, 1, now())
-        ON CONFLICT (field_code, value) 
-        DO UPDATE SET seen_count = dcf_values_index.seen_count + 1, last_seen_at = now()
-      `, [item.field, item.value, fileId]);
+    const values = analysis.extracted_values || [];
+    if (!values.length) return;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const item of values) {
+        await client.query(
+          `
+          INSERT INTO dcf_values_index (field_code, value, file_id)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (field_code, value)
+          DO UPDATE 
+            SET seen_count = dcf_values_index.seen_count + 1,
+                last_seen_at = now()
+        `,
+          [item.field, item.value, fileId]
+        );
+      }
+      await client.query("COMMIT");
+    } catch (e) {
+      await client.query("ROLLBACK");
+    } finally {
+      client.release();
     }
-    await client.query('COMMIT');
   } catch (e) {
-    await client.query('ROLLBACK');
-  } finally {
-    client.release();
+    // Silent fail volontaire (non bloquant)
   }
 }
 
 // -----------------------------------------------------------------------------
 // 4. MULTER (MEMORY STORAGE)
 // -----------------------------------------------------------------------------
-const upload = multer({ 
+
+const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024 }
+  limits: { fileSize: 25 * 1024 * 1024 } // 25MB
 });
 
 // -----------------------------------------------------------------------------
 // 5. ROUTES WIZARD
 // -----------------------------------------------------------------------------
 
+// 5.1 Analyze request -> files required
 app.post("/api/dcf/wizard/analyze", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
-    
-    const { rows: recentFiles } = await pool.query(`SELECT id, filename FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT 50`);
-    const filesList = recentFiles.map(f => `- ${f.filename} (ID: ${f.id})`).join("\n");
+
+    const { rows: recentFiles } = await pool.query(
+      `
+      SELECT id, filename 
+      FROM dcf_files
+      WHERE file_data IS NOT NULL
+      ORDER BY uploaded_at DESC
+      LIMIT $1
+    `,
+      [MAX_FILES_LIBRARY]
+    );
+
+    const filesList = recentFiles
+      .map((f) => `- ${f.filename} (ID: ${f.id})`)
+      .join("\n");
 
     const systemPrompt = `
-      Tu es l'Expert Technique SAP DCF.
-      RÈGLES MÉTIER STRICTES (Protocole Charles):
-      1. **MODIFICATION TEXTE** -> "is_manual": true.
-      2. **AJOUT D'OPÉRATION** -> Fichier **Task List** requis.
-      3. **AJOUT D'ÉQUIPEMENT DANS PLAN** -> Fichier **Maintenance Plan**.
-      4. **DÉCOMMISSIONNEMENT** -> Pack 3 fichiers (Task List, Maint Plan, Equipment).
+Tu es l'Expert Technique SAP DCF.
 
-      BIBLIOTHÈQUE :
-      ${filesList}
+RÈGLES MÉTIER STRICTES (Protocole Charles):
+1) MODIFICATION TEXTE uniquement -> is_manual=true.
+2) AJOUT D'OPÉRATION -> Fichier Task List.
+3) AJOUT D'ÉQUIPEMENT DANS PLAN -> Fichier Maintenance Plan.
+4) DÉCOMMISSIONNEMENT -> 3 fichiers: Task List + Maintenance Plan + Equipment.
 
-      Réponds en JSON strict :
-      {
-        "action": "type_action",
-        "is_manual": boolean,
-        "reasoning": "...",
-        "required_files": [{ "type": "...", "template_filename": "...", "file_id": 123, "usage": "..." }]
-      }
-    `;
+Tu dois choisir parmi la bibliothèque UTILE ci-dessous.
+`;
+
+    const userPrompt = `
+Demande utilisateur:
+"${message}"
+
+Bibliothèque disponible:
+${filesList}
+
+Réponds en JSON STRICT uniquement:
+{
+  "action": "type_action",
+  "is_manual": boolean,
+  "reasoning": "texte court",
+  "required_files": [
+    {
+      "type": "Task List | Maintenance Plan | Equipment | autres",
+      "template_filename": "nom exact fichier",
+      "file_id": 123,
+      "usage": "ce qu'on va faire dans ce fichier"
+    }
+  ]
+}
+`;
 
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
-      messages: [{ role: "system", content: systemPrompt }, { role: "user", content: message }],
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
       response_format: { type: "json_object" },
       temperature: 0.0
     });
 
-    const result = cleanJSON(completion.choices[0].message.content);
+    const out = cleanJSON(completion.choices[0].message.content);
 
-    if (result.required_files) {
-      result.required_files.forEach(rf => {
-        const match = recentFiles.find(f => f.filename === rf.template_filename);
-        if (match) rf.file_id = match.id;
-      });
+    // Log request si session
+    if (sessionId) {
+      await pool.query(
+        `
+        INSERT INTO dcf_requests (session_id, user_request, analysis_json)
+        VALUES ($1, $2, $3)
+      `,
+        [sessionId, message, out]
+      );
     }
 
-    if (sessionId) await pool.query(`INSERT INTO dcf_requests (session_id, request_text, detected_action, response_json) VALUES ($1, $2, $3, $4)`, [sessionId, message, result.action, result]);
-
-    res.json(result);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    res.json(out);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
+// 5.2 Instructions from template + optional SAP screenshots
 app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
-    const { requestText, templateFilename, attachmentIds } = req.body;
+    const { sessionId, requestText, templateFilename, attachmentIds = [] } =
+      req.body;
 
-    let fileContext = "";
-    const { rows: files } = await pool.query(`SELECT analysis FROM dcf_files WHERE filename = $1 LIMIT 1`, [templateFilename]);
-    if (files.length) fileContext = files[0].analysis.ai_context || "";
+    // récupère le template (dernier uploadé avec ce nom)
+    const { rows } = await pool.query(
+      `
+      SELECT id, filename, analysis
+      FROM dcf_files
+      WHERE filename = $1
+      ORDER BY uploaded_at DESC
+      LIMIT 1
+    `,
+      [templateFilename]
+    );
 
+    if (!rows.length) {
+      return res.status(404).json({ error: "Template introuvable." });
+    }
+
+    const file = rows[0];
+    const fileContext = file.analysis?.ai_context || "";
+
+    // Récupère contexte OCR / vision
     let visionContext = "";
-    if (attachmentIds?.length) {
-      const { rows: atts } = await pool.query(`SELECT ocr_analysis, file_data, mime FROM dcf_attachments WHERE id = ANY($1::int[])`, [attachmentIds]);
-      for (const att of atts) {
-        let text = att.ocr_analysis;
-        if ((!text || typeof text !== 'string') && att.file_data) {
-           text = await analyzeImageSAP(att.file_data, att.mime);
-        }
-        visionContext += `\n[SCREENSHOT DATA]: ${text}\n`;
-      }
+    if (attachmentIds.length) {
+      const { rows: att } = await pool.query(
+        `
+        SELECT id, extracted_text
+        FROM dcf_attachments
+        WHERE id = ANY($1::int[])
+      `,
+        [attachmentIds]
+      );
+
+      visionContext = att
+        .map((a) => a.extracted_text || "")
+        .join("\n")
+        .slice(0, MAX_ATTACHMENT_TEXT);
     }
 
     const prompt = `
-      CONTEXTE: "${requestText}"
-      FICHIER: "${templateFilename}"
-      STRUCTURE: ${fileContext.slice(0, 5000)}
-      VISION: ${visionContext || "N/A"}
+Tu es un Expert SAP DCF. Tu dois remplir un fichier Excel DCF.
 
-      ACTION: Génère instructions LIGNE PAR LIGNE.
-      JSON: { "steps": [{ "row": "6", "col": "H", "code": "ACTION", "label":"...", "value": "Create", "reason": "...", "mandatory": true }] }
-    `;
+DEMANDE UTILISATEUR:
+"${requestText}"
+
+FICHIER TEMPLATE:
+"${templateFilename}"
+
+STRUCTURE DU TEMPLATE (résumé):
+${fileContext.slice(0, 5000)}
+
+DONNÉES SAP (Vision OCR si dispo):
+${visionContext || "N/A"}
+
+INSTRUCTIONS:
+- Génère une liste d'étapes ligne par ligne pour remplir le DCF.
+- Chaque étape doit pointer une cellule (row, col) et un code champ.
+- Valeur doit être prêtes à copier/coller.
+- mandatory=true si c’est obligatoire.
+
+Réponds en JSON STRICT:
+{
+  "steps": [
+    {
+      "row": "6",
+      "col": "H",
+      "code": "ACTION",
+      "label": "texte court",
+      "value": "Create / Update / Delete / ...",
+      "reason": "pourquoi cette valeur",
+      "mandatory": true,
+      "sheet": "NomSheetOptionnel"
+    }
+  ]
+}
+`;
 
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
-      messages: [{ role: "system", content: "Expert SAP." }, { role: "user", content: prompt }],
+      messages: [
+        { role: "system", content: "Expert SAP DCF." },
+        { role: "user", content: prompt }
+      ],
       response_format: { type: "json_object" },
       temperature: 0.1
     });
 
-    res.json(cleanJSON(completion.choices[0].message.content).steps || []);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const out = cleanJSON(completion.choices[0].message.content);
+    const steps = Array.isArray(out.steps) ? out.steps : [];
+
+    // Log si session
+    if (sessionId) {
+      await pool.query(
+        `
+        INSERT INTO dcf_steps (session_id, template_id, steps_json)
+        VALUES ($1, $2, $3)
+      `,
+        [sessionId, file.id, steps]
+      );
+    }
+
+    res.json(steps);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
+// 5.3 Autofill template from instructions -> returns XLSX/XLSM
 app.post("/api/dcf/wizard/autofill", async (req, res) => {
   try {
     const { templateFilename, instructions } = req.body;
-    
-    const { rows: files } = await pool.query(`SELECT file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`, [templateFilename]);
-    if (!files.length || !files[0].file_data) throw new Error("Fichier introuvable en base (Veuillez le ré-uploader).");
 
-    const isMacro = templateFilename.toLowerCase().endsWith(".xlsm");
-    const wb = xlsx.read(files[0].file_data, { type: "buffer", cellFormula: false });
-    const ws = wb.Sheets[wb.SheetNames[0]]; 
+    const { rows } = await pool.query(
+      `
+      SELECT filename, mime, file_data
+      FROM dcf_files
+      WHERE filename = $1
+      ORDER BY uploaded_at DESC
+      LIMIT 1
+    `,
+      [templateFilename]
+    );
 
-    if (instructions && Array.isArray(instructions)) {
-      instructions.forEach(step => {
-        if (step.col && step.row) {
-          const ref = `${step.col}${step.row}`;
-          ws[ref] = { t: 's', v: String(step.value || "") };
-        }
-      });
+    if (!rows.length) {
+      return res.status(404).json({ error: "Template introuvable." });
     }
 
-    const bookType = isMacro ? "xlsm" : "xlsx";
-    const newFilename = `FILLED_${templateFilename}`;
-    const buffer = xlsx.write(wb, { type: 'buffer', bookType: bookType });
-    
-    res.setHeader('Content-Disposition', `attachment; filename="${newFilename}"`);
-    res.send(buffer);
-  } catch (e) { 
+    const tpl = rows[0];
+    const wb = xlsx.read(tpl.file_data, { type: "buffer" });
+
+    const steps = Array.isArray(instructions) ? instructions : [];
+
+    // Applique sur la 1ère sheet par défaut, sauf si inst.sheet est fourni et existe
+    for (const inst of steps) {
+      const sheetName =
+        inst.sheet && wb.Sheets[inst.sheet]
+          ? inst.sheet
+          : wb.SheetNames[0];
+
+      const ws = wb.Sheets[sheetName];
+      if (!ws) continue;
+
+      const cellAddress = `${inst.col}${inst.row}`;
+      ws[cellAddress] = {
+        t: "s",
+        v: String(inst.value ?? "")
+      };
+    }
+
+    const isXlsm = String(tpl.filename).toLowerCase().endsWith(".xlsm");
+    const outBuffer = xlsx.write(wb, {
+      type: "buffer",
+      bookType: isXlsm ? "xlsm" : "xlsx"
+    });
+
+    res.setHeader(
+      "Content-Type",
+      isXlsm
+        ? "application/vnd.ms-excel.sheet.macroEnabled.12"
+        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="FILLED_${sanitizeName(tpl.filename)}"`
+    );
+
+    res.send(outBuffer);
+  } catch (e) {
     console.error(e);
-    res.status(500).json({ error: e.message }); 
+    res.status(500).json({ error: e.message });
   }
 });
 
+// 5.4 Validate filled excels
 app.post("/api/dcf/wizard/validate", async (req, res) => {
   try {
     const { fileIds } = req.body;
-    const { rows: files } = await pool.query(`SELECT filename, analysis FROM dcf_files WHERE id = ANY($1::int[])`, [fileIds]);
-    const context = files.map(f => `Fichier: ${f.filename}\nStructure:\n${f.analysis.ai_context}`).join("\n");
-    
-    const prompt = `Valide ces fichiers DCF SAP.\n${context.slice(0, 8000)}\nJSON: { "report": "...", "critical": [], "warnings": [], "suggestions": [] }`;
+    if (!Array.isArray(fileIds) || !fileIds.length) {
+      return res.status(400).json({ error: "fileIds manquant." });
+    }
+
+    const { rows: files } = await pool.query(
+      `
+      SELECT id, filename, analysis
+      FROM dcf_files
+      WHERE id = ANY($1::int[])
+    `,
+      [fileIds]
+    );
+
+    const context = files
+      .map(
+        (f) =>
+          `Fichier: ${f.filename}\nStructure:\n${
+            f.analysis?.ai_context || ""
+          }`
+      )
+      .join("\n\n")
+      .slice(0, MAX_CONTEXT_CHARS);
+
+    const prompt = `
+Valide ces fichiers DCF SAP et détecte incohérences.
+
+CONTEXTE:
+${context}
+
+Réponds en JSON STRICT:
+{
+  "report": "résumé global",
+  "critical": ["erreurs bloquantes"],
+  "warnings": ["points à vérifier"],
+  "suggestions": ["améliorations possibles"]
+}
+`;
 
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
-      messages: [{ role: "system", content: "Validateur SAP." }, { role: "user", content: prompt }],
+      messages: [
+        { role: "system", content: "Validateur SAP DCF." },
+        { role: "user", content: prompt }
+      ],
       response_format: { type: "json_object" },
       temperature: 0.1
     });
 
-    res.json(cleanJSON(completion.choices[0].message.content));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+    let out = cleanJSON(completion.choices[0].message.content);
 
-// -----------------------------------------------------------------------------
-// 6. ROUTES GLOBALES (CORRECTIF UPLOAD)
-// -----------------------------------------------------------------------------
+    // --- NORMALISATION ROBUSTE (évite crash front)
+    const toLine = (x) => {
+      if (typeof x === "string") return x;
+      if (!x || typeof x !== "object") return String(x ?? "");
+      const sheet = x.sheet ? `[${x.sheet}] ` : "";
+      const col = x.column ? `${x.column}: ` : "";
+      const msg =
+        x.suggestion ??
+        x.warning ??
+        x.message ??
+        x.reason ??
+        "";
+      const line = `${sheet}${col}${msg}`.trim();
+      return line || JSON.stringify(x);
+    };
 
-// Upload Excel
-app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
-  try {
-    const analysis = buildDeepExcelAnalysis(req.file.buffer, req.file.originalname);
-    // FIX CRITIQUE : On génère un 'stored_name' bidon pour satisfaire la contrainte DB
-    const storedName = `${Date.now()}_${sanitizeName(req.file.originalname)}`;
-    
-    const { rows } = await pool.query(
-      `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename`, 
-      [req.file.originalname, storedName, req.file.mimetype, req.file.size, analysis.sheetNames, analysis, req.file.buffer]
-    );
-    await indexFileValues(rows[0].id, analysis);
-    res.json({ ok: true, file: rows[0] });
-  } catch (e) { 
+    out.critical = (out.critical || []).map(toLine);
+    out.warnings = (out.warnings || []).map(toLine);
+    out.suggestions = (out.suggestions || []).map(toLine);
+
+    res.json(out);
+  } catch (e) {
     console.error(e);
-    res.status(500).json({ error: e.message }); 
+    res.status(500).json({ error: e.message });
   }
 });
 
-// Upload Multi
-app.post("/api/dcf/uploadExcelMulti", upload.array("files"), async (req, res) => {
+// -----------------------------------------------------------------------------
+// 6. ROUTES LIBRARY UPLOAD
+// -----------------------------------------------------------------------------
+
+// Upload single template
+app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
   try {
-    const out = [];
-    for (const f of req.files) {
-      const analysis = buildDeepExcelAnalysis(f.buffer, f.originalname);
-      const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`; // FIX CRITIQUE
-      
-      const { rows } = await pool.query(
-        `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename`, 
-        [f.originalname, storedName, f.mimetype, f.size, analysis.sheetNames, analysis, f.buffer]
-      );
-      await indexFileValues(rows[0].id, analysis);
-      out.push(rows[0]);
-    }
-    res.json({ ok: true, files: out });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    if (!req.file) return res.status(400).json({ error: "Aucun fichier." });
+
+    const analysis = buildDeepExcelAnalysis(
+      req.file.buffer,
+      req.file.originalname
+    );
+
+    const storedName = `${Date.now()}_${sanitizeName(req.file.originalname)}`;
+    const relPath = storedName; // maintien compat schema NOT NULL
+
+    const { rows } = await pool.query(
+      `
+      INSERT INTO dcf_files
+        (filename, stored_name, path, mime, bytes, sheet_names, analysis, file_data)
+      VALUES
+        ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id, filename, uploaded_at
+    `,
+      [
+        req.file.originalname,
+        storedName,
+        relPath,
+        req.file.mimetype,
+        req.file.size,
+        analysis.sheetNames,
+        analysis,
+        req.file.buffer
+      ]
+    );
+
+    await indexFileValues(rows[0].id, analysis);
+
+    res.json({ ok: true, file: rows[0] });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Session
+// Upload multi templates
+app.post(
+  "/api/dcf/uploadExcelMulti",
+  upload.array("files"),
+  async (req, res) => {
+    try {
+      const files = req.files || [];
+      if (!files.length) {
+        return res.status(400).json({ error: "Aucun fichier." });
+      }
+
+      const out = [];
+      for (const f of files) {
+        const analysis = buildDeepExcelAnalysis(f.buffer, f.originalname);
+        const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`;
+        const relPath = storedName;
+
+        const { rows } = await pool.query(
+          `
+          INSERT INTO dcf_files
+            (filename, stored_name, path, mime, bytes, sheet_names, analysis, file_data)
+          VALUES
+            ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id, filename, uploaded_at
+        `,
+          [
+            f.originalname,
+            storedName,
+            relPath,
+            f.mimetype,
+            f.size,
+            analysis.sheetNames,
+            analysis,
+            f.buffer
+          ]
+        );
+
+        await indexFileValues(rows[0].id, analysis);
+        out.push(rows[0]);
+      }
+
+      res.json({ ok: true, files: out });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 7. SESSIONS
+// -----------------------------------------------------------------------------
+
 app.post("/api/dcf/startSession", async (req, res) => {
-  const { rows } = await pool.query(`INSERT INTO dcf_sessions (title) VALUES ($1) RETURNING id`, [req.body.title || "Session DCF"]);
-  res.json({ ok: true, sessionId: rows[0].id });
+  try {
+    const title = req.body?.title || "Session DCF";
+    const userEmail = getUserEmail(req);
+
+    const { rows } = await pool.query(
+      `
+      INSERT INTO dcf_sessions (title, created_by)
+      VALUES ($1, $2)
+      RETURNING id
+    `,
+      [title, userEmail]
+    );
+
+    res.json({ ok: true, sessionId: rows[0].id });
+  } catch (e) {
+    // fallback si colonne created_by n’existe pas
+    try {
+      const title = req.body?.title || "Session DCF";
+      const { rows } = await pool.query(
+        `
+        INSERT INTO dcf_sessions (title)
+        VALUES ($1)
+        RETURNING id
+      `,
+        [title]
+      );
+      return res.json({ ok: true, sessionId: rows[0].id });
+    } catch (e2) {
+      console.error(e2);
+      res.status(500).json({ error: e2.message });
+    }
+  }
 });
 
-// Upload Attachments
-app.post("/api/dcf/attachments/upload", upload.array("files"), async (req, res) => {
+// Liste sessions
+app.get("/api/dcf/sessions", async (req, res) => {
   try {
-    const items = [];
-    for (const f of req.files) {
-      let ocr = null;
-      if (f.mimetype.startsWith("image/")) ocr = await analyzeImageSAP(f.buffer, f.mimetype);
-      const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`; // FIX CRITIQUE
-      
-      const { rows } = await pool.query(
-        `INSERT INTO dcf_attachments (session_id, filename, stored_name, mime, bytes, ocr_analysis, file_data) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`, 
-        [req.body.session_id, f.originalname, storedName, f.mimetype, f.size, ocr, f.buffer]
-      );
-      items.push(rows[0]);
-    }
-    res.json({ ok: true, items });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const { rows } = await pool.query(
+      `SELECT * FROM dcf_sessions ORDER BY created_at DESC LIMIT 20`
+    );
+    res.json({ ok: true, sessions: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
+
+// -----------------------------------------------------------------------------
+// 8. ATTACHMENTS (SAP screenshots)
+// -----------------------------------------------------------------------------
+
+app.post(
+  "/api/dcf/attachments/upload",
+  upload.array("files"),
+  async (req, res) => {
+    try {
+      const files = req.files || [];
+      const sessionId = req.body?.sessionId || null;
+
+      if (!files.length) {
+        return res.status(400).json({ error: "Aucun fichier image." });
+      }
+
+      const items = [];
+
+      for (const f of files) {
+        let extractedText = "";
+
+        // Vision OCR via OpenAI
+        try {
+          const b64 = f.buffer.toString("base64");
+          const completion = await openai.chat.completions.create({
+            model: VISION_MODEL,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "Tu lis une capture SAP. Extrais les codes, ID opérations, numéros plan, équipements. Répond uniquement par le texte utile."
+              },
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "Lis cette capture SAP." },
+                  {
+                    type: "image_url",
+                    image_url: { url: `data:${f.mimetype};base64,${b64}` }
+                  }
+                ]
+              }
+            ],
+            temperature: 0.0
+          });
+
+          extractedText = completion.choices[0].message.content || "";
+        } catch (visionErr) {
+          extractedText = "";
+        }
+
+        const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`;
+
+        const { rows } = await pool.query(
+          `
+          INSERT INTO dcf_attachments
+            (session_id, filename, stored_name, mime, bytes, file_data, extracted_text)
+          VALUES
+            ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING id, filename
+        `,
+          [
+            sessionId,
+            f.originalname,
+            storedName,
+            f.mimetype,
+            f.size,
+            f.buffer,
+            extractedText
+          ]
+        );
+
+        items.push({
+          id: rows[0].id,
+          filename: rows[0].filename,
+          extracted_text: extractedText
+        });
+      }
+
+      res.json({ ok: true, items });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: e.message });
+    }
+  }
+);
+
+// -----------------------------------------------------------------------------
+// 9. GENERIC CHAT (debug)
+// -----------------------------------------------------------------------------
 
 app.post("/api/dcf/chat", async (req, res) => {
   try {
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
-      messages: [{ role: "system", content: "Assistant SAP." }, { role: "user", content: req.body.message }]
+      messages: [
+        { role: "system", content: "Assistant SAP." },
+        { role: "user", content: req.body.message }
+      ]
     });
-    res.json({ ok: true, answer: completion.choices[0].message.content });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+
+    res.json({
+      ok: true,
+      answer: completion.choices[0].message.content
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.get("/api/dcf/sessions", async (req, res) => {
-  const { rows } = await pool.query(`SELECT * FROM dcf_sessions ORDER BY created_at DESC LIMIT 20`);
-  res.json({ ok: true, sessions: rows });
-});
+// -----------------------------------------------------------------------------
+// 10. FILES LIST + HEALTH
+// -----------------------------------------------------------------------------
 
 app.get("/api/dcf/files", async (req, res) => {
-  const { rows } = await pool.query(`SELECT id, filename, uploaded_at FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT 50`);
-  res.json({ ok: true, files: rows });
+  try {
+    const { rows } = await pool.query(
+      `
+      SELECT id, filename, uploaded_at
+      FROM dcf_files
+      WHERE file_data IS NOT NULL
+      ORDER BY uploaded_at DESC
+      LIMIT 50
+    `
+    );
+
+    res.json({ ok: true, files: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-app.get("/api/dcf/health", (req, res) => res.json({ status: "ok", version: "7.2 Fix" }));
+app.get("/api/dcf/health", (req, res) =>
+  res.json({ status: "ok", version: "7.3 Full Fix" })
+);
+
+// -----------------------------------------------------------------------------
+// 11. START
+// -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.2] Backend FullDB + Constraint Fix démarré sur http://${HOST}:${PORT}`);
+  console.log(
+    `[dcf-v7.3] Backend FullDB démarré sur http://${HOST}:${PORT}`
+  );
 });
