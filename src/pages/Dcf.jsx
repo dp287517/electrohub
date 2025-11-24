@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api } from "../lib/api.js";
 import {
   FaArrowRight,
@@ -18,14 +18,13 @@ import {
   FaUpload,
   FaQuestionCircle,
   FaFilter,
-  FaEye,
-  FaEyeSlash,
-  FaBug
+  FaBug,
+  FaTrash,
 } from "react-icons/fa";
 
-// -----------------------------------------------------------------------------
-// UI COMPONENTS
-// -----------------------------------------------------------------------------
+/* ============================================================================
+   UI BASICS
+============================================================================ */
 
 const StepIndicator = ({ currentStep, steps }) => (
   <div className="mb-8 px-4">
@@ -78,7 +77,7 @@ const FieldInstruction = ({
   value,
   reason,
   mandatory,
-  sheet
+  sheet,
 }) => (
   <div className="flex flex-col sm:flex-row gap-4 p-4 bg-white rounded-lg border border-slate-200 mb-3 hover:border-blue-300 transition-colors shadow-sm animate-fade-in-up group">
     <div className="flex-shrink-0 flex flex-col items-center justify-center min-w-[70px] bg-slate-50 rounded border border-slate-200 p-2 group-hover:bg-blue-50 transition-colors">
@@ -136,12 +135,50 @@ const FieldInstruction = ({
   </div>
 );
 
-// -----------------------------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------------------------
+/* ============================================================================
+   TOASTS (bonus robustesse UX)
+============================================================================ */
+
+const Toasts = ({ toasts, onClose }) => (
+  <div className="fixed right-4 top-4 z-50 flex flex-col gap-2 w-[360px] max-w-[90vw]">
+    {toasts.map((t) => (
+      <div
+        key={t.id}
+        className={`rounded-xl shadow-lg border px-4 py-3 animate-fade-in-up ${
+          t.type === "error"
+            ? "bg-red-50 border-red-200 text-red-900"
+            : t.type === "warn"
+            ? "bg-yellow-50 border-yellow-200 text-yellow-900"
+            : "bg-emerald-50 border-emerald-200 text-emerald-900"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="text-sm font-bold">{t.title}</div>
+          <button
+            onClick={() => onClose(t.id)}
+            className="text-xs opacity-60 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+        {t.message && (
+          <div className="text-xs mt-1 whitespace-pre-wrap">{t.message}</div>
+        )}
+        {t.details && (
+          <div className="text-[11px] mt-2 opacity-80 whitespace-pre-wrap">
+            {t.details}
+          </div>
+        )}
+      </div>
+    ))}
+  </div>
+);
+
+/* ============================================================================
+   HELPERS
+============================================================================ */
 
 const excelColToNumber = (col = "") => {
-  // "A"->1, "Z"->26, "AA"->27...
   let n = 0;
   const s = String(col).toUpperCase().trim();
   for (let i = 0; i < s.length; i++) {
@@ -157,21 +194,26 @@ const safeRowNumber = (r) => {
   return m ? Number(m[0]) : Number.MAX_SAFE_INTEGER;
 };
 
-// -----------------------------------------------------------------------------
-// MAIN WIZARD FRONTEND v7.5.0
-// -----------------------------------------------------------------------------
-
 export default function DCFWizard() {
-  const stepsLabel = [
-    "Demande",
-    "Choix fichier(s)",
-    "Instructions",
-    "Validation"
-  ];
+  const stepsLabel = ["Demande", "Choix fichier(s)", "Instructions", "Validation"];
 
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState(null);
+
+  // toasts
+  const [toasts, setToasts] = useState([]);
+  const toastId = useRef(0);
+  const notify = useCallback((type, title, message = "", details = "") => {
+    const id = ++toastId.current;
+    setToasts((prev) => [...prev, { id, type, title, message, details }]);
+    // auto close after 6s
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 6000);
+  }, []);
+  const closeToast = (id) =>
+    setToasts((prev) => prev.filter((t) => t.id !== id));
 
   // LIBRARY
   const [showLibrary, setShowLibrary] = useState(false);
@@ -203,10 +245,6 @@ export default function DCFWizard() {
   const [validationReport, setValidationReport] = useState(null);
 
   const mountedRef = useRef(true);
-
-  // ---------------------------------------------------------------------------
-  // Helpers robustes
-  // ---------------------------------------------------------------------------
 
   const toLine = (x) => {
     if (typeof x === "string") return x;
@@ -246,18 +284,15 @@ export default function DCFWizard() {
       value: toLine(inst?.value),
       reason: inst?.reason ? toLine(inst.reason) : "",
       mandatory: Boolean(inst?.mandatory),
-      sheet: inst?.sheet ? toLine(inst.sheet) : ""
+      sheet: inst?.sheet ? toLine(inst.sheet) : "",
     }));
   }, [instructions]);
 
-  // ✅ tri stable + filtres + regroupement
   const filteredSortedInstructions = useMemo(() => {
     const q = searchQ.trim().toLowerCase();
     let list = normalizedInstructions;
 
-    if (hideOptional) {
-      list = list.filter((x) => x.mandatory);
-    }
+    if (hideOptional) list = list.filter((x) => x.mandatory);
 
     if (q) {
       list = list.filter((x) => {
@@ -282,7 +317,6 @@ export default function DCFWizard() {
     return list;
   }, [normalizedInstructions, searchQ, hideOptional]);
 
-  // group by sheet -> row number
   const groupedInstructions = useMemo(() => {
     const groups = {};
     for (const inst of filteredSortedInstructions) {
@@ -311,24 +345,25 @@ export default function DCFWizard() {
       report: validationReport.report ?? "",
       critical: (validationReport.critical || []).map(toLine),
       warnings: (validationReport.warnings || []).map(toLine),
-      suggestions: (validationReport.suggestions || []).map(toLine)
+      suggestions: (validationReport.suggestions || []).map(toLine),
     };
   }, [validationReport]);
 
-  // ---------------------------------------------------------------------------
-  // Init
-  // ---------------------------------------------------------------------------
+  /* ============================================================================
+     INIT
+  ============================================================================ */
 
   useEffect(() => {
     mountedRef.current = true;
 
     const init = async () => {
       try {
-        const res = await api.dcf.startSession({ title: "Wizard DCF v7.5.0" });
+        const res = await api.dcf.startSession({ title: "Wizard DCF v7.5.1" });
         if (mountedRef.current && res?.sessionId) setSessionId(res.sessionId);
         refreshLibrary();
       } catch (e) {
         console.error(e);
+        notify("error", "Impossible de démarrer une session", e.message);
       }
     };
 
@@ -337,7 +372,7 @@ export default function DCFWizard() {
     return () => {
       mountedRef.current = false;
     };
-  }, []);
+  }, [notify]);
 
   const refreshLibrary = async () => {
     try {
@@ -346,12 +381,13 @@ export default function DCFWizard() {
       setLibraryFiles(res?.files || []);
     } catch (e) {
       console.error(e);
+      notify("warn", "Bibliothèque indisponible", e.message);
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Library handlers
-  // ---------------------------------------------------------------------------
+  /* ============================================================================
+     LIBRARY HANDLERS
+  ============================================================================ */
 
   const handleLibraryUpload = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -363,31 +399,33 @@ export default function DCFWizard() {
       files.forEach((f) => fd.append("files", f));
       await api.dcf.uploadExcelMulti(fd);
       await refreshLibrary();
-      alert(`${files.length} fichier(s) ajouté(s) à la bibliothèque !`);
+      notify("ok", "Templates ajoutés", `${files.length} fichier(s) ajouté(s).`);
     } catch (e2) {
-      alert("Erreur upload: " + e2.message);
+      notify("error", "Erreur upload bibliothèque", e2.message);
     } finally {
       setUploadingLib(false);
       e.target.value = "";
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Wizard handlers
-  // ---------------------------------------------------------------------------
+  /* ============================================================================
+     WIZARD HANDLERS
+  ============================================================================ */
 
   const handleAnalyzeRequest = async () => {
     if (!requestText.trim()) return;
+
     setLoading(true);
     setAnalysis(null);
     setClarificationText("");
+
     try {
       const res = await api.dcf.wizard.analyze(requestText, sessionId);
       if (!mountedRef.current) return;
       setAnalysis(res);
       setStep(2);
     } catch (e) {
-      alert("Erreur analyse: " + e.message);
+      notify("error", "Erreur analyse", e.message);
     } finally {
       setLoading(false);
     }
@@ -415,7 +453,7 @@ export default function DCFWizard() {
       setInstructions(Array.isArray(data) ? data : []);
       setStep(3);
     } catch (e) {
-      alert("Erreur génération instructions: " + e.message);
+      notify("error", "Erreur génération instructions", e.message);
     } finally {
       setLoading(false);
       setFillingTemplate(null);
@@ -425,14 +463,16 @@ export default function DCFWizard() {
   const handleScreenshotUpload = async (e) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
+
     if (!activeFile?.template_filename) {
-      alert("Sélectionne d'abord un fichier template.");
+      notify("warn", "Template non sélectionné", "Choisis un template avant d’ajouter des screenshots.");
       e.target.value = "";
       return;
     }
 
     setLoading(true);
     setScreenshots((prev) => [...prev, ...files]);
+
     try {
       const upRes = await api.dcf.uploadAttachments(files, sessionId);
       const newIds = (upRes?.items || []).map((i) => i.id).filter(Boolean);
@@ -445,10 +485,12 @@ export default function DCFWizard() {
         activeFile.template_filename,
         allIds
       );
+
       if (!mountedRef.current) return;
       setInstructions(Array.isArray(data) ? data : []);
+      notify("ok", "Screenshots analysés", `${files.length} capture(s) ajoutée(s).`);
     } catch (e2) {
-      alert("Erreur analyse image: " + e2.message);
+      notify("error", "Erreur analyse image", e2.message);
     } finally {
       setLoading(false);
       e.target.value = "";
@@ -459,13 +501,14 @@ export default function DCFWizard() {
     if (!filteredSortedInstructions.length || !activeFile?.template_filename) return;
 
     setAutofillLoading(true);
+
     try {
       const safeSteps = filteredSortedInstructions.map((s) => ({
         ...s,
         row: String(s.row || "").trim(),
         col: String(s.col || "").trim(),
         code: String(s.code || "").trim(),
-        value: s.value ?? ""
+        value: s.value ?? "",
       }));
 
       const blob = await api.dcf.wizard.autofill(
@@ -476,20 +519,23 @@ export default function DCFWizard() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const ext = activeFile.template_filename
-        .toLowerCase()
-        .endsWith(".xlsm")
+
+      const ext = activeFile.template_filename.toLowerCase().endsWith(".xlsm")
         ? ".xlsm"
         : ".xlsx";
+
       a.download = `FILLED_${activeFile.template_filename
         .replace(/\.xlsm$/i, "")
         .replace(/\.xlsx$/i, "")}${ext}`;
+
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+
+      notify("ok", "Fichier généré", "Téléchargement lancé.");
     } catch (e) {
-      alert("Erreur génération fichier: " + e.message);
+      notify("error", "Erreur génération Excel", e.message);
     } finally {
       setAutofillLoading(false);
     }
@@ -505,6 +551,7 @@ export default function DCFWizard() {
 
   const runValidation = async () => {
     if (!validationFiles.length) return;
+
     setLoading(true);
     setValidationReport(null);
 
@@ -527,8 +574,10 @@ export default function DCFWizard() {
 
       if (!mountedRef.current) return;
       setValidationReport(valRes);
+
+      notify("ok", "Validation terminée", "Rapport qualité disponible.");
     } catch (e) {
-      alert("Erreur validation: " + e.message);
+      notify("error", "Erreur validation", e.message);
     } finally {
       setLoading(false);
     }
@@ -537,32 +586,32 @@ export default function DCFWizard() {
   const downloadBlankTemplate = async (file) => {
     try {
       if (!file?.file_id && !file?.id) {
-        alert("Template vierge indisponible (id manquant).");
+        notify("warn", "Template vierge indisponible", "ID manquant côté backend.");
         return;
       }
       const id = file.file_id || file.id;
       const res = await api.dcf.getFile(id);
+
       if (res instanceof Blob) {
         const url = window.URL.createObjectURL(res);
         const a = document.createElement("a");
         a.href = url;
-        a.download =
-          file.template_filename || file.filename || `template_${id}.xlsx`;
+        a.download = file.template_filename || file.filename || `template_${id}.xlsx`;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
         document.body.removeChild(a);
         return;
       }
-      alert("Route de téléchargement vierge pas encore disponible côté backend.");
-    } catch {
-      alert("Route de téléchargement vierge pas encore disponible côté backend.");
+      notify("warn", "Route vierge non disponible", "Le backend ne renvoie pas de blob.");
+    } catch (e) {
+      notify("warn", "Route vierge non disponible", e.message);
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Renderers
-  // ---------------------------------------------------------------------------
+  /* ============================================================================
+     RENDERERS
+  ============================================================================ */
 
   const renderLibrary = () => (
     <div className="bg-slate-100 border-b border-slate-200 p-4 animate-slide-down mb-6 rounded-xl">
@@ -652,9 +701,10 @@ export default function DCFWizard() {
           value={requestText}
           onChange={(e) => setRequestText(e.target.value)}
         />
+
         <div className="flex justify-between items-center mt-2">
           <div className="text-xs text-gray-400 italic">
-            <FaRobot className="inline mr-1" /> Analyse IA SAP v7.5.0
+            <FaRobot className="inline mr-1" /> Analyse IA SAP v7.5.1
           </div>
           <button
             onClick={handleAnalyzeRequest}
@@ -692,6 +742,7 @@ export default function DCFWizard() {
             Questions de clarification (optionnel)
           </h4>
         </div>
+
         <ul className="list-disc ml-5 text-sm text-yellow-900 space-y-1 mb-4">
           {questions.map((q, i) => (
             <li key={i}>{toLine(q)}</li>
@@ -699,7 +750,7 @@ export default function DCFWizard() {
         </ul>
 
         <p className="text-xs text-yellow-800 mb-2">
-          Tu peux répondre ici ou juste envoyer une capture SAP à l’étape 3.
+          Tu peux répondre ici ou envoyer une capture SAP à l’étape 3.
         </p>
 
         <textarea
@@ -781,9 +832,7 @@ export default function DCFWizard() {
           </p>
         </div>
 
-        <div className="max-w-4xl mx-auto">
-          {renderClarificationsBox()}
-        </div>
+        <div className="max-w-4xl mx-auto">{renderClarificationsBox()}</div>
 
         {fillingTemplate && (
           <div className="max-w-4xl mx-auto">
@@ -914,7 +963,6 @@ export default function DCFWizard() {
         </div>
       </div>
 
-      {/* bandeau autofill */}
       {autofillLoading && (
         <Card className="p-3 mb-4 bg-blue-50 border-blue-200 flex items-center gap-2 text-blue-900 text-sm">
           <FaSpinner className="animate-spin" />
@@ -922,7 +970,6 @@ export default function DCFWizard() {
         </Card>
       )}
 
-      {/* toolbar filtres */}
       <Card className="p-3 mb-4">
         <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
           <div className="flex items-center gap-2 flex-1">
@@ -965,7 +1012,6 @@ export default function DCFWizard() {
         </div>
       </Card>
 
-      {/* debug ai_context (si backend le renvoie côté analyze / file analysis) */}
       {showDebug && normalizedAnalysis?.excel_context && (
         <Card className="p-4 mb-4 bg-amber-50 border-amber-200">
           <div className="font-bold text-amber-900 text-sm mb-2 flex items-center gap-2">
@@ -1033,8 +1079,7 @@ export default function DCFWizard() {
           <div className="sticky top-6">
             <Card className="p-6 bg-gradient-to-b from-blue-50 to-white border-blue-200 shadow-md">
               <h3 className="text-sm font-bold text-blue-900 mb-3 flex items-center gap-2">
-                <FaCamera className="text-blue-600 text-lg" /> Capture SAP
-                (Vision)
+                <FaCamera className="text-blue-600 text-lg" /> Capture SAP (Vision)
               </h3>
               <p className="text-xs text-blue-800 mb-5 leading-relaxed font-medium">
                 Si un champ est “À confirmer”, envoie un screenshot SAP (IP02, IA05…).
@@ -1067,7 +1112,7 @@ export default function DCFWizard() {
                       key={i}
                       className="flex items-center gap-2 text-xs text-gray-700 bg-white p-2 rounded border border-gray-200 shadow-sm"
                     >
-                      <FaCheckCircle className="text-green-500 flex-shrink-0" />{" "}
+                      <FaCheckCircle className="text-green-500 flex-shrink-0" />
                       <span className="truncate">{s.name}</span>
                     </div>
                   ))}
@@ -1103,9 +1148,7 @@ export default function DCFWizard() {
           <span className="text-sm font-bold text-gray-700 block">
             Déposer les fichiers FILLED ici
           </span>
-          <span className="text-xs text-gray-400">
-            .xlsx / .xlsm
-          </span>
+          <span className="text-xs text-gray-400">.xlsx / .xlsm</span>
           <input
             type="file"
             accept=".xlsx,.xls,.xlsm"
@@ -1197,12 +1240,13 @@ export default function DCFWizard() {
     </div>
   );
 
-  // ---------------------------------------------------------------------------
-  // MAIN RENDER
-  // ---------------------------------------------------------------------------
+  /* ============================================================================
+     MAIN RENDER
+  ============================================================================ */
 
   return (
     <div className="p-4 md:p-8 bg-slate-50 min-h-screen">
+      <Toasts toasts={toasts} onClose={closeToast} />
       <StepIndicator currentStep={step} steps={stepsLabel} />
 
       {step === 1 && renderStep1_Describe()}
