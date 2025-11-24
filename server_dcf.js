@@ -590,7 +590,7 @@ function findDataStartIdx(raw, headerRowIdx, columns) {
       i++;
       continue;
     }
-    return i;
+    return headerRowIdx + 2;
   }
 
   return headerRowIdx + 2;
@@ -1193,6 +1193,8 @@ function detectPreferredActionCode(analysisLiteOrFull) {
       if (c?.code) allCodes.push(String(c.code).toUpperCase());
     }
   }
+  // NEW: Priorise ACTION en I, I étant la colonne d'action la plus courante dans les Task List
+  if (allCodes.includes("ACTION") && findColumnByCode(analysisLiteOrFull, "ACTION")?.col === "I") return "ACTION";
   if (allCodes.includes("ACTION_02")) return "ACTION_02";
   if (allCodes.includes("ACTION_01")) return "ACTION_01";
   const anyActionX = allCodes.find((c) => /^ACTION_\d+$/i.test(c));
