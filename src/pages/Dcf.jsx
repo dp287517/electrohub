@@ -16,7 +16,11 @@ import {
   FaRobot,
   FaDatabase,
   FaUpload,
-  FaQuestionCircle
+  FaQuestionCircle,
+  FaFilter,
+  FaEye,
+  FaEyeSlash,
+  FaBug
 } from "react-icons/fa";
 
 // -----------------------------------------------------------------------------
@@ -73,7 +77,8 @@ const FieldInstruction = ({
   label,
   value,
   reason,
-  mandatory
+  mandatory,
+  sheet
 }) => (
   <div className="flex flex-col sm:flex-row gap-4 p-4 bg-white rounded-lg border border-slate-200 mb-3 hover:border-blue-300 transition-colors shadow-sm animate-fade-in-up group">
     <div className="flex-shrink-0 flex flex-col items-center justify-center min-w-[70px] bg-slate-50 rounded border border-slate-200 p-2 group-hover:bg-blue-50 transition-colors">
@@ -90,6 +95,12 @@ const FieldInstruction = ({
 
     <div className="flex-grow space-y-2">
       <div className="flex items-center flex-wrap gap-2">
+        {sheet && (
+          <span className="text-[10px] bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
+            {sheet}
+          </span>
+        )}
+
         <span className="font-mono text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded border border-gray-200 font-bold">
           {code}
         </span>
@@ -126,7 +137,28 @@ const FieldInstruction = ({
 );
 
 // -----------------------------------------------------------------------------
-// MAIN WIZARD FRONTEND v7.4.9
+// Helpers
+// -----------------------------------------------------------------------------
+
+const excelColToNumber = (col = "") => {
+  // "A"->1, "Z"->26, "AA"->27...
+  let n = 0;
+  const s = String(col).toUpperCase().trim();
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i) - 64;
+    if (c < 1 || c > 26) continue;
+    n = n * 26 + c;
+  }
+  return n || 0;
+};
+
+const safeRowNumber = (r) => {
+  const m = String(r || "").match(/\d+/);
+  return m ? Number(m[0]) : Number.MAX_SAFE_INTEGER;
+};
+
+// -----------------------------------------------------------------------------
+// MAIN WIZARD FRONTEND v7.5.0
 // -----------------------------------------------------------------------------
 
 export default function DCFWizard() {
@@ -151,8 +183,8 @@ export default function DCFWizard() {
 
   // STEP 2
   const [analysis, setAnalysis] = useState(null);
-  const [clarificationText, setClarificationText] = useState(""); // ✅ réponses non-bloquantes
-  const [fillingTemplate, setFillingTemplate] = useState(null); // ✅ statut "Remplir"
+  const [clarificationText, setClarificationText] = useState("");
+  const [fillingTemplate, setFillingTemplate] = useState(null);
 
   // STEP 3
   const [activeFile, setActiveFile] = useState(null);
@@ -160,6 +192,11 @@ export default function DCFWizard() {
   const [attachmentIds, setAttachmentIds] = useState([]);
   const [screenshots, setScreenshots] = useState([]);
   const [autofillLoading, setAutofillLoading] = useState(false);
+
+  // STEP 3 UX
+  const [searchQ, setSearchQ] = useState("");
+  const [hideOptional, setHideOptional] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
 
   // STEP 4
   const [validationFiles, setValidationFiles] = useState([]);
@@ -181,7 +218,6 @@ export default function DCFWizard() {
     return line || JSON.stringify(x);
   };
 
-  // ✅ useCase frontend (mêmes règles que backend)
   const inferUseCase = (text = "") => {
     const m = String(text).toLowerCase();
     if (/(décommission|decommission|retirer|supprimer équipement|retirer equipement)/.test(m))
@@ -210,9 +246,54 @@ export default function DCFWizard() {
       value: toLine(inst?.value),
       reason: inst?.reason ? toLine(inst.reason) : "",
       mandatory: Boolean(inst?.mandatory),
-      sheet: inst?.sheet
+      sheet: inst?.sheet ? toLine(inst.sheet) : ""
     }));
   }, [instructions]);
+
+  // ✅ tri stable + filtres + regroupement
+  const filteredSortedInstructions = useMemo(() => {
+    const q = searchQ.trim().toLowerCase();
+    let list = normalizedInstructions;
+
+    if (hideOptional) {
+      list = list.filter((x) => x.mandatory);
+    }
+
+    if (q) {
+      list = list.filter((x) => {
+        const hay = `${x.sheet} ${x.row} ${x.col} ${x.code} ${x.label} ${x.value} ${x.reason}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    list = [...list].sort((a, b) => {
+      const sa = (a.sheet || "").toLowerCase();
+      const sb = (b.sheet || "").toLowerCase();
+      if (sa < sb) return -1;
+      if (sa > sb) return 1;
+
+      const ra = safeRowNumber(a.row);
+      const rb = safeRowNumber(b.row);
+      if (ra !== rb) return ra - rb;
+
+      return excelColToNumber(a.col) - excelColToNumber(b.col);
+    });
+
+    return list;
+  }, [normalizedInstructions, searchQ, hideOptional]);
+
+  // group by sheet -> row number
+  const groupedInstructions = useMemo(() => {
+    const groups = {};
+    for (const inst of filteredSortedInstructions) {
+      const sheet = inst.sheet || "Sheet";
+      const rowN = safeRowNumber(inst.row);
+      const key = `${sheet}__${rowN}`;
+      if (!groups[key]) groups[key] = { sheet, row: inst.row, items: [] };
+      groups[key].items.push(inst);
+    }
+    return Object.values(groups);
+  }, [filteredSortedInstructions]);
 
   const normalizedAnalysis = useMemo(() => {
     if (!analysis || typeof analysis !== "object") return null;
@@ -243,7 +324,7 @@ export default function DCFWizard() {
 
     const init = async () => {
       try {
-        const res = await api.dcf.startSession({ title: "Wizard DCF v7.4.9" });
+        const res = await api.dcf.startSession({ title: "Wizard DCF v7.5.0" });
         if (mountedRef.current && res?.sessionId) setSessionId(res.sessionId);
         refreshLibrary();
       } catch (e) {
@@ -312,14 +393,16 @@ export default function DCFWizard() {
     }
   };
 
-  // ✅ Étape 2: statut d'avancement quand on clique "Remplir"
   const handleSelectFile = async (fileObj) => {
-    setFillingTemplate(fileObj?.template_filename || "template"); // show progress
+    setFillingTemplate(fileObj?.template_filename || "template");
     setActiveFile(fileObj);
     setLoading(true);
     setInstructions([]);
     setAttachmentIds([]);
     setScreenshots([]);
+    setSearchQ("");
+    setHideOptional(false);
+    setShowDebug(false);
 
     try {
       const data = await api.dcf.wizard.instructions(
@@ -372,13 +455,12 @@ export default function DCFWizard() {
     }
   };
 
-  // ✅ Autofill progress = bouton + bandeau
   const handleAutofill = async () => {
-    if (!normalizedInstructions.length || !activeFile?.template_filename) return;
+    if (!filteredSortedInstructions.length || !activeFile?.template_filename) return;
 
     setAutofillLoading(true);
     try {
-      const safeSteps = normalizedInstructions.map((s) => ({
+      const safeSteps = filteredSortedInstructions.map((s) => ({
         ...s,
         row: String(s.row || "").trim(),
         col: String(s.col || "").trim(),
@@ -437,15 +519,11 @@ export default function DCFWizard() {
       if (!fileIds.length) throw new Error("Aucun fichier valide reçu du serveur.");
 
       const useCase = inferUseCase(fullRequestText);
-
-      // compat api.js actuelle (validate(fileIds) only)
       const validateFn = api?.dcf?.wizard?.validate;
-      let valRes;
-      if (validateFn?.length >= 2) {
-        valRes = await validateFn(fileIds, useCase);
-      } else {
-        valRes = await validateFn(fileIds);
-      }
+      const valRes =
+        validateFn?.length >= 2
+          ? await validateFn(fileIds, useCase)
+          : await validateFn(fileIds);
 
       if (!mountedRef.current) return;
       setValidationReport(valRes);
@@ -456,7 +534,6 @@ export default function DCFWizard() {
     }
   };
 
-  // Future-proof blank download
   const downloadBlankTemplate = async (file) => {
     try {
       if (!file?.file_id && !file?.id) {
@@ -469,7 +546,8 @@ export default function DCFWizard() {
         const url = window.URL.createObjectURL(res);
         const a = document.createElement("a");
         a.href = url;
-        a.download = file.template_filename || file.filename || `template_${id}.xlsx`;
+        a.download =
+          file.template_filename || file.filename || `template_${id}.xlsx`;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
@@ -576,7 +654,7 @@ export default function DCFWizard() {
         />
         <div className="flex justify-between items-center mt-2">
           <div className="text-xs text-gray-400 italic">
-            <FaRobot className="inline mr-1" /> Analyse IA SAP v7.4.9
+            <FaRobot className="inline mr-1" /> Analyse IA SAP v7.5.0
           </div>
           <button
             onClick={handleAnalyzeRequest}
@@ -703,12 +781,10 @@ export default function DCFWizard() {
           </p>
         </div>
 
-        {/* ✅ Clarifications non-bloquantes */}
         <div className="max-w-4xl mx-auto">
           {renderClarificationsBox()}
         </div>
 
-        {/* ✅ Bandeau progress si "Remplir" en cours */}
         {fillingTemplate && (
           <div className="max-w-4xl mx-auto">
             <Card className="p-4 border-blue-200 bg-blue-50 flex items-center gap-3">
@@ -806,12 +882,19 @@ export default function DCFWizard() {
               {toLine(activeFile?.template_filename)}
             </span>
           </h2>
+
+          <div className="text-[11px] text-gray-500 mt-1">
+            Total instructions :{" "}
+            <span className="font-bold text-gray-700">
+              {normalizedInstructions.length}
+            </span>
+          </div>
         </div>
 
         <div className="flex gap-3">
           <button
             onClick={handleAutofill}
-            disabled={autofillLoading || loading || !normalizedInstructions.length}
+            disabled={autofillLoading || loading || !filteredSortedInstructions.length}
             className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white px-6 py-2.5 rounded-lg font-bold hover:from-blue-700 hover:to-indigo-700 flex items-center gap-2 shadow-lg disabled:opacity-50 transition-all hover:scale-105 active:scale-95"
           >
             {autofillLoading ? (
@@ -839,11 +922,66 @@ export default function DCFWizard() {
         </Card>
       )}
 
+      {/* toolbar filtres */}
+      <Card className="p-3 mb-4">
+        <div className="flex flex-col md:flex-row gap-3 md:items-center md:justify-between">
+          <div className="flex items-center gap-2 flex-1">
+            <FaSearch className="text-gray-400" />
+            <input
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 outline-none"
+              placeholder="Rechercher (code, label, valeur, sheet, ligne...)"
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+            />
+          </div>
+
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={() => setHideOptional((v) => !v)}
+              className={`px-3 py-2 rounded-lg text-sm font-bold border flex items-center gap-2 ${
+                hideOptional
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+              }`}
+              title="Masquer les champs À confirmer"
+            >
+              <FaFilter />
+              {hideOptional ? "Obligatoires only" : "Tout afficher"}
+            </button>
+
+            <button
+              onClick={() => setShowDebug((v) => !v)}
+              className={`px-3 py-2 rounded-lg text-sm font-bold border flex items-center gap-2 ${
+                showDebug
+                  ? "bg-amber-500 text-white border-amber-500"
+                  : "bg-white text-amber-700 border-amber-200 hover:bg-amber-50"
+              }`}
+              title="Afficher le contexte Excel analysé (debug)"
+            >
+              <FaBug />
+              Debug Excel
+            </button>
+          </div>
+        </div>
+      </Card>
+
+      {/* debug ai_context (si backend le renvoie côté analyze / file analysis) */}
+      {showDebug && normalizedAnalysis?.excel_context && (
+        <Card className="p-4 mb-4 bg-amber-50 border-amber-200">
+          <div className="font-bold text-amber-900 text-sm mb-2 flex items-center gap-2">
+            <FaBug /> Contexte Excel détecté (ai_context)
+          </div>
+          <pre className="text-xs whitespace-pre-wrap text-amber-900 bg-white border border-amber-200 rounded p-3 max-h-64 overflow-auto">
+            {normalizedAnalysis.excel_context}
+          </pre>
+        </Card>
+      )}
+
       <div className="grid lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-bold text-gray-700 text-lg">
-              Instructions ({normalizedInstructions.length})
+              Instructions filtrées ({filteredSortedInstructions.length})
             </h3>
             {attachmentIds.length > 0 && (
               <span className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full font-bold flex items-center gap-1 border border-green-200">
@@ -860,18 +998,32 @@ export default function DCFWizard() {
                 Lecture structure Excel + Vision SAP
               </p>
             </div>
-          ) : normalizedInstructions.length > 0 ? (
-            <div className="space-y-3">
-              {normalizedInstructions.map((inst, idx) => (
-                <FieldInstruction key={idx} {...inst} />
+          ) : filteredSortedInstructions.length > 0 ? (
+            <div className="space-y-5">
+              {groupedInstructions.map((g, idx) => (
+                <Card key={idx} className="p-3 border-slate-200 bg-slate-50/50">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-xs font-extrabold text-slate-700 uppercase tracking-wide">
+                      {g.sheet} — Ligne {g.row}
+                    </div>
+                    <div className="text-[10px] text-slate-500">
+                      {g.items.length} champ(s)
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    {g.items.map((inst, j) => (
+                      <FieldInstruction key={j} {...inst} />
+                    ))}
+                  </div>
+                </Card>
               ))}
             </div>
           ) : (
             <div className="p-10 bg-yellow-50 border border-yellow-100 rounded-xl text-yellow-800 text-center">
               <FaExclamationTriangle className="mx-auto text-3xl mb-3 opacity-50" />
-              <p className="font-bold">Aucune instruction générée.</p>
+              <p className="font-bold">Aucune instruction à afficher.</p>
               <p className="text-sm mt-1">
-                Vérifie que le fichier sélectionné est bien un template DCF valide.
+                Ajuste le filtre ou vérifie que le template DCF est valide.
               </p>
             </div>
           )}
