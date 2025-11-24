@@ -15,7 +15,8 @@ import {
   FaMagic,
   FaRobot,
   FaDatabase,
-  FaUpload
+  FaUpload,
+  FaQuestionCircle
 } from "react-icons/fa";
 
 // -----------------------------------------------------------------------------
@@ -86,18 +87,25 @@ const FieldInstruction = ({
       </div>
       <div className="text-xl font-black text-blue-600">{col}</div>
     </div>
+
     <div className="flex-grow space-y-2">
       <div className="flex items-center flex-wrap gap-2">
         <span className="font-mono text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded border border-gray-200 font-bold">
           {code}
         </span>
         <span className="text-sm font-semibold text-gray-800">{label}</span>
-        {mandatory && (
+
+        {mandatory ? (
           <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
             Obligatoire
           </span>
+        ) : (
+          <span className="text-[10px] bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
+            À confirmer
+          </span>
         )}
       </div>
+
       <div>
         <div className="text-[11px] text-gray-500 mb-1 uppercase tracking-wide font-medium">
           Valeur à saisir :
@@ -106,6 +114,7 @@ const FieldInstruction = ({
           {value}
         </div>
       </div>
+
       {reason && (
         <div className="text-xs text-gray-500 italic flex items-start gap-1">
           <FaInfoCircle className="mt-0.5 text-blue-400 flex-shrink-0" />
@@ -117,10 +126,17 @@ const FieldInstruction = ({
 );
 
 // -----------------------------------------------------------------------------
-// MAIN WIZARD v7.4.6 FRONTEND
+// MAIN WIZARD FRONTEND v7.4.9
 // -----------------------------------------------------------------------------
 
 export default function DCFWizard() {
+  const stepsLabel = [
+    "Demande",
+    "Choix fichier(s)",
+    "Instructions",
+    "Validation"
+  ];
+
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState(null);
@@ -135,6 +151,8 @@ export default function DCFWizard() {
 
   // STEP 2
   const [analysis, setAnalysis] = useState(null);
+  const [clarificationText, setClarificationText] = useState(""); // ✅ réponses non-bloquantes
+  const [fillingTemplate, setFillingTemplate] = useState(null); // ✅ statut "Remplir"
 
   // STEP 3
   const [activeFile, setActiveFile] = useState(null);
@@ -158,12 +176,7 @@ export default function DCFWizard() {
     if (!x || typeof x !== "object") return String(x ?? "");
     const sheet = x.sheet ? `[${x.sheet}] ` : "";
     const col = x.column ? `${x.column}: ` : "";
-    const msg =
-      x.suggestion ??
-      x.warning ??
-      x.message ??
-      x.reason ??
-      "";
+    const msg = x.suggestion ?? x.warning ?? x.message ?? x.reason ?? "";
     const line = `${sheet}${col}${msg}`.trim();
     return line || JSON.stringify(x);
   };
@@ -181,6 +194,11 @@ export default function DCFWizard() {
       return "text_only_change";
     return "unknown";
   };
+
+  const fullRequestText = useMemo(() => {
+    if (!clarificationText.trim()) return requestText;
+    return `${requestText}\n\n--- Précisions utilisateur (non obligatoires) ---\n${clarificationText.trim()}`;
+  }, [requestText, clarificationText]);
 
   const normalizedInstructions = useMemo(() => {
     if (!Array.isArray(instructions)) return [];
@@ -219,12 +237,13 @@ export default function DCFWizard() {
   // ---------------------------------------------------------------------------
   // Init
   // ---------------------------------------------------------------------------
+
   useEffect(() => {
     mountedRef.current = true;
 
     const init = async () => {
       try {
-        const res = await api.dcf.startSession({ title: "Wizard DCF v7.4.6" });
+        const res = await api.dcf.startSession({ title: "Wizard DCF v7.4.9" });
         if (mountedRef.current && res?.sessionId) setSessionId(res.sessionId);
         refreshLibrary();
       } catch (e) {
@@ -280,6 +299,7 @@ export default function DCFWizard() {
     if (!requestText.trim()) return;
     setLoading(true);
     setAnalysis(null);
+    setClarificationText("");
     try {
       const res = await api.dcf.wizard.analyze(requestText, sessionId);
       if (!mountedRef.current) return;
@@ -292,16 +312,19 @@ export default function DCFWizard() {
     }
   };
 
+  // ✅ Étape 2: statut d'avancement quand on clique "Remplir"
   const handleSelectFile = async (fileObj) => {
+    setFillingTemplate(fileObj?.template_filename || "template"); // show progress
     setActiveFile(fileObj);
     setLoading(true);
     setInstructions([]);
     setAttachmentIds([]);
     setScreenshots([]);
+
     try {
       const data = await api.dcf.wizard.instructions(
         sessionId,
-        requestText,
+        fullRequestText,
         fileObj.template_filename,
         []
       );
@@ -312,6 +335,7 @@ export default function DCFWizard() {
       alert("Erreur génération instructions: " + e.message);
     } finally {
       setLoading(false);
+      setFillingTemplate(null);
     }
   };
 
@@ -334,7 +358,7 @@ export default function DCFWizard() {
 
       const data = await api.dcf.wizard.instructions(
         sessionId,
-        requestText,
+        fullRequestText,
         activeFile.template_filename,
         allIds
       );
@@ -348,6 +372,7 @@ export default function DCFWizard() {
     }
   };
 
+  // ✅ Autofill progress = bouton + bandeau
   const handleAutofill = async () => {
     if (!normalizedInstructions.length || !activeFile?.template_filename) return;
 
@@ -411,10 +436,16 @@ export default function DCFWizard() {
 
       if (!fileIds.length) throw new Error("Aucun fichier valide reçu du serveur.");
 
-      const useCase = inferUseCase(requestText);
+      const useCase = inferUseCase(fullRequestText);
 
-      // ✅ backend v7.4.6 supporte useCase pour validate
-      const valRes = await api.dcf.wizard.validate(fileIds, useCase);
+      // compat api.js actuelle (validate(fileIds) only)
+      const validateFn = api?.dcf?.wizard?.validate;
+      let valRes;
+      if (validateFn?.length >= 2) {
+        valRes = await validateFn(fileIds, useCase);
+      } else {
+        valRes = await validateFn(fileIds);
+      }
 
       if (!mountedRef.current) return;
       setValidationReport(valRes);
@@ -545,7 +576,7 @@ export default function DCFWizard() {
         />
         <div className="flex justify-between items-center mt-2">
           <div className="text-xs text-gray-400 italic">
-            <FaRobot className="inline mr-1" /> Analyse IA SAP v7.4.6
+            <FaRobot className="inline mr-1" /> Analyse IA SAP v7.4.9
           </div>
           <button
             onClick={handleAnalyzeRequest}
@@ -557,8 +588,51 @@ export default function DCFWizard() {
           </button>
         </div>
       </Card>
+
+      <div className="text-center mt-6">
+        <button
+          onClick={() => setShowLibrary((v) => !v)}
+          className="text-sm text-blue-700 hover:underline"
+        >
+          {showLibrary ? "Fermer la bibliothèque" : "Voir / gérer la bibliothèque"}
+        </button>
+      </div>
+
+      {showLibrary && renderLibrary()}
     </div>
   );
+
+  const renderClarificationsBox = () => {
+    const questions = normalizedAnalysis?.questions || [];
+    if (!questions.length) return null;
+
+    return (
+      <Card className="p-5 border-yellow-200 bg-yellow-50/40">
+        <div className="flex items-center gap-2 mb-3">
+          <FaQuestionCircle className="text-yellow-600" />
+          <h4 className="font-bold text-yellow-900 text-sm">
+            Questions de clarification (optionnel)
+          </h4>
+        </div>
+        <ul className="list-disc ml-5 text-sm text-yellow-900 space-y-1 mb-4">
+          {questions.map((q, i) => (
+            <li key={i}>{toLine(q)}</li>
+          ))}
+        </ul>
+
+        <p className="text-xs text-yellow-800 mb-2">
+          Tu peux répondre ici ou juste envoyer une capture SAP à l’étape 3.
+        </p>
+
+        <textarea
+          className="w-full min-h-[90px] p-3 border border-yellow-200 rounded-lg bg-white text-sm"
+          placeholder="Réponses / précisions facultatives..."
+          value={clarificationText}
+          onChange={(e) => setClarificationText(e.target.value)}
+        />
+      </Card>
+    );
+  };
 
   const renderStep2_Recommend = () => {
     if (normalizedAnalysis?.is_manual) {
@@ -619,7 +693,7 @@ export default function DCFWizard() {
     }
 
     return (
-      <div className="animate-fade-in space-y-8">
+      <div className="animate-fade-in space-y-6">
         <div className="text-center max-w-3xl mx-auto">
           <h2 className="text-2xl font-bold text-gray-800 mb-2">
             {files.length > 1 ? "Pack de fichiers nécessaire" : "Fichier recommandé"}
@@ -629,47 +703,82 @@ export default function DCFWizard() {
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
-          {files.map((file, idx) => (
-            <Card
-              key={idx}
-              className="flex flex-col h-full border-t-4 border-t-blue-500 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1"
-            >
-              <div className="p-6 flex-1">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">
-                    {toLine(file.type)}
-                  </div>
-                  <FaFileExcel className="text-emerald-600 text-3xl" />
-                </div>
-                <h3 className="font-bold text-gray-800 mb-3 break-words leading-tight text-lg">
-                  {toLine(file.template_filename)}
-                </h3>
-                <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-600 mt-2 border border-gray-100">
-                  <span className="font-bold block mb-1 text-gray-800 text-xs uppercase">
-                    Action prévue :
-                  </span>
-                  {toLine(file.usage)}
-                </div>
-              </div>
-              <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
-                <button
-                  onClick={() => downloadBlankTemplate(file)}
-                  className="flex-1 bg-white border border-gray-300 text-gray-600 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 hover:text-gray-800 flex items-center justify-center gap-2 transition-colors"
-                >
-                  <FaDownload /> Vierge
-                </button>
-                <button
-                  onClick={() => handleSelectFile(file)}
-                  className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-blue-700 flex items-center justify-center gap-2 shadow-md transition-colors"
-                >
-                  Remplir <FaArrowRight />
-                </button>
+        {/* ✅ Clarifications non-bloquantes */}
+        <div className="max-w-4xl mx-auto">
+          {renderClarificationsBox()}
+        </div>
+
+        {/* ✅ Bandeau progress si "Remplir" en cours */}
+        {fillingTemplate && (
+          <div className="max-w-4xl mx-auto">
+            <Card className="p-4 border-blue-200 bg-blue-50 flex items-center gap-3">
+              <FaSpinner className="animate-spin text-blue-700" />
+              <div className="text-sm text-blue-900 font-medium">
+                Génération des instructions pour{" "}
+                <span className="font-bold">{fillingTemplate}</span>…
               </div>
             </Card>
-          ))}
+          </div>
+        )}
+
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
+          {files.map((file, idx) => {
+            const isFillingThis =
+              fillingTemplate && fillingTemplate === file.template_filename;
+
+            return (
+              <Card
+                key={idx}
+                className="flex flex-col h-full border-t-4 border-t-blue-500 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1"
+              >
+                <div className="p-6 flex-1">
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider">
+                      {toLine(file.type)}
+                    </div>
+                    <FaFileExcel className="text-emerald-600 text-3xl" />
+                  </div>
+                  <h3 className="font-bold text-gray-800 mb-3 break-words leading-tight text-lg">
+                    {toLine(file.template_filename)}
+                  </h3>
+                  <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-600 mt-2 border border-gray-100">
+                    <span className="font-bold block mb-1 text-gray-800 text-xs uppercase">
+                      Action prévue :
+                    </span>
+                    {toLine(file.usage)}
+                  </div>
+                </div>
+                <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
+                  <button
+                    onClick={() => downloadBlankTemplate(file)}
+                    className="flex-1 bg-white border border-gray-300 text-gray-600 py-2 rounded-lg text-sm font-medium hover:bg-gray-100 hover:text-gray-800 flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <FaDownload /> Vierge
+                  </button>
+
+                  <button
+                    onClick={() => handleSelectFile(file)}
+                    disabled={loading || isFillingThis}
+                    className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm font-bold hover:bg-blue-700 flex items-center justify-center gap-2 shadow-md transition-colors disabled:opacity-60"
+                  >
+                    {isFillingThis ? (
+                      <>
+                        <FaSpinner className="animate-spin" />
+                        Remplir…
+                      </>
+                    ) : (
+                      <>
+                        Remplir <FaArrowRight />
+                      </>
+                    )}
+                  </button>
+                </div>
+              </Card>
+            );
+          })}
         </div>
-        <div className="text-center pt-4">
+
+        <div className="text-center pt-2">
           <button
             onClick={() => setStep(1)}
             className="text-sm text-gray-400 hover:text-gray-600 underline"
@@ -698,6 +807,7 @@ export default function DCFWizard() {
             </span>
           </h2>
         </div>
+
         <div className="flex gap-3">
           <button
             onClick={handleAutofill}
@@ -711,6 +821,7 @@ export default function DCFWizard() {
             )}{" "}
             Générer le fichier Excel rempli
           </button>
+
           <button
             onClick={() => setStep(4)}
             className="bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg font-medium hover:bg-gray-50 flex items-center gap-2 transition-colors"
@@ -719,6 +830,14 @@ export default function DCFWizard() {
           </button>
         </div>
       </div>
+
+      {/* bandeau autofill */}
+      {autofillLoading && (
+        <Card className="p-3 mb-4 bg-blue-50 border-blue-200 flex items-center gap-2 text-blue-900 text-sm">
+          <FaSpinner className="animate-spin" />
+          Génération du fichier en cours… (ne ferme pas la page)
+        </Card>
+      )}
 
       <div className="grid lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-4">
@@ -732,6 +851,7 @@ export default function DCFWizard() {
               </span>
             )}
           </div>
+
           {loading ? (
             <div className="h-80 flex flex-col items-center justify-center bg-white rounded-xl border border-dashed border-gray-300 text-gray-400 animate-pulse">
               <FaSpinner className="animate-spin text-4xl mb-4 text-blue-500" />
@@ -765,9 +885,10 @@ export default function DCFWizard() {
                 (Vision)
               </h3>
               <p className="text-xs text-blue-800 mb-5 leading-relaxed font-medium">
-                Ne recopie pas les données ! Fais un screenshot SAP
-                (ex: IP02, IA05). L'IA va lire les ID et mettre à jour les instructions.
+                Si un champ est “À confirmer”, envoie un screenshot SAP (IP02, IA05…).
+                L’IA relira et mettra à jour automatiquement.
               </p>
+
               <label className="block w-full border-2 border-dashed border-blue-300 bg-white/80 rounded-xl p-8 text-center cursor-pointer hover:bg-blue-50 hover:border-blue-500 transition-all group relative overflow-hidden">
                 <div className="relative z-10">
                   <FaCamera className="mx-auto text-blue-400 mb-3 text-3xl group-hover:scale-110 transition-transform duration-300" />
@@ -783,6 +904,7 @@ export default function DCFWizard() {
                   onChange={handleScreenshotUpload}
                 />
               </label>
+
               {screenshots.length > 0 && (
                 <div className="mt-5 space-y-2 border-t border-blue-100 pt-4">
                   <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">
@@ -798,8 +920,9 @@ export default function DCFWizard() {
                     </div>
                   ))}
                   {loading && (
-                    <div className="text-xs text-blue-600 animate-pulse text-center mt-2 font-medium">
-                      Mise à jour des instructions...
+                    <div className="text-xs text-blue-700 flex items-center gap-2 mt-2">
+                      <FaSpinner className="animate-spin" />
+                      Relance Instructions avec Vision…
                     </div>
                   )}
                 </div>
@@ -812,194 +935,128 @@ export default function DCFWizard() {
   );
 
   const renderStep4_Validate = () => (
-    <div className="animate-fade-in max-w-5xl mx-auto">
-      <div className="text-center mb-8">
-        <h2 className="text-2xl font-bold text-gray-800">
-          Validation Finale
+    <div className="animate-fade-in max-w-4xl mx-auto space-y-6">
+      <div className="text-center">
+        <h2 className="text-2xl font-bold text-gray-800 mb-1">
+          Validation Qualité
         </h2>
-        <p className="text-gray-500">
-          Dernière vérification avant l'envoi au support SAP.
+        <p className="text-gray-500 text-sm">
+          Importe les fichiers FILLED générés pour vérification.
         </p>
       </div>
-      <div className="grid md:grid-cols-2 gap-8 items-start">
-        <Card className="p-8 border-2 border-dashed border-gray-300 hover:border-blue-400 transition-colors flex flex-col items-center justify-center min-h-[400px]">
-          {validationFiles.length === 0 ? (
-            <>
-              <div className="bg-gray-100 p-6 rounded-full mb-6">
-                <FaFileExcel className="text-gray-400 text-5xl" />
+
+      <Card className="p-6">
+        <label className="block w-full border-2 border-dashed border-gray-300 bg-white rounded-xl p-8 text-center cursor-pointer hover:bg-gray-50 hover:border-blue-400 transition-all">
+          <FaFileExcel className="mx-auto text-green-600 mb-3 text-3xl" />
+          <span className="text-sm font-bold text-gray-700 block">
+            Déposer les fichiers FILLED ici
+          </span>
+          <span className="text-xs text-gray-400">
+            .xlsx / .xlsm
+          </span>
+          <input
+            type="file"
+            accept=".xlsx,.xls,.xlsm"
+            multiple
+            className="hidden"
+            onChange={handleValidationUpload}
+          />
+        </label>
+
+        {validationFiles.length > 0 && (
+          <div className="mt-4 text-sm text-gray-700">
+            <strong>{validationFiles.length}</strong> fichier(s) prêt(s) à valider.
+          </div>
+        )}
+
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={runValidation}
+            disabled={loading || validationFiles.length === 0}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2 disabled:opacity-50"
+          >
+            {loading ? <FaSpinner className="animate-spin" /> : <FaCheckCircle />}
+            Lancer la validation
+          </button>
+        </div>
+      </Card>
+
+      {normalizedValidation && (
+        <Card className="p-6 space-y-5">
+          <h3 className="font-bold text-gray-800 text-lg mb-2">
+            Rapport Qualité
+          </h3>
+
+          {normalizedValidation.report && (
+            <div className="text-sm text-gray-700 whitespace-pre-wrap">
+              {normalizedValidation.report}
+            </div>
+          )}
+
+          {normalizedValidation.critical?.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+              <div className="font-bold text-red-800 mb-2 flex items-center gap-2">
+                <FaTimesCircle /> Erreurs critiques
               </div>
-              <p className="text-lg font-medium text-gray-700 mb-1">
-                Glisse tes fichiers Excel ici
-              </p>
-              <p className="text-sm text-gray-400 mb-6">
-                Accepte les fichiers .xlsm générés
-              </p>
-              <label className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg cursor-pointer font-medium transition-colors shadow-sm">
-                Parcourir mes fichiers
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.xlsm"
-                  multiple
-                  className="hidden"
-                  onChange={handleValidationUpload}
-                />
-              </label>
-            </>
-          ) : (
-            <div className="w-full text-center">
-              <div className="mb-6 space-y-3 max-h-60 overflow-auto">
-                {validationFiles.map((f, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-center gap-3 text-sm text-gray-700 bg-gray-50 p-3 rounded border border-gray-200"
-                  >
-                    <FaFileExcel className="text-green-600 text-lg" />{" "}
-                    <span className="font-medium">{f.name}</span>
-                  </div>
+              <ul className="list-disc ml-5 text-sm text-red-900 space-y-1">
+                {normalizedValidation.critical.map((c, i) => (
+                  <li key={i}>{c}</li>
                 ))}
+              </ul>
+            </div>
+          )}
+
+          {normalizedValidation.warnings?.length > 0 && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <div className="font-bold text-yellow-800 mb-2 flex items-center gap-2">
+                <FaExclamationTriangle /> Points d’attention
               </div>
-              <button
-                onClick={runValidation}
-                disabled={loading}
-                className="bg-green-600 hover:bg-green-700 text-white px-10 py-3 rounded-full font-bold shadow-lg shadow-green-200 flex items-center gap-2 mx-auto disabled:opacity-50 transform transition-transform hover:scale-105"
-              >
-                {loading ? (
-                  <FaSpinner className="animate-spin" />
-                ) : (
-                  "Lancer la validation"
-                )}
-              </button>
-              <button
-                onClick={() => {
-                  setValidationFiles([]);
-                  setValidationReport(null);
-                }}
-                className="mt-6 text-xs text-gray-400 underline hover:text-gray-600"
-              >
-                Annuler la sélection
-              </button>
+              <ul className="list-disc ml-5 text-sm text-yellow-900 space-y-1">
+                {normalizedValidation.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {normalizedValidation.suggestions?.length > 0 && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="font-bold text-blue-800 mb-2 flex items-center gap-2">
+                <FaInfoCircle /> Suggestions
+              </div>
+              <ul className="list-disc ml-5 text-sm text-blue-900 space-y-1">
+                {normalizedValidation.suggestions.map((s, i) => (
+                  <li key={i}>{s}</li>
+                ))}
+              </ul>
             </div>
           )}
         </Card>
+      )}
 
-        <div className="space-y-4 h-full">
-          <div className="flex items-center justify-between">
-            <h3 className="font-bold text-gray-800 uppercase tracking-wide text-sm">
-              Rapport Qualité v7.4.6
-            </h3>
-            {validationReport && (
-              <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold">
-                Predictive Check Active
-              </span>
-            )}
-          </div>
-
-          {!normalizedValidation ? (
-            <div className="h-[400px] bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-center text-gray-400 text-sm italic p-8 text-center">
-              {loading ? (
-                <div className="flex flex-col items-center gap-4">
-                  <FaSpinner className="animate-spin text-3xl text-blue-500" />
-                  <p className="font-medium text-gray-600">
-                    Validation en cours...
-                  </p>
-                </div>
-              ) : (
-                "Le rapport apparaîtra ici après l'analyse."
-              )}
-            </div>
-          ) : (
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden h-[400px] flex flex-col">
-              <div className="overflow-y-auto p-5 space-y-5 custom-scrollbar flex-1">
-                {normalizedValidation.critical?.length > 0 ? (
-                  <div className="bg-red-50 border border-red-100 rounded-lg p-4">
-                    <h4 className="text-red-800 font-bold text-sm uppercase mb-3 flex items-center gap-2">
-                      <FaTimesCircle className="text-lg" /> Erreurs Critiques
-                    </h4>
-                    <ul className="list-disc list-inside text-xs text-red-700 space-y-2 font-medium">
-                      {normalizedValidation.critical.map((err, i) => (
-                        <li key={i}>{err}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : (
-                  <div className="bg-green-50 border border-green-100 rounded-lg p-4 text-center">
-                    <FaCheckCircle className="text-green-500 text-2xl mx-auto mb-2" />
-                    <p className="text-green-800 font-bold text-sm">
-                      Aucune erreur critique détectée
-                    </p>
-                  </div>
-                )}
-
-                {(normalizedValidation.warnings?.length > 0 ||
-                  normalizedValidation.suggestions?.length > 0) && (
-                  <div className="bg-amber-50 border border-amber-100 rounded-lg p-4">
-                    <h4 className="text-amber-800 font-bold text-sm uppercase mb-3 flex items-center gap-2">
-                      <FaExclamationTriangle /> Points d'attention
-                    </h4>
-                    <ul className="list-disc list-inside text-xs text-amber-800 space-y-2">
-                      {normalizedValidation.warnings?.map((w, i) => (
-                        <li key={`w-${i}`}>{w}</li>
-                      ))}
-                      {normalizedValidation.suggestions?.map((s, i) => (
-                        <li key={`s-${i}`}>{s}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                <div className="text-xs text-gray-600 border-t pt-4 mt-2 whitespace-pre-wrap leading-relaxed">
-                  <span className="font-bold text-gray-800 block mb-1">
-                    Résumé Global :
-                  </span>
-                  {normalizedValidation.report}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+      <div className="text-center pt-2">
+        <button
+          onClick={() => setStep(3)}
+          className="text-sm text-blue-700 hover:underline"
+        >
+          ← Retour aux instructions
+        </button>
       </div>
     </div>
   );
 
   // ---------------------------------------------------------------------------
-  // Main render
+  // MAIN RENDER
   // ---------------------------------------------------------------------------
+
   return (
-    <div className="min-h-screen bg-slate-50 pb-20 font-sans text-gray-900">
-      <div className="max-w-7xl mx-auto px-4 py-8">
-        <header className="mb-10 text-center relative">
-          <button
-            onClick={() => setShowLibrary(!showLibrary)}
-            className="absolute right-0 top-0 text-xs font-medium text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1.5 rounded-full transition-colors flex items-center gap-2"
-          >
-            <FaDatabase /> Gérer la bibliothèque
-          </button>
-          <h1 className="text-3xl font-extrabold text-slate-800 mb-2 tracking-tight">
-            Assistant DCF <span className="text-blue-600">v7 Ultimate</span>
-          </h1>
-          <p className="text-slate-500 text-sm font-medium">
-            Architecture "Full Database" • Génération Automatique • Vision SAP • Memory v7.4.6
-          </p>
-        </header>
+    <div className="p-4 md:p-8 bg-slate-50 min-h-screen">
+      <StepIndicator currentStep={step} steps={stepsLabel} />
 
-        {showLibrary && renderLibrary()}
-
-        <StepIndicator
-          currentStep={step}
-          steps={["Besoin", "Analyse", "Guidage & Auto-fill", "Validation"]}
-        />
-
-        <div className="transition-all duration-500 ease-in-out">
-          {step === 1 && renderStep1_Describe()}
-          {step === 2 && renderStep2_Recommend()}
-          {step === 3 && renderStep3_Guide()}
-          {step === 4 && renderStep4_Validate()}
-        </div>
-      </div>
-
-      <div className="fixed bottom-4 right-4 text-[11px] text-gray-400 pointer-events-none font-medium bg-white/80 px-2 py-1 rounded backdrop-blur-sm border border-gray-100">
-        © Copyright Daniel Palha
-      </div>
+      {step === 1 && renderStep1_Describe()}
+      {step === 2 && renderStep2_Recommend()}
+      {step === 3 && renderStep3_Guide()}
+      {step === 4 && renderStep4_Validate()}
     </div>
   );
 }
