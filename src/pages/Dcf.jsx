@@ -1019,7 +1019,7 @@ export default function DCFWizard() {
                     return;
                   }
                   
-                  const debug = await api.get(`/api/dcf/files/${fileId}/debug`);
+                  const debug = await api.dcf.getFileDebug(fileId);
                   console.log("🔍 DEBUG EXCEL ANALYSIS:", debug);
                   
                   notify("ok", "Debug dans console", "Ouvre la console navigateur (F12)");
