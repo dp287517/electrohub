@@ -1,5 +1,7 @@
-// server_dcf.js — Assistant DCF SAP v7.4.8
+// server_dcf.js — Assistant DCF SAP v7.4.9
 // FULL FIX + Memory + Protocole Charles + Validate Smart + ACTION Multi-Cols + Instructions ACTION-aware
+// + Dropdown lists support (CSV) + Clarification scaffolding
+//
 // - Pré-routage métier (ajout opération/contrôle dans plan existant => TL+MP)
 // - Validation scope-aware: ignore lignes sans vraie action SAP
 // - ACTION peut être dans ACTION, ACTION_01, ACTION_02, ACTION_03...
@@ -7,6 +9,7 @@
 // - Instructions: IA guidée vers ACTION_0X + remap auto
 // - Instructions length-aware (SAP max lengths + troncature auto)
 // - Analyse Excel robuste SAP + mémoire relationnelle + historique noms
+// - Dropdown CSV: on n’invente pas les valeurs de listes, on demande si besoin
 
 import express from "express";
 import cors from "cors";
@@ -16,6 +19,8 @@ import multer from "multer";
 import pg from "pg";
 import OpenAI from "openai";
 import xlsx from "xlsx";
+import fs from "fs";
+import path from "path";
 
 dotenv.config();
 
@@ -46,6 +51,11 @@ const MAX_CONTEXT_CHARS = 12000;
 const MAX_ATTACHMENT_TEXT = 6000;
 const MAX_MEMORY_HINTS = 50;
 const MAX_NUMBERS_SCAN = 40;
+
+// Dropdown CSV path (optional)
+const DROPDOWN_CSV_PATH =
+  process.env.DCF_DROPDOWN_CSV_PATH ||
+  path.join(process.cwd(), "Listes_deroulantes__data_validation_.csv");
 
 // -----------------------------------------------------------------------------
 // 1. EXPRESS SETUP
@@ -150,6 +160,96 @@ async function ensureMemoryTables() {
 ensureMemoryTables().catch(() =>
   console.warn("⚠️ Impossible de créer les tables mémoire (non bloquant).")
 );
+
+// -----------------------------------------------------------------------------
+// 3bis. DROPDOWNS (CSV OPTIONAL)
+// -----------------------------------------------------------------------------
+
+let DROPDOWN_INDEX = null;
+
+/**
+ * CSV schema (from your file):
+ * Fichier | Feuille | Cellules concernées | Nom/Source liste | Nb valeurs | Valeurs (liste complète)
+ */
+function loadDropdownCSV() {
+  try {
+    if (!fs.existsSync(DROPDOWN_CSV_PATH)) {
+      DROPDOWN_INDEX = null;
+      return;
+    }
+
+    const raw = fs.readFileSync(DROPDOWN_CSV_PATH, "utf8");
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    const header = lines.shift();
+    if (!header) return;
+
+    const idx = new Map();
+
+    for (const line of lines) {
+      // naive CSV split (works with your current export)
+      const parts = line.split(",");
+      if (parts.length < 6) continue;
+
+      const fichier = (parts[0] || "").trim();
+      const feuille = (parts[1] || "").trim();
+      const cellules = (parts[2] || "").trim();
+      const listName = (parts[3] || "").trim();
+      const nb = Number((parts[4] || "0").trim()) || 0;
+      const valuesStr = parts.slice(5).join(",").trim(); // keep commas inside list
+      const values = valuesStr
+        .split(/\s*,\s*/)
+        .map((v) => v.trim())
+        .filter(Boolean);
+
+      const key = fichier.toLowerCase();
+      if (!idx.has(key)) idx.set(key, []);
+      idx.get(key).push({
+        fichier,
+        feuille,
+        cellules,
+        listName,
+        nb,
+        values
+      });
+    }
+
+    DROPDOWN_INDEX = idx;
+    console.log(`✅ Dropdown CSV chargé: ${idx.size} fichiers indexés`);
+  } catch (e) {
+    console.warn("⚠️ Dropdown CSV non chargé:", e.message);
+    DROPDOWN_INDEX = null;
+  }
+}
+
+loadDropdownCSV();
+
+/**
+ * Return dropdown entries matching a template filename (case-insensitive contains).
+ */
+function getDropdownsForTemplate(templateFilename = "") {
+  if (!DROPDOWN_INDEX) return [];
+  const tf = templateFilename.toLowerCase();
+  for (const [k, arr] of DROPDOWN_INDEX.entries()) {
+    if (tf.includes(k)) return arr;
+  }
+  // fallback: try partial match
+  for (const [k, arr] of DROPDOWN_INDEX.entries()) {
+    if (k.includes(tf) || tf.includes(k)) return arr;
+  }
+  return [];
+}
+
+function dropdownBlockForPrompt(templateFilename) {
+  const dds = getDropdownsForTemplate(templateFilename);
+  if (!dds.length) return "N/A";
+
+  return dds
+    .map((d) => {
+      const vals = d.values.slice(0, 80).join(", ");
+      return `- Liste "${d.listName}" (cells: ${d.cellules}) valeurs autorisées: ${vals}`;
+    })
+    .join("\n");
+}
 
 // -----------------------------------------------------------------------------
 // 4. EXCEL ANALYSIS ROBUSTE
@@ -651,19 +751,17 @@ function enforceSapLengthsOnSteps(steps = []) {
       reason: `${
         s.reason ? s.reason + " | " : ""
       }Texte tronqué SAP (max ${maxLen}). Reste à mettre en long text: "${overflow.slice(
-        0,
-        80
+        0, 80
       )}${overflow.length > 80 ? "…" : ""}"`
     };
   });
 }
 
 // -----------------------------------------------------------------------------
-// 8. ACTION COLUMN DETECTION (NEW v7.4.8)
+// 8. ACTION COLUMN DETECTION
 // -----------------------------------------------------------------------------
 
 function detectPreferredActionCode(analysisLiteOrFull) {
-  // scan columns in sheets
   const sheets = analysisLiteOrFull?.sheets || [];
   const allCodes = [];
   for (const sh of sheets) {
@@ -671,7 +769,6 @@ function detectPreferredActionCode(analysisLiteOrFull) {
       if (c?.code) allCodes.push(String(c.code).toUpperCase());
     }
   }
-  // prefer ACTION_02 then ACTION_01 then any ACTION_x then ACTION
   if (allCodes.includes("ACTION_02")) return "ACTION_02";
   if (allCodes.includes("ACTION_01")) return "ACTION_01";
   const anyActionX = allCodes.find((c) => /^ACTION_\d+$/i.test(c));
@@ -709,7 +806,6 @@ function remapActionStepsToPreferred(steps, analysisFull, preferredActionCode) {
 
     const targetPos = findColumnByCode(analysisFull, pref);
     if (!targetPos) {
-      // If we can't find the column, at least normalize code
       return { ...s, code: pref };
     }
 
@@ -727,11 +823,12 @@ function remapActionStepsToPreferred(steps, analysisFull, preferredActionCode) {
 // 9. WIZARD ROUTES
 // -----------------------------------------------------------------------------
 
-// ✅ ANALYZE renforcé + pré-routage TL+MP
+// ✅ ANALYZE renforcé + pré-routage TL+MP + clarifications scaffold
 app.post("/api/dcf/wizard/analyze", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
     const msgLower = String(message || "").toLowerCase();
+    const useCase = extractUseCaseFromText(message);
 
     const planNums = msgLower.match(/\b\d{6,12}\b/g) || [];
     const hasPlanWord =
@@ -781,7 +878,8 @@ app.post("/api/dcf/wizard/analyze", async (req, res) => {
                   `Rattacher la nouvelle opération au plan ${planNums[0]} (ou mettre à jour la TL liée).`
               }
             : null
-        ].filter(Boolean)
+        ].filter(Boolean),
+        questions: [] // scaffold for future UX
       };
 
       if (sessionId) {
@@ -867,6 +965,9 @@ Réponds en JSON STRICT uniquement:
       "file_id": 123,
       "usage": "ce qu'on va faire dans ce fichier"
     }
+  ],
+  "questions": [
+    "questions de clarification si la demande est incomplète (non bloquant)"
   ]
 }
 `;
@@ -926,7 +1027,7 @@ Réponds en JSON STRICT uniquement:
   }
 });
 
-// ✅ INSTRUCTIONS renforcées + longueur SAP + ACTION aware
+// ✅ INSTRUCTIONS renforcées + longueur SAP + ACTION aware + dropdowns
 app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
     const { sessionId, requestText, templateFilename, attachmentIds = [] } =
@@ -949,14 +1050,13 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
 
     const file = rows[0];
 
-    // rebuild full analysis for accurate col letters
     const analysisFull = file.file_data
       ? buildDeepExcelAnalysis(file.file_data, file.filename)
       : null;
 
-    const fileContext = file.analysis?.ai_context || analysisFull?.ai_context || "";
+    const fileContext =
+      file.analysis?.ai_context || analysisFull?.ai_context || "";
 
-    // ✅ detect preferred ACTION column for THIS template
     const preferredActionCode = detectPreferredActionCode(
       file.analysis || analysisFull
     );
@@ -983,6 +1083,8 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
       ? `\nMEMOIRE METIER (si pertinente):\n${memHints.join("\n")}\n`
       : "";
 
+    const dropdownBlock = dropdownBlockForPrompt(templateFilename);
+
     const prompt = `
 Tu es un Expert SAP DCF. Tu dois remplir un fichier Excel DCF.
 
@@ -992,8 +1094,13 @@ ${memBlock}
 FICHIER TEMPLATE:
 "${templateFilename}"
 
-STRUCTURE DU TEMPLATE (résumé):
+STRUCTURE DU TEMPLATE:
 ${clampStr(fileContext, 5000)}
+
+LISTES DEROUlANTES (IMPORTANT):
+${dropdownBlock}
+Règle: si un champ correspond à une liste déroulante, tu DOIS choisir une valeur dans la liste.
+Si la valeur n’est pas claire dans la demande ou dans les captures SAP, pose une question dans "reason" et mets mandatory=false.
 
 DONNÉES SAP (Vision OCR si dispo):
 ${visionContext || "N/A"}
@@ -1014,7 +1121,7 @@ INSTRUCTIONS:
 - Chaque étape doit pointer une cellule (row, col) et un code champ.
 - Valeur prêtes à copier/coller.
 - mandatory=true si c’est obligatoire.
-- Si le champ est optionnel (ex: EQUNR dans ajout opération plan), mets mandatory=false.
+- Si le champ est optionnel ou incertain, mets mandatory=false et explique quoi demander.
 
 Réponds en JSON STRICT:
 {
@@ -1025,7 +1132,7 @@ Réponds en JSON STRICT:
       "code": "WARPL",
       "label": "texte court",
       "value": "30482007",
-      "reason": "pourquoi cette valeur",
+      "reason": "pourquoi cette valeur / question si incertain",
       "mandatory": true,
       "sheet": "NomSheetOptionnel"
     }
@@ -1046,10 +1153,8 @@ Réponds en JSON STRICT:
     const out = cleanJSON(completion.choices[0].message.content);
     let steps = Array.isArray(out.steps) ? out.steps : [];
 
-    // ✅ post-traitement longueur SAP
     steps = enforceSapLengthsOnSteps(steps);
 
-    // ✅ NEW v7.4.8: remap action steps to preferred ACTION col
     if (analysisFull) {
       steps = remapActionStepsToPreferred(
         steps,
@@ -1135,7 +1240,7 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
   }
 });
 
-// ✅ VALIDATE intelligent scope-aware + ACTION multi-colonnes
+// ✅ VALIDATE intelligent scope-aware + ACTION multi-colonnes + dropdown-aware
 app.post("/api/dcf/wizard/validate", async (req, res) => {
   try {
     const { fileIds, useCase = null } = req.body;
@@ -1156,7 +1261,6 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       return res.status(404).json({ error: "Aucun fichier trouvé." });
     }
 
-    // Rebuild FULL analysis depuis file_data
     const rebuilt = files.map((f) => {
       let full = null;
       try {
@@ -1169,7 +1273,6 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       return { ...f, analysis_full: full };
     });
 
-    // ✅ PATCH ACTION MULTI-COLONNES + whitelist
     function getActiveRows(fullAnalysis) {
       const rowsIndex = fullAnalysis?.rows_index || {};
       const active = [];
@@ -1213,7 +1316,7 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
     if (noActive) {
       return res.json({
         report:
-          "Aucune vraie ACTION SAP détectée (Insert/Change/Delete). Vérifie que tes lignes modifiées ont bien ACTION_01/02/03 = Insert/Change/Delete selon le template.",
+          "Aucune vraie ACTION SAP détectée (Insert/Change/Delete). Vérifie ACTION_01/02/03.",
         critical: [],
         warnings: [],
         suggestions: []
@@ -1221,6 +1324,13 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
     }
 
     const context = JSON.stringify(activeRowsByFile).slice(0, MAX_CONTEXT_CHARS);
+
+    // dropdowns summary per file
+    const dropdownByFile = rebuilt.map((f) => ({
+      filename: f.filename,
+      dropdowns: getDropdownsForTemplate(f.filename)
+    }));
+    const dropdownContext = JSON.stringify(dropdownByFile).slice(0, 4000);
 
     const prompt = `
 Tu valides des fichiers DCF SAP.
@@ -1231,6 +1341,10 @@ IMPORTANT:
 - Ne contrôle QUE les lignes avec Insert/Change/Delete.
 
 Cas d'usage: ${useCase || "unknown"}.
+
+LISTES DEROUlANTES (référence):
+${dropdownContext}
+Règle: si un champ possède une liste, une valeur hors liste = WARNING (pas critique pour l'instant).
 
 Règles spécifiques:
 - add_operation_in_plan:
@@ -1573,7 +1687,7 @@ app.get("/api/dcf/files", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.8 Validate+Instructions ACTION-aware" })
+  res.json({ status: "ok", version: "7.4.9 Dropdown+Clarifications" })
 );
 
 // -----------------------------------------------------------------------------
@@ -1581,5 +1695,5 @@ app.get("/api/dcf/health", (req, res) =>
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.8] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.4.9] Backend démarré sur http://${HOST}:${PORT}`);
 });
