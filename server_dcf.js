@@ -495,6 +495,28 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
   return analysis;
 }
 
+
+// -----------------------------------------------------------------------------
+// 4.b ANALYSIS SHRINKING FOR DB (compat v7.5.0)
+// -----------------------------------------------------------------------------
+// L'analyse complète peut être très grosse (extracted_values, context long).
+// On stocke une version "lite" en DB pour historique/debug léger.
+function shrinkAnalysisForDB(analysisFull) {
+  if (!analysisFull || typeof analysisFull !== "object") return analysisFull;
+  const ai = String(analysisFull.ai_context || "");
+  return {
+    filename: analysisFull.filename,
+    sheetNames: analysisFull.sheetNames || [],
+    sheets: analysisFull.sheets || [],
+    // utile pour debug, mais on limite la taille
+    ai_context: ai.length > 20000 ? ai.slice(0, 20000) + "\n...[TRUNCATED]" : ai,
+    extracted_count: Array.isArray(analysisFull.extracted_values)
+      ? analysisFull.extracted_values.length
+      : 0,
+    rows_index: analysisFull.rows_index || {}
+  };
+}
+
 function buildFileContext(analysis) {
   return {
     filename: analysis.filename,
