@@ -209,6 +209,18 @@ async function ensureMemoryTables() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_entity_name_history (
+      id SERIAL PRIMARY KEY,
+      entity_type TEXT NOT NULL,
+      key_code TEXT NOT NULL,
+      key_value TEXT NOT NULL,
+      old_name_value TEXT,
+      new_name_value TEXT,
+      changed_at TIMESTAMP DEFAULT now()
+      );
+    `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_values_index (
       id SERIAL PRIMARY KEY,
       field_code TEXT NOT NULL,
@@ -226,59 +238,123 @@ ensureMemoryTables().catch(() =>
 );
 
 // -----------------------------------------------------------------------------
-// 3bis. DROPDOWNS (CSV OPTIONAL)
+// 3bis. DROPDOWNS (CSV OPTIONAL) — ROBUST PARSE + ROBUST MATCH
 // -----------------------------------------------------------------------------
 
 let DROPDOWN_INDEX = null;
 
 /**
- * CSV schema (from your file):
+ * Normalise une clé de fichier pour matcher même si:
+ * - extension différente / absente
+ * - accents
+ * - underscores / espaces
+ * - variantes de nom (Maintenance Plan vs DCF_MaintPlan etc.)
+ */
+function normalizeKey(s = "") {
+  return String(s)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // enlève accents
+    .replace(/\.(xlsx|xlsm|xls)$/i, "") // enlève extension
+    .replace(/[^a-z0-9]+/g, " ") // remplace tout par espace
+    .trim();
+}
+
+/**
+ * Détecte automatiquement si le CSV est séparé par "," ou ";"
+ * (Excel FR sort souvent du ";" par défaut)
+ */
+function detectDelimiter(headerLine = "") {
+  const comma = (headerLine.match(/,/g) || []).length;
+  const semi  = (headerLine.match(/;/g) || []).length;
+  return semi > comma ? ";" : ",";
+}
+
+/**
+ * Split CSV en respectant les guillemets.
+ * Ex: "valeur, avec virgule" reste un seul champ.
+ */
+function smartSplitCSVLine(line, delim) {
+  const out = [];
+  let cur = "";
+  let inQ = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+
+    if (ch === '"') {
+      inQ = !inQ;
+      continue;
+    }
+
+    if (ch === delim && !inQ) {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+
+    cur += ch;
+  }
+
+  out.push(cur);
+  return out;
+}
+
+/**
+ * CSV schema:
  * Fichier | Feuille | Cellules concernées | Nom/Source liste | Nb valeurs | Valeurs (liste complète)
  */
 function loadDropdownCSV() {
   try {
     if (!fs.existsSync(DROPDOWN_CSV_PATH)) {
+      console.warn("⚠️ Dropdown CSV introuvable:", DROPDOWN_CSV_PATH);
       DROPDOWN_INDEX = null;
       return;
     }
 
     const raw = fs.readFileSync(DROPDOWN_CSV_PATH, "utf8");
-    const lines = raw.split(/\r?\n/).filter(Boolean);
+    const lines = raw.split(/\r?\n/).filter((l) => l.trim() !== "");
     const header = lines.shift();
-    if (!header) return;
+    if (!header) {
+      DROPDOWN_INDEX = null;
+      return;
+    }
 
+    const delim = detectDelimiter(header);
     const idx = new Map();
 
     for (const line of lines) {
-      // naive CSV split (works with your current export)
-      const parts = line.split(",");
+      const parts = smartSplitCSVLine(line, delim).map((p) => String(p || "").trim());
       if (parts.length < 6) continue;
 
-      const fichier = (parts[0] || "").trim();
-      const feuille = (parts[1] || "").trim();
-      const cellules = (parts[2] || "").trim();
-      const listName = (parts[3] || "").trim();
-      const nb = Number((parts[4] || "0").trim()) || 0;
-      const valuesStr = parts.slice(5).join(",").trim(); // keep commas inside list
+      const fichierRaw = parts[0];
+      const feuille = parts[1];
+      const cellules = parts[2];
+      const listName = parts[3];
+      const nb = Number(parts[4] || "0") || 0;
+
+      // tout ce qui reste = valeurs (on re-joint au cas où des virgules sont dedans)
+      const valuesStr = parts.slice(5).join(delim).trim();
       const values = valuesStr
-        .split(/\s*,\s*/)
+        .split(/\s*[,;]\s*/)   // virgule OU point-virgule
         .map((v) => v.trim())
         .filter(Boolean);
 
-      const key = fichier.toLowerCase();
+
+      const key = normalizeKey(fichierRaw);
       if (!idx.has(key)) idx.set(key, []);
       idx.get(key).push({
-        fichier,
+        fichier: fichierRaw,
         feuille,
         cellules,
         listName,
         nb,
-        values
+        values,
       });
     }
 
     DROPDOWN_INDEX = idx;
-    console.log(`✅ Dropdown CSV chargé: ${idx.size} fichiers indexés`);
+    console.log(`✅ Dropdown CSV chargé: ${idx.size} fichiers indexés (delim="${delim}")`);
   } catch (e) {
     console.warn("⚠️ Dropdown CSV non chargé:", e.message);
     DROPDOWN_INDEX = null;
@@ -288,18 +364,40 @@ function loadDropdownCSV() {
 loadDropdownCSV();
 
 /**
- * Return dropdown entries matching a template filename (case-insensitive contains).
+ * Matching robuste template <-> CSV
+ * 1) match direct normalisé
+ * 2) contains
+ * 3) fallback fuzzy par mots-clés
  */
 function getDropdownsForTemplate(templateFilename = "") {
   if (!DROPDOWN_INDEX) return [];
-  const tf = templateFilename.toLowerCase();
+
+  const tf = normalizeKey(templateFilename);
+
+  // 1) match direct
+  if (DROPDOWN_INDEX.has(tf)) return DROPDOWN_INDEX.get(tf);
+
+  // 2) contains
   for (const [k, arr] of DROPDOWN_INDEX.entries()) {
-    if (tf.includes(k)) return arr;
+    if (tf.includes(k) || k.includes(tf)) return arr;
   }
-  // fallback: try partial match
-  for (const [k, arr] of DROPDOWN_INDEX.entries()) {
-    if (k.includes(tf) || tf.includes(k)) return arr;
+
+  // 3) fuzzy buckets (si nom trop différent)
+  const buckets = [
+    { key: "maintenance plan", words: ["maintenance", "plan", "warpl", "mp"] },
+    { key: "equipment", words: ["equipment", "equnr", "eq"] },
+    { key: "task list", words: ["task", "list", "plnnr", "plnty"] },
+    { key: "functional location", words: ["functional", "location", "iloan", "tplnr"] },
+  ];
+
+  for (const b of buckets) {
+    if (b.words.some((w) => tf.includes(w))) {
+      for (const [k, arr] of DROPDOWN_INDEX.entries()) {
+        if (k.includes(b.key)) return arr;
+      }
+    }
   }
+
   return [];
 }
 
@@ -309,7 +407,7 @@ function dropdownBlockForPrompt(templateFilename) {
 
   return dds
     .map((d) => {
-      const vals = d.values.slice(0, 80).join(", ");
+      const vals = (d.values || []).slice(0, 120).join(", ");
       return `- Liste "${d.listName}" (cells: ${d.cellules}) valeurs autorisées: ${vals}`;
     })
     .join("\n");
@@ -349,6 +447,22 @@ function looksLikeCodes(row) {
   ).length;
 
   return codeLike / cells.length > 0.35;
+}
+
+// Heuristique: si beaucoup de colonnes codes sont >= H,
+// on ignore A..G pour éviter les colonnes parasites.
+function applyHStartHeuristic(columns, startLetter = "H") {
+  if (!Array.isArray(columns) || columns.length === 0) return columns || [];
+
+  const startIdx = letterToIndex(startLetter); // utilise la helper déjà définie
+  const afterH = columns.filter(c => c.idx >= startIdx);
+  const beforeH = columns.filter(c => c.idx < startIdx);
+
+  // Si au moins 60% des colonnes détectées sont après H → on filtre avant H
+  if (afterH.length / columns.length >= 0.6) {
+    return afterH;
+  }
+  return columns;
 }
 
 function findHeaderRow(raw) {
@@ -1667,11 +1781,6 @@ Réponds JSON STRICT:
 
     let out = cleanJSON(completion.choices[0].message.content);
 
-    // Guardrail: refuse columns outside official template window
-    const { fixed, critical } = validateAIColumns(out, templateFilename);
-    out = fixed;
-    if (critical.length) out.unshift(...critical);
-
     const toLine = (x) => {
       if (typeof x === "string") return x;
       if (!x || typeof x !== "object") return String(x ?? "");
@@ -2005,7 +2114,7 @@ app.get("/api/dcf/files/:id", async (req, res) => {
 });
 
 app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.4.9 Dropdown+Clarifications" })
+  res.json({ status: "ok", version: "7.5.0 Dropdown+Clarifications" })
 );
 
 // -----------------------------------------------------------------------------
