@@ -1434,7 +1434,7 @@ export const api = {
       }),
   },
 
-/** --- DCF ASSISTANT v7.4.6 (Ultimate, Database Storage & Memory) --- */
+/** --- DCF ASSISTANT v7.5.1 (Ultimate, Database Storage & Memory) --- */
 dcf: {
   health: () => get("/api/dcf/health"),
 
@@ -1450,8 +1450,27 @@ dcf: {
 
   listFiles: () => get("/api/dcf/files"),
 
-  // Route optionnelle (pas bloquant si absente côté backend)
-  getFile: (id) => get(`/api/dcf/files/${id}`),
+  /**
+   * Téléchargement d'un template depuis la DB
+   * Backend: GET /api/dcf/files/:id -> renvoie un fichier (Blob)
+   */
+  getFile: async (id) => {
+    const site = currentSite();
+    const headers = identityHeaders(new Headers({ "X-Site": site }));
+
+    const res = await fetch(`${API_BASE}/api/dcf/files/${id}`, {
+      method: "GET",
+      headers,
+      credentials: "include",
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+
+    return res.blob();
+  },
 
   // --- SESSIONS ---
   startSession: (payload) => post("/api/dcf/startSession", payload),
@@ -1464,7 +1483,6 @@ dcf: {
   uploadAttachments: (files = [], sessionId = null) => {
     const fd = new FormData();
     (files || []).forEach((f) => fd.append("files", f));
-    // backend lit req.body.sessionId
     if (sessionId) fd.append("sessionId", sessionId);
     return upload("/api/dcf/attachments/upload", fd);
   },
@@ -1487,7 +1505,7 @@ dcf: {
       useCase,
     }),
 
-  // --- WIZARD v7.4.x ---
+  // --- WIZARD v7.5.x ---
   wizard: {
     // Étape 1 : Analyse
     analyze: (message, sessionId) =>
@@ -1527,7 +1545,7 @@ dcf: {
       return res.blob();
     },
 
-    // Étape 4 : Validation ✅ updated pour v7.4.6
+    // Étape 4 : Validation
     validate: (fileIds, useCase = null) =>
       post("/api/dcf/wizard/validate", { fileIds, useCase }),
 
