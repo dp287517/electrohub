@@ -604,7 +604,8 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     ai_context: "",
     sheets: [],
     extracted_values: [],
-    rows_index: {}
+    rows_index: {},
+    debug_info: [] // ⚡ NOUVEAU : logs debug
   };
 
   let globalContext = "";
@@ -616,35 +617,78 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
     if (!raw.length) continue;
 
+    const debugLog = [];
+
+    // ========== ÉTAPE 1 : DÉTECTION HEADER ==========
+    debugLog.push(`\n🔍 SHEET "${sheetName}" - ${raw.length} lignes détectées`);
+
     const headerRowIdx = findHeaderRow(raw);
+    debugLog.push(`📍 Header row détectée : ligne ${headerRowIdx + 1} (index ${headerRowIdx})`);
+    debugLog.push(`   Contenu : ${JSON.stringify(raw[headerRowIdx]?.slice(0, 15) || [])}`);
+
     const row0 = raw[headerRowIdx] || [];
     const row1 = raw[headerRowIdx + 1] || [];
 
-    const codesRow = looksLikeCodes(row1) ? row1 : row0;
-    const labelsRow = looksLikeCodes(row1) ? row0 : row1;
+    debugLog.push(`📍 Ligne suivante (codes potentiels) : ligne ${headerRowIdx + 2}`);
+    debugLog.push(`   Contenu : ${JSON.stringify(row1.slice(0, 15) || [])}`);
 
-    let columns = [];
+    // ========== ÉTAPE 2 : IDENTIFICATION CODES/LABELS ==========
+    const row0IsCodes = looksLikeCodes(row0);
+    const row1IsCodes = looksLikeCodes(row1);
+
+    debugLog.push(`🔬 Analyse lignes :`);
+    debugLog.push(`   - row0 looks like codes? ${row0IsCodes}`);
+    debugLog.push(`   - row1 looks like codes? ${row1IsCodes}`);
+
+    const codesRow = row1IsCodes ? row1 : row0;
+    const labelsRow = row1IsCodes ? row0 : row1;
+    const codesRowIdx = row1IsCodes ? headerRowIdx + 1 : headerRowIdx;
+
+    debugLog.push(`✅ Décision : codes en ligne ${codesRowIdx + 1}, labels en ligne ${row1IsCodes ? headerRowIdx + 1 : headerRowIdx + 2}`);
+
+    // ========== ÉTAPE 3 : EXTRACTION COLONNES (SANS FILTRE) ==========
+    let rawColumns = [];
     codesRow.forEach((code, idx) => {
       const c = String(code).trim();
       if (c.length > 1 && /[A-Za-z0-9]/.test(c)) {
         const label = String(labelsRow[idx] || "").trim();
-        columns.push({ idx, col: columnIndexToLetter(idx), code: c, label });
+        rawColumns.push({ idx, col: columnIndexToLetter(idx), code: c, label });
       }
     });
 
-    // heuristique H (templates SAP) si dispo
-    columns = applyHStartHeuristic(columns);
+    debugLog.push(`📊 ${rawColumns.length} colonnes brutes détectées (avant filtres) :`);
+    rawColumns.slice(0, 20).forEach(c => {
+      debugLog.push(`   ${c.col} (idx=${c.idx}) : ${c.code} "${c.label}"`);
+    });
 
-    // clamp à la fenêtre officielle du template
+    // ========== ÉTAPE 4 : APPLICATION HEURISTIQUE H (OPTIONNELLE) ==========
+    let columns = [...rawColumns];
+
+    // ⚠️ DÉSACTIVATION TEMPORAIRE de l'heuristique H pour debug
+    // const afterHFiltered = applyHStartHeuristic(columns);
+    // debugLog.push(`🔧 Heuristique H : ${columns.length} → ${afterHFiltered.length} colonnes`);
+    // columns = afterHFiltered;
+
+    debugLog.push(`⏭️  Heuristique H DÉSACTIVÉE (debug mode)`);
+
+    // ========== ÉTAPE 5 : WINDOW CLAMP (OPTIONNEL) ==========
     const window = getWindowForFilename(originalName);
-    columns = clampColumnsToWindow(columns, window);
+    if (window) {
+      const beforeClamp = columns.length;
+      columns = clampColumnsToWindow(columns, window);
+      debugLog.push(`📏 Window ${window.start}-${window.end} appliquée : ${beforeClamp} → ${columns.length} colonnes`);
+    } else {
+      debugLog.push(`📏 Pas de fenêtre template définie`);
+    }
 
+    // ========== ÉTAPE 6 : DÉBUT DONNÉES ==========
     const dataStartIdx = findDataStartIdx(raw, headerRowIdx, columns);
-    const dataRows = raw.slice(dataStartIdx);
+    debugLog.push(`📍 Début données détecté : ligne ${dataStartIdx + 1} (index ${dataStartIdx})`);
 
+    const dataRows = raw.slice(dataStartIdx);
     const colStats = computeColumnStats(dataRows, columns);
 
-    // première vraie ligne exemple
+    // ========== ÉTAPE 7 : EXEMPLE LIGNE ==========
     let exampleRowNumber = null;
     let exampleMap = {};
     for (let ridx = 0; ridx < dataRows.length; ridx++) {
@@ -658,6 +702,10 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       }
     }
 
+    debugLog.push(`📝 Exemple ligne ${exampleRowNumber || "?"} :`);
+    debugLog.push(`   ${JSON.stringify(exampleMap).slice(0, 200)}`);
+
+    // ========== ÉTAPE 8 : EXTRACTION VALEURS ==========
     let extractedCount = 0;
 
     dataRows.forEach((rowArr, ridx) => {
@@ -685,6 +733,12 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       }
     });
 
+    debugLog.push(`✅ ${extractedCount} valeurs extraites`);
+
+    // ========== SAVE DEBUG LOG ==========
+    analysis.debug_info.push(debugLog.join("\n"));
+
+    // ========== CONTEXT TEXTE ==========
     const columnsStr = columns
       .map((c) => `${c.code}${c.label ? ` (${c.label})` : ""} -> ${c.col}`)
       .join(", ");
@@ -703,16 +757,12 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     const sheetContext =
       `SHEET "${sheetName}"\n` +
       `Colonnes détectées: ${columnsStr}\n` +
-      `Header ligne ${headerRowIdx + 1} | Codes ligne ${
-        looksLikeCodes(row1) ? headerRowIdx + 2 : headerRowIdx + 1
-      }\n` +
-      `Fenêtre template: ${
-        window ? window.start + "-" + window.end : "auto"
-      }\n` +
+      `Header ligne ${headerRowIdx + 1} | Codes ligne ${codesRowIdx + 1}\n` +
+      `Fenêtre template: ${window ? window.start + "-" + window.end : "auto"}\n` +
       `Début données détecté: ligne ${dataStartIdx + 1}\n` +
       `Exemple ligne ${exampleRowNumber || "?"}: ${exampleStr}\n` +
       (constantStr
-        ? `Colonnes constantes (figées, ne pas modifier sauf demande explicite): ${constantStr}\n`
+        ? `Colonnes constantes (figées): ${constantStr}\n`
         : "");
 
     globalContext += sheetContext + "\n";
@@ -720,7 +770,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     analysis.sheets.push({
       name: sheetName,
       headerRowIdx: headerRowIdx + 1,
-      codesRowIdx: looksLikeCodes(row1) ? headerRowIdx + 2 : headerRowIdx + 1,
+      codesRowIdx: codesRowIdx + 1,
       columns,
       dataStartRow: dataStartIdx + 1,
       extracted_count: extractedCount
@@ -728,9 +778,16 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
   }
 
   analysis.ai_context = globalContext.trim();
+
+  // ⚡ AFFICHE DEBUG DANS CONSOLE SERVEUR
+  console.log("\n" + "=".repeat(80));
+  console.log(`📋 ANALYSE EXCEL : ${originalName}`);
+  console.log("=".repeat(80));
+  analysis.debug_info.forEach(log => console.log(log));
+  console.log("=".repeat(80) + "\n");
+
   return analysis;
 }
-
 
 // -----------------------------------------------------------------------------
 // 4.b ANALYSIS SHRINKING FOR DB (compat v7.5.0)
@@ -2089,6 +2146,7 @@ app.get("/api/dcf/files", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 // Download a stored template/file by id (blank template support)
 app.get("/api/dcf/files/:id", async (req, res) => {
   try {
@@ -2110,6 +2168,31 @@ app.get("/api/dcf/files/:id", async (req, res) => {
     return res.send(f.file_data);
   } catch (e) {
     return res.status(500).json({ error: e.message });
+  }
+});
+
+// ⚡ NOUVEAU : Route debug pour analyse Excel détaillée
+app.get("/api/dcf/files/:id/debug", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { rows } = await pool.query(
+      "SELECT filename, file_data FROM dcf_files WHERE id=$1",
+      [id]
+    );
+    
+    if (!rows.length) return res.status(404).json({ error: "File not found" });
+    
+    const file = rows[0];
+    const fullAnalysis = buildDeepExcelAnalysis(file.file_data, file.filename);
+    
+    res.json({
+      filename: file.filename,
+      sheets: fullAnalysis.sheets,
+      debug_logs: fullAnalysis.debug_info,
+      ai_context: fullAnalysis.ai_context
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
