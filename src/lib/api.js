@@ -1472,6 +1472,12 @@ dcf: {
     return res.blob();
   },
 
+  /**
+   * NOUVEAU: Récupère les logs d'analyse Excel détaillés pour debug.
+   * Backend: GET /api/dcf/files/:id/debug -> renvoie JSON
+   */
+  getFileDebug: (id) => get(`/api/dcf/files/${id}/debug`), // ⬅️ AJOUT DE LA FONCTION DE DEBUG
+
   // --- SESSIONS ---
   startSession: (payload) => post("/api/dcf/startSession", payload),
   listSessions: () => get("/api/dcf/sessions"),
