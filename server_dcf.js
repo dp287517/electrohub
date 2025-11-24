@@ -117,6 +117,69 @@ function extractUseCaseFromText(message = "") {
 // -----------------------------------------------------------------------------
 
 async function ensureMemoryTables() {
+  // Core tables (needed for first run)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_files (
+      id SERIAL PRIMARY KEY,
+      filename TEXT NOT NULL,
+      stored_name TEXT,
+      path TEXT,
+      mime TEXT,
+      bytes INT,
+      sheet_names JSONB DEFAULT '[]'::jsonb,
+      analysis JSONB DEFAULT '{}'::jsonb,
+      file_data BYTEA,
+      uploaded_at TIMESTAMP DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_sessions (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      created_by TEXT,
+      created_at TIMESTAMP DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_requests (
+      id SERIAL PRIMARY KEY,
+      session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
+      request_text TEXT NOT NULL,
+      detected_action TEXT,
+      detected_type TEXT,
+      recommended_file_id INT REFERENCES dcf_files(id),
+      response_json JSONB DEFAULT '{}'::jsonb,
+      created_at TIMESTAMP DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_messages (
+      id SERIAL PRIMARY KEY,
+      session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS dcf_attachments (
+      id SERIAL PRIMARY KEY,
+      session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
+      filename TEXT NOT NULL,
+      stored_name TEXT,
+      mime TEXT,
+      bytes INT,
+      file_data BYTEA,
+      extracted_text TEXT,
+      uploaded_at TIMESTAMP DEFAULT now()
+    );
+  `);
+
+  // Memory tables
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_entity_memory (
       id SERIAL PRIMARY KEY,
@@ -133,14 +196,15 @@ async function ensureMemoryTables() {
   `);
 
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_entity_name_history (
+    CREATE TABLE IF NOT EXISTS dcf_row_memory (
       id SERIAL PRIMARY KEY,
-      entity_type TEXT NOT NULL,
-      key_code TEXT NOT NULL,
-      key_value TEXT NOT NULL,
-      old_name_value TEXT,
-      new_name_value TEXT,
-      changed_at TIMESTAMP DEFAULT now()
+      file_id INT REFERENCES dcf_files(id) ON DELETE CASCADE,
+      sheet TEXT,
+      row_number INT,
+      data JSONB DEFAULT '{}'::jsonb,
+      seen_count INT DEFAULT 1,
+      last_seen_at TIMESTAMP DEFAULT now(),
+      UNIQUE(file_id, sheet, row_number)
     );
   `);
 
@@ -149,7 +213,7 @@ async function ensureMemoryTables() {
       id SERIAL PRIMARY KEY,
       field_code TEXT NOT NULL,
       value TEXT NOT NULL,
-      file_id INT,
+      file_id INT REFERENCES dcf_files(id) ON DELETE SET NULL,
       seen_count INT DEFAULT 1,
       last_seen_at TIMESTAMP DEFAULT now(),
       UNIQUE(field_code, value)
@@ -303,6 +367,41 @@ function findHeaderRow(raw) {
   return idx === -1 ? 0 : idx;
 }
 
+// NEW: Column windows per template to prevent drift (H..end fixed)
+const TEMPLATE_COL_WINDOWS = [
+  { match: /maintenance plan/i, start: "H", end: "BE" },
+  { match: /equipment/i, start: "H", end: "BU" },
+  { match: /task list/i, start: "H", end: "EB" },
+  { match: /functional location/i, start: "H", end: "BR" }
+];
+
+function letterToIndex(letter) {
+  let n = 0;
+  const s = String(letter || "").toUpperCase().trim();
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i) - 64;
+    if (c < 1 || c > 26) continue;
+    n = n * 26 + c;
+  }
+  return n - 1;
+}
+
+function getWindowForFilename(filename = "") {
+  const f = String(filename || "");
+  for (const w of TEMPLATE_COL_WINDOWS) {
+    if (w.match.test(f)) return w;
+  }
+  return null;
+}
+
+function clampColumnsToWindow(columns, window) {
+  if (!window) return columns;
+  const startIdx = letterToIndex(window.start);
+  const endIdx = letterToIndex(window.end);
+  return columns.filter((c) => c.idx >= startIdx && c.idx <= endIdx);
+}
+
+// test si une ligne contient des données sur les colonnes utiles
 function rowHasAnyDataInColumns(rowArr, columns) {
   for (const colDef of columns) {
     const v = String(rowArr[colDef.idx] ?? "").trim();
@@ -311,25 +410,7 @@ function rowHasAnyDataInColumns(rowArr, columns) {
   return false;
 }
 
-function findDataStartIdx(raw, headerRowIdx, columns) {
-  let i = headerRowIdx + 1;
-
-  while (i < raw.length) {
-    const row = raw[i] || [];
-    const isEmpty = row.every((c) => String(c ?? "").trim() === "");
-    const isCodes = looksLikeCodes(row);
-
-    if (isEmpty || isCodes) {
-      i++;
-      continue;
-    }
-    if (rowHasAnyDataInColumns(row, columns)) return i;
-
-    i++;
-  }
-  return headerRowIdx + 2;
-}
-
+// stats colonnes (constantes, valeurs uniques, etc.)
 function computeColumnStats(dataRows, columns) {
   const stats = {};
   for (const colDef of columns) {
@@ -351,18 +432,54 @@ function computeColumnStats(dataRows, columns) {
   return stats;
 }
 
-function applyHStartHeuristic(columns) {
-  // Si on a clairement un template SAP où les colonnes utiles démarrent en H (idx>=7),
-  // on ignore A..G pour éviter pollution/décalage.
-  const beforeH = columns.filter((c) => c.idx < 7);
-  const fromH = columns.filter((c) => c.idx >= 7);
+// évite de considérer une ligne d'exemple/constantes comme data réelle
+function isRowMostlyConstants(row, columns, colStats) {
+  let filled = 0;
+  let constants = 0;
+  for (const colDef of columns) {
+    const v = String(row[colDef.idx] ?? "").trim();
+    if (v !== "") {
+      filled++;
+      if (colStats?.[colDef.code]?.isConstant) constants++;
+    }
+  }
+  return filled > 0 && constants / filled > 0.8;
+}
 
-  if (!beforeH.length || !fromH.length) return columns;
+// début des données dynamique et anti-décalage
+function findDataStartIdx(raw, headerRowIdx, columns) {
+  let i = headerRowIdx + 1;
 
-  // Heuristique: si la majorité des colonnes sont >=H, on filtre A..G.
-  if (fromH.length >= beforeH.length * 2) return fromH;
+  // skip lignes vides/codes
+  while (i < raw.length) {
+    const row = raw[i] || [];
+    const isEmpty = row.every((c) => String(c ?? "").trim() === "");
+    const isCodes = looksLikeCodes(row);
+    if (isEmpty || isCodes) {
+      i++;
+      continue;
+    }
+    break;
+  }
 
-  return columns;
+  // probe stats sur 10 lignes max
+  const probeRows = raw.slice(i, i + 10);
+  const probeStats = computeColumnStats(probeRows, columns);
+
+  while (i < raw.length) {
+    const row = raw[i] || [];
+    if (!rowHasAnyDataInColumns(row, columns)) {
+      i++;
+      continue;
+    }
+    if (isRowMostlyConstants(row, columns, probeStats)) {
+      i++;
+      continue;
+    }
+    return i;
+  }
+
+  return headerRowIdx + 2;
 }
 
 function buildDeepExcelAnalysis(buffer, originalName = "") {
@@ -386,7 +503,6 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     if (!raw.length) continue;
 
     const headerRowIdx = findHeaderRow(raw);
-
     const row0 = raw[headerRowIdx] || [];
     const row1 = raw[headerRowIdx + 1] || [];
 
@@ -402,16 +518,19 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       }
     });
 
+    // heuristique H (templates SAP) si dispo
     columns = applyHStartHeuristic(columns);
 
-    // Début données dynamique
+    // clamp à la fenêtre officielle du template
+    const window = getWindowForFilename(originalName);
+    columns = clampColumnsToWindow(columns, window);
+
     const dataStartIdx = findDataStartIdx(raw, headerRowIdx, columns);
     const dataRows = raw.slice(dataStartIdx);
 
-    // Stats colonnes (constantes)
     const colStats = computeColumnStats(dataRows, columns);
 
-    // Première ligne exemple "réelle"
+    // première vraie ligne exemple
     let exampleRowNumber = null;
     let exampleMap = {};
     for (let ridx = 0; ridx < dataRows.length; ridx++) {
@@ -473,10 +592,13 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       `Header ligne ${headerRowIdx + 1} | Codes ligne ${
         looksLikeCodes(row1) ? headerRowIdx + 2 : headerRowIdx + 1
       }\n` +
+      `Fenêtre template: ${
+        window ? window.start + "-" + window.end : "auto"
+      }\n` +
       `Début données détecté: ligne ${dataStartIdx + 1}\n` +
       `Exemple ligne ${exampleRowNumber || "?"}: ${exampleStr}\n` +
       (constantStr
-        ? `Colonnes constantes (souvent figées / ne pas modifier sauf action explicite): ${constantStr}\n`
+        ? `Colonnes constantes (figées, ne pas modifier sauf demande explicite): ${constantStr}\n`
         : "");
 
     globalContext += sheetContext + "\n";
@@ -1159,6 +1281,38 @@ Réponds en JSON STRICT uniquement:
 });
 
 // ✅ INSTRUCTIONS renforcées + longueur SAP + ACTION aware + dropdowns
+function validateAIColumns(out, templateFilename) {
+  const window = getWindowForFilename(templateFilename);
+  if (!window || !Array.isArray(out)) return { fixed: out || [], critical: [] };
+
+  const start = letterToIndex(window.start);
+  const end = letterToIndex(window.end);
+
+  const fixed = [];
+  const critical = [];
+
+  for (const step of out) {
+    const colLetter = String(step.col || "").trim().toUpperCase();
+    const idx = letterToIndex(colLetter);
+    if (!colLetter || idx < start || idx > end) {
+      critical.push({
+        sheet: step.sheet,
+        row: step.row,
+        col: step.col,
+        code: step.code,
+        label: step.label,
+        value: step.value,
+        mandatory: false,
+        reason: `Colonne hors zone ${window.start}-${window.end} pour ${templateFilename}. Refusée.`
+      });
+      continue;
+    }
+    fixed.push(step);
+  }
+
+  return { fixed, critical };
+}
+
 app.post("/api/dcf/wizard/instructions", async (req, res) => {
   try {
     const { sessionId, requestText, templateFilename, attachmentIds = [] } =
@@ -1248,15 +1402,16 @@ ACTION SAP (IMPORTANT):
 - N'utilise pas ACTION (simple) si elle sert à un usage métier.
 
 INSTRUCTIONS:
-- Génère une liste d'étapes ligne par ligne pour remplir le DCF.
-- Chaque étape doit pointer une cellule (row, col) et un code champ.
-- Valeur prêtes à copier/coller.
-- mandatory=true si c’est obligatoire.
-- Si le champ est optionnel ou incertain, mets mandatory=false et explique quoi demander.
-- **NE MODIFIE JAMAIS une colonne identifiée comme constante/figée dans le template** (voir "Colonnes constantes" dans STRUCTURE DU TEMPLATE), sauf si l’utilisateur demande explicitement un changement. Pour ces champs, recopie la valeur constante si nécessaire ou laisse vide si déjà pré-rempli.
-- **N’invente aucune valeur**. Si tu n’as pas une valeur certaine (demande utilisateur, SAP Vision, lignes exemples, mémoire), pose une question dans "reason" et mets mandatory=false.
-- **Respecte les plages de colonnes utiles du template** : ne remplis que les colonnes détectées dans STRUCTURE DU TEMPLATE. Ne crée pas de colonnes supplémentaires.
-- **ACTION**: utilise uniquement Insert / Change / Delete et écris-la dans la colonne d’action SAP préférée (ex ACTION_02). Si l’action manque, demande clarification.
+- Génère une liste d’étapes ligne par ligne pour remplir le DCF, en respectant STRICTEMENT la structure du template.
+- Chaque étape doit pointer une cellule (row, col), un code champ (code) et une valeur (value) prête à copier/coller.
+- mandatory=true uniquement si le champ est réellement obligatoire SAP pour l’action demandée.
+- Si le champ est optionnel, incertain, ou non applicable au cas, mets mandatory=false et explique clairement quoi demander / vérifier dans "reason".
+- Ne remplis QUE les colonnes détectées dans STRUCTURE DU TEMPLATE. N’ajoute jamais une colonne hors fenêtre H→fin du template.
+- **NE MODIFIE JAMAIS une colonne identifiée comme constante/figée** dans le contexte Excel, sauf si l’utilisateur demande explicitement un changement.
+- **N’invente aucune valeur.** Si une valeur n’est pas certaine via la demande, une capture SAP, une liste déroulante, ou la mémoire, pose une question dans "reason" et mets mandatory=false.
+- Si un champ a une liste déroulante: choisis une valeur AUTORISÉE. Si aucune ne colle, explique le doute dans "reason".
+- ACTION SAP: utilise toujours ${preferredActionCode} pour Insert/Change/Delete.
+- Conserve la cohérence intra-fichier: même WARPL/WPTXT/STRAT etc doivent rester identiques sur la même ligne de plan.
 
 Réponds en JSON STRICT:
 {
@@ -1511,6 +1666,11 @@ Réponds JSON STRICT:
     });
 
     let out = cleanJSON(completion.choices[0].message.content);
+
+    // Guardrail: refuse columns outside official template window
+    const { fixed, critical } = validateAIColumns(out, templateFilename);
+    out = fixed;
+    if (critical.length) out.unshift(...critical);
 
     const toLine = (x) => {
       if (typeof x === "string") return x;
@@ -1818,6 +1978,29 @@ app.get("/api/dcf/files", async (req, res) => {
     res.json({ ok: true, files: rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+// Download a stored template/file by id (blank template support)
+app.get("/api/dcf/files/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ error: "Invalid id" });
+
+    const { rows } = await pool.query(
+      "SELECT filename, mime, file_data FROM dcf_files WHERE id=$1",
+      [id]
+    );
+    if (!rows.length) return res.status(404).send("Not found");
+
+    const f = rows[0];
+    res.setHeader("Content-Type", f.mime || "application/octet-stream");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(f.filename)}"`
+    );
+    return res.send(f.file_data);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
   }
 });
 
