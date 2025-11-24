@@ -1,4 +1,4 @@
-// server_dcf.js — Assistant DCF SAP v7.4.9
+// server_dcf.js — Assistant DCF SAP v7.5.0
 // FULL FIX + Memory + Protocole Charles + Validate Smart + ACTION Multi-Cols + Instructions ACTION-aware
 // + Dropdown lists support (CSV) + Clarification scaffolding
 //
@@ -252,8 +252,14 @@ function dropdownBlockForPrompt(templateFilename) {
 }
 
 // -----------------------------------------------------------------------------
-// 4. EXCEL ANALYSIS ROBUSTE
+// 4. EXCEL ANALYSIS ROBUSTE  (v7.5.0)
 // -----------------------------------------------------------------------------
+// Objectifs robustesse:
+// - Détecter dynamiquement la ligne de début des données (pas de +3 hardcodé)
+// - Détecter et signaler les colonnes constantes/figées (ex WERKS=CH94)
+// - Ajouter une ligne d'exemple dans ai_context pour éviter hallucinations
+// - Gérer tous les templates (Maintenance Plan, Equipment, Task List, FL, etc.)
+// - Heuristique "templates SAP commencent en H" sans casser un template atypique
 
 function columnIndexToLetter(idx) {
   let n = idx + 1;
@@ -270,14 +276,19 @@ function looksLikeCodes(row) {
   const cells = row
     .map((x) => String(x ?? "").trim())
     .filter(Boolean)
-    .slice(0, 80);
+    .slice(0, 120);
+
   if (!cells.length) return false;
-  const codeLike = cells.filter((c) => /^[A-Z0-9_]{3,}$/.test(c)).length;
+
+  const codeLike = cells.filter((c) =>
+    /^[A-Z0-9_]{2,}$/.test(c) && !/^(TRUE|FALSE|YES|NO)$/i.test(c)
+  ).length;
+
   return codeLike / cells.length > 0.35;
 }
 
 function findHeaderRow(raw) {
-  for (let r = 0; r < Math.min(raw.length, 35); r++) {
+  for (let r = 0; r < Math.min(raw.length, 40); r++) {
     const row = raw[r].map((c) => String(c).toLowerCase());
     if (
       row.some((c) => c.includes("code")) ||
@@ -290,6 +301,68 @@ function findHeaderRow(raw) {
   }
   const idx = raw.findIndex((r) => r.some((c) => String(c).trim() !== ""));
   return idx === -1 ? 0 : idx;
+}
+
+function rowHasAnyDataInColumns(rowArr, columns) {
+  for (const colDef of columns) {
+    const v = String(rowArr[colDef.idx] ?? "").trim();
+    if (v !== "") return true;
+  }
+  return false;
+}
+
+function findDataStartIdx(raw, headerRowIdx, columns) {
+  let i = headerRowIdx + 1;
+
+  while (i < raw.length) {
+    const row = raw[i] || [];
+    const isEmpty = row.every((c) => String(c ?? "").trim() === "");
+    const isCodes = looksLikeCodes(row);
+
+    if (isEmpty || isCodes) {
+      i++;
+      continue;
+    }
+    if (rowHasAnyDataInColumns(row, columns)) return i;
+
+    i++;
+  }
+  return headerRowIdx + 2;
+}
+
+function computeColumnStats(dataRows, columns) {
+  const stats = {};
+  for (const colDef of columns) {
+    const values = [];
+    for (const r of dataRows) {
+      const v = String(r[colDef.idx] ?? "").trim();
+      if (v !== "") values.push(v);
+    }
+    if (!values.length) continue;
+
+    const uniq = [...new Set(values)];
+    stats[colDef.code] = {
+      unique: uniq,
+      isConstant: uniq.length === 1,
+      constantValue: uniq.length === 1 ? uniq[0] : null,
+      filledCount: values.length
+    };
+  }
+  return stats;
+}
+
+function applyHStartHeuristic(columns) {
+  // Si on a clairement un template SAP où les colonnes utiles démarrent en H (idx>=7),
+  // on ignore A..G pour éviter pollution/décalage.
+  const beforeH = columns.filter((c) => c.idx < 7);
+  const fromH = columns.filter((c) => c.idx >= 7);
+
+  if (!beforeH.length || !fromH.length) return columns;
+
+  // Heuristique: si la majorité des colonnes sont >=H, on filtre A..G.
+  if (fromH.length >= beforeH.length * 2) return fromH;
+
+  return columns;
 }
 
 function buildDeepExcelAnalysis(buffer, originalName = "") {
@@ -320,7 +393,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
     const codesRow = looksLikeCodes(row1) ? row1 : row0;
     const labelsRow = looksLikeCodes(row1) ? row0 : row1;
 
-    const columns = [];
+    let columns = [];
     codesRow.forEach((code, idx) => {
       const c = String(code).trim();
       if (c.length > 1 && /[A-Za-z0-9]/.test(c)) {
@@ -329,8 +402,28 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       }
     });
 
-    const dataStartIdx = headerRowIdx + 3;
+    columns = applyHStartHeuristic(columns);
+
+    // Début données dynamique
+    const dataStartIdx = findDataStartIdx(raw, headerRowIdx, columns);
     const dataRows = raw.slice(dataStartIdx);
+
+    // Stats colonnes (constantes)
+    const colStats = computeColumnStats(dataRows, columns);
+
+    // Première ligne exemple "réelle"
+    let exampleRowNumber = null;
+    let exampleMap = {};
+    for (let ridx = 0; ridx < dataRows.length; ridx++) {
+      if (rowHasAnyDataInColumns(dataRows[ridx], columns)) {
+        exampleRowNumber = dataStartIdx + ridx + 1;
+        for (const colDef of columns) {
+          const val = String(dataRows[ridx][colDef.idx] ?? "").trim();
+          if (val !== "") exampleMap[colDef.code] = val;
+        }
+        break;
+      }
+    }
 
     let extractedCount = 0;
 
@@ -359,15 +452,32 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
       }
     });
 
+    const columnsStr = columns
+      .map((c) => `${c.code}${c.label ? ` (${c.label})` : ""} -> ${c.col}`)
+      .join(", ");
+
+    const constantStr = Object.entries(colStats)
+      .filter(([_, st]) => st.isConstant)
+      .map(([code, st]) => `${code}=${st.constantValue}`)
+      .join(", ");
+
+    const exampleStr = exampleRowNumber
+      ? Object.entries(exampleMap)
+          .map(([k, v]) => `${k}=${v}`)
+          .join(", ")
+      : "N/A";
+
     const sheetContext =
       `SHEET "${sheetName}"\n` +
-      `Colonnes détectées: ${columns
-        .map((c) => `${c.code}${c.label ? ` (${c.label})` : ""} -> ${c.col}`)
-        .join(", ")}\n` +
+      `Colonnes détectées: ${columnsStr}\n` +
       `Header ligne ${headerRowIdx + 1} | Codes ligne ${
         looksLikeCodes(row1) ? headerRowIdx + 2 : headerRowIdx + 1
       }\n` +
-      `Début données: ligne ${dataStartIdx + 1}\n`;
+      `Début données détecté: ligne ${dataStartIdx + 1}\n` +
+      `Exemple ligne ${exampleRowNumber || "?"}: ${exampleStr}\n` +
+      (constantStr
+        ? `Colonnes constantes (souvent figées / ne pas modifier sauf action explicite): ${constantStr}\n`
+        : "");
 
     globalContext += sheetContext + "\n";
 
@@ -385,7 +495,7 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
   return analysis;
 }
 
-function shrinkAnalysisForDB(analysis) {
+function buildFileContext(analysis) {
   return {
     filename: analysis.filename,
     sheetNames: analysis.sheetNames,
@@ -394,7 +504,6 @@ function shrinkAnalysisForDB(analysis) {
     extracted_count: analysis.extracted_values?.length || 0
   };
 }
-
 // -----------------------------------------------------------------------------
 // 5. INDEXATION DB (values + mémoire entités)
 // -----------------------------------------------------------------------------
@@ -1122,6 +1231,10 @@ INSTRUCTIONS:
 - Valeur prêtes à copier/coller.
 - mandatory=true si c’est obligatoire.
 - Si le champ est optionnel ou incertain, mets mandatory=false et explique quoi demander.
+- **NE MODIFIE JAMAIS une colonne identifiée comme constante/figée dans le template** (voir "Colonnes constantes" dans STRUCTURE DU TEMPLATE), sauf si l’utilisateur demande explicitement un changement. Pour ces champs, recopie la valeur constante si nécessaire ou laisse vide si déjà pré-rempli.
+- **N’invente aucune valeur**. Si tu n’as pas une valeur certaine (demande utilisateur, SAP Vision, lignes exemples, mémoire), pose une question dans "reason" et mets mandatory=false.
+- **Respecte les plages de colonnes utiles du template** : ne remplis que les colonnes détectées dans STRUCTURE DU TEMPLATE. Ne crée pas de colonnes supplémentaires.
+- **ACTION**: utilise uniquement Insert / Change / Delete et écris-la dans la colonne d’action SAP préférée (ex ACTION_02). Si l’action manque, demande clarification.
 
 Réponds en JSON STRICT:
 {
@@ -1695,5 +1808,5 @@ app.get("/api/dcf/health", (req, res) =>
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.4.9] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v7.5.0] Backend démarré sur http://${HOST}:${PORT}`);
 });
