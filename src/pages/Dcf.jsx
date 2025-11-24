@@ -465,7 +465,7 @@ export default function DCFWizard() {
     if (!files.length) return;
 
     if (!activeFile?.template_filename) {
-      notify("warn", "Template non sélectionné", "Choisis un template avant d’ajouter des screenshots.");
+      notify("warn", "Template non sélectionné", "Choisis un template avant d'ajouter des screenshots.");
       e.target.value = "";
       return;
     }
@@ -750,7 +750,7 @@ export default function DCFWizard() {
         </ul>
 
         <p className="text-xs text-yellow-800 mb-2">
-          Tu peux répondre ici ou envoyer une capture SAP à l’étape 3.
+          Tu peux répondre ici ou envoyer une capture SAP à l'étape 3.
         </p>
 
         <textarea
@@ -1008,6 +1008,32 @@ export default function DCFWizard() {
               <FaBug />
               Debug Excel
             </button>
+
+            {/* ⚡ NOUVEAU BOUTON : Logs détaillés */}
+            <button
+              onClick={async () => {
+                try {
+                  const fileId = activeFile?.file_id || activeFile?.id;
+                  if (!fileId) {
+                    notify("warn", "Impossible", "Pas de file_id disponible");
+                    return;
+                  }
+                  
+                  const debug = await api.get(`/api/dcf/files/${fileId}/debug`);
+                  console.log("🔍 DEBUG EXCEL ANALYSIS:", debug);
+                  
+                  notify("ok", "Debug dans console", "Ouvre la console navigateur (F12)");
+                  
+                  // Optionnel : affiche dans une alerte
+                  alert(`DEBUG LOGS:\n\n${debug.debug_logs?.join("\n\n") || "N/A"}`);
+                } catch (e) {
+                  notify("error", "Erreur debug", e.message);
+                }
+              }}
+              className="px-3 py-2 rounded-lg text-sm font-bold bg-purple-500 text-white hover:bg-purple-600 flex items-center gap-2"
+            >
+              <FaBug /> Logs détaillés
+            </button>
           </div>
         </div>
       </Card>
@@ -1082,8 +1108,8 @@ export default function DCFWizard() {
                 <FaCamera className="text-blue-600 text-lg" /> Capture SAP (Vision)
               </h3>
               <p className="text-xs text-blue-800 mb-5 leading-relaxed font-medium">
-                Si un champ est “À confirmer”, envoie un screenshot SAP (IP02, IA05…).
-                L’IA relira et mettra à jour automatiquement.
+                Si un champ est "À confirmer", envoie un screenshot SAP (IP02, IA05…).
+                L'IA relira et mettra à jour automatiquement.
               </p>
 
               <label className="block w-full border-2 border-dashed border-blue-300 bg-white/80 rounded-xl p-8 text-center cursor-pointer hover:bg-blue-50 hover:border-blue-500 transition-all group relative overflow-hidden">
@@ -1204,7 +1230,7 @@ export default function DCFWizard() {
           {normalizedValidation.warnings?.length > 0 && (
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
               <div className="font-bold text-yellow-800 mb-2 flex items-center gap-2">
-                <FaExclamationTriangle /> Points d’attention
+                <FaExclamationTriangle /> Points d'attention
               </div>
               <ul className="list-disc ml-5 text-sm text-yellow-900 space-y-1">
                 {normalizedValidation.warnings.map((w, i) => (
