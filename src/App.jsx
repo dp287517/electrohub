@@ -24,7 +24,7 @@ import Comp from './pages/Comp.jsx';
 import AskVeeva from './pages/Ask_veeva.jsx';
 import Doors from './pages/Doors.jsx';
 import Dcf from './pages/Dcf.jsx';
-import LearnEx from '/pages/Learn_ex.jsx';
+import LearnEx from './pages/Learn_ex.jsx';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
