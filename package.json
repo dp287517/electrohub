@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "concurrently -k \"node server_atex.js\" \"node server_dcf.js\" \"node server_meca.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server_diagram.js\" \"node server_controls.js\" \"node server_oibt.js\" \"node server_project.js\" \"node server_comp_ext.js\" \"node server_ask_veeva.js\" \"node server_doors.js\" \"node server_vsd.js\" \"node server.js\""
+    "start": "concurrently -k \"node server_atex.js\" \"node server_learn_ex.js\" \"node server_dcf.js\" \"node server_meca.js\" \"node server_loopcalc.js\" \"node server_switchboard.js\" \"node server_selectivity.js\" \"node server_fla.js\" \"node server_arcflash.js\" \"node server_obsolescence.js\" \"node server_hv.js\" \"node server_diagram.js\" \"node server_controls.js\" \"node server_oibt.js\" \"node server_project.js\" \"node server_comp_ext.js\" \"node server_ask_veeva.js\" \"node server_doors.js\" \"node server_vsd.js\" \"node server.js\""
   },
   "dependencies": {
     "@projectstorm/react-diagrams": "^7.0.4",
