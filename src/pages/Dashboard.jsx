@@ -60,6 +60,12 @@ const otherApps = [
     description: 'SAP Support',
     icon: '📊'
   },
+    {
+    label: 'Formation ATEX',
+    to: '/app/dcf',
+    description: 'Formation ATEX Niveau 0',
+    icon: '📊'
+  },
 ];
 
 export default function Dashboard() {
