@@ -73,7 +73,7 @@ export default function App() {
 
           {/* 👇 NEW: Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
-          <Route path="/app/learn-ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
+          <Route path="/app/learn_ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
           
 
           {/* Fallback */}
