@@ -58,6 +58,7 @@ const doorsTarget        = process.env.DOORS_BASE_URL         || "http://127.0.0
 const vsdTarget          = process.env.VSD_BASE_URL           || "http://127.0.0.1:3020";
 const mecaTarget = process.env.MECA_BASE_URL || "http://127.0.0.1:3021";
 const dcfTarget = process.env.DCF_TARGET || "http://127.0.0.1:3030";
+const learnExTarget = process.env.LEARN_EX_BASE_URL || "http://127.0.0.1:3040";
 
 // petit helper pour créer des proxys homogènes
 function mkProxy(target, { withRestream = false } = {}) {
@@ -111,6 +112,8 @@ app.use("/api/doors", mkProxy(doorsTarget, { withRestream: true }));
 
 // >>> Meca (Maintenance Mécanique) : re-stream nécessaire pour upload
 app.use("/api/meca", mkProxy(mecaTarget, { withRestream: true }));
+
+app.use("/api/learn-ex", mkProxy(learnExTarget, { withRestream: true }));
 
 /* =================================================================
    Body parser APRES les proxys (pour nos routes locales uniquement)
