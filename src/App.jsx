@@ -24,6 +24,7 @@ import Comp from './pages/Comp.jsx';
 import AskVeeva from './pages/Ask_veeva.jsx';
 import Doors from './pages/Doors.jsx';
 import Dcf from './pages/Dcf.jsx';
+import LearnEx from '/pages/Learn_ex.jsx';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
@@ -72,6 +73,7 @@ export default function App() {
 
           {/* 👇 NEW: Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
+          <Route path="/app/learn-ex" element={<ProtectedRoute><LearnEx /></ProtectedRoute>} />
           
 
           {/* Fallback */}
