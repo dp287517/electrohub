@@ -1565,6 +1565,30 @@ dcf: {
     post("/api/dcf/validate", { fileIds, mode }),
 },
 
+/** --- LEARN-EX (Formation ATEX Niveau 0) --- */
+  learnEx: {
+    health: () => get("/api/learn-ex/health"),
+    config: () => get("/api/learn-ex/config"),
+    modules: () => get("/api/learn-ex/modules"),
+    getModule: (id) => get(`/api/learn-ex/modules/${id}`),
+    getModuleQuiz: (id) => get(`/api/learn-ex/modules/${id}/quiz`),
+    checkModuleQuiz: (id, answers, sessionId) =>
+      post(`/api/learn-ex/modules/${id}/quiz/check`, { answers, sessionId }),
+    finalExam: () => get("/api/learn-ex/final-exam"),
+    submitExam: (sessionId, answers, timeSpent) =>
+      post("/api/learn-ex/final-exam/submit", { sessionId, answers, timeSpent }),
+    getCurrentSession: () => get("/api/learn-ex/sessions/current"),
+    getSession: (id) => get(`/api/learn-ex/sessions/${id}`),
+    createSession: () => post("/api/learn-ex/sessions", {}),
+    history: () => get("/api/learn-ex/history"),
+    certificates: () => get("/api/learn-ex/certificates"),
+    verifyCertificate: (number) =>
+      get(`/api/learn-ex/certificates/verify/${number}`),
+    certificatePdfUrl: (id) => `${API_BASE}/api/learn-ex/certificates/${id}/pdf`,
+    stats: () => get("/api/learn-ex/stats"),
+    imageUrl: (name) => `${API_BASE}/api/learn-ex/images/${name}`,
+  },
+
   /** --- 🔵 BUBBLE AUTH --- */
   bubble: {
     login: (token) => post("/api/auth/bubble", { token }),
