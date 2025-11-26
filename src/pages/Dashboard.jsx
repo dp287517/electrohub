@@ -62,7 +62,7 @@ const otherApps = [
   },
     {
     label: 'Formation ATEX',
-    to: '/app/dcf',
+    to: '/app/learn_ex',
     description: 'Formation ATEX Niveau 0',
     icon: '📊'
   },
