@@ -1434,137 +1434,141 @@ export const api = {
       }),
   },
 
-/** --- DCF ASSISTANT v7.5.1 (Ultimate, Database Storage & Memory) --- */
-dcf: {
-  health: () => get("/api/dcf/health"),
+  /** --- DCF ASSISTANT v8.0.0 --- */
+  dcf: {
+    health: () => get("/api/dcf/health"),
 
-  // --- GESTION DES FICHIERS ---
-  uploadExcelMulti: (formData) =>
-    upload("/api/dcf/uploadExcelMulti", formData),
+    // --- FILE MANAGEMENT ---
+    uploadExcelMulti: (formData) => upload("/api/dcf/uploadExcelMulti", formData),
 
-  uploadExcel: (file) => {
-    const fd = new FormData();
-    fd.append("file", file);
-    return upload("/api/dcf/uploadExcel", fd);
-  },
+    uploadExcel: (file) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      return upload("/api/dcf/uploadExcel", fd);
+    },
 
-  listFiles: () => get("/api/dcf/files"),
+    listFiles: () => get("/api/dcf/files"),
 
-  /**
-   * Téléchargement d'un template depuis la DB
-   * Backend: GET /api/dcf/files/:id -> renvoie un fichier (Blob)
-   */
-  getFile: async (id) => {
-    const site = currentSite();
-    const headers = identityHeaders(new Headers({ "X-Site": site }));
-
-    const res = await fetch(`${API_BASE}/api/dcf/files/${id}`, {
-      method: "GET",
-      headers,
-      credentials: "include",
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(text || `HTTP ${res.status}`);
-    }
-
-    return res.blob();
-  },
-
-  /**
-   * NOUVEAU: Récupère les logs d'analyse Excel détaillés pour debug.
-   * Backend: GET /api/dcf/files/:id/debug -> renvoie JSON
-   */
-  getFileDebug: (id) => get(`/api/dcf/files/${id}/debug`), // ⬅️ AJOUT DE LA FONCTION DE DEBUG
-
-  // --- SESSIONS ---
-  startSession: (payload) => post("/api/dcf/startSession", payload),
-  listSessions: () => get("/api/dcf/sessions"),
-
-  // Route optionnelle (pas bloquant si absente côté backend)
-  getSession: (id) => get(`/api/dcf/session/${id}`),
-
-  // --- COMMON / UPLOADS ---
-  uploadAttachments: (files = [], sessionId = null) => {
-    const fd = new FormData();
-    (files || []).forEach((f) => fd.append("files", f));
-    if (sessionId) fd.append("sessionId", sessionId);
-    return upload("/api/dcf/attachments/upload", fd);
-  },
-
-  // --- CHAT GÉNÉRAL (Fallback) ---
-  chat: ({
-    sessionId = null,
-    message,
-    fileIds = [],
-    attachmentIds = [],
-    mode = "guidage",
-    useCase = null,
-  }) =>
-    post("/api/dcf/chat", {
-      sessionId,
-      message,
-      fileIds,
-      attachmentIds,
-      mode,
-      useCase,
-    }),
-
-  // --- WIZARD v7.5.x ---
-  wizard: {
-    // Étape 1 : Analyse
-    analyze: (message, sessionId) =>
-      post("/api/dcf/wizard/analyze", { message, sessionId }),
-
-    // Étape 3 : Instructions
-    instructions: (
-      sessionId,
-      requestText,
-      templateFilename,
-      attachmentIds = []
-    ) =>
-      post("/api/dcf/wizard/instructions", {
-        sessionId,
-        requestText,
-        templateFilename,
-        attachmentIds,
-      }),
-
-    // Étape 3 (Bonus) : Génération fichier (retourne un BLOB)
-    autofill: async (templateFilename, instructions) => {
+    getFile: async (id) => {
       const site = currentSite();
       const headers = identityHeaders(new Headers({ "X-Site": site }));
-      headers.set("Content-Type", "application/json");
-
-      const res = await fetch(`${API_BASE}/api/dcf/wizard/autofill`, {
-        method: "POST",
+      const res = await fetch(`${API_BASE}/api/dcf/files/${id}`, {
+        method: "GET",
         headers,
         credentials: "include",
-        body: JSON.stringify({ templateFilename, instructions }),
       });
-
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(text || `HTTP ${res.status}`);
-      }
+      if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
       return res.blob();
     },
 
-    // Étape 4 : Validation
-    validate: (fileIds, useCase = null) =>
-      post("/api/dcf/wizard/validate", { fileIds, useCase }),
+    getFileDebug: (id) => get(`/api/dcf/files/${id}/debug`),
 
-    // Module : Reverse DCF (optionnel si route absente)
-    explain: (fileId) =>
-      post("/api/dcf/wizard/explain", { fileId }),
+    // --- SESSIONS ---
+    startSession: (payload) => post("/api/dcf/startSession", payload),
+    listSessions: () => get("/api/dcf/sessions"),
+    getSession: (id) => get(`/api/dcf/session/${id}`),
+
+    // --- ATTACHMENTS (Screenshots) ---
+    uploadAttachments: (files = [], sessionId = null) => {
+      const fd = new FormData();
+      (files || []).forEach((f) => fd.append("files", f));
+      if (sessionId) fd.append("sessionId", sessionId);
+      return upload("/api/dcf/attachments/upload", fd);
+    },
+
+    // --- CHAT ---
+    chat: (payload) => post("/api/dcf/chat", payload),
+
+    // --- REFERENCE DATA ---
+    reference: {
+      taskLists: () => get("/api/dcf/reference/tasklists"),
+      plan: (planNumber) => get(`/api/dcf/reference/plan/${planNumber}`),
+    },
+
+    // --- WIZARD v8.0 ---
+    wizard: {
+      /**
+       * Étape 1: Analyse de la demande avec screenshots optionnels
+       * Peut être appelé avec FormData (pour screenshots) ou JSON simple
+       */
+      analyze: async (messageOrFormData, sessionId) => {
+        // Si c'est une string simple (message), on appelle en JSON
+        if (typeof messageOrFormData === "string") {
+          return post("/api/dcf/wizard/analyze", { message: messageOrFormData, sessionId });
+        }
+        // Si c'est un FormData, on l'envoie directement
+        if (messageOrFormData instanceof FormData) {
+          return upload("/api/dcf/wizard/analyze", messageOrFormData);
+        }
+        // Sinon objet { message, sessionId, screenshots }
+        const fd = new FormData();
+        fd.append("message", messageOrFormData.message || "");
+        if (messageOrFormData.sessionId) fd.append("sessionId", messageOrFormData.sessionId);
+        if (messageOrFormData.screenshots) {
+          messageOrFormData.screenshots.forEach((f) => fd.append("screenshots", f));
+        }
+        return upload("/api/dcf/wizard/analyze", fd);
+      },
+
+      /**
+       * Étape 3: Génération des instructions
+       * Support screenshots supplémentaires via FormData
+       */
+      instructions: async (sessionId, requestText, templateFilename, attachmentIds = [], screenshots = []) => {
+        // Si pas de screenshots, appel JSON simple
+        if (!screenshots || screenshots.length === 0) {
+          return post("/api/dcf/wizard/instructions", {
+            sessionId,
+            requestText,
+            templateFilename,
+            attachmentIds,
+          });
+        }
+        // Avec screenshots, utiliser FormData
+        const fd = new FormData();
+        fd.append("sessionId", sessionId);
+        fd.append("requestText", requestText);
+        fd.append("templateFilename", templateFilename);
+        fd.append("attachmentIds", JSON.stringify(attachmentIds));
+        screenshots.forEach((f) => fd.append("screenshots", f));
+        return upload("/api/dcf/wizard/instructions", fd);
+      },
+
+      /**
+       * Génération du fichier Excel rempli
+       */
+      autofill: async (templateFilename, instructions) => {
+        const site = currentSite();
+        const headers = identityHeaders(new Headers({ "X-Site": site }));
+        headers.set("Content-Type", "application/json");
+
+        const res = await fetch(`${API_BASE}/api/dcf/wizard/autofill`, {
+          method: "POST",
+          headers,
+          credentials: "include",
+          body: JSON.stringify({ templateFilename, instructions }),
+        });
+
+        if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+        return res.blob();
+      },
+
+      /**
+       * Validation des fichiers remplis
+       */
+      validate: (fileIds, useCase = null) =>
+        post("/api/dcf/wizard/validate", { fileIds, useCase }),
+
+      /**
+       * Reverse DCF - Explication d'un fichier existant
+       */
+      explain: (fileId) => post("/api/dcf/wizard/explain", { fileId }),
+    },
+
+    // Alias rétro-compatible
+    validate: ({ fileIds, mode = "auto" }) => post("/api/dcf/validate", { fileIds, mode }),
   },
-
-  // Alias rétro-compatible (optionnel si route absente)
-  validate: ({ fileIds, mode = "auto" }) =>
-    post("/api/dcf/validate", { fileIds, mode }),
-},
-
+};
 /** --- LEARN-EX (Formation ATEX Niveau 0) --- */
   learnEx: {
     health: () => get("/api/learn-ex/health"),
