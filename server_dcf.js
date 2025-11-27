@@ -1,15 +1,13 @@
-// server_dcf.js — Assistant DCF SAP v7.5.0
-// FULL FIX + Memory + Protocole Charles + Validate Smart + ACTION Multi-Cols + Instructions ACTION-aware
-// + Dropdown lists support (CSV) + Clarification scaffolding
+// server_dcf.js — Assistant DCF SAP v8.0.0
+// REFONTE COMPLÈTE basée sur documentation métier
 //
-// - Pré-routage métier (ajout opération/contrôle dans plan existant => TL+MP)
-// - Validation scope-aware: ignore lignes sans vraie action SAP
-// - ACTION peut être dans ACTION, ACTION_01, ACTION_02, ACTION_03...
-// - Only whitelist actions: Insert | Change | Delete
-// - Instructions: IA guidée vers ACTION_0X + remap auto
-// - Instructions length-aware (SAP max lengths + troncature auto)
-// - Analyse Excel robuste SAP + mémoire relationnelle + historique noms
-// - Dropdown CSV: on n’invente pas les valeurs de listes, on demande si besoin
+// Nouveautés v8:
+// - Upload images SAP dès l'étape 1 (analyse préliminaire)
+// - Logique métier stricte (TL/PM/EQPT combinaisons)
+// - Mapping colonnes précis par type de DCF
+// - Référentiel Task List intégré
+// - Édition des valeurs step 3
+// - Validation scope-aware améliorée
 
 import express from "express";
 import cors from "cors";
@@ -40,22 +38,19 @@ const pool = new Pool({
   ssl: DATABASE_URL?.includes("localhost") ? false : { rejectUnauthorized: false }
 });
 
-// OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ANSWER_MODEL = process.env.DCF_ANSWER_MODEL || "gpt-4o-mini";
 const VISION_MODEL = process.env.DCF_VISION_MODEL || "gpt-4o-mini";
 
+// Paths
+const DROPDOWN_CSV_PATH = process.env.DCF_DROPDOWN_CSV_PATH || path.join(process.cwd(), "Listes_deroulantes__data_validation_.csv");
+const TASKLIST_REF_PATH = process.env.DCF_TASKLIST_REF_PATH || path.join(process.cwd(), "Suivi_Task_List.xlsx");
+
 // Limites
 const MAX_FILES_LIBRARY = 50;
-const MAX_CONTEXT_CHARS = 12000;
-const MAX_ATTACHMENT_TEXT = 6000;
+const MAX_CONTEXT_CHARS = 15000;
+const MAX_ATTACHMENT_TEXT = 8000;
 const MAX_MEMORY_HINTS = 50;
-const MAX_NUMBERS_SCAN = 40;
-
-// Dropdown CSV path (optional)
-const DROPDOWN_CSV_PATH =
-  process.env.DCF_DROPDOWN_CSV_PATH ||
-  path.join(process.cwd(), "Listes_deroulantes__data_validation_.csv");
 
 // -----------------------------------------------------------------------------
 // 1. EXPRESS SETUP
@@ -64,10 +59,192 @@ const DROPDOWN_CSV_PATH =
 const app = express();
 app.use(helmet());
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json({ limit: "20mb" }));
+app.use(express.json({ limit: "30mb" }));
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 30 * 1024 * 1024 }
+});
 
 // -----------------------------------------------------------------------------
-// 2. HELPERS
+// 2. BUSINESS LOGIC - RÈGLES MÉTIER DCF
+// -----------------------------------------------------------------------------
+
+/**
+ * LOGIQUE MÉTIER STRICTE basée sur la documentation
+ * 
+ * | Cas d'usage                          | DCF requis           |
+ * |--------------------------------------|----------------------|
+ * | Modifier opération existante (IP18)  | TL (Change)          |
+ * | Ajouter opération sur plan existant  | TL (Create)          |
+ * | Ajouter équipement dans plan existant| PM (Change) + EQPT   |
+ * | Modifier équipement seul             | EQPT (Change)        |
+ * | Créer nouveau plan complet           | TL + PM (Create)     |
+ * | Affecter équipement à plan existant  | PM (Change) + TL     |
+ * | Supprimer opération                  | TL (Delete)          |
+ * | Supprimer plan                       | PM (Delete) + TL     |
+ */
+
+const BUSINESS_RULES = {
+  // Colonnes obligatoires par type de DCF et action
+  TASK_LIST: {
+    MODIFY_OPERATION: {
+      action: "Change",
+      columns: {
+        I: { code: "ACTION", value: "Change", mandatory: true },
+        N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true },
+        P: { code: "PLNAL", label: "Counter (1, 2, 3...)", mandatory: true },
+        Q: { code: "KTEXT", label: "Nom du plan", mandatory: false },
+        AG: { code: "VORNR", label: "N° Opération (10, 20, 30...)", mandatory: true },
+        AJ: { code: "LTXA1", label: "Short Text (40 chars max)", mandatory: false },
+        AK: { code: "LTXA2", label: "Long Text", mandatory: false },
+        AL: { code: "DAESSION", label: "Temps passé", mandatory: false },
+        AN: { code: "ARBPL", label: "Nb personnes", mandatory: false },
+        X: { code: "SYSTC", label: "Intrusive/Non-intrusive", mandatory: false }
+      }
+    },
+    CREATE_OPERATION: {
+      action: "Create",
+      columns: {
+        I: { code: "ACTION", value: "Create", mandatory: true },
+        N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true },
+        P: { code: "PLNAL", label: "Counter", mandatory: true },
+        Q: { code: "KTEXT", label: "Nom du plan", mandatory: true },
+        T: { code: "ARBPL", label: "Work Center", mandatory: true },
+        X: { code: "SYSTC", label: "System Condition", mandatory: true },
+        AG: { code: "VORNR", label: "N° Opération", mandatory: true },
+        AJ: { code: "LTXA1", label: "Short Text (40 max)", mandatory: true },
+        AK: { code: "LTXA2", label: "Long Text", mandatory: false },
+        AL: { code: "DAESSION", label: "Durée", mandatory: true },
+        AN: { code: "ANZMA", label: "Nb personnes", mandatory: true },
+        AV: { code: "SYSTC2", label: "System Condition", mandatory: false }
+      }
+    },
+    DELETE_OPERATION: {
+      action: "Delete",
+      columns: {
+        I: { code: "ACTION", value: "Delete", mandatory: true },
+        N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true },
+        P: { code: "PLNAL", label: "Counter", mandatory: true },
+        AG: { code: "VORNR", label: "N° Opération", mandatory: true }
+      }
+    }
+  },
+
+  MAINTENANCE_PLAN: {
+    CHANGE_PLAN: {
+      action: "Change",
+      columns: {
+        I: { code: "ACTION", value: "Change", mandatory: true },
+        J: { code: "WARPL", label: "N° Plan maintenance", mandatory: true },
+        W: { code: "ACTION_ITEM", label: "Action Item", mandatory: false }
+      }
+    },
+    CREATE_PLAN: {
+      action: "Create",
+      columns: {
+        I: { code: "ACTION", value: "Create", mandatory: true },
+        Q: { code: "WPTXT", label: "Nom du plan", mandatory: true },
+        S: { code: "ZYKL1", label: "Cycle (1=année, 12=mois)", mandatory: true },
+        U: { code: "ZYTXT", label: "Texte cycle", mandatory: false },
+        AA: { code: "TPLNR_EQUNR", label: "FL ou Equipment", mandatory: true },
+        AE: { code: "AUART", label: "Type maintenance", mandatory: true },
+        AF: { code: "GEWRK", label: "Main Work Center", mandatory: true },
+        AH: { code: "INGRP", label: "Maint Plan Group", mandatory: true },
+        AI: { code: "ILART", label: "Maint Activity Type", mandatory: true },
+        AJ: { code: "PLNNR", label: "Task List Group ref", mandatory: true },
+        BC: { code: "GSTRP", label: "Start Date", mandatory: true }
+      }
+    },
+    ADD_EQUIPMENT_TO_PLAN: {
+      action: "Change",
+      columns: {
+        I: { code: "ACTION", value: "Change", mandatory: true },
+        J: { code: "WARPL", label: "N° Plan maintenance", mandatory: true },
+        W: { code: "ACTION_ITEM", value: "Create", mandatory: true }
+        // + colonnes pour identifier l'équipement
+      }
+    }
+  },
+
+  EQUIPMENT: {
+    CREATE: {
+      action: "Create",
+      columns: {
+        I: { code: "ACTION", value: "Create", mandatory: true },
+        O: { code: "EQTYP", label: "Object Type/Criticité", mandatory: true },
+        P: { code: "SSTAT", label: "Status (ISER)", value: "ISER", mandatory: true },
+        Y: { code: "HERST", label: "Manufacturer", mandatory: true },
+        AA: { code: "TYPBZ", label: "Model Number", mandatory: true },
+        AD: { code: "SERGE", label: "Serial Number", mandatory: true },
+        AH: { code: "BEESSION", label: "Plant Section", mandatory: true },
+        AJ: { code: "ABESSION", label: "ABC Indicator", mandatory: true },
+        AM: { code: "KOSTL", label: "Cost Center", mandatory: true },
+        AP: { code: "INGRP", label: "Planner Group", mandatory: true },
+        AQ: { code: "GEWRK", label: "Main Work Center", mandatory: true },
+        AR: { code: "TPLNR", label: "Functional Location", mandatory: true },
+        AT: { code: "BAESSION", label: "Construction Type", value: "Next", mandatory: false },
+        AW: { code: "MAESSION", label: "Grouping Key", value: "PRT6", mandatory: false },
+        BD: { code: "KLESSION", label: "Class", mandatory: true }
+      }
+    },
+    CHANGE: {
+      action: "Change",
+      columns: {
+        I: { code: "ACTION", value: "Change", mandatory: true },
+        J: { code: "EQUNR", label: "N° Equipment", mandatory: true }
+        // Seules les colonnes modifiées sont requises
+      }
+    }
+  }
+};
+
+// Mapping USE CASE -> DCF requis
+const USE_CASE_MAPPING = {
+  "modify_operation": {
+    description: "Modifier une opération existante (IP18)",
+    dcf_required: ["TASK_LIST"],
+    rules: ["TASK_LIST.MODIFY_OPERATION"]
+  },
+  "create_operation": {
+    description: "Ajouter une opération sur un plan existant",
+    dcf_required: ["TASK_LIST"],
+    rules: ["TASK_LIST.CREATE_OPERATION"]
+  },
+  "add_equipment_to_plan": {
+    description: "Ajouter un équipement dans un plan existant",
+    dcf_required: ["MAINTENANCE_PLAN", "EQUIPMENT"],
+    rules: ["MAINTENANCE_PLAN.ADD_EQUIPMENT_TO_PLAN", "EQUIPMENT.CREATE"]
+  },
+  "modify_equipment": {
+    description: "Modifier un équipement uniquement",
+    dcf_required: ["EQUIPMENT"],
+    rules: ["EQUIPMENT.CHANGE"]
+  },
+  "create_plan": {
+    description: "Créer un nouveau plan de maintenance complet",
+    dcf_required: ["TASK_LIST", "MAINTENANCE_PLAN"],
+    rules: ["TASK_LIST.CREATE_OPERATION", "MAINTENANCE_PLAN.CREATE_PLAN"]
+  },
+  "assign_equipment_existing_plan": {
+    description: "Affecter un équipement à un plan existant",
+    dcf_required: ["TASK_LIST", "MAINTENANCE_PLAN"],
+    rules: ["TASK_LIST.MODIFY_OPERATION", "MAINTENANCE_PLAN.CHANGE_PLAN"]
+  },
+  "delete_operation": {
+    description: "Supprimer une opération",
+    dcf_required: ["TASK_LIST"],
+    rules: ["TASK_LIST.DELETE_OPERATION"]
+  },
+  "delete_plan": {
+    description: "Supprimer un plan de maintenance",
+    dcf_required: ["TASK_LIST", "MAINTENANCE_PLAN"],
+    rules: ["TASK_LIST.DELETE_OPERATION", "MAINTENANCE_PLAN.CHANGE_PLAN"]
+  }
+};
+
+// -----------------------------------------------------------------------------
+// 3. HELPERS
 // -----------------------------------------------------------------------------
 
 function cleanJSON(text = "") {
@@ -83,47 +260,389 @@ function sanitizeName(name = "") {
   return String(name).replace(/[^\w.\-]+/g, "_");
 }
 
-function safeEmail(x) {
-  return x && /\S+@\S+\.\S+/.test(x) ? String(x).trim().toLowerCase() : null;
-}
-
-function getUserEmail(req) {
-  return safeEmail(req.headers["x-user-email"] || req.headers["x-user_email"]);
-}
-
 function clampStr(s, n) {
   return String(s ?? "").slice(0, n);
 }
 
-function extractMaybeNumber(text) {
-  return (String(text || "").match(/\b\d{4,12}\b/g) || []).slice(0, MAX_NUMBERS_SCAN);
+function columnIndexToLetter(idx) {
+  let n = idx + 1;
+  let s = "";
+  while (n > 0) {
+    const r = ((n - 1) % 26) + 65;
+    s = String.fromCharCode(r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
 }
 
-function extractUseCaseFromText(message = "") {
-  const m = String(message).toLowerCase();
-  if (/(décommission|decommission|retirer|supprimer équipement|retirer equipement)/.test(m))
-    return "decommission";
-  if (/(ajout|ajouter|rajouter|créer|creer).*(opération|operation|contrôle|controle|inspection|check).*(plan)/.test(m))
-    return "add_operation_in_plan";
-  if (/(ajout|ajouter|rajouter).*(équipement|equipement).*(plan)/.test(m))
-    return "add_equipment_in_plan";
-  if (/(modif|modifier|changer).*(texte|short text|long text)/.test(m))
-    return "text_only_change";
+function letterToIndex(letter) {
+  let n = 0;
+  const s = String(letter || "").toUpperCase().trim();
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i) - 64;
+    if (c < 1 || c > 26) continue;
+    n = n * 26 + c;
+  }
+  return n - 1;
+}
+
+// Détection du use case depuis le texte
+function detectUseCase(text = "") {
+  const m = String(text).toLowerCase();
+
+  // Suppression
+  if (/(supprimer|delete|retirer|désactiver).*(plan|opération|operation)/.test(m)) {
+    if (/plan/.test(m)) return "delete_plan";
+    return "delete_operation";
+  }
+
+  // Création plan complet
+  if (/(créer|creer|nouveau|nouvelle).*(plan|maintenance plan)/.test(m) && !/(existant|exist)/.test(m)) {
+    return "create_plan";
+  }
+
+  // Ajout opération sur plan existant
+  if (/(ajout|ajouter|rajouter|créer|creer|insert).*(opération|operation|contrôle|controle|inspection|check|vérif)/.test(m)) {
+    if (/(plan|existant|exist|ip18)/.test(m)) return "create_operation";
+  }
+
+  // Modification opération
+  if (/(modif|modifier|changer|update).*(opération|operation|contrôle|controle)/.test(m)) {
+    return "modify_operation";
+  }
+
+  // Ajout équipement dans plan
+  if (/(ajout|ajouter).*(équipement|equipement).*(plan)/.test(m)) {
+    return "add_equipment_to_plan";
+  }
+
+  // Modification équipement seul
+  if (/(modif|modifier|changer).*(équipement|equipement)/.test(m)) {
+    return "modify_equipment";
+  }
+
+  // Affectation équipement à plan existant
+  if (/(affecter|rattacher|associer).*(équipement|equipement).*(plan)/.test(m)) {
+    return "assign_equipment_existing_plan";
+  }
+
   return "unknown";
 }
 
 // -----------------------------------------------------------------------------
-// 3. DB SAFE MIGRATIONS (tables mémoire)
+// 4. VISION - EXTRACTION SAP
+// -----------------------------------------------------------------------------
+
+async function extractSAPDataFromImages(images = []) {
+  if (!images.length) return { extracted: [], raw_texts: [] };
+
+  const results = [];
+  const rawTexts = [];
+
+  for (const img of images) {
+    try {
+      const b64 = img.buffer ? img.buffer.toString("base64") : img;
+      const mime = img.mimetype || "image/png";
+
+      const completion = await openai.chat.completions.create({
+        model: VISION_MODEL,
+        messages: [
+          {
+            role: "system",
+            content: `Tu es un expert SAP. Extrais TOUS les codes et valeurs visibles dans cette capture SAP.
+
+CHERCHE SPÉCIFIQUEMENT:
+- Numéros de plan (WARPL): 8 chiffres ex: 40052643
+- Numéros Task List Group (PLNNR): ex: 20036344, CH940XXX
+- Counter Group: 1, 2, 3...
+- N° Opération: 10, 20, 30...
+- N° Equipment: 10XXXXXXX
+- Functional Location: CH94-XXXX
+- Short Text / Description
+- Work Center: FMXXXXXX, INXXXXX
+- Dates, durées, nombres de personnes
+- Criticité, Status
+
+Réponds en JSON:
+{
+  "extracted_fields": [
+    {"code": "WARPL", "value": "40052643", "confidence": "high"},
+    {"code": "PLNNR", "value": "20036344", "confidence": "high"}
+  ],
+  "raw_text": "texte brut visible"
+}`
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Extrais toutes les données SAP de cette capture." },
+              { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }
+            ]
+          }
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.0
+      });
+
+      const parsed = cleanJSON(completion.choices[0].message.content);
+      if (parsed.extracted_fields) {
+        results.push(...parsed.extracted_fields);
+      }
+      if (parsed.raw_text) {
+        rawTexts.push(parsed.raw_text);
+      }
+    } catch (e) {
+      console.error("Vision error:", e.message);
+    }
+  }
+
+  return { extracted: results, raw_texts: rawTexts };
+}
+
+// -----------------------------------------------------------------------------
+// 5. TASK LIST REFERENCE
+// -----------------------------------------------------------------------------
+
+let TASKLIST_REF = null;
+
+function loadTaskListReference() {
+  try {
+    if (!fs.existsSync(TASKLIST_REF_PATH)) {
+      console.warn("⚠️ Référentiel Task List introuvable:", TASKLIST_REF_PATH);
+      return;
+    }
+
+    const wb = xlsx.read(fs.readFileSync(TASKLIST_REF_PATH), { type: "buffer" });
+    TASKLIST_REF = {
+      maintenance_plans: [],
+      task_list_groups: []
+    };
+
+    // Sheet "Maintenance Plant Actif"
+    if (wb.SheetNames.includes("Maintenance Plant Actif")) {
+      const ws = wb.Sheets["Maintenance Plant Actif"];
+      const data = xlsx.utils.sheet_to_json(ws, { header: 1 });
+      
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
+        if (row && row[3]) { // Colonne D = Maintenance Plan
+          TASKLIST_REF.maintenance_plans.push({
+            pu: row[0],
+            value_stream: row[1],
+            equipment: row[2],
+            plan_number: String(row[3]),
+            description: row[4],
+            task_list_group: String(row[5] || ""),
+            counter_group: row[6],
+            maintenance_item: row[7]
+          });
+        }
+      }
+    }
+
+    // Sheet "Group TL Dispo"
+    if (wb.SheetNames.includes("Group TL Dispo")) {
+      const ws = wb.Sheets["Group TL Dispo"];
+      const data = xlsx.utils.sheet_to_json(ws, { header: 1 });
+
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
+        if (row && row[1]) { // Colonne B = N° GROUP
+          TASKLIST_REF.task_list_groups.push({
+            owner: row[0],
+            group_number: String(row[1]),
+            counter: row[2],
+            description: row[3],
+            comments: row[4]
+          });
+        }
+      }
+    }
+
+    console.log(`✅ Référentiel Task List chargé: ${TASKLIST_REF.maintenance_plans.length} plans, ${TASKLIST_REF.task_list_groups.length} TL groups`);
+  } catch (e) {
+    console.warn("⚠️ Référentiel Task List non chargé:", e.message);
+  }
+}
+
+loadTaskListReference();
+
+function findPlanInfo(planNumber) {
+  if (!TASKLIST_REF || !planNumber) return null;
+  return TASKLIST_REF.maintenance_plans.find(p => p.plan_number === String(planNumber));
+}
+
+function findTaskListGroup(groupNumber) {
+  if (!TASKLIST_REF || !groupNumber) return null;
+  return TASKLIST_REF.task_list_groups.filter(t => t.group_number === String(groupNumber));
+}
+
+// -----------------------------------------------------------------------------
+// 6. DROPDOWN LISTS
+// -----------------------------------------------------------------------------
+
+let DROPDOWN_INDEX = null;
+
+function loadDropdownCSV() {
+  try {
+    if (!fs.existsSync(DROPDOWN_CSV_PATH)) {
+      console.warn("⚠️ Dropdown CSV introuvable:", DROPDOWN_CSV_PATH);
+      return;
+    }
+
+    const raw = fs.readFileSync(DROPDOWN_CSV_PATH, "utf8");
+    const lines = raw.split(/\r?\n/).filter(l => l.trim());
+    const header = lines.shift();
+    if (!header) return;
+
+    const delim = (header.match(/;/g) || []).length > (header.match(/,/g) || []).length ? ";" : ",";
+    const idx = new Map();
+
+    for (const line of lines) {
+      const parts = line.split(delim).map(p => p.trim().replace(/^"|"$/g, ""));
+      if (parts.length < 6) continue;
+
+      const fichier = parts[0].toLowerCase().replace(/\.(xlsx|xlsm|xls)$/i, "").replace(/[^a-z0-9]+/g, " ").trim();
+      const listName = parts[3];
+      const values = parts.slice(5).join(delim).split(/[,;]/).map(v => v.trim()).filter(Boolean);
+
+      if (!idx.has(fichier)) idx.set(fichier, []);
+      idx.get(fichier).push({ listName, cellules: parts[2], values });
+    }
+
+    DROPDOWN_INDEX = idx;
+    console.log(`✅ Dropdown CSV chargé: ${idx.size} fichiers`);
+  } catch (e) {
+    console.warn("⚠️ Dropdown CSV non chargé:", e.message);
+  }
+}
+
+loadDropdownCSV();
+
+function getDropdownsForTemplate(filename = "") {
+  if (!DROPDOWN_INDEX) return [];
+  const key = String(filename).toLowerCase().replace(/\.(xlsx|xlsm|xls)$/i, "").replace(/[^a-z0-9]+/g, " ").trim();
+  
+  for (const [k, arr] of DROPDOWN_INDEX.entries()) {
+    if (key.includes(k) || k.includes(key)) return arr;
+  }
+  return [];
+}
+
+// -----------------------------------------------------------------------------
+// 7. EXCEL ANALYSIS
+// -----------------------------------------------------------------------------
+
+function buildDeepExcelAnalysis(buffer, originalName = "") {
+  const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
+  const analysis = {
+    filename: originalName,
+    sheetNames: wb.SheetNames || [],
+    sheets: [],
+    ai_context: "",
+    extracted_values: [],
+    rows_index: {}
+  };
+
+  let globalContext = "";
+
+  for (const sheetName of analysis.sheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) continue;
+
+    const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    if (!raw.length) continue;
+
+    // Trouver la ligne header (cherche "code" ou "field")
+    let headerRowIdx = 0;
+    for (let r = 0; r < Math.min(raw.length, 20); r++) {
+      const row = raw[r].map(c => String(c).toLowerCase());
+      if (row.some(c => c.includes("code") || c.includes("field"))) {
+        headerRowIdx = r;
+        break;
+      }
+    }
+
+    const row0 = raw[headerRowIdx] || [];
+    const row1 = raw[headerRowIdx + 1] || [];
+
+    // Déterminer quelle ligne contient les codes
+    const row0IsCodes = row0.filter(c => /^[A-Z0-9_]{2,}$/.test(String(c).trim())).length > row0.length * 0.3;
+    const row1IsCodes = row1.filter(c => /^[A-Z0-9_]{2,}$/.test(String(c).trim())).length > row1.length * 0.3;
+
+    const codesRow = row1IsCodes ? row1 : row0;
+    const labelsRow = row1IsCodes ? row0 : row1;
+
+    // Extraire colonnes
+    const columns = [];
+    codesRow.forEach((code, idx) => {
+      const c = String(code).trim();
+      if (c.length > 1 && /[A-Za-z0-9]/.test(c)) {
+        columns.push({
+          idx,
+          col: columnIndexToLetter(idx),
+          code: c,
+          label: String(labelsRow[idx] || "").trim()
+        });
+      }
+    });
+
+    // Filtrer colonnes avant H pour les templates SAP
+    const filteredColumns = columns.filter(c => c.idx >= 7); // H = index 7
+
+    // Data start
+    const dataStartIdx = headerRowIdx + 2;
+    const dataRows = raw.slice(dataStartIdx);
+
+    // Extraire valeurs
+    dataRows.forEach((rowArr, ridx) => {
+      const rowNumber = dataStartIdx + ridx + 1;
+      const rowKey = `${sheetName}::${rowNumber}`;
+
+      for (const colDef of filteredColumns) {
+        const val = String(rowArr[colDef.idx] ?? "").trim();
+        if (val) {
+          analysis.extracted_values.push({
+            sheet: sheetName,
+            row: rowNumber,
+            col: colDef.col,
+            field: colDef.code,
+            label: colDef.label,
+            value: val
+          });
+
+          if (!analysis.rows_index[rowKey]) analysis.rows_index[rowKey] = {};
+          analysis.rows_index[rowKey][colDef.code] = val;
+        }
+      }
+    });
+
+    // Contexte pour IA
+    const columnsStr = filteredColumns.map(c => `${c.col}=${c.code}`).join(", ");
+    globalContext += `SHEET "${sheetName}": Colonnes: ${columnsStr}\n`;
+
+    analysis.sheets.push({
+      name: sheetName,
+      headerRowIdx: headerRowIdx + 1,
+      dataStartRow: dataStartIdx + 1,
+      columns: filteredColumns
+    });
+  }
+
+  analysis.ai_context = globalContext.trim();
+  return analysis;
+}
+
+// -----------------------------------------------------------------------------
+// 8. DB SETUP
 // -----------------------------------------------------------------------------
 
 async function ensureMemoryTables() {
-  // Core tables (needed for first run)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS dcf_files (
       id SERIAL PRIMARY KEY,
       filename TEXT NOT NULL,
       stored_name TEXT,
-      path TEXT,
       mime TEXT,
       bytes INT,
       sheet_names JSONB DEFAULT '[]'::jsonb,
@@ -138,19 +657,8 @@ async function ensureMemoryTables() {
       id SERIAL PRIMARY KEY,
       title TEXT NOT NULL,
       created_by TEXT,
-      created_at TIMESTAMP DEFAULT now()
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_requests (
-      id SERIAL PRIMARY KEY,
-      session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
-      request_text TEXT NOT NULL,
-      detected_action TEXT,
-      detected_type TEXT,
-      recommended_file_id INT REFERENCES dcf_files(id),
-      response_json JSONB DEFAULT '{}'::jsonb,
+      use_case TEXT,
+      sap_data JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMP DEFAULT now()
     );
   `);
@@ -170,1335 +678,150 @@ async function ensureMemoryTables() {
       id SERIAL PRIMARY KEY,
       session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
       filename TEXT NOT NULL,
-      stored_name TEXT,
       mime TEXT,
       bytes INT,
       file_data BYTEA,
       extracted_text TEXT,
+      extracted_fields JSONB DEFAULT '[]'::jsonb,
       uploaded_at TIMESTAMP DEFAULT now()
     );
   `);
-
-  // Memory tables
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_entity_memory (
-      id SERIAL PRIMARY KEY,
-      entity_type TEXT NOT NULL,
-      key_code TEXT NOT NULL,
-      key_value TEXT NOT NULL,
-      name_code TEXT,
-      name_value TEXT,
-      extra JSONB DEFAULT '{}'::jsonb,
-      seen_count INT DEFAULT 1,
-      last_seen_at TIMESTAMP DEFAULT now(),
-      UNIQUE(entity_type, key_code, key_value)
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_row_memory (
-      id SERIAL PRIMARY KEY,
-      file_id INT REFERENCES dcf_files(id) ON DELETE CASCADE,
-      sheet TEXT,
-      row_number INT,
-      data JSONB DEFAULT '{}'::jsonb,
-      seen_count INT DEFAULT 1,
-      last_seen_at TIMESTAMP DEFAULT now(),
-      UNIQUE(file_id, sheet, row_number)
-    );
-  `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_entity_name_history (
-      id SERIAL PRIMARY KEY,
-      entity_type TEXT NOT NULL,
-      key_code TEXT NOT NULL,
-      key_value TEXT NOT NULL,
-      old_name_value TEXT,
-      new_name_value TEXT,
-      changed_at TIMESTAMP DEFAULT now()
-      );
-    `);
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_values_index (
-      id SERIAL PRIMARY KEY,
-      field_code TEXT NOT NULL,
-      value TEXT NOT NULL,
-      file_id INT REFERENCES dcf_files(id) ON DELETE SET NULL,
-      seen_count INT DEFAULT 1,
-      last_seen_at TIMESTAMP DEFAULT now(),
-      UNIQUE(field_code, value)
-    );
-  `);
 }
 
-ensureMemoryTables().catch(() =>
-  console.warn("⚠️ Impossible de créer les tables mémoire (non bloquant).")
-);
+ensureMemoryTables().catch(() => console.warn("⚠️ Tables mémoire non créées"));
 
 // -----------------------------------------------------------------------------
-// 3bis. DROPDOWNS (CSV OPTIONAL) — ROBUST PARSE + ROBUST MATCH
+// 9. ROUTES - WIZARD v8
 // -----------------------------------------------------------------------------
 
-let DROPDOWN_INDEX = null;
-
-/**
- * Normalise une clé de fichier pour matcher même si:
- * - extension différente / absente
- * - accents
- * - underscores / espaces
- * - variantes de nom (Maintenance Plan vs DCF_MaintPlan etc.)
- */
-function normalizeKey(s = "") {
-  return String(s)
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // enlève accents
-    .replace(/\.(xlsx|xlsm|xls)$/i, "") // enlève extension
-    .replace(/[^a-z0-9]+/g, " ") // remplace tout par espace
-    .trim();
-}
-
-/**
- * Détecte automatiquement si le CSV est séparé par "," ou ";"
- * (Excel FR sort souvent du ";" par défaut)
- */
-function detectDelimiter(headerLine = "") {
-  const comma = (headerLine.match(/,/g) || []).length;
-  const semi  = (headerLine.match(/;/g) || []).length;
-  return semi > comma ? ";" : ",";
-}
-
-/**
- * Split CSV en respectant les guillemets.
- * Ex: "valeur, avec virgule" reste un seul champ.
- */
-function smartSplitCSVLine(line, delim) {
-  const out = [];
-  let cur = "";
-  let inQ = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-
-    if (ch === '"') {
-      inQ = !inQ;
-      continue;
-    }
-
-    if (ch === delim && !inQ) {
-      out.push(cur);
-      cur = "";
-      continue;
-    }
-
-    cur += ch;
-  }
-
-  out.push(cur);
-  return out;
-}
-
-/**
- * CSV schema:
- * Fichier | Feuille | Cellules concernées | Nom/Source liste | Nb valeurs | Valeurs (liste complète)
- */
-function loadDropdownCSV() {
+// POST /api/dcf/startSession
+app.post("/api/dcf/startSession", async (req, res) => {
   try {
-    if (!fs.existsSync(DROPDOWN_CSV_PATH)) {
-      console.warn("⚠️ Dropdown CSV introuvable:", DROPDOWN_CSV_PATH);
-      DROPDOWN_INDEX = null;
-      return;
-    }
-
-    const raw = fs.readFileSync(DROPDOWN_CSV_PATH, "utf8");
-    const lines = raw.split(/\r?\n/).filter((l) => l.trim() !== "");
-    const header = lines.shift();
-    if (!header) {
-      DROPDOWN_INDEX = null;
-      return;
-    }
-
-    const delim = detectDelimiter(header);
-    const idx = new Map();
-
-    for (const line of lines) {
-      const parts = smartSplitCSVLine(line, delim).map((p) => String(p || "").trim());
-      if (parts.length < 6) continue;
-
-      const fichierRaw = parts[0];
-      const feuille = parts[1];
-      const cellules = parts[2];
-      const listName = parts[3];
-      const nb = Number(parts[4] || "0") || 0;
-
-      // tout ce qui reste = valeurs (on re-joint au cas où des virgules sont dedans)
-      const valuesStr = parts.slice(5).join(delim).trim();
-      const values = valuesStr
-        .split(/\s*[,;]\s*/)   // virgule OU point-virgule
-        .map((v) => v.trim())
-        .filter(Boolean);
-
-
-      const key = normalizeKey(fichierRaw);
-      if (!idx.has(key)) idx.set(key, []);
-      idx.get(key).push({
-        fichier: fichierRaw,
-        feuille,
-        cellules,
-        listName,
-        nb,
-        values,
-      });
-    }
-
-    DROPDOWN_INDEX = idx;
-    console.log(`✅ Dropdown CSV chargé: ${idx.size} fichiers indexés (delim="${delim}")`);
-  } catch (e) {
-    console.warn("⚠️ Dropdown CSV non chargé:", e.message);
-    DROPDOWN_INDEX = null;
-  }
-}
-
-loadDropdownCSV();
-
-/**
- * Matching robuste template <-> CSV
- * 1) match direct normalisé
- * 2) contains
- * 3) fallback fuzzy par mots-clés
- */
-function getDropdownsForTemplate(templateFilename = "") {
-  if (!DROPDOWN_INDEX) return [];
-
-  const tf = normalizeKey(templateFilename);
-
-  // 1) match direct
-  if (DROPDOWN_INDEX.has(tf)) return DROPDOWN_INDEX.get(tf);
-
-  // 2) contains
-  for (const [k, arr] of DROPDOWN_INDEX.entries()) {
-    if (tf.includes(k) || k.includes(tf)) return arr;
-  }
-
-  // 3) fuzzy buckets (si nom trop différent)
-  const buckets = [
-    { key: "maintenance plan", words: ["maintenance", "plan", "warpl", "mp"] },
-    { key: "equipment", words: ["equipment", "equnr", "eq"] },
-    { key: "task list", words: ["task", "list", "plnnr", "plnty"] },
-    { key: "functional location", words: ["functional", "location", "iloan", "tplnr"] },
-  ];
-
-  for (const b of buckets) {
-    if (b.words.some((w) => tf.includes(w))) {
-      for (const [k, arr] of DROPDOWN_INDEX.entries()) {
-        if (k.includes(b.key)) return arr;
-      }
-    }
-  }
-
-  return [];
-}
-
-function dropdownBlockForPrompt(templateFilename) {
-  const dds = getDropdownsForTemplate(templateFilename);
-  if (!dds.length) return "N/A";
-
-  return dds
-    .map((d) => {
-      const vals = (d.values || []).slice(0, 120).join(", ");
-      return `- Liste "${d.listName}" (cells: ${d.cellules}) valeurs autorisées: ${vals}`;
-    })
-    .join("\n");
-}
-
-// -----------------------------------------------------------------------------
-// 4. EXCEL ANALYSIS ROBUSTE  (v7.5.0)
-// -----------------------------------------------------------------------------
-// Objectifs robustesse:
-// - Détecter dynamiquement la ligne de début des données (pas de +3 hardcodé)
-// - Détecter et signaler les colonnes constantes/figées (ex WERKS=CH94)
-// - Ajouter une ligne d'exemple dans ai_context pour éviter hallucinations
-// - Gérer tous les templates (Maintenance Plan, Equipment, Task List, FL, etc.)
-// - Heuristique "templates SAP commencent en H" sans casser un template atypique
-
-function columnIndexToLetter(idx) {
-  let n = idx + 1;
-  let s = "";
-  while (n > 0) {
-    const r = ((n - 1) % 26) + 65;
-    s = String.fromCharCode(r) + s;
-    n = Math.floor((n - 1) / 26);
-  }
-  return s;
-}
-
-function looksLikeCodes(row) {
-  const cells = row
-    .map((x) => String(x ?? "").trim())
-    .filter(Boolean)
-    .slice(0, 120);
-
-  if (!cells.length) return false;
-
-  const codeLike = cells.filter((c) =>
-    /^[A-Z0-9_]{2,}$/.test(c) && !/^(TRUE|FALSE|YES|NO)$/i.test(c)
-  ).length;
-
-  return codeLike / cells.length > 0.35;
-}
-
-// Heuristique: si beaucoup de colonnes codes sont >= H,
-// on ignore A..G pour éviter les colonnes parasites.
-function applyHStartHeuristic(columns, startLetter = "H") {
-  if (!Array.isArray(columns) || columns.length === 0) return columns || [];
-
-  const startIdx = letterToIndex(startLetter); // utilise la helper déjà définie
-  const afterH = columns.filter(c => c.idx >= startIdx);
-  const beforeH = columns.filter(c => c.idx < startIdx);
-
-  // Si au moins 60% des colonnes détectées sont après H → on filtre avant H
-  if (afterH.length / columns.length >= 0.6) {
-    return afterH;
-  }
-  return columns;
-}
-
-function findHeaderRow(raw) {
-  for (let r = 0; r < Math.min(raw.length, 40); r++) {
-    const row = raw[r].map((c) => String(c).toLowerCase());
-    if (
-      row.some((c) => c.includes("code")) ||
-      row.some((c) => c.includes("field")) ||
-      row.some((c) => c.includes("champ")) ||
-      row.some((c) => c.includes("field name"))
-    ) {
-      return r;
-    }
-  }
-  const idx = raw.findIndex((r) => r.some((c) => String(c).trim() !== ""));
-  return idx === -1 ? 0 : idx;
-}
-
-// NEW: Column windows per template to prevent drift (H..end fixed)
-const TEMPLATE_COL_WINDOWS = [
-  { match: /maintenance plan/i, start: "H", end: "BE" },
-  { match: /equipment/i, start: "H", end: "BU" },
-  { match: /task list/i, start: "H", end: "EB" },
-  { match: /functional location/i, start: "H", end: "BR" }
-];
-
-function letterToIndex(letter) {
-  let n = 0;
-  const s = String(letter || "").toUpperCase().trim();
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i) - 64;
-    if (c < 1 || c > 26) continue;
-    n = n * 26 + c;
-  }
-  return n - 1;
-}
-
-function getWindowForFilename(filename = "") {
-  const f = String(filename || "");
-  for (const w of TEMPLATE_COL_WINDOWS) {
-    if (w.match.test(f)) return w;
-  }
-  return null;
-}
-
-function clampColumnsToWindow(columns, window) {
-  if (!window) return columns;
-  const startIdx = letterToIndex(window.start);
-  const endIdx = letterToIndex(window.end);
-  return columns.filter((c) => c.idx >= startIdx && c.idx <= endIdx);
-}
-
-// test si une ligne contient des données sur les colonnes utiles
-function rowHasAnyDataInColumns(rowArr, columns) {
-  for (const colDef of columns) {
-    const v = String(rowArr[colDef.idx] ?? "").trim();
-    if (v !== "") return true;
-  }
-  return false;
-}
-
-// stats colonnes (constantes, valeurs uniques, etc.)
-function computeColumnStats(dataRows, columns) {
-  const stats = {};
-  for (const colDef of columns) {
-    const values = [];
-    for (const r of dataRows) {
-      const v = String(r[colDef.idx] ?? "").trim();
-      if (v !== "") values.push(v);
-    }
-    if (!values.length) continue;
-
-    const uniq = [...new Set(values)];
-    stats[colDef.code] = {
-      unique: uniq,
-      isConstant: uniq.length === 1,
-      constantValue: uniq.length === 1 ? uniq[0] : null,
-      filledCount: values.length
-    };
-  }
-  return stats;
-}
-
-// évite de considérer une ligne d'exemple/constantes comme data réelle
-function isRowMostlyConstants(row, columns, colStats) {
-  let filled = 0;
-  let constants = 0;
-  for (const colDef of columns) {
-    const v = String(row[colDef.idx] ?? "").trim();
-    if (v !== "") {
-      filled++;
-      if (colStats?.[colDef.code]?.isConstant) constants++;
-    }
-  }
-  return filled > 0 && constants / filled > 0.8;
-}
-
-// début des données dynamique et anti-décalage
-function findDataStartIdx(raw, headerRowIdx, columns) {
-  let i = headerRowIdx + 1;
-
-  // skip lignes vides/codes
-  while (i < raw.length) {
-    const row = raw[i] || [];
-    const isEmpty = row.every((c) => String(c ?? "").trim() === "");
-    const isCodes = looksLikeCodes(row);
-    if (isEmpty || isCodes) {
-      i++;
-      continue;
-    }
-    break;
-  }
-
-  // probe stats sur 10 lignes max
-  const probeRows = raw.slice(i, i + 10);
-  const probeStats = computeColumnStats(probeRows, columns);
-
-  while (i < raw.length) {
-    const row = raw[i] || [];
-    if (!rowHasAnyDataInColumns(row, columns)) {
-      i++;
-      continue;
-    }
-    if (isRowMostlyConstants(row, columns, probeStats)) {
-      i++;
-      continue;
-    }
-    return headerRowIdx + 2;
-  }
-
-  return headerRowIdx + 2;
-}
-
-function buildDeepExcelAnalysis(buffer, originalName = "") {
-  const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
-  const analysis = {
-    filename: originalName,
-    sheetNames: wb.SheetNames || [],
-    ai_context: "",
-    sheets: [],
-    extracted_values: [],
-    rows_index: {},
-    debug_info: [] // ⚡ NOUVEAU : logs debug
-  };
-
-  let globalContext = "";
-
-  for (const sheetName of analysis.sheetNames) {
-    const ws = wb.Sheets[sheetName];
-    if (!ws) continue;
-
-    const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
-    if (!raw.length) continue;
-
-    const debugLog = [];
-
-    // ========== ÉTAPE 1 : DÉTECTION HEADER ==========
-    debugLog.push(`\n🔍 SHEET "${sheetName}" - ${raw.length} lignes détectées`);
-
-    const headerRowIdx = findHeaderRow(raw);
-    debugLog.push(`📍 Header row détectée : ligne ${headerRowIdx + 1} (index ${headerRowIdx})`);
-    debugLog.push(`   Contenu : ${JSON.stringify(raw[headerRowIdx]?.slice(0, 15) || [])}`);
-
-    const row0 = raw[headerRowIdx] || [];
-    const row1 = raw[headerRowIdx + 1] || [];
-
-    debugLog.push(`📍 Ligne suivante (codes potentiels) : ligne ${headerRowIdx + 2}`);
-    debugLog.push(`   Contenu : ${JSON.stringify(row1.slice(0, 15) || [])}`);
-
-    // ========== ÉTAPE 2 : IDENTIFICATION CODES/LABELS ==========
-    const row0IsCodes = looksLikeCodes(row0);
-    const row1IsCodes = looksLikeCodes(row1);
-
-    debugLog.push(`🔬 Analyse lignes :`);
-    debugLog.push(`   - row0 looks like codes? ${row0IsCodes}`);
-    debugLog.push(`   - row1 looks like codes? ${row1IsCodes}`);
-
-    const codesRow = row1IsCodes ? row1 : row0;
-    const labelsRow = row1IsCodes ? row0 : row1;
-    const codesRowIdx = row1IsCodes ? headerRowIdx + 1 : headerRowIdx;
-
-    debugLog.push(`✅ Décision : codes en ligne ${codesRowIdx + 1}, labels en ligne ${row1IsCodes ? headerRowIdx + 1 : headerRowIdx + 2}`);
-
-    // ========== ÉTAPE 3 : EXTRACTION COLONNES (SANS FILTRE) ==========
-    let rawColumns = [];
-    codesRow.forEach((code, idx) => {
-      const c = String(code).trim();
-      if (c.length > 1 && /[A-Za-z0-9]/.test(c)) {
-        const label = String(labelsRow[idx] || "").trim();
-        rawColumns.push({ idx, col: columnIndexToLetter(idx), code: c, label });
-      }
-    });
-
-    debugLog.push(`📊 ${rawColumns.length} colonnes brutes détectées (avant filtres) :`);
-    rawColumns.slice(0, 20).forEach(c => {
-      debugLog.push(`   ${c.col} (idx=${c.idx}) : ${c.code} "${c.label}"`);
-    });
-
-    // ========== ÉTAPE 4 : APPLICATION HEURISTIQUE H (OPTIONNELLE) ==========
-    let columns = [...rawColumns];
-
-    // ⚠️ DÉSACTIVATION TEMPORAIRE de l'heuristique H pour debug
-    // const afterHFiltered = applyHStartHeuristic(columns);
-    // debugLog.push(`🔧 Heuristique H : ${columns.length} → ${afterHFiltered.length} colonnes`);
-    // columns = afterHFiltered;
-
-    debugLog.push(`⏭️  Heuristique H DÉSACTIVÉE (debug mode)`);
-
-    // ========== ÉTAPE 5 : WINDOW CLAMP (OPTIONNEL) ==========
-    const window = getWindowForFilename(originalName);
-    if (window) {
-      const beforeClamp = columns.length;
-      columns = clampColumnsToWindow(columns, window);
-      debugLog.push(`📏 Window ${window.start}-${window.end} appliquée : ${beforeClamp} → ${columns.length} colonnes`);
-    } else {
-      debugLog.push(`📏 Pas de fenêtre template définie`);
-    }
-
-    // ========== ÉTAPE 6 : DÉBUT DONNÉES ==========
-    const dataStartIdx = findDataStartIdx(raw, headerRowIdx, columns);
-    debugLog.push(`📍 Début données détecté : ligne ${dataStartIdx + 1} (index ${dataStartIdx})`);
-
-    const dataRows = raw.slice(dataStartIdx);
-    const colStats = computeColumnStats(dataRows, columns);
-
-    // ========== ÉTAPE 7 : EXEMPLE LIGNE ==========
-    let exampleRowNumber = null;
-    let exampleMap = {};
-    for (let ridx = 0; ridx < dataRows.length; ridx++) {
-      if (rowHasAnyDataInColumns(dataRows[ridx], columns)) {
-        exampleRowNumber = dataStartIdx + ridx + 1;
-        for (const colDef of columns) {
-          const val = String(dataRows[ridx][colDef.idx] ?? "").trim();
-          if (val !== "") exampleMap[colDef.code] = val;
-        }
-        break;
-      }
-    }
-
-    debugLog.push(`📝 Exemple ligne ${exampleRowNumber || "?"} :`);
-    debugLog.push(`   ${JSON.stringify(exampleMap).slice(0, 200)}`);
-
-    // ========== ÉTAPE 8 : EXTRACTION VALEURS ==========
-    let extractedCount = 0;
-
-    dataRows.forEach((rowArr, ridx) => {
-      const rowNumber = dataStartIdx + ridx + 1;
-      const rowKey = `${sheetName}::${rowNumber}`;
-
-      for (const colDef of columns) {
-        const v = rowArr[colDef.idx];
-        const val = String(v ?? "").trim();
-        if (val !== "") {
-          analysis.extracted_values.push({
-            sheet: sheetName,
-            row: rowNumber,
-            col: colDef.col,
-            field: colDef.code,
-            label: colDef.label,
-            value: val
-          });
-
-          if (!analysis.rows_index[rowKey]) analysis.rows_index[rowKey] = {};
-          analysis.rows_index[rowKey][colDef.code] = val;
-
-          extractedCount++;
-        }
-      }
-    });
-
-    debugLog.push(`✅ ${extractedCount} valeurs extraites`);
-
-    // ========== SAVE DEBUG LOG ==========
-    analysis.debug_info.push(debugLog.join("\n"));
-
-    // ========== CONTEXT TEXTE ==========
-    const columnsStr = columns
-      .map((c) => `${c.code}${c.label ? ` (${c.label})` : ""} -> ${c.col}`)
-      .join(", ");
-
-    const constantStr = Object.entries(colStats)
-      .filter(([_, st]) => st.isConstant)
-      .map(([code, st]) => `${code}=${st.constantValue}`)
-      .join(", ");
-
-    const exampleStr = exampleRowNumber
-      ? Object.entries(exampleMap)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(", ")
-      : "N/A";
-
-    const sheetContext =
-      `SHEET "${sheetName}"\n` +
-      `Colonnes détectées: ${columnsStr}\n` +
-      `Header ligne ${headerRowIdx + 1} | Codes ligne ${codesRowIdx + 1}\n` +
-      `Fenêtre template: ${window ? window.start + "-" + window.end : "auto"}\n` +
-      `Début données détecté: ligne ${dataStartIdx + 1}\n` +
-      `Exemple ligne ${exampleRowNumber || "?"}: ${exampleStr}\n` +
-      (constantStr
-        ? `Colonnes constantes (figées): ${constantStr}\n`
-        : "");
-
-    globalContext += sheetContext + "\n";
-
-    analysis.sheets.push({
-      name: sheetName,
-      headerRowIdx: headerRowIdx + 1,
-      codesRowIdx: codesRowIdx + 1,
-      columns,
-      dataStartRow: dataStartIdx + 1,
-      extracted_count: extractedCount
-    });
-  }
-
-  analysis.ai_context = globalContext.trim();
-
-  // ⚡ AFFICHE DEBUG DANS CONSOLE SERVEUR
-  console.log("\n" + "=".repeat(80));
-  console.log(`📋 ANALYSE EXCEL : ${originalName}`);
-  console.log("=".repeat(80));
-  analysis.debug_info.forEach(log => console.log(log));
-  console.log("=".repeat(80) + "\n");
-
-  return analysis;
-}
-
-// -----------------------------------------------------------------------------
-// 4.b ANALYSIS SHRINKING FOR DB (compat v7.5.0)
-// -----------------------------------------------------------------------------
-// L'analyse complète peut être très grosse (extracted_values, context long).
-// On stocke une version "lite" en DB pour historique/debug léger.
-function shrinkAnalysisForDB(analysisFull) {
-  if (!analysisFull || typeof analysisFull !== "object") return analysisFull;
-  const ai = String(analysisFull.ai_context || "");
-  return {
-    filename: analysisFull.filename,
-    sheetNames: analysisFull.sheetNames || [],
-    sheets: analysisFull.sheets || [],
-    // utile pour debug, mais on limite la taille
-    ai_context: ai.length > 20000 ? ai.slice(0, 20000) + "\n...[TRUNCATED]" : ai,
-    extracted_count: Array.isArray(analysisFull.extracted_values)
-      ? analysisFull.extracted_values.length
-      : 0,
-    rows_index: analysisFull.rows_index || {}
-  };
-}
-
-function buildFileContext(analysis) {
-  return {
-    filename: analysis.filename,
-    sheetNames: analysis.sheetNames,
-    ai_context: analysis.ai_context,
-    sheets: analysis.sheets,
-    extracted_count: analysis.extracted_values?.length || 0
-  };
-}
-// -----------------------------------------------------------------------------
-// 5. INDEXATION DB (values + mémoire entités)
-// -----------------------------------------------------------------------------
-
-async function indexFileValues(fileId, analysis) {
-  try {
-    const values = analysis.extracted_values || [];
-    if (!values.length) return;
-
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      for (const item of values) {
-        await client.query(
-          `
-          INSERT INTO dcf_values_index (field_code, value, file_id)
-          VALUES ($1, $2, $3)
-          ON CONFLICT (field_code, value)
-          DO UPDATE 
-            SET seen_count = dcf_values_index.seen_count + 1,
-                last_seen_at = now()
-        `,
-          [item.field, item.value, fileId]
-        );
-      }
-      await client.query("COMMIT");
-    } catch {
-      await client.query("ROLLBACK");
-    } finally {
-      client.release();
-    }
-  } catch {}
-}
-
-async function indexEntityMemory(fileId, analysis) {
-  try {
-    const rowsIndex = analysis.rows_index || {};
-    if (!Object.keys(rowsIndex).length) return;
-
-    const client = await pool.connect();
-    try {
-      for (const rowKey of Object.keys(rowsIndex)) {
-        const row = rowsIndex[rowKey];
-
-        // 1) Maintenance Plan (WARPL -> WPTXT)
-        if (row.WARPL) {
-          const keyValue = String(row.WARPL).trim();
-          const nameValue = String(
-            row.WPTXT ||
-              row.PLTEXT ||
-              row.PLTXT ||
-              row.PLANNAM ||
-              ""
-          ).trim();
-
-          const extra = {};
-          if (row.TPLNR) extra.TPLNR = row.TPLNR;
-          if (row.EQUNR) extra.EQUNR = row.EQUNR;
-          if (row.MPTYP) extra.MPTYP = row.MPTYP;
-          if (row.STRAT) extra.STRAT = row.STRAT;
-          if (row.WERKS) extra.WERKS = row.WERKS;
-
-          const prev = await client.query(
-            `
-            SELECT name_value 
-            FROM dcf_entity_memory
-            WHERE entity_type='maintenance_plan' AND key_code='WARPL' AND key_value=$1
-            LIMIT 1
-          `,
-            [keyValue]
-          );
-          const prevName = prev.rows[0]?.name_value || null;
-          const newName = nameValue || null;
-
-          if (prevName && newName && prevName !== newName) {
-            await client.query(
-              `
-              INSERT INTO dcf_entity_name_history(entity_type, key_code, key_value, old_name_value, new_name_value)
-              VALUES ($1,$2,$3,$4,$5)
-            `,
-              ["maintenance_plan", "WARPL", keyValue, prevName, newName]
-            );
-          }
-
-          await client.query(
-            `
-            INSERT INTO dcf_entity_memory(entity_type, key_code, key_value, name_code, name_value, extra)
-            VALUES ($1,$2,$3,$4,$5,$6)
-            ON CONFLICT(entity_type, key_code, key_value)
-            DO UPDATE SET
-              name_value = COALESCE(EXCLUDED.name_value, dcf_entity_memory.name_value),
-              extra = dcf_entity_memory.extra || EXCLUDED.extra,
-              seen_count = dcf_entity_memory.seen_count + 1,
-              last_seen_at = now()
-          `,
-            [
-              "maintenance_plan",
-              "WARPL",
-              keyValue,
-              newName ? "WPTXT" : null,
-              newName,
-              extra
-            ]
-          );
-        }
-
-        // 2) Equipment (EQUNR -> EQKTX)
-        if (row.EQUNR) {
-          const keyValue = String(row.EQUNR).trim();
-          const nameValue = String(
-            row.EQKTX || row.SHORTTEXT || row.EQTXT || ""
-          ).trim();
-
-          const extra = {};
-          if (row.TPLNR) extra.TPLNR = row.TPLNR;
-          if (row.SERGE) extra.SERGE = row.SERGE;
-          if (row.BEGRU) extra.BEGRU = row.BEGRU;
-          if (row.WERKS) extra.WERKS = row.WERKS;
-
-          const prev = await client.query(
-            `
-            SELECT name_value 
-            FROM dcf_entity_memory
-            WHERE entity_type='equipment' AND key_code='EQUNR' AND key_value=$1
-            LIMIT 1
-          `,
-            [keyValue]
-          );
-          const prevName = prev.rows[0]?.name_value || null;
-          const newName = nameValue || null;
-
-          if (prevName && newName && prevName !== newName) {
-            await client.query(
-              `
-              INSERT INTO dcf_entity_name_history(entity_type, key_code, key_value, old_name_value, new_name_value)
-              VALUES ($1,$2,$3,$4,$5)
-            `,
-              ["equipment", "EQUNR", keyValue, prevName, newName]
-            );
-          }
-
-          await client.query(
-            `
-            INSERT INTO dcf_entity_memory(entity_type, key_code, key_value, name_code, name_value, extra)
-            VALUES ($1,$2,$3,$4,$5,$6)
-            ON CONFLICT(entity_type, key_code, key_value)
-            DO UPDATE SET
-              name_value = COALESCE(EXCLUDED.name_value, dcf_entity_memory.name_value),
-              extra = dcf_entity_memory.extra || EXCLUDED.extra,
-              seen_count = dcf_entity_memory.seen_count + 1,
-              last_seen_at = now()
-          `,
-            [
-              "equipment",
-              "EQUNR",
-              keyValue,
-              newName ? "EQKTX" : null,
-              newName,
-              extra
-            ]
-          );
-        }
-
-        // 3) Task list (PLNNR/TLNUM -> KTEXT)
-        if (row.PLNNR || row.PLNAL || row.TLNUM) {
-          const keyValue = String(
-            row.PLNNR || row.TLNUM || row.PLNAL || ""
-          ).trim();
-          if (keyValue) {
-            const nameValue = String(
-              row.KTEXT || row.TLTXT || row.LTXA1 || row.PLNNTXT || ""
-            ).trim();
-
-            const extra = {};
-            if (row.WERKS) extra.WERKS = row.WERKS;
-            if (row.STRAT) extra.STRAT = row.STRAT;
-
-            const prev = await client.query(
-              `
-              SELECT name_value 
-              FROM dcf_entity_memory
-              WHERE entity_type='task_list' AND key_code='PLNNR' AND key_value=$1
-              LIMIT 1
-            `,
-              [keyValue]
-            );
-            const prevName = prev.rows[0]?.name_value || null;
-            const newName = nameValue || null;
-
-            if (prevName && newName && prevName !== newName) {
-              await client.query(
-                `
-                INSERT INTO dcf_entity_name_history(entity_type, key_code, key_value, old_name_value, new_name_value)
-                VALUES ($1,$2,$3,$4,$5)
-              `,
-                ["task_list", "PLNNR", keyValue, prevName, newName]
-              );
-            }
-
-            await client.query(
-              `
-              INSERT INTO dcf_entity_memory(entity_type, key_code, key_value, name_code, name_value, extra)
-              VALUES ($1,$2,$3,$4,$5,$6)
-              ON CONFLICT(entity_type, key_code, key_value)
-              DO UPDATE SET
-                name_value = COALESCE(EXCLUDED.name_value, dcf_entity_memory.name_value),
-                extra = dcf_entity_memory.extra || EXCLUDED.extra,
-                seen_count = dcf_entity_memory.seen_count + 1,
-                last_seen_at = now()
-            `,
-              [
-                "task_list",
-                "PLNNR",
-                keyValue,
-                newName ? "KTEXT" : null,
-                newName,
-                extra
-              ]
-            );
-          }
-        }
-
-        // 4) Functional Location (TPLNR -> texte)
-        if (row.TPLNR) {
-          const keyValue = String(row.TPLNR).trim();
-          if (keyValue) {
-            const nameValue = String(
-              row.PLTXT || row.PLTEXT || row.TPLTX || row.FLTEXT || row.FLTXT || ""
-            ).trim();
-
-            const extra = {};
-            if (row.WERKS) extra.WERKS = row.WERKS;
-            if (row.BEGRU) extra.BEGRU = row.BEGRU;
-
-            const prev = await client.query(
-              `
-              SELECT name_value
-              FROM dcf_entity_memory
-              WHERE entity_type='functional_location' AND key_code='TPLNR' AND key_value=$1
-              LIMIT 1
-            `,
-              [keyValue]
-            );
-            const prevName = prev.rows[0]?.name_value || null;
-            const newName = nameValue || null;
-
-            if (prevName && newName && prevName !== newName) {
-              await client.query(
-                `
-                INSERT INTO dcf_entity_name_history(entity_type, key_code, key_value, old_name_value, new_name_value)
-                VALUES ($1,$2,$3,$4,$5)
-              `,
-                ["functional_location", "TPLNR", keyValue, prevName, newName]
-              );
-            }
-
-            await client.query(
-              `
-              INSERT INTO dcf_entity_memory(entity_type, key_code, key_value, name_code, name_value, extra)
-              VALUES ($1,$2,$3,$4,$5,$6)
-              ON CONFLICT(entity_type, key_code, key_value)
-              DO UPDATE SET
-                name_value = COALESCE(EXCLUDED.name_value, dcf_entity_memory.name_value),
-                extra = dcf_entity_memory.extra || EXCLUDED.extra,
-                seen_count = dcf_entity_memory.seen_count + 1,
-                last_seen_at = now()
-            `,
-              [
-                "functional_location",
-                "TPLNR",
-                keyValue,
-                newName ? "PLTXT" : null,
-                newName,
-                extra
-              ]
-            );
-          }
-        }
-      }
-    } finally {
-      client.release();
-    }
-  } catch {}
-}
-
-async function fetchMemoryHintsFromText(text) {
-  const nums = extractMaybeNumber(text);
-  if (!nums.length) return [];
-
-  try {
+    const { title = "Session DCF v8" } = req.body;
     const { rows } = await pool.query(
-      `
-      SELECT entity_type, key_code, key_value, name_value, extra
-      FROM dcf_entity_memory
-      WHERE key_value = ANY($1::text[])
-      ORDER BY last_seen_at DESC
-      LIMIT $2
-    `,
-      [nums, MAX_MEMORY_HINTS]
+      `INSERT INTO dcf_sessions (title) VALUES ($1) RETURNING id`,
+      [title]
     );
-
-    return rows.map((r) => {
-      const extraStr = r.extra
-        ? Object.entries(r.extra)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(", ")
-        : "";
-      return `- ${r.entity_type} ${r.key_code}=${r.key_value}${
-        r.name_value ? ` -> "${r.name_value}"` : ""
-      }${extraStr ? ` (${extraStr})` : ""}`;
-    });
-  } catch {
-    return [];
+    res.json({ ok: true, sessionId: rows[0].id });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-}
-
-// -----------------------------------------------------------------------------
-// 6. MULTER
-// -----------------------------------------------------------------------------
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }
 });
 
-// -----------------------------------------------------------------------------
-// 7. LENGTH NORMALIZATION (Instructions)
-// -----------------------------------------------------------------------------
-
-const SAP_MAXLEN = {
-  KTEXT: 40,
-  LTXA1: 40,
-  TEXT1: 132,
-  WPTXT: 40,
-  PLTXT: 40,
-  EQKTX: 40
-};
-
-function enforceSapLengthsOnSteps(steps = []) {
-  return steps.map((s) => {
-    const code = String(s.code || "").trim().toUpperCase();
-    const maxLen = SAP_MAXLEN[code];
-    if (!maxLen) return s;
-
-    const val = String(s.value ?? "");
-    if (val.length <= maxLen) return s;
-
-    const truncated = val.slice(0, maxLen);
-    const overflow = val.slice(maxLen);
-
-    return {
-      ...s,
-      value: truncated,
-      reason: `${
-        s.reason ? s.reason + " | " : ""
-      }Texte tronqué SAP (max ${maxLen}). Reste à mettre en long text: "${overflow.slice(
-        0, 80
-      )}${overflow.length > 80 ? "…" : ""}"`
-    };
-  });
-}
-
-// -----------------------------------------------------------------------------
-// 8. ACTION COLUMN DETECTION
-// -----------------------------------------------------------------------------
-
-function detectPreferredActionCode(analysisLiteOrFull) {
-  const sheets = analysisLiteOrFull?.sheets || [];
-  const allCodes = [];
-  for (const sh of sheets) {
-    for (const c of sh.columns || []) {
-      if (c?.code) allCodes.push(String(c.code).toUpperCase());
-    }
+// GET /api/dcf/sessions
+app.get("/api/dcf/sessions", async (req, res) => {
+  try {
+    const { rows } = await pool.query(`SELECT * FROM dcf_sessions ORDER BY created_at DESC LIMIT 20`);
+    res.json({ ok: true, sessions: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-  // NEW: Priorise ACTION en I, I étant la colonne d'action la plus courante dans les Task List
-  if (allCodes.includes("ACTION") && findColumnByCode(analysisLiteOrFull, "ACTION")?.col === "I") return "ACTION";
-  if (allCodes.includes("ACTION_02")) return "ACTION_02";
-  if (allCodes.includes("ACTION_01")) return "ACTION_01";
-  const anyActionX = allCodes.find((c) => /^ACTION_\d+$/i.test(c));
-  if (anyActionX) return anyActionX;
-  return "ACTION";
-}
+});
 
-function findColumnByCode(analysis, wantedCode) {
-  const sheets = analysis?.sheets || [];
-  const w = String(wantedCode).toUpperCase();
-  for (const sh of sheets) {
-    for (const col of sh.columns || []) {
-      if (String(col.code).toUpperCase() === w) {
-        return { sheet: sh.name, col: col.col };
-      }
-    }
-  }
-  return null;
-}
-
-function remapActionStepsToPreferred(steps, analysisFull, preferredActionCode) {
-  const allowed = new Set(["insert", "change", "delete"]);
-  const pref = String(preferredActionCode || "ACTION").toUpperCase();
-  if (!steps.length) return steps;
-
-  return steps.map((s) => {
-    const code = String(s.code || "").toUpperCase();
-    const val = String(s.value || "").trim().toLowerCase();
-
-    const isActionStep =
-      /^ACTION(_\d+)?$/i.test(code) && allowed.has(val);
-
-    if (!isActionStep) return s;
-    if (code === pref) return s;
-
-    const targetPos = findColumnByCode(analysisFull, pref);
-    if (!targetPos) {
-      return { ...s, code: pref };
-    }
-
-    return {
-      ...s,
-      code: pref,
-      col: targetPos.col,
-      sheet: targetPos.sheet || s.sheet,
-      reason: `${s.reason ? s.reason + " | " : ""}Action SAP remappée automatiquement vers ${pref}.`
-    };
-  });
-}
-
-// -----------------------------------------------------------------------------
-// 9. WIZARD ROUTES
-// -----------------------------------------------------------------------------
-
-// ✅ ANALYZE renforcé + pré-routage TL+MP + clarifications scaffold
-app.post("/api/dcf/wizard/analyze", async (req, res) => {
+// POST /api/dcf/wizard/analyze - ÉTAPE 1 avec images SAP
+app.post("/api/dcf/wizard/analyze", upload.array("screenshots"), async (req, res) => {
   try {
     const { message, sessionId } = req.body;
-    const msgLower = String(message || "").toLowerCase();
-    const useCase = extractUseCaseFromText(message);
+    const screenshots = req.files || [];
 
-    const planNums = msgLower.match(/\b\d{6,12}\b/g) || [];
-    const hasPlanWord =
-      /plan\s*(de)?\s*(maintenance)?/.test(msgLower) ||
-      /maintenance\s*plan/.test(msgLower);
+    // 1. Extraire données des images SAP si présentes
+    let sapData = { extracted: [], raw_texts: [] };
+    if (screenshots.length > 0) {
+      sapData = await extractSAPDataFromImages(screenshots);
 
-    const wantsAddOperation =
-      /(ajout|ajouter|rajoute|rajouter|crée|creer|insère|inserer|intègre|integrer|ajouter une|ajouter le)\b/.test(msgLower) &&
-      /(opération|operation|contrôle|controle|check|vérif|verif|inspection|test)/.test(msgLower);
-
-    const isAddOperationInExistingPlan =
-      wantsAddOperation && hasPlanWord && planNums.length > 0;
-
-    if (isAddOperationInExistingPlan) {
-      const { rows: tlFile } = await pool.query(
-        `SELECT id, filename FROM dcf_files 
-         WHERE filename ILIKE '%task list%' 
-         ORDER BY uploaded_at DESC LIMIT 1`
-      );
-      const { rows: mpFile } = await pool.query(
-        `SELECT id, filename FROM dcf_files 
-         WHERE filename ILIKE '%maintenance plan%' 
-         ORDER BY uploaded_at DESC LIMIT 1`
-      );
-
-      const forcedOut = {
-        action: "add_operation_in_plan",
-        is_manual: false,
-        reasoning:
-          "Ajout d’une opération/contrôle dans un plan existant : protocole SAP = créer/ajouter l’opération dans la Task List puis rattacher au Maintenance Plan.",
-        required_files: [
-          tlFile[0]
-            ? {
-                type: "Task List",
-                template_filename: tlFile[0].filename,
-                file_id: tlFile[0].id,
-                usage:
-                  "Créer/ajouter l’opération (short text, long text, durée, nb personnes, workcenter)."
-              }
-            : null,
-          mpFile[0]
-            ? {
-                type: "Maintenance Plan",
-                template_filename: mpFile[0].filename,
-                file_id: mpFile[0].id,
-                usage:
-                  `Rattacher la nouvelle opération au plan ${planNums[0]} (ou mettre à jour la TL liée).`
-              }
-            : null
-        ].filter(Boolean),
-        questions: [] // scaffold for future UX
-      };
-
-      if (sessionId) {
+      // Sauvegarder les attachments
+      for (const file of screenshots) {
         await pool.query(
-          `
-          INSERT INTO dcf_requests
-            (session_id, request_text, detected_action, detected_type, recommended_file_id, response_json)
-          VALUES
-            ($1,$2,$3,$4,$5,$6)
-        `,
-          [
-            sessionId,
-            message,
-            forcedOut.action,
-            forcedOut.required_files?.[0]?.type || null,
-            forcedOut.required_files?.[0]?.file_id || null,
-            forcedOut
-          ]
-        );
-
-        await pool.query(
-          `
-          INSERT INTO dcf_messages (session_id, role, content)
-          VALUES ($1,'assistant',$2)
-        `,
-          [sessionId, JSON.stringify(forcedOut)]
+          `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [sessionId, file.originalname, file.mimetype, file.size, file.buffer, JSON.stringify(sapData.extracted)]
         );
       }
-
-      return res.json(forcedOut);
     }
 
+    // 2. Détecter le use case
+    const useCase = detectUseCase(message);
+    const useCaseInfo = USE_CASE_MAPPING[useCase] || { description: "Cas non reconnu", dcf_required: [] };
+
+    // 3. Enrichir avec les données du référentiel
+    let refInfo = "";
+    const planNumbers = sapData.extracted.filter(e => e.code === "WARPL").map(e => e.value);
+    for (const pn of planNumbers) {
+      const planInfo = findPlanInfo(pn);
+      if (planInfo) {
+        refInfo += `\nPlan ${pn}: TL Group=${planInfo.task_list_group}, Counter=${planInfo.counter_group}, Desc="${planInfo.description}"`;
+      }
+    }
+
+    // 4. Récupérer les templates disponibles
     const { rows: recentFiles } = await pool.query(
-      `
-      SELECT id, filename 
-      FROM dcf_files
-      WHERE file_data IS NOT NULL
-      ORDER BY uploaded_at DESC
-      LIMIT $1
-    `,
-      [MAX_FILES_LIBRARY]
+      `SELECT id, filename FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT ${MAX_FILES_LIBRARY}`
     );
 
-    const filesList = recentFiles
-      .map((f) => `- ${f.filename} (ID: ${f.id})`)
-      .join("\n");
+    // 5. Mapper DCF requis aux fichiers
+    const required_files = [];
+    for (const dcfType of useCaseInfo.dcf_required) {
+      const matchingFile = recentFiles.find(f => {
+        const fn = f.filename.toLowerCase();
+        if (dcfType === "TASK_LIST") return fn.includes("task list") || fn.includes("tasklist");
+        if (dcfType === "MAINTENANCE_PLAN") return fn.includes("maintenance plan") || fn.includes("maintenanceplan");
+        if (dcfType === "EQUIPMENT") return fn.includes("equipment") || fn.includes("eqpt");
+        return false;
+      });
 
-    const memHints = await fetchMemoryHintsFromText(message);
-    const memBlock = memHints.length
-      ? `\nMEMOIRE METIER (si pertinente):\n${memHints.join("\n")}\n`
-      : "";
-
-    const systemPrompt = `
-Tu es l'Expert Technique SAP DCF.
-
-RÈGLES MÉTIER STRICTES (Protocole Charles):
-1) MODIFICATION TEXTE uniquement (short/long text sans ajout/suppression d'opération) -> is_manual=true.
-2) AJOUT / CREATION d'OPÉRATION dans une TL -> DCF Task List.
-3) AJOUT d'une OPÉRATION/CONTRÔLE dans un PLAN EXISTANT -> DCF Task List + DCF Maintenance Plan.
-4) AJOUT d'ÉQUIPEMENT dans un PLAN -> DCF Maintenance Plan + DCF Equipment si nouvel équipement.
-5) DÉCOMMISSIONNEMENT -> DCF Task List + DCF Maintenance Plan + DCF Equipment.
-6) Si doute entre (1) et (3) : privilégie DCF (is_manual=false).
-
-Tu dois choisir uniquement parmi la bibliothèque ci-dessous.
-`;
-
-    const userPrompt = `
-Demande utilisateur:
-"${message}"
-${memBlock}
-Bibliothèque disponible:
-${filesList}
-
-Réponds en JSON STRICT uniquement:
-{
-  "action": "type_action",
-  "is_manual": boolean,
-  "reasoning": "texte court",
-  "required_files": [
-    {
-      "type": "Task List | Maintenance Plan | Equipment | autres",
-      "template_filename": "nom exact fichier",
-      "file_id": 123,
-      "usage": "ce qu'on va faire dans ce fichier"
+      if (matchingFile) {
+        required_files.push({
+          type: dcfType,
+          template_filename: matchingFile.filename,
+          file_id: matchingFile.id,
+          rules: useCaseInfo.rules.filter(r => r.startsWith(dcfType))
+        });
+      }
     }
-  ],
-  "questions": [
-    "questions de clarification si la demande est incomplète (non bloquant)"
-  ]
-}
-`;
 
-    const completion = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.0
-    });
-
-    const out = cleanJSON(completion.choices[0].message.content);
-
+    // 6. Update session avec use case et SAP data
     if (sessionId) {
-      const detectedType =
-        (Array.isArray(out?.required_files) && out.required_files[0]?.type) ||
-        null;
-
-      const recommendedFileId =
-        (Array.isArray(out?.required_files) &&
-          out.required_files[0]?.file_id) ||
-        null;
-
       await pool.query(
-        `
-        INSERT INTO dcf_requests
-          (session_id, request_text, detected_action, detected_type, recommended_file_id, response_json)
-        VALUES
-          ($1, $2, $3, $4, $5, $6)
-      `,
-        [
-          sessionId,
-          message,
-          out?.action || null,
-          detectedType,
-          recommendedFileId,
-          out
-        ]
-      );
-
-      await pool.query(
-        `
-        INSERT INTO dcf_messages (session_id, role, content)
-        VALUES ($1, 'assistant', $2)
-      `,
-        [sessionId, JSON.stringify(out)]
+        `UPDATE dcf_sessions SET use_case = $1, sap_data = $2 WHERE id = $3`,
+        [useCase, JSON.stringify(sapData), sessionId]
       );
     }
 
-    res.json(out);
+    const response = {
+      action: useCase,
+      description: useCaseInfo.description,
+      is_manual: false,
+      reasoning: `Cas détecté: ${useCaseInfo.description}. ${refInfo}`,
+      required_files,
+      sap_extracted: sapData.extracted,
+      reference_info: refInfo,
+      questions: []
+    };
+
+    // Ajouter questions de clarification si données manquantes
+    if (useCase === "create_operation" && !sapData.extracted.find(e => e.code === "PLNNR")) {
+      response.questions.push("Quel est le numéro du groupe Task List (PLNNR) ?");
+    }
+    if (useCase === "modify_operation" && !sapData.extracted.find(e => e.code === "VORNR")) {
+      response.questions.push("Quel est le numéro de l'opération à modifier (10, 20, 30...) ?");
+    }
+
+    res.json(response);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ✅ INSTRUCTIONS renforcées + longueur SAP + ACTION aware + dropdowns
-function validateAIColumns(out, templateFilename) {
-  const window = getWindowForFilename(templateFilename);
-  if (!window || !Array.isArray(out)) return { fixed: out || [], critical: [] };
-
-  const start = letterToIndex(window.start);
-  const end = letterToIndex(window.end);
-
-  const fixed = [];
-  const critical = [];
-
-  for (const step of out) {
-    const colLetter = String(step.col || "").trim().toUpperCase();
-    const idx = letterToIndex(colLetter);
-    if (!colLetter || idx < start || idx > end) {
-      critical.push({
-        sheet: step.sheet,
-        row: step.row,
-        col: step.col,
-        code: step.code,
-        label: step.label,
-        value: step.value,
-        mandatory: false,
-        reason: `Colonne hors zone ${window.start}-${window.end} pour ${templateFilename}. Refusée.`
-      });
-      continue;
-    }
-    fixed.push(step);
-  }
-
-  return { fixed, critical };
-}
-
-app.post("/api/dcf/wizard/instructions", async (req, res) => {
+// POST /api/dcf/wizard/instructions - ÉTAPE 3
+app.post("/api/dcf/wizard/instructions", upload.array("screenshots"), async (req, res) => {
   try {
-    const { sessionId, requestText, templateFilename, attachmentIds = [] } =
-      req.body;
+    const { sessionId, requestText, templateFilename, attachmentIds = [] } = req.body;
+    const newScreenshots = req.files || [];
 
+    // 1. Récupérer le template
     const { rows } = await pool.query(
-      `
-      SELECT id, filename, analysis, file_data
-      FROM dcf_files
-      WHERE filename = $1
-      ORDER BY uploaded_at DESC
-      LIMIT 1
-    `,
+      `SELECT id, filename, analysis, file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`,
       [templateFilename]
     );
 
@@ -1507,106 +830,144 @@ app.post("/api/dcf/wizard/instructions", async (req, res) => {
     }
 
     const file = rows[0];
+    const analysis = file.file_data ? buildDeepExcelAnalysis(file.file_data, file.filename) : null;
 
-    const analysisFull = file.file_data
-      ? buildDeepExcelAnalysis(file.file_data, file.filename)
-      : null;
-
-    const fileContext =
-      file.analysis?.ai_context || analysisFull?.ai_context || "";
-
-    const preferredActionCode = detectPreferredActionCode(
-      file.analysis || analysisFull
-    );
-
-    let visionContext = "";
-    if (attachmentIds.length) {
-      const { rows: att } = await pool.query(
-        `
-        SELECT id, extracted_text
-        FROM dcf_attachments
-        WHERE id = ANY($1::int[])
-      `,
-        [attachmentIds]
-      );
-
-      visionContext = att
-        .map((a) => a.extracted_text || "")
-        .join("\n")
-        .slice(0, MAX_ATTACHMENT_TEXT);
+    // 2. Récupérer session data
+    let sessionData = { sap_data: { extracted: [] } };
+    if (sessionId) {
+      const { rows: sessRows } = await pool.query(`SELECT * FROM dcf_sessions WHERE id = $1`, [sessionId]);
+      if (sessRows.length) sessionData = sessRows[0];
     }
 
-    const memHints = await fetchMemoryHintsFromText(requestText);
-    const memBlock = memHints.length
-      ? `\nMEMOIRE METIER (si pertinente):\n${memHints.join("\n")}\n`
-      : "";
+    // 3. Extraire données des nouvelles images
+    let newSapData = { extracted: [], raw_texts: [] };
+    if (newScreenshots.length > 0) {
+      newSapData = await extractSAPDataFromImages(newScreenshots);
 
-    const dropdownBlock = dropdownBlockForPrompt(templateFilename);
+      // Sauvegarder
+      for (const file of newScreenshots) {
+        await pool.query(
+          `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [sessionId, file.originalname, file.mimetype, file.size, file.buffer, JSON.stringify(newSapData.extracted)]
+        );
+      }
+    }
+
+    // 4. Récupérer attachments existants
+    let existingExtracted = [];
+    if (attachmentIds.length) {
+      const { rows: attRows } = await pool.query(
+        `SELECT extracted_fields FROM dcf_attachments WHERE id = ANY($1::int[])`,
+        [attachmentIds]
+      );
+      for (const att of attRows) {
+        if (att.extracted_fields) {
+          existingExtracted.push(...(Array.isArray(att.extracted_fields) ? att.extracted_fields : []));
+        }
+      }
+    }
+
+    // 5. Fusionner toutes les données SAP extraites
+    const allSapData = [
+      ...(sessionData.sap_data?.extracted || []),
+      ...existingExtracted,
+      ...newSapData.extracted
+    ];
+
+    // 6. Déterminer le type de DCF et les règles
+    const useCase = sessionData.use_case || detectUseCase(requestText);
+    const useCaseInfo = USE_CASE_MAPPING[useCase] || {};
+
+    // Déterminer le type de template
+    let templateType = "TASK_LIST";
+    const fnLower = templateFilename.toLowerCase();
+    if (fnLower.includes("equipment") || fnLower.includes("eqpt")) templateType = "EQUIPMENT";
+    else if (fnLower.includes("maintenance plan") || fnLower.includes("maintenanceplan")) templateType = "MAINTENANCE_PLAN";
+
+    // 7. Construire les règles de colonnes
+    const applicableRules = useCaseInfo.rules?.filter(r => r.startsWith(templateType)) || [];
+    let columnsToFill = {};
+    
+    for (const rulePath of applicableRules) {
+      const [type, action] = rulePath.split(".");
+      if (BUSINESS_RULES[type]?.[action]?.columns) {
+        columnsToFill = { ...columnsToFill, ...BUSINESS_RULES[type][action].columns };
+      }
+    }
+
+    // 8. Dropdowns
+    const dropdowns = getDropdownsForTemplate(templateFilename);
+    const dropdownBlock = dropdowns.map(d => `- ${d.listName}: ${d.values.slice(0, 50).join(", ")}`).join("\n");
+
+    // 9. Référentiel info
+    let refInfo = "";
+    const planNumber = allSapData.find(e => e.code === "WARPL")?.value;
+    if (planNumber) {
+      const planInfo = findPlanInfo(planNumber);
+      if (planInfo) {
+        refInfo = `\nPlan ${planNumber}: TL Group=${planInfo.task_list_group}, Counter=${planInfo.counter_group}`;
+      }
+    }
+
+    // 10. Prompt IA
+    const sapDataStr = allSapData.map(e => `${e.code}=${e.value}`).join(", ");
 
     const prompt = `
-Tu es un Expert SAP DCF. Tu dois remplir un fichier Excel DCF.
+Tu es un Expert SAP DCF. Tu dois générer les instructions de remplissage pour un fichier DCF.
 
-DEMANDE UTILISATEUR:
-"${requestText}"
-${memBlock}
-FICHIER TEMPLATE:
-"${templateFilename}"
+DEMANDE: "${requestText}"
 
-STRUCTURE DU TEMPLATE:
-${clampStr(fileContext, 5000)}
+CAS D'USAGE DÉTECTÉ: ${useCase} - ${useCaseInfo.description || ""}
 
-LISTES DEROUlANTES (IMPORTANT):
-${dropdownBlock}
-Règle: si un champ correspond à une liste déroulante, tu DOIS choisir une valeur dans la liste.
-Si la valeur n’est pas claire dans la demande ou dans les captures SAP, pose une question dans "reason" et mets mandatory=false.
+TEMPLATE: ${templateFilename} (Type: ${templateType})
 
-DONNÉES SAP (Vision OCR si dispo):
-${visionContext || "N/A"}
+STRUCTURE TEMPLATE:
+${analysis?.ai_context || "N/A"}
 
-CONTRAINTES SAP IMPORTANTES:
-- KTEXT / LTXA1 (short text TL) : max 40 caractères
-- TEXT1 (texte long court SAP) : max 132 caractères
-- WPTXT / PLTXT / EQKTX : max 40 caractères
-Si un texte dépasse, TRONQUE et mets le reste dans la “reason” comme long text.
+DONNÉES SAP EXTRAITES DES CAPTURES:
+${sapDataStr || "Aucune donnée extraite"}
 
-ACTION SAP (IMPORTANT):
-- Dans ce template, la vraie colonne d'action SAP est: ${preferredActionCode}.
-- Quand tu dois mettre Insert/Change/Delete, écris TOUJOURS dans ${preferredActionCode}.
-- N'utilise pas ACTION (simple) si elle sert à un usage métier.
+RÉFÉRENTIEL TASK LIST:
+${refInfo || "N/A"}
 
-INSTRUCTIONS:
-- Génère une liste d’étapes ligne par ligne pour remplir le DCF, en respectant STRICTEMENT la structure du template.
-- Chaque étape doit pointer une cellule (row, col), un code champ (code) et une valeur (value) prête à copier/coller.
-- mandatory=true uniquement si le champ est réellement obligatoire SAP pour l’action demandée.
-- Si le champ est optionnel, incertain, ou non applicable au cas, mets mandatory=false et explique clairement quoi demander / vérifier dans "reason".
-- Ne remplis QUE les colonnes détectées dans STRUCTURE DU TEMPLATE. N’ajoute jamais une colonne hors fenêtre H→fin du template.
-- **NE MODIFIE JAMAIS une colonne identifiée comme constante/figée** dans le contexte Excel, sauf si l’utilisateur demande explicitement un changement.
-- **N’invente aucune valeur.** Si une valeur n’est pas certaine via la demande, une capture SAP, une liste déroulante, ou la mémoire, pose une question dans "reason" et mets mandatory=false.
-- Si un champ a une liste déroulante: choisis une valeur AUTORISÉE. Si aucune ne colle, explique le doute dans "reason".
-- ACTION SAP: utilise toujours ${preferredActionCode} pour Insert/Change/Delete.
-- Conserve la cohérence intra-fichier: même WARPL/WPTXT/STRAT etc doivent rester identiques sur la même ligne de plan.
+COLONNES OBLIGATOIRES POUR CE CAS:
+${Object.entries(columnsToFill).map(([col, info]) => `${col}: ${info.code} - ${info.label || ""} ${info.mandatory ? "(OBLIGATOIRE)" : "(optionnel)"} ${info.value ? `= "${info.value}"` : ""}`).join("\n")}
 
-Réponds en JSON STRICT:
+LISTES DÉROULANTES:
+${dropdownBlock || "N/A"}
+
+RÈGLES IMPORTANTES:
+- Short Text (LTXA1, KTEXT): max 40 caractères
+- Long Text (LTXA2): pas de limite
+- N° Opération (VORNR): 10, 20, 30... (incréments de 10)
+- Counter (PLNAL): 1, 2, 3...
+- ACTION: Create, Change, Delete uniquement
+- System Condition: I = Intrusive, N = Non-intrusive
+
+GÉNÈRE les instructions ligne par ligne en JSON:
 {
   "steps": [
     {
       "row": "6",
-      "col": "H",
-      "code": "WARPL",
-      "label": "texte court",
-      "value": "30482007",
-      "reason": "pourquoi cette valeur / question si incertain",
+      "col": "I",
+      "code": "ACTION",
+      "label": "Action SAP",
+      "value": "Create",
+      "reason": "Nouvelle opération",
       "mandatory": true,
-      "sheet": "NomSheetOptionnel"
+      "sheet": "DCF",
+      "editable": false
     }
-  ]
+  ],
+  "missing_data": ["Liste des données manquantes à demander"]
 }
 `;
 
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
       messages: [
-        { role: "system", content: "Expert SAP DCF." },
+        { role: "system", content: "Expert SAP DCF v8. Génère des instructions précises." },
         { role: "user", content: prompt }
       ],
       response_format: { type: "json_object" },
@@ -1614,47 +975,34 @@ Réponds en JSON STRICT:
     });
 
     const out = cleanJSON(completion.choices[0].message.content);
-    let steps = Array.isArray(out.steps) ? out.steps : [];
+    const steps = Array.isArray(out.steps) ? out.steps : [];
 
-    steps = enforceSapLengthsOnSteps(steps);
+    // 11. Post-traitement: marquer les champs éditables
+    const processedSteps = steps.map(s => ({
+      ...s,
+      editable: !s.value || s.mandatory === false
+    }));
 
-    if (analysisFull) {
-      steps = remapActionStepsToPreferred(
-        steps,
-        analysisFull,
-        preferredActionCode
-      );
-    }
-
-    if (sessionId) {
-      await pool.query(
-        `
-        INSERT INTO dcf_messages (session_id, role, content)
-        VALUES ($1, 'assistant', $2)
-      `,
-        [sessionId, JSON.stringify({ type: "steps", templateFilename, steps })]
-      );
-    }
-
-    res.json(steps);
+    res.json({
+      steps: processedSteps,
+      missing_data: out.missing_data || [],
+      sap_extracted: allSapData,
+      template_type: templateType,
+      use_case: useCase
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
   }
 });
 
+// POST /api/dcf/wizard/autofill - Générer le fichier rempli
 app.post("/api/dcf/wizard/autofill", async (req, res) => {
   try {
     const { templateFilename, instructions } = req.body;
 
     const { rows } = await pool.query(
-      `
-      SELECT filename, mime, file_data
-      FROM dcf_files
-      WHERE filename = $1
-      ORDER BY uploaded_at DESC
-      LIMIT 1
-    `,
+      `SELECT filename, mime, file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`,
       [templateFilename]
     );
 
@@ -1667,11 +1015,7 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
     const steps = Array.isArray(instructions) ? instructions : [];
 
     for (const inst of steps) {
-      const sheetName =
-        inst.sheet && wb.Sheets[inst.sheet]
-          ? inst.sheet
-          : wb.SheetNames[0];
-
+      const sheetName = inst.sheet && wb.Sheets[inst.sheet] ? inst.sheet : wb.SheetNames[0];
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
 
@@ -1680,22 +1024,10 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
     }
 
     const isXlsm = String(tpl.filename).toLowerCase().endsWith(".xlsm");
-    const outBuffer = xlsx.write(wb, {
-      type: "buffer",
-      bookType: isXlsm ? "xlsm" : "xlsx"
-    });
+    const outBuffer = xlsx.write(wb, { type: "buffer", bookType: isXlsm ? "xlsm" : "xlsx" });
 
-    res.setHeader(
-      "Content-Type",
-      isXlsm
-        ? "application/vnd.ms-excel.sheet.macroEnabled.12"
-        : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    );
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="FILLED_${sanitizeName(tpl.filename)}"`
-    );
-
+    res.setHeader("Content-Type", isXlsm ? "application/vnd.ms-excel.sheet.macroEnabled.12" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="FILLED_${sanitizeName(tpl.filename)}"`);
     res.send(outBuffer);
   } catch (e) {
     console.error(e);
@@ -1703,20 +1035,17 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
   }
 });
 
-// ✅ VALIDATE intelligent scope-aware + ACTION multi-colonnes + dropdown-aware
+// POST /api/dcf/wizard/validate
 app.post("/api/dcf/wizard/validate", async (req, res) => {
   try {
     const { fileIds, useCase = null } = req.body;
+
     if (!Array.isArray(fileIds) || !fileIds.length) {
       return res.status(400).json({ error: "fileIds manquant." });
     }
 
     const { rows: files } = await pool.query(
-      `
-      SELECT id, filename, analysis, file_data
-      FROM dcf_files
-      WHERE id = ANY($1::int[])
-    `,
+      `SELECT id, filename, file_data FROM dcf_files WHERE id = ANY($1::int[])`,
       [fileIds]
     );
 
@@ -1724,142 +1053,116 @@ app.post("/api/dcf/wizard/validate", async (req, res) => {
       return res.status(404).json({ error: "Aucun fichier trouvé." });
     }
 
-    const rebuilt = files.map((f) => {
-      let full = null;
-      try {
-        if (f.file_data) {
-          full = buildDeepExcelAnalysis(f.file_data, f.filename);
-        }
-      } catch {
-        full = null;
-      }
-      return { ...f, analysis_full: full };
+    // Analyser chaque fichier
+    const analyses = files.map(f => {
+      const analysis = f.file_data ? buildDeepExcelAnalysis(f.file_data, f.filename) : null;
+      return { id: f.id, filename: f.filename, analysis };
     });
 
-    function getActiveRows(fullAnalysis) {
-      const rowsIndex = fullAnalysis?.rows_index || {};
-      const active = [];
-      const allowed = new Set(["insert", "change", "delete"]);
-
-      for (const key of Object.keys(rowsIndex)) {
-        const row = rowsIndex[key];
-
-        const actionKeys = Object.keys(row).filter(k =>
-          /^ACTION(_\d+)?$/i.test(k)
-        );
-
-        let foundAction = null;
-        for (const ak of actionKeys) {
-          const val = String(row[ak] || "").trim().toLowerCase();
-          if (allowed.has(val)) {
-            foundAction = { action: val, col: ak };
-            break;
-          }
-        }
-
-        if (foundAction) {
-          active.push({
-            key,
-            action: foundAction.action,
-            action_col: foundAction.col,
-            row
-          });
+    // Extraire les lignes avec ACTION
+    const activeRows = [];
+    for (const a of analyses) {
+      if (!a.analysis) continue;
+      for (const [key, row] of Object.entries(a.analysis.rows_index)) {
+        const action = row.ACTION || row.ACTION_01 || row.ACTION_02;
+        if (action && ["create", "change", "delete"].includes(String(action).toLowerCase())) {
+          activeRows.push({ file: a.filename, key, action, row });
         }
       }
-      return active;
     }
 
-    const activeRowsByFile = rebuilt.map((f) => ({
-      id: f.id,
-      filename: f.filename,
-      active_rows: getActiveRows(f.analysis_full)
-    }));
-
-    const noActive = activeRowsByFile.every((f) => !f.active_rows.length);
-    if (noActive) {
+    if (!activeRows.length) {
       return res.json({
-        report:
-          "Aucune vraie ACTION SAP détectée (Insert/Change/Delete). Vérifie ACTION_01/02/03.",
+        report: "Aucune ligne avec ACTION SAP détectée (Create/Change/Delete).",
         critical: [],
-        warnings: [],
+        warnings: ["Vérifiez que la colonne ACTION est remplie."],
         suggestions: []
       });
     }
 
-    const context = JSON.stringify(activeRowsByFile).slice(0, MAX_CONTEXT_CHARS);
+    // Validation basée sur les règles métier
+    const critical = [];
+    const warnings = [];
+    const suggestions = [];
 
-    // dropdowns summary per file
-    const dropdownByFile = rebuilt.map((f) => ({
-      filename: f.filename,
-      dropdowns: getDropdownsForTemplate(f.filename)
-    }));
-    const dropdownContext = JSON.stringify(dropdownByFile).slice(0, 4000);
+    for (const ar of activeRows) {
+      const row = ar.row;
+      const action = String(ar.action).toLowerCase();
 
-    const prompt = `
-Tu valides des fichiers DCF SAP.
+      // Task List validations
+      if (ar.file.toLowerCase().includes("task")) {
+        if (action === "create") {
+          if (!row.PLNNR && !row.N) critical.push(`[${ar.key}] PLNNR (N° Groupe TL) manquant pour Create`);
+          if (!row.PLNAL && !row.P) warnings.push(`[${ar.key}] PLNAL (Counter) non renseigné`);
+          if (!row.VORNR && !row.AG) warnings.push(`[${ar.key}] VORNR (N° Opération) non renseigné`);
+          if (!row.LTXA1 && !row.AJ) critical.push(`[${ar.key}] LTXA1 (Short Text) obligatoire pour Create`);
+        }
+        if (action === "change") {
+          if (!row.PLNNR && !row.N) critical.push(`[${ar.key}] PLNNR requis pour Change`);
+          if (!row.VORNR && !row.AG) critical.push(`[${ar.key}] VORNR requis pour identifier l'opération`);
+        }
+      }
 
-IMPORTANT:
-- Ignore toutes les lignes sans vraie action SAP.
-- Les actions SAP peuvent être dans ACTION, ACTION_01, ACTION_02, ACTION_03...
-- Ne contrôle QUE les lignes avec Insert/Change/Delete.
+      // Maintenance Plan validations
+      if (ar.file.toLowerCase().includes("maintenance") || ar.file.toLowerCase().includes("plan")) {
+        if (action === "create") {
+          if (!row.WPTXT && !row.Q) critical.push(`[${ar.key}] WPTXT (Nom plan) obligatoire`);
+          if (!row.PLNNR && !row.AJ) critical.push(`[${ar.key}] Référence Task List (PLNNR) obligatoire`);
+        }
+        if (action === "change") {
+          if (!row.WARPL && !row.J) critical.push(`[${ar.key}] WARPL (N° Plan) requis pour Change`);
+        }
+      }
 
-Cas d'usage: ${useCase || "unknown"}.
+      // Equipment validations
+      if (ar.file.toLowerCase().includes("equipment") || ar.file.toLowerCase().includes("eqpt")) {
+        if (action === "create") {
+          if (!row.EQTYP && !row.O) warnings.push(`[${ar.key}] Object Type/Criticité recommandé`);
+          if (!row.TPLNR && !row.AR) critical.push(`[${ar.key}] Functional Location obligatoire`);
+        }
+      }
+    }
 
-LISTES DEROUlANTES (référence):
-${dropdownContext}
-Règle: si un champ possède une liste, une valeur hors liste = WARNING (pas critique pour l'instant).
-
-Règles spécifiques:
-- add_operation_in_plan:
-  * Task List: EQUNR optionnel si non fourni par l’utilisateur.
-  * Maintenance Plan: WARPL requis uniquement sur les lignes ACTION.
-- text_only_change: ne pas exiger EQUNR/WARPL si pas liés à l'action.
-- decommission: exiger cohérence TL+MP+Equipment sur lignes ACTION.
-
-Données actives:
-${context}
-
-Réponds JSON STRICT:
-{
-  "report": "résumé global",
-  "critical": ["erreurs bloquantes"],
-  "warnings": ["points à vérifier"],
-  "suggestions": ["améliorations possibles"]
-}
-`;
-
-    const completion = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: [
-        { role: "system", content: "Validateur SAP DCF scope-aware." },
-        { role: "user", content: prompt }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.1
+    res.json({
+      report: `Validation de ${activeRows.length} ligne(s) avec ACTION.`,
+      critical,
+      warnings,
+      suggestions: suggestions.length ? suggestions : ["Vérifiez les valeurs avant import SAP."]
     });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
-    let out = cleanJSON(completion.choices[0].message.content);
+// POST /api/dcf/attachments/upload - Upload screenshots seul
+app.post("/api/dcf/attachments/upload", upload.array("files"), async (req, res) => {
+  try {
+    const files = req.files || [];
+    const sessionId = req.body?.sessionId || null;
 
-    const toLine = (x) => {
-      if (typeof x === "string") return x;
-      if (!x || typeof x !== "object") return String(x ?? "");
-      const sheet = x.sheet ? `[${x.sheet}] ` : "";
-      const col = x.column ? `${x.column}: ` : "";
-      const msg =
-        x.suggestion ??
-        x.warning ??
-        x.message ??
-        x.reason ??
-        "";
-      const line = `${sheet}${col}${msg}`.trim();
-      return line || JSON.stringify(x);
-    };
+    if (!files.length) {
+      return res.status(400).json({ error: "Aucun fichier." });
+    }
 
-    out.critical = (out.critical || []).map(toLine);
-    out.warnings = (out.warnings || []).map(toLine);
-    out.suggestions = (out.suggestions || []).map(toLine);
+    const items = [];
+    for (const f of files) {
+      const sapData = await extractSAPDataFromImages([f]);
 
-    res.json(out);
+      const { rows } = await pool.query(
+        `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, filename`,
+        [sessionId, f.originalname, f.mimetype, f.size, f.buffer, JSON.stringify(sapData.extracted)]
+      );
+
+      items.push({
+        id: rows[0].id,
+        filename: rows[0].filename,
+        extracted: sapData.extracted
+      });
+    }
+
+    res.json({ ok: true, items });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -1867,345 +1170,145 @@ Réponds JSON STRICT:
 });
 
 // -----------------------------------------------------------------------------
-// 10. UPLOAD ROUTES
+// 10. FILE MANAGEMENT ROUTES
 // -----------------------------------------------------------------------------
 
 app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "Aucun fichier." });
 
-    const analysisFull = buildDeepExcelAnalysis(
-      req.file.buffer,
-      req.file.originalname
-    );
-    const analysisLite = shrinkAnalysisForDB(analysisFull);
-
+    const analysis = buildDeepExcelAnalysis(req.file.buffer, req.file.originalname);
     const storedName = `${Date.now()}_${sanitizeName(req.file.originalname)}`;
-    const relPath = storedName;
 
     const { rows } = await pool.query(
-      `
-      INSERT INTO dcf_files
-        (filename, stored_name, path, mime, bytes, sheet_names, analysis, file_data)
-      VALUES
-        ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING id, filename, uploaded_at
-    `,
-      [
-        req.file.originalname,
-        storedName,
-        relPath,
-        req.file.mimetype,
-        req.file.size,
-        analysisFull.sheetNames,
-        analysisLite,
-        req.file.buffer
-      ]
+      `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename, uploaded_at`,
+      [req.file.originalname, storedName, req.file.mimetype, req.file.size, analysis.sheetNames, { ai_context: analysis.ai_context, sheets: analysis.sheets }, req.file.buffer]
     );
-
-    const fileId = rows[0].id;
-
-    await indexFileValues(fileId, analysisFull);
-    await indexEntityMemory(fileId, analysisFull);
 
     res.json({ ok: true, file: rows[0] });
   } catch (e) {
-    console.error(e);
     res.status(500).json({ error: e.message });
   }
 });
 
-app.post(
-  "/api/dcf/uploadExcelMulti",
-  upload.array("files"),
-  async (req, res) => {
-    try {
-      const files = req.files || [];
-      if (!files.length) {
-        return res.status(400).json({ error: "Aucun fichier." });
-      }
-
-      const out = [];
-      for (const f of files) {
-        const analysisFull = buildDeepExcelAnalysis(f.buffer, f.originalname);
-        const analysisLite = shrinkAnalysisForDB(analysisFull);
-
-        const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`;
-        const relPath = storedName;
-
-        const { rows } = await pool.query(
-          `
-          INSERT INTO dcf_files
-            (filename, stored_name, path, mime, bytes, sheet_names, analysis, file_data)
-          VALUES
-            ($1, $2, $3, $4, $5, $6, $7, $8)
-          RETURNING id, filename, uploaded_at
-        `,
-          [
-            f.originalname,
-            storedName,
-            relPath,
-            f.mimetype,
-            f.size,
-            analysisFull.sheetNames,
-            analysisLite,
-            f.buffer
-          ]
-        );
-
-        const fileId = rows[0].id;
-
-        await indexFileValues(fileId, analysisFull);
-        await indexEntityMemory(fileId, analysisFull);
-
-        out.push(rows[0]);
-      }
-
-      res.json({ ok: true, files: out });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
-    }
-  }
-);
-
-// -----------------------------------------------------------------------------
-// 11. SESSIONS
-// -----------------------------------------------------------------------------
-
-app.post("/api/dcf/startSession", async (req, res) => {
+app.post("/api/dcf/uploadExcelMulti", upload.array("files"), async (req, res) => {
   try {
-    const title = req.body?.title || "Session DCF";
-    const userEmail = getUserEmail(req);
+    const files = req.files || [];
+    if (!files.length) return res.status(400).json({ error: "Aucun fichier." });
 
-    const { rows } = await pool.query(
-      `
-      INSERT INTO dcf_sessions (title, created_by)
-      VALUES ($1, $2)
-      RETURNING id
-    `,
-      [title, userEmail]
-    );
+    const out = [];
+    for (const f of files) {
+      const analysis = buildDeepExcelAnalysis(f.buffer, f.originalname);
+      const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`;
 
-    res.json({ ok: true, sessionId: rows[0].id });
-  } catch (e) {
-    try {
-      const title = req.body?.title || "Session DCF";
       const { rows } = await pool.query(
-        `
-        INSERT INTO dcf_sessions (title)
-        VALUES ($1)
-        RETURNING id
-      `,
-        [title]
+        `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename, uploaded_at`,
+        [f.originalname, storedName, f.mimetype, f.size, analysis.sheetNames, { ai_context: analysis.ai_context, sheets: analysis.sheets }, f.buffer]
       );
-      return res.json({ ok: true, sessionId: rows[0].id });
-    } catch (e2) {
-      console.error(e2);
-      res.status(500).json({ error: e2.message });
-    }
-  }
-});
 
-app.get("/api/dcf/sessions", async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT * FROM dcf_sessions ORDER BY created_at DESC LIMIT 20`
-    );
-    res.json({ ok: true, sessions: rows });
+      out.push(rows[0]);
+    }
+
+    res.json({ ok: true, files: out });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
-
-// -----------------------------------------------------------------------------
-// 12. ATTACHMENTS (SAP screenshots)
-// -----------------------------------------------------------------------------
-
-app.post(
-  "/api/dcf/attachments/upload",
-  upload.array("files"),
-  async (req, res) => {
-    try {
-      const files = req.files || [];
-      const sessionId = req.body?.sessionId || null;
-
-      if (!files.length) {
-        return res.status(400).json({ error: "Aucun fichier image." });
-      }
-
-      const items = [];
-
-      for (const f of files) {
-        let extractedText = "";
-
-        try {
-          const b64 = f.buffer.toString("base64");
-          const completion = await openai.chat.completions.create({
-            model: VISION_MODEL,
-            messages: [
-              {
-                role: "system",
-                content:
-                  "Tu lis une capture SAP. Extrais les codes, ID opérations, numéros plan, équipements, functional location. Répond uniquement par le texte utile."
-              },
-              {
-                role: "user",
-                content: [
-                  { type: "text", text: "Lis cette capture SAP." },
-                  {
-                    type: "image_url",
-                    image_url: { url: `data:${f.mimetype};base64,${b64}` }
-                  }
-                ]
-              }
-            ],
-            temperature: 0.0
-          });
-
-          extractedText = completion.choices[0].message.content || "";
-        } catch {
-          extractedText = "";
-        }
-
-        const storedName = `${Date.now()}_${sanitizeName(f.originalname)}`;
-
-        const { rows } = await pool.query(
-          `
-          INSERT INTO dcf_attachments
-            (session_id, filename, stored_name, mime, bytes, file_data, extracted_text)
-          VALUES
-            ($1, $2, $3, $4, $5, $6, $7)
-          RETURNING id, filename
-        `,
-          [
-            sessionId,
-            f.originalname,
-            storedName,
-            f.mimetype,
-            f.size,
-            f.buffer,
-            extractedText
-          ]
-        );
-
-        items.push({
-          id: rows[0].id,
-          filename: rows[0].filename,
-          extracted_text: extractedText
-        });
-      }
-
-      res.json({ ok: true, items });
-    } catch (e) {
-      console.error(e);
-      res.status(500).json({ error: e.message });
-    }
-  }
-);
-
-// -----------------------------------------------------------------------------
-// 13. GENERIC CHAT
-// -----------------------------------------------------------------------------
-
-app.post("/api/dcf/chat", async (req, res) => {
-  try {
-    const completion = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: [
-        { role: "system", content: "Assistant SAP." },
-        { role: "user", content: req.body.message }
-      ]
-    });
-
-    res.json({
-      ok: true,
-      answer: completion.choices[0].message.content
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// -----------------------------------------------------------------------------
-// 14. FILES LIST + HEALTH
-// -----------------------------------------------------------------------------
 
 app.get("/api/dcf/files", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `
-      SELECT id, filename, uploaded_at
-      FROM dcf_files
-      WHERE file_data IS NOT NULL
-      ORDER BY uploaded_at DESC
-      LIMIT 50
-    `
+      `SELECT id, filename, uploaded_at FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT 50`
     );
-
     res.json({ ok: true, files: rows });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Download a stored template/file by id (blank template support)
 app.get("/api/dcf/files/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: "Invalid id" });
 
-    const { rows } = await pool.query(
-      "SELECT filename, mime, file_data FROM dcf_files WHERE id=$1",
-      [id]
-    );
+    const { rows } = await pool.query("SELECT filename, mime, file_data FROM dcf_files WHERE id=$1", [id]);
     if (!rows.length) return res.status(404).send("Not found");
 
     const f = rows[0];
     res.setHeader("Content-Type", f.mime || "application/octet-stream");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(f.filename)}"`
-    );
-    return res.send(f.file_data);
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(f.filename)}"`);
+    res.send(f.file_data);
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// ⚡ NOUVEAU : Route debug pour analyse Excel détaillée
 app.get("/api/dcf/files/:id/debug", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const { rows } = await pool.query(
-      "SELECT filename, file_data FROM dcf_files WHERE id=$1",
-      [id]
-    );
-    
+    const { rows } = await pool.query("SELECT filename, file_data FROM dcf_files WHERE id=$1", [id]);
+
     if (!rows.length) return res.status(404).json({ error: "File not found" });
-    
+
     const file = rows[0];
-    const fullAnalysis = buildDeepExcelAnalysis(file.file_data, file.filename);
-    
+    const analysis = buildDeepExcelAnalysis(file.file_data, file.filename);
+
     res.json({
       filename: file.filename,
-      sheets: fullAnalysis.sheets,
-      debug_logs: fullAnalysis.debug_info,
-      ai_context: fullAnalysis.ai_context
+      sheets: analysis.sheets,
+      ai_context: analysis.ai_context,
+      sample_values: analysis.extracted_values.slice(0, 50)
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.get("/api/dcf/health", (req, res) =>
-  res.json({ status: "ok", version: "7.5.0 Dropdown+Clarifications" })
-);
+// Référentiel Task List
+app.get("/api/dcf/reference/tasklists", (req, res) => {
+  res.json({
+    ok: true,
+    maintenance_plans: TASKLIST_REF?.maintenance_plans || [],
+    task_list_groups: TASKLIST_REF?.task_list_groups || []
+  });
+});
+
+app.get("/api/dcf/reference/plan/:planNumber", (req, res) => {
+  const info = findPlanInfo(req.params.planNumber);
+  if (!info) return res.status(404).json({ error: "Plan non trouvé dans le référentiel" });
+  res.json({ ok: true, plan: info });
+});
+
+// Chat générique
+app.post("/api/dcf/chat", async (req, res) => {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: ANSWER_MODEL,
+      messages: [
+        { role: "system", content: "Assistant SAP DCF expert." },
+        { role: "user", content: req.body.message }
+      ]
+    });
+    res.json({ ok: true, answer: completion.choices[0].message.content });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/dcf/health", (req, res) => {
+  res.json({
+    status: "ok",
+    version: "8.0.0",
+    features: ["vision_step1", "business_rules", "tasklist_reference", "editable_values"]
+  });
+});
 
 // -----------------------------------------------------------------------------
-// 15. START
+// 11. START
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v7.5.0] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v8.0.0] Backend démarré sur http://${HOST}:${PORT}`);
 });
