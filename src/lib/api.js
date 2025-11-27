@@ -1568,7 +1568,6 @@ export const api = {
     // Alias rétro-compatible
     validate: ({ fileIds, mode = "auto" }) => post("/api/dcf/validate", { fileIds, mode }),
   },
-};
 /** --- LEARN-EX (Formation ATEX Niveau 0) --- */
   learnEx: {
     health: () => get("/api/learn-ex/health"),
