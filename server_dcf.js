@@ -879,6 +879,7 @@ async function ensureMemoryTables() {
         id SERIAL PRIMARY KEY,
         session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
         filename TEXT NOT NULL,
+        stored_name TEXT,
         mime TEXT,
         bytes INT,
         file_data BYTEA,
@@ -910,6 +911,11 @@ async function ensureMemoryTables() {
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                        WHERE table_name = 'dcf_attachments' AND column_name = 'extracted_fields') THEN
           ALTER TABLE dcf_attachments ADD COLUMN extracted_fields JSONB DEFAULT '[]'::jsonb;
+        END IF;
+        
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_name = 'dcf_attachments' AND column_name = 'stored_name') THEN
+          ALTER TABLE dcf_attachments ADD COLUMN stored_name TEXT;
         END IF;
       END $$;
     `);
@@ -1023,10 +1029,13 @@ app.post("/api/dcf/startSession", async (req, res) => {
 // ÉTAPE 2: Analyse demande + screenshots → détection use case
 app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req, res) => {
   try {
-    const { sessionId, requestText } = req.body;
+    // CORRECTION : Récupération de message OU requestText pour gérer les deux formats frontend
+    const { sessionId, requestText, message } = req.body;
+    const textToAnalyze = requestText || message || "";
+    
     const screenshots = req.files || [];
 
-    console.log(`[analyze] Message: "${requestText?.substring(0, 100)}...", Screenshots: ${screenshots.length}`);
+    console.log(`[analyze] Message: "${textToAnalyze.substring(0, 100)}...", Screenshots: ${screenshots.length}`);
 
     // 1. Extraire données SAP des screenshots
     const sapData = await extractSAPDataFromImages(screenshots);
@@ -1035,10 +1044,13 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
     // 2. Sauvegarder les screenshots en base
     for (const ss of screenshots) {
       try {
+        // CORRECTION : Génération d'un stored_name pour satisfaire la contrainte NOT NULL
+        const storedName = `${Date.now()}_${sanitizeName(ss.originalname)}`;
+        
         await pool.query(
-          `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [sessionId, ss.originalname, ss.mimetype, ss.size, ss.buffer, JSON.stringify(sapData.extracted || [])]
+          `INSERT INTO dcf_attachments (session_id, filename, stored_name, mime, bytes, file_data, extracted_fields)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [sessionId, ss.originalname, storedName, ss.mimetype, ss.size, ss.buffer, JSON.stringify(sapData.extracted || [])]
         );
       } catch (dbErr) {
         console.log(`[analyze] Attachment save error: ${dbErr.message}`);
@@ -1046,13 +1058,15 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
     }
 
     // 3. Détecter le cas d'usage
-    const useCase = detectUseCase(requestText || "");
+    // CORRECTION : Utilisation de textToAnalyze au lieu de requestText qui était undefined
+    const useCase = detectUseCase(textToAnalyze);
     const useCaseInfo = USE_CASES[useCase] || USE_CASES.unknown;
     console.log(`[analyze] Use case: ${useCase}`);
 
     // 4. Chercher info dans référentiel
     let refInfo = "";
-    const planNumber = getSapValue(sapData, "WARPL") || requestText?.match(/(\d{7,8})/)?.[1];
+    // CORRECTION : Utilisation de textToAnalyze
+    const planNumber = getSapValue(sapData, "WARPL") || textToAnalyze.match(/(\d{7,8})/)?.[1];
     if (planNumber) {
       const planInfo = findPlanInfo(planNumber);
       if (planInfo) {
@@ -1096,7 +1110,8 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
     }
 
     // 7. Construire le contexte
-    const context = buildInstructionContext(sapData, useCase, requestText || "");
+    // CORRECTION : Utilisation de textToAnalyze
+    const context = buildInstructionContext(sapData, useCase, textToAnalyze);
 
     const response = {
       action: useCase,
