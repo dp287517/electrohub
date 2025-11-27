@@ -30,6 +30,19 @@ import {
 } from "react-icons/fa";
 
 /* ============================================================================
+   HELPER: Convert File to Data URL (CSP-safe alternative to blob URLs)
+============================================================================ */
+
+function fileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ============================================================================
    UI COMPONENTS
 ============================================================================ */
 
@@ -296,6 +309,69 @@ const ScreenshotUploadZone = ({ onUpload, loading, count = 0, compact = false })
 );
 
 /* ============================================================================
+   SCREENSHOT PREVIEW COMPONENT (uses data URLs instead of blob URLs)
+============================================================================ */
+
+const ScreenshotPreview = ({ screenshots, onRemove }) => {
+  const [previews, setPreviews] = useState([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPreviews = async () => {
+      const results = await Promise.all(
+        screenshots.map(async (file) => {
+          try {
+            const dataUrl = await fileToDataURL(file);
+            return { name: file.name, dataUrl };
+          } catch {
+            return { name: file.name, dataUrl: null };
+          }
+        })
+      );
+      if (!cancelled) {
+        setPreviews(results);
+      }
+    };
+
+    loadPreviews();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [screenshots]);
+
+  if (!previews.length) return null;
+
+  return (
+    <div className="mt-4 grid grid-cols-4 gap-2">
+      {previews.map((preview, i) => (
+        <div key={i} className="relative">
+          {preview.dataUrl ? (
+            <img
+              src={preview.dataUrl}
+              alt={preview.name}
+              className="w-full h-20 object-cover rounded border"
+            />
+          ) : (
+            <div className="w-full h-20 bg-gray-200 rounded border flex items-center justify-center">
+              <FaImage className="text-gray-400" />
+            </div>
+          )}
+          <button
+            onClick={() => onRemove(i)}
+            className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs hover:bg-red-600"
+          >
+            ×
+          </button>
+          <div className="text-[9px] text-gray-500 truncate mt-1">{preview.name}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+/* ============================================================================
    USE CASE EXPLANATION
 ============================================================================ */
 
@@ -528,6 +604,10 @@ export default function DCFWizardV8() {
     e.target.value = "";
   };
 
+  const removeStep1Screenshot = (index) => {
+    setStep1Screenshots((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleAnalyzeRequest = async () => {
     if (!requestText.trim()) return;
 
@@ -546,14 +626,22 @@ export default function DCFWizardV8() {
         method: "POST",
         body: fd,
         credentials: "include",
-      }).then((r) => r.json());
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || `HTTP ${res.status}`);
+      }
+      
+      const data = await res.json();
 
       if (!mountedRef.current) return;
 
-      setAnalysis(res);
-      setSapExtracted(res.sap_extracted || []);
+      setAnalysis(data);
+      setSapExtracted(data.sap_extracted || []);
       setStep(2);
     } catch (e) {
+      console.error("Analyze error:", e);
       notify("error", "Erreur analyse", e.message);
     } finally {
       setLoading(false);
@@ -610,13 +698,20 @@ export default function DCFWizardV8() {
         method: "POST",
         body: fd,
         credentials: "include",
-      }).then((r) => r.json());
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || `HTTP ${res.status}`);
+      }
+      
+      const data = await res.json();
 
       if (!mountedRef.current) return;
 
-      setInstructions(res.steps || []);
-      setMissingData(res.missing_data || []);
-      if (res.sap_extracted) setSapExtracted(res.sap_extracted);
+      setInstructions(data.steps || []);
+      setMissingData(data.missing_data || []);
+      if (data.sap_extracted) setSapExtracted(data.sap_extracted);
       notify("ok", "Captures analysées", `${files.length} nouvelle(s) capture(s)`);
     } catch (e2) {
       notify("error", "Erreur analyse image", e2.message);
@@ -624,6 +719,10 @@ export default function DCFWizardV8() {
       setLoading(false);
       e.target.value = "";
     }
+  };
+
+  const removeStep3Screenshot = (index) => {
+    setStep3Screenshots((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleAutofill = async () => {
@@ -784,26 +883,11 @@ export default function DCFWizardV8() {
           count={step1Screenshots.length}
         />
 
-        {/* Preview des screenshots */}
-        {step1Screenshots.length > 0 && (
-          <div className="mt-4 grid grid-cols-4 gap-2">
-            {step1Screenshots.map((f, i) => (
-              <div key={i} className="relative">
-                <img
-                  src={URL.createObjectURL(f)}
-                  alt={f.name}
-                  className="w-full h-20 object-cover rounded border"
-                />
-                <button
-                  onClick={() => setStep1Screenshots((prev) => prev.filter((_, idx) => idx !== i))}
-                  className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Preview des screenshots avec data URLs */}
+        <ScreenshotPreview 
+          screenshots={step1Screenshots} 
+          onRemove={removeStep1Screenshot} 
+        />
 
         <div className="flex justify-between items-center mt-4">
           <div className="text-xs text-gray-400 flex items-center gap-1">
@@ -1072,7 +1156,13 @@ export default function DCFWizardV8() {
                 {step3Screenshots.map((s, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs text-gray-700 bg-white p-2 rounded border">
                     <FaCheckCircle className="text-green-500" />
-                    <span className="truncate">{s.name}</span>
+                    <span className="truncate flex-1">{s.name}</span>
+                    <button 
+                      onClick={() => removeStep3Screenshot(i)}
+                      className="text-red-400 hover:text-red-600"
+                    >
+                      <FaTrash size={10} />
+                    </button>
                   </div>
                 ))}
               </div>
