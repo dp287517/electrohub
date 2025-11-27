@@ -1,14 +1,12 @@
-// server_dcf.js — Assistant DCF SAP v8.0.1
-// REFONTE COMPLÈTE basée sur documentation métier
-// FIX: CSP pour blob URLs + meilleure gestion erreurs
-//
-// Nouveautés v8:
-// - Upload images SAP dès l'étape 1 (analyse préliminaire)
-// - Logique métier stricte (TL/PM/EQPT combinaisons)
-// - Mapping colonnes précis par type de DCF
-// - Référentiel Task List intégré
-// - Édition des valeurs step 3
-// - Validation scope-aware améliorée
+// server_dcf.js — Assistant DCF SAP v9.0.0
+// =============================================================================
+// REFONTE COMPLÈTE avec corrections:
+// - Fix colonnes DB manquantes (extracted_fields, use_case)
+// - Extraction Vision améliorée (opérations existantes, work center, type travail)
+// - Calcul automatique prochain N° opération
+// - Mapping colonnes précis par type DCF (basé sur documentation Word)
+// - Logique métier stricte TL/PM/EQPT
+// =============================================================================
 
 import express from "express";
 import cors from "cors";
@@ -23,11 +21,11 @@ import path from "path";
 
 dotenv.config();
 
-// -----------------------------------------------------------------------------
-// 0. CONFIG
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 0. CONFIGURATION
+// =============================================================================
 
-const HOST = process.env.DCF_HOST || "127.0.0.1";
+const HOST = process.env.DCF_HOST || "0.0.0.0";
 const PORT = Number(process.env.DCF_PORT || 3030);
 
 const DATABASE_URL = process.env.NEON_DATABASE_URL || process.env.DATABASE_URL;
@@ -50,16 +48,13 @@ const TASKLIST_REF_PATH = process.env.DCF_TASKLIST_REF_PATH || path.join(process
 // Limites
 const MAX_FILES_LIBRARY = 50;
 const MAX_CONTEXT_CHARS = 15000;
-const MAX_ATTACHMENT_TEXT = 8000;
-const MAX_MEMORY_HINTS = 50;
 
-// -----------------------------------------------------------------------------
-// 1. EXPRESS SETUP avec CSP corrigé pour blob: URLs
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 1. EXPRESS APP SETUP
+// =============================================================================
 
 const app = express();
 
-// Configuration Helmet avec CSP permissive pour blob:
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -67,12 +62,11 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", "data:", "blob:"],
-      connectSrc: ["'self'", "https://api.openai.com", "https://*.openai.com"],
+      connectSrc: ["'self'", "https://api.openai.com"],
       fontSrc: ["'self'", "data:"],
       objectSrc: ["'none'"],
-      mediaSrc: ["'self'", "blob:"],
+      mediaSrc: ["'self'"],
       frameSrc: ["'self'"],
-      workerSrc: ["'self'", "blob:"],
     }
   },
   crossOriginEmbedderPolicy: false,
@@ -82,592 +76,751 @@ app.use(helmet({
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "30mb" }));
 
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 30 * 1024 * 1024 }
-});
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
 
-// -----------------------------------------------------------------------------
-// 2. BUSINESS LOGIC - RÈGLES MÉTIER DCF
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 2. MAPPING COLONNES DCF PAR TYPE (basé sur documentation Word)
+// =============================================================================
 
-/**
- * LOGIQUE MÉTIER STRICTE basée sur la documentation
- * 
- * | Cas d'usage                          | DCF requis           |
- * |--------------------------------------|----------------------|
- * | Modifier opération existante (IP18)  | TL (Change)          |
- * | Ajouter opération sur plan existant  | TL (Create)          |
- * | Ajouter équipement dans plan existant| PM (Change) + EQPT   |
- * | Modifier équipement seul             | EQPT (Change)        |
- * | Créer nouveau plan complet           | TL + PM (Create)     |
- * | Affecter équipement à plan existant  | PM (Change) + TL     |
- * | Supprimer opération                  | TL (Delete)          |
- * | Supprimer plan                       | PM (Delete) + TL     |
- */
-
-const BUSINESS_RULES = {
-  // Colonnes obligatoires par type de DCF et action
+const DCF_COLUMNS = {
+  // -------------------------------------------------------------------------
+  // DCF TASK LIST
+  // -------------------------------------------------------------------------
   TASK_LIST: {
-    MODIFY_OPERATION: {
+    // Modifier une opération existante (IP18)
+    CHANGE_OPERATION: {
       action: "Change",
+      description: "Modifier une opération existante sur un plan (IP18)",
       columns: {
-        I: { code: "ACTION", value: "Change", mandatory: true },
+        I: { code: "ACTION", value: "Change", label: "Action SAP", mandatory: true },
         N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true },
         P: { code: "PLNAL", label: "Counter (1, 2, 3...)", mandatory: true },
-        Q: { code: "KTEXT", label: "Nom du plan", mandatory: false },
+        Q: { code: "KTEXT", label: "Nom du plan de maintenance", mandatory: false },
+        R: { code: "LTXA2", label: "Long text", mandatory: false },
+        T: { code: "ARBPL", label: "Work Center / Groupe", mandatory: true },
+        X: { code: "SYSTC", label: "Intrusive (I) / Non-intrusive (N)", mandatory: false },
         AG: { code: "VORNR", label: "N° Opération (10, 20, 30...)", mandatory: true },
         AJ: { code: "LTXA1", label: "Short Text (40 chars max)", mandatory: false },
-        AK: { code: "LTXA2", label: "Long Text", mandatory: false },
-        AL: { code: "DAESSION", label: "Temps passé", mandatory: false },
-        AN: { code: "ARBPL", label: "Nb personnes", mandatory: false },
-        X: { code: "SYSTC", label: "Intrusive/Non-intrusive", mandatory: false }
+        AK: { code: "LTXA2_OP", label: "Long text opération", mandatory: false },
+        AL: { code: "DAESSION", label: "Temps passé / Durée", mandatory: false },
+        AN: { code: "ANZMA", label: "Nombre de personnes", mandatory: false }
       }
     },
+    
+    // Créer une nouvelle opération sur plan existant
     CREATE_OPERATION: {
       action: "Create",
+      description: "Ajouter une nouvelle opération sur un plan existant (IP18)",
       columns: {
-        I: { code: "ACTION", value: "Create", mandatory: true },
+        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true },
         N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true },
-        P: { code: "PLNAL", label: "Counter", mandatory: true },
-        Q: { code: "KTEXT", label: "Nom du plan", mandatory: true },
-        T: { code: "ARBPL", label: "Work Center", mandatory: true },
-        X: { code: "SYSTC", label: "System Condition", mandatory: true },
-        AG: { code: "VORNR", label: "N° Opération", mandatory: true },
-        AJ: { code: "LTXA1", label: "Short Text (40 max)", mandatory: true },
-        AK: { code: "LTXA2", label: "Long Text", mandatory: false },
-        AL: { code: "DAESSION", label: "Durée", mandatory: true },
-        AN: { code: "ANZMA", label: "Nb personnes", mandatory: true },
-        AV: { code: "SYSTC2", label: "System Condition", mandatory: false }
+        P: { code: "PLNAL", label: "Counter (1, 2, 3...)", mandatory: true },
+        Q: { code: "KTEXT", label: "Nom du plan de maintenance", mandatory: true },
+        R: { code: "LTXA2", label: "Long text", mandatory: false },
+        T: { code: "ARBPL", label: "Work Center / Groupe", mandatory: true },
+        X: { code: "SYSTC", label: "Intrusive (I) / Non-intrusive (N)", mandatory: true },
+        AG: { code: "VORNR", label: "N° Opération (10, 20, 30...)", mandatory: true },
+        AJ: { code: "LTXA1", label: "Short Text (40 chars max)", mandatory: true },
+        AK: { code: "LTXA2_OP", label: "Long text opération", mandatory: false },
+        AL: { code: "DAESSION", label: "Temps passé / Durée", mandatory: true },
+        AN: { code: "ANZMA", label: "Nombre de personnes", mandatory: false },
+        AV: { code: "SYSTC2", label: "Intrusive (I) / Non-intrusive (N)", mandatory: false }
       }
     },
+    
+    // Supprimer une opération
     DELETE_OPERATION: {
       action: "Delete",
+      description: "Supprimer une opération",
       columns: {
-        I: { code: "ACTION", value: "Delete", mandatory: true },
+        I: { code: "ACTION", value: "Delete", label: "Action SAP", mandatory: true },
         N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true },
         P: { code: "PLNAL", label: "Counter", mandatory: true },
-        AG: { code: "VORNR", label: "N° Opération", mandatory: true }
+        AG: { code: "VORNR", label: "N° Opération à supprimer", mandatory: true }
       }
     }
   },
 
+  // -------------------------------------------------------------------------
+  // DCF MAINTENANCE PLAN (PM)
+  // -------------------------------------------------------------------------
   MAINTENANCE_PLAN: {
+    // Modifier un plan existant (pour ajouter équipement)
     CHANGE_PLAN: {
       action: "Change",
+      description: "Modifier un plan de maintenance existant",
       columns: {
-        I: { code: "ACTION", value: "Change", mandatory: true },
-        J: { code: "WARPL", label: "N° Plan maintenance", mandatory: true },
-        W: { code: "ACTION_ITEM", label: "Action Item", mandatory: false }
+        I: { code: "ACTION", value: "Change", label: "Action SAP", mandatory: true },
+        J: { code: "WARPL", label: "N° Plan de maintenance", mandatory: true },
+        W: { code: "ACTION_ITEM", label: "Action Item (Create pour nouvel équipement)", mandatory: false }
       }
     },
+    
+    // Créer un nouveau plan
     CREATE_PLAN: {
       action: "Create",
+      description: "Créer un nouveau plan de maintenance",
       columns: {
-        I: { code: "ACTION", value: "Create", mandatory: true },
+        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true },
+        E: { code: "STRAT", label: "Stratégie", mandatory: false },
         Q: { code: "WPTXT", label: "Nom du plan", mandatory: true },
         S: { code: "ZYKL1", label: "Cycle (1=année, 12=mois)", mandatory: true },
-        U: { code: "ZYTXT", label: "Texte cycle", mandatory: false },
-        AA: { code: "TPLNR_EQUNR", label: "FL ou Equipment", mandatory: true },
-        AE: { code: "AUART", label: "Type maintenance", mandatory: true },
-        AF: { code: "GEWRK", label: "Main Work Center", mandatory: true },
-        AH: { code: "INGRP", label: "Maint Plan Group", mandatory: true },
-        AI: { code: "ILART", label: "Maint Activity Type", mandatory: true },
-        AJ: { code: "PLNNR", label: "Task List Group ref", mandatory: true },
-        BC: { code: "GSTRP", label: "Start Date", mandatory: true }
+        U: { code: "ZYKLTEXT", label: "Texte cycle (ex: tous les 2 ans)", mandatory: false },
+        AA: { code: "TPLNR", label: "Functional Location ou Equipment", mandatory: true },
+        AE: { code: "INGRP", label: "Type de maintenance", mandatory: false },
+        AJ: { code: "PLNNR_REF", label: "Nom Task List associée", mandatory: true },
+        BC: { code: "NESSION", label: "Date premier WO (date - cycle)", mandatory: false }
       }
     },
-    ADD_EQUIPMENT_TO_PLAN: {
-      action: "Change",
+    
+    // Supprimer un plan
+    DELETE_PLAN: {
+      action: "Delete",
+      description: "Supprimer un plan de maintenance",
       columns: {
-        I: { code: "ACTION", value: "Change", mandatory: true },
-        J: { code: "WARPL", label: "N° Plan maintenance", mandatory: true },
-        W: { code: "ACTION_ITEM", value: "Create", mandatory: true }
-        // + colonnes pour identifier l'équipement
+        I: { code: "ACTION", value: "Delete", label: "Action SAP", mandatory: true },
+        J: { code: "WARPL", label: "N° Plan à supprimer", mandatory: true }
       }
     }
   },
 
+  // -------------------------------------------------------------------------
+  // DCF EQUIPMENT (EQPT)
+  // -------------------------------------------------------------------------
   EQUIPMENT: {
-    CREATE: {
+    // Créer un nouvel équipement
+    CREATE_EQUIPMENT: {
       action: "Create",
+      description: "Créer un nouvel équipement",
       columns: {
-        I: { code: "ACTION", value: "Create", mandatory: true },
-        O: { code: "EQTYP", label: "Object Type/Criticité", mandatory: true },
-        P: { code: "SSTAT", label: "Status (ISER)", value: "ISER", mandatory: true },
-        Y: { code: "HERST", label: "Manufacturer", mandatory: true },
-        AA: { code: "TYPBZ", label: "Model Number", mandatory: true },
-        AD: { code: "SERGE", label: "Serial Number", mandatory: true },
-        AH: { code: "BEESSION", label: "Plant Section", mandatory: true },
-        AJ: { code: "ABESSION", label: "ABC Indicator", mandatory: true },
-        AM: { code: "KOSTL", label: "Cost Center", mandatory: true },
-        AP: { code: "INGRP", label: "Planner Group", mandatory: true },
-        AQ: { code: "GEWRK", label: "Main Work Center", mandatory: true },
+        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true },
+        O: { code: "KRIT", label: "Criticité (toujours la plus haute)", mandatory: true },
+        P: { code: "USTATUS", label: "Statut (ISER = en service)", mandatory: true, value: "ISER" },
+        Y: { code: "HERST", label: "Manufacturer", mandatory: false },
+        AA: { code: "TYPBZ", label: "Model number", mandatory: false },
+        AD: { code: "SERGE", label: "Serial Number", mandatory: false },
+        AH: { code: "EQART", label: "Plan section", mandatory: true },
+        AJ: { code: "ABCKZ", label: "ABC Indicator", mandatory: true },
+        AM: { code: "KOSTL", label: "Cost center", mandatory: true },
+        AP: { code: "INGRP", label: "Service", mandatory: true },
+        AQ: { code: "SWERK", label: "Site", mandatory: true },
         AR: { code: "TPLNR", label: "Functional Location", mandatory: true },
-        AT: { code: "BAESSION", label: "Construction Type", value: "Next", mandatory: false },
-        AW: { code: "MAESSION", label: "Grouping Key", value: "PRT6", mandatory: false },
-        BD: { code: "KLESSION", label: "Class", mandatory: true }
+        AT: { code: "SUBMESSION", label: "Mettre Next", mandatory: false, value: "Next" },
+        AW: { code: "GRESSION", label: "Grouping key (PRT6 = General equipment)", mandatory: true, value: "PRT6" },
+        BD: { code: "EQTYP", label: "Type d'équipement", mandatory: false }
       }
     },
-    CHANGE: {
+    
+    // Modifier un équipement
+    CHANGE_EQUIPMENT: {
       action: "Change",
+      description: "Modifier un équipement existant",
       columns: {
-        I: { code: "ACTION", value: "Change", mandatory: true },
-        J: { code: "EQUNR", label: "N° Equipment", mandatory: true }
-        // Seules les colonnes modifiées sont requises
+        I: { code: "ACTION", value: "Change", label: "Action SAP", mandatory: true },
+        J: { code: "EQUNR", label: "N° Équipement", mandatory: true }
+        // + colonnes à modifier selon besoin
       }
     }
   }
 };
 
-// Mapping USE CASE -> DCF requis
-const USE_CASE_MAPPING = {
-  "modify_operation": {
+// =============================================================================
+// 3. LOGIQUE MÉTIER: CAS D'USAGE → DCF REQUIS
+// =============================================================================
+
+const USE_CASES = {
+  // Opérations sur Task List
+  change_operation: {
     description: "Modifier une opération existante (IP18)",
     dcf_required: ["TASK_LIST"],
-    rules: ["TASK_LIST.MODIFY_OPERATION"]
+    dcf_actions: { TASK_LIST: "CHANGE_OPERATION" }
   },
-  "create_operation": {
-    description: "Ajouter une opération sur un plan existant",
+  create_operation: {
+    description: "Ajouter une nouvelle opération sur un plan existant",
     dcf_required: ["TASK_LIST"],
-    rules: ["TASK_LIST.CREATE_OPERATION"]
+    dcf_actions: { TASK_LIST: "CREATE_OPERATION" }
   },
-  "add_equipment_to_plan": {
-    description: "Ajouter un équipement dans un plan existant",
-    dcf_required: ["MAINTENANCE_PLAN", "EQUIPMENT"],
-    rules: ["MAINTENANCE_PLAN.ADD_EQUIPMENT_TO_PLAN", "EQUIPMENT.CREATE"]
-  },
-  "modify_equipment": {
-    description: "Modifier un équipement uniquement",
-    dcf_required: ["EQUIPMENT"],
-    rules: ["EQUIPMENT.CHANGE"]
-  },
-  "create_plan": {
-    description: "Créer un nouveau plan de maintenance complet",
-    dcf_required: ["TASK_LIST", "MAINTENANCE_PLAN"],
-    rules: ["TASK_LIST.CREATE_OPERATION", "MAINTENANCE_PLAN.CREATE_PLAN"]
-  },
-  "assign_equipment_existing_plan": {
-    description: "Affecter un équipement à un plan existant",
-    dcf_required: ["TASK_LIST", "MAINTENANCE_PLAN"],
-    rules: ["TASK_LIST.MODIFY_OPERATION", "MAINTENANCE_PLAN.CHANGE_PLAN"]
-  },
-  "delete_operation": {
+  delete_operation: {
     description: "Supprimer une opération",
     dcf_required: ["TASK_LIST"],
-    rules: ["TASK_LIST.DELETE_OPERATION"]
+    dcf_actions: { TASK_LIST: "DELETE_OPERATION" }
   },
-  "delete_plan": {
-    description: "Supprimer un plan de maintenance",
+  
+  // Plans de maintenance
+  create_plan: {
+    description: "Créer un nouveau plan de maintenance complet",
     dcf_required: ["TASK_LIST", "MAINTENANCE_PLAN"],
-    rules: ["TASK_LIST.DELETE_OPERATION", "MAINTENANCE_PLAN.CHANGE_PLAN"]
+    dcf_actions: { TASK_LIST: "CREATE_OPERATION", MAINTENANCE_PLAN: "CREATE_PLAN" }
+  },
+  change_plan: {
+    description: "Modifier un plan de maintenance",
+    dcf_required: ["MAINTENANCE_PLAN"],
+    dcf_actions: { MAINTENANCE_PLAN: "CHANGE_PLAN" }
+  },
+  delete_plan: {
+    description: "Supprimer un plan de maintenance",
+    dcf_required: ["MAINTENANCE_PLAN"],
+    dcf_actions: { MAINTENANCE_PLAN: "DELETE_PLAN" }
+  },
+  
+  // Équipements
+  add_equipment_to_plan: {
+    description: "Ajouter un équipement dans un plan existant",
+    dcf_required: ["MAINTENANCE_PLAN", "EQUIPMENT"],
+    dcf_actions: { MAINTENANCE_PLAN: "CHANGE_PLAN", EQUIPMENT: "CREATE_EQUIPMENT" }
+  },
+  create_equipment: {
+    description: "Créer un nouvel équipement",
+    dcf_required: ["EQUIPMENT"],
+    dcf_actions: { EQUIPMENT: "CREATE_EQUIPMENT" }
+  },
+  change_equipment: {
+    description: "Modifier un équipement existant",
+    dcf_required: ["EQUIPMENT"],
+    dcf_actions: { EQUIPMENT: "CHANGE_EQUIPMENT" }
+  },
+  
+  // Fallback
+  unknown: {
+    description: "Action non reconnue - assistance manuelle",
+    dcf_required: [],
+    dcf_actions: {}
   }
 };
 
-// -----------------------------------------------------------------------------
-// 3. HELPERS
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 4. DÉTECTION DU CAS D'USAGE
+// =============================================================================
 
-function cleanJSON(text = "") {
-  try {
-    const cleaned = text.trim().replace(/```json/gi, "").replace(/```/g, "");
-    return JSON.parse(cleaned);
-  } catch {
-    return { error: "Invalid JSON", raw: text };
-  }
-}
-
-function sanitizeName(name = "") {
-  return String(name).replace(/[^\w.\-]+/g, "_");
-}
-
-function clampStr(s, n) {
-  return String(s ?? "").slice(0, n);
-}
-
-function columnIndexToLetter(idx) {
-  let n = idx + 1;
-  let s = "";
-  while (n > 0) {
-    const r = ((n - 1) % 26) + 65;
-    s = String.fromCharCode(r) + s;
-    n = Math.floor((n - 1) / 26);
-  }
-  return s;
-}
-
-function letterToIndex(letter) {
-  let n = 0;
-  const s = String(letter || "").toUpperCase().trim();
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i) - 64;
-    if (c < 1 || c > 26) continue;
-    n = n * 26 + c;
-  }
-  return n - 1;
-}
-
-// Détection du use case depuis le texte
-function detectUseCase(text = "") {
-  const m = String(text).toLowerCase();
-
+function detectUseCase(message) {
+  const m = message.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  
   // Suppression
-  if (/(supprimer|delete|retirer|désactiver).*(plan|opération|operation)/.test(m)) {
-    if (/plan/.test(m)) return "delete_plan";
+  if (/(supprimer|delete|retirer|enlever).*(operation|opération)/.test(m)) {
     return "delete_operation";
   }
-
+  if (/(supprimer|delete|retirer|enlever).*(plan|maintenance)/.test(m)) {
+    return "delete_plan";
+  }
+  
+  // Création opération sur plan existant
+  if (/(ajouter|creer|créer|nouvelle|nouveau|add|create).*(operation|opération).*(plan|maintenance|existant)/.test(m)) {
+    return "create_operation";
+  }
+  if (/(ajouter|creer|créer|nouvelle|nouveau).*(operation|opération)/.test(m)) {
+    return "create_operation";
+  }
+  
+  // Modification opération
+  if (/(modifier|changer|change|update|modif).*(operation|opération)/.test(m)) {
+    return "change_operation";
+  }
+  
   // Création plan complet
-  if (/(créer|creer|nouveau|nouvelle).*(plan|maintenance plan)/.test(m) && !/(existant|exist)/.test(m)) {
+  if (/(creer|créer|nouveau|nouvelle|create).*(plan).*(maintenance|complet)/.test(m)) {
     return "create_plan";
   }
-
-  // Ajout opération sur plan existant
-  if (/(ajout|ajouter|rajouter|créer|creer|insert).*(opération|operation|contrôle|controle|inspection|check|vérif)/.test(m)) {
-    if (/(plan|existant|exist|ip18)/.test(m)) return "create_operation";
+  if (/(creer|créer|nouveau|nouvelle).*(plan)/.test(m)) {
+    return "create_plan";
   }
-
-  // Modification opération
-  if (/(modif|modifier|changer|update).*(opération|operation|contrôle|controle)/.test(m)) {
-    return "modify_operation";
+  
+  // Modification plan
+  if (/(modifier|changer|change).*(plan)/.test(m)) {
+    return "change_plan";
   }
-
-  // Ajout équipement dans plan
-  if (/(ajout|ajouter).*(équipement|equipement).*(plan)/.test(m)) {
+  
+  // Équipements
+  if (/(ajouter|affecter|rattacher|associer).*(equipement|équipement).*(plan)/.test(m)) {
     return "add_equipment_to_plan";
   }
-
-  // Modification équipement seul
-  if (/(modif|modifier|changer).*(équipement|equipement)/.test(m)) {
-    return "modify_equipment";
+  if (/(creer|créer|nouveau|nouvelle|create).*(equipement|équipement)/.test(m)) {
+    return "create_equipment";
   }
-
-  // Affectation équipement à plan existant
-  if (/(affecter|rattacher|associer).*(équipement|equipement).*(plan)/.test(m)) {
-    return "assign_equipment_existing_plan";
+  if (/(modifier|changer|change).*(equipement|équipement)/.test(m)) {
+    return "change_equipment";
   }
-
+  
   return "unknown";
 }
 
-// -----------------------------------------------------------------------------
-// 4. VISION - EXTRACTION SAP (avec gestion d'erreurs améliorée)
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 5. EXTRACTION VISION SAP AMÉLIORÉE
+// =============================================================================
+
+const VISION_PROMPT = `Tu es un expert SAP PM/PM. Extrais TOUTES les données visibles dans cette capture SAP.
+
+EXTRAIS SPÉCIFIQUEMENT:
+
+1. IDENTIFIANTS PRINCIPAUX:
+- N° Plan de maintenance (WARPL): 8 chiffres, ex: 30482333, 40052643
+- N° Groupe Task List (PLNNR): ex: CH940104, 20036344
+- N° Ordre (AUFNR): ex: 4097131
+- N° Equipment (EQUNR): 10 chiffres, ex: 1000012345
+- Functional Location (TPLNR): ex: CH94-UIN-EAUIND
+
+2. LISTE DES OPÉRATIONS EXISTANTES (CRITIQUE):
+Si tu vois un tableau d'opérations, extrais CHAQUE ligne avec:
+- N° Opération (Opé.): 0010, 0020, 0030...
+- Position travail / Work Center: FMEXUTIL, FMMANAGE, FMEXMAINT...
+- Description de l'opération
+- Division (CH94, etc.)
+
+3. DONNÉES DE PLANIFICATION:
+- Type d'ordre: ZM02, ZM01...
+- Division planification (Div. planif.): CH94
+- PosteTravPrinc (Work Center principal): FMMANAGE, etc.
+- Type de travail (VAGR): P1, P2, P3...
+- Groupe gamme (Groupe gamme): CH940104
+- Counter: 1, 2, 3...
+- Priorité: 1-haut, 2, 3, 4-bas
+
+4. AUTRES DONNÉES:
+- Nom/Description du plan
+- Short Text / Long Text
+- Durées, temps
+- Nombres de personnes
+- Intrusive (I) / Non-intrusive (N)
+- Statuts système
+
+Réponds UNIQUEMENT en JSON valide:
+{
+  "extracted_fields": [
+    {"code": "WARPL", "value": "30482333", "label": "N° Plan maintenance", "confidence": "high"},
+    {"code": "PLNNR", "value": "CH940104", "label": "N° Groupe Task List", "confidence": "high"},
+    {"code": "AUFNR", "value": "4097131", "label": "N° Ordre", "confidence": "high"},
+    {"code": "MAIN_WORK_CENTER", "value": "FMMANAGE", "label": "Work Center principal", "confidence": "high"},
+    {"code": "WORK_TYPE", "value": "P2", "label": "Type de travail", "confidence": "high"}
+  ],
+  "existing_operations": [
+    {"number": "0010", "work_center": "FMEXUTIL", "description": "VIDANGER LES FOSSES A GRAISSES", "division": "CH94"},
+    {"number": "0020", "work_center": "FMMANAGE", "description": "Envoi des bons de destruction à la DGE", "division": "CH94"}
+  ],
+  "plan_name": "Nettoyage EI B20-B23 - #50193+51157",
+  "raw_text": "texte brut visible si pertinent"
+}`;
 
 async function extractSAPDataFromImages(images = []) {
-  if (!images.length) return { extracted: [], raw_texts: [] };
-
-  // Vérifier la clé API OpenAI
-  if (!process.env.OPENAI_API_KEY) {
-    console.warn("⚠️ OPENAI_API_KEY manquante - Vision désactivée");
-    return { extracted: [], raw_texts: [], warning: "Vision API non configurée" };
+  if (!images.length) {
+    return { extracted: [], existing_operations: [], raw_texts: [] };
   }
 
-  const results = [];
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("⚠️ OPENAI_API_KEY manquante - Vision désactivée");
+    return { extracted: [], existing_operations: [], raw_texts: [], warning: "Vision API non configurée" };
+  }
+
+  const allExtracted = [];
+  const allOperations = [];
   const rawTexts = [];
+  let planName = null;
 
   for (const img of images) {
     try {
-      // Gérer les différents formats d'image
       let b64, mime;
       
       if (img.buffer) {
-        // Fichier uploadé via multer
         b64 = img.buffer.toString("base64");
         mime = img.mimetype || "image/png";
       } else if (typeof img === "string") {
         // Déjà en base64
-        b64 = img;
-        mime = "image/png";
+        if (img.startsWith("data:")) {
+          const match = img.match(/^data:([^;]+);base64,(.+)$/);
+          if (match) {
+            mime = match[1];
+            b64 = match[2];
+          } else {
+            continue;
+          }
+        } else {
+          b64 = img;
+          mime = "image/png";
+        }
       } else {
         console.warn("Format d'image non supporté:", typeof img);
         continue;
       }
 
+      console.log(`[Vision] Analyse image (${mime}, ${b64.length} chars base64)...`);
+
       const completion = await openai.chat.completions.create({
         model: VISION_MODEL,
         messages: [
-          {
-            role: "system",
-            content: `Tu es un expert SAP. Extrais TOUS les codes et valeurs visibles dans cette capture SAP.
-
-CHERCHE SPÉCIFIQUEMENT:
-- Numéros de plan (WARPL): 8 chiffres ex: 40052643
-- Numéros Task List Group (PLNNR): ex: 20036344, CH940XXX
-- Counter Group: 1, 2, 3...
-- N° Opération: 10, 20, 30...
-- N° Equipment: 10XXXXXXX
-- Functional Location: CH94-XXXX
-- Short Text / Description
-- Work Center: FMXXXXXX, INXXXXX
-- Dates, durées, nombres de personnes
-- Criticité, Status
-
-Réponds en JSON:
-{
-  "extracted_fields": [
-    {"code": "WARPL", "value": "40052643", "confidence": "high"},
-    {"code": "PLNNR", "value": "20036344", "confidence": "high"}
-  ],
-  "raw_text": "texte brut visible"
-}`
-          },
+          { role: "system", content: VISION_PROMPT },
           {
             role: "user",
             content: [
-              { type: "text", text: "Extrais toutes les données SAP de cette capture." },
+              { type: "text", text: "Extrais toutes les données SAP de cette capture. Fais particulièrement attention aux opérations existantes et au Work Center principal." },
               { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }
             ]
           }
         ],
         response_format: { type: "json_object" },
         temperature: 0.0,
-        max_tokens: 1000
+        max_tokens: 2000
       });
 
-      const parsed = cleanJSON(completion.choices[0].message.content);
-      if (parsed.extracted_fields) {
-        results.push(...parsed.extracted_fields);
+      const content = completion.choices[0].message.content;
+      console.log(`[Vision] Réponse brute: ${content.substring(0, 200)}...`);
+      
+      const parsed = cleanJSON(content);
+      
+      if (parsed.extracted_fields && Array.isArray(parsed.extracted_fields)) {
+        allExtracted.push(...parsed.extracted_fields);
+      }
+      if (parsed.existing_operations && Array.isArray(parsed.existing_operations)) {
+        allOperations.push(...parsed.existing_operations);
+      }
+      if (parsed.plan_name) {
+        planName = parsed.plan_name;
       }
       if (parsed.raw_text) {
         rawTexts.push(parsed.raw_text);
       }
     } catch (e) {
-      console.error("Vision error:", e.message);
-      // Continuer avec les autres images
+      console.error("[Vision] Erreur:", e.message);
     }
   }
 
-  return { extracted: results, raw_texts: rawTexts };
+  // Dédupliquer les opérations par numéro
+  const uniqueOps = [];
+  const seenOps = new Set();
+  for (const op of allOperations) {
+    const key = op.number || op.vornr;
+    if (key && !seenOps.has(key)) {
+      seenOps.add(key);
+      uniqueOps.push(op);
+    }
+  }
+
+  // Trier par numéro d'opération
+  uniqueOps.sort((a, b) => {
+    const numA = parseInt(a.number || a.vornr || "0", 10);
+    const numB = parseInt(b.number || b.vornr || "0", 10);
+    return numA - numB;
+  });
+
+  console.log(`[Vision] Extraction terminée: ${allExtracted.length} champs, ${uniqueOps.length} opérations`);
+
+  return { 
+    extracted: allExtracted, 
+    existing_operations: uniqueOps,
+    plan_name: planName,
+    raw_texts: rawTexts 
+  };
 }
 
-// -----------------------------------------------------------------------------
-// 5. TASK LIST REFERENCE
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 6. FONCTIONS UTILITAIRES POUR LES VALEURS CONTEXTUELLES
+// =============================================================================
+
+/**
+ * Calcule le prochain numéro d'opération basé sur les opérations existantes
+ */
+function calculateNextOperationNumber(existingOperations = []) {
+  if (!existingOperations || !existingOperations.length) return "10";
+  
+  const numbers = existingOperations
+    .map(op => {
+      const num = op.number || op.vornr || "0";
+      return parseInt(String(num).replace(/^0+/, ""), 10);
+    })
+    .filter(n => !isNaN(n) && n > 0);
+  
+  if (!numbers.length) return "10";
+  
+  const maxOp = Math.max(...numbers);
+  // Arrondir au multiple de 10 supérieur
+  const nextOp = Math.ceil((maxOp + 1) / 10) * 10;
+  
+  return String(nextOp);
+}
+
+/**
+ * Détermine le Work Center approprié basé sur les données extraites
+ */
+function determineWorkCenter(sapData) {
+  // Priorité 1: Work Center principal (PosteTravPrinc)
+  const mainWC = sapData.extracted?.find(e => 
+    e.code === "MAIN_WORK_CENTER" || e.code === "ARBPL_MAIN" || e.code === "PosteTravPrinc"
+  );
+  if (mainWC?.value) return mainWC.value;
+  
+  // Priorité 2: Le plus fréquent dans les opérations existantes
+  const ops = sapData.existing_operations || [];
+  if (ops.length) {
+    const wcCounts = {};
+    ops.forEach(op => {
+      const wc = op.work_center || op.arbpl;
+      if (wc) {
+        wcCounts[wc] = (wcCounts[wc] || 0) + 1;
+      }
+    });
+    const sorted = Object.entries(wcCounts).sort((a, b) => b[1] - a[1]);
+    if (sorted.length) return sorted[0][0];
+  }
+  
+  // Priorité 3: Champ ARBPL générique
+  const arbpl = sapData.extracted?.find(e => e.code === "ARBPL");
+  if (arbpl?.value) return arbpl.value;
+  
+  return null; // Laisser null plutôt que mettre une valeur incorrecte
+}
+
+/**
+ * Détermine le type de travail (P1, P2, P3...)
+ */
+function determineWorkType(sapData) {
+  const workType = sapData.extracted?.find(e => 
+    e.code === "WORK_TYPE" || e.code === "VAGR" || e.code === "VAGRP" || e.code === "Type de travail"
+  );
+  if (workType?.value) return workType.value;
+  
+  return null;
+}
+
+/**
+ * Extrait une valeur spécifique des données SAP
+ */
+function getSapValue(sapData, ...codes) {
+  for (const code of codes) {
+    const field = sapData.extracted?.find(e => e.code === code);
+    if (field?.value) return field.value;
+  }
+  return null;
+}
+
+/**
+ * Construit le contexte pour la génération d'instructions
+ */
+function buildInstructionContext(sapData, useCase, requestText) {
+  const context = {
+    nextOperationNumber: calculateNextOperationNumber(sapData.existing_operations),
+    existingOperationsCount: sapData.existing_operations?.length || 0,
+    workCenter: determineWorkCenter(sapData),
+    workType: determineWorkType(sapData),
+    planNumber: null,
+    taskListGroup: null,
+    counter: null,
+    planName: sapData.plan_name || null,
+    division: null
+  };
+  
+  // Extraire les identifiants
+  context.planNumber = getSapValue(sapData, "WARPL", "Plan de maintenance");
+  context.taskListGroup = getSapValue(sapData, "PLNNR", "Groupe Task List", "Groupe gamme");
+  context.counter = getSapValue(sapData, "PLNAL", "Counter") || "1";
+  context.division = getSapValue(sapData, "WERKS", "Division", "Div. planif.") || "CH94";
+  
+  // Chercher dans le texte de la demande
+  const planMatch = requestText.match(/plan[s]?\s*(?:de maintenance)?\s*(\d{7,8})/i);
+  if (planMatch && !context.planNumber) {
+    context.planNumber = planMatch[1];
+  }
+  
+  // Extraire le nom du plan depuis les opérations si disponible
+  if (!context.planName && sapData.existing_operations?.length) {
+    const firstOp = sapData.existing_operations[0];
+    if (firstOp.description) {
+      context.planName = firstOp.description;
+    }
+  }
+  
+  return context;
+}
+
+// =============================================================================
+// 7. UTILITAIRES
+// =============================================================================
+
+function cleanJSON(str) {
+  try {
+    return JSON.parse(str);
+  } catch {
+    // Essayer de nettoyer
+    const cleaned = str
+      .replace(/```json\s*/gi, "")
+      .replace(/```\s*/gi, "")
+      .trim();
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      return {};
+    }
+  }
+}
+
+function sanitizeName(n) {
+  return n.replace(/[^a-zA-Z0-9_.-]/g, "_");
+}
+
+// =============================================================================
+// 8. CHARGEMENT RÉFÉRENTIELS
+// =============================================================================
 
 let TASKLIST_REF = null;
+let DROPDOWNS = {};
 
 function loadTaskListReference() {
   try {
-    if (!fs.existsSync(TASKLIST_REF_PATH)) {
-      console.warn("⚠️ Référentiel Task List introuvable:", TASKLIST_REF_PATH);
-      return;
-    }
-
-    const wb = xlsx.read(fs.readFileSync(TASKLIST_REF_PATH), { type: "buffer" });
-    TASKLIST_REF = {
-      maintenance_plans: [],
-      task_list_groups: []
-    };
-
-    // Sheet "Maintenance Plant Actif"
-    if (wb.SheetNames.includes("Maintenance Plant Actif")) {
-      const ws = wb.Sheets["Maintenance Plant Actif"];
-      const data = xlsx.utils.sheet_to_json(ws, { header: 1 });
+    if (fs.existsSync(TASKLIST_REF_PATH)) {
+      const wb = xlsx.readFile(TASKLIST_REF_PATH);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data = xlsx.utils.sheet_to_json(ws);
       
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i];
-        if (row && row[3]) { // Colonne D = Maintenance Plan
+      TASKLIST_REF = {
+        maintenance_plans: [],
+        task_list_groups: []
+      };
+      
+      for (const row of data) {
+        // Adapter selon la structure de ton fichier
+        if (row["N° Plan"] || row["WARPL"]) {
           TASKLIST_REF.maintenance_plans.push({
-            pu: row[0],
-            value_stream: row[1],
-            equipment: row[2],
-            plan_number: String(row[3]),
-            description: row[4],
-            task_list_group: String(row[5] || ""),
-            counter_group: row[6],
-            maintenance_item: row[7]
+            warpl: row["N° Plan"] || row["WARPL"],
+            plnnr: row["N° Groupe"] || row["PLNNR"],
+            description: row["Description"] || row["Nom"],
+            counter: row["Counter"] || row["PLNAL"] || "1"
           });
         }
-      }
-    }
-
-    // Sheet "Group TL Dispo"
-    if (wb.SheetNames.includes("Group TL Dispo")) {
-      const ws = wb.Sheets["Group TL Dispo"];
-      const data = xlsx.utils.sheet_to_json(ws, { header: 1 });
-
-      for (let i = 1; i < data.length; i++) {
-        const row = data[i];
-        if (row && row[1]) { // Colonne B = N° GROUP
+        if (row["N° Groupe"] || row["PLNNR"]) {
           TASKLIST_REF.task_list_groups.push({
-            owner: row[0],
-            group_number: String(row[1]),
-            counter: row[2],
-            description: row[3],
-            comments: row[4]
+            plnnr: row["N° Groupe"] || row["PLNNR"],
+            description: row["Description"] || row["Nom"]
           });
         }
       }
+      
+      console.log(`✅ Référentiel Task List chargé: ${TASKLIST_REF.maintenance_plans.length} plans`);
+    } else {
+      console.log("ℹ️ Fichier Suivi_Task_List.xlsx non trouvé");
     }
-
-    console.log(`✅ Référentiel Task List chargé: ${TASKLIST_REF.maintenance_plans.length} plans, ${TASKLIST_REF.task_list_groups.length} TL groups`);
   } catch (e) {
-    console.warn("⚠️ Référentiel Task List non chargé:", e.message);
+    console.error("❌ Erreur chargement référentiel:", e.message);
   }
 }
 
-loadTaskListReference();
+function loadDropdowns() {
+  try {
+    if (fs.existsSync(DROPDOWN_CSV_PATH)) {
+      const content = fs.readFileSync(DROPDOWN_CSV_PATH, "utf-8");
+      const lines = content.split("\n").filter(l => l.trim());
+      
+      for (const line of lines.slice(1)) { // Skip header
+        const parts = line.split(";");
+        if (parts.length >= 2) {
+          const col = parts[0].trim();
+          const values = parts.slice(1).map(v => v.trim()).filter(v => v);
+          if (values.length) {
+            DROPDOWNS[col] = values;
+          }
+        }
+      }
+      
+      console.log(`✅ Listes déroulantes chargées: ${Object.keys(DROPDOWNS).length} colonnes`);
+    }
+  } catch (e) {
+    console.error("❌ Erreur chargement dropdowns:", e.message);
+  }
+}
 
 function findPlanInfo(planNumber) {
-  if (!TASKLIST_REF || !planNumber) return null;
-  return TASKLIST_REF.maintenance_plans.find(p => p.plan_number === String(planNumber));
+  if (!TASKLIST_REF) return null;
+  return TASKLIST_REF.maintenance_plans.find(p => 
+    String(p.warpl) === String(planNumber) || 
+    String(p.plnnr) === String(planNumber)
+  );
 }
 
-function findTaskListGroup(groupNumber) {
-  if (!TASKLIST_REF || !groupNumber) return null;
-  return TASKLIST_REF.task_list_groups.filter(t => t.group_number === String(groupNumber));
-}
+// Charger au démarrage
+loadTaskListReference();
+loadDropdowns();
 
-// -----------------------------------------------------------------------------
-// 6. DROPDOWN LISTS
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 9. ANALYSE EXCEL
+// =============================================================================
 
-let DROPDOWN_INDEX = null;
-
-function loadDropdownCSV() {
-  try {
-    if (!fs.existsSync(DROPDOWN_CSV_PATH)) {
-      console.warn("⚠️ Dropdown CSV introuvable:", DROPDOWN_CSV_PATH);
-      return;
-    }
-
-    const raw = fs.readFileSync(DROPDOWN_CSV_PATH, "utf8");
-    const lines = raw.split(/\r?\n/).filter(l => l.trim());
-    const header = lines.shift();
-    if (!header) return;
-
-    const delim = (header.match(/;/g) || []).length > (header.match(/,/g) || []).length ? ";" : ",";
-    const idx = new Map();
-
-    for (const line of lines) {
-      const parts = line.split(delim).map(p => p.trim().replace(/^"|"$/g, ""));
-      if (parts.length < 6) continue;
-
-      const fichier = parts[0].toLowerCase().replace(/\.(xlsx|xlsm|xls)$/i, "").replace(/[^a-z0-9]+/g, " ").trim();
-      const listName = parts[3];
-      const values = parts.slice(5).join(delim).split(/[,;]/).map(v => v.trim()).filter(Boolean);
-
-      if (!idx.has(fichier)) idx.set(fichier, []);
-      idx.get(fichier).push({ listName, cellules: parts[2], values });
-    }
-
-    DROPDOWN_INDEX = idx;
-    console.log(`✅ Dropdown CSV chargé: ${idx.size} fichiers`);
-  } catch (e) {
-    console.warn("⚠️ Dropdown CSV non chargé:", e.message);
-  }
-}
-
-loadDropdownCSV();
-
-function getDropdownsForTemplate(filename = "") {
-  if (!DROPDOWN_INDEX) return [];
-  const key = String(filename).toLowerCase().replace(/\.(xlsx|xlsm|xls)$/i, "").replace(/[^a-z0-9]+/g, " ").trim();
-  
-  for (const [k, arr] of DROPDOWN_INDEX.entries()) {
-    if (key.includes(k) || k.includes(key)) return arr;
-  }
-  return [];
-}
-
-// -----------------------------------------------------------------------------
-// 7. EXCEL ANALYSIS
-// -----------------------------------------------------------------------------
-
-function buildDeepExcelAnalysis(buffer, originalName = "") {
-  const wb = xlsx.read(buffer, { type: "buffer", cellDates: false });
+function buildDeepExcelAnalysis(buffer, filename) {
+  const wb = xlsx.read(buffer, { type: "buffer" });
   const analysis = {
-    filename: originalName,
-    sheetNames: wb.SheetNames || [],
+    filename,
+    sheetNames: wb.SheetNames,
     sheets: [],
-    ai_context: "",
     extracted_values: [],
-    rows_index: {}
+    rows_index: {},
+    ai_context: ""
   };
 
-  let globalContext = "";
+  let globalContext = `Fichier: ${filename}\n`;
 
-  for (const sheetName of analysis.sheetNames) {
+  for (const sheetName of wb.SheetNames) {
     const ws = wb.Sheets[sheetName];
-    if (!ws) continue;
+    if (!ws["!ref"]) continue;
 
-    const raw = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
-    if (!raw.length) continue;
+    const range = xlsx.utils.decode_range(ws["!ref"]);
+    const rows = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
-    // Trouver la ligne header (cherche "code" ou "field")
-    let headerRowIdx = 0;
-    for (let r = 0; r < Math.min(raw.length, 20); r++) {
-      const row = raw[r].map(c => String(c).toLowerCase());
-      if (row.some(c => c.includes("code") || c.includes("field"))) {
-        headerRowIdx = r;
+    // Trouver la ligne d'en-tête (chercher "ACTION" ou codes DCF)
+    let headerRowIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      const row = rows[i];
+      if (row.some(cell => /^(ACTION|DCFACTION|PLNNR|WARPL|EQUNR)/i.test(String(cell)))) {
+        headerRowIdx = i;
         break;
       }
     }
 
-    const row0 = raw[headerRowIdx] || [];
-    const row1 = raw[headerRowIdx + 1] || [];
+    if (headerRowIdx === -1) {
+      // Essayer de trouver par position connue (ligne 5 souvent)
+      headerRowIdx = 4;
+    }
 
-    // Déterminer quelle ligne contient les codes
-    const row0IsCodes = row0.filter(c => /^[A-Z0-9_]{2,}$/.test(String(c).trim())).length > row0.length * 0.3;
-    const row1IsCodes = row1.filter(c => /^[A-Z0-9_]{2,}$/.test(String(c).trim())).length > row1.length * 0.3;
+    const headers = rows[headerRowIdx] || [];
+    const dataStartIdx = headerRowIdx + 1;
 
-    const codesRow = row1IsCodes ? row1 : row0;
-    const labelsRow = row1IsCodes ? row0 : row1;
-
-    // Extraire colonnes
+    // Mapper colonnes
     const columns = [];
-    codesRow.forEach((code, idx) => {
-      const c = String(code).trim();
-      if (c.length > 1 && /[A-Za-z0-9]/.test(c)) {
+    headers.forEach((h, idx) => {
+      const colLetter = xlsx.utils.encode_col(idx);
+      const headerStr = String(h || "").trim();
+      if (headerStr) {
         columns.push({
-          idx,
-          col: columnIndexToLetter(idx),
-          code: c,
-          label: String(labelsRow[idx] || "").trim()
+          col: colLetter,
+          index: idx,
+          code: headerStr,
+          label: headerStr
         });
       }
     });
 
-    // Filtrer colonnes avant H pour les templates SAP
-    const filteredColumns = columns.filter(c => c.idx >= 7); // H = index 7
-
-    // Data start
-    const dataStartIdx = headerRowIdx + 2;
-    const dataRows = raw.slice(dataStartIdx);
-
-    // Extraire valeurs
-    dataRows.forEach((rowArr, ridx) => {
-      const rowNumber = dataStartIdx + ridx + 1;
-      const rowKey = `${sheetName}::${rowNumber}`;
-
-      for (const colDef of filteredColumns) {
-        const val = String(rowArr[colDef.idx] ?? "").trim();
+    // Extraire quelques valeurs d'exemple
+    const sampleRows = rows.slice(dataStartIdx, dataStartIdx + 5);
+    sampleRows.forEach((row, rowOffset) => {
+      const rowNumber = dataStartIdx + rowOffset + 1;
+      const rowKey = `${sheetName}:${rowNumber}`;
+      
+      columns.forEach(col => {
+        const val = String(row[col.index] || "").trim();
         if (val) {
           analysis.extracted_values.push({
             sheet: sheetName,
             row: rowNumber,
-            col: colDef.col,
-            field: colDef.code,
-            label: colDef.label,
+            col: col.col,
+            field: col.code,
             value: val
           });
-
-          if (!analysis.rows_index[rowKey]) analysis.rows_index[rowKey] = {};
-          analysis.rows_index[rowKey][colDef.code] = val;
         }
-      }
+      });
     });
 
     // Contexte pour IA
-    const columnsStr = filteredColumns.map(c => `${c.col}=${c.code}`).join(", ");
-    globalContext += `SHEET "${sheetName}": Colonnes: ${columnsStr}\n`;
+    const columnsStr = columns.slice(0, 30).map(c => `${c.col}=${c.code}`).join(", ");
+    globalContext += `FEUILLE "${sheetName}": ${columnsStr}\n`;
 
     analysis.sheets.push({
       name: sheetName,
       headerRowIdx: headerRowIdx + 1,
       dataStartRow: dataStartIdx + 1,
-      columns: filteredColumns
+      columns
     });
   }
 
@@ -675,12 +828,13 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
   return analysis;
 }
 
-// -----------------------------------------------------------------------------
-// 8. DB SETUP
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 10. DATABASE SETUP
+// =============================================================================
 
 async function ensureMemoryTables() {
   try {
+    // Table des fichiers DCF templates
     await pool.query(`
       CREATE TABLE IF NOT EXISTS dcf_files (
         id SERIAL PRIMARY KEY,
@@ -695,17 +849,20 @@ async function ensureMemoryTables() {
       );
     `);
 
+    // Table des sessions wizard
     await pool.query(`
       CREATE TABLE IF NOT EXISTS dcf_sessions (
         id SERIAL PRIMARY KEY,
         title TEXT NOT NULL,
         created_by TEXT,
-        use_case TEXT,
+        use_case VARCHAR(100),
         sap_data JSONB DEFAULT '{}'::jsonb,
+        template_type VARCHAR(50),
         created_at TIMESTAMP DEFAULT now()
       );
     `);
 
+    // Table des messages
     await pool.query(`
       CREATE TABLE IF NOT EXISTS dcf_messages (
         id SERIAL PRIMARY KEY,
@@ -716,6 +873,7 @@ async function ensureMemoryTables() {
       );
     `);
 
+    // Table des pièces jointes (screenshots)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS dcf_attachments (
         id SERIAL PRIMARY KEY,
@@ -730,7 +888,33 @@ async function ensureMemoryTables() {
       );
     `);
     
-    console.log("✅ Tables DCF créées/vérifiées");
+    // Ajouter les colonnes si elles n'existent pas (pour migration)
+    await pool.query(`
+      DO $$ 
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_name = 'dcf_sessions' AND column_name = 'use_case') THEN
+          ALTER TABLE dcf_sessions ADD COLUMN use_case VARCHAR(100);
+        END IF;
+        
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_name = 'dcf_sessions' AND column_name = 'sap_data') THEN
+          ALTER TABLE dcf_sessions ADD COLUMN sap_data JSONB DEFAULT '{}'::jsonb;
+        END IF;
+        
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_name = 'dcf_sessions' AND column_name = 'template_type') THEN
+          ALTER TABLE dcf_sessions ADD COLUMN template_type VARCHAR(50);
+        END IF;
+        
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_name = 'dcf_attachments' AND column_name = 'extracted_fields') THEN
+          ALTER TABLE dcf_attachments ADD COLUMN extracted_fields JSONB DEFAULT '[]'::jsonb;
+        END IF;
+      END $$;
+    `);
+    
+    console.log("✅ Tables DCF créées/migrées avec succès");
   } catch (e) {
     console.error("❌ Erreur création tables:", e.message);
   }
@@ -738,541 +922,14 @@ async function ensureMemoryTables() {
 
 ensureMemoryTables();
 
-// -----------------------------------------------------------------------------
-// 9. ROUTES - WIZARD v8
-// -----------------------------------------------------------------------------
-
-// POST /api/dcf/startSession
-app.post("/api/dcf/startSession", async (req, res) => {
-  try {
-    const { title = "Session DCF v8" } = req.body;
-    const { rows } = await pool.query(
-      `INSERT INTO dcf_sessions (title) VALUES ($1) RETURNING id`,
-      [title]
-    );
-    res.json({ ok: true, sessionId: rows[0].id });
-  } catch (e) {
-    console.error("startSession error:", e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// GET /api/dcf/sessions
-app.get("/api/dcf/sessions", async (req, res) => {
-  try {
-    const { rows } = await pool.query(`SELECT * FROM dcf_sessions ORDER BY created_at DESC LIMIT 20`);
-    res.json({ ok: true, sessions: rows });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/dcf/wizard/analyze - ÉTAPE 1 avec images SAP
-app.post("/api/dcf/wizard/analyze", upload.array("screenshots"), async (req, res) => {
-  try {
-    const { message, sessionId } = req.body;
-    const screenshots = req.files || [];
-
-    console.log(`[analyze] Message: "${(message || "").substring(0, 100)}...", Screenshots: ${screenshots.length}`);
-
-    // 1. Extraire données des images SAP si présentes
-    let sapData = { extracted: [], raw_texts: [] };
-    if (screenshots.length > 0) {
-      try {
-        sapData = await extractSAPDataFromImages(screenshots);
-        console.log(`[analyze] Extracted ${sapData.extracted.length} SAP fields`);
-      } catch (visionErr) {
-        console.error("[analyze] Vision error:", visionErr.message);
-        // Continue sans les données vision
-      }
-
-      // Sauvegarder les attachments si sessionId
-      if (sessionId) {
-        for (const file of screenshots) {
-          try {
-            await pool.query(
-              `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
-               VALUES ($1, $2, $3, $4, $5, $6)`,
-              [sessionId, file.originalname, file.mimetype, file.size, file.buffer, JSON.stringify(sapData.extracted)]
-            );
-          } catch (dbErr) {
-            console.warn("[analyze] Attachment save error:", dbErr.message);
-          }
-        }
-      }
-    }
-
-    // 2. Détecter le use case
-    const useCase = detectUseCase(message || "");
-    const useCaseInfo = USE_CASE_MAPPING[useCase] || { description: "Cas non reconnu", dcf_required: [] };
-
-    console.log(`[analyze] Use case: ${useCase}`);
-
-    // 3. Enrichir avec les données du référentiel
-    let refInfo = "";
-    const planNumbers = sapData.extracted.filter(e => e.code === "WARPL").map(e => e.value);
-    for (const pn of planNumbers) {
-      const planInfo = findPlanInfo(pn);
-      if (planInfo) {
-        refInfo += `\nPlan ${pn}: TL Group=${planInfo.task_list_group}, Counter=${planInfo.counter_group}, Desc="${planInfo.description}"`;
-      }
-    }
-
-    // 4. Récupérer les templates disponibles
-    let recentFiles = [];
-    try {
-      const { rows } = await pool.query(
-        `SELECT id, filename FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT ${MAX_FILES_LIBRARY}`
-      );
-      recentFiles = rows;
-    } catch (dbErr) {
-      console.warn("[analyze] DB query error:", dbErr.message);
-    }
-
-    // 5. Mapper DCF requis aux fichiers
-    const required_files = [];
-    for (const dcfType of useCaseInfo.dcf_required) {
-      const matchingFile = recentFiles.find(f => {
-        const fn = f.filename.toLowerCase();
-        if (dcfType === "TASK_LIST") return fn.includes("task list") || fn.includes("tasklist") || fn.includes("task_list");
-        if (dcfType === "MAINTENANCE_PLAN") return fn.includes("maintenance plan") || fn.includes("maintenanceplan") || fn.includes("maintenance_plan");
-        if (dcfType === "EQUIPMENT") return fn.includes("equipment") || fn.includes("eqpt");
-        return false;
-      });
-
-      if (matchingFile) {
-        required_files.push({
-          type: dcfType,
-          template_filename: matchingFile.filename,
-          file_id: matchingFile.id,
-          rules: useCaseInfo.rules.filter(r => r.startsWith(dcfType))
-        });
-      }
-    }
-
-    // 6. Update session avec use case et SAP data
-    if (sessionId) {
-      try {
-        await pool.query(
-          `UPDATE dcf_sessions SET use_case = $1, sap_data = $2 WHERE id = $3`,
-          [useCase, JSON.stringify(sapData), sessionId]
-        );
-      } catch (dbErr) {
-        console.warn("[analyze] Session update error:", dbErr.message);
-      }
-    }
-
-    const response = {
-      action: useCase,
-      description: useCaseInfo.description,
-      is_manual: false,
-      reasoning: `Cas détecté: ${useCaseInfo.description}. ${refInfo}`,
-      required_files,
-      sap_extracted: sapData.extracted,
-      reference_info: refInfo,
-      questions: []
-    };
-
-    // Ajouter questions de clarification si données manquantes
-    if (useCase === "create_operation" && !sapData.extracted.find(e => e.code === "PLNNR")) {
-      response.questions.push("Quel est le numéro du groupe Task List (PLNNR) ?");
-    }
-    if (useCase === "modify_operation" && !sapData.extracted.find(e => e.code === "VORNR")) {
-      response.questions.push("Quel est le numéro de l'opération à modifier (10, 20, 30...) ?");
-    }
-
-    console.log(`[analyze] Response: ${required_files.length} files, ${sapData.extracted.length} SAP fields`);
-    res.json(response);
-  } catch (e) {
-    console.error("[analyze] Error:", e);
-    res.status(500).json({ error: e.message, stack: process.env.NODE_ENV === "development" ? e.stack : undefined });
-  }
-});
-
-// POST /api/dcf/wizard/instructions - ÉTAPE 3
-app.post("/api/dcf/wizard/instructions", upload.array("screenshots"), async (req, res) => {
-  try {
-    const { sessionId, requestText, templateFilename, attachmentIds = [] } = req.body;
-    const newScreenshots = req.files || [];
-
-    // 1. Récupérer le template
-    const { rows } = await pool.query(
-      `SELECT id, filename, analysis, file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`,
-      [templateFilename]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ error: "Template introuvable." });
-    }
-
-    const file = rows[0];
-    const analysis = file.file_data ? buildDeepExcelAnalysis(file.file_data, file.filename) : null;
-
-    // 2. Récupérer session data
-    let sessionData = { sap_data: { extracted: [] } };
-    if (sessionId) {
-      const { rows: sessRows } = await pool.query(`SELECT * FROM dcf_sessions WHERE id = $1`, [sessionId]);
-      if (sessRows.length) sessionData = sessRows[0];
-    }
-
-    // 3. Extraire données des nouvelles images
-    let newSapData = { extracted: [], raw_texts: [] };
-    if (newScreenshots.length > 0) {
-      newSapData = await extractSAPDataFromImages(newScreenshots);
-
-      // Sauvegarder
-      for (const file of newScreenshots) {
-        await pool.query(
-          `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [sessionId, file.originalname, file.mimetype, file.size, file.buffer, JSON.stringify(newSapData.extracted)]
-        );
-      }
-    }
-
-    // 4. Récupérer attachments existants
-    let existingExtracted = [];
-    const parsedAttachmentIds = typeof attachmentIds === 'string' ? JSON.parse(attachmentIds) : attachmentIds;
-    if (parsedAttachmentIds.length) {
-      const { rows: attRows } = await pool.query(
-        `SELECT extracted_fields FROM dcf_attachments WHERE id = ANY($1::int[])`,
-        [parsedAttachmentIds]
-      );
-      for (const att of attRows) {
-        if (att.extracted_fields) {
-          existingExtracted.push(...(Array.isArray(att.extracted_fields) ? att.extracted_fields : []));
-        }
-      }
-    }
-
-    // 5. Fusionner toutes les données SAP extraites
-    const allSapData = [
-      ...(sessionData.sap_data?.extracted || []),
-      ...existingExtracted,
-      ...newSapData.extracted
-    ];
-
-    // 6. Déterminer le type de DCF et les règles
-    const useCase = sessionData.use_case || detectUseCase(requestText);
-    const useCaseInfo = USE_CASE_MAPPING[useCase] || {};
-
-    // Déterminer le type de template
-    let templateType = "TASK_LIST";
-    const fnLower = templateFilename.toLowerCase();
-    if (fnLower.includes("equipment") || fnLower.includes("eqpt")) templateType = "EQUIPMENT";
-    else if (fnLower.includes("maintenance plan") || fnLower.includes("maintenanceplan")) templateType = "MAINTENANCE_PLAN";
-
-    // 7. Construire les règles de colonnes
-    const applicableRules = useCaseInfo.rules?.filter(r => r.startsWith(templateType)) || [];
-    let columnsToFill = {};
-    
-    for (const rulePath of applicableRules) {
-      const [type, action] = rulePath.split(".");
-      if (BUSINESS_RULES[type]?.[action]?.columns) {
-        columnsToFill = { ...columnsToFill, ...BUSINESS_RULES[type][action].columns };
-      }
-    }
-
-    // 8. Dropdowns
-    const dropdowns = getDropdownsForTemplate(templateFilename);
-    const dropdownBlock = dropdowns.map(d => `- ${d.listName}: ${d.values.slice(0, 50).join(", ")}`).join("\n");
-
-    // 9. Référentiel info
-    let refInfo = "";
-    const planNumber = allSapData.find(e => e.code === "WARPL")?.value;
-    if (planNumber) {
-      const planInfo = findPlanInfo(planNumber);
-      if (planInfo) {
-        refInfo = `\nPlan ${planNumber}: TL Group=${planInfo.task_list_group}, Counter=${planInfo.counter_group}`;
-      }
-    }
-
-    // 10. Prompt IA
-    const sapDataStr = allSapData.map(e => `${e.code}=${e.value}`).join(", ");
-
-    const prompt = `
-Tu es un Expert SAP DCF. Tu dois générer les instructions de remplissage pour un fichier DCF.
-
-DEMANDE: "${requestText}"
-
-CAS D'USAGE DÉTECTÉ: ${useCase} - ${useCaseInfo.description || ""}
-
-TEMPLATE: ${templateFilename} (Type: ${templateType})
-
-STRUCTURE TEMPLATE:
-${analysis?.ai_context || "N/A"}
-
-DONNÉES SAP EXTRAITES DES CAPTURES:
-${sapDataStr || "Aucune donnée extraite"}
-
-RÉFÉRENTIEL TASK LIST:
-${refInfo || "N/A"}
-
-COLONNES OBLIGATOIRES POUR CE CAS:
-${Object.entries(columnsToFill).map(([col, info]) => `${col}: ${info.code} - ${info.label || ""} ${info.mandatory ? "(OBLIGATOIRE)" : "(optionnel)"} ${info.value ? `= "${info.value}"` : ""}`).join("\n")}
-
-LISTES DÉROULANTES:
-${dropdownBlock || "N/A"}
-
-RÈGLES IMPORTANTES:
-- Short Text (LTXA1, KTEXT): max 40 caractères
-- Long Text (LTXA2): pas de limite
-- N° Opération (VORNR): 10, 20, 30... (incréments de 10)
-- Counter (PLNAL): 1, 2, 3...
-- ACTION: Create, Change, Delete uniquement
-- System Condition: I = Intrusive, N = Non-intrusive
-
-GÉNÈRE les instructions ligne par ligne en JSON:
-{
-  "steps": [
-    {
-      "row": "6",
-      "col": "I",
-      "code": "ACTION",
-      "label": "Action SAP",
-      "value": "Create",
-      "reason": "Nouvelle opération",
-      "mandatory": true,
-      "sheet": "DCF",
-      "editable": false
-    }
-  ],
-  "missing_data": ["Liste des données manquantes à demander"]
-}
-`;
-
-    const completion = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: [
-        { role: "system", content: "Expert SAP DCF v8. Génère des instructions précises." },
-        { role: "user", content: prompt }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.1
-    });
-
-    const out = cleanJSON(completion.choices[0].message.content);
-    const steps = Array.isArray(out.steps) ? out.steps : [];
-
-    // 11. Post-traitement: marquer les champs éditables
-    const processedSteps = steps.map(s => ({
-      ...s,
-      editable: !s.value || s.mandatory === false
-    }));
-
-    res.json({
-      steps: processedSteps,
-      missing_data: out.missing_data || [],
-      sap_extracted: allSapData,
-      template_type: templateType,
-      use_case: useCase
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/dcf/wizard/autofill - Générer le fichier rempli
-app.post("/api/dcf/wizard/autofill", async (req, res) => {
-  try {
-    const { templateFilename, instructions } = req.body;
-
-    const { rows } = await pool.query(
-      `SELECT filename, mime, file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`,
-      [templateFilename]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ error: "Template introuvable." });
-    }
-
-    const tpl = rows[0];
-    const wb = xlsx.read(tpl.file_data, { type: "buffer" });
-    const steps = Array.isArray(instructions) ? instructions : [];
-
-    for (const inst of steps) {
-      const sheetName = inst.sheet && wb.Sheets[inst.sheet] ? inst.sheet : wb.SheetNames[0];
-      const ws = wb.Sheets[sheetName];
-      if (!ws) continue;
-
-      const cellAddress = `${inst.col}${inst.row}`;
-      ws[cellAddress] = { t: "s", v: String(inst.value ?? "") };
-    }
-
-    const isXlsm = String(tpl.filename).toLowerCase().endsWith(".xlsm");
-    const outBuffer = xlsx.write(wb, { type: "buffer", bookType: isXlsm ? "xlsm" : "xlsx" });
-
-    res.setHeader("Content-Type", isXlsm ? "application/vnd.ms-excel.sheet.macroEnabled.12" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="FILLED_${sanitizeName(tpl.filename)}"`);
-    res.send(outBuffer);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/dcf/wizard/validate
-app.post("/api/dcf/wizard/validate", async (req, res) => {
-  try {
-    const { fileIds, useCase = null } = req.body;
-
-    if (!Array.isArray(fileIds) || !fileIds.length) {
-      return res.status(400).json({ error: "fileIds manquant." });
-    }
-
-    const { rows: files } = await pool.query(
-      `SELECT id, filename, file_data FROM dcf_files WHERE id = ANY($1::int[])`,
-      [fileIds]
-    );
-
-    if (!files.length) {
-      return res.status(404).json({ error: "Aucun fichier trouvé." });
-    }
-
-    // Analyser chaque fichier
-    const analyses = files.map(f => {
-      const analysis = f.file_data ? buildDeepExcelAnalysis(f.file_data, f.filename) : null;
-      return { id: f.id, filename: f.filename, analysis };
-    });
-
-    // Extraire les lignes avec ACTION
-    const activeRows = [];
-    for (const a of analyses) {
-      if (!a.analysis) continue;
-      for (const [key, row] of Object.entries(a.analysis.rows_index)) {
-        const action = row.ACTION || row.ACTION_01 || row.ACTION_02;
-        if (action && ["create", "change", "delete"].includes(String(action).toLowerCase())) {
-          activeRows.push({ file: a.filename, key, action, row });
-        }
-      }
-    }
-
-    if (!activeRows.length) {
-      return res.json({
-        report: "Aucune ligne avec ACTION SAP détectée (Create/Change/Delete).",
-        critical: [],
-        warnings: ["Vérifiez que la colonne ACTION est remplie."],
-        suggestions: []
-      });
-    }
-
-    // Validation basée sur les règles métier
-    const critical = [];
-    const warnings = [];
-    const suggestions = [];
-
-    for (const ar of activeRows) {
-      const row = ar.row;
-      const action = String(ar.action).toLowerCase();
-
-      // Task List validations
-      if (ar.file.toLowerCase().includes("task")) {
-        if (action === "create") {
-          if (!row.PLNNR && !row.N) critical.push(`[${ar.key}] PLNNR (N° Groupe TL) manquant pour Create`);
-          if (!row.PLNAL && !row.P) warnings.push(`[${ar.key}] PLNAL (Counter) non renseigné`);
-          if (!row.VORNR && !row.AG) warnings.push(`[${ar.key}] VORNR (N° Opération) non renseigné`);
-          if (!row.LTXA1 && !row.AJ) critical.push(`[${ar.key}] LTXA1 (Short Text) obligatoire pour Create`);
-        }
-        if (action === "change") {
-          if (!row.PLNNR && !row.N) critical.push(`[${ar.key}] PLNNR requis pour Change`);
-          if (!row.VORNR && !row.AG) critical.push(`[${ar.key}] VORNR requis pour identifier l'opération`);
-        }
-      }
-
-      // Maintenance Plan validations
-      if (ar.file.toLowerCase().includes("maintenance") || ar.file.toLowerCase().includes("plan")) {
-        if (action === "create") {
-          if (!row.WPTXT && !row.Q) critical.push(`[${ar.key}] WPTXT (Nom plan) obligatoire`);
-          if (!row.PLNNR && !row.AJ) critical.push(`[${ar.key}] Référence Task List (PLNNR) obligatoire`);
-        }
-        if (action === "change") {
-          if (!row.WARPL && !row.J) critical.push(`[${ar.key}] WARPL (N° Plan) requis pour Change`);
-        }
-      }
-
-      // Equipment validations
-      if (ar.file.toLowerCase().includes("equipment") || ar.file.toLowerCase().includes("eqpt")) {
-        if (action === "create") {
-          if (!row.EQTYP && !row.O) warnings.push(`[${ar.key}] Object Type/Criticité recommandé`);
-          if (!row.TPLNR && !row.AR) critical.push(`[${ar.key}] Functional Location obligatoire`);
-        }
-      }
-    }
-
-    res.json({
-      report: `Validation de ${activeRows.length} ligne(s) avec ACTION.`,
-      critical,
-      warnings,
-      suggestions: suggestions.length ? suggestions : ["Vérifiez les valeurs avant import SAP."]
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// POST /api/dcf/attachments/upload - Upload screenshots seul
-app.post("/api/dcf/attachments/upload", upload.array("files"), async (req, res) => {
+// =============================================================================
+// 11. ROUTES API - FICHIERS
+// =============================================================================
+
+app.post("/api/dcf/upload", upload.array("files", 10), async (req, res) => {
   try {
     const files = req.files || [];
-    const sessionId = req.body?.sessionId || null;
-
-    if (!files.length) {
-      return res.status(400).json({ error: "Aucun fichier." });
-    }
-
-    const items = [];
-    for (const f of files) {
-      const sapData = await extractSAPDataFromImages([f]);
-
-      const { rows } = await pool.query(
-        `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, filename`,
-        [sessionId, f.originalname, f.mimetype, f.size, f.buffer, JSON.stringify(sapData.extracted)]
-      );
-
-      items.push({
-        id: rows[0].id,
-        filename: rows[0].filename,
-        extracted: sapData.extracted
-      });
-    }
-
-    res.json({ ok: true, items });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// -----------------------------------------------------------------------------
-// 10. FILE MANAGEMENT ROUTES
-// -----------------------------------------------------------------------------
-
-app.post("/api/dcf/uploadExcel", upload.single("file"), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "Aucun fichier." });
-
-    const analysis = buildDeepExcelAnalysis(req.file.buffer, req.file.originalname);
-    const storedName = `${Date.now()}_${sanitizeName(req.file.originalname)}`;
-
-    const { rows } = await pool.query(
-      `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename, uploaded_at`,
-      [req.file.originalname, storedName, req.file.mimetype, req.file.size, analysis.sheetNames, { ai_context: analysis.ai_context, sheets: analysis.sheets }, req.file.buffer]
-    );
-
-    res.json({ ok: true, file: rows[0] });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post("/api/dcf/uploadExcelMulti", upload.array("files"), async (req, res) => {
-  try {
-    const files = req.files || [];
-    if (!files.length) return res.status(400).json({ error: "Aucun fichier." });
+    if (!files.length) return res.status(400).json({ error: "Aucun fichier fourni." });
 
     const out = [];
     for (const f of files) {
@@ -1282,7 +939,8 @@ app.post("/api/dcf/uploadExcelMulti", upload.array("files"), async (req, res) =>
       const { rows } = await pool.query(
         `INSERT INTO dcf_files (filename, stored_name, mime, bytes, sheet_names, analysis, file_data)
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, filename, uploaded_at`,
-        [f.originalname, storedName, f.mimetype, f.size, analysis.sheetNames, { ai_context: analysis.ai_context, sheets: analysis.sheets }, f.buffer]
+        [f.originalname, storedName, f.mimetype, f.size, analysis.sheetNames, 
+         { ai_context: analysis.ai_context, sheets: analysis.sheets }, f.buffer]
       );
 
       out.push(rows[0]);
@@ -1290,6 +948,7 @@ app.post("/api/dcf/uploadExcelMulti", upload.array("files"), async (req, res) =>
 
     res.json({ ok: true, files: out });
   } catch (e) {
+    console.error("[upload] Erreur:", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -1297,7 +956,7 @@ app.post("/api/dcf/uploadExcelMulti", upload.array("files"), async (req, res) =>
 app.get("/api/dcf/files", async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, filename, uploaded_at FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT 50`
+      `SELECT id, filename, uploaded_at FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT ${MAX_FILES_LIBRARY}`
     );
     res.json({ ok: true, files: rows });
   } catch (e) {
@@ -1343,7 +1002,499 @@ app.get("/api/dcf/files/:id/debug", async (req, res) => {
   }
 });
 
-// Référentiel Task List
+// =============================================================================
+// 12. ROUTES API - WIZARD
+// =============================================================================
+
+// Créer une session
+app.post("/api/dcf/startSession", async (req, res) => {
+  try {
+    const { title } = req.body;
+    const { rows } = await pool.query(
+      `INSERT INTO dcf_sessions (title) VALUES ($1) RETURNING id, title, created_at`,
+      [title || "Session DCF"]
+    );
+    res.json({ ok: true, session: rows[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ÉTAPE 2: Analyse demande + screenshots → détection use case
+app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req, res) => {
+  try {
+    const { sessionId, requestText } = req.body;
+    const screenshots = req.files || [];
+
+    console.log(`[analyze] Message: "${requestText?.substring(0, 100)}...", Screenshots: ${screenshots.length}`);
+
+    // 1. Extraire données SAP des screenshots
+    const sapData = await extractSAPDataFromImages(screenshots);
+    console.log(`[analyze] Extracted ${sapData.extracted?.length || 0} SAP fields`);
+
+    // 2. Sauvegarder les screenshots en base
+    for (const ss of screenshots) {
+      try {
+        await pool.query(
+          `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [sessionId, ss.originalname, ss.mimetype, ss.size, ss.buffer, JSON.stringify(sapData.extracted || [])]
+        );
+      } catch (dbErr) {
+        console.log(`[analyze] Attachment save error: ${dbErr.message}`);
+      }
+    }
+
+    // 3. Détecter le cas d'usage
+    const useCase = detectUseCase(requestText || "");
+    const useCaseInfo = USE_CASES[useCase] || USE_CASES.unknown;
+    console.log(`[analyze] Use case: ${useCase}`);
+
+    // 4. Chercher info dans référentiel
+    let refInfo = "";
+    const planNumber = getSapValue(sapData, "WARPL") || requestText?.match(/(\d{7,8})/)?.[1];
+    if (planNumber) {
+      const planInfo = findPlanInfo(planNumber);
+      if (planInfo) {
+        refInfo = `Plan ${planNumber} trouvé: TL Group=${planInfo.plnnr}, Counter=${planInfo.counter}`;
+      }
+    }
+
+    // 5. Mapper DCF requis aux fichiers disponibles
+    const { rows: recentFiles } = await pool.query(
+      `SELECT id, filename FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT ${MAX_FILES_LIBRARY}`
+    );
+
+    const required_files = [];
+    for (const dcfType of useCaseInfo.dcf_required) {
+      const matchingFile = recentFiles.find(f => {
+        const fn = f.filename.toLowerCase();
+        if (dcfType === "TASK_LIST") return fn.includes("task") || fn.includes("tl") || fn.includes("tasklist");
+        if (dcfType === "MAINTENANCE_PLAN") return fn.includes("pm") || fn.includes("plan") || fn.includes("maintenance");
+        if (dcfType === "EQUIPMENT") return fn.includes("eqpt") || fn.includes("equipment") || fn.includes("equip");
+        return false;
+      });
+
+      required_files.push({
+        type: dcfType,
+        action: useCaseInfo.dcf_actions[dcfType],
+        template_filename: matchingFile?.filename || null,
+        file_id: matchingFile?.id || null
+      });
+    }
+
+    // 6. Update session
+    if (sessionId) {
+      try {
+        await pool.query(
+          `UPDATE dcf_sessions SET use_case = $1, sap_data = $2 WHERE id = $3`,
+          [useCase, JSON.stringify(sapData), sessionId]
+        );
+      } catch (dbErr) {
+        console.log(`[analyze] Session update error: ${dbErr.message}`);
+      }
+    }
+
+    // 7. Construire le contexte
+    const context = buildInstructionContext(sapData, useCase, requestText || "");
+
+    const response = {
+      action: useCase,
+      description: useCaseInfo.description,
+      is_manual: useCase === "unknown",
+      reasoning: `Cas détecté: ${useCaseInfo.description}. ${refInfo}`,
+      required_files,
+      sap_extracted: sapData.extracted || [],
+      existing_operations: sapData.existing_operations || [],
+      context: {
+        nextOperationNumber: context.nextOperationNumber,
+        workCenter: context.workCenter,
+        workType: context.workType,
+        planName: context.planName
+      },
+      reference_info: refInfo,
+      questions: []
+    };
+
+    // Ajouter questions si données manquantes
+    if (useCase === "create_operation" && !context.taskListGroup) {
+      response.questions.push("Quel est le numéro du groupe Task List (PLNNR) ?");
+    }
+    if ((useCase === "change_operation" || useCase === "delete_operation") && !sapData.existing_operations?.length) {
+      response.questions.push("Quel est le numéro de l'opération à modifier/supprimer (10, 20, 30...) ?");
+    }
+
+    console.log(`[analyze] Response: ${required_files.length} files, ${sapData.extracted?.length || 0} SAP fields`);
+    res.json(response);
+  } catch (e) {
+    console.error("[analyze] Error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ÉTAPE 3: Génération des instructions de remplissage
+app.post("/api/dcf/wizard/instructions", upload.array("screenshots", 10), async (req, res) => {
+  try {
+    const { sessionId, requestText, templateFilename, attachmentIds = [] } = req.body;
+    const newScreenshots = req.files || [];
+
+    console.log(`[instructions] Template: ${templateFilename}, New screenshots: ${newScreenshots.length}`);
+
+    // 1. Récupérer le template
+    const { rows } = await pool.query(
+      `SELECT id, filename, analysis, file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`,
+      [templateFilename]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: `Template "${templateFilename}" introuvable.` });
+    }
+
+    const file = rows[0];
+    const analysis = file.file_data ? buildDeepExcelAnalysis(file.file_data, file.filename) : null;
+
+    // 2. Récupérer les données SAP de la session
+    let sessionSapData = { extracted: [], existing_operations: [] };
+    if (sessionId) {
+      const { rows: sessionRows } = await pool.query(
+        `SELECT sap_data, use_case FROM dcf_sessions WHERE id = $1`,
+        [sessionId]
+      );
+      if (sessionRows.length && sessionRows[0].sap_data) {
+        sessionSapData = sessionRows[0].sap_data;
+      }
+    }
+
+    // 3. Extraire données des nouveaux screenshots
+    let newSapData = { extracted: [], existing_operations: [] };
+    if (newScreenshots.length) {
+      newSapData = await extractSAPDataFromImages(newScreenshots);
+    }
+
+    // 4. Fusionner toutes les données SAP
+    const allSapData = {
+      extracted: [...(sessionSapData.extracted || []), ...(newSapData.extracted || [])],
+      existing_operations: [...(sessionSapData.existing_operations || []), ...(newSapData.existing_operations || [])],
+      plan_name: sessionSapData.plan_name || newSapData.plan_name
+    };
+
+    // 5. Détecter le type de template
+    const fn = templateFilename.toLowerCase();
+    let templateType = "TASK_LIST";
+    if (fn.includes("pm") || fn.includes("plan") || fn.includes("maintenance")) {
+      templateType = "MAINTENANCE_PLAN";
+    } else if (fn.includes("eqpt") || fn.includes("equipment")) {
+      templateType = "EQUIPMENT";
+    }
+
+    // 6. Détecter le cas d'usage
+    const useCase = detectUseCase(requestText || "");
+    const useCaseInfo = USE_CASES[useCase] || USE_CASES.unknown;
+    const dcfAction = useCaseInfo.dcf_actions[templateType];
+
+    // 7. Obtenir le mapping des colonnes
+    let columnsToFill = {};
+    if (DCF_COLUMNS[templateType] && dcfAction && DCF_COLUMNS[templateType][dcfAction]) {
+      columnsToFill = DCF_COLUMNS[templateType][dcfAction].columns;
+    }
+
+    // 8. Construire le contexte
+    const context = buildInstructionContext(allSapData, useCase, requestText || "");
+
+    // 9. Préparer les données pour le prompt
+    const sapDataStr = JSON.stringify({
+      extracted: allSapData.extracted,
+      existing_operations: allSapData.existing_operations,
+      plan_name: allSapData.plan_name
+    }, null, 2);
+
+    const dropdownBlock = Object.entries(DROPDOWNS)
+      .map(([col, vals]) => `${col}: ${vals.slice(0, 10).join(", ")}${vals.length > 10 ? "..." : ""}`)
+      .join("\n");
+
+    // 10. Générer les instructions via IA
+    const prompt = `Tu dois générer les instructions PRÉCISES de remplissage pour un fichier DCF SAP.
+
+DEMANDE UTILISATEUR: "${requestText}"
+
+CAS D'USAGE DÉTECTÉ: ${useCase} - ${useCaseInfo.description}
+
+TEMPLATE: ${templateFilename} (Type: ${templateType})
+
+STRUCTURE TEMPLATE:
+${analysis?.ai_context || "N/A"}
+
+DONNÉES SAP EXTRAITES DES CAPTURES:
+${sapDataStr}
+
+CONTEXTE CALCULÉ (UTILISE CES VALEURS):
+- Prochain N° Opération: ${context.nextOperationNumber} (basé sur ${context.existingOperationsCount} opérations existantes: ${allSapData.existing_operations?.map(o => o.number).join(", ") || "aucune"})
+- Work Center suggéré: ${context.workCenter || "NON TROUVÉ - À DEMANDER"}
+- Type de travail: ${context.workType || "NON TROUVÉ"}
+- N° Plan: ${context.planNumber || "NON TROUVÉ"}
+- N° Groupe TL: ${context.taskListGroup || "NON TROUVÉ"}
+- Counter: ${context.counter || "1"}
+- Nom du plan: ${context.planName || "NON TROUVÉ"}
+
+COLONNES OBLIGATOIRES POUR CE CAS (${dcfAction || "N/A"}):
+${Object.entries(columnsToFill).map(([col, info]) => 
+  `${col}: ${info.code} - ${info.label || ""} ${info.mandatory ? "(OBLIGATOIRE)" : "(optionnel)"} ${info.value ? `= "${info.value}"` : ""}`
+).join("\n")}
+
+LISTES DÉROULANTES DISPONIBLES:
+${dropdownBlock || "N/A"}
+
+RÈGLES CRITIQUES:
+1. N° Opération (VORNR): Utilise ${context.nextOperationNumber}, PAS 10 par défaut!
+2. Work Center (ARBPL): Utilise ${context.workCenter || "la valeur extraite"}, PAS FMEXMAINT par défaut!
+3. Type travail (VAGR): Utilise ${context.workType || "la valeur extraite"}, PAS P1 par défaut!
+4. Short Text (LTXA1, KTEXT): max 40 caractères
+5. Counter (PLNAL): 1, 2, 3...
+6. ACTION: Create, Change ou Delete uniquement
+7. System Condition: I = Intrusive, N = Non-intrusive
+
+GÉNÈRE les instructions ligne par ligne en JSON STRICT:
+{
+  "steps": [
+    {
+      "row": "6",
+      "col": "I",
+      "code": "ACTION",
+      "label": "Action SAP",
+      "value": "Create",
+      "reason": "Nouvelle opération à créer",
+      "mandatory": true,
+      "sheet": "DCF",
+      "editable": false
+    },
+    {
+      "row": "6",
+      "col": "AG",
+      "code": "VORNR",
+      "label": "N° Opération",
+      "value": "${context.nextOperationNumber}",
+      "reason": "Après opérations existantes ${allSapData.existing_operations?.map(o => o.number).join(", ") || ""}",
+      "mandatory": true,
+      "sheet": "DCF",
+      "editable": true
+    }
+  ],
+  "missing_data": ["Liste des données manquantes essentielles"]
+}
+
+IMPORTANT: 
+- Utilise les VRAIES valeurs du contexte calculé, pas des valeurs par défaut!
+- Si une valeur n'est pas trouvée, mets null et ajoute-la dans missing_data
+- Génère TOUTES les colonnes obligatoires pour ce cas d'usage`;
+
+    const completion = await openai.chat.completions.create({
+      model: ANSWER_MODEL,
+      messages: [
+        { role: "system", content: "Tu es un expert SAP DCF. Génère des instructions PRÉCISES basées sur les données extraites des screenshots. N'invente JAMAIS de valeurs - utilise uniquement ce qui est fourni dans le contexte." },
+        { role: "user", content: prompt }
+      ],
+      response_format: { type: "json_object" },
+      temperature: 0.1,
+      max_tokens: 3000
+    });
+
+    const out = cleanJSON(completion.choices[0].message.content);
+    const steps = Array.isArray(out.steps) ? out.steps : [];
+
+    // 11. Post-traitement: marquer les champs éditables
+    const processedSteps = steps.map(s => ({
+      ...s,
+      editable: s.editable !== false && (!s.value || s.mandatory === false || s.value === null)
+    }));
+
+    // 12. Vérifier les valeurs manquantes critiques
+    const missingData = out.missing_data || [];
+    if (!context.workCenter && useCase.includes("operation")) {
+      missingData.push("Work Center (ARBPL) non trouvé dans les screenshots");
+    }
+    if (!context.taskListGroup && templateType === "TASK_LIST") {
+      missingData.push("N° Groupe Task List (PLNNR) non trouvé");
+    }
+
+    console.log(`[instructions] Generated ${processedSteps.length} steps, ${missingData.length} missing`);
+
+    res.json({
+      steps: processedSteps,
+      missing_data: missingData,
+      sap_extracted: allSapData.extracted,
+      existing_operations: allSapData.existing_operations,
+      context,
+      template_type: templateType,
+      use_case: useCase
+    });
+  } catch (e) {
+    console.error("[instructions] Error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ÉTAPE 4: Générer le fichier rempli
+app.post("/api/dcf/wizard/autofill", async (req, res) => {
+  try {
+    const { templateFilename, instructions } = req.body;
+
+    const { rows } = await pool.query(
+      `SELECT filename, mime, file_data FROM dcf_files WHERE filename = $1 ORDER BY uploaded_at DESC LIMIT 1`,
+      [templateFilename]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({ error: "Template introuvable." });
+    }
+
+    const tpl = rows[0];
+    const wb = xlsx.read(tpl.file_data, { type: "buffer" });
+    const steps = Array.isArray(instructions) ? instructions : [];
+
+    for (const inst of steps) {
+      if (!inst.value || inst.value === "null" || inst.value === null) continue;
+      
+      const sheetName = inst.sheet && wb.Sheets[inst.sheet] ? inst.sheet : wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
+      if (!ws) continue;
+
+      const row = parseInt(inst.row, 10);
+      const col = inst.col;
+      if (!row || !col) continue;
+
+      const cellRef = `${col}${row}`;
+      ws[cellRef] = { t: "s", v: String(inst.value) };
+
+      // Mettre à jour la plage si nécessaire
+      if (!ws["!ref"]) {
+        ws["!ref"] = `A1:${cellRef}`;
+      } else {
+        const currentRange = xlsx.utils.decode_range(ws["!ref"]);
+        const colNum = xlsx.utils.decode_col(col);
+        if (colNum > currentRange.e.c) currentRange.e.c = colNum;
+        if (row - 1 > currentRange.e.r) currentRange.e.r = row - 1;
+        ws["!ref"] = xlsx.utils.encode_range(currentRange);
+      }
+    }
+
+    const outBuffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+    const outName = tpl.filename.replace(/\.xlsx?$/i, "_FILLED.xlsx");
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(outName)}"`);
+    res.send(outBuffer);
+  } catch (e) {
+    console.error("[autofill] Error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// =============================================================================
+// 13. ROUTES API - VALIDATION
+// =============================================================================
+
+app.post("/api/dcf/validate", upload.single("file"), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: "Aucun fichier fourni." });
+
+    const wb = xlsx.read(file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const data = xlsx.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+    const errors = [];
+    const warnings = [];
+    const successes = [];
+
+    // Trouver la ligne d'en-tête
+    let headerRowIdx = 4;
+    for (let i = 0; i < Math.min(data.length, 10); i++) {
+      if (data[i].some(c => /^(ACTION|DCFACTION)/i.test(String(c)))) {
+        headerRowIdx = i;
+        break;
+      }
+    }
+
+    const headers = data[headerRowIdx] || [];
+    
+    // Mapper les colonnes
+    const colMap = {};
+    headers.forEach((h, idx) => {
+      const code = String(h).toUpperCase().trim();
+      colMap[code] = idx;
+    });
+
+    // Valider chaque ligne de données
+    for (let i = headerRowIdx + 1; i < data.length; i++) {
+      const row = data[i];
+      const rowNum = i + 1;
+      
+      const action = String(row[colMap["ACTION"] || colMap["DCFACTION"]] || "").trim();
+      if (!action || !["Create", "Change", "Delete"].includes(action)) {
+        continue; // Ignorer lignes sans action valide
+      }
+
+      // Vérifications générales
+      if (action === "Create") {
+        // Pour Task List
+        if (colMap["PLNNR"] !== undefined) {
+          const plnnr = row[colMap["PLNNR"]];
+          if (!plnnr) {
+            errors.push({ row: rowNum, field: "PLNNR", message: "N° Groupe Task List obligatoire pour Create" });
+          }
+        }
+        
+        if (colMap["VORNR"] !== undefined) {
+          const vornr = row[colMap["VORNR"]];
+          if (!vornr) {
+            errors.push({ row: rowNum, field: "VORNR", message: "N° Opération obligatoire pour Create" });
+          }
+        }
+
+        if (colMap["LTXA1"] !== undefined || colMap["KTEXT"] !== undefined) {
+          const shortText = row[colMap["LTXA1"]] || row[colMap["KTEXT"]] || "";
+          if (shortText.length > 40) {
+            errors.push({ row: rowNum, field: "LTXA1/KTEXT", message: `Short Text trop long: ${shortText.length}/40 caractères` });
+          }
+        }
+      }
+
+      if (action === "Change" || action === "Delete") {
+        // Vérifier qu'on a un identifiant
+        const hasId = row[colMap["PLNNR"]] || row[colMap["WARPL"]] || row[colMap["EQUNR"]];
+        if (!hasId) {
+          errors.push({ row: rowNum, field: "ID", message: "Identifiant requis pour Change/Delete (PLNNR, WARPL ou EQUNR)" });
+        }
+      }
+
+      // Validation réussie
+      if (!errors.find(e => e.row === rowNum)) {
+        successes.push({ row: rowNum, action, message: `Ligne ${rowNum}: ${action} valide` });
+      }
+    }
+
+    res.json({
+      ok: errors.length === 0,
+      errors,
+      warnings,
+      successes,
+      summary: {
+        total_rows: data.length - headerRowIdx - 1,
+        errors: errors.length,
+        warnings: warnings.length,
+        valid: successes.length
+      }
+    });
+  } catch (e) {
+    console.error("[validate] Error:", e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// =============================================================================
+// 14. ROUTES API - RÉFÉRENTIELS
+// =============================================================================
+
 app.get("/api/dcf/reference/tasklists", (req, res) => {
   res.json({
     ok: true,
@@ -1358,15 +1509,32 @@ app.get("/api/dcf/reference/plan/:planNumber", (req, res) => {
   res.json({ ok: true, plan: info });
 });
 
-// Chat générique
+app.get("/api/dcf/reference/dropdowns", (req, res) => {
+  res.json({ ok: true, dropdowns: DROPDOWNS });
+});
+
+app.get("/api/dcf/reference/columns/:templateType/:action", (req, res) => {
+  const { templateType, action } = req.params;
+  const columns = DCF_COLUMNS[templateType]?.[action]?.columns;
+  if (!columns) {
+    return res.status(404).json({ error: "Template type ou action non trouvé" });
+  }
+  res.json({ ok: true, columns, description: DCF_COLUMNS[templateType][action].description });
+});
+
+// =============================================================================
+// 15. ROUTES API - CHAT & HEALTH
+// =============================================================================
+
 app.post("/api/dcf/chat", async (req, res) => {
   try {
     const completion = await openai.chat.completions.create({
       model: ANSWER_MODEL,
       messages: [
-        { role: "system", content: "Assistant SAP DCF expert." },
+        { role: "system", content: "Tu es un assistant expert SAP PM DCF. Aide l'utilisateur avec ses questions sur le remplissage des fichiers DCF (Task List, Maintenance Plan, Equipment)." },
         { role: "user", content: req.body.message }
-      ]
+      ],
+      max_tokens: 1000
     });
     res.json({ ok: true, answer: completion.choices[0].message.content });
   } catch (e) {
@@ -1377,15 +1545,44 @@ app.post("/api/dcf/chat", async (req, res) => {
 app.get("/api/dcf/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "8.0.1",
-    features: ["vision_step1", "business_rules", "tasklist_reference", "editable_values", "csp_blob_fix"]
+    version: "9.0.0",
+    features: [
+      "vision_extraction_v2",
+      "auto_operation_numbering",
+      "work_center_detection",
+      "business_rules_strict",
+      "tasklist_reference",
+      "editable_values",
+      "db_migration_auto"
+    ],
+    config: {
+      vision_model: VISION_MODEL,
+      answer_model: ANSWER_MODEL,
+      has_tasklist_ref: !!TASKLIST_REF,
+      dropdowns_count: Object.keys(DROPDOWNS).length
+    }
   });
 });
 
-// -----------------------------------------------------------------------------
-// 11. START
-// -----------------------------------------------------------------------------
+// =============================================================================
+// 16. DÉMARRAGE
+// =============================================================================
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v8.0.1] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`
+╔═══════════════════════════════════════════════════════════════╗
+║           DCF SAP Assistant v9.0.0 - DÉMARRÉ                  ║
+╠═══════════════════════════════════════════════════════════════╣
+║  URL: http://${HOST}:${PORT}                                  
+║  Vision Model: ${VISION_MODEL}                                
+║  Answer Model: ${ANSWER_MODEL}                                
+║                                                               ║
+║  Améliorations v9:                                            ║
+║  ✓ Fix colonnes DB (extracted_fields, use_case)               ║
+║  ✓ Extraction Vision améliorée (opérations existantes)        ║
+║  ✓ Calcul auto N° opération (10→20→30...)                     ║
+║  ✓ Détection Work Center depuis screenshots                   ║
+║  ✓ Mapping colonnes strict basé sur doc Word                  ║
+╚═══════════════════════════════════════════════════════════════╝
+`);
 });
