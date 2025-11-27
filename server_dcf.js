@@ -1,8 +1,9 @@
-// server_dcf.js — Assistant DCF SAP v9.0.0
+// server_dcf.js — Assistant DCF SAP v9.0.1
 // =============================================================================
 // REFONTE COMPLÈTE avec corrections:
-// - Fix colonnes DB manquantes (extracted_fields, use_case)
+// - Fix colonnes DB manquantes (extracted_fields, use_case, path)
 // - Extraction Vision améliorée (opérations existantes, work center, type travail)
+// - Déduplication des résultats Vision (éviter doublons WARPL, PLNNR...)
 // - Calcul automatique prochain N° opération
 // - Mapping colonnes précis par type DCF (basé sur documentation Word)
 // - Logique métier stricte TL/PM/EQPT
@@ -481,6 +482,20 @@ async function extractSAPDataFromImages(images = []) {
     }
   }
 
+  // === DÉDUPLICATION DES DONNÉES EXTRAITES ===
+  const uniqueExtracted = [];
+  const seenCodesExt = new Set();
+  
+  for (const field of allExtracted) {
+    // On utilise une clé unique basée sur le code pour éviter les doublons
+    // On pourrait aussi vérifier la valeur, mais en général on veut juste 
+    // une valeur par code pour l'affichage
+    if (field.code && !seenCodesExt.has(field.code)) {
+      seenCodesExt.add(field.code);
+      uniqueExtracted.push(field);
+    }
+  }
+
   // Dédupliquer les opérations par numéro
   const uniqueOps = [];
   const seenOps = new Set();
@@ -499,10 +514,10 @@ async function extractSAPDataFromImages(images = []) {
     return numA - numB;
   });
 
-  console.log(`[Vision] Extraction terminée: ${allExtracted.length} champs, ${uniqueOps.length} opérations`);
+  console.log(`[Vision] Extraction terminée: ${uniqueExtracted.length} champs uniques (sur ${allExtracted.length}), ${uniqueOps.length} opérations`);
 
   return { 
-    extracted: allExtracted, 
+    extracted: uniqueExtracted, // Utiliser la liste dédupliquée
     existing_operations: uniqueOps,
     plan_name: planName,
     raw_texts: rawTexts 
@@ -1029,7 +1044,7 @@ app.post("/api/dcf/startSession", async (req, res) => {
 // ÉTAPE 2: Analyse demande + screenshots → détection use case
 app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req, res) => {
   try {
-    // CORRECTION : Récupération de message OU requestText pour gérer les deux formats frontend
+    // CORRECTION : Récupération de message OU requestText
     const { sessionId, requestText, message } = req.body;
     const textToAnalyze = requestText || message || "";
     
@@ -1039,17 +1054,18 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
 
     // 1. Extraire données SAP des screenshots
     const sapData = await extractSAPDataFromImages(screenshots);
-    console.log(`[analyze] Extracted ${sapData.extracted?.length || 0} SAP fields`);
+    console.log(`[analyze] Extracted ${sapData.extracted?.length || 0} SAP fields (deduplicated)`);
 
     // 2. Sauvegarder les screenshots en base
     for (const ss of screenshots) {
       try {
-        // CORRECTION : Génération d'un stored_name pour satisfaire la contrainte NOT NULL
+        // CORRECTION : Génération stored_name + ajout champ PATH pour éviter erreur NOT NULL
         const storedName = `${Date.now()}_${sanitizeName(ss.originalname)}`;
         
         await pool.query(
-          `INSERT INTO dcf_attachments (session_id, filename, stored_name, mime, bytes, file_data, extracted_fields)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          `INSERT INTO dcf_attachments (session_id, filename, stored_name, mime, bytes, file_data, extracted_fields, path)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $3)`,
+           // Note: on met $3 (storedName) dans le champ path pour satisfaire la contrainte
           [sessionId, ss.originalname, storedName, ss.mimetype, ss.size, ss.buffer, JSON.stringify(sapData.extracted || [])]
         );
       } catch (dbErr) {
@@ -1058,14 +1074,12 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
     }
 
     // 3. Détecter le cas d'usage
-    // CORRECTION : Utilisation de textToAnalyze au lieu de requestText qui était undefined
     const useCase = detectUseCase(textToAnalyze);
     const useCaseInfo = USE_CASES[useCase] || USE_CASES.unknown;
     console.log(`[analyze] Use case: ${useCase}`);
 
     // 4. Chercher info dans référentiel
     let refInfo = "";
-    // CORRECTION : Utilisation de textToAnalyze
     const planNumber = getSapValue(sapData, "WARPL") || textToAnalyze.match(/(\d{7,8})/)?.[1];
     if (planNumber) {
       const planInfo = findPlanInfo(planNumber);
@@ -1110,7 +1124,6 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
     }
 
     // 7. Construire le contexte
-    // CORRECTION : Utilisation de textToAnalyze
     const context = buildInstructionContext(sapData, useCase, textToAnalyze);
 
     const response = {
