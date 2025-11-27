@@ -1,5 +1,6 @@
-// server_dcf.js — Assistant DCF SAP v8.0.0
+// server_dcf.js — Assistant DCF SAP v8.0.1
 // REFONTE COMPLÈTE basée sur documentation métier
+// FIX: CSP pour blob URLs + meilleure gestion erreurs
 //
 // Nouveautés v8:
 // - Upload images SAP dès l'étape 1 (analyse préliminaire)
@@ -53,11 +54,31 @@ const MAX_ATTACHMENT_TEXT = 8000;
 const MAX_MEMORY_HINTS = 50;
 
 // -----------------------------------------------------------------------------
-// 1. EXPRESS SETUP
+// 1. EXPRESS SETUP avec CSP corrigé pour blob: URLs
 // -----------------------------------------------------------------------------
 
 const app = express();
-app.use(helmet());
+
+// Configuration Helmet avec CSP permissive pour blob:
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", "https://api.openai.com", "https://*.openai.com"],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'", "blob:"],
+      frameSrc: ["'self'"],
+      workerSrc: ["'self'", "blob:"],
+    }
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "30mb" }));
 
@@ -330,19 +351,38 @@ function detectUseCase(text = "") {
 }
 
 // -----------------------------------------------------------------------------
-// 4. VISION - EXTRACTION SAP
+// 4. VISION - EXTRACTION SAP (avec gestion d'erreurs améliorée)
 // -----------------------------------------------------------------------------
 
 async function extractSAPDataFromImages(images = []) {
   if (!images.length) return { extracted: [], raw_texts: [] };
+
+  // Vérifier la clé API OpenAI
+  if (!process.env.OPENAI_API_KEY) {
+    console.warn("⚠️ OPENAI_API_KEY manquante - Vision désactivée");
+    return { extracted: [], raw_texts: [], warning: "Vision API non configurée" };
+  }
 
   const results = [];
   const rawTexts = [];
 
   for (const img of images) {
     try {
-      const b64 = img.buffer ? img.buffer.toString("base64") : img;
-      const mime = img.mimetype || "image/png";
+      // Gérer les différents formats d'image
+      let b64, mime;
+      
+      if (img.buffer) {
+        // Fichier uploadé via multer
+        b64 = img.buffer.toString("base64");
+        mime = img.mimetype || "image/png";
+      } else if (typeof img === "string") {
+        // Déjà en base64
+        b64 = img;
+        mime = "image/png";
+      } else {
+        console.warn("Format d'image non supporté:", typeof img);
+        continue;
+      }
 
       const completion = await openai.chat.completions.create({
         model: VISION_MODEL,
@@ -381,7 +421,8 @@ Réponds en JSON:
           }
         ],
         response_format: { type: "json_object" },
-        temperature: 0.0
+        temperature: 0.0,
+        max_tokens: 1000
       });
 
       const parsed = cleanJSON(completion.choices[0].message.content);
@@ -393,6 +434,7 @@ Réponds en JSON:
       }
     } catch (e) {
       console.error("Vision error:", e.message);
+      // Continuer avec les autres images
     }
   }
 
@@ -638,57 +680,63 @@ function buildDeepExcelAnalysis(buffer, originalName = "") {
 // -----------------------------------------------------------------------------
 
 async function ensureMemoryTables() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_files (
-      id SERIAL PRIMARY KEY,
-      filename TEXT NOT NULL,
-      stored_name TEXT,
-      mime TEXT,
-      bytes INT,
-      sheet_names JSONB DEFAULT '[]'::jsonb,
-      analysis JSONB DEFAULT '{}'::jsonb,
-      file_data BYTEA,
-      uploaded_at TIMESTAMP DEFAULT now()
-    );
-  `);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dcf_files (
+        id SERIAL PRIMARY KEY,
+        filename TEXT NOT NULL,
+        stored_name TEXT,
+        mime TEXT,
+        bytes INT,
+        sheet_names JSONB DEFAULT '[]'::jsonb,
+        analysis JSONB DEFAULT '{}'::jsonb,
+        file_data BYTEA,
+        uploaded_at TIMESTAMP DEFAULT now()
+      );
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_sessions (
-      id SERIAL PRIMARY KEY,
-      title TEXT NOT NULL,
-      created_by TEXT,
-      use_case TEXT,
-      sap_data JSONB DEFAULT '{}'::jsonb,
-      created_at TIMESTAMP DEFAULT now()
-    );
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dcf_sessions (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        created_by TEXT,
+        use_case TEXT,
+        sap_data JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMP DEFAULT now()
+      );
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_messages (
-      id SERIAL PRIMARY KEY,
-      session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT now()
-    );
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dcf_messages (
+        id SERIAL PRIMARY KEY,
+        session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT now()
+      );
+    `);
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS dcf_attachments (
-      id SERIAL PRIMARY KEY,
-      session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
-      filename TEXT NOT NULL,
-      mime TEXT,
-      bytes INT,
-      file_data BYTEA,
-      extracted_text TEXT,
-      extracted_fields JSONB DEFAULT '[]'::jsonb,
-      uploaded_at TIMESTAMP DEFAULT now()
-    );
-  `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dcf_attachments (
+        id SERIAL PRIMARY KEY,
+        session_id INT REFERENCES dcf_sessions(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        mime TEXT,
+        bytes INT,
+        file_data BYTEA,
+        extracted_text TEXT,
+        extracted_fields JSONB DEFAULT '[]'::jsonb,
+        uploaded_at TIMESTAMP DEFAULT now()
+      );
+    `);
+    
+    console.log("✅ Tables DCF créées/vérifiées");
+  } catch (e) {
+    console.error("❌ Erreur création tables:", e.message);
+  }
 }
 
-ensureMemoryTables().catch(() => console.warn("⚠️ Tables mémoire non créées"));
+ensureMemoryTables();
 
 // -----------------------------------------------------------------------------
 // 9. ROUTES - WIZARD v8
@@ -704,6 +752,7 @@ app.post("/api/dcf/startSession", async (req, res) => {
     );
     res.json({ ok: true, sessionId: rows[0].id });
   } catch (e) {
+    console.error("startSession error:", e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -724,24 +773,40 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots"), async (req, res
     const { message, sessionId } = req.body;
     const screenshots = req.files || [];
 
+    console.log(`[analyze] Message: "${(message || "").substring(0, 100)}...", Screenshots: ${screenshots.length}`);
+
     // 1. Extraire données des images SAP si présentes
     let sapData = { extracted: [], raw_texts: [] };
     if (screenshots.length > 0) {
-      sapData = await extractSAPDataFromImages(screenshots);
+      try {
+        sapData = await extractSAPDataFromImages(screenshots);
+        console.log(`[analyze] Extracted ${sapData.extracted.length} SAP fields`);
+      } catch (visionErr) {
+        console.error("[analyze] Vision error:", visionErr.message);
+        // Continue sans les données vision
+      }
 
-      // Sauvegarder les attachments
-      for (const file of screenshots) {
-        await pool.query(
-          `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [sessionId, file.originalname, file.mimetype, file.size, file.buffer, JSON.stringify(sapData.extracted)]
-        );
+      // Sauvegarder les attachments si sessionId
+      if (sessionId) {
+        for (const file of screenshots) {
+          try {
+            await pool.query(
+              `INSERT INTO dcf_attachments (session_id, filename, mime, bytes, file_data, extracted_fields)
+               VALUES ($1, $2, $3, $4, $5, $6)`,
+              [sessionId, file.originalname, file.mimetype, file.size, file.buffer, JSON.stringify(sapData.extracted)]
+            );
+          } catch (dbErr) {
+            console.warn("[analyze] Attachment save error:", dbErr.message);
+          }
+        }
       }
     }
 
     // 2. Détecter le use case
-    const useCase = detectUseCase(message);
+    const useCase = detectUseCase(message || "");
     const useCaseInfo = USE_CASE_MAPPING[useCase] || { description: "Cas non reconnu", dcf_required: [] };
+
+    console.log(`[analyze] Use case: ${useCase}`);
 
     // 3. Enrichir avec les données du référentiel
     let refInfo = "";
@@ -754,17 +819,23 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots"), async (req, res
     }
 
     // 4. Récupérer les templates disponibles
-    const { rows: recentFiles } = await pool.query(
-      `SELECT id, filename FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT ${MAX_FILES_LIBRARY}`
-    );
+    let recentFiles = [];
+    try {
+      const { rows } = await pool.query(
+        `SELECT id, filename FROM dcf_files WHERE file_data IS NOT NULL ORDER BY uploaded_at DESC LIMIT ${MAX_FILES_LIBRARY}`
+      );
+      recentFiles = rows;
+    } catch (dbErr) {
+      console.warn("[analyze] DB query error:", dbErr.message);
+    }
 
     // 5. Mapper DCF requis aux fichiers
     const required_files = [];
     for (const dcfType of useCaseInfo.dcf_required) {
       const matchingFile = recentFiles.find(f => {
         const fn = f.filename.toLowerCase();
-        if (dcfType === "TASK_LIST") return fn.includes("task list") || fn.includes("tasklist");
-        if (dcfType === "MAINTENANCE_PLAN") return fn.includes("maintenance plan") || fn.includes("maintenanceplan");
+        if (dcfType === "TASK_LIST") return fn.includes("task list") || fn.includes("tasklist") || fn.includes("task_list");
+        if (dcfType === "MAINTENANCE_PLAN") return fn.includes("maintenance plan") || fn.includes("maintenanceplan") || fn.includes("maintenance_plan");
         if (dcfType === "EQUIPMENT") return fn.includes("equipment") || fn.includes("eqpt");
         return false;
       });
@@ -781,10 +852,14 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots"), async (req, res
 
     // 6. Update session avec use case et SAP data
     if (sessionId) {
-      await pool.query(
-        `UPDATE dcf_sessions SET use_case = $1, sap_data = $2 WHERE id = $3`,
-        [useCase, JSON.stringify(sapData), sessionId]
-      );
+      try {
+        await pool.query(
+          `UPDATE dcf_sessions SET use_case = $1, sap_data = $2 WHERE id = $3`,
+          [useCase, JSON.stringify(sapData), sessionId]
+        );
+      } catch (dbErr) {
+        console.warn("[analyze] Session update error:", dbErr.message);
+      }
     }
 
     const response = {
@@ -806,10 +881,11 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots"), async (req, res
       response.questions.push("Quel est le numéro de l'opération à modifier (10, 20, 30...) ?");
     }
 
+    console.log(`[analyze] Response: ${required_files.length} files, ${sapData.extracted.length} SAP fields`);
     res.json(response);
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
+    console.error("[analyze] Error:", e);
+    res.status(500).json({ error: e.message, stack: process.env.NODE_ENV === "development" ? e.stack : undefined });
   }
 });
 
@@ -856,10 +932,11 @@ app.post("/api/dcf/wizard/instructions", upload.array("screenshots"), async (req
 
     // 4. Récupérer attachments existants
     let existingExtracted = [];
-    if (attachmentIds.length) {
+    const parsedAttachmentIds = typeof attachmentIds === 'string' ? JSON.parse(attachmentIds) : attachmentIds;
+    if (parsedAttachmentIds.length) {
       const { rows: attRows } = await pool.query(
         `SELECT extracted_fields FROM dcf_attachments WHERE id = ANY($1::int[])`,
-        [attachmentIds]
+        [parsedAttachmentIds]
       );
       for (const att of attRows) {
         if (att.extracted_fields) {
@@ -1300,8 +1377,8 @@ app.post("/api/dcf/chat", async (req, res) => {
 app.get("/api/dcf/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "8.0.0",
-    features: ["vision_step1", "business_rules", "tasklist_reference", "editable_values"]
+    version: "8.0.1",
+    features: ["vision_step1", "business_rules", "tasklist_reference", "editable_values", "csp_blob_fix"]
   });
 });
 
@@ -1310,5 +1387,5 @@ app.get("/api/dcf/health", (req, res) => {
 // -----------------------------------------------------------------------------
 
 app.listen(PORT, HOST, () => {
-  console.log(`[dcf-v8.0.0] Backend démarré sur http://${HOST}:${PORT}`);
+  console.log(`[dcf-v8.0.1] Backend démarré sur http://${HOST}:${PORT}`);
 });
