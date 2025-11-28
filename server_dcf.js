@@ -1157,11 +1157,18 @@ app.post("/api/dcf/wizard/instructions", upload.array("screenshots", 10), async 
     const useCaseInfo = USE_CASES[useCase] || USE_CASES.unknown;
     const dcfAction = useCaseInfo.dcf_actions[templateType];
 
+    console.log(`[instructions] Use case: ${useCase}`);
+    console.log(`[instructions] Use case info:`, JSON.stringify(useCaseInfo));
+    console.log(`[instructions] DCF Action for ${templateType}: ${dcfAction}`);
+
     // 7. Mapping colonnes
     let columnsToFill = {};
     if (DCF_COLUMNS[templateType] && dcfAction && DCF_COLUMNS[templateType][dcfAction]) {
       columnsToFill = DCF_COLUMNS[templateType][dcfAction].columns;
     }
+
+    console.log(`[instructions] Template type: ${templateType}, DCF Action: ${dcfAction}`);
+    console.log(`[instructions] Columns to fill: ${Object.keys(columnsToFill).length} colonnes`);
 
     // 8. Contexte
     const context = buildInstructionContext(allSapData, useCase, requestText || "");
@@ -1171,6 +1178,33 @@ app.post("/api/dcf/wizard/instructions", upload.array("screenshots", 10), async 
     // 9. Génération automatique des instructions
     const generatedSteps = [];
     let missingData = [];
+
+    // DEBUG: Si pas de colonnes, utiliser le mapping par défaut
+    if (Object.keys(columnsToFill).length === 0) {
+      console.log(`[instructions] ⚠️ Aucune colonne trouvée dans le mapping pour ${templateType}.${dcfAction}`);
+      console.log(`[instructions] Available template types:`, Object.keys(DCF_COLUMNS));
+      if (DCF_COLUMNS[templateType]) {
+        console.log(`[instructions] Available actions for ${templateType}:`, Object.keys(DCF_COLUMNS[templateType]));
+      }
+      
+      // FORCER CREATE_OPERATION pour TASK_LIST
+      if (templateType === "TASK_LIST") {
+        if (useCase.includes("create") && DCF_COLUMNS.TASK_LIST.CREATE_OPERATION) {
+          columnsToFill = DCF_COLUMNS.TASK_LIST.CREATE_OPERATION.columns;
+          console.log(`[instructions] ✅ Force CREATE_OPERATION: ${Object.keys(columnsToFill).length} colonnes`);
+        } else if (useCase.includes("change") && DCF_COLUMNS.TASK_LIST.CHANGE_OPERATION) {
+          columnsToFill = DCF_COLUMNS.TASK_LIST.CHANGE_OPERATION.columns;
+          console.log(`[instructions] ✅ Force CHANGE_OPERATION: ${Object.keys(columnsToFill).length} colonnes`);
+        } else if (useCase.includes("delete") && DCF_COLUMNS.TASK_LIST.DELETE_OPERATION) {
+          columnsToFill = DCF_COLUMNS.TASK_LIST.DELETE_OPERATION.columns;
+          console.log(`[instructions] ✅ Force DELETE_OPERATION: ${Object.keys(columnsToFill).length} colonnes`);
+        } else {
+          // Dernier recours
+          columnsToFill = DCF_COLUMNS.TASK_LIST.CREATE_OPERATION.columns;
+          console.log(`[instructions] ✅ Force CREATE_OPERATION par défaut: ${Object.keys(columnsToFill).length} colonnes`);
+        }
+      }
+    }
 
     // Parcourir toutes les colonnes définies
     for (const [col, colDef] of Object.entries(columnsToFill)) {
