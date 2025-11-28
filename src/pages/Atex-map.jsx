@@ -367,7 +367,6 @@ export default function AtexMap({
   // Tasks
   const loadingTaskRef = useRef(null);
   const renderTaskRef = useRef(null);
-  const imgObjectUrlRef = useRef(null);
   const lastJob = useRef({ key: null });
   // Flags
   const baseReadyRef = useRef(false);
@@ -453,13 +452,6 @@ export default function AtexMap({
       try { await loadingTaskRef.current?.destroy?.(); } catch {}
       renderTaskRef.current = null;
       loadingTaskRef.current = null;
-
-    try {
-        if (imgObjectUrlRef.current) {
-          URL.revokeObjectURL(imgObjectUrlRef.current);
-          imgObjectUrlRef.current = null;
-        }
-      } catch {}
     };
 
     const cleanupMap = () => {
@@ -491,18 +483,12 @@ export default function AtexMap({
         await cleanupPdf();
 
         // 1️⃣ Création de la carte Leaflet
-        const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
-
         const m = L.map(wrapRef.current, {
           crs: L.CRS.Simple,
           zoomControl: false,
           preferCanvas: true,
-
-          // ✅ NEW: coupe les animations coûteuses sur mobile
-          zoomAnimation: !isMobile,
-          fadeAnimation: !isMobile,
+          zoomAnimation: true,
           markerZoomAnimation: false,
-
           scrollWheelZoom: true,
           touchZoom: true,
           tap: true,
@@ -556,17 +542,9 @@ export default function AtexMap({
         // 2️⃣ Rendu PDF -> image -> base overlay
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
-          const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
           const dpr = Math.max(1, window.devicePixelRatio || 1);
-
-          // ✅ NEW: même qualité perçue mais moins de pixels inutiles sur mobile
-          const qualityBoost = isMobile ? 2.0 : 3.5;
-          const maxW = isMobile ? 6144 : 12288;
-
-          const targetBitmapW = Math.min(
-            maxW,
-            Math.max(1800, Math.floor(containerW * dpr * qualityBoost))
-          );
+          const qualityBoost = 3.5;
+          const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
           loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
           const pdf = await loadingTaskRef.current.promise;
           const page = await pdf.getPage(Number(pageIndex) + 1);
@@ -576,31 +554,12 @@ export default function AtexMap({
           const canvas = document.createElement("canvas");
           canvas.width = Math.floor(viewport.width);
           canvas.height = Math.floor(viewport.height);
-
           const ctx = canvas.getContext("2d", { alpha: true });
           ctx.imageSmoothingEnabled = true;
-
           renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
           await renderTaskRef.current.promise;
-
-          // ✅ NEW: PNG en Blob (pas de base64 -> énorme gain mémoire)
-          const blob = await new Promise((res) =>
-            canvas.toBlob(res, "image/png", 1)
-          );
-
-          // nettoie l'ancienne image si existante
-          try {
-            if (imgObjectUrlRef.current) URL.revokeObjectURL(imgObjectUrlRef.current);
-          } catch {}
-
-          const dataUrl = URL.createObjectURL(blob);
-          imgObjectUrlRef.current = dataUrl;
-
+          const dataUrl = canvas.toDataURL("image/png");
           setImgSize({ w: canvas.width, h: canvas.height });
-
-          // ✅ NEW: libère le canvas après usage
-          canvas.width = 0;
-          canvas.height = 0;
 
           const bounds = L.latLngBounds([[0, 0], [viewport.height, viewport.width]]);
           const base = L.imageOverlay(dataUrl, bounds, { interactive: false, opacity: 1, pane: "basePane" }).addTo(m);
@@ -616,11 +575,7 @@ export default function AtexMap({
 
           // ✅ Marque la carte prête et recharge
           baseReadyRef.current = true;
-
-          // ✅ NEW: charge équipements/zones après affichage du plan
-          setTimeout(() => {
-            reloadAll();
-          }, 0);
+          await reloadAll(); // <--- recharge formes + équipements
 
           try { await pdf.cleanup?.(); } catch {}
         }
