@@ -1809,4 +1809,3 @@ function PlanCard({ plan, onRename, onPick }) {
     </div>
   );
 }
-
