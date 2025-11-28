@@ -6,6 +6,7 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "../styles/atex-map.css";
 import { api } from "../lib/api.js";
+import { getPDFConfig, getLazyLoadConfig, logDeviceInfo, isMobileDevice } from "../config/mobile-optimization.js";
 // --- PDF.js worker + logs discrets
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 pdfjsLib.setVerbosity?.(pdfjsLib.VerbosityLevel.ERRORS);
@@ -387,6 +388,7 @@ export default function AtexMap({
   const [drawMenu, setDrawMenu] = useState(false);
   const drawMenuRef = useRef(null);
   const [open, setOpen] = useState(inModal ? !!autoOpenModal : true);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const planKey = useMemo(() => plan?.id || plan?.logical_name || "", [plan]);
   const planDisplayName = useMemo(
     () => (plan?.display_name || plan?.logical_name || plan?.id || "").toString(),
@@ -478,6 +480,7 @@ export default function AtexMap({
     let onResize = null;
 
     (async () => {
+      setPdfLoading(true);
       const close = timeStart("init map + pdf render");
       try {
         await cleanupPdf();
@@ -543,19 +546,39 @@ export default function AtexMap({
         if (fileUrl) {
           const containerW = Math.max(320, wrapRef.current.clientWidth || 1024);
           const dpr = Math.max(1, window.devicePixelRatio || 1);
-          const qualityBoost = 3.5;
-          const targetBitmapW = Math.min(12288, Math.max(1800, Math.floor(containerW * dpr * qualityBoost)));
+          
+          // 🔥 Configuration adaptative selon appareil et réseau
+          const pdfConfig = getPDFConfig();
+          logDeviceInfo();
+          
+          const targetBitmapW = Math.min(
+            pdfConfig.maxBitmapWidth,
+            Math.max(pdfConfig.minBitmapWidth, Math.floor(containerW * dpr * pdfConfig.qualityBoost))
+          );
+          
           loadingTaskRef.current = pdfjsLib.getDocument(pdfDocOpts(fileUrl));
           const pdf = await loadingTaskRef.current.promise;
           const page = await pdf.getPage(Number(pageIndex) + 1);
           const baseVp = page.getViewport({ scale: 1 });
-          const safeScale = Math.min(6.0, Math.max(0.75, targetBitmapW / baseVp.width));
+          const safeScale = Math.min(
+            pdfConfig.maxScale,
+            Math.max(pdfConfig.minScale, targetBitmapW / baseVp.width)
+          );
           const viewport = page.getViewport({ scale: safeScale });
           const canvas = document.createElement("canvas");
           canvas.width = Math.floor(viewport.width);
           canvas.height = Math.floor(viewport.height);
-          const ctx = canvas.getContext("2d", { alpha: true });
-          ctx.imageSmoothingEnabled = true;
+          const ctx = canvas.getContext("2d", { 
+            alpha: true,
+            willReadFrequently: false 
+          });
+          ctx.imageSmoothingEnabled = pdfConfig.enableImageSmoothing;
+          
+          if (isMobileDevice()) {
+            ctx.imageSmoothingQuality = "low";
+          } else {
+            ctx.imageSmoothingQuality = "high";
+          }
           renderTaskRef.current = page.render({ canvasContext: ctx, viewport, intent: "display" });
           await renderTaskRef.current.promise;
           const dataUrl = canvas.toDataURL("image/png");
@@ -583,6 +606,7 @@ export default function AtexMap({
         console.error("[AtexMap] init error", e);
       } finally {
         close();
+        setPdfLoading(false);
       }
     })();
 
@@ -615,11 +639,25 @@ export default function AtexMap({
   async function reloadAll() {
     if (!baseReadyRef.current || !planKey) return;
     const end = timeStart("reloadAll");
+    const lazyConfig = getLazyLoadConfig();
+    
     try {
       await ensureIndexedOnce();
-      await loadSubareas();
+      
+      // 🚀 Charger les positions en priorité (marqueurs = critiques)
       await loadPositions();
-    } finally { end(); }
+      
+      // ⏱️ Délai avant de charger les sous-zones sur mobile
+      if (lazyConfig.subareasLoadDelay > 0) {
+        setTimeout(() => {
+          loadSubareas().catch(console.error);
+        }, lazyConfig.subareasLoadDelay);
+      } else {
+        await loadSubareas();
+      }
+    } finally { 
+      end(); 
+    }
   }
     async function enrichStatuses(list) {
     if (!Array.isArray(list) || list.length === 0) return list;
@@ -2096,6 +2134,23 @@ function setupHandleDrag(map, onMoveCallback) {
   // --- Modal plein écran
   return (
     <>
+      {/* Indicateur de chargement PDF */}
+      {pdfLoading && (
+        <div className="absolute inset-0 bg-white/90 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm mx-4">
+            <div className="text-center space-y-4">
+              <div className="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto"></div>
+              <div className="font-medium text-gray-700">Chargement du plan...</div>
+              <div className="text-sm text-gray-500">
+                {isMobileDevice() 
+                  ? "Optimisation mobile en cours..." 
+                  : "Rendu haute qualité..."}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {!open && (
         <Btn className="mt-2" onClick={() => setOpen(true)}>
           Ouvrir le plan
