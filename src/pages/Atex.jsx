@@ -250,6 +250,7 @@ export default function Atex() {
   // Liste équipements
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(false); // Indique s'il y a plus d'équipements à charger
   // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -311,18 +312,30 @@ export default function Atex() {
   async function reload() {
     setGlobalLoading(true);
     setLoading(true);
+    
+    // 🔥 Timeout de 10 secondes pour éviter le blocage infini
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Timeout')), 10000)
+    );
+    
     try {
-      const res = await api.atex.listEquipments({
+      const apiCall = api.atex.listEquipments({
         q,
         status,
         building,
         zone,
         compliance,
       });
+      
+      // Race entre l'API et le timeout
+      const res = await Promise.race([apiCall, timeoutPromise]);
       setItems(Array.isArray(res?.items) ? res.items : []);
+      setHasMore(false); // Chargement complet fait
     } catch (e) {
-      console.error(e);
+      console.error('[ATEX] Erreur chargement équipements:', e);
       setItems([]);
+      setHasMore(false);
+      // Ne pas bloquer l'UI en cas d'erreur
     } finally {
       setLoading(false);
       setGlobalLoading(false);
@@ -370,7 +383,29 @@ export default function Atex() {
     }
   }
   useEffect(() => {
-    reload();
+    // 🔥 OPTIMISATION : Chargement rapide initial (limité à 50 items)
+    const loadInitial = async () => {
+      setLoading(true);
+      try {
+        // Charger uniquement les 50 premiers équipements au démarrage
+        const res = await Promise.race([
+          api.atex.listEquipments({ limit: 50 }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+        ]);
+        const itemsList = Array.isArray(res?.items) ? res.items : [];
+        setItems(itemsList);
+        // Si on a exactement 50 items, il y en a probablement plus
+        setHasMore(itemsList.length === 50);
+      } catch (e) {
+        console.error('[ATEX] Chargement initial rapide échoué, tentative complète...');
+        // Si échec, essayer le chargement complet mais sans bloquer
+        reload().catch(console.error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadInitial();
   }, []);
   useEffect(() => {
     triggerReloadDebounced();
@@ -992,8 +1027,16 @@ function applyZonesLocally(id, zones) {
       <Toast text={toast} onClose={() => setToast("")} />
         {/* SPINNER GLOBAL */}
       {globalLoading && (
-        <div className="fixed inset-0 bg-white/70 flex items-center justify-center z-[5000] backdrop-blur-sm">
-          <div className="text-sm text-gray-600">Mise à jour en cours...</div>
+        <div className="fixed inset-0 bg-white/90 flex items-center justify-center z-[5000] backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm">
+            <div className="flex flex-col items-center gap-4">
+              <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+              <div className="text-center">
+                <div className="text-base font-medium text-gray-900">Chargement des équipements...</div>
+                <div className="text-xs text-gray-500 mt-1">Maximum 10 secondes</div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
       <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -1200,6 +1243,19 @@ function applyZonesLocally(id, zones) {
           </div>
         </div>
       )}
+      
+      {/* 🔥 Bouton pour charger tous les équipements si chargement partiel */}
+      {tab === "controls" && hasMore && !loading && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
+          <div className="text-sm text-blue-900 mb-3">
+            <strong>Chargement rapide :</strong> Les 50 premiers équipements sont affichés.
+          </div>
+          <Btn onClick={() => reload()} variant="primary">
+            Charger tous les équipements
+          </Btn>
+        </div>
+      )}
+      
       {/* --------- Onglet Calendrier --------- */}
       {tab === "calendar" && (
         <div className="bg-white rounded-2xl border shadow-sm p-4">
