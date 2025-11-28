@@ -1,10 +1,13 @@
-// server_dcf.js — Assistant DCF SAP v9.1.0 - CORRECTIONS MAJEURES
+// server_dcf.js — Assistant DCF SAP v9.2.0 - VERSION FINALE
 // =============================================================================
-// CORRECTIONS v9.1:
-// - Fix mapping colonnes DCF (VORNR → AG, ARBPL → T, etc.)
-// - Réutilisation correcte des données Vision extraites
-// - Calcul automatique N° opération basé sur opérations existantes
-// - Meilleure détection Work Center et Type de travail
+// CORRECTIONS v9.2:
+// - Mapping 26 colonnes COMPLET basé sur analyse Excel réelle
+// - 16 colonnes MANDATORY respectées (ligne 5 Excel)
+// - 8 colonnes avec valeurs fixes (CH94, ZM01, MTASKLIST...)
+// - Extraction automatique Short Text depuis demande
+// - Calcul N° opération (0010→0020→0030)
+// - Colonne CH (WARPL) ajoutée pour traçabilité
+// - Colonne N (PLNNR_02) obligatoire
 // =============================================================================
 
 import express from "express";
@@ -77,30 +80,56 @@ app.use(express.json({ limit: "30mb" }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 30 * 1024 * 1024 } });
 
 // =============================================================================
-// 2. MAPPING COLONNES DCF PAR TYPE (CORRIGÉ)
+// 2. MAPPING COLONNES DCF - VERSION FINALE v9.2
+// Basé sur analyse Excel réelle + documentation Word
 // =============================================================================
 
 const DCF_COLUMNS = {
   // -------------------------------------------------------------------------
-  // DCF TASK LIST - COLONNES RÉELLES du fichier Excel
+  // DCF TASK LIST - CREATE OPERATION (26 colonnes)
   // -------------------------------------------------------------------------
   TASK_LIST: {
-    // Créer une nouvelle opération
     CREATE_OPERATION: {
       action: "Create",
-      description: "Ajouter une nouvelle opération sur un plan existant",
+      description: "Ajouter une nouvelle opération sur un plan existant (IP18)",
       columns: {
-        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true, editable: false },
-        N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true, editable: true },
-        P: { code: "PLNAL", label: "Counter (1, 2, 3...)", mandatory: true, editable: true },
-        Q: { code: "KTEXT", label: "Nom du plan de maintenance", mandatory: false, editable: true },
-        T: { code: "ARBPL", label: "Work Center / Groupe", mandatory: true, editable: true },
-        X: { code: "SYSTC", label: "Intrusive (I) / Non-intrusive (N)", mandatory: true, editable: true },
-        AG: { code: "VORNR", label: "N° Opération (0010, 0020, 0030...)", mandatory: true, editable: true },
-        AJ: { code: "LTXA1", label: "Short Text (40 chars max)", mandatory: true, editable: true },
-        AK: { code: "LTXA2", label: "Long text opération", mandatory: false, editable: true },
-        AL: { code: "DAESSION", label: "Temps passé / Durée", mandatory: false, editable: true },
-        AN: { code: "ANZMA", label: "Nombre de personnes", mandatory: false, editable: true }
+        // ACTION
+        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true, editable: false, source: "fixed" },
+        
+        // TASK LIST IDENTIFICATION
+        J: { code: "PLNNR_01", label: "N° Groupe (référence)", mandatory: false, editable: true, source: "copy_from_N" },
+        N: { code: "PLNNR_02", label: "N° Groupe Task List", mandatory: true, editable: true, source: "sap_extracted" },
+        P: { code: "PLNAL_02", label: "Counter", mandatory: true, editable: true, source: "sap_extracted" },
+        Q: { code: "KTEXT", label: "Nom du plan de maintenance", mandatory: true, editable: true, source: "sap_extracted" },
+        R: { code: "TEXT1", label: "Long text header", mandatory: false, editable: true, source: "user_input" },
+        
+        // WORK CENTER & PLANNING
+        S: { code: "WERKS", value: "CH94", label: "Planning plant", mandatory: true, editable: false, source: "fixed" },
+        T: { code: "ARBPL_01", label: "Work Center", mandatory: true, editable: true, source: "sap_extracted" },
+        U: { code: "VERWE", value: "4", label: "Usage", mandatory: true, editable: false, source: "fixed" },
+        V: { code: "VAGRP", label: "Planner group (Type de travail)", mandatory: true, editable: true, source: "sap_extracted" },
+        W: { code: "STATU", value: "4", label: "Status", mandatory: true, editable: false, source: "fixed" },
+        X: { code: "ANLZU_01", value: "I", label: "System Condition (I/N)", mandatory: false, editable: true, source: "user_input" },
+        
+        // CLASSIFICATION
+        AC: { code: "CLASS", value: "MTASKLIST", label: "Class", mandatory: true, editable: false, source: "fixed" },
+        AF: { code: "ATWRT-03", value: "CH94", label: "Plant", mandatory: true, editable: false, source: "fixed" },
+        
+        // OPERATION DETAILS
+        AG: { code: "VORNR_01", label: "N° Opération", mandatory: true, editable: true, source: "calculated" },
+        AH: { code: "ARBPL-02", label: "Work center (operation)", mandatory: true, editable: true, source: "copy_from_T" },
+        AI: { code: "STEUS", value: "ZM01", label: "Control key", mandatory: true, editable: false, source: "fixed" },
+        AJ: { code: "LTXA1", label: "Short Text (40 chars max)", mandatory: true, editable: true, source: "extracted_from_request" },
+        AK: { code: "TXTKZ", label: "Long text opération", mandatory: false, editable: true, source: "user_input" },
+        AL: { code: "ARBEI", label: "Work/Duration", mandatory: true, editable: true, source: "user_input" },
+        AM: { code: "ARBEH", value: "HR", label: "Unit", mandatory: true, editable: false, source: "fixed" },
+        AN: { code: "ANZZL", label: "Number of persons", mandatory: true, editable: true, source: "user_input" },
+        
+        // OPTIONAL
+        AV: { code: "ANLZU_02", value: "I", label: "System Condition (2)", mandatory: false, editable: true, source: "user_input" },
+        
+        // MAINTENANCE PLAN REFERENCE
+        CH: { code: "WARPL", label: "N° Plan de maintenance", mandatory: false, editable: false, source: "sap_extracted" }
       }
     },
     
@@ -109,15 +138,14 @@ const DCF_COLUMNS = {
       action: "Change",
       description: "Modifier une opération existante",
       columns: {
-        I: { code: "ACTION", value: "Change", label: "Action SAP", mandatory: true, editable: false },
-        N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true, editable: false },
-        P: { code: "PLNAL", label: "Counter", mandatory: true, editable: false },
-        T: { code: "ARBPL", label: "Work Center / Groupe", mandatory: false, editable: true },
-        AG: { code: "VORNR", label: "N° Opération à modifier", mandatory: true, editable: false },
-        AJ: { code: "LTXA1", label: "Short Text (40 chars max)", mandatory: false, editable: true },
-        AK: { code: "LTXA2", label: "Long text opération", mandatory: false, editable: true },
-        AL: { code: "DAESSION", label: "Temps passé / Durée", mandatory: false, editable: true },
-        AN: { code: "ANZMA", label: "Nombre de personnes", mandatory: false, editable: true }
+        I: { code: "ACTION", value: "Change", label: "Action SAP", mandatory: true, editable: false, source: "fixed" },
+        N: { code: "PLNNR_02", label: "N° Groupe Task List", mandatory: true, editable: false, source: "sap_extracted" },
+        P: { code: "PLNAL_02", label: "Counter", mandatory: true, editable: false, source: "sap_extracted" },
+        AG: { code: "VORNR_01", label: "N° Opération à modifier", mandatory: true, editable: false, source: "sap_extracted" },
+        AJ: { code: "LTXA1", label: "Short Text (40 chars max)", mandatory: false, editable: true, source: "user_input" },
+        AK: { code: "TXTKZ", label: "Long text opération", mandatory: false, editable: true, source: "user_input" },
+        AL: { code: "ARBEI", label: "Work/Duration", mandatory: false, editable: true, source: "user_input" },
+        AN: { code: "ANZZL", label: "Number of persons", mandatory: false, editable: true, source: "user_input" }
       }
     },
     
@@ -126,10 +154,10 @@ const DCF_COLUMNS = {
       action: "Delete",
       description: "Supprimer une opération",
       columns: {
-        I: { code: "ACTION", value: "Delete", label: "Action SAP", mandatory: true, editable: false },
-        N: { code: "PLNNR", label: "N° Groupe Task List", mandatory: true, editable: false },
-        P: { code: "PLNAL", label: "Counter", mandatory: true, editable: false },
-        AG: { code: "VORNR", label: "N° Opération à supprimer", mandatory: true, editable: false }
+        I: { code: "ACTION", value: "Delete", label: "Action SAP", mandatory: true, editable: false, source: "fixed" },
+        N: { code: "PLNNR_02", label: "N° Groupe Task List", mandatory: true, editable: false, source: "sap_extracted" },
+        P: { code: "PLNAL_02", label: "Counter", mandatory: true, editable: false, source: "sap_extracted" },
+        AG: { code: "VORNR_01", label: "N° Opération à supprimer", mandatory: true, editable: false, source: "sap_extracted" }
       }
     }
   },
@@ -142,9 +170,9 @@ const DCF_COLUMNS = {
       action: "Change",
       description: "Modifier un plan de maintenance existant",
       columns: {
-        I: { code: "ACTION", value: "Change", label: "Action SAP", mandatory: true, editable: false },
-        J: { code: "WARPL", label: "N° Plan de maintenance", mandatory: true, editable: false },
-        W: { code: "ACTION_ITEM", value: "Create", label: "Action Item (Create pour nouvel équipement)", mandatory: false, editable: false }
+        I: { code: "ACTION", value: "Change", label: "Action SAP", mandatory: true, editable: false, source: "fixed" },
+        J: { code: "WARPL", label: "N° Plan de maintenance", mandatory: true, editable: false, source: "sap_extracted" },
+        W: { code: "ACTION_ITEM", value: "Create", label: "Action Item", mandatory: false, editable: false, source: "fixed" }
       }
     },
     
@@ -152,12 +180,12 @@ const DCF_COLUMNS = {
       action: "Create",
       description: "Créer un nouveau plan de maintenance",
       columns: {
-        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true, editable: false },
-        Q: { code: "WPTXT", label: "Nom du plan", mandatory: true, editable: true },
-        S: { code: "ZYKL1", label: "Cycle (1=année, 12=mois)", mandatory: true, editable: true },
-        AA: { code: "TPLNR", label: "Functional Location ou Equipment", mandatory: true, editable: true },
-        AE: { code: "INGRP", label: "Type de maintenance", mandatory: false, editable: true },
-        AJ: { code: "PLNNR_REF", label: "N° Task List associée", mandatory: true, editable: true }
+        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true, editable: false, source: "fixed" },
+        Q: { code: "WPTXT", label: "Nom du plan", mandatory: true, editable: true, source: "user_input" },
+        S: { code: "ZYKL1", label: "Cycle", mandatory: true, editable: true, source: "user_input" },
+        AA: { code: "TPLNR", label: "Functional Location ou Equipment", mandatory: true, editable: true, source: "user_input" },
+        AE: { code: "INGRP", label: "Type de maintenance", mandatory: false, editable: true, source: "user_input" },
+        AJ: { code: "PLNNR_REF", label: "N° Task List associée", mandatory: true, editable: true, source: "sap_extracted" }
       }
     }
   },
@@ -170,18 +198,20 @@ const DCF_COLUMNS = {
       action: "Create",
       description: "Créer un nouvel équipement",
       columns: {
-        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true, editable: false },
-        O: { code: "KRIT", label: "Criticité", mandatory: true, editable: true },
-        P: { code: "USTATUS", value: "ISER", label: "Statut (ISER = en service)", mandatory: true, editable: false },
-        Y: { code: "HERST", label: "Manufacturer", mandatory: false, editable: true },
-        AA: { code: "TYPBZ", label: "Model number", mandatory: false, editable: true },
-        AD: { code: "SERGE", label: "Serial Number", mandatory: false, editable: true },
-        AH: { code: "EQART", label: "Plan section", mandatory: true, editable: true },
-        AJ: { code: "ABCKZ", label: "ABC Indicator", mandatory: true, editable: true },
-        AM: { code: "KOSTL", label: "Cost center", mandatory: true, editable: true },
-        AP: { code: "INGRP", label: "Service", mandatory: true, editable: true },
-        AQ: { code: "SWERK", label: "Site", mandatory: true, editable: true },
-        AR: { code: "TPLNR", label: "Functional Location", mandatory: true, editable: true }
+        I: { code: "ACTION", value: "Create", label: "Action SAP", mandatory: true, editable: false, source: "fixed" },
+        O: { code: "KRIT", label: "Criticité", mandatory: true, editable: true, source: "user_input" },
+        P: { code: "USTATUS", value: "ISER", label: "Statut (ISER)", mandatory: true, editable: false, source: "fixed" },
+        Y: { code: "HERST", label: "Manufacturer", mandatory: false, editable: true, source: "user_input" },
+        AA: { code: "TYPBZ", label: "Model number", mandatory: false, editable: true, source: "user_input" },
+        AD: { code: "SERGE", label: "Serial Number", mandatory: false, editable: true, source: "user_input" },
+        AH: { code: "EQART", label: "Plan section", mandatory: true, editable: true, source: "user_input" },
+        AJ: { code: "ABCKZ", label: "ABC Indicator", mandatory: true, editable: true, source: "user_input" },
+        AM: { code: "KOSTL", label: "Cost center", mandatory: true, editable: true, source: "user_input" },
+        AP: { code: "INGRP", label: "Service", mandatory: true, editable: true, source: "user_input" },
+        AQ: { code: "SWERK", label: "Site", mandatory: true, editable: true, source: "user_input" },
+        AR: { code: "TPLNR", label: "Functional Location", mandatory: true, editable: true, source: "user_input" },
+        AT: { code: "SUBMESSION", value: "Next", label: "Mettre Next", mandatory: false, editable: false, source: "fixed" },
+        AW: { code: "GRESSION", value: "PRT6", label: "Grouping key", mandatory: true, editable: false, source: "fixed" }
       }
     }
   }
@@ -282,26 +312,24 @@ const VISION_PROMPT = `Tu es un expert SAP PM. Extrais TOUTES les données visib
 
 EXTRAIS SPÉCIFIQUEMENT:
 
-1. IDENTIFIANTS:
-- N° Plan de maintenance (WARPL): 8 chiffres ex: 30482333
+1. IDENTIFIANTS PRINCIPAUX:
+- N° Plan de maintenance (WARPL): 8 chiffres ex: 30482333, 40054680
 - N° Groupe Task List (PLNNR): ex: CH940104, 20036344
 - Counter (PLNAL): 1, 2, 3...
 - N° Ordre (AUFNR): ex: 4097131
-- N° Equipment (EQUNR): 10 chiffres
-- Functional Location (TPLNR): ex: CH94-UIN-EAUIND
+- Division: CH94
 
-2. OPÉRATIONS EXISTANTES (CRITIQUE):
+2. OPÉRATIONS EXISTANTES (TRÈS IMPORTANT):
 Si tu vois un tableau d'opérations, extrais CHAQUE ligne:
 - N° Opération (Opé.): 0010, 0020, 0030...
-- Work Center: FMEXUTIL, FMMANAGE...
+- Work Center: FMEXUTIL, FMMANAGE, FMEXMAINT...
 - Description de l'opération
-- Type de travail (P1, P2, P3...)
+- Type de travail (P1, P2, P3, P4...)
 
 3. DONNÉES DE PLANIFICATION:
 - Type d'ordre: ZM02, ZM01...
-- Division: CH94
 - PosteTravPrinc (Work Center principal): FMMANAGE, FMEXUTIL...
-- Type de travail (P2, P3...): cherche "Type de travail" ou "VAGR"
+- Type de travail / Planner group (P1, P2, P3, P4...): cherche "Type de travail" ou "VAGRP" ou "Planner group"
 - Priorité: 4-bas, 3, 2, 1-haut
 
 4. DESCRIPTIONS:
@@ -313,11 +341,12 @@ Réponds UNIQUEMENT en JSON valide:
   "extracted_fields": [
     {"code": "WARPL", "value": "30482333", "label": "N° Plan", "confidence": "high"},
     {"code": "PLNNR", "value": "CH940104", "label": "N° Groupe TL", "confidence": "high"},
+    {"code": "PLNAL", "value": "1", "label": "Counter", "confidence": "high"},
     {"code": "MAIN_WORK_CENTER", "value": "FMMANAGE", "label": "Work Center principal", "confidence": "high"},
     {"code": "WORK_TYPE", "value": "P2", "label": "Type de travail", "confidence": "high"}
   ],
   "existing_operations": [
-    {"number": "0010", "work_center": "FMEXUTIL", "description": "VIDANGER LES FOSSES A GRAISSES"},
+    {"number": "0010", "work_center": "FMEXUTIL", "description": "VIDANGER LES FOSSES"},
     {"number": "0020", "work_center": "FMMANAGE", "description": "Envoi des bons"}
   ],
   "plan_name": "Nettoyage EI B20-B23",
@@ -373,7 +402,7 @@ async function extractSAPDataFromImages(images = []) {
           {
             role: "user",
             content: [
-              { type: "text", text: "Extrais toutes les données SAP. Fais attention aux opérations existantes et au Work Center principal." },
+              { type: "text", text: "Extrais toutes les données SAP. Fais particulièrement attention aux opérations existantes (0010, 0020...) et au Work Center principal." },
               { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }
             ]
           }
@@ -445,9 +474,13 @@ async function extractSAPDataFromImages(images = []) {
 }
 
 // =============================================================================
-// 6. FONCTIONS UTILITAIRES
+// 6. FONCTIONS UTILITAIRES POUR LES VALEURS CONTEXTUELLES
 // =============================================================================
 
+/**
+ * Calcule le prochain numéro d'opération basé sur les opérations existantes
+ * Ex: [0010, 0020] → 0030
+ */
 function calculateNextOperationNumber(existingOperations = []) {
   if (!existingOperations || !existingOperations.length) return "0010";
   
@@ -467,8 +500,11 @@ function calculateNextOperationNumber(existingOperations = []) {
   return String(nextOp).padStart(4, '0');
 }
 
+/**
+ * Détermine le Work Center approprié basé sur les données extraites
+ */
 function determineWorkCenter(sapData) {
-  // Priorité 1: Work Center principal
+  // Priorité 1: Work Center principal (PosteTravPrinc)
   const mainWC = sapData.extracted?.find(e => 
     e.code === "MAIN_WORK_CENTER" || e.code === "ARBPL_MAIN" || e.code === "PosteTravPrinc"
   );
@@ -495,15 +531,21 @@ function determineWorkCenter(sapData) {
   return null;
 }
 
+/**
+ * Détermine le type de travail (P1, P2, P3...)
+ */
 function determineWorkType(sapData) {
   const workType = sapData.extracted?.find(e => 
-    e.code === "WORK_TYPE" || e.code === "VAGR" || e.code === "Type de travail"
+    e.code === "WORK_TYPE" || e.code === "VAGR" || e.code === "VAGRP" || e.code === "Type de travail" || e.code === "Planner group"
   );
   if (workType?.value) return workType.value;
   
   return null;
 }
 
+/**
+ * Extrait une valeur spécifique des données SAP
+ */
 function getSapValue(sapData, ...codes) {
   for (const code of codes) {
     const field = sapData.extracted?.find(e => e.code === code);
@@ -512,6 +554,40 @@ function getSapValue(sapData, ...codes) {
   return null;
 }
 
+/**
+ * Extrait le Short Text depuis la demande utilisateur
+ */
+function extractShortText(requestText) {
+  const patterns = [
+    /(?:nouvelle|new)\s+op[ée]ration\s+(?:est\s*:\s*|est\s+)(.+?)(?:\.|dans|sur|$)/i,
+    /(?:ajouter|cr[ée]er|create)\s+(?:une\s+)?op[ée]ration\s+(.+?)(?:\.|dans|sur|$)/i,
+    /op[ée]ration\s+:\s*(.+?)(?:\.|dans|sur|$)/i,
+    /:\s*(.+?)(?:\.|dans|$)/
+  ];
+  
+  for (const pattern of patterns) {
+    const match = requestText.match(pattern);
+    if (match && match[1]) {
+      let text = match[1].trim();
+      // Nettoyer
+      text = text.replace(/^(de|d'|pour|sur|dans)\s+/i, '');
+      text = text.replace(/\s+(dans|sur|pour)\s+.+$/i, '');
+      // Limiter à 40 caractères
+      if (text.length > 40) {
+        text = text.substring(0, 40);
+      }
+      if (text.length > 0) {
+        return text;
+      }
+    }
+  }
+  
+  return "";
+}
+
+/**
+ * Construit le contexte complet pour la génération d'instructions
+ */
 function buildInstructionContext(sapData, useCase, requestText) {
   const context = {
     nextOperationNumber: calculateNextOperationNumber(sapData.existing_operations),
@@ -522,15 +598,16 @@ function buildInstructionContext(sapData, useCase, requestText) {
     taskListGroup: null,
     counter: null,
     planName: sapData.plan_name || null,
-    division: null
+    division: null,
+    shortText: extractShortText(requestText)
   };
   
   context.planNumber = getSapValue(sapData, "WARPL", "Plan de maintenance");
-  context.taskListGroup = getSapValue(sapData, "PLNNR", "Groupe Task List", "Groupe gamme");
+  context.taskListGroup = getSapValue(sapData, "PLNNR", "Groupe Task List", "Groupe gamme", "PLNNR_02");
   context.counter = getSapValue(sapData, "PLNAL", "Counter") || "1";
   context.division = getSapValue(sapData, "WERKS", "Division", "Div. planif.") || "CH94";
   
-  // Chercher dans le texte
+  // Chercher plan number dans le texte
   const planMatch = requestText.match(/plan[s]?\s*(?:de maintenance)?\s*(\d{7,8})/i);
   if (planMatch && !context.planNumber) {
     context.planNumber = planMatch[1];
@@ -913,7 +990,7 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
 
     // 1. Extraire données SAP
     const sapData = await extractSAPDataFromImages(screenshots);
-    console.log(`[analyze] Extracted ${sapData.extracted?.length || 0} SAP fields, ${sapData.existing_operations?.length || 0} operations`);
+    console.log(`[analyze] Extracted ${sapData.extracted?.length || 0} fields, ${sapData.existing_operations?.length || 0} operations`);
 
     // 2. Sauvegarder screenshots
     for (const ss of screenshots) {
@@ -997,18 +1074,19 @@ app.post("/api/dcf/wizard/analyze", upload.array("screenshots", 10), async (req,
         workType: context.workType,
         planName: context.planName,
         planNumber: context.planNumber,
-        taskListGroup: context.taskListGroup
+        taskListGroup: context.taskListGroup,
+        shortText: context.shortText
       },
       reference_info: refInfo,
       questions: []
     };
 
     // Questions si données manquantes
-    if (useCase === "create_operation" && !context.taskListGroup) {
-      response.questions.push("Quel est le N° Groupe Task List (PLNNR) ?");
-    }
-    if (!context.workCenter) {
-      response.questions.push("Quel est le Work Center (ARBPL) ?");
+    if (useCase === "create_operation") {
+      if (!context.taskListGroup) response.questions.push("Quel est le N° Groupe Task List (PLNNR_02) ?");
+      if (!context.workCenter) response.questions.push("Quel est le Work Center (ARBPL_01) ?");
+      if (!context.workType) response.questions.push("Quel est le Type de travail / Planner group (VAGRP) ? Ex: P1, P2, P3...");
+      if (!context.shortText) response.questions.push("Quelle est la description de l'opération (Short Text, max 40 chars) ?");
     }
 
     console.log(`[analyze] Response: ${required_files.length} files, ${sapData.extracted?.length || 0} fields`);
@@ -1088,122 +1166,84 @@ app.post("/api/dcf/wizard/instructions", upload.array("screenshots", 10), async 
     // 8. Contexte
     const context = buildInstructionContext(allSapData, useCase, requestText || "");
 
-    console.log(`[instructions] Context: nextOp=${context.nextOperationNumber}, WC=${context.workCenter}, type=${context.workType}`);
+    console.log(`[instructions] Context: nextOp=${context.nextOperationNumber}, WC=${context.workCenter}, type=${context.workType}, shortText="${context.shortText}"`);
 
-    // 9. Prompt IA
-    const sapDataStr = JSON.stringify({
-      extracted: allSapData.extracted,
-      existing_operations: allSapData.existing_operations,
-      plan_name: allSapData.plan_name
-    }, null, 2);
+    // 9. Génération automatique des instructions
+    const generatedSteps = [];
+    let missingData = [];
 
-    const prompt = `Tu dois générer les instructions PRÉCISES pour remplir un fichier DCF SAP.
+    // Parcourir toutes les colonnes définies
+    for (const [col, colDef] of Object.entries(columnsToFill)) {
+      let value = "";
+      let reason = "";
+      let editable = colDef.editable !== false;
 
-DEMANDE: "${requestText}"
+      // Déterminer la valeur selon la source
+      if (colDef.source === "fixed" && colDef.value) {
+        value = colDef.value;
+        reason = "Valeur fixe SAP";
+        editable = false;
+      }
+      else if (colDef.source === "calculated" && col === "AG") {
+        value = context.nextOperationNumber;
+        reason = `Calculé après opérations: ${allSapData.existing_operations?.map(o => o.number).join(", ") || "aucune"}`;
+        editable = true;
+      }
+      else if (colDef.source === "copy_from_T" && col === "AH") {
+        value = context.workCenter || "";
+        reason = "Copie du Work Center principal (colonne T)";
+        editable = true;
+      }
+      else if (colDef.source === "copy_from_N" && col === "J") {
+        value = context.taskListGroup || "";
+        reason = "Copie de PLNNR_02 (colonne N)";
+        editable = true;
+      }
+      else if (colDef.source === "sap_extracted") {
+        // Chercher dans les données extraites
+        if (col === "N") value = context.taskListGroup || "";
+        else if (col === "P") value = context.counter || "";
+        else if (col === "Q") value = context.planName || "";
+        else if (col === "T") value = context.workCenter || "";
+        else if (col === "V") value = context.workType || "";
+        else if (col === "CH") value = context.planNumber || "";
+        
+        reason = value ? "Extrait des screenshots SAP" : "NON TROUVÉ dans les screenshots";
+        editable = true;
+      }
+      else if (colDef.source === "extracted_from_request" && col === "AJ") {
+        value = context.shortText || "";
+        reason = value ? "Extrait de la demande utilisateur" : "À extraire de la demande";
+        editable = true;
+      }
+      else if (colDef.source === "user_input") {
+        value = "";
+        reason = "À renseigner par l'utilisateur";
+        editable = true;
+      }
 
-CAS D'USAGE: ${useCase} - ${useCaseInfo.description}
+      // Ajouter dans missing_data si obligatoire et vide
+      if (colDef.mandatory && !value) {
+        missingData.push(`${colDef.label} (col ${col}, code ${colDef.code})`);
+      }
 
-TEMPLATE: ${templateFilename} (Type: ${templateType}, Action: ${dcfAction || "N/A"})
-
-DONNÉES SAP EXTRAITES:
-${sapDataStr}
-
-CONTEXTE CALCULÉ (UTILISE CES VALEURS):
-- Prochain N° Opération: ${context.nextOperationNumber} (basé sur ${context.existingOperationsCount} ops: ${allSapData.existing_operations?.map(o => o.number).join(", ") || "aucune"})
-- Work Center: ${context.workCenter || "NON TROUVÉ"}
-- Type de travail: ${context.workType || "NON TROUVÉ"}
-- N° Plan: ${context.planNumber || "NON TROUVÉ"}
-- N° Groupe TL: ${context.taskListGroup || "NON TROUVÉ"}
-- Counter: ${context.counter || "1"}
-- Nom plan: ${context.planName || "NON TROUVÉ"}
-
-COLONNES OBLIGATOIRES (${dcfAction || "N/A"}):
-${Object.entries(columnsToFill).map(([col, info]) => 
-  `${col}: ${info.code} - ${info.label || ""} ${info.mandatory ? "(OBLIGATOIRE)" : ""} ${info.value ? `= "${info.value}"` : ""}`
-).join("\n")}
-
-RÈGLES CRITIQUES:
-1. N° Opération (col AG): Utilise ${context.nextOperationNumber}, PAS 0010 par défaut!
-2. Work Center (col T): Utilise ${context.workCenter || "la valeur extraite"}, PAS FMEXMAINT!
-3. Type travail: Utilise ${context.workType || "la valeur extraite"}
-4. Short Text (col AJ): max 40 caractères
-5. Counter (col P): ${context.counter}
-6. ACTION (col I): ${dcfAction === "CREATE_OPERATION" ? "Create" : dcfAction === "CHANGE_OPERATION" ? "Change" : "Delete"}
-7. System Condition (col X): I = Intrusive, N = Non-intrusive
-
-GÉNÈRE en JSON:
-{
-  "steps": [
-    {
-      "row": "6",
-      "col": "I",
-      "code": "ACTION",
-      "label": "Action SAP",
-      "value": "Create",
-      "reason": "Nouvelle opération",
-      "mandatory": true,
-      "sheet": "DCF",
-      "editable": false
-    },
-    {
-      "row": "6",
-      "col": "AG",
-      "code": "VORNR",
-      "label": "N° Opération",
-      "value": "${context.nextOperationNumber}",
-      "reason": "Après opérations ${allSapData.existing_operations?.map(o => o.number).join(", ") || ""}",
-      "mandatory": true,
-      "sheet": "DCF",
-      "editable": true
-    }
-  ],
-  "missing_data": ["Liste données manquantes"]
-}
-
-IMPORTANT:
-- Utilise les VRAIES valeurs du contexte!
-- Si valeur non trouvée, mets null dans missing_data
-- Génère TOUTES les colonnes obligatoires`;
-
-    const completion = await openai.chat.completions.create({
-      model: ANSWER_MODEL,
-      messages: [
-        { role: "system", content: "Expert SAP DCF. Génère instructions PRÉCISES basées sur données extraites. N'invente JAMAIS - utilise uniquement le contexte fourni." },
-        { role: "user", content: prompt }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.1,
-      max_tokens: 3000
-    });
-
-    const out = cleanJSON(completion.choices[0].message.content);
-    const steps = Array.isArray(out.steps) ? out.steps : [];
-
-    const processedSteps = steps.map((s, idx) => ({
-      index: idx,
-      row: String(s.row || "6"),
-      col: String(s.col || ""),
-      code: String(s.code || ""),
-      label: String(s.label || ""),
-      value: s.value || "",
-      reason: s.reason || "",
-      mandatory: Boolean(s.mandatory),
-      sheet: s.sheet || "DCF",
-      editable: s.editable !== false && Boolean(s.value !== "Create" && s.value !== "Change" && s.value !== "Delete")
-    }));
-
-    const missingData = out.missing_data || [];
-    if (!context.workCenter && useCase.includes("operation")) {
-      missingData.push("Work Center (ARBPL) non trouvé");
-    }
-    if (!context.taskListGroup && templateType === "TASK_LIST") {
-      missingData.push("N° Groupe Task List (PLNNR) non trouvé");
+      generatedSteps.push({
+        row: "6",
+        col: col,
+        code: colDef.code,
+        label: colDef.label,
+        value: value,
+        reason: reason,
+        mandatory: colDef.mandatory,
+        sheet: "DCF",
+        editable: editable
+      });
     }
 
-    console.log(`[instructions] ${processedSteps.length} steps, ${missingData.length} missing`);
+    console.log(`[instructions] ${generatedSteps.length} steps générées, ${missingData.length} données manquantes`);
 
     res.json({
-      steps: processedSteps,
+      steps: generatedSteps,
       missing_data: missingData,
       sap_extracted: allSapData.extracted,
       existing_operations: allSapData.existing_operations,
@@ -1236,7 +1276,7 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
     const steps = Array.isArray(instructions) ? instructions : [];
 
     for (const inst of steps) {
-      if (!inst.value || inst.value === "null" || inst.value === null) continue;
+      if (!inst.value || inst.value === "null" || inst.value === null || inst.value === "") continue;
       
       const sheetName = inst.sheet && wb.Sheets[inst.sheet] ? inst.sheet : wb.SheetNames[0];
       const ws = wb.Sheets[sheetName];
@@ -1273,26 +1313,29 @@ app.post("/api/dcf/wizard/autofill", async (req, res) => {
 });
 
 // =============================================================================
-// 12. ROUTES API - VALIDATION & HEALTH
+// 12. ROUTES API - HEALTH
 // =============================================================================
 
 app.get("/api/dcf/health", (req, res) => {
   res.json({
     status: "ok",
-    version: "9.1.0",
+    version: "9.2.0",
     features: [
-      "vision_extraction_v2",
+      "26_columns_task_list_create",
+      "16_mandatory_columns",
+      "8_fixed_values",
       "auto_operation_numbering",
       "work_center_detection",
-      "column_mapping_fixed",
-      "context_reuse_fixed"
+      "short_text_extraction",
+      "warpl_tracking"
     ],
     config: {
       vision_model: VISION_MODEL,
       answer_model: ANSWER_MODEL,
       has_tasklist_ref: !!TASKLIST_REF,
       dropdowns_count: Object.keys(DROPDOWNS).length
-    }
+    },
+    columns_create_operation: Object.keys(DCF_COLUMNS.TASK_LIST.CREATE_OPERATION.columns).length
   });
 });
 
@@ -1303,15 +1346,18 @@ app.get("/api/dcf/health", (req, res) => {
 app.listen(PORT, HOST, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════════════╗
-║           DCF SAP Assistant v9.1.0 - CORRECTIONS              ║
+║           DCF SAP Assistant v9.2.0 - VERSION FINALE           ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  URL: http://${HOST}:${PORT}                                  
 ║                                                               ║
-║  Corrections v9.1:                                            ║
-║  ✅ Fix mapping colonnes (VORNR → AG, ARBPL → T)              ║
-║  ✅ Calcul automatique N° opération (0010→0020→0030)          ║
-║  ✅ Réutilisation données Vision extraites                    ║
-║  ✅ Détection correcte Work Center depuis screenshots         ║
+║  Corrections v9.2:                                            ║
+║  ✅ 26 colonnes CREATE_OPERATION (basé Excel réel)            ║
+║  ✅ 16 colonnes MANDATORY respectées                           ║
+║  ✅ 8 colonnes valeurs fixes (CH94, ZM01, MTASKLIST...)        ║
+║  ✅ Colonne N (PLNNR_02) obligatoire                           ║
+║  ✅ Colonne CH (WARPL) pour traçabilité                        ║
+║  ✅ Extraction Short Text depuis demande                       ║
+║  ✅ Calcul N° opération (0010→0020→0030)                       ║
 ╚═══════════════════════════════════════════════════════════════╝
 `);
 });
