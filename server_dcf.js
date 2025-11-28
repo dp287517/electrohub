@@ -109,7 +109,7 @@ const DCF_COLUMNS = {
         U: { code: "VERWE", value: "4", label: "Usage", mandatory: true, editable: false, source: "fixed" },
         V: { code: "VAGRP", label: "Planner group (Type de travail)", mandatory: true, editable: true, source: "sap_extracted" },
         W: { code: "STATU", value: "4", label: "Status", mandatory: true, editable: false, source: "fixed" },
-        X: { code: "ANLZU_01", value: "I", label: "System Condition (I/N)", mandatory: false, editable: true, source: "user_input" },
+        X: { code: "ANLZU_01", value: "I", label: "System Condition (I/N)", mandatory: false, editable: true, source: "fixed" },
         
         // CLASSIFICATION
         AC: { code: "CLASS", value: "MTASKLIST", label: "Class", mandatory: true, editable: false, source: "fixed" },
@@ -607,10 +607,11 @@ function buildInstructionContext(sapData, useCase, requestText) {
   context.counter = getSapValue(sapData, "PLNAL", "Counter") || "1";
   context.division = getSapValue(sapData, "WERKS", "Division", "Div. planif.") || "CH94";
   
-  // Chercher plan number dans le texte
+  // PRIORISER le plan number depuis le texte de la demande
   const planMatch = requestText.match(/plan[s]?\s*(?:de maintenance)?\s*(\d{7,8})/i);
-  if (planMatch && !context.planNumber) {
-    context.planNumber = planMatch[1];
+  if (planMatch) {
+    context.planNumber = planMatch[1]; // Override Vision si présent dans le texte
+    console.log(`[Context] Plan number trouvé dans demande: ${context.planNumber}`);
   }
   
   return context;
@@ -1184,7 +1185,15 @@ app.post("/api/dcf/wizard/instructions", upload.array("screenshots", 10), async 
     // 8. Contexte
     const context = buildInstructionContext(allSapData, useCase, requestText || "");
 
-    console.log(`[instructions] Context: nextOp=${context.nextOperationNumber}, WC=${context.workCenter}, type=${context.workType}, shortText="${context.shortText}"`);
+    console.log(`[instructions] Context complet:`);
+    console.log(`  - nextOperationNumber: ${context.nextOperationNumber}`);
+    console.log(`  - workCenter: ${context.workCenter}`);
+    console.log(`  - workType: ${context.workType}`);
+    console.log(`  - planNumber: ${context.planNumber}`);
+    console.log(`  - taskListGroup: ${context.taskListGroup}`);
+    console.log(`  - counter: ${context.counter}`);
+    console.log(`  - planName: ${context.planName}`);
+    console.log(`  - shortText: "${context.shortText}"`);
 
     // 9. Génération automatique des instructions
     const generatedSteps = [];
