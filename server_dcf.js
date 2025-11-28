@@ -1143,14 +1143,25 @@ app.post("/api/dcf/wizard/instructions", upload.array("screenshots", 10), async 
       plan_name: sessionSapData.plan_name || newSapData.plan_name
     };
 
-    // 5. Type template
+    // 5. Type template - DÉTECTION INTELLIGENTE
     const fn = templateFilename.toLowerCase();
-    let templateType = "TASK_LIST";
-    if (fn.includes("pm") || fn.includes("plan")) {
+    let templateType = "TASK_LIST"; // Défaut
+    
+    // Priorité 1: Si "Task List" OU "Task_List" dans le nom → TASK_LIST
+    if (fn.includes("task list") || fn.includes("task_list") || fn.includes("tasklist")) {
+      templateType = "TASK_LIST";
+    }
+    // Priorité 2: Si "Maintenance Plan" seul (sans "Task List") → MAINTENANCE_PLAN
+    else if ((fn.includes("maintenance plan") || fn.includes("maintenance_plan")) && !fn.includes("task")) {
       templateType = "MAINTENANCE_PLAN";
-    } else if (fn.includes("eqpt") || fn.includes("equipment")) {
+    }
+    // Priorité 3: Equipment
+    else if (fn.includes("equipment") || fn.includes("eqpt")) {
       templateType = "EQUIPMENT";
     }
+    
+    console.log(`[instructions] Template filename: ${templateFilename}`);
+    console.log(`[instructions] Detected template type: ${templateType}`);
 
     // 6. Cas d'usage
     const useCase = detectUseCase(requestText || "");
