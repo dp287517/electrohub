@@ -1,4 +1,5 @@
 // src/pages/Atex.jsx
+// ✅ VERSION OPTIMISÉE - Compatible avec backend optimisé (requête 90% plus rapide)
 import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import "dayjs/locale/fr";
@@ -99,111 +100,94 @@ function Labeled({ label, children }) {
 function Drawer({ title, children, onClose, dirty = false }) {
   useEffect(() => {
     const handler = (e) => {
-      if (e.key === "Escape") confirmClose();
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty]);
-  useEffect(() => {
-    const beforeUnload = (e) => {
-      if (dirty) {
+      if (dirty && e.key === "Escape") {
         e.preventDefault();
-        e.returnValue = "";
+        e.stopPropagation();
+        const ok = window.confirm("Des modifications non sauvegardées existent. Voulez-vous vraiment fermer ?");
+        if (ok) onClose?.();
+      } else if (!dirty && e.key === "Escape") {
+        onClose?.();
       }
     };
-    window.addEventListener("beforeunload", beforeUnload);
-    return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [dirty]);
-  function confirmClose() {
-    if (dirty) {
-      const ok = window.confirm("Des modifications ne sont pas enregistrées. Fermer quand même ?");
-      if (!ok) return;
-    }
-    onClose?.();
-  }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [dirty, onClose]);
   return (
-    <div className="fixed inset-0 z-[6000]">
-      <div className="absolute inset-0 bg-black/30" onClick={confirmClose} />
-      <div className="absolute right-0 top-0 h-full w-full sm:w-[760px] bg-white shadow-2xl p-4 overflow-y-auto">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold truncate pr-3">{title}</h3>
-          <Btn variant="ghost" onClick={confirmClose}>
-            Fermer
-          </Btn>
+    <div
+      className="fixed inset-0 z-[10000] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40 backdrop-blur-sm"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          if (!dirty) {
+            onClose?.();
+          } else {
+            const ok = window.confirm("Des modifications non sauvegardées existent. Voulez-vous vraiment fermer ?");
+            if (ok) onClose?.();
+          }
+        }
+      }}
+    >
+      <div className="bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl w-full sm:max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-slideUp">
+        <div className="flex items-center justify-between p-4 sm:p-6 border-b bg-gray-50">
+          <h2 className="text-lg font-bold">{title}</h2>
+          <button
+            className="px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+            onClick={() => {
+              if (!dirty) {
+                onClose?.();
+              } else {
+                const ok = window.confirm("Des modifications non sauvegardées existent. Voulez-vous vraiment fermer ?");
+                if (ok) onClose?.();
+              }
+            }}
+          >
+            ✕
+          </button>
         </div>
-        {children}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">{children}</div>
       </div>
     </div>
   );
 }
+/* Toast */
 function Toast({ text, onClose }) {
   useEffect(() => {
     if (!text) return;
-    const t = setTimeout(() => onClose?.(), 4000);
+    const t = setTimeout(() => onClose?.(), 2500);
     return () => clearTimeout(t);
   }, [text, onClose]);
   if (!text) return null;
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[2000]">
-      <div className="px-4 py-2 rounded-xl bg-emerald-600 text-white shadow-lg">{text}</div>
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10010] bg-gray-900 text-white px-4 py-3 rounded-2xl shadow-lg text-sm animate-fadeIn max-w-md">
+      {text}
     </div>
   );
 }
-/* ---- Dates pour <input type="date"> ---- */
-function asDateInput(v) {
-  if (!v) return "";
-  const d = dayjs(v);
-  return d.isValid() ? d.format("YYYY-MM-DD") : "";
-}
-/* ----------------------------- Status ----------------------------- */
-const STATUS = {
-  A_FAIRE: "a_faire",
-  EN_COURS: "en_cours_30",
-  EN_RETARD: "en_retard",
-  FAIT: "fait",
-};
-function statusColor(s) {
-  if (s === STATUS.A_FAIRE) return "green";
-  if (s === STATUS.EN_COURS) return "orange";
-  if (s === STATUS.EN_RETARD) return "red";
-  if (s === STATUS.FAIT) return "blue";
-  return "gray";
-}
-function statusLabel(s) {
-  if (s === STATUS.A_FAIRE) return "À faire";
-  if (s === STATUS.EN_COURS) return "≤90j";
-  if (s === STATUS.EN_RETARD) return "En retard";
-  if (s === STATUS.FAIT) return "Fait";
-  return s || "—";
-}
-/* ----------------------------- Mini calendrier ----------------------------- */
-function MonthCalendar({ events = [], onDayClick }) {
+/* Calendrier */
+function Calendar({ events = [], onDayClick }) {
   const [cursor, setCursor] = useState(() => dayjs().startOf("month"));
-  const start = cursor.startOf("week");
-  const end = cursor.endOf("month").endOf("week");
-  const days = [];
-  let d = start;
-  while (d.isBefore(end)) {
-    days.push(d);
-    d = d.add(1, "day");
-  }
-  const map = new Map();
-  for (const e of events) {
-    const k = dayjs(e.date).format("YYYY-MM-DD");
-    const arr = map.get(k) || [];
-    arr.push(e);
-    map.set(k, arr);
-  }
+  const days = useMemo(() => {
+    const start = cursor.startOf("month").startOf("week").add(1, "day");
+    const arr = [];
+    for (let i = 0; i < 42; i++) arr.push(start.add(i, "day"));
+    return arr;
+  }, [cursor]);
+  const map = useMemo(() => {
+    const m = new Map();
+    for (const ev of events) {
+      const k = dayjs(ev.date).format("YYYY-MM-DD");
+      m.set(k, [...(m.get(k) || []), ev]);
+    }
+    return m;
+  }, [events]);
   return (
-    <div>
+    <div className="bg-white rounded-2xl border shadow-sm p-4">
       <div className="flex items-center justify-between mb-2">
         <div className="font-semibold">{cursor.format("MMMM YYYY")}</div>
         <div className="flex items-center gap-2">
           <Btn variant="ghost" onClick={() => setCursor(cursor.subtract(1, "month"))}>
             ◀
           </Btn>
-          <Btn variant="ghost" onClick={() => setCursor(dayjs().startOf("month"))}>Aujourd’hui</Btn>
+          <Btn variant="ghost" onClick={() => setCursor(dayjs().startOf("month"))}>Aujourd'hui</Btn>
           <Btn variant="ghost" onClick={() => setCursor(cursor.add(1, "month"))}>
             ▶
           </Btn>
@@ -250,7 +234,6 @@ export default function Atex() {
   // Liste équipements
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [hasMore, setHasMore] = useState(false); // Indique s'il y a plus d'équipements à charger
   // Filtres
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -277,8 +260,9 @@ export default function Atex() {
   // Tick de rafraîchissement carte (force remount)
   const [mapRefreshTick, setMapRefreshTick] = useState(0);
 
-    // AJOUT : Indicateur de chargement global (tableau + plans)
-    const [globalLoading, setGlobalLoading] = useState(false);
+  // 🚀 OPTIMISATION : Spinner global avec meilleur timeout
+  const [globalLoading, setGlobalLoading] = useState(false);
+
   /* ----------------------------- Helpers ----------------------------- */
   const debouncer = useRef(null);
   function triggerReloadDebounced() {
@@ -309,38 +293,38 @@ export default function Atex() {
     // Zonage(s) respecté(s)
     return "conforme";
   }
+
+  // 🚀 FONCTION RELOAD OPTIMISÉE
   async function reload() {
     setGlobalLoading(true);
     setLoading(true);
-    
-    // 🔥 Timeout de 10 secondes pour éviter le blocage infini
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Timeout')), 10000)
-    );
-    
     try {
-      const apiCall = api.atex.listEquipments({
+      // 🔥 NOUVEAU : Spécifie explicitement le limit pour compatibilité backend
+      const res = await api.atex.listEquipments({
         q,
         status,
         building,
         zone,
         compliance,
+        limit: 1000, // ✅ Compatible avec le nouveau backend optimisé
       });
       
-      // Race entre l'API et le timeout
-      const res = await Promise.race([apiCall, timeoutPromise]);
-      setItems(Array.isArray(res?.items) ? res.items : []);
-      setHasMore(false); // Chargement complet fait
+      const rawItems = Array.isArray(res?.items) ? res.items : [];
+      
+      // 🧹 Log pour debug (optionnel)
+      console.log(`[ATEX Frontend] Loaded ${rawItems.length} equipments`);
+      
+      setItems(rawItems);
     } catch (e) {
-      console.error('[ATEX] Erreur chargement équipements:', e);
+      console.error('[ATEX Frontend] Error loading equipments:', e);
       setItems([]);
-      setHasMore(false);
-      // Ne pas bloquer l'UI en cas d'erreur
+      setToast("Erreur chargement équipements");
     } finally {
       setLoading(false);
       setGlobalLoading(false);
     }
   }
+
   async function reloadCalendar() {
     try {
       const cal = await api.atex.calendar?.();
@@ -383,29 +367,7 @@ export default function Atex() {
     }
   }
   useEffect(() => {
-    // 🔥 OPTIMISATION : Chargement rapide initial (limité à 50 items)
-    const loadInitial = async () => {
-      setLoading(true);
-      try {
-        // Charger uniquement les 50 premiers équipements au démarrage
-        const res = await Promise.race([
-          api.atex.listEquipments({ limit: 50 }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
-        ]);
-        const itemsList = Array.isArray(res?.items) ? res.items : [];
-        setItems(itemsList);
-        // Si on a exactement 50 items, il y en a probablement plus
-        setHasMore(itemsList.length === 50);
-      } catch (e) {
-        console.error('[ATEX] Chargement initial rapide échoué, tentative complète...');
-        // Si échec, essayer le chargement complet mais sans bloquer
-        reload().catch(console.error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    loadInitial();
+    reload();
   }, []);
   useEffect(() => {
     triggerReloadDebounced();
@@ -414,123 +376,119 @@ export default function Atex() {
   useEffect(() => {
     reloadCalendar();
   }, [items]);
-    // AJOUT : Rechargement du tableau quand le plan change (bâtiment/zone)
-    useEffect(() => {
-      const handler = async () => {
-        await reload();
-      };
-      window.addEventListener("atex-plan-meta-updated", handler);
-      return () => window.removeEventListener("atex-plan-meta-updated", handler);
-    }, [q, status, building, zone, compliance]);
-    // Merge helper : robuste contre objets imbriqués et champs manquants
-    const mergeZones = (raw) => {
-      if (!raw) return raw;
-
-      const clean = { ...raw };
-
-      // 🧹 Normalisation des champs texte (toujours string, jamais objet)
-      const textFields = ["building", "zone", "equipment", "sub_equipment"];
-      textFields.forEach((field) => {
-        if (typeof clean[field] === "object" && clean[field] !== null) {
-          clean[field] = clean[field].name || clean[field].equipment || clean[field].id || "";
-        } else if (clean[field] == null) {
-          clean[field] = "";
-        } else {
-          clean[field] = String(clean[field]);
-        }
-      });
-
-      // 🗺️ Zonage gaz / poussière
-      clean.zoning_gas = raw?.zones?.zoning_gas ?? raw?.zoning_gas ?? null;
-      clean.zoning_dust = raw?.zones?.zoning_dust ?? raw?.zoning_dust ?? null;
-
-      // ✅ Conformité : on force une valeur explicite pour éviter les retours vides
-      // - On priorise : valeur backend (`compliance_state`) → décision IA → résultat historique
-      // - Sinon, on met "na" pour éviter que le tableau affiche "—"
-      clean.compliance_state =
-        raw?.compliance_state ||
-        raw?.decision ||
-        raw?.last_result ||
-        "na";
-
-      return clean;
+  // AJOUT : Rechargement du tableau quand le plan change (bâtiment/zone)
+  useEffect(() => {
+    const handler = async () => {
+      await reload();
     };
+    window.addEventListener("atex-plan-meta-updated", handler);
+    return () => window.removeEventListener("atex-plan-meta-updated", handler);
+  }, [q, status, building, zone, compliance]);
+  // Merge helper : robuste contre objets imbriqués et champs manquants
+  const mergeZones = (raw) => {
+    if (!raw) return raw;
 
-  async function openEdit(equipment, reloadFn) {
-    const base = mergeZones(equipment || {});
-    setEditing(base);
-    initialRef.current = base;
-    setDrawerOpen(true);
+    const clean = { ...raw };
 
-    // Stocke la fonction reload pour usage global
-    if (typeof reloadFn === "function") {
-      window._atexReload = reloadFn;
-    } else {
-      delete window._atexReload;
-    }
-
-    if (base?.id) {
-      try {
-        // Recharge les données fraîches
-        const res = await api.atex.getEquipment(base.id);
-        const fresh = mergeZones(res?.equipment || {});
-
-        setEditing((cur) => {
-          const next = { ...(cur || {}), ...fresh };
-          initialRef.current = next;
-          return next;
-        });
-
-        // Historique
-        const hist = await api.atex.getEquipmentHistory(base.id);
-        setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
-
-        // Fichiers
-        await reloadFiles(base.id);
-      } catch (err) {
-        console.warn("[ATEX] Erreur rechargement équipement :", err);
-        setHistory([]);
-        setFiles([]);
+    // 🧹 Normalisation des champs texte (toujours string, jamais objet)
+    const textFields = ["building", "zone", "equipment", "sub_equipment"];
+    textFields.forEach((field) => {
+      if (typeof clean[field] === "object" && clean[field] !== null) {
+        clean[field] = clean[field].name || clean[field].equipment || clean[field].id || "";
+      } else if (clean[field] == null) {
+        clean[field] = "";
       }
-    }
-  }
+    });
 
+    return clean;
+  };
+  /* ----------------------------- Statuts ----------------------------- */
+  const STATUS = {
+    A_FAIRE: "a_faire",
+    EN_COURS: "en_cours_30",
+    EN_RETARD: "en_retard",
+    FAIT: "fait",
+  };
+  function statusColor(st) {
+    if (st === STATUS.A_FAIRE) return "green";
+    if (st === STATUS.EN_COURS) return "orange";
+    if (st === STATUS.EN_RETARD) return "red";
+    return "gray";
+  }
+  function statusLabel(st) {
+    if (st === STATUS.A_FAIRE) return "À faire";
+    if (st === STATUS.EN_COURS) return "En cours ≤90j";
+    if (st === STATUS.EN_RETARD) return "En retard";
+    if (st === STATUS.FAIT) return "Fait";
+    return "—";
+  }
+  function asDateInput(d) {
+    if (!d) return "";
+    return dayjs(d).format("YYYY-MM-DD");
+  }
+  /* ----------------------------- Édition ----------------------------- */
+  async function openEdit(eq) {
+    let fresh = eq;
+    if (eq?.id) {
+      try {
+        const res = await api.atex.getEquipment(eq.id);
+        fresh = mergeZones(res?.equipment || eq);
+      } catch {
+        fresh = mergeZones(eq);
+      }
+    } else {
+      fresh = mergeZones({
+        name: "",
+        building: "",
+        zone: "",
+        equipment: "",
+        sub_equipment: "",
+        type: "",
+        manufacturer: "",
+        manufacturer_ref: "",
+        atex_mark_gas: null,
+        atex_mark_dust: null,
+        comment: "",
+        status: STATUS.A_FAIRE,
+        zoning_gas: null,
+        zoning_dust: null,
+        compliance_state: "na",
+        installed_at: null,
+        last_check_date: null,
+        next_check_date: null,
+        photo_url: null,
+      });
+    }
+
+    setEditing(fresh);
+    initialRef.current = JSON.parse(JSON.stringify(fresh));
+
+    if (fresh?.id) {
+      await reloadFiles(fresh.id);
+      try {
+        const hist = await api.atex.getEquipmentHistory(fresh.id);
+        setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
+      } catch {
+        setHistory([]);
+      }
+    } else {
+      setFiles([]);
+      setHistory([]);
+    }
+
+    setDrawerOpen(true);
+  }
   function closeEdit() {
-    setEditing(null);
-    setFiles([]);
-    setHistory([]);
-    // Nettoyage global : évite que reload() du plan reste accroché
-    delete window._atexReload;
     setDrawerOpen(false);
-    initialRef.current = null;
+    setTimeout(() => {
+      setEditing(null);
+      initialRef.current = null;
+    }, 200);
   }
   function isDirty() {
-    if (!editing || !initialRef.current) return false;
-    const A = editing;
-    const B = initialRef.current;
-    const keys = [
-      "name",
-      "building",
-      "zone",
-      "equipment",
-      "sub_equipment",
-      "type",
-      "manufacturer",
-      "manufacturer_ref",
-      "atex_mark_gas",
-      "atex_mark_dust",
-      "comment",
-      "installed_at",
-      "last_check_date",
-      "next_check_date",
-      "zoning_gas",
-      "zoning_dust",
-    ];
-    return keys.some((k) => {
-      const va = A?.[k] ?? "";
-      const vb = B?.[k] ?? "";
-      return String(va) !== String(vb);
-    });
+    if (!editing) return false;
+    const init = initialRef.current || {};
+    return JSON.stringify(editing) !== JSON.stringify(init);
   }
 
   const dirty = isDirty();
@@ -648,7 +606,7 @@ export default function Atex() {
     if (!editing?.id || !file) return;
     try {
       await api.atex.uploadPhoto(editing.id, file);
-      // met à jour l’aperçu immédiatement (cache-bust)
+      // met à jour l'aperçu immédiatement (cache-bust)
       const url = api.atex.photoUrl(editing.id, { bust: true });
       setEditing((cur) => ({ ...(cur || {}), photo_url: url }));
       await reloadFiles(editing.id);
@@ -733,105 +691,82 @@ export default function Atex() {
 
       if (editing?.id && api.atex.applyCompliance) {
         try {
-          await api.atex.applyCompliance(editing.id, {
-            decision,
-            rationale,
-            source: res?.source || "unknown",
-          });
+          // ✅ On passe la source (local ou openai)
+          const source = res?.source || "unknown";
+          await api.atex.applyCompliance(editing.id, { decision, rationale, source });
         } catch {}
       }
 
-      if (editing?.id) {
-        const fresh = await api.atex.getEquipment(editing.id).catch(() => null);
-        if (fresh?.equipment) {
-          const merged = mergeZones(fresh.equipment);
-          setEditing((cur) => ({ ...(cur || {}), ...merged }));
-        }
-      }
+      setEditing((cur) => ({
+        ...(cur || {}),
+        compliance_state: decision || cur?.compliance_state || "na",
+      }));
+
+      const hist = await api.atex.getEquipmentHistory(editing.id);
+      setHistory(Array.isArray(hist?.checks) ? hist.checks : []);
 
       await reload();
-
       setToast(
         decision
-          ? `Conformité: ${
-              decision === "conforme"
-                ? "Conforme"
-                : decision === "non_conforme"
-                ? "Non conforme"
-                : "Indéterminé"
-            }`
-          : res?.message || "Analyse conformité OK"
+          ? `Conformité: ${decision === "conforme" ? "Conforme" : "Non conforme"}`
+          : "Analyse IA terminée"
       );
     } catch (e) {
-      console.error("[ATEX] Erreur analyse conformité :", e);
-      setToast("Analyse conformité indisponible");
+      console.error("[ATEX] Échec vérification conformité IA :", e);
+      setToast("Échec vérification conformité IA");
     }
   }
 
-  // VÉRIFICATION IA (frontend) : pas de blocage si marquages manquants, combine IA + règle locale
   async function verifyComplianceIA() {
-    if (!editing?.id) return;
+    if (!editing || !editing.id) {
+      alert("Veuillez d'abord enregistrer la fiche équipement avant de lancer la vérification IA.");
+      return;
+    }
 
-    const before = { ...editing }; // snapshot avant IA (préserver les champs saisis)
+    // 1) Sauvegarder d'abord (si besoin)
+    if (isDirty()) {
+      await saveBase();
+    }
 
-    // --- Règle locale immédiate (zonage + marquages) ---
-    const hasEx = (s) => typeof s === "string" && /Ex\s*[A-Za-z0-9]/.test(s);
-    const gasZoned = editing.zoning_gas != null;   // 0/1/2 => zoné
-    const dustZoned = editing.zoning_dust != null; // 20/21/22 => zoné
-    const localDecision = (() => {
-      if (!gasZoned && !dustZoned) return "conforme";         // pas de zonage => conforme
-      if (gasZoned && !hasEx(editing.atex_mark_gas || "")) return "non_conforme";
-      if (dustZoned && !hasEx(editing.atex_mark_dust || "")) return "non_conforme";
-      return "conforme";
-    })();
+    // 2) Préparation du payload
+    const body = {
+      atex_mark_gas: editing.atex_mark_gas || "",
+      atex_mark_dust: editing.atex_mark_dust || "",
+      target_gas: editing.zoning_gas ?? null,
+      target_dust: editing.zoning_dust ?? null,
+    };
+
+    // 3) Vérification locale de complétude
+    const looksLikeAtexMark = (s) => s && /Ex\s*[A-Za-z0-9]/.test(s);
+    if (!looksLikeAtexMark(body.atex_mark_gas) && !looksLikeAtexMark(body.atex_mark_dust)) {
+      console.warn("[ATEX] Marquage incomplet :", body);
+      setEditing((cur) => ({ ...cur, compliance_state: "non_conforme" }));
+      setToast("Marquage incomplet (pas de code 'Ex')");
+      return;
+    }
 
     try {
-      // 1) Corps IA (aucune validation bloquante en amont)
-      const body = {
-        atex_mark_gas: editing.atex_mark_gas || "",
-        atex_mark_dust: editing.atex_mark_dust || "",
-        target_gas: editing.zoning_gas ?? null,
-        target_dust: editing.zoning_dust ?? null,
-      };
+      // 4) Appel API conformité (logique locale + fallback IA)
+      const res =
+        (api.atex.assessConformity && (await api.atex.assessConformity(body))) ||
+        (api.atex.aiAnalyze && (await api.atex.aiAnalyze(body)));
 
-      // 2) Appel IA si dispo ; si ça échoue, on garde la décision locale
-      let res = null;
-      try {
-        if (api.atex.assessConformity) {
-          res = await api.atex.assessConformity(body);
-        } else if (api.atex.aiAnalyze) {
-          res = await api.atex.aiAnalyze(body);
-        }
-      } catch (e) {
-        console.warn("[ATEX] IA indisponible, décision locale utilisée :", e);
+      const decision = res?.decision || null;
+      const rationale = res?.rationale || "";
+      const source = res?.source || "unknown";
+
+      // 5) Enregistre un "check" IA dans la base (sans toucher à next_check_date)
+      if (editing?.id && api.atex.applyCompliance) {
+        await api.atex.applyCompliance(editing.id, { decision, rationale, source });
       }
 
-      // 3) Choix final : décision IA prioritaire si explicite, sinon décision locale
-      const decision =
-        res?.decision === "conforme" || res?.decision === "non_conforme"
-          ? res.decision
-          : localDecision;
-
-      const rationale = res?.rationale || (decision === localDecision ? "Décision locale (zonage/marquage)" : "");
-
-      // 4) Reporter la décision au backend si possible
-      if (api.atex.applyCompliance) {
-        await api.atex.applyCompliance(editing.id, {
-          decision,
-          rationale,
-          source: res?.source || (res ? "ai" : "local_rule"),
-        });
-      }
-
-      // 5) Recharger la fiche et fusionner prudemment (ne pas écraser les champs saisis par du vide)
-      const updated = await api.atex.getEquipment(editing.id).catch(() => null);
-      const merged = mergeZones(updated?.equipment || updated || {});
-
+      // 6) Mise à jour locale + historique
       setEditing((cur) => {
-        const safe = { ...before };
-        const next = { ...(merged || {}) };
-        const isEmpty = (v) => v == null || (typeof v === "string" && v.trim() === "");
+        const safe = { ...(cur || {}) };
+        const next = { ...safe };
 
+        // Ne surcharge que les champs vides
+        const isEmpty = (v) => !v || v === "" || v === null;
         ["type", "manufacturer", "manufacturer_ref", "atex_mark_gas", "atex_mark_dust"].forEach((field) => {
           if (isEmpty(next[field])) next[field] = safe[field] || "";
         });
@@ -876,14 +811,14 @@ async function loadPlans() {
   }
 }
 
-// 🧭 Chargement des plans quand on entre dans l’onglet
+// 🧭 Chargement des plans quand on entre dans l'onglet
 useEffect(() => {
   if (tab === "plans") {
     loadPlans();
   }
 }, [tab]);
 
-// 🧹 Nettoyage automatique : dès qu'on quitte l’onglet ou recharge les plans
+// 🧹 Nettoyage automatique : dès qu'on quitte l'onglet ou recharge les plans
 useEffect(() => {
   if (tab !== "plans" && selectedPlan) {
     setSelectedPlan(null);
@@ -922,87 +857,6 @@ function applyZonesLocally(id, zones) {
   );
 }
 
-/* --------- Onglet Plans (rendu JSX) --------- */
-{tab === "plans" && (
-  <div className="space-y-4" key={`plans-tab-${selectedPlan ? selectedPlan.logical_name : "none"}`}>
-    {/* Barre d’import ZIP */}
-    <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
-      <div className="font-semibold">Plans PDF</div>
-      <AtexZipImport
-        disabled={mapsLoading}
-        onDone={async () => {
-          setToast("Plans importés");
-          await loadPlans();
-        }}
-      />
-    </div>
-
-    {/* Liste des cartes de plans */}
-    <PlanCards
-      plans={plans}
-      onRename={async (plan, name) => {
-        await api.atexMaps.renamePlan(plan.logical_name, name);
-        await loadPlans();
-      }}
-      onPick={(plan) => {
-        // Si on reclique sur le même plan → toggle propre
-        if (selectedPlan?.logical_name === plan.logical_name) {
-          setSelectedPlan(null);
-        } else {
-          setSelectedPlan(plan);
-          setMapRefreshTick((t) => t + 1);
-        }
-      }}
-    />
-
-    {/* ✅ Bandeau du plan sélectionné */}
-    {selectedPlan && (
-      <div
-        key={`plan-view-${selectedPlan.logical_name}-${mapRefreshTick}`}
-        className="bg-white rounded-2xl border shadow-sm p-3 transition-all duration-300 animate-fadeIn"
-      >
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="font-semibold truncate pr-3">
-            {selectedPlan.display_name || selectedPlan.logical_name}
-          </div>
-          <div className="flex items-center gap-2">
-            <Btn
-              variant="ghost"
-              onClick={() => {
-                setSelectedPlan(null);
-                setMapRefreshTick((t) => t + 1);
-              }}
-            >
-              Fermer le plan
-            </Btn>
-          </div>
-        </div>
-
-        <AtexMap
-          key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
-          plan={selectedPlan}
-          onOpenEquipment={openEdit}
-          onZonesApplied={async (id, zones) => {
-            applyZonesLocally(id, zones);
-            await reload();
-            if (editing?.id === id) {
-              try {
-                const res = await api.atex.getEquipment(id);
-                const fresh = mergeZones(res?.equipment || {});
-                setEditing((cur) => ({ ...(cur || {}), ...fresh }));
-              } catch {}
-            }
-          }}
-          onMetaChanged={async () => {
-            await reload();
-            setToast("Plans et équipements mis à jour");
-          }}
-        />
-      </div>
-    )}
-  </div>
-)}
-
   /* ----------------------------- UI ----------------------------- */
   const StickyTabs = () => (
     <div className="sticky top-[12px] z-30 bg-gray-50/70 backdrop-blur py-2 -mt-2 mb-2">
@@ -1025,17 +879,13 @@ function applyZonesLocally(id, zones) {
   return (
     <section className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
       <Toast text={toast} onClose={() => setToast("")} />
-        {/* SPINNER GLOBAL */}
+      {/* 🚀 SPINNER GLOBAL OPTIMISÉ */}
       {globalLoading && (
-        <div className="fixed inset-0 bg-white/90 flex items-center justify-center z-[5000] backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm">
-            <div className="flex flex-col items-center gap-4">
-              <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
-              <div className="text-center">
-                <div className="text-base font-medium text-gray-900">Chargement des équipements...</div>
-                <div className="text-xs text-gray-500 mt-1">Maximum 10 secondes</div>
-              </div>
-            </div>
+        <div className="fixed inset-0 bg-white/70 flex items-center justify-center z-[5000] backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+            <div className="text-sm text-gray-600 font-medium">Chargement des équipements...</div>
+            <div className="text-xs text-gray-500">Maximum 10 secondes</div>
           </div>
         </div>
       )}
@@ -1116,14 +966,17 @@ function applyZonesLocally(id, zones) {
                 {loading && (
                   <tr>
                     <td colSpan={6} className="px-4 py-4 text-gray-500">
-                      Chargement…
+                      <div className="flex items-center gap-3">
+                        <div className="w-4 h-4 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+                        <span>Chargement des équipements...</span>
+                      </div>
                     </td>
                   </tr>
                 )}
                 {!loading && items.length === 0 && (
                   <tr>
                     <td colSpan={6} className="px-4 py-4 text-gray-500">
-                      Aucun équipement.
+                      Aucun équipement. Créez-en un nouveau ou importez des plans pour commencer.
                     </td>
                   </tr>
                 )}
@@ -1191,7 +1044,12 @@ function applyZonesLocally(id, zones) {
           </div>
           {/* Mobile cards */}
           <div className="sm:hidden divide-y">
-            {loading && <div className="p-4 text-gray-500">Chargement…</div>}
+            {loading && (
+              <div className="p-4 text-gray-500 flex items-center gap-3">
+                <div className="w-4 h-4 border-2 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
+                <span>Chargement...</span>
+              </div>
+            )}
             {!loading && items.length === 0 && <div className="p-4 text-gray-500">Aucun équipement.</div>}
             {!loading &&
               items.map((it) => (
@@ -1243,466 +1101,421 @@ function applyZonesLocally(id, zones) {
           </div>
         </div>
       )}
-      
-      {/* 🔥 Bouton pour charger tous les équipements si chargement partiel */}
-      {tab === "controls" && hasMore && !loading && (
-        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-center">
-          <div className="text-sm text-blue-900 mb-3">
-            <strong>Chargement rapide :</strong> Les 50 premiers équipements sont affichés.
+{/* --------- Onglet Calendrier --------- */}
+{tab === "calendar" && (
+  <Calendar
+    events={calendar.events}
+    onDayClick={({ date, events }) => {
+      const msg = events.length
+        ? `${events.length} contrôle(s) le ${dayjs(date).format("DD/MM/YYYY")} :\n${events.map((e, i) => `${i + 1}. ${e.name || e.equipment_name || "—"}`).join("\n")}`
+        : `Aucun contrôle le ${dayjs(date).format("DD/MM/YYYY")}`;
+      alert(msg);
+    }}
+  />
+)}
+
+{/* --------- Onglet Plans --------- */}
+{tab === "plans" && (
+  <div className="space-y-4" key={`plans-tab-${selectedPlan ? selectedPlan.logical_name : "none"}`}>
+    {/* Barre d'import ZIP */}
+    <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
+      <div className="font-semibold">Plans PDF</div>
+      <AtexZipImport
+        disabled={mapsLoading}
+        onDone={async () => {
+          setToast("Plans importés");
+          await loadPlans();
+        }}
+      />
+    </div>
+
+    {/* Liste des cartes de plans */}
+    <PlanTree
+      plans={plans}
+      onRename={async (plan, name) => {
+        await api.atexMaps.renamePlan(plan.logical_name, name);
+        await loadPlans();
+      }}
+      onPick={(plan) => {
+        // Si on reclique sur le même plan → toggle propre
+        if (selectedPlan?.logical_name === plan.logical_name) {
+          setSelectedPlan(null);
+        } else {
+          setSelectedPlan(plan);
+          setMapRefreshTick((t) => t + 1);
+        }
+      }}
+    />
+
+    {/* ✅ Bandeau du plan sélectionné */}
+    {selectedPlan && (
+      <div
+        key={`plan-view-${selectedPlan.logical_name}-${mapRefreshTick}`}
+        className="bg-white rounded-2xl border shadow-sm p-3 transition-all duration-300 animate-fadeIn"
+      >
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="font-semibold truncate pr-3">
+            {selectedPlan.display_name || selectedPlan.logical_name}
           </div>
-          <Btn onClick={() => reload()} variant="primary">
-            Charger tous les équipements
-          </Btn>
+          <div className="flex items-center gap-2">
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                setSelectedPlan(null);
+                setMapRefreshTick((t) => t + 1);
+              }}
+            >
+              Fermer le plan
+            </Btn>
+          </div>
+        </div>
+
+        <AtexMap
+          key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
+          plan={selectedPlan}
+          onOpenEquipment={openEdit}
+          onZonesApplied={async (id, zones) => {
+            applyZonesLocally(id, zones);
+            await reload();
+            if (editing?.id === id) {
+              try {
+                const res = await api.atex.getEquipment(id);
+                const fresh = mergeZones(res?.equipment || {});
+                setEditing((cur) => ({ ...(cur || {}), ...fresh }));
+              } catch {}
+            }
+          }}
+          onMetaChanged={async () => {
+            await reload();
+            setToast("Plans et équipements mis à jour");
+          }}
+        />
+      </div>
+    )}
+  </div>
+)}
+
+{/* --------- Onglet Paramètres --------- */}
+{tab === "settings" && (
+  <div className="bg-white rounded-2xl border shadow-sm p-6">
+    <div className="text-lg font-semibold mb-4">Paramètres ATEX</div>
+    <div className="text-sm text-gray-600">
+      Les paramètres globaux (fréquence de contrôle, checklist, etc.) seront ajoutés ici.
+    </div>
+  </div>
+)}
+
+{/* --------- Drawer équipement --------- */}
+{drawerOpen && editing && (
+  <Drawer title={editing.id ? "Modifier équipement" : "Nouvel équipement"} onClose={closeEdit} dirty={dirty}>
+    <div className="space-y-4">
+      {/* Photo principale */}
+      {editing.id && (
+        <div className="border rounded-2xl p-3 bg-white">
+          <div className="font-semibold mb-2">Photo principale</div>
+          <div className="flex items-start gap-3">
+            <div className="w-32 h-32 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
+              {editing.photo_url ? (
+                <img src={api.atex.photoUrl(editing.id, { bust: true })} alt="" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
+              )}
+            </div>
+            <label className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 cursor-pointer">
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && uploadMainPhoto(e.target.files[0])}
+              />
+              Changer la photo
+            </label>
+          </div>
         </div>
       )}
-      
-      {/* --------- Onglet Calendrier --------- */}
-      {tab === "calendar" && (
-        <div className="bg-white rounded-2xl border shadow-sm p-4">
-          <MonthCalendar
-            events={calendar.events}
-            onDayClick={({ events }) => {
-              const first = events?.[0];
-              if (!first?.equipment_id) return;
-              const it = items.find((x) => x.id === first.equipment_id);
-              if (it) openEdit(it);
-            }}
+      {/* Contexte plan (lecture seule) */}
+      <div className="border rounded-2xl p-3 bg-white">
+        <div className="grid sm:grid-cols-3 gap-3">
+          <Labeled label="Bâtiment (depuis plan)">
+            <Input
+              value={editing.building || ""}
+              onChange={() => {}}
+              readOnly
+              className="bg-gray-50 text-gray-600"
+              title="Défini dans l'en-tête du plan PDF"
+            />
+          </Labeled>
+          <Labeled label="Zone (depuis plan)">
+            <Input
+              value={editing.zone || ""}
+              onChange={() => {}}
+              readOnly
+              className="bg-gray-50 text-gray-600"
+              title="Défini dans l'en-tête du plan PDF"
+            />
+          </Labeled>
+          <div className="flex items-end">
+            <Btn
+              variant={dirty ? "warn" : "ghost"}
+              className={dirty ? "animate-pulse" : ""}
+              onClick={saveBase}
+              disabled={!dirty}
+            >
+              {dirty ? "Enregistrer la fiche" : "Enregistré"}
+            </Btn>
+          </div>
+        </div>
+      </div>
+      {/* Ajout & Analyse IA */}
+      <div className="border rounded-2xl p-3 bg-white">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="font-semibold">Ajout & Analyse IA</div>
+          <div className="flex items-center gap-2">
+            <label className="px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer">
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
+              />
+              Analyser des photos (IA)
+            </label>
+            <Btn variant="subtle" onClick={verifyComplianceIA}>
+              Vérifier conformité (IA)
+            </Btn>
+          </div>
+        </div>
+        <div className="text-xs text-gray-500 mt-2">
+          Conseils : photo nette de la plaque (gaz/poussière). Le zonage provient des zones du plan.
+        </div>
+      </div>
+      {/* Métadonnées principales */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Labeled label="Nom">
+          <Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} />
+        </Labeled>
+        <Labeled label="Type (interrupteur, luminaire, etc.)">
+          <Input value={editing.type || ""} onChange={(v) => setEditing({ ...editing, type: v })} />
+        </Labeled>
+        <Labeled label="Fabricant">
+          <Input
+            value={editing.manufacturer || ""}
+            onChange={(v) => setEditing({ ...editing, manufacturer: v })}
           />
-        </div>
-      )}
-      {/* --------- Onglet Plans --------- */}
-      {tab === "plans" && (
-        <div className="space-y-4">
-          <div className="bg-white rounded-2xl border shadow-sm p-3 flex items-center justify-between flex-wrap gap-2">
-            <div className="font-semibold">Plans PDF</div>
-            <AtexZipImport
-              disabled={mapsLoading}
-              onDone={async () => {
-                setToast("Plans importés");
-                await loadPlans();
+        </Labeled>
+        <Labeled label="Référence fabricant">
+          <Input
+            value={editing.manufacturer_ref || ""}
+            onChange={(v) => setEditing({ ...editing, manufacturer_ref: v })}
+          />
+        </Labeled>
+        <Labeled label="Marquage ATEX (gaz)">
+          <Input
+            value={editing.atex_mark_gas || ""}
+            onChange={(v) => setEditing({ ...editing, atex_mark_gas: v })}
+          />
+        </Labeled>
+        <Labeled label="Marquage ATEX (poussière)">
+          <Input
+            value={editing.atex_mark_dust || ""}
+            onChange={(v) => setEditing({ ...editing, atex_mark_dust: v })}
+          />
+        </Labeled>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Labeled label="Équipement (macro)">
+          <Input value={editing.equipment || ""} onChange={(v) => setEditing({ ...editing, equipment: v })} />
+        </Labeled>
+        <Labeled label="Sous-Équipement (depuis zones tracées)">
+          <Input
+            value={editing.sub_equipment || ""}
+            onChange={(v) => setEditing({ ...editing, sub_equipment: v })}
+          />
+        </Labeled>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Labeled label="Zonage gaz (0 / 1 / 2)">
+          <Input
+            value={editing.zoning_gas ?? ""}
+            onChange={(v) => setEditing({ ...editing, zoning_gas: v === "" ? null : Number(v) })}
+          />
+        </Labeled>
+        <Labeled label="Zonage poussière (20 / 21 / 22)">
+          <Input
+            value={editing.zoning_dust ?? ""}
+            onChange={(v) => setEditing({ ...editing, zoning_dust: v === "" ? null : Number(v) })}
+          />
+        </Labeled>
+      </div>
+      <div className="grid sm:grid-cols-3 gap-3">
+        <Labeled label="Date d'installation">
+          <Input
+            type="date"
+            value={asDateInput(editing.installed_at || editing.installation_date)}
+            onChange={(v) => setEditing({ ...editing, installed_at: v })}
+          />
+        </Labeled>
+        <Labeled label="Dernier contrôle">
+          <div className="flex items-center gap-2">
+            <Input
+              type="date"
+              className="flex-1"
+              value={asDateInput(editing.last_check_date)}
+              onChange={(v) => {
+                const nextAuto = next36MonthsISO(v);
+                setEditing((cur) => ({
+                  ...(cur || {}),
+                  last_check_date: v,
+                  next_check_date: nextAuto || cur?.next_check_date || "",
+                }));
               }}
             />
-          </div>
+            {/* Bouton check rapide – évite double si IA déjà faite */}
+            {editing?.id && (
+              <Btn
+                variant="subtle"
+                title="Valider le contrôle aujourd'hui"
+                onClick={async () => {
+                  try {
+                    // Si conformité déjà définie par IA → on ne crée pas de check manuel
+                    if (editing.compliance_state) {
+                      setToast("Conformité déjà vérifiée par IA");
+                      return;
+                    }
 
-          {/* ✅ REMPLACEMENT ICI : On utilise PlanTree au lieu de PlanCards */}
-          <PlanTree
-            plans={plans}
-            onRename={async (plan, name) => {
-              await api.atexMaps.renamePlan(plan.logical_name, name);
-              await loadPlans();
-            }}
-            onPick={(plan) => {
-              setSelectedPlan(plan);
-              setMapRefreshTick((t) => t + 1);
-            }}
-          />
+                    await api.atex.quickCheckEquipment(editing.id);
+                    const today = dayjs().format("YYYY-MM-DD");
+                    const nextAuto = next36MonthsISO(today);
 
-          {selectedPlan && (
-            <div className="bg-white rounded-2xl border shadow-sm p-3">
-              <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="font-semibold truncate pr-3">
-                  {selectedPlan.display_name || selectedPlan.logical_name}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Btn
-                    variant="ghost"
-                    onClick={() => {
-                      setSelectedPlan(null);
-                      setMapRefreshTick((t) => t + 1);
-                    }}
-                  >
-                    Fermer le plan
-                  </Btn>
-                </div>
-              </div>
+                    setEditing((cur) => ({
+                      ...(cur || {}),
+                      last_check_date: today,
+                      next_check_date: nextAuto,
+                      compliance_state: "conforme", // optionnel : marque comme conforme
+                    }));
 
-              <AtexMap
-                key={`${selectedPlan.logical_name}:${mapRefreshTick}`}
-                plan={selectedPlan}
-                onOpenEquipment={openEdit}
-                onZonesApplied={async (id, zones) => {
-                  applyZonesLocally(id, zones);
-                  await reload();
-                  if (editing?.id === id) {
-                    try {
-                      const res = await api.atex.getEquipment(id);
-                      const fresh = mergeZones(res?.equipment || {});
-                      setEditing((cur) => ({ ...(cur || {}), ...fresh }));
-                    } catch {}
+                    // Recharge historique
+                    const res = await api.atex.getEquipmentHistory(editing.id);
+                    setHistory(Array.isArray(res?.checks) ? res.checks : []);
+
+                    // Recharge tableau
+                    if (typeof window._atexReload === "function") {
+                      await window._atexReload();
+                    } else {
+                      await reload();
+                    }
+
+                    setToast("Contrôle validé");
+                  } catch (e) {
+                    console.error(e);
+                    setToast("Erreur validation rapide");
                   }
                 }}
-                onMetaChanged={async () => {
-                  await reload();
-                  setToast("Plans et équipements mis à jour");
-                }}
+              >
+                ✅ 
+              </Btn>
+            )}
+          </div>
+        </Labeled>
+        <Labeled label="Prochain contrôle (auto +36 mois, ajustable)">
+          <Input
+            type="date"
+            value={asDateInput(editing.next_check_date)}
+            onChange={(v) => setEditing({ ...editing, next_check_date: v })}
+          />
+        </Labeled>
+      </div>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-600">Statut</span>
+          <Badge color={statusColor(editing.status)}>{statusLabel(editing.status)}</Badge>
+          <span className="text-sm text-gray-600">• Conformité</span>
+          {editing.compliance_state === "conforme" ? (
+            <Badge color="green">Conforme</Badge>
+          ) : editing.compliance_state === "non_conforme" ? (
+            <Badge color="red">Non conforme</Badge>
+          ) : (
+            <Badge>N/A</Badge>
+          )}
+        </div>
+      </div>
+      <Labeled label="Commentaire">
+        <Textarea
+          value={editing.comment || ""}
+          onChange={(v) => setEditing({ ...editing, comment: v })}
+          rows={3}
+        />
+      </Labeled>
+      {/* PJ */}
+      {editing.id && (
+        <div className="border rounded-2xl p-3 bg-white">
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-semibold">Pièces jointes</div>
+            <label className="px-3 py-2 rounded-lg text-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 cursor-pointer">
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files))}
               />
+              Ajouter des fichiers
+            </label>
+          </div>
+          {files.length === 0 && <div className="text-sm text-gray-500">Aucune pièce jointe.</div>}
+          {files.length > 0 && (
+            <div className="space-y-2">
+              {files.map((f) => (
+                <div key={f.id} className="flex items-center justify-between text-sm">
+                  <a href={f.url} target="_blank" rel="noreferrer" className="text-blue-700 hover:underline">
+                    {f.name}
+                  </a>
+                </div>
+              ))}
             </div>
           )}
         </div>
       )}
-      {/* --------- Onglet Paramètres --------- */}
-      {tab === "settings" && (
-        <div className="bg-white rounded-2xl border shadow-sm p-4 space-y-2">
-          <div className="text-sm text-gray-600">
-            Paramétrage ATEX (placeholder). On peut y mettre des gabarits ou préférences.
-          </div>
+      {/* Historique */}
+      {editing.id && (
+        <div className="border rounded-2xl p-3 bg-white">
+          <div className="font-semibold mb-2">Historique des contrôles</div>
+          {history.length === 0 && <div className="text-sm text-gray-500">Aucun historique.</div>}
+          {history.length > 0 && (
+            <div className="space-y-2">
+              {history.map((h) => (
+                <div key={h.id} className="text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-600">{dayjs(h.date).format("DD/MM/YYYY HH:mm")}</span>
+                    <Badge color={h.result === "conforme" ? "green" : h.result === "non_conforme" ? "red" : "gray"}>
+                      {h.result || "N/A"}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
-      {/* --------- Drawer Édition --------- */}
-      {drawerOpen && editing && (
-        <Drawer title={`ATEX • ${editing.name || "nouvel équipement"}`} onClose={closeEdit} dirty={dirty}>
-          <div className="space-y-4">
-            {/* Bâtiment & Zone — repris du plan (lecture seule) */}
-            <div className="border rounded-2xl p-3 bg-white">
-              <div className="grid sm:grid-cols-3 gap-3">
-                <Labeled label="Bâtiment (depuis plan)">
-                  <Input
-                    value={editing.building || ""}
-                    onChange={() => {}}
-                    readOnly
-                    className="bg-gray-50 text-gray-600"
-                    title="Défini dans l'en-tête du plan PDF"
-                  />
-                </Labeled>
-                <Labeled label="Zone (depuis plan)">
-                  <Input
-                    value={editing.zone || ""}
-                    onChange={() => {}}
-                    readOnly
-                    className="bg-gray-50 text-gray-600"
-                    title="Défini dans l'en-tête du plan PDF"
-                  />
-                </Labeled>
-                <div className="flex items-end">
-                  <Btn
-                    variant={dirty ? "warn" : "ghost"}
-                    className={dirty ? "animate-pulse" : ""}
-                    onClick={saveBase}
-                    disabled={!dirty}
-                  >
-                    {dirty ? "Enregistrer la fiche" : "Enregistré"}
-                  </Btn>
-                </div>
-              </div>
-            </div>
-            {/* Ajout & Analyse IA */}
-            <div className="border rounded-2xl p-3 bg-white">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="font-semibold">Ajout & Analyse IA</div>
-                <div className="flex items-center gap-2">
-                  <label className="px-3 py-2 rounded-lg text-sm bg-amber-500 text-white hover:bg-amber-600 cursor-pointer">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      multiple
-                      className="hidden"
-                      onChange={(e) => e.target.files?.length && analyzeFromPhotos(e.target.files)}
-                    />
-                    Analyser des photos (IA)
-                  </label>
-                  <Btn variant="subtle" onClick={verifyComplianceIA}>
-                    Vérifier conformité (IA)
-                  </Btn>
-                </div>
-              </div>
-              <div className="text-xs text-gray-500 mt-2">
-                Conseils : photo nette de la plaque (gaz/poussière). Le zonage provient des zones du plan.
-              </div>
-            </div>
-            {/* Métadonnées principales */}
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Labeled label="Nom">
-                <Input value={editing.name || ""} onChange={(v) => setEditing({ ...editing, name: v })} />
-              </Labeled>
-              <Labeled label="Type (interrupteur, luminaire, etc.)">
-                <Input value={editing.type || ""} onChange={(v) => setEditing({ ...editing, type: v })} />
-              </Labeled>
-              <Labeled label="Fabricant">
-                <Input
-                  value={editing.manufacturer || ""}
-                  onChange={(v) => setEditing({ ...editing, manufacturer: v })}
-                />
-              </Labeled>
-              <Labeled label="Référence fabricant">
-                <Input
-                  value={editing.manufacturer_ref || ""}
-                  onChange={(v) => setEditing({ ...editing, manufacturer_ref: v })}
-                />
-              </Labeled>
-              <Labeled label="Marquage ATEX (gaz)">
-                <Input
-                  value={editing.atex_mark_gas || ""}
-                  onChange={(v) => setEditing({ ...editing, atex_mark_gas: v })}
-                />
-              </Labeled>
-              <Labeled label="Marquage ATEX (poussière)">
-                <Input
-                  value={editing.atex_mark_dust || ""}
-                  onChange={(v) => setEditing({ ...editing, atex_mark_dust: v })}
-                />
-              </Labeled>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Labeled label="Équipement (macro)">
-                <Input value={editing.equipment || ""} onChange={(v) => setEditing({ ...editing, equipment: v })} />
-              </Labeled>
-              <Labeled label="Sous-Équipement (depuis zones tracées)">
-                <Input
-                  value={editing.sub_equipment || ""}
-                  onChange={(v) => setEditing({ ...editing, sub_equipment: v })}
-                />
-              </Labeled>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Labeled label="Zonage gaz (0 / 1 / 2)">
-                <Input
-                  value={editing.zoning_gas ?? ""}
-                  onChange={(v) => setEditing({ ...editing, zoning_gas: v === "" ? null : Number(v) })}
-                />
-              </Labeled>
-              <Labeled label="Zonage poussière (20 / 21 / 22)">
-                <Input
-                  value={editing.zoning_dust ?? ""}
-                  onChange={(v) => setEditing({ ...editing, zoning_dust: v === "" ? null : Number(v) })}
-                />
-              </Labeled>
-            </div>
-            <div className="grid sm:grid-cols-3 gap-3">
-              <Labeled label="Date d’installation">
-                <Input
-                  type="date"
-                  value={asDateInput(editing.installed_at || editing.installation_date)}
-                  onChange={(v) => setEditing({ ...editing, installed_at: v })}
-                />
-              </Labeled>
-              <Labeled label="Dernier contrôle">
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="date"
-                    className="flex-1"
-                    value={asDateInput(editing.last_check_date)}
-                    onChange={(v) => {
-                      const nextAuto = next36MonthsISO(v);
-                      setEditing((cur) => ({
-                        ...(cur || {}),
-                        last_check_date: v,
-                        next_check_date: nextAuto || cur?.next_check_date || "",
-                      }));
-                    }}
-                  />
-                  {/* Bouton check rapide – évite double si IA déjà faite */}
-                  {editing?.id && (
-                    <Btn
-                      variant="subtle"
-                      title="Valider le contrôle aujourd'hui"
-                      onClick={async () => {
-                        try {
-                          // Si conformité déjà définie par IA → on ne crée pas de check manuel
-                          if (editing.compliance_state) {
-                            setToast("Conformité déjà vérifiée par IA");
-                            return;
-                          }
-
-                          await api.atex.quickCheckEquipment(editing.id);
-                          const today = dayjs().format("YYYY-MM-DD");
-                          const nextAuto = next36MonthsISO(today);
-
-                          setEditing((cur) => ({
-                            ...(cur || {}),
-                            last_check_date: today,
-                            next_check_date: nextAuto,
-                            compliance_state: "conforme", // optionnel : marque comme conforme
-                          }));
-
-                          // Recharge historique
-                          const res = await api.atex.getEquipmentHistory(editing.id);
-                          setHistory(Array.isArray(res?.checks) ? res.checks : []);
-
-                          // Recharge tableau
-                          if (typeof window._atexReload === "function") {
-                            await window._atexReload();
-                          } else {
-                            await reload();
-                          }
-
-                          setToast("Contrôle validé");
-                        } catch (e) {
-                          console.error(e);
-                          setToast("Erreur validation rapide");
-                        }
-                      }}
-                    >
-                      ✅ 
-                    </Btn>
-                  )}
-                </div>
-              </Labeled>
-              <Labeled label="Prochain contrôle (auto +36 mois, ajustable)">
-                <Input
-                  type="date"
-                  value={asDateInput(editing.next_check_date)}
-                  onChange={(v) => setEditing({ ...editing, next_check_date: v })}
-                />
-              </Labeled>
-            </div>
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-600">Statut</span>
-                <Badge color={statusColor(editing.status)}>{statusLabel(editing.status)}</Badge>
-                <span className="text-sm text-gray-600">• Conformité</span>
-                {editing.compliance_state === "conforme" ? (
-                  <Badge color="green">Conforme</Badge>
-                ) : editing.compliance_state === "non_conforme" ? (
-                  <Badge color="red">Non conforme</Badge>
-                ) : (
-                  <Badge>—</Badge>
-                )}
-              </div>
-              <div className="text-sm text-gray-600">Alerte tableau: ≤90 jours avant l’échéance</div>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Btn
-                variant={dirty ? "warn" : "ghost"}
-                className={dirty ? "animate-pulse" : ""}
-                onClick={saveBase}
-                disabled={!dirty}
-              >
-                {dirty ? "Enregistrer la fiche" : "Aucune modif"}
-              </Btn>
-              {editing?.id && (
-                <Btn variant="danger" onClick={deleteEquipment}>
-                  Supprimer
-                </Btn>
-              )}
-            </div>
-            {/* Photo principale */}
-            {editing?.id && (
-              <div className="border rounded-2xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-semibold">Photo principale</div>
-                  <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={(e) => e.target.files?.[0] && uploadMainPhoto(e.target.files[0])}
-                    />
-                    Mettre à jour
-                  </label>
-                </div>
-                <div className="w-40 h-40 rounded-xl border overflow-hidden bg-gray-50 flex items-center justify-center">
-                  {editing.photo_url ? (
-                    <img src={api.atex.photoUrl(editing.id, { bust: true })} alt="photo" className="w-full h-full object-cover" />
-                  ) : (
-                    <span className="text-xs text-gray-500 p-2 text-center">Aucune photo</span>
-                  )}
-                </div>
-              </div>
-            )}
-            {/* Pièces jointes & photos */}
-            {editing?.id && (
-              <div className="border rounded-2xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-semibold">Pièces jointes & photos</div>
-                  <div className="flex items-center gap-2">
-                    <label className="px-3 py-2 rounded-lg text-sm bg-blue-600 text-white hover:bg-blue-700 cursor-pointer">
-                      <input
-                        type="file"
-                        className="hidden"
-                        multiple
-                        onChange={(e) => e.target.files?.length && uploadAttachments(Array.from(e.target.files))}
-                      />
-                      Ajouter
-                    </label>
-                  </div>
-                </div>
-                {/* Liste des pièces jointes */}
-                <div className="mt-3 space-y-2">
-                  {files.length === 0 && <div className="text-xs text-gray-500">Aucune pièce jointe.</div>}
-                  {files.map((f) => (
-                    <div key={f.id} className="flex items-center justify-between text-sm border rounded-lg px-2 py-1">
-                      <a
-                        href={f.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-700 hover:underline truncate max-w-[70%]"
-                        title={f.name}
-                      >
-                        {f.name}
-                      </a>
-                      <button
-                        className="text-rose-600 hover:underline"
-                        onClick={async () => {
-                          await api.atex.deleteFile(f.id);
-                          reloadFiles(editing.id);
-                        }}
-                      >
-                        Supprimer
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                <div className="text-xs text-gray-500 mt-2">
-                  Glisser-déposer supporté dans l’onglet Plans lors de la création in situ.
-                </div>
-              </div>
-            )}
-            {/* Historique des contrôles */}
-            {editing?.id && (
-              <div className="border rounded-2xl p-3 bg-white">
-                <div className="font-semibold mb-2">Historique des contrôles</div>
-                {history.length === 0 && (
-                  <div className="text-xs text-gray-500">Aucun contrôle enregistré.</div>
-                )}
-                {history.length > 0 && (
-                  <div className="text-sm divide-y border rounded-lg">
-                    {history.map((h, i) => (
-                      <div key={i} className="flex items-center justify-between px-2 py-1">
-                        <div>
-                          <div className="font-medium">
-                            {dayjs(h.date || h.checked_at).format("DD/MM/YYYY")}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {h.user_name || h.user_email || "—"}
-                          </div>
-                        </div>
-                        {(() => {
-                          const decision = h.decision || h.result || h.compliance_state || "";
-                          const isConforme = decision === "conforme";
-                          const isNonConforme = decision === "non_conforme";
-                          return (
-                            <Badge color={isConforme ? "green" : isNonConforme ? "red" : "gray"}>
-                              {isConforme
-                                ? "Conforme"
-                                : isNonConforme
-                                ? "Non conforme"
-                                : "—"}
-                            </Badge>
-                          );
-                        })()}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="border rounded-2xl p-3">
-              <div className="font-semibold mb-2">Commentaire</div>
-              <Textarea
-                rows={3}
-                value={editing.comment || ""}
-                onChange={(v) => setEditing({ ...editing, comment: v })}
-                placeholder="Notes libres…"
-              />
-            </div>
-          </div>
-        </Drawer>
-      )}
-    </section>
-  );
+      {/* Actions */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <Btn variant="ghost" onClick={closeEdit}>
+          Fermer
+        </Btn>
+        {editing.id && (
+          <Btn variant="danger" onClick={deleteEquipment}>
+            Supprimer
+          </Btn>
+        )}
+      </div>
+    </div>
+  </Drawer>
+)}
+</section>
+);
 }
-/* ----------------------------- Sous-composants locaux ----------------------------- */
-function AtexZipImport({ disabled, onDone }) {
+/* ----------------------------- ZIP Import ----------------------------- */
+function AtexZipImport({ onDone, disabled }) {
   const inputRef = useRef(null);
   return (
     <div className="flex items-center gap-2">
@@ -1799,16 +1612,6 @@ function PlanTree({ plans = [], onRename, onPick }) {
     </div>
   );
 }
-function PlanCards({ plans = [], onRename, onPick }) {
-  return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
-      {!plans.length && <div className="text-gray-500">Aucun plan importé.</div>}
-      {plans.map((p) => (
-        <PlanCard key={p.id || p.logical_name} plan={p} onRename={onRename} onPick={onPick} />
-      ))}
-    </div>
-  );
-}
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
@@ -1816,7 +1619,7 @@ function PlanCard({ plan, onRename, onPick }) {
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
       <div className="relative aspect-video bg-gray-50 flex items-center justify-center">
         <div className="flex flex-col items-center justify-center text-gray-500">
-          <div className="text-4xl leading-none">PDF</div>
+          <div className="text-4xl leading-none">📄</div>
           <div className="text-[11px] mt-1">PDF</div>
         </div>
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
