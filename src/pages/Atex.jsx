@@ -306,7 +306,7 @@ export default function Atex() {
         building,
         zone,
         compliance,
-        limit: 1000, // ✅ Compatible avec le nouveau backend optimisé
+        limit: 500, // ✅ Réduit pour éviter ERR_CACHE_WRITE_FAILURE
       });
       
       const rawItems = Array.isArray(res?.items) ? res.items : [];
@@ -1042,7 +1042,7 @@ function applyZonesLocally(id, zones) {
               </tbody>
             </table>
           </div>
-          {/* Mobile cards */}
+          {/* Mobile cards - 🚀 OPTIMISÉ : Pas de vignettes photos sur mobile */}
           <div className="sm:hidden divide-y">
             {loading && (
               <div className="p-4 text-gray-500 flex items-center gap-3">
@@ -1055,41 +1055,28 @@ function applyZonesLocally(id, zones) {
               items.map((it) => (
                 <div key={it.id} className="p-4">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <div className="w-16 h-16 rounded-lg border overflow-hidden bg-gray-50 flex items-center justify-center">
-                        {it.photo_url ? (
-                          <img src={api.atex.photoUrl(it.id)} alt={it.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <span className="text-[11px] text-gray-500 p-1 text-center">
-                            Photo à
-                            <br />
-                            prendre
-                          </span>
-                        )}
+                    <div className="flex-1">
+                      <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(it)}>
+                        {it.name || it.type || "Équipement"}
+                      </button>
+                      <div className="text-xs text-gray-500 mt-0.5">
+                        {it.building || "—"} • {it.zone || "—"} {it.equipment ? `• ${it.equipment}` : ""}{" "}
+                        {it.sub_equipment ? `• ${it.sub_equipment}` : ""}
                       </div>
-                      <div>
-                        <button className="text-blue-700 font-semibold hover:underline" onClick={() => openEdit(it)}>
-                          {it.name || it.type || "Équipement"}
-                        </button>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          {it.building || "—"} • {it.zone || "—"} {it.equipment ? `• ${it.equipment}` : ""}{" "}
-                          {it.sub_equipment ? `• ${it.sub_equipment}` : ""}
-                        </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          {it.compliance_state === "conforme" ? (
-                            <Badge color="green">Conforme</Badge>
-                          ) : it.compliance_state === "non_conforme" ? (
-                            <Badge color="red">Non conforme</Badge>
-                          ) : (
-                            <Badge>—</Badge>
-                          )}
-                          <span className="text-xs text-gray-500">
-                            Prochain contrôle: {it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YYYY") : "—"}
-                          </span>
-                        </div>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        {it.compliance_state === "conforme" ? (
+                          <Badge color="green">Conforme</Badge>
+                        ) : it.compliance_state === "non_conforme" ? (
+                          <Badge color="red">Non conforme</Badge>
+                        ) : (
+                          <Badge>—</Badge>
+                        )}
+                        <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Prochain contrôle: {it.next_check_date ? dayjs(it.next_check_date).format("DD/MM/YYYY") : "—"}
                       </div>
                     </div>
-                    <Badge color={statusColor(it.status)}>{statusLabel(it.status)}</Badge>
                   </div>
                   <div className="mt-3 flex gap-2">
                     <Btn variant="ghost" onClick={() => openEdit(it)}>
