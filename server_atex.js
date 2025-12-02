@@ -366,7 +366,6 @@ app.get("/api/atex/equipments", async (req, res) => {
         e.type,
         e.manufacturer,
         e.manufacturer_ref,
-        e.serial_number,
         e.building,
         e.zone,
         e.equipment,
