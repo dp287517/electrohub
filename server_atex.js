@@ -379,7 +379,6 @@ app.get("/api/atex/equipments", async (req, res) => {
         e.installed_at,
         e.next_check_date,
         e.photo_path,
-        e.photo_content,
         e.created_at,
         e.updated_at,
         lc.last_check_date,
@@ -423,7 +422,7 @@ app.get("/api/atex/equipments", async (req, res) => {
         status: computed_status,
         compliance_state,
         photo_url:
-          (r.photo_content && r.photo_content.length) || r.photo_path
+          r.photo_path
             ? `/api/atex/equipments/${r.id}/photo`
             : null,
         __hay: hay,
