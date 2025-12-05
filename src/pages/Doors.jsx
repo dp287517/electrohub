@@ -329,6 +329,7 @@ function PlansHeader({ mapsLoading, onUploadZip }) {
     </div>
   );
 }
+
 function PlanCards({ plans = [], onRename, onPick }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3">
@@ -339,8 +340,11 @@ function PlanCards({ plans = [], onRename, onPick }) {
     </div>
   );
 }
+
 function useIsMobile() {
-  const [isMobile, setIsMobile] = useState(() => (typeof window === "undefined" ? false : window.innerWidth < 640));
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window === "undefined" ? false : window.innerWidth < 640
+  );
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 640);
     window.addEventListener("resize", onResize);
@@ -352,11 +356,16 @@ function useIsMobile() {
   }, []);
   return isMobile;
 }
+
 function PlanCard({ plan, onRename, onPick }) {
   const [edit, setEdit] = useState(false);
   const [name, setName] = useState(plan.display_name || plan.logical_name || "");
   const next30 = Number(plan?.actions_next_30 || 0);
   const overdue = Number(plan?.overdue || 0);
+
+  // ✅ amélioration : vignette verte si aucune porte à contrôler ≤30j ET aucune en retard
+  const isAllGood = next30 <= 0 && overdue <= 0;
+
   const canvasRef = useRef(null);
   const [thumbErr, setThumbErr] = useState("");
   const [visible, setVisible] = useState(false);
@@ -367,7 +376,10 @@ function PlanCard({ plan, onRename, onPick }) {
     const el = obsRef.current;
     if (!el) return;
     const io = new IntersectionObserver(
-      (entries) => entries.forEach((e) => { if (e.isIntersecting) setVisible(true); }),
+      (entries) =>
+        entries.forEach((e) => {
+          if (e.isIntersecting) setVisible(true);
+        }),
       { rootMargin: "200px" }
     );
     io.observe(el);
@@ -400,26 +412,46 @@ function PlanCard({ plan, onRename, onPick }) {
         if (!c || cancelled) return;
         c.width = Math.floor(adjusted.width);
         c.height = Math.floor(adjusted.height);
-        const ctx = c.getContext("2d", { willReadFrequently: false, alpha: true });
+        const ctx = c.getContext("2d", {
+          willReadFrequently: false,
+          alpha: true,
+        });
         renderTask = page.render({ canvasContext: ctx, viewport: adjusted });
         await renderTask.promise;
-        try { await pdf.cleanup(); } catch {}
-        try { await loadingTask.destroy(); } catch {}
+        try {
+          await pdf.cleanup();
+        } catch {}
+        try {
+          await loadingTask.destroy();
+        } catch {}
       } catch (e) {
-        if (e?.name !== "RenderingCancelledException") setThumbErr("Aperçu indisponible.");
+        if (e?.name !== "RenderingCancelledException")
+          setThumbErr("Aperçu indisponible.");
       }
     })();
 
     return () => {
       cancelled = true;
-      try { renderTask?.cancel(); } catch {}
-      try { loadingTask?.destroy(); } catch {}
+      try {
+        renderTask?.cancel();
+      } catch {}
+      try {
+        loadingTask?.destroy();
+      } catch {}
     };
   }, [plan.id, plan.logical_name, visible, isMobile]);
 
+  // 🎨 classes de couleur pour la vignette
+  const vignetteClass = isAllGood
+    ? "ring-2 ring-emerald-500 bg-emerald-50"
+    : "";
+
   return (
     <div className="border rounded-2xl bg-white shadow-sm hover:shadow transition overflow-hidden">
-      <div ref={obsRef} className="relative aspect-video bg-gray-50 flex items-center justify-center">
+      <div
+        ref={obsRef}
+        className={`relative aspect-video bg-gray-50 flex items-center justify-center ${vignetteClass}`}
+      >
         {isMobile ? (
           <div className="flex flex-col items-center justify-center text-gray-500">
             <div className="text-4xl leading-none">📄</div>
@@ -431,29 +463,66 @@ function PlanCard({ plan, onRename, onPick }) {
             <div className="text-[11px] mt-1">PDF</div>
           </div>
         )}
+
+        {/* ✅ petit badge OK quand tout est bon */}
+        {isAllGood && (
+          <div className="absolute top-2 left-2">
+            <Badge color="green">OK</Badge>
+          </div>
+        )}
+
         <div className="absolute inset-x-0 bottom-0 bg-black/50 text-white text-xs px-2 py-1 truncate text-center">
           {name}
         </div>
       </div>
+
       <div className="p-3">
         {!edit ? (
           <div className="flex items-start justify-between gap-2">
-            <div className="font-medium truncate" title={name}>{name || "—"}</div>
+            <div className="font-medium truncate" title={name}>
+              {name || "—"}
+            </div>
             <div className="flex items-center gap-1">
-              <Btn variant="ghost" aria-label="Renommer le plan" onClick={() => setEdit(true)}>✏️</Btn>
-              <Btn variant="subtle" onClick={() => onPick(plan)}>Ouvrir</Btn>
+              <Btn
+                variant="ghost"
+                aria-label="Renommer le plan"
+                onClick={() => setEdit(true)}
+              >
+                ✏️
+              </Btn>
+              <Btn variant="subtle" onClick={() => onPick(plan)}>
+                Ouvrir
+              </Btn>
             </div>
           </div>
         ) : (
           <div className="flex items-center gap-2">
             <Input value={name} onChange={setName} />
-            <Btn variant="subtle" onClick={async () => { await onRename(plan, (name || "").trim()); setEdit(false); }}>OK</Btn>
-            <Btn variant="ghost" onClick={() => { setName(plan.display_name || plan.logical_name || ""); setEdit(false); }}>Annuler</Btn>
+            <Btn
+              variant="subtle"
+              onClick={async () => {
+                await onRename(plan, (name || "").trim());
+                setEdit(false);
+              }}
+            >
+              OK
+            </Btn>
+            <Btn
+              variant="ghost"
+              onClick={() => {
+                setName(plan.display_name || plan.logical_name || "");
+                setEdit(false);
+              }}
+            >
+              Annuler
+            </Btn>
           </div>
         )}
+
+        {/* badges avec couleurs dynamiques (optionnel mais pratique) */}
         <div className="flex items-center gap-2 mt-2 text-xs">
-          <Badge color="orange">≤30j: {next30}</Badge>
-          <Badge color="red">Retard: {overdue}</Badge>
+          <Badge color={next30 > 0 ? "orange" : "gray"}>≤30j: {next30}</Badge>
+          <Badge color={overdue > 0 ? "red" : "gray"}>Retard: {overdue}</Badge>
         </div>
       </div>
     </div>
