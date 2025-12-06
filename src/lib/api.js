@@ -47,7 +47,7 @@ function getIdentity() {
     }
   } catch {}
 
-  // 3) fallback: dérive un nom depuis l’email
+  // 3) fallback: dérive un nom depuis l'email
   if (!name && email) {
     const base = String(email).split("@")[0] || "";
     if (base) {
@@ -219,6 +219,10 @@ export async function upload(path, formData /* FormData */) {
 
 /** Namespaced API */
 export const api = {
+  // Expose baseURL and site for components that need direct URLs
+  get baseURL() { return API_BASE; },
+  get site() { return currentSite(); },
+
   /** --- AUTH / PROFILE (si utilisés) --- */
   auth: {
     me: () => get("/api/auth/me"),
@@ -465,7 +469,7 @@ export const api = {
       );
     },
 
-    // Analyse multi-photos d’équipements (IA Controls, même principe ATEX)
+    // Analyse multi-photos d'équipements (IA Controls, même principe ATEX)
     extractFromPhotos: (files = []) => {
       const fd = new FormData();
       (files || []).forEach((f) => fd.append("files", f));
@@ -1568,7 +1572,8 @@ export const api = {
     // Alias rétro-compatible
     validate: ({ fileIds, mode = "auto" }) => post("/api/dcf/validate", { fileIds, mode }),
   },
-/** --- LEARN-EX (Formation ATEX Niveau 0) --- */
+
+  /** --- LEARN-EX (Formation ATEX Niveau 0) --- */
   learnEx: {
     health: () => get("/api/learn-ex/health"),
     config: () => get("/api/learn-ex/config"),
@@ -1592,8 +1597,114 @@ export const api = {
     imageUrl: (name) => `${API_BASE}/api/learn-ex/images/${name}`,
   },
 
+  /* ======================================================================
+     ====================== SWITCHBOARD (Tableaux électriques) ============
+     ====================================================================== */
+
+  /** --- SWITCHBOARD (Tableaux électriques & Disjoncteurs) --- */
+  switchboard: {
+    // ========================= TABLEAUX (BOARDS) =========================
+
+    // Liste des tableaux avec pagination
+    listBoards: (params) => get("/api/switchboard/boards", params),
+
+    // Obtenir un tableau par ID
+    getBoard: (id) => get(`/api/switchboard/boards/${encodeURIComponent(id)}`),
+
+    // Créer un nouveau tableau
+    createBoard: (payload) => post("/api/switchboard/boards", payload),
+
+    // Mettre à jour un tableau
+    updateBoard: (id, payload) =>
+      put(`/api/switchboard/boards/${encodeURIComponent(id)}`, payload),
+
+    // Supprimer un tableau (et ses disjoncteurs)
+    deleteBoard: (id) =>
+      del(`/api/switchboard/boards/${encodeURIComponent(id)}`),
+
+    // Photo du tableau
+    boardPhotoUrl: (id, { bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/photo`,
+        bust
+      ),
+
+    uploadBoardPhoto: (id, file) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      fd.append("photo", file);
+      if (email) fd.append("user_email", email);
+      if (name) fd.append("user_name", name);
+      return upload(
+        `/api/switchboard/boards/${encodeURIComponent(id)}/photo`,
+        fd
+      );
+    },
+
+    // ========================= DISJONCTEURS (DEVICES) =========================
+
+    // Liste des disjoncteurs d'un tableau
+    listDevices: (boardId, params) =>
+      get(`/api/switchboard/boards/${encodeURIComponent(boardId)}/devices`, params),
+
+    // Obtenir un disjoncteur par ID
+    getDevice: (id) =>
+      get(`/api/switchboard/devices/${encodeURIComponent(id)}`),
+
+    // Créer un nouveau disjoncteur
+    createDevice: (payload) => post("/api/switchboard/devices", payload),
+
+    // Mettre à jour un disjoncteur
+    updateDevice: (id, payload) =>
+      put(`/api/switchboard/devices/${encodeURIComponent(id)}`, payload),
+
+    // Supprimer un disjoncteur
+    deleteDevice: (id) =>
+      del(`/api/switchboard/devices/${encodeURIComponent(id)}`),
+
+    // ========================= IMPORT EXCEL =========================
+
+    // Importer depuis un fichier Excel
+    importExcel: (file) => {
+      const { email, name } = getIdentity();
+      const fd = new FormData();
+      fd.append("file", file);
+      if (email) fd.append("user_email", email);
+      if (name) fd.append("user_name", name);
+      return upload("/api/switchboard/import-excel", fd);
+    },
+
+    // ========================= COMPTAGES =========================
+
+    // Obtenir les comptages de devices par tableau (pour progress bars)
+    getDeviceCounts: (boardIds = []) =>
+      post("/api/switchboard/devices-count", { board_ids: boardIds }),
+
+    // ========================= IA PHOTO ANALYSIS =========================
+
+    // Analyser une photo de disjoncteur (extraction fabricant/référence)
+    analyzePhoto: (file) => {
+      const fd = new FormData();
+      fd.append("photo", file);
+      return upload("/api/switchboard/analyze-photo", fd);
+    },
+
+    // Rechercher les specs complètes d'un disjoncteur via IA
+    searchDevice: (query) =>
+      post("/api/switchboard/search-device", { query }),
+
+    // ========================= CALENDRIER & STATS =========================
+
+    calendar: () => get("/api/switchboard/calendar"),
+    stats: () => get("/api/switchboard/stats"),
+    health: () => get("/api/switchboard/health"),
+  },
+
   /** --- 🔵 BUBBLE AUTH --- */
   bubble: {
     login: (token) => post("/api/auth/bubble", { token }),
   },
 };
+
+// Default export for convenience
+export default api;
