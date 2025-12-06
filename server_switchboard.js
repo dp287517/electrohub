@@ -121,6 +121,24 @@ async function ensureSchema() {
     -- Add columns if missing
     DO $$
     BEGIN
+      -- Switchboards columns
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'photo') THEN
+        ALTER TABLE switchboards ADD COLUMN photo BYTEA;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'modes') THEN
+        ALTER TABLE switchboards ADD COLUMN modes JSONB DEFAULT '{}'::jsonb;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'quality') THEN
+        ALTER TABLE switchboards ADD COLUMN quality JSONB DEFAULT '{}'::jsonb;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'regime_neutral') THEN
+        ALTER TABLE switchboards ADD COLUMN regime_neutral TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'is_principal') THEN
+        ALTER TABLE switchboards ADD COLUMN is_principal BOOLEAN DEFAULT FALSE;
+      END IF;
+      
+      -- Devices columns
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'name') THEN
         ALTER TABLE devices ADD COLUMN name TEXT;
       END IF;
@@ -132,9 +150,6 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'is_complete') THEN
         ALTER TABLE devices ADD COLUMN is_complete BOOLEAN DEFAULT FALSE;
-      END IF;
-      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'photo') THEN
-        ALTER TABLE switchboards ADD COLUMN photo BYTEA;
       END IF;
     END $$;
 
