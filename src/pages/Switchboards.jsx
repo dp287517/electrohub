@@ -5,7 +5,7 @@ import {
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle
 } from 'lucide-react';
-import api from '../api';
+import { api } from '../lib/api';
 
 // ==================== ANIMATION COMPONENTS ====================
 
