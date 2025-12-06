@@ -7,6 +7,7 @@ import pg from 'pg';
 import OpenAI from 'openai';
 import PDFDocument from 'pdfkit';
 import multer from 'multer';
+import ExcelJS from 'exceljs';
 
 dotenv.config();
 const { Pool } = pg;
@@ -34,14 +35,14 @@ app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
-// Upload setup for photo
-const upload = multer({ memoryStorage: true });
+// Upload setup for photos and Excel files
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // CORS
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Site');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Site,X-User-Email,X-User-Name');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
@@ -55,11 +56,11 @@ function siteOf(req) {
   return (req.header('X-Site') || req.query.site || '').toString();
 }
 
-const WHITELIST_SORT = ['created_at','name','code','building_code','floor'];
+const WHITELIST_SORT = ['created_at', 'name', 'code', 'building_code', 'floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema - AMÉLIORATION: Meilleure gestion des NULL et defaults
+// Schema avec nouvelles colonnes
 async function ensureSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS switchboards (
@@ -72,6 +73,7 @@ async function ensureSchema() {
       room TEXT,
       regime_neutral TEXT,
       is_principal BOOLEAN DEFAULT FALSE,
+      photo BYTEA,
       modes JSONB DEFAULT '{}'::jsonb,
       quality JSONB DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ DEFAULT NOW()
@@ -97,6 +99,8 @@ async function ensureSchema() {
       voltage_v NUMERIC,
       trip_unit TEXT,
       position_number TEXT,
+      is_differential BOOLEAN DEFAULT FALSE,
+      is_complete BOOLEAN DEFAULT FALSE,
       settings JSONB DEFAULT '{}'::jsonb,
       is_main_incoming BOOLEAN DEFAULT FALSE,
       pv_tests BYTEA,
@@ -112,6 +116,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_manufacturer ON devices(manufacturer);
     CREATE INDEX IF NOT EXISTS idx_devices_name ON devices(name);
     CREATE INDEX IF NOT EXISTS idx_devices_position ON devices(position_number);
+    CREATE INDEX IF NOT EXISTS idx_devices_complete ON devices(is_complete);
 
     -- Add columns if missing
     DO $$
@@ -122,14 +127,18 @@ async function ensureSchema() {
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'position_number') THEN
         ALTER TABLE devices ADD COLUMN position_number TEXT;
       END IF;
-      -- Ensure settings defaults
-      UPDATE devices 
-      SET settings = COALESCE(settings, '{}'::jsonb) || 
-        '{"ir": 1, "tr": 10, "isd": 6, "tsd": 0.1, "ii": 10, "ig": 0.5, "tg": 0.2, "zsi": false, "erms": false, "curve_type": ""}'::jsonb
-      WHERE settings IS NULL OR settings = '{}'::jsonb;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'is_differential') THEN
+        ALTER TABLE devices ADD COLUMN is_differential BOOLEAN DEFAULT FALSE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'is_complete') THEN
+        ALTER TABLE devices ADD COLUMN is_complete BOOLEAN DEFAULT FALSE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'photo') THEN
+        ALTER TABLE switchboards ADD COLUMN photo BYTEA;
+      END IF;
     END $$;
 
-    -- Add trigger if missing (matches schema)
+    -- Add trigger for updated_at
     CREATE OR REPLACE FUNCTION update_updated_at_column() RETURNS TRIGGER AS $$
     BEGIN
       NEW.updated_at = NOW();
@@ -149,21 +158,46 @@ async function ensureSchema() {
 }
 ensureSchema().catch(e => console.error('[SWITCHBOARD SCHEMA]', e.message));
 
+// Helper: Check if device is complete
+function checkDeviceComplete(device) {
+  return !!(device.manufacturer && device.reference && device.in_amps && Number(device.in_amps) > 0);
+}
+
+// Helper: Detect if device is differential from text
+function detectDifferential(text) {
+  if (!text) return false;
+  const lowerText = String(text).toLowerCase();
+  const patterns = [
+    'ddr', 'rcd', 'rcbo', 'différentiel', 'differentiel', 'diff',
+    '30ma', '300ma', '30 ma', '300 ma', 'δ', 'vigi'
+  ];
+  return patterns.some(p => lowerText.includes(p));
+}
+
+// Helper: Detect differential from position format (X.X like 9.1)
+function detectDifferentialFromPosition(position) {
+  if (!position) return false;
+  return /^\d+\.\d+$/.test(String(position).trim());
+}
+
+// ==================== SWITCHBOARDS CRUD ====================
+
 // LIST Switchboards
 app.get('/api/switchboard/boards', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const { q, building, floor, room, sort = 'created_at', dir = 'desc', page = '1', pageSize = '18' } = req.query;
+    const { q, building, floor, room, sort = 'created_at', dir = 'desc', page = '1', pageSize = '100' } = req.query;
     const where = ['site = $1']; const vals = [site]; let i = 2;
     if (q) { where.push(`(name ILIKE $${i} OR code ILIKE $${i})`); vals.push(`%${q}%`); i++; }
     if (building) { where.push(`building_code ILIKE $${i}`); vals.push(`%${building}%`); i++; }
     if (floor) { where.push(`floor ILIKE $${i}`); vals.push(`%${floor}%`); i++; }
     if (room) { where.push(`room ILIKE $${i}`); vals.push(`%${room}%`); i++; }
-    const limit = Math.min(parseInt(pageSize,10) || 18, 100);
-    const offset = ((parseInt(page,10) || 1) - 1) * limit;
+    const limit = Math.min(parseInt(pageSize, 10) || 100, 500);
+    const offset = ((parseInt(page, 10) || 1) - 1) * limit;
 
-    const sql = `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at
+    const sql = `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
+                        modes, quality, created_at, (photo IS NOT NULL) as has_photo
                  FROM switchboards
                  WHERE ${where.join(' AND ')}
                  ORDER BY ${sortSafe(sort)} ${dirSafe(dir)}
@@ -175,6 +209,7 @@ app.get('/api/switchboard/boards', async (req, res) => {
       meta: { site: r.site, building_code: r.building_code, floor: r.floor, room: r.room },
       name: r.name, code: r.code, regime_neutral: r.regime_neutral,
       is_principal: r.is_principal,
+      has_photo: r.has_photo,
       modes: r.modes || {}, quality: r.quality || {}, created_at: r.created_at
     }));
     res.json({ data, total: count.rows[0].total, page: Number(page), pageSize: limit });
@@ -191,7 +226,8 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     const r = await pool.query(
-      `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at
+      `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
+              modes, quality, created_at, (photo IS NOT NULL) as has_photo
        FROM switchboards WHERE id=$1 AND site=$2`, [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -201,6 +237,7 @@ app.get('/api/switchboard/boards/:id', async (req, res) => {
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
+      has_photo: sb.has_photo,
       modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
@@ -237,7 +274,7 @@ app.post('/api/switchboard/boards', async (req, res) => {
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
-      is_principal: sb.is_principal,
+      is_principal: sb.is_principal, has_photo: false,
       modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
@@ -268,7 +305,7 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       `UPDATE switchboards SET
         name=$1, code=$2, building_code=$3, floor=$4, room=$5, regime_neutral=$6, is_principal=$7, modes=$8, quality=$9
        WHERE id=$10 AND site=$11
-       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at`,
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at, (photo IS NOT NULL) as has_photo`,
       [name, code, building, floor, room, regime, is_principal, modes, quality, id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -277,12 +314,35 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
-      is_principal: sb.is_principal,
+      is_principal: sb.is_principal, has_photo: sb.has_photo,
       modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD UPDATE] error:', e);
     res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// DELETE Switchboard (cascade deletes devices)
+app.delete('/api/switchboard/boards/:id', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const id = Number(req.params.id);
+    
+    // Count devices before delete
+    const countResult = await pool.query(
+      `SELECT COUNT(*)::int as count FROM devices WHERE switchboard_id = $1`, [id]
+    );
+    const deviceCount = countResult.rows[0]?.count || 0;
+    
+    const r = await pool.query(`DELETE FROM switchboards WHERE id=$1 AND site=$2 RETURNING id, name`, [id, site]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
+    
+    res.json({ success: true, deleted: id, name: r.rows[0].name, devices_deleted: deviceCount });
+  } catch (e) {
+    console.error('[SWITCHBOARD DELETE] error:', e);
+    res.status(500).json({ error: 'Delete failed' });
   }
 });
 
@@ -305,7 +365,7 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
-      is_principal: sb.is_principal,
+      is_principal: sb.is_principal, has_photo: false,
       modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
@@ -314,59 +374,142 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
   }
 });
 
-// DELETE Switchboard
-app.delete('/api/switchboard/boards/:id', async (req, res) => {
+// ==================== SWITCHBOARD PHOTO ====================
+
+// Upload Switchboard Photo
+app.post('/api/switchboard/boards/:id/photo', upload.single('photo'), async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
-    const r = await pool.query(`DELETE FROM switchboards WHERE id=$1 AND site=$2`, [id, site]);
-    if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
-    res.json({ success: true, deleted: id });
+    if (!req.file) return res.status(400).json({ error: 'No photo provided' });
+
+    const r = await pool.query(
+      `UPDATE switchboards SET photo = $1 WHERE id = $2 AND site = $3 RETURNING id`,
+      [req.file.buffer, id, site]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    
+    res.json({ success: true, id });
   } catch (e) {
-    console.error('[SWITCHBOARD DELETE] error:', e);
-    res.status(500).json({ error: 'Delete failed' });
+    console.error('[SWITCHBOARD PHOTO UPLOAD] error:', e);
+    res.status(500).json({ error: 'Upload failed' });
   }
 });
 
-// Amélioration 1 : endpoint pour compter les devices par switchboard
-app.get('/api/switchboard/devices-count', async (req, res) => {
+// Get Switchboard Photo
+app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const id = Number(req.params.id);
+
+    const r = await pool.query(
+      `SELECT photo FROM switchboards WHERE id = $1 AND site = $2`, [id, site]
+    );
+    if (!r.rows.length || !r.rows[0].photo) {
+      return res.status(404).json({ error: 'Photo not found' });
+    }
+
+    res.set('Content-Type', 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(r.rows[0].photo);
+  } catch (e) {
+    console.error('[SWITCHBOARD PHOTO GET] error:', e);
+    res.status(500).json({ error: 'Get photo failed' });
+  }
+});
+
+// ==================== DEVICE COUNTS ====================
+
+// Device counts for progress tracking
+app.post('/api/switchboard/devices-count', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
 
-    const idsParam = (req.query.ids || '').toString().trim();
-    if (!idsParam) {
-      // counts for all boards of the site
+    const boardIds = req.body?.board_ids || [];
+    
+    if (!boardIds.length) {
+      // Return counts for all boards of the site
       const { rows } = await pool.query(
-        `SELECT switchboard_id, COUNT(*)::int AS count
-         FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id
-         WHERE sb.site = $1 GROUP BY switchboard_id`, [site]
+        `SELECT d.switchboard_id, 
+                COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE d.is_complete = true)::int AS complete
+         FROM devices d 
+         JOIN switchboards sb ON d.switchboard_id = sb.id
+         WHERE sb.site = $1 
+         GROUP BY d.switchboard_id`, [site]
       );
-      const map = {};
-      rows.forEach(r => map[r.switchboard_id] = r.count);
-      return res.json({ counts: map });
+      const counts = {};
+      rows.forEach(r => {
+        counts[r.switchboard_id] = { total: r.total, complete: r.complete };
+      });
+      return res.json({ counts });
     }
 
-    const ids = idsParam.split(',').map(s => Number(s)).filter(Boolean);
+    const ids = boardIds.map(Number).filter(Boolean);
     if (!ids.length) return res.json({ counts: {} });
 
     const { rows } = await pool.query(
-      `SELECT switchboard_id, COUNT(*)::int AS count
-       FROM devices d
+      `SELECT switchboard_id, 
+              COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE is_complete = true)::int AS complete
+       FROM devices
        WHERE switchboard_id = ANY($1::int[])
        GROUP BY switchboard_id`, [ids]
     );
-    const map = {};
-    rows.forEach(r => map[r.switchboard_id] = r.count);
-    res.json({ counts: map });
+    
+    const counts = {};
+    rows.forEach(r => {
+      counts[r.switchboard_id] = { total: r.total, complete: r.complete };
+    });
+    
+    // Include boards with 0 devices
+    ids.forEach(id => {
+      if (!counts[id]) counts[id] = { total: 0, complete: 0 };
+    });
+    
+    res.json({ counts });
   } catch (e) {
     console.error('[DEVICES COUNT] error:', e.message);
     res.status(500).json({ error: 'Count failed' });
   }
 });
 
-// LIST Devices - AMÉLIORATION: Retour plus complet pour l'édition
+// ==================== DEVICES CRUD ====================
+
+// LIST Devices for a switchboard
+app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const switchboard_id = Number(req.params.boardId);
+    if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
+
+    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
+    if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
+
+    const { rows } = await pool.query(
+      `SELECT d.id, d.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
+              d.name, d.device_type, d.manufacturer, d.reference,
+              d.in_amps, d.icu_ka, d.ics_ka, d.poles, d.voltage_v, d.trip_unit,
+              d.position_number, d.is_differential, d.is_complete, d.settings,
+              d.is_main_incoming, d.created_at, d.updated_at
+       FROM devices d
+       WHERE d.switchboard_id = $1 
+       ORDER BY d.position_number ASC NULLS LAST, d.created_at ASC`,
+      [switchboard_id]
+    );
+    
+    res.json({ data: rows });
+  } catch (e) {
+    console.error('[DEVICES LIST] error:', e.message);
+    res.status(500).json({ error: 'List failed' });
+  }
+});
+
+// Legacy endpoint for backward compatibility
 app.get('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -378,39 +521,19 @@ app.get('/api/switchboard/devices', async (req, res) => {
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
     const { rows } = await pool.query(
-      `SELECT d.*, 
-       COALESCE(s.name, '') as switchboard_name,
-       COALESCE(p.name, '') as parent_name,
-       COALESCE(p.manufacturer, '') as parent_manufacturer,
-       COALESCE(p.reference, '') as parent_reference
-       FROM devices d
-       LEFT JOIN switchboards s ON d.switchboard_id = s.id
-       LEFT JOIN devices p ON d.parent_id = p.id
-       WHERE d.switchboard_id=$1 
-       ORDER BY d.created_at DESC`,
+      `SELECT * FROM devices WHERE switchboard_id = $1 
+       ORDER BY position_number ASC NULLS LAST, created_at ASC`,
       [switchboard_id]
     );
     
-    const enriched = rows.map(d => ({
-      ...d,
-      in_amps: d.in_amps,
-      icu_ka: d.icu_ka,
-      ics_ka: d.ics_ka,
-      poles: d.poles,
-      voltage_v: d.voltage_v,
-      settings: d.settings || {
-        ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: ''
-      }
-    }));
-    
-    res.json({ data: enriched });
+    res.json({ data: rows });
   } catch (e) {
-    console.error('[DEVICES LIST] error:', e.message);
+    console.error('[DEVICES LIST LEGACY] error:', e.message);
     res.status(500).json({ error: 'List failed' });
   }
 });
 
-// GET ONE Device - AMÉLIORATION: Retour complet avec parent/downstream info
+// GET ONE Device
 app.get('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -418,64 +541,22 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     const r = await pool.query(
-      `SELECT d.*, 
-       s.name as switchboard_name,
-       p.name as parent_name,
-       p.manufacturer as parent_manufacturer,
-       p.reference as parent_reference,
-       ds.name as downstream_name,
-       ds.code as downstream_code
+      `SELECT d.*, s.name as switchboard_name
        FROM devices d
        JOIN switchboards s ON d.switchboard_id = s.id
-       LEFT JOIN devices p ON d.parent_id = p.id
-       LEFT JOIN switchboards ds ON d.downstream_switchboard_id = ds.id
-       WHERE d.id=$1 AND s.site=$2`,
+       WHERE d.id = $1 AND s.site = $2`,
       [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     
-    const device = r.rows[0];
-    const enriched = {
-      ...device,
-      in_amps: device.in_amps,
-      icu_ka: device.icu_ka,
-      ics_ka: device.ics_ka,
-      poles: device.poles,
-      voltage_v: device.voltage_v,
-      settings: device.settings || {
-        ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: ''
-      }
-    };
-    
-    res.json(enriched);
+    res.json(r.rows[0]);
   } catch (e) {
     console.error('[DEVICES GET] error:', e.message);
     res.status(500).json({ error: 'Get failed' });
   }
 });
 
-// Coerce helpers - AMÉLIORATION: Meilleure gestion des valeurs NULL
-function coercePVTests(pv_tests) {
-  if (typeof pv_tests === 'string' && pv_tests.length > 0) {
-    try { return Buffer.from(pv_tests, 'base64'); } catch { return null; }
-  }
-  return null;
-}
-
-function coercePhotos(photos) {
-  if (Array.isArray(photos)) {
-    const out = [];
-    for (const p of photos) {
-      if (typeof p === 'string') {
-        try { out.push(Buffer.from(p, 'base64')); } catch { /* ignore */ }
-      }
-    }
-    return out;
-  }
-  return [];
-}
-
-// CREATE Device - AMÉLIORATION: Préservation des NULL et meilleure gestion settings
+// CREATE Device
 app.post('/api/switchboard/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -486,38 +567,42 @@ app.post('/api/switchboard/devices', async (req, res) => {
 
     const sbCheck = await pool.query('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
-    const device_site = sbCheck.rows[0].site;
 
-    const safePV = coercePVTests(b.pv_tests);
-    const safePhotos = coercePhotos(b.photos);
-    
+    // Calculate is_complete and is_differential
+    const is_complete = checkDeviceComplete(b);
+    const is_differential = b.is_differential || detectDifferential(b.name) || detectDifferentialFromPosition(b.position_number);
+
     const settings = b.settings || {};
-    const mergedSettings = {
-      ir: settings.ir !== undefined ? Number(settings.ir) : null,
-      tr: settings.tr !== undefined ? Number(settings.tr) : null,
-      isd: settings.isd !== undefined ? Number(settings.isd) : null,
-      tsd: settings.tsd !== undefined ? Number(settings.tsd) : null,
-      ii: settings.ii !== undefined ? Number(settings.ii) : null,
-      ig: settings.ig !== undefined ? Number(settings.ig) : null,
-      tg: settings.tg !== undefined ? Number(settings.tg) : null,
-      zsi: settings.zsi !== undefined ? Boolean(settings.zsi) : null,
-      erms: settings.erms !== undefined ? Boolean(settings.erms) : null,
-      curve_type: settings.curve_type || null
-    };
 
     const { rows } = await pool.query(
-      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, is_main_incoming, pv_tests, photos, position_number)
+      `INSERT INTO devices (
+        site, switchboard_id, parent_id, downstream_switchboard_id, 
+        name, device_type, manufacturer, reference, 
+        in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, 
+        position_number, is_differential, is_complete, settings, is_main_incoming
+      )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
        RETURNING *`,
-      [device_site, switchboard_id, b.parent_id || null, b.downstream_switchboard_id || null, b.name || null, b.device_type, b.manufacturer || null, b.reference || null,
-       b.in_amps !== undefined ? Number(b.in_amps) : null, 
-       b.icu_ka !== undefined ? Number(b.icu_ka) : null,
-       b.ics_ka !== undefined ? Number(b.ics_ka) : null, 
-       b.poles !== undefined ? Number(b.poles) : null,
-       b.voltage_v !== undefined ? Number(b.voltage_v) : null,
-       b.trip_unit || null, 
-       mergedSettings,
-       !!b.is_main_incoming, safePV, safePhotos, b.position_number || null]
+      [
+        site, switchboard_id, 
+        b.parent_id || null, 
+        b.downstream_switchboard_id || null, 
+        b.name || null, 
+        b.device_type || 'Low Voltage Circuit Breaker', 
+        b.manufacturer || null, 
+        b.reference || null,
+        b.in_amps ? Number(b.in_amps) : null, 
+        b.icu_ka ? Number(b.icu_ka) : null,
+        b.ics_ka ? Number(b.ics_ka) : null, 
+        b.poles ? Number(b.poles) : null,
+        b.voltage_v ? Number(b.voltage_v) : null,
+        b.trip_unit || null, 
+        b.position_number || null,
+        is_differential,
+        is_complete,
+        settings,
+        !!b.is_main_incoming
+      ]
     );
     res.status(201).json(rows[0]);
   } catch (e) {
@@ -526,56 +611,50 @@ app.post('/api/switchboard/devices', async (req, res) => {
   }
 });
 
-// UPDATE Device - AMÉLIORATION: Préservation des NULL et mise à jour settings
+// UPDATE Device
 app.put('/api/switchboard/devices/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     const b = req.body || {};
-    const safePV = coercePVTests(b.pv_tests);
-    const safePhotos = coercePhotos(b.photos);
     
+    // Calculate is_complete and is_differential
+    const is_complete = checkDeviceComplete(b);
+    const is_differential = b.is_differential !== undefined 
+      ? b.is_differential 
+      : (detectDifferential(b.name) || detectDifferentialFromPosition(b.position_number));
+
     const settings = b.settings || {};
-    const mergedSettings = {
-      ir: settings.ir !== undefined ? Number(settings.ir) : null,
-      tr: settings.tr !== undefined ? Number(settings.tr) : null,
-      isd: settings.isd !== undefined ? Number(settings.isd) : null,
-      tsd: settings.tsd !== undefined ? Number(settings.tsd) : null,
-      ii: settings.ii !== undefined ? Number(settings.ii) : null,
-      ig: settings.ig !== undefined ? Number(settings.ig) : null,
-      tg: settings.tg !== undefined ? Number(settings.tg) : null,
-      zsi: settings.zsi !== undefined ? Boolean(settings.zsi) : null,
-      erms: settings.erms !== undefined ? Boolean(settings.erms) : null,
-      curve_type: settings.curve_type !== undefined ? settings.curve_type : null
-    };
 
     const { rows } = await pool.query(
       `UPDATE devices SET
-        parent_id=$1, downstream_switchboard_id=$2, name=$3, device_type=$4, manufacturer=$5, reference=$6, 
-        in_amps=$7, icu_ka=$8, ics_ka=$9, poles=$10, voltage_v=$11, trip_unit=$12, settings=$13, is_main_incoming=$14, 
-        pv_tests=$15, photos=$16, position_number=$17, updated_at=NOW()
+        parent_id = $1, downstream_switchboard_id = $2, name = $3, device_type = $4, 
+        manufacturer = $5, reference = $6, in_amps = $7, icu_ka = $8, ics_ka = $9, 
+        poles = $10, voltage_v = $11, trip_unit = $12, position_number = $13,
+        is_differential = $14, is_complete = $15, settings = $16, is_main_incoming = $17,
+        updated_at = NOW()
        FROM switchboards sb
-       WHERE devices.id=$18 AND devices.switchboard_id = sb.id AND sb.site=$19
+       WHERE devices.id = $18 AND devices.switchboard_id = sb.id AND sb.site = $19
        RETURNING devices.*`,
       [
-        b.parent_id !== undefined ? b.parent_id : null,
-        b.downstream_switchboard_id !== undefined ? b.downstream_switchboard_id : null,
-        b.name !== undefined ? b.name : null,
-        b.device_type,
-        b.manufacturer !== undefined ? b.manufacturer : null,
-        b.reference !== undefined ? b.reference : null,
-        b.in_amps !== undefined ? Number(b.in_amps) : null,
-        b.icu_ka !== undefined ? Number(b.icu_ka) : null,
-        b.ics_ka !== undefined ? Number(b.ics_ka) : null,
-        b.poles !== undefined ? Number(b.poles) : null,
-        b.voltage_v !== undefined ? Number(b.voltage_v) : null,
-        b.trip_unit !== undefined ? b.trip_unit : null,
-        mergedSettings,
+        b.parent_id || null,
+        b.downstream_switchboard_id || null,
+        b.name || null,
+        b.device_type || 'Low Voltage Circuit Breaker',
+        b.manufacturer || null,
+        b.reference || null,
+        b.in_amps ? Number(b.in_amps) : null,
+        b.icu_ka ? Number(b.icu_ka) : null,
+        b.ics_ka ? Number(b.ics_ka) : null,
+        b.poles ? Number(b.poles) : null,
+        b.voltage_v ? Number(b.voltage_v) : null,
+        b.trip_unit || null,
+        b.position_number || null,
+        is_differential,
+        is_complete,
+        settings,
         !!b.is_main_incoming,
-        safePV,
-        safePhotos,
-        b.position_number !== undefined ? b.position_number : null,
         id,
         site
       ]
@@ -585,31 +664,6 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
   } catch (e) {
     console.error('[DEVICES UPDATE] error:', e.message);
     res.status(500).json({ error: 'Update failed' });
-  }
-});
-
-// DUPLICATE Device
-app.post('/api/switchboard/devices/:id/duplicate', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const id = Number(req.params.id);
-    const r = await pool.query(
-      `INSERT INTO devices (site, switchboard_id, parent_id, downstream_switchboard_id, name, device_type, manufacturer, reference, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings, is_main_incoming, pv_tests, photos, position_number)
-       SELECT sb.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
-              COALESCE(d.name, d.reference) || ' (copy)', d.device_type, d.manufacturer, COALESCE(d.reference, 'Device') || ' (copy)',
-              d.in_amps, d.icu_ka, d.ics_ka, d.poles, d.voltage_v, d.trip_unit, d.settings, FALSE, d.pv_tests, d.photos, d.position_number
-       FROM devices d
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE d.id=$1 AND sb.site=$2
-       RETURNING *`,
-      [id, site]
-    );
-    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
-    res.status(201).json(r.rows[0]);
-  } catch (e) {
-    console.error('[DEVICES DUPLICATE] error:', e.message);
-    res.status(500).json({ error: 'Duplicate failed' });
   }
 });
 
@@ -623,7 +677,8 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
     const r = await pool.query(
       `DELETE FROM devices d
        USING switchboards sb
-       WHERE d.id=$1 AND d.switchboard_id = sb.id AND sb.site=$2`,
+       WHERE d.id = $1 AND d.switchboard_id = sb.id AND sb.site = $2
+       RETURNING d.id`,
       [id, site]
     );
     if (r.rowCount === 0) return res.status(404).json({ error: 'Not found' });
@@ -634,50 +689,322 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// Set Main Incoming
-app.put('/api/switchboard/devices/:id/set-main', async (req, res) => {
+// ==================== EXCEL IMPORT ====================
+
+app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    const id = Number(req.params.id);
-    const is_main_incoming = !!req.body.is_main_incoming;
+    if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
-    const r = await pool.query(
-      `UPDATE devices d
-       SET is_main_incoming=$1, updated_at=NOW()
-       FROM switchboards sb
-       WHERE d.id=$2 AND d.switchboard_id = sb.id AND sb.site=$3
-       RETURNING d.*`,
-      [is_main_incoming, id, site]
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(req.file.buffer);
+    const sheet = workbook.worksheets[0];
+    if (!sheet) return res.status(400).json({ error: 'No worksheet found' });
+
+    // Extract tableau name from row 2 columns D-G (merged)
+    let tableauName = '';
+    const row2 = sheet.getRow(2);
+    for (let col = 4; col <= 7; col++) {
+      const val = row2.getCell(col).value;
+      if (val) {
+        tableauName = String(val).trim();
+        break;
+      }
+    }
+
+    // Extract code from row 4 columns D-G (merged)
+    let code = '';
+    const row4 = sheet.getRow(4);
+    for (let col = 4; col <= 7; col++) {
+      const val = row4.getCell(col).value;
+      if (val) {
+        code = String(val).trim();
+        break;
+      }
+    }
+
+    if (!tableauName) tableauName = 'Tableau importé';
+    if (!code) code = `IMP-${Date.now()}`;
+
+    // Parse building and floor from code (format: BUILDING-FLOOR-XX-XX)
+    const codeParts = code.split('-');
+    const building = codeParts[0] || null;
+    const floor = codeParts[1] || null;
+
+    // Check if switchboard exists or create new one
+    let switchboardId;
+    const existingBoard = await pool.query(
+      `SELECT id FROM switchboards WHERE site = $1 AND code = $2`,
+      [site, code]
     );
-    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
-    res.json(r.rows[0]);
+
+    if (existingBoard.rows.length > 0) {
+      switchboardId = existingBoard.rows[0].id;
+      // Update name if different
+      await pool.query(
+        `UPDATE switchboards SET name = $1, building_code = $2, floor = $3 WHERE id = $4`,
+        [tableauName, building, floor, switchboardId]
+      );
+    } else {
+      const newBoard = await pool.query(
+        `INSERT INTO switchboards (site, name, code, building_code, floor, regime_neutral)
+         VALUES ($1, $2, $3, $4, $5, 'TN-S')
+         RETURNING id`,
+        [site, tableauName, code, building, floor]
+      );
+      switchboardId = newBoard.rows[0].id;
+    }
+
+    // Parse devices from rows 12+ 
+    // Column A = position (repère départ), columns B-E = designation (merged)
+    let devicesCreated = 0;
+    const startRow = 12;
+
+    for (let rowNum = startRow; rowNum <= sheet.rowCount; rowNum++) {
+      const row = sheet.getRow(rowNum);
+      
+      // Get position from column A
+      const positionCell = row.getCell(1).value;
+      const position = positionCell ? String(positionCell).trim() : '';
+      
+      // Skip empty rows or header rows
+      if (!position || position.toLowerCase().includes('repère') || position.toLowerCase().includes('départ')) {
+        continue;
+      }
+
+      // Get designation from columns B-E (might be merged)
+      let designation = '';
+      for (let col = 2; col <= 5; col++) {
+        const val = row.getCell(col).value;
+        if (val) {
+          designation = String(val).trim();
+          break;
+        }
+      }
+
+      if (!designation) continue;
+
+      // Detect if differential from designation or position format
+      const is_differential = detectDifferential(designation) || detectDifferentialFromPosition(position);
+
+      // Insert device (marked as incomplete since we don't have specs)
+      await pool.query(
+        `INSERT INTO devices (site, switchboard_id, name, device_type, position_number, is_differential, is_complete)
+         VALUES ($1, $2, $3, $4, $5, $6, false)`,
+        [site, switchboardId, designation, 'Low Voltage Circuit Breaker', position, is_differential]
+      );
+      devicesCreated++;
+    }
+
+    res.json({
+      success: true,
+      switchboard: {
+        id: switchboardId,
+        name: tableauName,
+        code,
+        building,
+        floor
+      },
+      devices_created: devicesCreated
+    });
   } catch (e) {
-    console.error('[DEVICES SET MAIN] error:', e.message);
-    res.status(500).json({ error: 'Set main failed' });
+    console.error('[EXCEL IMPORT] error:', e.message, e.stack);
+    res.status(500).json({ error: 'Import failed', details: e.message });
   }
 });
 
-// Unique Device References
-app.get('/api/switchboard/device-references', async (req, res) => {
+// ==================== AI PHOTO ANALYSIS ====================
+
+app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
+    if (!req.file) return res.status(400).json({ error: 'No photo provided' });
+    if (!openai) return res.status(503).json({ error: 'OpenAI not available' });
+
+    const buffer = req.file.buffer;
+    const base64Image = buffer.toString('base64');
+    const mimeType = req.file.mimetype || 'image/jpeg';
+
+    // Vision analysis
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: 'You output ONLY valid JSON. No markdown fences, no prose. Focus on electrical device identification.'
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: `Analyze this electrical device image. Extract with high precision:
+              - manufacturer: brand name (e.g., "Schneider", "ABB", "Siemens", "Legrand", "Hager")
+              - reference: exact model number visible on the device
+              - is_differential: boolean, true if you see any of: "30mA", "300mA", "Δ", "DDR", "RCD", "RCBO", "Vigi", differential symbol
+              
+              If text is unclear, use null. Output JSON only.`
+            },
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+          ]
+        }
+      ],
+      response_format: { type: 'json_object' },
+      max_tokens: 300
+    });
+
+    let result;
+    try {
+      result = JSON.parse(response.choices[0].message.content);
+    } catch (parseErr) {
+      console.error('[PHOTO] Parse error:', parseErr);
+      return res.status(500).json({ error: 'Failed to parse photo analysis' });
+    }
+
+    const manufacturer = result.manufacturer || null;
+    const reference = result.reference || null;
+    const is_differential = !!result.is_differential;
+
+    // Build query for AI search
+    const quick_ai_query = [manufacturer, reference].filter(Boolean).join(' ').trim() || null;
+
+    res.json({
+      manufacturer,
+      reference,
+      is_differential,
+      quick_ai_query
+    });
+  } catch (e) {
+    console.error('[PHOTO ANALYSIS] error:', e.message);
+    res.status(500).json({ error: 'Photo analysis failed', details: e.message });
+  }
+});
+
+// ==================== AI DEVICE SEARCH ====================
+
+app.post('/api/switchboard/search-device', async (req, res) => {
+  try {
+    const { query } = req.body;
+    if (!query) return res.status(400).json({ error: 'Missing query' });
+    if (!openai) return res.json({ error: 'OpenAI not available' });
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { 
+          role: 'system', 
+          content: `You are an expert in electrical protective devices. For the query "${query}", extract and return structured JSON with complete device specifications.
+
+Required fields (use realistic manufacturer-standard values):
+- manufacturer: string (exact brand name)
+- reference: string (exact model number)
+- device_type: string ("MCCB", "ACB", "MCB", "RCBO", "Low Voltage Circuit Breaker")
+- in_amps: number (rated current in Amps)
+- icu_ka: number (ultimate breaking capacity in kA) 
+- ics_ka: number (service breaking capacity in kA, usually 75-100% of Icu)
+- poles: number (1-4)
+- voltage_v: number (rated voltage, typically 400V for LV)
+- trip_unit: string (e.g., "Thermal Magnetic", "Electronic", "Micrologic 5.2")
+- is_differential: boolean (true if RCBO, Vigi, or has differential protection)
+
+Settings object (LSIG protection - use manufacturer defaults):
+- ir: number (long-time pickup, multiple of In, typically 0.4-1.0)
+- tr: number (long-time delay in seconds)
+- isd: number (short-time pickup, multiple of Ir)
+- tsd: number (short-time delay in seconds)
+- ii: number (instantaneous pickup, multiple of In)
+- ig: number (ground fault pickup, multiple of In)
+- tg: number (ground fault delay in seconds)
+- zsi: boolean (Zone Selective Interlocking)
+- erms: boolean (Energy Reducing Maintenance)
+- curve_type: string ("B", "C", "D" for MCBs)
+
+Output ONLY valid JSON. Use null for unknown values.` 
+        },
+        { role: 'user', content: `Extract device specifications: ${query}` }
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.1,
+      max_tokens: 800
+    });
+
+    const jsonResponse = JSON.parse(completion.choices[0].message.content);
+    
+    // Safe number conversion
+    const safeNum = (val) => {
+      if (val === null || val === undefined) return null;
+      const num = Number(val);
+      return isNaN(num) ? null : num;
+    };
+
+    const validated = {
+      manufacturer: jsonResponse.manufacturer || null,
+      reference: jsonResponse.reference || null,
+      device_type: jsonResponse.device_type || 'Low Voltage Circuit Breaker',
+      in_amps: safeNum(jsonResponse.in_amps),
+      icu_ka: safeNum(jsonResponse.icu_ka),
+      ics_ka: safeNum(jsonResponse.ics_ka) || (safeNum(jsonResponse.icu_ka) ? safeNum(jsonResponse.icu_ka) * 0.75 : null),
+      poles: safeNum(jsonResponse.poles) || 3,
+      voltage_v: safeNum(jsonResponse.voltage_v) || 400,
+      trip_unit: jsonResponse.trip_unit || null,
+      is_differential: !!jsonResponse.is_differential,
+      settings: {
+        ir: safeNum(jsonResponse.settings?.ir) ?? 1,
+        tr: safeNum(jsonResponse.settings?.tr) ?? 10,
+        isd: safeNum(jsonResponse.settings?.isd) ?? 6,
+        tsd: safeNum(jsonResponse.settings?.tsd) ?? 0.1,
+        ii: safeNum(jsonResponse.settings?.ii) ?? 10,
+        ig: safeNum(jsonResponse.settings?.ig) ?? 0.5,
+        tg: safeNum(jsonResponse.settings?.tg) ?? 0.2,
+        zsi: !!jsonResponse.settings?.zsi,
+        erms: !!jsonResponse.settings?.erms,
+        curve_type: jsonResponse.settings?.curve_type || 'C'
+      }
+    };
+
+    res.json(validated);
+  } catch (e) {
+    console.error('[SEARCH DEVICE] error:', e.message);
+    res.status(500).json({ error: 'Search failed', details: e.message });
+  }
+});
+
+// ==================== SEARCH HELPERS ====================
+
+// Search Device References (autocomplete)
+app.get('/api/switchboard/search-references', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const query = (req.query.query || '').trim().toLowerCase();
+
+    const where = ['site = $1'];
+    const vals = [site];
+    let i = 2;
+    if (query) {
+      where.push(`(LOWER(reference) ILIKE $${i} OR LOWER(manufacturer) ILIKE $${i})`);
+      vals.push(`%${query}%`);
+      i++;
+    }
+
     const { rows } = await pool.query(
-      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings
-       FROM devices 
-       WHERE site=$1 AND manufacturer IS NOT NULL AND reference IS NOT NULL 
-       ORDER BY manufacturer, reference`,
-      [site]
+      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings
+       FROM devices
+       WHERE ${where.join(' AND ')} AND manufacturer IS NOT NULL
+       ORDER BY manufacturer, reference
+       LIMIT 20`, vals
     );
-    res.json({ data: rows });
+
+    res.json({ suggestions: rows });
   } catch (e) {
-    console.error('[DEVICE REFERENCES] error:', e.message);
-    res.status(500).json({ error: 'List failed' });
+    console.error('[SEARCH REFERENCES] error:', e.message);
+    res.status(500).json({ error: 'Search failed' });
   }
 });
 
-// Search Parent Devices - MODIFIÉ: Permettre parents dans le même switchboard
+// Search Parent Devices
 app.get('/api/switchboard/search-parents', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -685,7 +1012,7 @@ app.get('/api/switchboard/search-parents', async (req, res) => {
     const query = (req.query.query || '').trim().toLowerCase();
     const switchboard_id = Number(req.query.switchboard_id);
 
-    const where = ['d.site = $1'];
+    const where = ['sb.site = $1'];
     const vals = [site];
     let i = 2;
     if (query) {
@@ -694,17 +1021,18 @@ app.get('/api/switchboard/search-parents', async (req, res) => {
       i++;
     }
     if (switchboard_id) {
-      vals.push(switchboard_id);
       where.push(`d.switchboard_id = $${i}`);
+      vals.push(switchboard_id);
     }
 
-    const sql = `SELECT d.id, d.name, d.device_type, d.manufacturer, d.reference, s.name as switchboard_name
-                 FROM devices d
-                 JOIN switchboards s ON d.switchboard_id = s.id
-                 WHERE ${where.join(' AND ')}
-                 ORDER BY d.created_at DESC
-                 LIMIT 20`;
-    const { rows } = await pool.query(sql, vals);
+    const { rows } = await pool.query(
+      `SELECT d.id, d.name, d.device_type, d.manufacturer, d.reference, sb.name as switchboard_name
+       FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE ${where.join(' AND ')}
+       ORDER BY d.created_at DESC
+       LIMIT 20`, vals
+    );
     res.json({ suggestions: rows });
   } catch (e) {
     console.error('[SEARCH PARENTS] error:', e.message);
@@ -725,15 +1053,15 @@ app.get('/api/switchboard/search-downstreams', async (req, res) => {
     if (query) {
       where.push(`(LOWER(name) ILIKE $${i} OR LOWER(code) ILIKE $${i})`);
       vals.push(`%${query}%`);
-      i++;
     }
 
-    const sql = `SELECT id, name, code, building_code, floor, room
-                 FROM switchboards
-                 WHERE ${where.join(' AND ')}
-                 ORDER BY created_at DESC
-                 LIMIT 20`;
-    const { rows } = await pool.query(sql, vals);
+    const { rows } = await pool.query(
+      `SELECT id, name, code, building_code, floor, room
+       FROM switchboards
+       WHERE ${where.join(' AND ')}
+       ORDER BY name
+       LIMIT 20`, vals
+    );
     res.json({ suggestions: rows });
   } catch (e) {
     console.error('[SEARCH DOWNSTREAMS] error:', e.message);
@@ -741,160 +1069,8 @@ app.get('/api/switchboard/search-downstreams', async (req, res) => {
   }
 });
 
-// Search Device References
-app.get('/api/switchboard/search-references', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const query = (req.query.query || '').trim().toLowerCase();
+// ==================== GRAPH ====================
 
-    const where = ['site = $1'];
-    const vals = [site];
-    let i = 2;
-    if (query) {
-      where.push(`(LOWER(reference) ILIKE $${i} OR LOWER(manufacturer) ILIKE $${i})`);
-      vals.push(`%${query}%`);
-      i++;
-    }
-
-    const sql = `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, settings
-                 FROM devices
-                 WHERE ${where.join(' AND ')}
-                 ORDER BY manufacturer, reference
-                 LIMIT 20`;
-    const { rows } = await pool.query(sql, vals);
-
-    let exactMatch = null;
-    const queryLower = query.toLowerCase();
-    for (const row of rows) {
-      const refLower = (row.reference || '').toLowerCase();
-      const mfgLower = (row.manufacturer || '').toLowerCase();
-      const fullLower = `${mfgLower} ${refLower}`.trim();
-      if (refLower === queryLower || mfgLower === queryLower || fullLower === queryLower) {
-        exactMatch = row;
-        break;
-      }
-      if (queryLower.length >= 4 && 
-          (refLower.startsWith(queryLower) || mfgLower.startsWith(queryLower) || fullLower.startsWith(queryLower))) {
-        exactMatch = row;
-        break;
-      }
-    }
-
-    const suggestions = rows.map(r => ({
-      ...r,
-      in_amps: r.in_amps !== null && !isNaN(r.in_amps) ? Number(r.in_amps) : null,
-      icu_ka: r.icu_ka !== null && !isNaN(r.icu_ka) ? Number(r.icu_ka) : null,
-      ics_ka: r.ics_ka !== null && !isNaN(r.ics_ka) ? Number(r.ics_ka) : null,
-      poles: r.poles !== null && !isNaN(r.poles) ? Number(r.poles) : null,
-      voltage_v: r.voltage_v !== null && !isNaN(r.voltage_v) ? Number(r.voltage_v) : null,
-      settings: r.settings || {}
-    }));
-
-    res.json({
-      suggestions,
-      auto_fill: exactMatch ? {
-        manufacturer: exactMatch.manufacturer,
-        reference: exactMatch.reference,
-        device_type: exactMatch.device_type || 'Low Voltage Circuit Breaker',
-        in_amps: exactMatch.in_amps !== null && !isNaN(exactMatch.in_amps) ? Number(exactMatch.in_amps) : null,
-        icu_ka: exactMatch.icu_ka !== null && !isNaN(exactMatch.icu_ka) ? Number(exactMatch.icu_ka) : null,
-        ics_ka: exactMatch.ics_ka !== null && !isNaN(exactMatch.ics_ka) ? Number(exactMatch.ics_ka) : null,
-        poles: exactMatch.poles !== null && !isNaN(exactMatch.poles) ? Number(exactMatch.poles) : null,
-        voltage_v: exactMatch.voltage_v !== null && !isNaN(exactMatch.voltage_v) ? Number(exactMatch.voltage_v) : null,
-        trip_unit: exactMatch.trip_unit || '',
-        settings: exactMatch.settings || { curve_type: '' }
-      } : null
-    });
-  } catch (e) {
-    console.error('[SEARCH REFERENCES] error:', e.message, e.stack);
-    res.status(500).json({ error: 'Search failed', details: e.message });
-  }
-});
-
-// Search Device (OpenAI) - AMÉLIORATION: Meilleure prompt pour specs complètes
-app.post('/api/switchboard/search-device', async (req, res) => {
-  try {
-    const { query } = req.body;
-    if (!query) return res.status(400).json({ error: 'Missing query' });
-
-    if (!openai) {
-      return res.json({ error: 'OpenAI not available' });
-    }
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: `You are an expert in electrical protective devices. For the query "${query}", extract and return structured JSON with ALL relevant fields for a complete device specification. 
-
-Required fields (use realistic values based on manufacturer standards):
-- manufacturer: string (e.g. "Schneider", "ABB", "Siemens")
-- reference: string (specific model number)
-- device_type: string (e.g. "MCCB", "ACB", "MCB", "Low Voltage Circuit Breaker")
-- in_amps: number (rated current in Amps)
-- icu_ka: number (ultimate breaking capacity in kA) 
-- ics_ka: number (service breaking capacity in kA, usually 0.75-1.0 × Icu)
-- poles: number (1-4 poles)
-- voltage_v: number (rated voltage in Volts, typically 400 for LV)
-- trip_unit: string (e.g. "Thermal Magnetic", "Electronic", "Micrologic")
-
-Settings object (LSIG protection parameters - use realistic defaults):
-- ir: number (long-time pickup current, multiple of In)
-- tr: number (long-time delay in seconds)
-- isd: number (short-time pickup current, multiple of Ir)
-- tsd: number (short-time delay in seconds)
-- ii: number (instantaneous pickup current, multiple of In)
-- ig: number (ground fault pickup current, multiple of In)
-- tg: number (ground fault delay in seconds)
-- zsi: boolean (Zone Selective Interlocking)
-- erms: boolean (Energy Reducing Maintenance System)
-- curve_type: string (e.g. "C", "D", "K" for MCBs)
-
-Output ONLY valid JSON. If uncertain about a value, use null. Base values on electrical engineering standards.` 
-        },
-        { role: 'user', content: `Extract device specifications: ${query}` }
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.1,
-      max_tokens: 800
-    });
-
-    const jsonResponse = JSON.parse(completion.choices[0].message.content);
-    
-    const validated = {
-      manufacturer: jsonResponse.manufacturer || null,
-      reference: jsonResponse.reference || null,
-      device_type: jsonResponse.device_type || 'Low Voltage Circuit Breaker',
-      in_amps: jsonResponse.in_amps ? Number(jsonResponse.in_amps) : null,
-      icu_ka: jsonResponse.icu_ka ? Number(jsonResponse.icu_ka) : null,
-      ics_ka: jsonResponse.ics_ka ? Number(jsonResponse.ics_ka) : (jsonResponse.icu_ka ? Number(jsonResponse.icu_ka) * 0.75 : null),
-      poles: jsonResponse.poles ? Number(jsonResponse.poles) : 3,
-      voltage_v: jsonResponse.voltage_v ? Number(jsonResponse.voltage_v) : 400,
-      trip_unit: jsonResponse.trip_unit || null,
-      settings: {
-        ir: jsonResponse.settings?.ir ? Number(jsonResponse.settings.ir) : 1,
-        tr: jsonResponse.settings?.tr ? Number(jsonResponse.settings.tr) : 10,
-        isd: jsonResponse.settings?.isd ? Number(jsonResponse.settings.isd) : 6,
-        tsd: jsonResponse.settings?.tsd ? Number(jsonResponse.settings.tsd) : 0.1,
-        ii: jsonResponse.settings?.ii ? Number(jsonResponse.settings.ii) : 10,
-        ig: jsonResponse.settings?.ig ? Number(jsonResponse.settings.ig) : 0.5,
-        tg: jsonResponse.settings?.tg ? Number(jsonResponse.settings.tg) : 0.2,
-        zsi: jsonResponse.settings?.zsi !== undefined ? Boolean(jsonResponse.settings.zsi) : false,
-        erms: jsonResponse.settings?.erms !== undefined ? Boolean(jsonResponse.settings.erms) : false,
-        curve_type: jsonResponse.settings?.curve_type || 'C'
-      }
-    };
-
-    res.json(validated);
-  } catch (e) {
-    console.error('[SEARCH DEVICE] error:', e.message);
-    res.status(500).json({ error: 'Search failed', details: e.message });
-  }
-});
-
-// Graph
 app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -904,7 +1080,10 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
     if (!sb.rows.length) return res.status(404).json({ error: 'Not found' });
 
     const buildTree = async (switchboardId) => {
-      const { rows: devs } = await pool.query('SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY created_at ASC', [switchboardId]);
+      const { rows: devs } = await pool.query(
+        'SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY position_number ASC NULLS LAST, created_at ASC', 
+        [switchboardId]
+      );
       const byId = new Map(devs.map(d => [d.id, { ...d, children: [], downstream: null }]));
       const roots = [];
       for (const d of devs) {
@@ -926,181 +1105,55 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
   }
 });
 
-// ---- PHOTO ANALYSIS (amélioration 5 : enrichissement systématique + flux Quick AI) ----
-function safeJsonParse(raw) {
-  if (typeof raw !== 'string') return raw;
-  let s = raw.trim();
-  // strip fences ```json ... ```
-  if (s.startsWith('```')) {
-    s = s.replace(/^```(?:json)?\s*/i, '').replace(/```$/,'').trim();
-  }
-  // si un JSON est noyé dans du texte, on récupère le premier bloc {...}
-  const m = s.match(/\{[\s\S]*\}$/);
-  if (m) s = m[0];
-  return JSON.parse(s);
-}
+// ==================== STATS & CALENDAR ====================
 
-// Analyze Photo - Ne crée pas de device, juste extraction pour Quick AI Search
-app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, res) => {
+app.get('/api/switchboard/stats', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-    if (!req.file) return res.status(400).json({ error: 'No photo provided' });
-    if (!openai) return res.status(503).json({ error: 'OpenAI not available' });
 
-    const buffer = req.file.buffer;
-    const base64Image = buffer.toString('base64');
-    const mimeType = req.file.mimetype;
+    const stats = await pool.query(`
+      SELECT 
+        (SELECT COUNT(*)::int FROM switchboards WHERE site = $1) as total_boards,
+        (SELECT COUNT(*)::int FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id WHERE sb.site = $1) as total_devices,
+        (SELECT COUNT(*)::int FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id WHERE sb.site = $1 AND d.is_complete = true) as complete_devices,
+        (SELECT COUNT(*)::int FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id WHERE sb.site = $1 AND d.is_differential = true) as differential_devices,
+        (SELECT COUNT(*)::int FROM switchboards WHERE site = $1 AND is_principal = true) as principal_boards
+    `, [site]);
 
-    // Vision description - Extraire uniquement manufacturer et reference
-    const descriptionResponse = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: 'You output ONLY valid JSON. No markdown fences, no prose. Focus on electrical device identification.'
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: `Analyze this electrical device image. Extract with high precision:
-              - manufacturer: brand name (e.g., "Schneider", "ABB", "Siemens")
-              - reference: exact model number visible on the device (e.g., "LV429310")
-              If text is unclear, use "unknown". JSON only.`
-            },
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
-          ]
-        }
-      ],
-      response_format: { type: 'json_object' },
-      max_tokens: 200
-    });
-
-    let description;
-    try {
-      description = JSON.parse(descriptionResponse.choices[0].message.content);
-    } catch (parseErr) {
-      console.error('[PHOTO] Parse error:', parseErr);
-      return res.status(500).json({ error: 'Failed to parse photo description' });
-    }
-
-    if (!description.manufacturer && !description.reference) {
-      return res.json({
-        error: 'Could not identify manufacturer or reference from photo',
-        manufacturer: null,
-        reference: null,
-        quick_ai_query: null
-      });
-    }
-
-    // Recherche dans la base pour suggestions, mais pas de création
-    const { rows: existing } = await pool.query(
-      `SELECT d.*, sb.name as switchboard_name
-       FROM devices d
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE d.site = $1
-       AND (LOWER(COALESCE(d.manufacturer, '')) = LOWER($2) OR LOWER(d.reference) = LOWER($3))
-       ORDER BY d.updated_at DESC
-       LIMIT 3`,
-      [site, description.manufacturer || '', description.reference || '']
-    );
-
-    if (existing.length > 0) {
-      const bestMatch = existing[0];
-      res.json({
-        manufacturer: description.manufacturer || bestMatch.manufacturer,
-        reference: description.reference || bestMatch.reference,
-        quick_ai_query: `${description.manufacturer || bestMatch.manufacturer} ${description.reference || bestMatch.reference}`.trim(),
-        existing_id: bestMatch.id,
-        matched: true
-      });
-    } else {
-      res.json({
-        manufacturer: description.manufacturer || null,
-        reference: description.reference || null,
-        quick_ai_query: `${description.manufacturer || 'unknown'} ${description.reference || 'unknown'}`.trim(),
-        matched: false
-      });
-    }
+    res.json(stats.rows[0]);
   } catch (e) {
-    console.error('[PHOTO ANALYSIS] error:', e.message);
-    res.status(500).json({ error: 'Photo analysis failed', details: e.message });
+    console.error('[STATS] error:', e.message);
+    res.status(500).json({ error: 'Stats failed' });
   }
 });
 
-// Génération specs AI à partir de description - Avec vérification anti-NaN
-async function getAiDeviceSpecs(description) {
-  if (!openai) return {};
-
+app.get('/api/switchboard/calendar', async (req, res) => {
   try {
-    const prompt = `Based on this device description: "${JSON.stringify(description)}"
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
 
-    Generate complete technical specifications for this electrical device. Use realistic values based on the identified manufacturer and type.
+    // Return boards grouped by building for calendar view
+    const { rows } = await pool.query(`
+      SELECT sb.id, sb.name, sb.code, sb.building_code, sb.floor, sb.is_principal,
+             COUNT(d.id)::int as device_count,
+             COUNT(d.id) FILTER (WHERE d.is_complete = true)::int as complete_count
+      FROM switchboards sb
+      LEFT JOIN devices d ON d.switchboard_id = sb.id
+      WHERE sb.site = $1
+      GROUP BY sb.id
+      ORDER BY sb.building_code, sb.floor, sb.name
+    `, [site]);
 
-    Return JSON with:
-    - device_type: specific type (e.g., "MCCB", "ACB", "MCB")
-    - in_amps: pure number without units or suffixes (rated current, e.g., 100)
-    - icu_ka: pure number without units or suffixes (ultimate breaking capacity, e.g., 25)
-    - ics_ka: pure number without units or suffixes (service breaking capacity, typically 75% of Icu)
-    - poles: pure number (1-4, e.g., 3)
-    - voltage_v: pure number without units or suffixes (rated voltage, typically 400 for LV)
-    - trip_unit: type of trip unit (e.g., "Thermal Magnetic", "Electronic")
-    - settings: object with {ir, tr, isd, tsd, ii, ig, tg, zsi, erms, curve_type} - all numbers pure without units
-
-    Use engineering standards for this manufacturer. If uncertain, use null for numbers. Output ONLY valid JSON.`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: 'You are an electrical engineering expert. Generate realistic device specifications.' },
-        { role: 'user', content: prompt }
-      ],
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-      max_tokens: 600
-    });
-
-    const specs = JSON.parse(completion.choices[0].message.content);
-
-    // Vérifications anti-NaN pour tous les nombres
-    const safeNumber = (val) => {
-      const num = Number(val);
-      return isNaN(num) ? null : num;
-    };
-
-    return {
-      device_type: specs.device_type || 'Low Voltage Circuit Breaker',
-      in_amps: safeNumber(specs.in_amps),
-      icu_ka: safeNumber(specs.icu_ka),
-      ics_ka: safeNumber(specs.ics_ka) ?? (safeNumber(specs.icu_ka) ? safeNumber(specs.icu_ka) * 0.75 : null),
-      poles: safeNumber(specs.poles) ?? 3,
-      voltage_v: safeNumber(specs.voltage_v) ?? 400,
-      trip_unit: specs.trip_unit || null,
-      settings: {
-        ir: safeNumber(specs.settings?.ir) ?? 1,
-        tr: safeNumber(specs.settings?.tr) ?? 10,
-        isd: safeNumber(specs.settings?.isd) ?? 6,
-        tsd: safeNumber(specs.settings?.tsd) ?? 0.1,
-        ii: safeNumber(specs.settings?.ii) ?? 10,
-        ig: safeNumber(specs.settings?.ig) ?? 0.5,
-        tg: safeNumber(specs.settings?.tg) ?? 0.2,
-        zsi: specs.settings?.zsi !== undefined ? Boolean(specs.settings.zsi) : false,
-        erms: specs.settings?.erms !== undefined ? Boolean(specs.settings.erms) : false,
-        curve_type: specs.settings?.curve_type || 'C'
-      }
-    };
+    res.json({ data: rows });
   } catch (e) {
-    console.error('[AI SPECS] error:', e);
-    return {
-      device_type: 'Low Voltage Circuit Breaker',
-      settings: { ir: 1, tr: 10, isd: 6, curve_type: 'C' }
-    };
+    console.error('[CALENDAR] error:', e.message);
+    res.status(500).json({ error: 'Calendar failed' });
   }
-}
+});
 
-// ---- AI TIP - AMÉLIORATION: Réponses plus contextuelles ----
+// ==================== AI TIP ====================
+
 app.post('/api/switchboard/ai-tip', async (req, res) => {
   try {
     if (!openai) return res.json({ tip: 'AI tips unavailable' });
@@ -1113,12 +1166,8 @@ app.post('/api/switchboard/ai-tip', async (req, res) => {
       messages: [
         { 
           role: 'system', 
-          content: `You are an expert electrical engineer providing concise, practical advice. 
-          
-          Context: "${context}"
-          
-          Respond in 1-2 sentences with actionable advice. Be specific about standards (IEC, NEC), safety, or best practices. 
-          Keep it professional and helpful. No fluff.` 
+          content: `You are an expert electrical engineer. Provide a brief, practical tip (1-2 sentences) related to: "${context}". 
+          Reference standards (IEC, NEC) when relevant. Be specific and actionable.` 
         },
         { role: 'user', content: context }
       ],
@@ -1126,13 +1175,14 @@ app.post('/api/switchboard/ai-tip', async (req, res) => {
       temperature: 0.3
     });
 
-    const tip = completion.choices[0].message.content.trim();
-    res.json({ tip });
+    res.json({ tip: completion.choices[0].message.content.trim() });
   } catch (e) {
     console.error('[AI TIP] error:', e.message);
     res.status(500).json({ error: 'AI tip failed' });
   }
 });
 
+// ==================== START SERVER ====================
+
 const port = process.env.SWITCHBOARD_PORT || 3003;
-app.listen(port, () => console.log(`Switchboard service running on :${port}`));
+app.listen(port, () => console.log(`[SWITCHBOARD] Service running on :${port}`));
