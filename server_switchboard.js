@@ -118,6 +118,20 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_position ON devices(position_number);
     CREATE INDEX IF NOT EXISTS idx_devices_complete ON devices(is_complete);
 
+    -- Site settings table for logo and company info
+    CREATE TABLE IF NOT EXISTS site_settings (
+      id SERIAL PRIMARY KEY,
+      site TEXT UNIQUE NOT NULL,
+      logo BYTEA,
+      logo_mime TEXT DEFAULT 'image/png',
+      company_name TEXT,
+      company_address TEXT,
+      company_phone TEXT,
+      company_email TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     -- Add columns if missing
     DO $$
     BEGIN
@@ -178,7 +192,7 @@ function checkDeviceComplete(device) {
   return !!(device.manufacturer && device.reference && device.in_amps && Number(device.in_amps) > 0);
 }
 
-// Helper: Detect if device is differential from text
+// Helper: Detect if device is differential from text (ONLY used by AI photo analysis, NOT Excel import)
 function detectDifferential(text) {
   if (!text) return false;
   const lowerText = String(text).toLowerCase();
@@ -189,11 +203,354 @@ function detectDifferential(text) {
   return patterns.some(p => lowerText.includes(p));
 }
 
-// Helper: Detect differential from position format (X.X like 9.1)
-function detectDifferentialFromPosition(position) {
-  if (!position) return false;
-  return /^\d+\.\d+$/.test(String(position).trim());
-}
+// ==================== SITE SETTINGS (Logo, Company Info) ====================
+
+// Get site settings
+app.get('/api/switchboard/settings', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const r = await pool.query(
+      `SELECT id, site, company_name, company_address, company_phone, company_email, 
+              (logo IS NOT NULL) as has_logo, created_at, updated_at
+       FROM site_settings WHERE site = $1`, [site]
+    );
+
+    if (!r.rows.length) {
+      return res.json({ 
+        site, 
+        has_logo: false, 
+        company_name: null, 
+        company_address: null,
+        company_phone: null,
+        company_email: null
+      });
+    }
+
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error('[SETTINGS GET] error:', e);
+    res.status(500).json({ error: 'Get settings failed' });
+  }
+});
+
+// Update site settings
+app.put('/api/switchboard/settings', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const { company_name, company_address, company_phone, company_email } = req.body || {};
+
+    const r = await pool.query(`
+      INSERT INTO site_settings (site, company_name, company_address, company_phone, company_email)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (site) DO UPDATE SET 
+        company_name = COALESCE($2, site_settings.company_name),
+        company_address = COALESCE($3, site_settings.company_address),
+        company_phone = COALESCE($4, site_settings.company_phone),
+        company_email = COALESCE($5, site_settings.company_email),
+        updated_at = NOW()
+      RETURNING id, site, company_name, company_address, company_phone, company_email, (logo IS NOT NULL) as has_logo
+    `, [site, company_name || null, company_address || null, company_phone || null, company_email || null]);
+
+    res.json(r.rows[0]);
+  } catch (e) {
+    console.error('[SETTINGS UPDATE] error:', e);
+    res.status(500).json({ error: 'Update settings failed' });
+  }
+});
+
+// Upload logo
+app.post('/api/switchboard/settings/logo', upload.single('logo'), async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    if (!req.file) return res.status(400).json({ error: 'No logo provided' });
+
+    const mimeType = req.file.mimetype || 'image/png';
+
+    await pool.query(`
+      INSERT INTO site_settings (site, logo, logo_mime)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (site) DO UPDATE SET 
+        logo = $2, 
+        logo_mime = $3,
+        updated_at = NOW()
+    `, [site, req.file.buffer, mimeType]);
+
+    res.json({ success: true, message: 'Logo uploaded successfully' });
+  } catch (e) {
+    console.error('[LOGO UPLOAD] error:', e);
+    res.status(500).json({ error: 'Logo upload failed' });
+  }
+});
+
+// Get logo
+app.get('/api/switchboard/settings/logo', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    const r = await pool.query(
+      `SELECT logo, logo_mime FROM site_settings WHERE site = $1`, [site]
+    );
+
+    if (!r.rows.length || !r.rows[0].logo) {
+      return res.status(404).json({ error: 'Logo not found' });
+    }
+
+    res.set('Content-Type', r.rows[0].logo_mime || 'image/png');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(r.rows[0].logo);
+  } catch (e) {
+    console.error('[LOGO GET] error:', e);
+    res.status(500).json({ error: 'Get logo failed' });
+  }
+});
+
+// Delete logo
+app.delete('/api/switchboard/settings/logo', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+
+    await pool.query(`
+      UPDATE site_settings SET logo = NULL, logo_mime = NULL, updated_at = NOW()
+      WHERE site = $1
+    `, [site]);
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error('[LOGO DELETE] error:', e);
+    res.status(500).json({ error: 'Delete logo failed' });
+  }
+});
+
+// ==================== PDF EXPORT ====================
+
+app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
+  try {
+    const site = siteOf(req);
+    if (!site) return res.status(400).json({ error: 'Missing site' });
+    const id = Number(req.params.id);
+
+    // Get board info
+    const boardRes = await pool.query(
+      `SELECT * FROM switchboards WHERE id = $1 AND site = $2`, [id, site]
+    );
+    if (!boardRes.rows.length) return res.status(404).json({ error: 'Board not found' });
+    const board = boardRes.rows[0];
+
+    // Get devices
+    const devicesRes = await pool.query(
+      `SELECT * FROM devices WHERE switchboard_id = $1 ORDER BY position_number ASC NULLS LAST, created_at ASC`, [id]
+    );
+    const devices = devicesRes.rows;
+
+    // Get logo if exists
+    const logoRes = await pool.query(
+      `SELECT logo, logo_mime, company_name FROM site_settings WHERE site = $1`, [site]
+    );
+    const settings = logoRes.rows[0] || {};
+
+    // Create PDF
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${(board.code || board.name).replace(/[^a-zA-Z0-9-_]/g, '_')}_listing.pdf"`);
+    
+    doc.pipe(res);
+
+    // ===== HEADER =====
+    let headerY = 40;
+    let textStartX = 50;
+
+    // Logo (top-left, if exists)
+    if (settings.logo) {
+      try {
+        doc.image(settings.logo, 50, headerY, { width: 70, height: 50 });
+        textStartX = 130;
+      } catch (logoErr) {
+        console.warn('[PDF] Logo render error:', logoErr.message);
+      }
+    }
+
+    // Title and info
+    doc.fontSize(18).font('Helvetica-Bold').fillColor('#1e40af').text(board.name, textStartX, headerY);
+    doc.fontSize(10).font('Helvetica').fillColor('#374151');
+    doc.text(`Code: ${board.code || '-'}`, textStartX, headerY + 25);
+    doc.text(`Bâtiment: ${board.building_code || '-'} | Étage: ${board.floor || '-'} | Local: ${board.room || '-'}`, textStartX, headerY + 40);
+    doc.text(`Régime de neutre: ${board.regime_neutral || '-'}`, textStartX, headerY + 55);
+
+    // Date on the right
+    doc.fontSize(9).text(`Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`, 400, headerY, { align: 'right' });
+
+    // Company name if available
+    if (settings.company_name) {
+      doc.fontSize(8).fillColor('#6b7280').text(settings.company_name, 400, headerY + 15, { align: 'right' });
+    }
+
+    // Separator line
+    doc.moveTo(50, 110).lineTo(545, 110).strokeColor('#e5e7eb').stroke();
+
+    // ===== SUMMARY =====
+    const summaryY = 125;
+    const totalDevices = devices.length;
+    const completeDevices = devices.filter(d => d.is_complete).length;
+    const differentialDevices = devices.filter(d => d.is_differential).length;
+    const mainIncoming = devices.find(d => d.is_main_incoming);
+
+    doc.fontSize(10).font('Helvetica-Bold').fillColor('#111827').text('Résumé', 50, summaryY);
+    doc.fontSize(9).font('Helvetica').fillColor('#374151');
+    doc.text(`Total disjoncteurs: ${totalDevices}`, 50, summaryY + 15);
+    doc.text(`Fiches complètes: ${completeDevices}/${totalDevices} (${totalDevices > 0 ? Math.round(completeDevices/totalDevices*100) : 0}%)`, 180, summaryY + 15);
+    doc.text(`Différentiels (DDR): ${differentialDevices}`, 380, summaryY + 15);
+    
+    if (mainIncoming) {
+      doc.text(`Arrivée: ${mainIncoming.manufacturer || ''} ${mainIncoming.reference || ''} ${mainIncoming.in_amps ? mainIncoming.in_amps + 'A' : ''}`, 50, summaryY + 30);
+    }
+
+    // ===== TABLE =====
+    const tableStartY = summaryY + 55;
+    const colWidths = [35, 140, 75, 65, 40, 40, 35, 65];
+    const headers = ['N°', 'Désignation', 'Référence', 'Fabricant', 'In', 'Icu', 'P', 'Type'];
+    const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+
+    // Table header background
+    doc.rect(50, tableStartY, totalWidth, 22).fillColor('#f3f4f6').fill();
+    
+    // Table header text
+    doc.fontSize(8).font('Helvetica-Bold').fillColor('#374151');
+    let x = 50;
+    headers.forEach((h, i) => {
+      doc.text(h, x + 4, tableStartY + 6, { width: colWidths[i] - 8 });
+      x += colWidths[i];
+    });
+
+    // Table header border
+    doc.rect(50, tableStartY, totalWidth, 22).strokeColor('#d1d5db').stroke();
+
+    // Vertical lines for header
+    x = 50;
+    colWidths.forEach((w) => {
+      x += w;
+      if (x < 50 + totalWidth) {
+        doc.moveTo(x, tableStartY).lineTo(x, tableStartY + 22).stroke();
+      }
+    });
+
+    // Table rows
+    doc.font('Helvetica').fontSize(8);
+    let y = tableStartY + 22;
+    const rowHeight = 20;
+    
+    devices.forEach((d, idx) => {
+      // Check if we need a new page
+      if (y > 780) {
+        doc.addPage();
+        y = 50;
+        
+        // Redraw header on new page
+        doc.rect(50, y, totalWidth, 22).fillColor('#f3f4f6').fill();
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#374151');
+        let hx = 50;
+        headers.forEach((h, i) => {
+          doc.text(h, hx + 4, y + 6, { width: colWidths[i] - 8 });
+          hx += colWidths[i];
+        });
+        doc.rect(50, y, totalWidth, 22).strokeColor('#d1d5db').stroke();
+        hx = 50;
+        colWidths.forEach((w) => {
+          hx += w;
+          if (hx < 50 + totalWidth) {
+            doc.moveTo(hx, y).lineTo(hx, y + 22).stroke();
+          }
+        });
+        y += 22;
+        doc.font('Helvetica').fontSize(8);
+      }
+
+      // Alternate row background
+      if (idx % 2 === 1) {
+        doc.rect(50, y, totalWidth, rowHeight).fillColor('#fafafa').fill();
+      }
+
+      // Determine type badge
+      let typeText = '-';
+      let typeColor = '#6b7280';
+      if (d.is_main_incoming) {
+        typeText = 'Arrivée';
+        typeColor = '#d97706';
+      } else if (d.is_differential) {
+        typeText = 'DDR';
+        typeColor = '#7c3aed';
+      } else if (!d.is_complete) {
+        typeText = 'Incomplet';
+        typeColor = '#ea580c';
+      }
+
+      // Row data
+      const row = [
+        d.position_number || String(idx + 1),
+        (d.name || '-').substring(0, 35),
+        (d.reference || '-').substring(0, 18),
+        (d.manufacturer || '-').substring(0, 15),
+        d.in_amps ? `${d.in_amps}A` : '-',
+        d.icu_ka ? `${d.icu_ka}kA` : '-',
+        d.poles ? `${d.poles}P` : '-',
+        typeText
+      ];
+      
+      x = 50;
+      doc.fillColor('#111827');
+      row.forEach((cell, i) => {
+        if (i === row.length - 1) {
+          // Type column with color
+          doc.fillColor(typeColor);
+        }
+        doc.text(String(cell), x + 4, y + 5, { width: colWidths[i] - 8 });
+        if (i === row.length - 1) {
+          doc.fillColor('#111827');
+        }
+        x += colWidths[i];
+      });
+
+      // Row border
+      doc.rect(50, y, totalWidth, rowHeight).strokeColor('#e5e7eb').stroke();
+
+      // Vertical lines
+      x = 50;
+      colWidths.forEach((w) => {
+        x += w;
+        if (x < 50 + totalWidth) {
+          doc.moveTo(x, y).lineTo(x, y + rowHeight).strokeColor('#e5e7eb').stroke();
+        }
+      });
+
+      y += rowHeight;
+    });
+
+    // ===== FOOTER =====
+    const pageCount = doc.bufferedPageRange().count;
+    for (let i = 0; i < pageCount; i++) {
+      doc.switchToPage(i);
+      doc.fontSize(8).fillColor('#9ca3af');
+      doc.text(
+        `${board.code || board.name} - Page ${i + 1}/${pageCount}`,
+        50, 820, { align: 'center', width: 495 }
+      );
+    }
+
+    doc.end();
+  } catch (e) {
+    console.error('[PDF EXPORT] error:', e);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'PDF generation failed', details: e.message });
+    }
+  }
+});
 
 // ==================== SWITCHBOARDS CRUD ====================
 
@@ -583,9 +940,12 @@ app.post('/api/switchboard/devices', async (req, res) => {
     const sbCheck = await pool.query('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
-    // Calculate is_complete and is_differential
+    // Calculate is_complete
     const is_complete = checkDeviceComplete(b);
-    const is_differential = b.is_differential || detectDifferential(b.name) || detectDifferentialFromPosition(b.position_number);
+    
+    // is_differential comes ONLY from explicit user input or AI photo analysis
+    // NOT from text detection at import time
+    const is_differential = !!b.is_differential;
 
     const settings = b.settings || {};
 
@@ -634,11 +994,11 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     const id = Number(req.params.id);
     const b = req.body || {};
     
-    // Calculate is_complete and is_differential
+    // Calculate is_complete
     const is_complete = checkDeviceComplete(b);
-    const is_differential = b.is_differential !== undefined 
-      ? b.is_differential 
-      : (detectDifferential(b.name) || detectDifferentialFromPosition(b.position_number));
+    
+    // is_differential: use explicit value from request
+    const is_differential = !!b.is_differential;
 
     const settings = b.settings || {};
 
@@ -704,7 +1064,7 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// ==================== EXCEL IMPORT ====================
+// ==================== EXCEL IMPORT (DDR detection REMOVED) ====================
 
 app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res) => {
   try {
@@ -800,8 +1160,10 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
 
       if (!designation) continue;
 
-      // Detect if differential from designation or position format
-      const is_differential = detectDifferential(designation) || detectDifferentialFromPosition(position);
+      // *** DDR DETECTION REMOVED ***
+      // is_differential is now ALWAYS false at import
+      // It will be set via AI photo analysis or manual user input
+      const is_differential = false;
 
       // Insert device (marked as incomplete since we don't have specs)
       await pool.query(
