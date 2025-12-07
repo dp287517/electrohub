@@ -1491,20 +1491,13 @@ export const api = {
 
     // --- WIZARD v8.0 ---
     wizard: {
-      /**
-       * Étape 1: Analyse de la demande avec screenshots optionnels
-       * Peut être appelé avec FormData (pour screenshots) ou JSON simple
-       */
       analyze: async (messageOrFormData, sessionId) => {
-        // Si c'est une string simple (message), on appelle en JSON
         if (typeof messageOrFormData === "string") {
           return post("/api/dcf/wizard/analyze", { message: messageOrFormData, sessionId });
         }
-        // Si c'est un FormData, on l'envoie directement
         if (messageOrFormData instanceof FormData) {
           return upload("/api/dcf/wizard/analyze", messageOrFormData);
         }
-        // Sinon objet { message, sessionId, screenshots }
         const fd = new FormData();
         fd.append("message", messageOrFormData.message || "");
         if (messageOrFormData.sessionId) fd.append("sessionId", messageOrFormData.sessionId);
@@ -1514,12 +1507,7 @@ export const api = {
         return upload("/api/dcf/wizard/analyze", fd);
       },
 
-      /**
-       * Étape 3: Génération des instructions
-       * Support screenshots supplémentaires via FormData
-       */
       instructions: async (sessionId, requestText, templateFilename, attachmentIds = [], screenshots = []) => {
-        // Si pas de screenshots, appel JSON simple
         if (!screenshots || screenshots.length === 0) {
           return post("/api/dcf/wizard/instructions", {
             sessionId,
@@ -1528,7 +1516,6 @@ export const api = {
             attachmentIds,
           });
         }
-        // Avec screenshots, utiliser FormData
         const fd = new FormData();
         fd.append("sessionId", sessionId);
         fd.append("requestText", requestText);
@@ -1538,9 +1525,6 @@ export const api = {
         return upload("/api/dcf/wizard/instructions", fd);
       },
 
-      /**
-       * Génération du fichier Excel rempli
-       */
       autofill: async (templateFilename, instructions) => {
         const site = currentSite();
         const headers = identityHeaders(new Headers({ "X-Site": site }));
@@ -1557,19 +1541,12 @@ export const api = {
         return res.blob();
       },
 
-      /**
-       * Validation des fichiers remplis
-       */
       validate: (fileIds, useCase = null) =>
         post("/api/dcf/wizard/validate", { fileIds, useCase }),
 
-      /**
-       * Reverse DCF - Explication d'un fichier existant
-       */
       explain: (fileId) => post("/api/dcf/wizard/explain", { fileId }),
     },
 
-    // Alias rétro-compatible
     validate: ({ fileIds, mode = "auto" }) => post("/api/dcf/validate", { fileIds, mode }),
   },
 
@@ -1605,22 +1582,17 @@ export const api = {
   switchboard: {
     // ========================= TABLEAUX (BOARDS) =========================
 
-    // Liste des tableaux avec pagination
     listBoards: (params) => get("/api/switchboard/boards", params),
-
-    // Obtenir un tableau par ID
     getBoard: (id) => get(`/api/switchboard/boards/${encodeURIComponent(id)}`),
-
-    // Créer un nouveau tableau
     createBoard: (payload) => post("/api/switchboard/boards", payload),
-
-    // Mettre à jour un tableau
     updateBoard: (id, payload) =>
       put(`/api/switchboard/boards/${encodeURIComponent(id)}`, payload),
-
-    // Supprimer un tableau (et ses disjoncteurs)
     deleteBoard: (id) =>
       del(`/api/switchboard/boards/${encodeURIComponent(id)}`),
+
+    // Dupliquer un tableau
+    duplicateBoard: (id) =>
+      post(`/api/switchboard/boards/${encodeURIComponent(id)}/duplicate`, {}),
 
     // Photo du tableau
     boardPhotoUrl: (id, { bust = true } = {}) =>
@@ -1641,30 +1613,67 @@ export const api = {
       );
     },
 
+    // ========================= PDF EXPORT =========================
+
+    // URL du PDF listing (téléchargement direct via lien <a>)
+    pdfUrl: (id) =>
+      `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/pdf?site=${currentSite()}`,
+
+    // Télécharger le PDF (retourne un Blob pour usage programmatique)
+    downloadPdf: async (id) => {
+      const site = currentSite();
+      const headers = identityHeaders(new Headers({ "X-Site": site }));
+      const res = await fetch(
+        `${API_BASE}/api/switchboard/boards/${encodeURIComponent(id)}/pdf?site=${site}`,
+        {
+          method: "GET",
+          headers,
+          credentials: "include",
+        }
+      );
+      if (!res.ok) throw new Error(await res.text().catch(() => `HTTP ${res.status}`));
+      return res.blob();
+    },
+
+    // ========================= SITE SETTINGS (Logo, Company) =========================
+
+    // Récupérer les paramètres du site
+    getSettings: () => get("/api/switchboard/settings"),
+
+    // Mettre à jour les paramètres du site
+    updateSettings: (payload) => put("/api/switchboard/settings", payload),
+
+    // Upload du logo
+    uploadLogo: (file) => {
+      const fd = new FormData();
+      fd.append("logo", file);
+      return upload("/api/switchboard/settings/logo", fd);
+    },
+
+    // URL du logo (pour affichage <img>)
+    logoUrl: ({ bust = true } = {}) =>
+      withBust(
+        `${API_BASE}/api/switchboard/settings/logo?site=${currentSite()}`,
+        bust
+      ),
+
+    // Supprimer le logo
+    deleteLogo: () => del("/api/switchboard/settings/logo"),
+
     // ========================= DISJONCTEURS (DEVICES) =========================
 
-    // Liste des disjoncteurs d'un tableau
     listDevices: (boardId, params) =>
       get(`/api/switchboard/boards/${encodeURIComponent(boardId)}/devices`, params),
-
-    // Obtenir un disjoncteur par ID
     getDevice: (id) =>
       get(`/api/switchboard/devices/${encodeURIComponent(id)}`),
-
-    // Créer un nouveau disjoncteur
     createDevice: (payload) => post("/api/switchboard/devices", payload),
-
-    // Mettre à jour un disjoncteur
     updateDevice: (id, payload) =>
       put(`/api/switchboard/devices/${encodeURIComponent(id)}`, payload),
-
-    // Supprimer un disjoncteur
     deleteDevice: (id) =>
       del(`/api/switchboard/devices/${encodeURIComponent(id)}`),
 
     // ========================= IMPORT EXCEL =========================
 
-    // Importer depuis un fichier Excel
     importExcel: (file) => {
       const { email, name } = getIdentity();
       const fd = new FormData();
@@ -1676,20 +1685,17 @@ export const api = {
 
     // ========================= COMPTAGES =========================
 
-    // Obtenir les comptages de devices par tableau (pour progress bars)
     getDeviceCounts: (boardIds = []) =>
       post("/api/switchboard/devices-count", { board_ids: boardIds }),
 
     // ========================= IA PHOTO ANALYSIS =========================
 
-    // Analyser une photo de disjoncteur (extraction fabricant/référence)
     analyzePhoto: (file) => {
       const fd = new FormData();
       fd.append("photo", file);
       return upload("/api/switchboard/analyze-photo", fd);
     },
 
-    // Rechercher les specs complètes d'un disjoncteur via IA
     searchDevice: (query) =>
       post("/api/switchboard/search-device", { query }),
 
