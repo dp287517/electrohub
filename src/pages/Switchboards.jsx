@@ -2165,7 +2165,7 @@ export default function Switchboards() {
                         </button>
                         {/* Single Line Diagram */}
                         <button
-                          onClick={() => navigate(`/switchboards/${selectedBoard.id}/diagram`)}
+                          onClick={() => navigate(`/app/switchboards/${selectedBoard.id}/diagram`)}
                           className="p-2 text-gray-400 hover:text-violet-500 hover:bg-violet-50 rounded-xl transition-colors"
                           title="Schéma unifilaire"
                         >
