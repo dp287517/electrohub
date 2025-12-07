@@ -1696,6 +1696,9 @@ export const api = {
       return upload("/api/switchboard/analyze-photo", fd);
     },
 
+    searchDownstreams: (query) =>
+      get("/api/switchboard/search-downstreams", { query }),
+
     searchDevice: (query) =>
       post("/api/switchboard/search-device", { query }),
 
