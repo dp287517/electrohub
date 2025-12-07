@@ -3,159 +3,245 @@ import { useParams, useNavigate } from 'react-router-dom';
 import ReactFlow, { 
   useNodesState, 
   useEdgesState, 
-  addEdge, 
   Controls, 
   Background,
-  MarkerType,
   Handle, 
   Position,
   useReactFlow,
-  ReactFlowProvider
+  ReactFlowProvider,
+  Panel
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import dagre from 'dagre';
 import { toPng } from 'html-to-image';
 import { 
-  ArrowLeft, Save, RefreshCw, Download, Zap, ShieldCheck, 
-  AlertCircle, Settings, GitBranch // <--- Ajouté ici !
+  ArrowLeft, Save, RefreshCw, Download, Zap, Settings, 
+  Maximize, X, Check, Edit2, ZoomIn, Printer
 } from 'lucide-react';
 import { api } from '../lib/api';
 
+// ==================== SYMBOLS (IEC STANDARD) ====================
+
+const IECSymbols = {
+  Breaker: () => (
+    <g stroke="currentColor" strokeWidth="2" fill="none">
+      <line x1="10" y1="5" x2="22" y2="27" />
+      <line x1="22" y1="5" x2="10" y2="27" />
+      <line x1="16" y1="0" x2="16" y2="5" />
+      <line x1="16" y1="27" x2="16" y2="32" />
+    </g>
+  ),
+  Switch: () => (
+    <g stroke="currentColor" strokeWidth="2" fill="none">
+      <circle cx="16" cy="27" r="2" />
+      <line x1="16" y1="0" x2="16" y2="10" />
+      <line x1="16" y1="27" x2="16" y2="32" />
+      <line x1="16" y1="10" x2="26" y2="24" />
+    </g>
+  ),
+  Differential: () => (
+    <g stroke="currentColor" strokeWidth="2" fill="none">
+      <ellipse cx="16" cy="16" rx="12" ry="8" />
+      <line x1="16" y1="0" x2="16" y2="32" />
+    </g>
+  ),
+  Earth: () => (
+    <g stroke="currentColor" strokeWidth="2" fill="none">
+      <line x1="8" y1="0" x2="24" y2="0" />
+      <line x1="11" y1="4" x2="21" y2="4" />
+      <line x1="14" y1="8" x2="18" y2="8" />
+      <line x1="16" y1="-8" x2="16" y2="0" />
+    </g>
+  )
+};
+
 // ==================== CUSTOM NODES ====================
 
-// 1. Source Node (Amont)
+// 1. Source Node (Arrivée Réseau/TGBT)
 const SourceNode = ({ data }) => (
-  <div className="px-4 py-2 shadow-md rounded-md bg-amber-100 border-2 border-amber-300 text-amber-800 text-center min-w-[150px]">
-    <Handle type="source" position={Position.Bottom} className="w-3 h-3 bg-amber-500" />
-    <div className="flex flex-col items-center">
-      <Zap size={20} className="mb-1" />
-      <span className="font-bold text-sm">{data.label}</span>
-      <span className="text-xs">{data.subLabel}</span>
+  <div className="flex flex-col items-center">
+    <div className="bg-white border-2 border-gray-900 px-4 py-2 rounded-sm shadow-sm min-w-[140px] text-center relative">
+      <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-1">
+        <Zap size={16} className="text-amber-500 fill-amber-500" />
+      </div>
+      <div className="font-bold text-sm text-gray-900">{data.label}</div>
+      <div className="text-[10px] text-gray-500 uppercase tracking-wide">{data.subLabel}</div>
+      <Handle type="source" position={Position.Bottom} className="!bg-gray-900 !w-3 !h-3 !rounded-none -bottom-1.5" />
     </div>
+    {/* Line to busbar visual */}
+    <div className="h-8 w-0.5 bg-gray-900"></div>
   </div>
 );
 
-// 2. Busbar Node (Jeu de barres)
+// 2. Busbar Node (Barre de cuivre réaliste)
 const BusbarNode = ({ data }) => (
-  <div className="w-full h-4 bg-gray-700 rounded-sm shadow-sm relative flex items-center justify-center min-w-[300px]">
-    <Handle type="target" position={Position.Top} className="w-3 h-3 bg-gray-900 !rounded-none" />
-    <Handle type="source" position={Position.Bottom} className="w-full h-1 !bg-transparent !border-0 rounded-none opacity-0" />
-    <span className="text-[10px] text-white font-mono tracking-widest absolute -top-4">JEU DE BARRES 400V</span>
+  <div 
+    className="h-6 bg-gradient-to-b from-amber-600 via-amber-400 to-amber-700 shadow-md border-x-2 border-amber-800 flex items-center justify-center relative"
+    style={{ width: data.width || 300, borderRadius: '2px' }}
+  >
+    <Handle type="target" position={Position.Top} className="!opacity-0 w-full h-full" />
+    <Handle type="source" position={Position.Bottom} className="!opacity-0 w-full h-full" />
+    <span className="text-[10px] text-amber-900 font-bold tracking-[0.3em] uppercase drop-shadow-sm select-none">
+      Jeu de Barres 400V - {data.label}
+    </span>
+    {/* Mounting holes visual */}
+    <div className="absolute left-2 w-2 h-2 rounded-full bg-amber-900/30"></div>
+    <div className="absolute right-2 w-2 h-2 rounded-full bg-amber-900/30"></div>
   </div>
 );
 
-// 3. Breaker Node (Disjoncteur)
+// 3. Breaker Node (Symbole normalisé)
 const BreakerNode = ({ data }) => {
-  const isIncoming = data.isIncoming;
   const isDiff = data.isDifferential;
-  const isComplete = data.isComplete;
+  const isIncoming = data.isIncoming;
+  
+  // Determine color based on function
+  const strokeColor = isIncoming ? "text-amber-600" : isDiff ? "text-purple-600" : "text-gray-800";
+  const boxBorder = isIncoming ? "border-amber-500 shadow-amber-100" : "border-gray-300";
 
   return (
-    <div className={`relative group w-32 flex flex-col items-center bg-white rounded-lg shadow-sm border-2 transition-all hover:shadow-md
-      ${isIncoming ? 'border-amber-500 bg-amber-50' : isDiff ? 'border-purple-300' : 'border-gray-300'}
-    `}>
-      {/* Input Handle */}
-      <Handle type="target" position={Position.Top} className="!bg-gray-400 w-2 h-2" />
-
-      {/* Electrical Symbol Area */}
-      <div className="h-16 w-full flex items-center justify-center border-b border-gray-100 relative">
-        <div className="w-0.5 h-full bg-gray-300 absolute top-0"></div>
-        {/* Symbol Body */}
-        <div className="z-10 bg-white p-1">
-           {isDiff ? (
-             <div className="w-8 h-12 border-2 border-purple-500 rounded-full flex items-center justify-center bg-white relative">
-                <span className="text-purple-600 font-bold text-xs">Δ</span>
-                <div className="absolute -right-1 -bottom-1 w-3 h-3 bg-purple-500 rounded-full"></div>
-             </div>
-           ) : (
-             <div className="w-8 h-8 border-2 border-gray-800 rotate-45 bg-white flex items-center justify-center">
-                <span className="text-gray-800 font-bold text-xs -rotate-45">X</span>
-             </div>
-           )}
-        </div>
+    <div className="flex flex-col items-center group relative">
+      {/* Top Wire */}
+      <div className="h-6 w-0.5 bg-gray-800 relative">
+        <Handle type="target" position={Position.Top} className="!opacity-0 w-full h-full top-0" />
       </div>
 
-      {/* Info Area */}
-      <div className="w-full p-2 text-center">
-        <div className="font-bold text-sm text-gray-800 truncate" title={data.name}>{data.name || data.reference || '?'}</div>
-        <div className="flex justify-center gap-1 mt-1 text-xs font-mono text-gray-500">
-          <span>{data.in_amps ? `${data.in_amps}A` : '-'}</span>
-          <span className="text-gray-300">|</span>
-          <span>{data.poles ? `${data.poles}P` : '-'}</span>
-        </div>
-        {!isComplete && (
-           <div className="mt-1 flex justify-center">
-             <AlertCircle size={12} className="text-orange-500" />
+      {/* Device Box */}
+      <div className={`bg-white border-2 ${boxBorder} shadow-sm p-1 rounded-sm w-24 transition-all group-hover:shadow-md group-hover:border-blue-400`}>
+        {/* Header Info */}
+        <div className="bg-gray-50 border-b border-gray-100 p-1 text-center mb-1">
+           <div className="text-[9px] font-bold text-gray-700 truncate" title={data.name}>
+             {data.position ? <span className="mr-1 bg-gray-200 px-1 rounded text-gray-800">{data.position}</span> : null}
+             {data.reference || '?'}
            </div>
-        )}
+        </div>
+
+        {/* Symbol Area */}
+        <div className={`h-12 w-full flex items-center justify-center ${strokeColor}`}>
+           <svg width="32" height="32" viewBox="0 0 32 32" overflow="visible">
+              {isDiff && <IECSymbols.Differential />}
+              <IECSymbols.Breaker />
+           </svg>
+        </div>
+
+        {/* Footer Specs */}
+        <div className="text-[9px] text-center font-mono leading-tight text-gray-500 mt-1">
+          <div>{data.in_amps}A {data.curve ? `Type ${data.curve}` : ''}</div>
+          <div>{data.icu_ka ? `${data.icu_ka}kA` : ''} {data.poles}P</div>
+        </div>
       </div>
 
-      {/* Output Handle */}
-      <Handle type="source" position={Position.Bottom} className="!bg-gray-400 w-2 h-2" />
-      
-      {/* Position Badge */}
-      <div className="absolute -top-2 -left-2 bg-gray-800 text-white text-[10px] px-1.5 py-0.5 rounded-md font-mono shadow-sm">
-        {data.position || '#'}
+      {/* Bottom Wire & Handle */}
+      <div className="h-6 w-0.5 bg-gray-800 relative">
+         <Handle type="source" position={Position.Bottom} className="!opacity-0 w-full h-full bottom-0" />
       </div>
+
+      {/* Downstream Label if exists */}
+      {data.downstreamLabel && (
+        <div className="absolute -bottom-8 bg-green-50 text-green-800 text-[9px] border border-green-200 px-2 py-0.5 rounded-full whitespace-nowrap shadow-sm">
+          Vers: {data.downstreamLabel}
+        </div>
+      )}
     </div>
   );
 };
-
-// 4. Downstream Board Node (Aval)
-const DownstreamNode = ({ data }) => (
-  <div className="px-3 py-2 shadow-sm rounded-md bg-green-50 border-2 border-green-300 text-green-800 text-center min-w-[120px]">
-    <Handle type="target" position={Position.Top} className="w-3 h-3 bg-green-500" />
-    <div className="flex flex-col items-center">
-      <span className="font-bold text-sm">{data.label}</span>
-      <span className="text-[10px] text-green-600">Tableau Aval</span>
-    </div>
-  </div>
-);
 
 const nodeTypes = {
   source: SourceNode,
   busbar: BusbarNode,
   breaker: BreakerNode,
-  downstream: DownstreamNode,
 };
 
-// ==================== LAYOUT ENGINE (DAGRE) ====================
+// ==================== SIDEBAR PROPERTY EDITOR ====================
 
-const getLayoutedElements = (nodes, edges, direction = 'TB') => {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
+const PropertySidebar = ({ selectedNode, onClose, onSave }) => {
+  const [formData, setFormData] = useState({});
 
-  const nodeWidth = 150;
-  const nodeHeight = 150;
-
-  dagreGraph.setGraph({ rankdir: direction, nodesep: 50, ranksep: 80 });
-
-  nodes.forEach((node) => {
-    dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
-  });
-
-  edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
-  });
-
-  dagre.layout(dagreGraph);
-
-  const layoutedNodes = nodes.map((node) => {
-    const nodeWithPosition = dagreGraph.node(node.id);
-    // If node already has user position (from DB), keep it, otherwise use dagre
-    if (node.data.userPosition) {
-        return node;
+  useEffect(() => {
+    if (selectedNode) {
+      setFormData({
+        name: selectedNode.data.name || '',
+        reference: selectedNode.data.reference || '',
+        in_amps: selectedNode.data.in_amps || '',
+        position_number: selectedNode.data.position || '',
+        is_differential: selectedNode.data.isDifferential || false
+      });
     }
-    
-    node.position = {
-      x: nodeWithPosition.x - nodeWidth / 2,
-      y: nodeWithPosition.y - nodeHeight / 2,
-    };
+  }, [selectedNode]);
 
-    return node;
-  });
+  if (!selectedNode || selectedNode.type !== 'breaker') return null;
 
-  return { nodes: layoutedNodes, edges };
+  return (
+    <div className="absolute right-0 top-0 bottom-0 w-80 bg-white border-l shadow-2xl z-20 flex flex-col animate-slideLeft">
+      <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
+        <h3 className="font-bold text-gray-800 flex items-center gap-2">
+          <Edit2 size={16} /> Propriétés
+        </h3>
+        <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded text-gray-500">
+          <X size={18} />
+        </button>
+      </div>
+      
+      <div className="p-4 space-y-4 flex-1 overflow-y-auto">
+        <div>
+          <label className="block text-xs font-medium text-gray-500 uppercase">Référence</label>
+          <input 
+            type="text" 
+            value={formData.reference} 
+            onChange={e => setFormData({...formData, reference: e.target.value})}
+            className="w-full mt-1 p-2 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-500 uppercase">Désignation</label>
+          <textarea 
+            rows={3}
+            value={formData.name} 
+            onChange={e => setFormData({...formData, name: e.target.value})}
+            className="w-full mt-1 p-2 border rounded-md text-sm focus:ring-2 focus:ring-blue-500 outline-none" 
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 uppercase">Calibre (A)</label>
+            <input 
+              type="number" 
+              value={formData.in_amps} 
+              onChange={e => setFormData({...formData, in_amps: e.target.value})}
+              className="w-full mt-1 p-2 border rounded-md text-sm" 
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 uppercase">Repère</label>
+            <input 
+              type="text" 
+              value={formData.position_number} 
+              onChange={e => setFormData({...formData, position_number: e.target.value})}
+              className="w-full mt-1 p-2 border rounded-md text-sm font-mono" 
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-4 p-3 bg-gray-50 rounded-md border">
+          <input 
+            type="checkbox" 
+            checked={formData.is_differential}
+            onChange={e => setFormData({...formData, is_differential: e.target.checked})}
+            className="w-4 h-4 text-blue-600 rounded" 
+          />
+          <span className="text-sm text-gray-700">Protection Différentielle</span>
+        </div>
+      </div>
+
+      <div className="p-4 border-t bg-gray-50">
+        <button 
+          onClick={() => onSave(selectedNode.id, formData)}
+          className="w-full py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+        >
+          <Save size={16} /> Enregistrer
+        </button>
+      </div>
+    </div>
+  );
 };
 
 // ==================== MAIN COMPONENT ====================
@@ -169,303 +255,355 @@ const DiagramContent = () => {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [board, setBoard] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const { fitView, getNodes, getViewport } = useReactFlow();
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [settings, setSettings] = useState(null);
+  
+  const { fitView, getNodes } = useReactFlow();
 
-  // Load Data
+  // Load Settings (Logo, Company)
+  useEffect(() => {
+    api.switchboard.getSettings().then(setSettings).catch(console.error);
+  }, []);
+
+  // Load Diagram Data
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Get Board Info (includes upstream sources)
       const boardRes = await api.switchboard.getBoard(id);
       setBoard(boardRes);
-
-      // 2. Get Devices (includes downstream info)
       const devicesRes = await api.switchboard.listDevices(id);
       const devices = devicesRes.data || [];
 
-      // 3. Build Graph Elements
+      // --- Construction du Graphe ---
       const newNodes = [];
       const newEdges = [];
       
-      // -- A. Upstream Sources --
+      // 1. Sources (Amont)
       const upstreamSources = boardRes.upstream_sources || [];
-      if (upstreamSources.length === 0 && !boardRes.is_principal) {
-        // Fake source if none
-        upstreamSources.push({ id: 'src-unknown', source_board_name: 'Source Inconnue', name: '?' });
-      } else if (boardRes.is_principal) {
-        upstreamSources.push({ id: 'src-grid', source_board_name: 'Réseau / TGBT', name: 'Arrivée Générale' });
+      // Fallback si pas de source
+      if (upstreamSources.length === 0) {
+        upstreamSources.push({ 
+          id: 'src-default', 
+          source_board_name: boardRes.is_principal ? 'Réseau Distributeur' : 'Amont Inconnu', 
+          name: 'Arrivée' 
+        });
       }
 
+      // Positionnement sources
       upstreamSources.forEach((src, idx) => {
         newNodes.push({
           id: `source-${idx}`,
           type: 'source',
-          position: { x: 0 + (idx * 200), y: 0 },
+          position: { x: (idx * 200), y: 0 },
           data: { label: src.source_board_name, subLabel: src.name }
         });
       });
 
-      // -- B. Main Incoming Breaker (if any) --
+      // 2. Busbar (Calcul largeur)
+      const feeders = devices.filter(d => !d.is_main_incoming);
+      const busbarWidth = Math.max(400, feeders.length * 140 + 100);
+      const busbarX = (upstreamSources.length * 200) / 2 - (busbarWidth / 2); // Center relative to sources roughly
+      
+      const busbarNode = {
+        id: 'busbar',
+        type: 'busbar',
+        position: { x: 0, y: 180 }, // Fixed Y for busbar
+        data: { label: boardRes.code, width: busbarWidth },
+        draggable: false // Busbar is the backbone
+      };
+      
+      // 3. Arrivée Principale (Main Incoming)
       const mainIncoming = devices.find(d => d.is_main_incoming);
-      let busbarInputId = null;
-
       if (mainIncoming) {
-        // Source -> Main Incoming
         const incomerId = `dev-${mainIncoming.id}`;
+        // Place incoming breaker between source and busbar
         newNodes.push({
           id: incomerId,
           type: 'breaker',
-          position: { x: 0, y: 150 },
+          position: { x: 50, y: 80 }, // Manually tweak later with layout
           data: { 
-            name: mainIncoming.name, 
-            reference: mainIncoming.reference,
-            in_amps: mainIncoming.in_amps,
-            poles: mainIncoming.poles,
-            isIncoming: true,
-            isDifferential: mainIncoming.is_differential,
-            isComplete: mainIncoming.is_complete,
-            position: mainIncoming.position_number,
-            userPosition: mainIncoming.diagram_data?.position // Load saved position
+            ...mapDeviceToData(mainIncoming),
+            isIncoming: true
           }
         });
         
-        // Connect all sources to Main Incoming
+        // Links
         upstreamSources.forEach((_, idx) => {
-          newEdges.push({ 
-            id: `e-src${idx}-incomer`, 
-            source: `source-${idx}`, 
-            target: incomerId, 
-            type: 'smoothstep', 
-            animated: true,
-            style: { stroke: '#f59e0b', strokeWidth: 2 }
-          });
+          newEdges.push(createEdge(`source-${idx}`, incomerId, true));
         });
-        
-        busbarInputId = incomerId;
+        newEdges.push(createEdge(incomerId, 'busbar'));
       } else {
-        // No main incoming, connect sources directly to busbar (virtually)
-        busbarInputId = upstreamSources.length > 0 ? `source-0` : null; // Simplified logic
-      }
-
-      // -- C. Busbar --
-      const busbarId = 'busbar';
-      newNodes.push({
-        id: busbarId,
-        type: 'busbar',
-        position: { x: 0, y: 300 }, // Initial pos, will be adjusted by layout
-        data: { label: 'Busbar' },
-        style: { width: Math.max(300, devices.length * 100) } // Dynamic width
-      });
-
-      if (busbarInputId) {
-        newEdges.push({ 
-          id: `e-${busbarInputId}-busbar`, 
-          source: busbarInputId, 
-          target: busbarId, 
-          type: 'smoothstep',
-          style: { stroke: '#374151', strokeWidth: 3 }
+        // Direct link sources to busbar
+        upstreamSources.forEach((_, idx) => {
+          newEdges.push(createEdge(`source-${idx}`, 'busbar'));
         });
       }
 
-      // -- D. Outgoing Feeders (Devices) --
-      const feeders = devices.filter(d => !d.is_main_incoming);
-      
+      // 4. Départs (Feeders)
       feeders.forEach((dev, idx) => {
         const nodeId = `dev-${dev.id}`;
-        // Check for saved position
-        const savedPos = dev.diagram_data?.position;
+        // Calculate X position specifically for schema look
+        // Center the group of feeders under the busbar
+        const startX = -(feeders.length * 140) / 2 + 70; 
+        const xPos = startX + (idx * 140);
 
+        // Saved position override?
+        const savedPos = dev.diagram_data?.position;
+        
         newNodes.push({
           id: nodeId,
           type: 'breaker',
-          position: savedPos || { x: (idx * 160) - ((feeders.length * 160)/2), y: 450 }, // Grid fallback
-          data: { 
-            name: dev.name, 
-            reference: dev.reference,
-            in_amps: dev.in_amps,
-            poles: dev.poles,
-            isIncoming: false,
-            isDifferential: dev.is_differential,
-            isComplete: dev.is_complete,
-            position: dev.position_number,
-            userPosition: savedPos // Mark as user positioned
-          }
+          position: savedPos || { x: xPos, y: 300 }, 
+          data: mapDeviceToData(dev)
         });
 
-        // Connect Busbar -> Device
-        newEdges.push({ 
-          id: `e-busbar-${nodeId}`, 
-          source: busbarId, 
-          target: nodeId, 
-          type: 'smoothstep', // Orthogonal lines
-          style: { stroke: '#9ca3af', strokeWidth: 1.5 }
+        // Edge Busbar -> Breaker
+        newEdges.push({
+          id: `e-bus-${nodeId}`,
+          source: 'busbar',
+          target: nodeId,
+          type: 'step', // IMPORTANT: Orthogonal lines
+          style: { stroke: '#1f2937', strokeWidth: 2 },
         });
-
-        // -- E. Downstream Targets --
-        if (dev.downstream_switchboard_id) {
-          const downId = `down-${dev.downstream_switchboard_id}-${dev.id}`;
-          newNodes.push({
-            id: downId,
-            type: 'downstream',
-            position: { x: (idx * 160), y: 650 },
-            data: { label: dev.downstream_switchboard_name || dev.downstream_switchboard_code || 'Tableau' }
-          });
-
-          newEdges.push({
-            id: `e-${nodeId}-${downId}`,
-            source: nodeId,
-            target: downId,
-            type: 'smoothstep',
-            animated: true,
-            style: { stroke: '#10b981' }
-          });
-        }
       });
 
-      // Apply saved positions where available, else basic grid
-      setNodes(newNodes);
-      setEdges(newEdges);
+      // Add Busbar last to control Z-index if needed (though ReactFlow handles it)
+      newNodes.push(busbarNode);
 
-      // If no saved positions at all, trigger auto layout once
-      const hasSavedPositions = devices.some(d => d.diagram_data?.position);
-      if (!hasSavedPositions && boardRes?.diagram_data?.layout !== 'custom') {
-        setTimeout(() => handleAutoLayout(newNodes, newEdges), 50);
+      // Si pas de positions sauvegardées, on applique un layout auto simple
+      if (!devices.some(d => d.diagram_data?.position) && boardRes.diagram_data?.layout !== 'custom') {
+         // On laisse le calcul manuel ci-dessus faire le job "initial" qui est déjà pas mal
+         // On ajuste juste la barre
+         busbarNode.position.x = -(busbarWidth / 2);
       }
 
+      setNodes(newNodes);
+      setEdges(newEdges);
+      
+      // Delay fit view to allow render
+      setTimeout(() => fitView({ padding: 0.1, duration: 800 }), 100);
+
     } catch (err) {
-      console.error("Error loading diagram:", err);
+      console.error("Load diagram error:", err);
     } finally {
       setLoading(false);
     }
-  }, [id, setNodes, setEdges]);
+  }, [id, setNodes, setEdges, fitView]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  // Auto Layout
-  const handleAutoLayout = useCallback((currentNodes, currentEdges) => {
-    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
-      currentNodes || nodes,
-      currentEdges || edges
-    );
-    setNodes([...layoutedNodes]);
-    setEdges([...layoutedEdges]);
-    setTimeout(() => fitView({ padding: 0.2 }), 100);
-  }, [nodes, edges, setNodes, setEdges, fitView]);
+  // Helper: Create standardized edge
+  const createEdge = (source, target, main = false) => ({
+    id: `e-${source}-${target}`,
+    source,
+    target,
+    type: 'step', // Orthogonal
+    style: { stroke: main ? '#b45309' : '#1f2937', strokeWidth: main ? 3 : 2 },
+  });
 
-  // Save Positions
-  const handleSave = async () => {
-    setSaving(true);
+  // Helper: Map DB device to Node Data
+  const mapDeviceToData = (dev) => ({
+    name: dev.name,
+    reference: dev.reference,
+    in_amps: dev.in_amps,
+    icu_ka: dev.icu_ka,
+    poles: dev.poles,
+    curve: dev.settings?.curve_type,
+    isDifferential: dev.is_differential,
+    isComplete: dev.is_complete,
+    position: dev.position_number,
+    downstreamLabel: dev.downstream_switchboard_name || dev.downstream_switchboard_code
+  });
+
+  // Save Node Changes
+  const handleNodeSave = async (nodeId, newData) => {
+    const dbId = parseInt(nodeId.replace('dev-', ''));
+    if (isNaN(dbId)) return;
+
     try {
-      const currentNodes = getNodes();
-      
-      // Update Board Layout Metadata
-      await api.switchboard.updateBoard(id, {
-        name: board.name, 
-        code: board.code, 
-        diagram_data: { layout: 'custom' }
+      await api.switchboard.updateDevice(dbId, {
+        name: newData.name,
+        reference: newData.reference,
+        in_amps: newData.in_amps ? Number(newData.in_amps) : null,
+        position_number: newData.position_number,
+        is_differential: newData.is_differential
       });
-
-      // Update Each Device Position
-      const updates = currentNodes
-        .filter(n => n.type === 'breaker')
-        .map(n => {
-          const deviceId = parseInt(n.id.replace('dev-', ''));
-          if (isNaN(deviceId)) return null;
-          return api.switchboard.updateDevice(deviceId, {
-            diagram_data: { position: n.position }
-          });
-        })
-        .filter(Boolean);
-
-      await Promise.all(updates);
-      alert('Disposition sauvegardée !');
-    } catch (err) {
-      console.error('Save failed:', err);
-      alert('Erreur lors de la sauvegarde');
-    } finally {
-      setSaving(false);
+      
+      // Update local state to reflect changes instantly
+      setNodes(nds => nds.map(n => {
+        if (n.id === nodeId) {
+          return {
+            ...n,
+            data: { ...n.data, ...newData, position: newData.position_number, isDifferential: newData.is_differential }
+          };
+        }
+        return n;
+      }));
+      
+      // Close sidebar
+      // setSelectedNode(null); // Optional: keep open if user wants to verify
+    } catch (e) {
+      alert("Erreur de sauvegarde");
     }
   };
 
-  // Export Image
-  const handleExport = () => {
-    if (reactFlowWrapper.current === null) return;
-
-    toPng(reactFlowWrapper.current, { backgroundColor: '#f9fafb' })
-      .then((dataUrl) => {
-        const a = document.createElement('a');
-        a.setAttribute('download', `${board.code || 'schema'}_unifilaire.png`);
-        a.setAttribute('href', dataUrl);
-        a.click();
-      });
+  // Save Layout Positions
+  const handleSaveLayout = async () => {
+    const currentNodes = getNodes();
+    const updates = currentNodes
+      .filter(n => n.type === 'breaker')
+      .map(n => {
+        const did = parseInt(n.id.replace('dev-', ''));
+        if (isNaN(did)) return null;
+        return api.switchboard.updateDevice(did, { diagram_data: { position: n.position } });
+      })
+      .filter(Boolean);
+    
+    await Promise.all(updates);
+    // Mark board as having custom layout
+    await api.switchboard.updateBoard(id, { diagram_data: { layout: 'custom' } });
+    alert("Disposition sauvegardée !");
   };
 
-  if (loading) {
-    return <div className="h-screen flex items-center justify-center bg-gray-50 text-gray-500">Chargement du schéma...</div>;
-  }
+  // Export to Image with Title Block (Cartouche)
+  const handleExport = async () => {
+    if (reactFlowWrapper.current === null) return;
+    
+    // 1. Force white background for snapshot
+    const flowElement = document.querySelector('.react-flow');
+    const originalBg = flowElement.style.background;
+    flowElement.style.background = '#fff';
+
+    try {
+      const dataUrl = await toPng(reactFlowWrapper.current, { 
+        backgroundColor: '#fff', 
+        pixelRatio: 2, // High res
+        filter: (node) => !node.classList?.contains('react-flow__controls') // Hide controls
+      });
+      
+      // 2. Create a temporary canvas to add Title Block (Cartouche)
+      const img = new Image();
+      img.src = dataUrl;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const footerHeight = 120;
+        
+        canvas.width = img.width;
+        canvas.height = img.height + footerHeight;
+        
+        // Draw Diagram
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        
+        // Draw Cartouche Border
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(20, 20, canvas.width - 40, canvas.height - 40);
+        
+        // Draw Title Block Area
+        const tbY = canvas.height - footerHeight - 20;
+        ctx.beginPath();
+        ctx.moveTo(20, tbY);
+        ctx.lineTo(canvas.width - 20, tbY);
+        ctx.stroke();
+        
+        // Title Block Content
+        ctx.fillStyle = "#000000";
+        ctx.font = "bold 24px Arial";
+        ctx.fillText(board?.name || "Schéma Unifilaire", 40, tbY + 40);
+        
+        ctx.font = "16px Arial";
+        ctx.fillText(`Code: ${board?.code || '-'}`, 40, tbY + 70);
+        ctx.fillText(`Localisation: ${board?.meta?.building_code || ''} / ${board?.meta?.floor || ''}`, 40, tbY + 90);
+        
+        // Company Info (Right side)
+        if (settings?.company_name) {
+          ctx.textAlign = "right";
+          ctx.font = "bold 18px Arial";
+          ctx.fillText(settings.company_name, canvas.width - 40, tbY + 40);
+          ctx.font = "14px Arial";
+          if(settings.company_email) ctx.fillText(settings.company_email, canvas.width - 40, tbY + 65);
+          ctx.fillText(new Date().toLocaleDateString(), canvas.width - 40, tbY + 90);
+        }
+
+        // Add Logo if available (requires CORS handling usually, skipping for simplicity or needs Base64)
+        // ...
+
+        // Download
+        const link = document.createElement('a');
+        link.download = `${board?.code}_schema.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+      };
+    } finally {
+      flowElement.style.background = originalBg;
+    }
+  };
+
+  if (loading) return <div className="flex h-screen items-center justify-center text-gray-500">Génération du schéma...</div>;
 
   return (
-    <div className="h-screen flex flex-col bg-gray-50">
-      {/* Header Toolbar */}
-      <div className="h-16 bg-white border-b shadow-sm flex items-center justify-between px-6 z-10">
-        <div className="flex items-center gap-4">
-          <button onClick={() => navigate(`/switchboards?board=${id}`)} className="p-2 hover:bg-gray-100 rounded-full text-gray-600 transition-colors">
-            <ArrowLeft size={20} />
+    <div className="h-screen flex flex-col bg-gray-100">
+      {/* Top Bar */}
+      <div className="h-14 bg-white border-b flex items-center justify-between px-4 z-10 shadow-sm">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate(`/switchboards?board=${id}`)} className="p-2 hover:bg-gray-100 rounded-full">
+            <ArrowLeft size={20} className="text-gray-600" />
           </button>
           <div>
-            <h1 className="font-bold text-gray-900 text-lg flex items-center gap-2">
-              <GitBranch size={20} className="text-violet-600" />
-              Schéma Unifilaire
+            <h1 className="font-bold text-gray-800 text-sm md:text-base flex items-center gap-2">
+              <RefreshCw size={16} className="text-blue-600" />
+              {board?.name}
             </h1>
-            <p className="text-xs text-gray-500">{board?.name} ({board?.code})</p>
+            <span className="text-xs text-gray-500 font-mono">{board?.code} • {board?.regime_neutral}</span>
           </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          <button 
-            onClick={() => handleAutoLayout()} 
-            className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors"
-            title="Réorganiser automatiquement"
-          >
-            <RefreshCw size={16} /> Auto
+        <div className="flex gap-2">
+          <button onClick={handleSaveLayout} className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm shadow-sm transition-colors">
+            <Save size={16} /> <span className="hidden md:inline">Sauvegarder Vue</span>
           </button>
-          <button 
-            onClick={handleExport} 
-            className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm font-medium transition-colors"
-            title="Télécharger image"
-          >
-            <Download size={16} /> PNG
-          </button>
-          <button 
-            onClick={handleSave} 
-            disabled={saving}
-            className="flex items-center gap-2 px-4 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-medium shadow-sm transition-all disabled:opacity-50"
-          >
-            {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-            Sauvegarder
+          <button onClick={handleExport} className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-900 text-white rounded text-sm shadow-sm transition-colors">
+            <Printer size={16} /> <span className="hidden md:inline">Exporter Plan</span>
           </button>
         </div>
       </div>
 
-      {/* Canvas */}
-      <div className="flex-1 w-full h-full" ref={reactFlowWrapper}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          nodeTypes={nodeTypes}
-          fitView
-          attributionPosition="bottom-right"
-          snapToGrid={true}
-          snapGrid={[15, 15]}
-        >
-          <Controls />
-          <Background color="#e5e7eb" gap={20} size={1} />
-        </ReactFlow>
+      {/* Main Canvas Area */}
+      <div className="flex-1 relative flex" ref={reactFlowWrapper}>
+        <div className="flex-1">
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onNodeClick={(_, node) => setSelectedNode(node)}
+            nodeTypes={nodeTypes}
+            fitView
+            snapToGrid
+            snapGrid={[20, 20]}
+            minZoom={0.1}
+            maxZoom={4}
+          >
+            <Background color="#cbd5e1" gap={20} size={1} />
+            <Controls />
+            <Panel position="bottom-center" className="bg-white/80 backdrop-blur px-3 py-1 rounded-full border shadow-sm text-xs text-gray-500">
+              {nodes.filter(n => n.type === 'breaker').length} départs • Régime {board?.regime_neutral || 'TN'}
+            </Panel>
+          </ReactFlow>
+        </div>
+
+        {/* Sidebar Property Editor */}
+        {selectedNode && selectedNode.type === 'breaker' && (
+          <PropertySidebar 
+            selectedNode={selectedNode} 
+            onClose={() => setSelectedNode(null)} 
+            onSave={handleNodeSave} 
+          />
+        )}
       </div>
     </div>
   );
