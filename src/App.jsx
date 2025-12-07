@@ -71,7 +71,14 @@ export default function App() {
           <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
           <Route path="/app/meca" element={<ProtectedRoute><Meca /></ProtectedRoute>} />
           <Route path="/app/dcf" element={<ProtectedRoute><Dcf /></ProtectedRoute>} />
-          <Route path="/switchboards/:id/diagram" element={<SwitchboardDiagram />} />
+          <Route
+            path="/app/switchboards/:id/diagram"
+            element={
+              <ProtectedRoute>
+                <SwitchboardDiagram />
+              </ProtectedRoute>
+            }
+          />
 
           {/* 👇 NEW: Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
