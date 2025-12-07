@@ -31,7 +31,24 @@ if (process.env.OPENAI_API_KEY) {
 }
 
 const app = express();
-app.use(helmet());
+
+// --- CORRECTION CSP (POUR LA 3D ET LES WORKERS) ---
+// Remplace app.use(helmet()) par une config permissive pour les blobs/workers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "blob:"], // blob: nécessaire pour React Three Fiber
+      workerSrc: ["'self'", "blob:"], // blob: nécessaire pour les workers 3D
+      imgSrc: ["'self'", "data:", "blob:", "https:"], // Images et textures
+      connectSrc: ["'self'", process.env.CORS_ORIGIN || "*", "https://api.openai.com"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      fontSrc: ["'self'", "https:", "data:"]
+    }
+  },
+  crossOriginEmbedderPolicy: false // Souvent nécessaire pour les ressources 3D externes
+}));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
@@ -77,7 +94,7 @@ async function ensureSchema() {
       photo BYTEA,
       modes JSONB DEFAULT '{}'::jsonb,
       quality JSONB DEFAULT '{}'::jsonb,
-      diagram_data JSONB DEFAULT '{}'::jsonb, -- Pour le schéma unifilaire (position X/Y, style)
+      diagram_data JSONB DEFAULT '{}'::jsonb, 
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_switchboards_site ON switchboards(site);
@@ -108,7 +125,7 @@ async function ensureSchema() {
       is_main_incoming BOOLEAN DEFAULT FALSE,
       pv_tests BYTEA,
       photos BYTEA[],
-      diagram_data JSONB DEFAULT '{}'::jsonb, -- Pour le schéma unifilaire
+      diagram_data JSONB DEFAULT '{}'::jsonb, 
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     );
@@ -327,7 +344,7 @@ app.delete('/api/switchboard/settings/logo', async (req, res) => {
   }
 });
 
-// ==================== PDF EXPORT (CORRECTED) ====================
+// ==================== PDF EXPORT (BACKEND - LISTING) ====================
 
 app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
   try {
