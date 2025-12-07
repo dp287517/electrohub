@@ -17,7 +17,7 @@ import dagre from 'dagre';
 import { toPng } from 'html-to-image';
 import { 
   ArrowLeft, Save, RefreshCw, Download, Zap, ShieldCheck, 
-  AlertCircle, Settings, ZoomIn, ZoomOut, Maximize
+  AlertCircle, Settings, GitBranch // <--- Ajouté ici !
 } from 'lucide-react';
 import { api } from '../lib/api';
 
