@@ -60,9 +60,10 @@ const WHITELIST_SORT = ['created_at', 'name', 'code', 'building_code', 'floor'];
 function sortSafe(sort) { return WHITELIST_SORT.includes(String(sort)) ? sort : 'created_at'; }
 function dirSafe(dir) { return String(dir).toLowerCase() === 'asc' ? 'ASC' : 'DESC'; }
 
-// Schema avec nouvelles colonnes
+// Schema Initialization
 async function ensureSchema() {
   await pool.query(`
+    -- TABLE: Switchboards
     CREATE TABLE IF NOT EXISTS switchboards (
       id SERIAL PRIMARY KEY,
       site TEXT NOT NULL,
@@ -76,12 +77,14 @@ async function ensureSchema() {
       photo BYTEA,
       modes JSONB DEFAULT '{}'::jsonb,
       quality JSONB DEFAULT '{}'::jsonb,
+      diagram_data JSONB DEFAULT '{}'::jsonb, -- Pour le schéma unifilaire (position X/Y, style)
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_switchboards_site ON switchboards(site);
     CREATE INDEX IF NOT EXISTS idx_switchboards_building ON switchboards(building_code);
     CREATE INDEX IF NOT EXISTS idx_switchboards_code ON switchboards(code);
 
+    -- TABLE: Devices
     CREATE TABLE IF NOT EXISTS devices (
       id SERIAL PRIMARY KEY,
       site TEXT NOT NULL,
@@ -105,6 +108,7 @@ async function ensureSchema() {
       is_main_incoming BOOLEAN DEFAULT FALSE,
       pv_tests BYTEA,
       photos BYTEA[],
+      diagram_data JSONB DEFAULT '{}'::jsonb, -- Pour le schéma unifilaire
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ
     );
@@ -118,7 +122,7 @@ async function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_devices_position ON devices(position_number);
     CREATE INDEX IF NOT EXISTS idx_devices_complete ON devices(is_complete);
 
-    -- Site settings table for logo and company info
+    -- TABLE: Site Settings (Logo, Company Info)
     CREATE TABLE IF NOT EXISTS site_settings (
       id SERIAL PRIMARY KEY,
       site TEXT UNIQUE NOT NULL,
@@ -132,7 +136,7 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
-    -- Add columns if missing
+    -- Add columns if missing (Migrations)
     DO $$
     BEGIN
       -- Switchboards columns
@@ -151,6 +155,9 @@ async function ensureSchema() {
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'is_principal') THEN
         ALTER TABLE switchboards ADD COLUMN is_principal BOOLEAN DEFAULT FALSE;
       END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'switchboards' AND column_name = 'diagram_data') THEN
+        ALTER TABLE switchboards ADD COLUMN diagram_data JSONB DEFAULT '{}'::jsonb;
+      END IF;
       
       -- Devices columns
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'name') THEN
@@ -164,6 +171,9 @@ async function ensureSchema() {
       END IF;
       IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'is_complete') THEN
         ALTER TABLE devices ADD COLUMN is_complete BOOLEAN DEFAULT FALSE;
+      END IF;
+      IF NOT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'devices' AND column_name = 'diagram_data') THEN
+        ALTER TABLE devices ADD COLUMN diagram_data JSONB DEFAULT '{}'::jsonb;
       END IF;
     END $$;
 
@@ -182,6 +192,11 @@ async function ensureSchema() {
         BEFORE UPDATE ON devices
         FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
       END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_settings_updated_at') THEN
+        CREATE TRIGGER update_settings_updated_at
+        BEFORE UPDATE ON site_settings
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+      END IF;
     END $$;
   `);
 }
@@ -192,20 +207,8 @@ function checkDeviceComplete(device) {
   return !!(device.manufacturer && device.reference && device.in_amps && Number(device.in_amps) > 0);
 }
 
-// Helper: Detect if device is differential from text (ONLY used by AI photo analysis, NOT Excel import)
-function detectDifferential(text) {
-  if (!text) return false;
-  const lowerText = String(text).toLowerCase();
-  const patterns = [
-    'ddr', 'rcd', 'rcbo', 'différentiel', 'differentiel', 'diff',
-    '30ma', '300ma', '30 ma', '300 ma', 'δ', 'vigi'
-  ];
-  return patterns.some(p => lowerText.includes(p));
-}
-
 // ==================== SITE SETTINGS (Logo, Company Info) ====================
 
-// Get site settings
 app.get('/api/switchboard/settings', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -235,7 +238,6 @@ app.get('/api/switchboard/settings', async (req, res) => {
   }
 });
 
-// Update site settings
 app.put('/api/switchboard/settings', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -262,7 +264,6 @@ app.put('/api/switchboard/settings', async (req, res) => {
   }
 });
 
-// Upload logo
 app.post('/api/switchboard/settings/logo', upload.single('logo'), async (req, res) => {
   try {
     const site = siteOf(req);
@@ -287,7 +288,6 @@ app.post('/api/switchboard/settings/logo', upload.single('logo'), async (req, re
   }
 });
 
-// Get logo
 app.get('/api/switchboard/settings/logo', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -310,7 +310,6 @@ app.get('/api/switchboard/settings/logo', async (req, res) => {
   }
 });
 
-// Delete logo
 app.delete('/api/switchboard/settings/logo', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -328,7 +327,7 @@ app.delete('/api/switchboard/settings/logo', async (req, res) => {
   }
 });
 
-// ==================== PDF EXPORT ====================
+// ==================== PDF EXPORT (CORRECTED) ====================
 
 app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
   try {
@@ -343,11 +342,24 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     if (!boardRes.rows.length) return res.status(404).json({ error: 'Board not found' });
     const board = boardRes.rows[0];
 
-    // Get devices
+    // Get devices with downstream info
     const devicesRes = await pool.query(
-      `SELECT * FROM devices WHERE switchboard_id = $1 ORDER BY position_number ASC NULLS LAST, created_at ASC`, [id]
+      `SELECT d.*, sb_down.name as downstream_name, sb_down.code as downstream_code
+       FROM devices d
+       LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
+       WHERE d.switchboard_id = $1 
+       ORDER BY d.position_number ASC NULLS LAST, d.created_at ASC`, [id]
     );
     const devices = devicesRes.rows;
+
+    // Get upstream info (Sources)
+    const upstreamRes = await pool.query(
+      `SELECT d.*, sb.name as source_board_name, sb.code as source_board_code
+       FROM devices d
+       JOIN switchboards sb ON d.switchboard_id = sb.id
+       WHERE d.downstream_switchboard_id = $1`, [id]
+    );
+    const upstreamDevices = upstreamRes.rows;
 
     // Get logo if exists
     const logoRes = await pool.query(
@@ -355,8 +367,8 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     );
     const settings = logoRes.rows[0] || {};
 
-    // Create PDF
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    // Create PDF with bufferPages to fix Footer issue
+    const doc = new PDFDocument({ margin: 50, size: 'A4', bufferPages: true });
     
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${(board.code || board.name).replace(/[^a-zA-Z0-9-_]/g, '_')}_listing.pdf"`);
@@ -367,7 +379,7 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     let headerY = 40;
     let textStartX = 50;
 
-    // Logo (top-left, if exists)
+    // Logo (top-left)
     if (settings.logo) {
       try {
         doc.image(settings.logo, 50, headerY, { width: 70, height: 50 });
@@ -382,7 +394,15 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     doc.fontSize(10).font('Helvetica').fillColor('#374151');
     doc.text(`Code: ${board.code || '-'}`, textStartX, headerY + 25);
     doc.text(`Bâtiment: ${board.building_code || '-'} | Étage: ${board.floor || '-'} | Local: ${board.room || '-'}`, textStartX, headerY + 40);
-    doc.text(`Régime de neutre: ${board.regime_neutral || '-'}`, textStartX, headerY + 55);
+    
+    // Upstream info in header if available
+    let upstreamText = "Source: Inconnue / Principale";
+    if (upstreamDevices.length > 0) {
+      upstreamText = "Alimenté par: " + upstreamDevices.map(d => `${d.source_board_name} (${d.name})`).join(', ');
+    } else if (board.is_principal) {
+      upstreamText = "Type: Tableau Principal (TGBT)";
+    }
+    doc.text(upstreamText, textStartX, headerY + 55);
 
     // Date on the right
     doc.fontSize(9).text(`Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`, 400, headerY, { align: 'right' });
@@ -415,31 +435,29 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
     // ===== TABLE =====
     const tableStartY = summaryY + 55;
     const colWidths = [35, 140, 75, 65, 40, 40, 35, 65];
-    const headers = ['N°', 'Désignation', 'Référence', 'Fabricant', 'In', 'Icu', 'P', 'Type'];
+    const headers = ['N°', 'Désignation', 'Référence', 'Fabricant', 'In', 'Icu', 'P', 'Type/Aval'];
     const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
-    // Table header background
-    doc.rect(50, tableStartY, totalWidth, 22).fillColor('#f3f4f6').fill();
-    
-    // Table header text
-    doc.fontSize(8).font('Helvetica-Bold').fillColor('#374151');
-    let x = 50;
-    headers.forEach((h, i) => {
-      doc.text(h, x + 4, tableStartY + 6, { width: colWidths[i] - 8 });
-      x += colWidths[i];
-    });
+    // Helper to draw header
+    const drawHeader = (y) => {
+        doc.rect(50, y, totalWidth, 22).fillColor('#f3f4f6').fill();
+        doc.fontSize(8).font('Helvetica-Bold').fillColor('#374151');
+        let x = 50;
+        headers.forEach((h, i) => {
+          doc.text(h, x + 4, y + 6, { width: colWidths[i] - 8 });
+          x += colWidths[i];
+        });
+        doc.rect(50, y, totalWidth, 22).strokeColor('#d1d5db').stroke();
+        x = 50;
+        colWidths.forEach((w) => {
+          x += w;
+          if (x < 50 + totalWidth) {
+            doc.moveTo(x, y).lineTo(x, y + 22).stroke();
+          }
+        });
+    };
 
-    // Table header border
-    doc.rect(50, tableStartY, totalWidth, 22).strokeColor('#d1d5db').stroke();
-
-    // Vertical lines for header
-    x = 50;
-    colWidths.forEach((w) => {
-      x += w;
-      if (x < 50 + totalWidth) {
-        doc.moveTo(x, tableStartY).lineTo(x, tableStartY + 22).stroke();
-      }
-    });
+    drawHeader(tableStartY);
 
     // Table rows
     doc.font('Helvetica').fontSize(8);
@@ -451,23 +469,7 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       if (y > 780) {
         doc.addPage();
         y = 50;
-        
-        // Redraw header on new page
-        doc.rect(50, y, totalWidth, 22).fillColor('#f3f4f6').fill();
-        doc.fontSize(8).font('Helvetica-Bold').fillColor('#374151');
-        let hx = 50;
-        headers.forEach((h, i) => {
-          doc.text(h, hx + 4, y + 6, { width: colWidths[i] - 8 });
-          hx += colWidths[i];
-        });
-        doc.rect(50, y, totalWidth, 22).strokeColor('#d1d5db').stroke();
-        hx = 50;
-        colWidths.forEach((w) => {
-          hx += w;
-          if (hx < 50 + totalWidth) {
-            doc.moveTo(hx, y).lineTo(hx, y + 22).stroke();
-          }
-        });
+        drawHeader(y);
         y += 22;
         doc.font('Helvetica').fontSize(8);
       }
@@ -477,10 +479,13 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
         doc.rect(50, y, totalWidth, rowHeight).fillColor('#fafafa').fill();
       }
 
-      // Determine type badge
+      // Determine type badge or downstream info
       let typeText = '-';
       let typeColor = '#6b7280';
-      if (d.is_main_incoming) {
+      if (d.downstream_name) {
+        typeText = `Vers ${d.downstream_name}`;
+        typeColor = '#059669'; // Green for link
+      } else if (d.is_main_incoming) {
         typeText = 'Arrivée';
         typeColor = '#d97706';
       } else if (d.is_differential) {
@@ -503,16 +508,19 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
         typeText
       ];
       
-      x = 50;
+      let x = 50;
       doc.fillColor('#111827');
       row.forEach((cell, i) => {
         if (i === row.length - 1) {
-          // Type column with color
           doc.fillColor(typeColor);
+          if (String(cell).startsWith('Vers ')) {
+             doc.font('Helvetica-Bold');
+          }
         }
-        doc.text(String(cell), x + 4, y + 5, { width: colWidths[i] - 8 });
+        doc.text(String(cell), x + 4, y + 5, { width: colWidths[i] - 8, lineBreak: false, ellipsis: true });
         if (i === row.length - 1) {
           doc.fillColor('#111827');
+          doc.font('Helvetica');
         }
         x += colWidths[i];
       });
@@ -532,13 +540,13 @@ app.get('/api/switchboard/boards/:id/pdf', async (req, res) => {
       y += rowHeight;
     });
 
-    // ===== FOOTER =====
-    const pageCount = doc.bufferedPageRange().count;
-    for (let i = 0; i < pageCount; i++) {
+    // ===== FOOTER (Now safe due to bufferPages: true) =====
+    const range = doc.bufferedPageRange();
+    for (let i = range.start; i < range.start + range.count; i++) {
       doc.switchToPage(i);
       doc.fontSize(8).fillColor('#9ca3af');
       doc.text(
-        `${board.code || board.name} - Page ${i + 1}/${pageCount}`,
+        `${board.code || board.name} - Page ${i + 1}/${range.count}`,
         50, 820, { align: 'center', width: 495 }
       );
     }
@@ -569,7 +577,8 @@ app.get('/api/switchboard/boards', async (req, res) => {
     const offset = ((parseInt(page, 10) || 1) - 1) * limit;
 
     const sql = `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
-                        modes, quality, created_at, (photo IS NOT NULL) as has_photo
+                        modes, quality, created_at, (photo IS NOT NULL) as has_photo,
+                        diagram_data
                  FROM switchboards
                  WHERE ${where.join(' AND ')}
                  ORDER BY ${sortSafe(sort)} ${dirSafe(dir)}
@@ -582,6 +591,7 @@ app.get('/api/switchboard/boards', async (req, res) => {
       name: r.name, code: r.code, regime_neutral: r.regime_neutral,
       is_principal: r.is_principal,
       has_photo: r.has_photo,
+      diagram_data: r.diagram_data || {},
       modes: r.modes || {}, quality: r.quality || {}, created_at: r.created_at
     }));
     res.json({ data, total: count.rows[0].total, page: Number(page), pageSize: limit });
@@ -591,25 +601,40 @@ app.get('/api/switchboard/boards', async (req, res) => {
   }
 });
 
-// GET ONE Switchboard
+// GET ONE Switchboard (INCLUDES UPSTREAM INFO)
 app.get('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
+    
+    // Board details
     const r = await pool.query(
       `SELECT id, site, name, code, building_code, floor, room, regime_neutral, is_principal, 
-              modes, quality, created_at, (photo IS NOT NULL) as has_photo
+              modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo
        FROM switchboards WHERE id=$1 AND site=$2`, [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     const sb = r.rows[0];
+
+    // GET UPSTREAM: Find devices in OTHER boards that point to THIS board
+    // This solves the "Double Feeding" visibility
+    const upstream = await pool.query(
+      `SELECT d.id, d.name, d.position_number, d.in_amps, 
+              s.id as source_board_id, s.name as source_board_name, s.code as source_board_code
+       FROM devices d
+       JOIN switchboards s ON d.switchboard_id = s.id
+       WHERE d.downstream_switchboard_id = $1`, [id]
+    );
+
     res.json({
       id: sb.id,
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal,
       has_photo: sb.has_photo,
+      diagram_data: sb.diagram_data || {},
+      upstream_sources: upstream.rows, // Array of devices feeding this board
       modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
     });
   } catch (e) {
@@ -634,12 +659,13 @@ app.post('/api/switchboard/boards', async (req, res) => {
     const is_principal = !!b?.is_principal;
     const modes = b?.modes || {};
     const quality = b?.quality || {};
+    const diagram_data = b?.diagram_data || {};
 
     const r = await pool.query(
-      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at`,
-      [site, name, code, building, floor, room, regime, is_principal, modes, quality]
+      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, created_at`,
+      [site, name, code, building, floor, room, regime, is_principal, modes, quality, diagram_data]
     );
     const sb = r.rows[0];
     res.status(201).json({
@@ -647,7 +673,7 @@ app.post('/api/switchboard/boards', async (req, res) => {
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal, has_photo: false,
-      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
+      modes: sb.modes || {}, quality: sb.quality || {}, diagram_data: sb.diagram_data, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD CREATE] error:', e);
@@ -672,13 +698,14 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
     const is_principal = !!b?.is_principal;
     const modes = b?.modes || {};
     const quality = b?.quality || {};
+    const diagram_data = b?.diagram_data || {};
 
     const r = await pool.query(
       `UPDATE switchboards SET
-        name=$1, code=$2, building_code=$3, floor=$4, room=$5, regime_neutral=$6, is_principal=$7, modes=$8, quality=$9
+        name=$1, code=$2, building_code=$3, floor=$4, room=$5, regime_neutral=$6, is_principal=$7, modes=$8, quality=$9, diagram_data=$12
        WHERE id=$10 AND site=$11
-       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at, (photo IS NOT NULL) as has_photo`,
-      [name, code, building, floor, room, regime, is_principal, modes, quality, id, site]
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, created_at, (photo IS NOT NULL) as has_photo`,
+      [name, code, building, floor, room, regime, is_principal, modes, quality, id, site, diagram_data]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     const sb = r.rows[0];
@@ -687,7 +714,7 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal, has_photo: sb.has_photo,
-      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
+      modes: sb.modes || {}, quality: sb.quality || {}, diagram_data: sb.diagram_data, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD UPDATE] error:', e);
@@ -695,14 +722,14 @@ app.put('/api/switchboard/boards/:id', async (req, res) => {
   }
 });
 
-// DELETE Switchboard (cascade deletes devices)
+// DELETE Switchboard
 app.delete('/api/switchboard/boards/:id', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     
-    // Count devices before delete
+    // Count devices
     const countResult = await pool.query(
       `SELECT COUNT(*)::int as count FROM devices WHERE switchboard_id = $1`, [id]
     );
@@ -725,10 +752,10 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const id = Number(req.params.id);
     const r = await pool.query(
-      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality)
-       SELECT site, name || ' (copy)', code || '_COPY', building_code, floor, room, regime_neutral, FALSE, modes, quality
+      `INSERT INTO switchboards (site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data)
+       SELECT site, name || ' (copy)', code || '_COPY', building_code, floor, room, regime_neutral, FALSE, modes, quality, diagram_data
        FROM switchboards WHERE id=$1 AND site=$2
-       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, created_at`,
+       RETURNING id, site, name, code, building_code, floor, room, regime_neutral, is_principal, modes, quality, diagram_data, created_at`,
       [id, site]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
@@ -738,7 +765,7 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
       meta: { site: sb.site, building_code: sb.building_code, floor: sb.floor, room: sb.room },
       name: sb.name, code: sb.code, regime_neutral: sb.regime_neutral,
       is_principal: sb.is_principal, has_photo: false,
-      modes: sb.modes || {}, quality: sb.quality || {}, created_at: sb.created_at
+      modes: sb.modes || {}, quality: sb.quality || {}, diagram_data: sb.diagram_data, created_at: sb.created_at
     });
   } catch (e) {
     console.error('[SWITCHBOARD DUPLICATE] error:', e);
@@ -748,7 +775,6 @@ app.post('/api/switchboard/boards/:id/duplicate', async (req, res) => {
 
 // ==================== SWITCHBOARD PHOTO ====================
 
-// Upload Switchboard Photo
 app.post('/api/switchboard/boards/:id/photo', upload.single('photo'), async (req, res) => {
   try {
     const site = siteOf(req);
@@ -769,7 +795,6 @@ app.post('/api/switchboard/boards/:id/photo', upload.single('photo'), async (req
   }
 });
 
-// Get Switchboard Photo
 app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -794,7 +819,6 @@ app.get('/api/switchboard/boards/:id/photo', async (req, res) => {
 
 // ==================== DEVICE COUNTS ====================
 
-// Device counts for progress tracking
 app.post('/api/switchboard/devices-count', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -803,7 +827,6 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
     const boardIds = req.body?.board_ids || [];
     
     if (!boardIds.length) {
-      // Return counts for all boards of the site
       const { rows } = await pool.query(
         `SELECT d.switchboard_id, 
                 COUNT(*)::int AS total,
@@ -837,7 +860,6 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
       counts[r.switchboard_id] = { total: r.total, complete: r.complete };
     });
     
-    // Include boards with 0 devices
     ids.forEach(id => {
       if (!counts[id]) counts[id] = { total: 0, complete: 0 };
     });
@@ -851,7 +873,7 @@ app.post('/api/switchboard/devices-count', async (req, res) => {
 
 // ==================== DEVICES CRUD ====================
 
-// LIST Devices for a switchboard
+// LIST Devices for a switchboard (INCLUDES DOWNSTREAM NAMES)
 app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -862,13 +884,17 @@ app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
     const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
+    // Join with downstream switchboard to get its name
     const { rows } = await pool.query(
       `SELECT d.id, d.site, d.switchboard_id, d.parent_id, d.downstream_switchboard_id,
               d.name, d.device_type, d.manufacturer, d.reference,
               d.in_amps, d.icu_ka, d.ics_ka, d.poles, d.voltage_v, d.trip_unit,
               d.position_number, d.is_differential, d.is_complete, d.settings,
-              d.is_main_incoming, d.created_at, d.updated_at
+              d.is_main_incoming, d.diagram_data, d.created_at, d.updated_at,
+              sb_down.name as downstream_switchboard_name,
+              sb_down.code as downstream_switchboard_code
        FROM devices d
+       LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
        WHERE d.switchboard_id = $1 
        ORDER BY d.position_number ASC NULLS LAST, d.created_at ASC`,
       [switchboard_id]
@@ -881,30 +907,6 @@ app.get('/api/switchboard/boards/:boardId/devices', async (req, res) => {
   }
 });
 
-// Legacy endpoint for backward compatibility
-app.get('/api/switchboard/devices', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const switchboard_id = Number(req.query.switchboard_id);
-    if (!switchboard_id) return res.status(400).json({ error: 'Missing switchboard_id' });
-
-    const sbCheck = await pool.query('SELECT id FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
-    if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
-
-    const { rows } = await pool.query(
-      `SELECT * FROM devices WHERE switchboard_id = $1 
-       ORDER BY position_number ASC NULLS LAST, created_at ASC`,
-      [switchboard_id]
-    );
-    
-    res.json({ data: rows });
-  } catch (e) {
-    console.error('[DEVICES LIST LEGACY] error:', e.message);
-    res.status(500).json({ error: 'List failed' });
-  }
-});
-
 // GET ONE Device
 app.get('/api/switchboard/devices/:id', async (req, res) => {
   try {
@@ -913,9 +915,11 @@ app.get('/api/switchboard/devices/:id', async (req, res) => {
     const id = Number(req.params.id);
 
     const r = await pool.query(
-      `SELECT d.*, s.name as switchboard_name
+      `SELECT d.*, s.name as switchboard_name,
+              sb_down.name as downstream_switchboard_name
        FROM devices d
        JOIN switchboards s ON d.switchboard_id = s.id
+       LEFT JOIN switchboards sb_down ON d.downstream_switchboard_id = sb_down.id
        WHERE d.id = $1 AND s.site = $2`,
       [id, site]
     );
@@ -940,23 +944,19 @@ app.post('/api/switchboard/devices', async (req, res) => {
     const sbCheck = await pool.query('SELECT site FROM switchboards WHERE id=$1 AND site=$2', [switchboard_id, site]);
     if (!sbCheck.rows.length) return res.status(404).json({ error: 'Switchboard not found' });
 
-    // Calculate is_complete
     const is_complete = checkDeviceComplete(b);
-    
-    // is_differential comes ONLY from explicit user input or AI photo analysis
-    // NOT from text detection at import time
     const is_differential = !!b.is_differential;
-
     const settings = b.settings || {};
+    const diagram_data = b.diagram_data || {};
 
     const { rows } = await pool.query(
       `INSERT INTO devices (
         site, switchboard_id, parent_id, downstream_switchboard_id, 
         name, device_type, manufacturer, reference, 
         in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, 
-        position_number, is_differential, is_complete, settings, is_main_incoming
+        position_number, is_differential, is_complete, settings, is_main_incoming, diagram_data
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        RETURNING *`,
       [
         site, switchboard_id, 
@@ -976,7 +976,8 @@ app.post('/api/switchboard/devices', async (req, res) => {
         is_differential,
         is_complete,
         settings,
-        !!b.is_main_incoming
+        !!b.is_main_incoming,
+        diagram_data
       ]
     );
     res.status(201).json(rows[0]);
@@ -994,13 +995,10 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
     const id = Number(req.params.id);
     const b = req.body || {};
     
-    // Calculate is_complete
     const is_complete = checkDeviceComplete(b);
-    
-    // is_differential: use explicit value from request
     const is_differential = !!b.is_differential;
-
     const settings = b.settings || {};
+    const diagram_data = b.diagram_data || {};
 
     const { rows } = await pool.query(
       `UPDATE devices SET
@@ -1008,9 +1006,9 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         manufacturer = $5, reference = $6, in_amps = $7, icu_ka = $8, ics_ka = $9, 
         poles = $10, voltage_v = $11, trip_unit = $12, position_number = $13,
         is_differential = $14, is_complete = $15, settings = $16, is_main_incoming = $17,
-        updated_at = NOW()
+        diagram_data = $18, updated_at = NOW()
        FROM switchboards sb
-       WHERE devices.id = $18 AND devices.switchboard_id = sb.id AND sb.site = $19
+       WHERE devices.id = $19 AND devices.switchboard_id = sb.id AND sb.site = $20
        RETURNING devices.*`,
       [
         b.parent_id || null,
@@ -1030,6 +1028,7 @@ app.put('/api/switchboard/devices/:id', async (req, res) => {
         is_complete,
         settings,
         !!b.is_main_incoming,
+        diagram_data,
         id,
         site
       ]
@@ -1064,7 +1063,7 @@ app.delete('/api/switchboard/devices/:id', async (req, res) => {
   }
 });
 
-// ==================== EXCEL IMPORT (DDR detection REMOVED) ====================
+// ==================== EXCEL IMPORT ====================
 
 app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res) => {
   try {
@@ -1077,37 +1076,24 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
     const sheet = workbook.worksheets[0];
     if (!sheet) return res.status(400).json({ error: 'No worksheet found' });
 
-    // Extract tableau name from row 2 columns D-G (merged)
-    let tableauName = '';
+    // Extract basic info
+    let tableauName = 'Tableau importé';
+    let code = `IMP-${Date.now()}`;
     const row2 = sheet.getRow(2);
     for (let col = 4; col <= 7; col++) {
       const val = row2.getCell(col).value;
-      if (val) {
-        tableauName = String(val).trim();
-        break;
-      }
+      if (val) { tableauName = String(val).trim(); break; }
     }
-
-    // Extract code from row 4 columns D-G (merged)
-    let code = '';
     const row4 = sheet.getRow(4);
     for (let col = 4; col <= 7; col++) {
       const val = row4.getCell(col).value;
-      if (val) {
-        code = String(val).trim();
-        break;
-      }
+      if (val) { code = String(val).trim(); break; }
     }
 
-    if (!tableauName) tableauName = 'Tableau importé';
-    if (!code) code = `IMP-${Date.now()}`;
-
-    // Parse building and floor from code (format: BUILDING-FLOOR-XX-XX)
     const codeParts = code.split('-');
     const building = codeParts[0] || null;
     const floor = codeParts[1] || null;
 
-    // Check if switchboard exists or create new one
     let switchboardId;
     const existingBoard = await pool.query(
       `SELECT id FROM switchboards WHERE site = $1 AND code = $2`,
@@ -1116,7 +1102,6 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
 
     if (existingBoard.rows.length > 0) {
       switchboardId = existingBoard.rows[0].id;
-      // Update name if different
       await pool.query(
         `UPDATE switchboards SET name = $1, building_code = $2, floor = $3 WHERE id = $4`,
         [tableauName, building, floor, switchboardId]
@@ -1131,63 +1116,40 @@ app.post('/api/switchboard/import-excel', upload.single('file'), async (req, res
       switchboardId = newBoard.rows[0].id;
     }
 
-    // Parse devices from rows 12+ 
-    // Column A = position (repère départ), columns B-E = designation (merged)
     let devicesCreated = 0;
     const startRow = 12;
 
     for (let rowNum = startRow; rowNum <= sheet.rowCount; rowNum++) {
       const row = sheet.getRow(rowNum);
-      
-      // Get position from column A
       const positionCell = row.getCell(1).value;
       const position = positionCell ? String(positionCell).trim() : '';
       
-      // Skip empty rows or header rows
-      if (!position || position.toLowerCase().includes('repère') || position.toLowerCase().includes('départ')) {
-        continue;
-      }
+      if (!position || position.toLowerCase().includes('repère') || position.toLowerCase().includes('départ')) continue;
 
-      // Get designation from columns B-E (might be merged)
       let designation = '';
       for (let col = 2; col <= 5; col++) {
         const val = row.getCell(col).value;
-        if (val) {
-          designation = String(val).trim();
-          break;
-        }
+        if (val) { designation = String(val).trim(); break; }
       }
 
       if (!designation) continue;
 
-      // *** DDR DETECTION REMOVED ***
-      // is_differential is now ALWAYS false at import
-      // It will be set via AI photo analysis or manual user input
-      const is_differential = false;
-
-      // Insert device (marked as incomplete since we don't have specs)
       await pool.query(
         `INSERT INTO devices (site, switchboard_id, name, device_type, position_number, is_differential, is_complete)
-         VALUES ($1, $2, $3, $4, $5, $6, false)`,
-        [site, switchboardId, designation, 'Low Voltage Circuit Breaker', position, is_differential]
+         VALUES ($1, $2, $3, $4, $5, false, false)`,
+        [site, switchboardId, designation, 'Low Voltage Circuit Breaker', position]
       );
       devicesCreated++;
     }
 
     res.json({
       success: true,
-      switchboard: {
-        id: switchboardId,
-        name: tableauName,
-        code,
-        building,
-        floor
-      },
+      switchboard: { id: switchboardId, name: tableauName, code, building, floor },
       devices_created: devicesCreated
     });
   } catch (e) {
-    console.error('[EXCEL IMPORT] error:', e.message, e.stack);
-    res.status(500).json({ error: 'Import failed', details: e.message });
+    console.error('[EXCEL IMPORT] error:', e.message);
+    res.status(500).json({ error: 'Import failed' });
   }
 });
 
@@ -1204,25 +1166,19 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
     const base64Image = buffer.toString('base64');
     const mimeType = req.file.mimetype || 'image/jpeg';
 
-    // Vision analysis
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: 'You output ONLY valid JSON. No markdown fences, no prose. Focus on electrical device identification.'
+          content: 'Output ONLY valid JSON.'
         },
         {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: `Analyze this electrical device image. Extract with high precision:
-              - manufacturer: brand name (e.g., "Schneider", "ABB", "Siemens", "Legrand", "Hager")
-              - reference: exact model number visible on the device
-              - is_differential: boolean, true if you see any of: "30mA", "300mA", "Δ", "DDR", "RCD", "RCBO", "Vigi", differential symbol
-              
-              If text is unclear, use null. Output JSON only.`
+              text: `Analyze electrical device. Extract: manufacturer, reference, is_differential (boolean). JSON only.`
             },
             { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
           ]
@@ -1232,30 +1188,13 @@ app.post('/api/switchboard/analyze-photo', upload.single('photo'), async (req, r
       max_tokens: 300
     });
 
-    let result;
-    try {
-      result = JSON.parse(response.choices[0].message.content);
-    } catch (parseErr) {
-      console.error('[PHOTO] Parse error:', parseErr);
-      return res.status(500).json({ error: 'Failed to parse photo analysis' });
-    }
+    const result = JSON.parse(response.choices[0].message.content);
+    const quick_ai_query = [result.manufacturer, result.reference].filter(Boolean).join(' ').trim() || null;
 
-    const manufacturer = result.manufacturer || null;
-    const reference = result.reference || null;
-    const is_differential = !!result.is_differential;
-
-    // Build query for AI search
-    const quick_ai_query = [manufacturer, reference].filter(Boolean).join(' ').trim() || null;
-
-    res.json({
-      manufacturer,
-      reference,
-      is_differential,
-      quick_ai_query
-    });
+    res.json({ ...result, quick_ai_query });
   } catch (e) {
     console.error('[PHOTO ANALYSIS] error:', e.message);
-    res.status(500).json({ error: 'Photo analysis failed', details: e.message });
+    res.status(500).json({ error: 'Photo analysis failed' });
   }
 });
 
@@ -1272,35 +1211,9 @@ app.post('/api/switchboard/search-device', async (req, res) => {
       messages: [
         { 
           role: 'system', 
-          content: `You are an expert in electrical protective devices. For the query "${query}", extract and return structured JSON with complete device specifications.
-
-Required fields (use realistic manufacturer-standard values):
-- manufacturer: string (exact brand name)
-- reference: string (exact model number)
-- device_type: string ("MCCB", "ACB", "MCB", "RCBO", "Low Voltage Circuit Breaker")
-- in_amps: number (rated current in Amps)
-- icu_ka: number (ultimate breaking capacity in kA) 
-- ics_ka: number (service breaking capacity in kA, usually 75-100% of Icu)
-- poles: number (1-4)
-- voltage_v: number (rated voltage, typically 400V for LV)
-- trip_unit: string (e.g., "Thermal Magnetic", "Electronic", "Micrologic 5.2")
-- is_differential: boolean (true if RCBO, Vigi, or has differential protection)
-
-Settings object (LSIG protection - use manufacturer defaults):
-- ir: number (long-time pickup, multiple of In, typically 0.4-1.0)
-- tr: number (long-time delay in seconds)
-- isd: number (short-time pickup, multiple of Ir)
-- tsd: number (short-time delay in seconds)
-- ii: number (instantaneous pickup, multiple of In)
-- ig: number (ground fault pickup, multiple of In)
-- tg: number (ground fault delay in seconds)
-- zsi: boolean (Zone Selective Interlocking)
-- erms: boolean (Energy Reducing Maintenance)
-- curve_type: string ("B", "C", "D" for MCBs)
-
-Output ONLY valid JSON. Use null for unknown values.` 
+          content: `Expert electrical specs extraction. Return JSON: manufacturer, reference, device_type, in_amps (number), icu_ka (number), ics_ka (number), poles (number), voltage_v (number), trip_unit, is_differential (boolean), settings (ir, tr, isd, tsd, ii, ig, tg, zsi, erms, curve_type).` 
         },
-        { role: 'user', content: `Extract device specifications: ${query}` }
+        { role: 'user', content: `Extract specs: ${query}` }
       ],
       response_format: { type: 'json_object' },
       temperature: 0.1,
@@ -1309,7 +1222,7 @@ Output ONLY valid JSON. Use null for unknown values.`
 
     const jsonResponse = JSON.parse(completion.choices[0].message.content);
     
-    // Safe number conversion
+    // Validate number fields
     const safeNum = (val) => {
       if (val === null || val === undefined) return null;
       const num = Number(val);
@@ -1322,102 +1235,24 @@ Output ONLY valid JSON. Use null for unknown values.`
       device_type: jsonResponse.device_type || 'Low Voltage Circuit Breaker',
       in_amps: safeNum(jsonResponse.in_amps),
       icu_ka: safeNum(jsonResponse.icu_ka),
-      ics_ka: safeNum(jsonResponse.ics_ka) || (safeNum(jsonResponse.icu_ka) ? safeNum(jsonResponse.icu_ka) * 0.75 : null),
+      ics_ka: safeNum(jsonResponse.ics_ka),
       poles: safeNum(jsonResponse.poles) || 3,
       voltage_v: safeNum(jsonResponse.voltage_v) || 400,
       trip_unit: jsonResponse.trip_unit || null,
       is_differential: !!jsonResponse.is_differential,
-      settings: {
-        ir: safeNum(jsonResponse.settings?.ir) ?? 1,
-        tr: safeNum(jsonResponse.settings?.tr) ?? 10,
-        isd: safeNum(jsonResponse.settings?.isd) ?? 6,
-        tsd: safeNum(jsonResponse.settings?.tsd) ?? 0.1,
-        ii: safeNum(jsonResponse.settings?.ii) ?? 10,
-        ig: safeNum(jsonResponse.settings?.ig) ?? 0.5,
-        tg: safeNum(jsonResponse.settings?.tg) ?? 0.2,
-        zsi: !!jsonResponse.settings?.zsi,
-        erms: !!jsonResponse.settings?.erms,
-        curve_type: jsonResponse.settings?.curve_type || 'C'
-      }
+      settings: jsonResponse.settings || {}
     };
 
     res.json(validated);
   } catch (e) {
     console.error('[SEARCH DEVICE] error:', e.message);
-    res.status(500).json({ error: 'Search failed', details: e.message });
+    res.status(500).json({ error: 'Search failed' });
   }
 });
 
 // ==================== SEARCH HELPERS ====================
 
-// Search Device References (autocomplete)
-app.get('/api/switchboard/search-references', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const query = (req.query.query || '').trim().toLowerCase();
-
-    const where = ['site = $1'];
-    const vals = [site];
-    let i = 2;
-    if (query) {
-      where.push(`(LOWER(reference) ILIKE $${i} OR LOWER(manufacturer) ILIKE $${i})`);
-      vals.push(`%${query}%`);
-      i++;
-    }
-
-    const { rows } = await pool.query(
-      `SELECT DISTINCT manufacturer, reference, device_type, in_amps, icu_ka, ics_ka, poles, voltage_v, trip_unit, is_differential, settings
-       FROM devices
-       WHERE ${where.join(' AND ')} AND manufacturer IS NOT NULL
-       ORDER BY manufacturer, reference
-       LIMIT 20`, vals
-    );
-
-    res.json({ suggestions: rows });
-  } catch (e) {
-    console.error('[SEARCH REFERENCES] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-// Search Parent Devices
-app.get('/api/switchboard/search-parents', async (req, res) => {
-  try {
-    const site = siteOf(req);
-    if (!site) return res.status(400).json({ error: 'Missing site' });
-    const query = (req.query.query || '').trim().toLowerCase();
-    const switchboard_id = Number(req.query.switchboard_id);
-
-    const where = ['sb.site = $1'];
-    const vals = [site];
-    let i = 2;
-    if (query) {
-      where.push(`(LOWER(d.name) ILIKE $${i} OR LOWER(d.manufacturer) ILIKE $${i} OR LOWER(d.reference) ILIKE $${i})`);
-      vals.push(`%${query}%`);
-      i++;
-    }
-    if (switchboard_id) {
-      where.push(`d.switchboard_id = $${i}`);
-      vals.push(switchboard_id);
-    }
-
-    const { rows } = await pool.query(
-      `SELECT d.id, d.name, d.device_type, d.manufacturer, d.reference, sb.name as switchboard_name
-       FROM devices d
-       JOIN switchboards sb ON d.switchboard_id = sb.id
-       WHERE ${where.join(' AND ')}
-       ORDER BY d.created_at DESC
-       LIMIT 20`, vals
-    );
-    res.json({ suggestions: rows });
-  } catch (e) {
-    console.error('[SEARCH PARENTS] error:', e.message);
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
-
-// Search Downstream Switchboards
+// Search Downstream Switchboards (For linking functionality)
 app.get('/api/switchboard/search-downstreams', async (req, res) => {
   try {
     const site = siteOf(req);
@@ -1453,12 +1288,10 @@ app.get('/api/switchboard/boards/:id/graph', async (req, res) => {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
     const rootId = Number(req.params.id);
-    const sb = await pool.query('SELECT * FROM switchboards WHERE id=$1 AND site=$2', [rootId, site]);
-    if (!sb.rows.length) return res.status(404).json({ error: 'Not found' });
 
     const buildTree = async (switchboardId) => {
       const { rows: devs } = await pool.query(
-        'SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY position_number ASC NULLS LAST, created_at ASC', 
+        'SELECT * FROM devices WHERE switchboard_id=$1 ORDER BY position_number ASC NULLS LAST', 
         [switchboardId]
       );
       const byId = new Map(devs.map(d => [d.id, { ...d, children: [], downstream: null }]));
@@ -1494,8 +1327,7 @@ app.get('/api/switchboard/stats', async (req, res) => {
         (SELECT COUNT(*)::int FROM switchboards WHERE site = $1) as total_boards,
         (SELECT COUNT(*)::int FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id WHERE sb.site = $1) as total_devices,
         (SELECT COUNT(*)::int FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id WHERE sb.site = $1 AND d.is_complete = true) as complete_devices,
-        (SELECT COUNT(*)::int FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id WHERE sb.site = $1 AND d.is_differential = true) as differential_devices,
-        (SELECT COUNT(*)::int FROM switchboards WHERE site = $1 AND is_principal = true) as principal_boards
+        (SELECT COUNT(*)::int FROM devices d JOIN switchboards sb ON d.switchboard_id = sb.id WHERE sb.site = $1 AND d.is_differential = true) as differential_devices
     `, [site]);
 
     res.json(stats.rows[0]);
@@ -1509,53 +1341,19 @@ app.get('/api/switchboard/calendar', async (req, res) => {
   try {
     const site = siteOf(req);
     if (!site) return res.status(400).json({ error: 'Missing site' });
-
-    // Return boards grouped by building for calendar view
     const { rows } = await pool.query(`
-      SELECT sb.id, sb.name, sb.code, sb.building_code, sb.floor, sb.is_principal,
-             COUNT(d.id)::int as device_count,
-             COUNT(d.id) FILTER (WHERE d.is_complete = true)::int as complete_count
+      SELECT sb.id, sb.name, sb.code, sb.building_code, sb.floor,
+             COUNT(d.id)::int as device_count
       FROM switchboards sb
       LEFT JOIN devices d ON d.switchboard_id = sb.id
       WHERE sb.site = $1
       GROUP BY sb.id
       ORDER BY sb.building_code, sb.floor, sb.name
     `, [site]);
-
     res.json({ data: rows });
   } catch (e) {
     console.error('[CALENDAR] error:', e.message);
     res.status(500).json({ error: 'Calendar failed' });
-  }
-});
-
-// ==================== AI TIP ====================
-
-app.post('/api/switchboard/ai-tip', async (req, res) => {
-  try {
-    if (!openai) return res.json({ tip: 'AI tips unavailable' });
-
-    const { query } = req.body;
-    const context = query || 'General electrical engineering advice';
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { 
-          role: 'system', 
-          content: `You are an expert electrical engineer. Provide a brief, practical tip (1-2 sentences) related to: "${context}". 
-          Reference standards (IEC, NEC) when relevant. Be specific and actionable.` 
-        },
-        { role: 'user', content: context }
-      ],
-      max_tokens: 120,
-      temperature: 0.3
-    });
-
-    res.json({ tip: completion.choices[0].message.content.trim() });
-  } catch (e) {
-    console.error('[AI TIP] error:', e.message);
-    res.status(500).json({ error: 'AI tip failed' });
   }
 });
 
