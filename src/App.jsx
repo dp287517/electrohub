@@ -25,6 +25,7 @@ import AskVeeva from './pages/Ask_veeva.jsx';
 import Doors from './pages/Doors.jsx';
 import Dcf from './pages/Dcf.jsx';
 import LearnEx from './pages/Learn_ex.jsx';
+import SwitchboardDiagram from './pages/SwitchboardDiagram';
 
 // 👇 NEW: VSD (Variateurs de fréquence)
 import Vsd from './pages/Vsd.jsx';
@@ -70,6 +71,7 @@ export default function App() {
           <Route path="/app/doors" element={<ProtectedRoute><Doors /></ProtectedRoute>} />
           <Route path="/app/meca" element={<ProtectedRoute><Meca /></ProtectedRoute>} />
           <Route path="/app/dcf" element={<ProtectedRoute><Dcf /></ProtectedRoute>} />
+          <Route path="/switchboards/:id/diagram" element={<SwitchboardDiagram />} />
 
           {/* 👇 NEW: Variable Speed Drives */}
           <Route path="/app/vsd" element={<ProtectedRoute><Vsd /></ProtectedRoute>} />
