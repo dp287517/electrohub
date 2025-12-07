@@ -311,7 +311,7 @@ const DiagramContent = () => {
   const [totalFolios, setTotalFolios] = useState(1);
   const [deviceData, setDeviceData] = useState([]); 
   
-  const { fitView } = useReactFlow();
+  const { fitView, setViewport } = useReactFlow();
 
   useEffect(() => { api.switchboard.getSettings().then(setSettings).catch(console.error); }, []);
 
@@ -383,7 +383,7 @@ const DiagramContent = () => {
     downstreamId: dev.downstream_switchboard_id
   });
 
-  // --- CORRECTION NAVIGATION RETOUR ---
+  // --- CORRECTION NAVIGATION ---
   const handleBack = () => {
     navigate(`/switchboards?board=${id}`);
   };
@@ -413,46 +413,44 @@ const DiagramContent = () => {
     setSaving(false); alert("Disposition sauvegardée !");
   };
 
-  // --- CORRECTION EXPORT PDF (QUALITE PARFAITE) ---
+  // --- CORRECTION EXPORT PDF HD ---
   const handleExportPDF = async () => {
     if (reactFlowWrapper.current === null) return;
     const flowElement = document.querySelector('.react-flow');
     const originalBg = flowElement.style.background;
     flowElement.style.background = '#fff';
     
-    // Hide UI
     document.querySelectorAll('.react-flow__controls, .react-flow__panel, .title-block-overlay').forEach(el => el.style.display = 'none');
 
     try {
-      // Configuration A3 Paysage
+      // PDF A3 Paysage
       const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
       
-      const contentWidth = pageWidth - 20; // Marges 10mm
-      const contentHeight = pageHeight - 40; // Marge bas pour cartouche
+      const contentWidth = pageWidth - 20;
+      const contentHeight = pageHeight - 40;
 
       for (let i = 0; i < totalFolios; i++) {
         if (i > 0) pdf.addPage();
         
-        // Calculer la BoundingBox du folio actuel
+        // Calculer la zone à capturer pour ce folio
         const xStart = i * FOLIO_WIDTH;
         const xEnd = (i + 1) * FOLIO_WIDTH;
         
-        // Récupérer les noeuds de ce folio (grossièrement basé sur la position X)
         const folioNodes = nodes.filter(n => n.position.x >= xStart - 100 && n.position.x < xEnd + 100);
         if(folioNodes.length === 0) continue;
 
-        // Calcul des bornes exactes
+        // Bounding Box
         const minX = Math.min(...folioNodes.map(n => n.position.x));
         const maxX = Math.max(...folioNodes.map(n => n.position.x + (n.width || 100)));
         const minY = Math.min(...folioNodes.map(n => n.position.y));
         const maxY = Math.max(...folioNodes.map(n => n.position.y + (n.height || 300)));
         
-        const width = maxX - minX + 200; // Padding
+        const width = maxX - minX + 200;
         const height = maxY - minY + 200;
 
-        // Capture Haute Résolution
+        // Capture HD
         const dataUrl = await toPng(reactFlowWrapper.current, {
           backgroundColor: '#fff',
           width: width,
@@ -462,21 +460,21 @@ const DiagramContent = () => {
             height: height + 'px',
             transform: `translate(${-minX + 100}px, ${-minY + 100}px) scale(1)`
           },
-          pixelRatio: 4 // Très haute qualité
+          pixelRatio: 4 // Qualité maximale
         });
 
-        // Calcul Ratio pour fit dans le PDF sans déformation
+        // Ratio Aspect
         const ratio = Math.min(contentWidth / width, contentHeight / height);
         const imgW = width * ratio;
         const imgH = height * ratio;
         
-        // Centrer l'image
+        // Centrer
         const posX = 10 + (contentWidth - imgW) / 2;
         const posY = 10 + (contentHeight - imgH) / 2;
 
         pdf.addImage(dataUrl, 'PNG', posX, posY, imgW, imgH, undefined, 'FAST');
         
-        // Cartouche Vectoriel
+        // Cartouche
         const tbX = pageWidth - 130, tbY = pageHeight - 35;
         pdf.setFillColor(255); pdf.rect(tbX, tbY, 120, 25, 'F'); pdf.setLineWidth(0.3); pdf.rect(tbX, tbY, 120, 25);
         pdf.line(tbX + 80, tbY, tbX + 80, tbY + 25); pdf.line(tbX, tbY + 12, tbX + 120, tbY + 12);
