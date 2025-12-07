@@ -5,7 +5,7 @@ import {
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
-  Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch
+  Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -52,7 +52,7 @@ const ProgressRing = ({ progress, size = 40, strokeWidth = 4 }) => {
   );
 };
 
-// ==================== INPUT STYLES (FIXED FOR DARK MODE) ====================
+// ==================== INPUT STYLES ====================
 
 const inputBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400";
 const selectBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900";
@@ -321,7 +321,7 @@ const ShareLinkModal = ({ isOpen, onClose, board }) => {
   );
 };
 
-// AI Photo Wizard (3 steps)
+// AI Photo Wizard
 const AIPhotoWizard = ({ isOpen, onClose, onComplete }) => {
   const [step, setStep] = useState(1);
   const [photo, setPhoto] = useState(null);
@@ -739,10 +739,16 @@ export default function Switchboards() {
     name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
     in_amps: '', icu_ka: '', ics_ka: '', poles: 3, voltage_v: 400, trip_unit: '',
     position_number: '', is_differential: false, is_main_incoming: false,
+    downstream_switchboard_id: null, downstream_name: '', // Added for downstream linking
     settings: { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
   });
   const [editingBoardId, setEditingBoardId] = useState(null);
   const [editingDeviceId, setEditingDeviceId] = useState(null);
+
+  // Downstream Search State
+  const [downstreamSearch, setDownstreamSearch] = useState('');
+  const [downstreamResults, setDownstreamResults] = useState([]);
+  const [showDownstreamResults, setShowDownstreamResults] = useState(false);
 
   // Modal state
   const [showImportModal, setShowImportModal] = useState(false);
@@ -771,18 +777,20 @@ export default function Switchboards() {
   // Handle URL params for deep linking
   useEffect(() => {
     const boardId = searchParams.get('board');
-    if (boardId && boards.length > 0 && !selectedBoard) {
-      const board = boards.find(b => b.id === Number(boardId));
-      if (board) {
-        setSelectedBoard(board);
-        // Expand tree to show this board
-        const building = board.meta?.building_code || 'Sans bâtiment';
-        const floor = board.meta?.floor || 'Sans étage';
-        setExpandedBuildings(prev => ({ ...prev, [building]: true }));
-        setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
-      }
+    if (boardId && boards.length > 0 && (!selectedBoard || selectedBoard.id !== Number(boardId))) {
+      // Use api to get full board details (including upstream sources)
+      api.switchboard.getBoard(boardId).then(board => {
+        if (board) {
+          setSelectedBoard(board);
+          // Expand tree to show this board
+          const building = board.meta?.building_code || 'Sans bâtiment';
+          const floor = board.meta?.floor || 'Sans étage';
+          setExpandedBuildings(prev => ({ ...prev, [building]: true }));
+          setExpandedFloors(prev => ({ ...prev, [`${building}-${floor}`]: true }));
+        }
+      }).catch(console.error);
     }
-  }, [boards, searchParams]);
+  }, [boards, searchParams]); // Remove selectedBoard from dep to avoid loop
 
   // Update URL when selecting a board
   useEffect(() => {
@@ -798,6 +806,27 @@ export default function Switchboards() {
       loadDevices(selectedBoard.id);
     }
   }, [selectedBoard]);
+
+  // Downstream Search Effect
+  useEffect(() => {
+    const search = async () => {
+      if (!downstreamSearch) {
+        setDownstreamResults([]);
+        return;
+      }
+      try {
+        const res = await api.switchboard.searchDownstreams(downstreamSearch);
+        // Filter out current board to avoid circular link to self
+        const results = (res.suggestions || []).filter(b => b.id !== selectedBoard?.id);
+        setDownstreamResults(results);
+      } catch (err) {
+        console.error('Search downstreams error:', err);
+      }
+    };
+    
+    const debounce = setTimeout(search, 300);
+    return () => clearTimeout(debounce);
+  }, [downstreamSearch, selectedBoard]);
 
   // API calls
   const loadBoards = async () => {
@@ -837,13 +866,19 @@ export default function Switchboards() {
         is_principal: boardForm.is_principal
       };
       
+      let newBoard;
       if (editingBoardId) {
-        await api.switchboard.updateBoard(editingBoardId, payload);
+        newBoard = await api.switchboard.updateBoard(editingBoardId, payload);
       } else {
-        await api.switchboard.createBoard(payload);
+        newBoard = await api.switchboard.createBoard(payload);
       }
       
       await loadBoards();
+      if (editingBoardId && selectedBoard?.id === editingBoardId) {
+        // Refresh selected board details including upstream info
+        const updated = await api.switchboard.getBoard(editingBoardId);
+        setSelectedBoard(updated);
+      }
       resetBoardForm();
     } catch (err) {
       console.error('Save board error:', err);
@@ -893,7 +928,8 @@ export default function Switchboards() {
         icu_ka: deviceForm.icu_ka ? Number(deviceForm.icu_ka) : null,
         ics_ka: deviceForm.ics_ka ? Number(deviceForm.ics_ka) : null,
         poles: deviceForm.poles ? Number(deviceForm.poles) : null,
-        voltage_v: deviceForm.voltage_v ? Number(deviceForm.voltage_v) : null
+        voltage_v: deviceForm.voltage_v ? Number(deviceForm.voltage_v) : null,
+        downstream_switchboard_id: deviceForm.downstream_switchboard_id || null
       };
       
       if (editingDeviceId) {
@@ -959,16 +995,10 @@ export default function Switchboards() {
       const result = await api.switchboard.importExcel(file);
       if (result.success) {
         await loadBoards();
-        // Select the imported board
-        if (result.switchboard?.id) {
-          const board = { 
-            id: result.switchboard.id, 
-            name: result.switchboard.name,
-            code: result.switchboard.code,
-            meta: { building_code: result.switchboard.building, floor: result.switchboard.floor }
-          };
-          setSelectedBoard(board);
-        }
+        // Select the imported board with full details
+        const boardDetail = await api.switchboard.getBoard(result.switchboard.id);
+        setSelectedBoard(boardDetail);
+        
         setShowImportModal(false);
         alert(`Import réussi!\n${result.devices_created} disjoncteurs créés pour "${result.switchboard.name}"`);
       }
@@ -1010,9 +1040,11 @@ export default function Switchboards() {
       name: '', device_type: 'Low Voltage Circuit Breaker', manufacturer: '', reference: '',
       in_amps: '', icu_ka: '', ics_ka: '', poles: 3, voltage_v: 400, trip_unit: '',
       position_number: '', is_differential: false, is_main_incoming: false,
+      downstream_switchboard_id: null, downstream_name: '',
       settings: { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
     });
     setEditingDeviceId(null);
+    setDownstreamSearch('');
     setShowDeviceForm(false);
   };
 
@@ -1046,9 +1078,12 @@ export default function Switchboards() {
       position_number: device.position_number || '',
       is_differential: device.is_differential || false,
       is_main_incoming: device.is_main_incoming || false,
+      downstream_switchboard_id: device.downstream_switchboard_id || null,
+      downstream_name: device.downstream_switchboard_name || '',
       settings: device.settings || { ir: 1, tr: 10, isd: 6, tsd: 0.1, ii: 10, ig: 0.5, tg: 0.2, zsi: false, erms: false, curve_type: 'C' }
     });
     setEditingDeviceId(device.id);
+    setDownstreamSearch(''); // Reset search on edit open
     setShowDeviceForm(true);
   };
 
@@ -1078,6 +1113,17 @@ export default function Switchboards() {
     const counts = deviceCounts[boardId];
     if (!counts || counts.total === 0) return 0;
     return Math.round((counts.complete / counts.total) * 100);
+  };
+
+  // Select board handler wrapper to fetch full details
+  const handleSelectBoard = async (board) => {
+    try {
+      const fullBoard = await api.switchboard.getBoard(board.id);
+      setSelectedBoard(fullBoard);
+    } catch (err) {
+      console.error('Failed to fetch full board details', err);
+      setSelectedBoard(board); // Fallback
+    }
   };
 
   // ==================== RENDER ====================
@@ -1118,7 +1164,7 @@ export default function Switchboards() {
                       {floorBoards.map(board => (
                         <button
                           key={board.id}
-                          onClick={() => setSelectedBoard(board)}
+                          onClick={() => handleSelectBoard(board)}
                           className={`w-full flex items-center gap-2 px-3 py-2 text-left rounded-lg transition-all
                             ${selectedBoard?.id === board.id 
                               ? 'bg-blue-100 text-blue-700 shadow-sm' 
@@ -1156,7 +1202,7 @@ export default function Switchboards() {
         return (
           <AnimatedCard key={board.id} delay={index * 50}>
             <button
-              onClick={() => setSelectedBoard(board)}
+              onClick={() => handleSelectBoard(board)}
               className={`w-full p-4 rounded-xl text-left transition-all shadow-sm
                 ${selectedBoard?.id === board.id 
                   ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white shadow-lg' 
@@ -1220,12 +1266,26 @@ export default function Switchboards() {
         
         return (
           <AnimatedCard key={device.id} delay={index * 30}>
-            <div className={`p-4 rounded-xl border transition-all hover:shadow-md
+            <div className={`p-4 rounded-xl border transition-all hover:shadow-md relative
               ${device.is_main_incoming ? 'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-200' : 'bg-white border-gray-200'}`}
             >
+              {/* Downstream Badge */}
+              {device.downstream_switchboard_id && (
+                <div className="absolute top-0 right-0 p-2">
+                   <span 
+                    onClick={(e) => { e.stopPropagation(); navigate(`?board=${device.downstream_switchboard_id}`); }}
+                    className="cursor-pointer px-2 py-1 bg-green-100 text-green-700 text-xs rounded-bl-xl rounded-tr-xl font-medium flex items-center gap-1 hover:bg-green-200 transition-colors"
+                    title={`Alimente le tableau ${device.downstream_switchboard_name}`}
+                   >
+                     Vers : {device.downstream_switchboard_code || device.downstream_switchboard_name || 'Tableau'}
+                     <ArrowUpRight size={12} />
+                   </span>
+                </div>
+              )}
+
               {/* Header */}
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex-1">
+              <div className="flex items-start justify-between mb-3 mt-2">
+                <div className="flex-1 pr-6">
                   <div className="flex items-center gap-2 flex-wrap">
                     {device.position_number && (
                       <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full font-mono">
@@ -1452,6 +1512,62 @@ export default function Switchboards() {
                 placeholder="ex: 1, 9.1"
               />
             </div>
+          </div>
+
+          {/* Downstream Board Link (Updated UI) */}
+          <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+             <label className="block text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
+               <ArrowUpRight size={16} className="text-green-600" />
+               Alimentation Aval (Optionnel)
+             </label>
+             <div className="relative">
+                {deviceForm.downstream_switchboard_id ? (
+                  <div className="flex items-center justify-between bg-green-50 border border-green-200 p-3 rounded-xl">
+                    <div className="flex items-center gap-2">
+                       <Zap className="text-green-600" size={18} />
+                       <div>
+                         <span className="text-sm font-medium text-green-800">Alimente le tableau :</span>
+                         <span className="ml-1 text-sm font-bold text-gray-800">{deviceForm.downstream_name}</span>
+                       </div>
+                    </div>
+                    <button 
+                      onClick={() => setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: null, downstream_name: '' }))}
+                      className="text-gray-400 hover:text-red-500 p-1"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                ) : (
+                  <div>
+                    <input
+                      type="text"
+                      value={downstreamSearch}
+                      onChange={(e) => { setDownstreamSearch(e.target.value); setShowDownstreamResults(true); }}
+                      onFocus={() => setShowDownstreamResults(true)}
+                      className={inputBaseClass}
+                      placeholder="Rechercher un tableau aval (ex: T1-2)..."
+                    />
+                    {showDownstreamResults && downstreamResults.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 max-h-48 overflow-y-auto">
+                        {downstreamResults.map(board => (
+                          <button
+                            key={board.id}
+                            onClick={() => {
+                              setDeviceForm(prev => ({ ...prev, downstream_switchboard_id: board.id, downstream_name: board.name }));
+                              setDownstreamSearch('');
+                              setShowDownstreamResults(false);
+                            }}
+                            className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center justify-between"
+                          >
+                             <span className="font-medium text-gray-900">{board.name}</span>
+                             <span className="text-xs text-gray-500 font-mono">{board.code}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+             </div>
           </div>
 
           {/* Manufacturer & Reference */}
@@ -1775,6 +1891,27 @@ export default function Switchboards() {
                           <span className="text-sm text-gray-500 font-mono">{selectedBoard.code}</span>
                         </div>
                         <h2 className="text-xl font-bold text-gray-900 mt-1">{selectedBoard.name}</h2>
+                        
+                        {/* Source (Upstream) Display */}
+                        {selectedBoard.upstream_sources && selectedBoard.upstream_sources.length > 0 ? (
+                           <div className="mt-1 space-y-1">
+                             {selectedBoard.upstream_sources.map(source => (
+                               <div key={source.id} className="inline-flex items-center gap-1 bg-amber-50 text-amber-800 text-xs px-2 py-1 rounded-md mr-2 border border-amber-200">
+                                  <ArrowRight size={12} />
+                                  Alimenté par : <span className="font-semibold">{source.source_board_name}</span> (via {source.name})
+                               </div>
+                             ))}
+                           </div>
+                        ) : selectedBoard.is_principal ? (
+                           <div className="mt-1 inline-flex items-center gap-1 text-emerald-600 text-xs font-medium">
+                             <CheckCircle size={12} /> Source Principale
+                           </div>
+                        ) : (
+                           <div className="mt-1 inline-flex items-center gap-1 text-gray-400 text-xs">
+                             <AlertCircle size={12} /> Source non définie
+                           </div>
+                        )}
+
                         <div className="flex items-center gap-4 mt-2 text-sm text-gray-500 flex-wrap">
                           <span className="flex items-center gap-1">
                             <Building2 size={14} />
@@ -1922,7 +2059,7 @@ export default function Switchboards() {
         expandedFloors={expandedFloors}
         setExpandedFloors={setExpandedFloors}
         selectedBoard={selectedBoard}
-        onSelectBoard={setSelectedBoard}
+        onSelectBoard={handleSelectBoard}
         deviceCounts={deviceCounts}
         getProgress={getProgress}
       />
