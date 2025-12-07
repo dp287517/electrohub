@@ -1,4 +1,3 @@
-// SwitchboardDiagram.jsx
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import ReactFlow, { 
@@ -19,8 +18,8 @@ import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Box, Text, Cylinder, Html } from '@react-three/drei';
 import * as THREE from 'three';
 import { 
-  ArrowLeft, Save, Printer, Edit2, 
-  X, Layers, Zap, AlertCircle, ArrowUpRight, Check, Cuboid
+  ArrowLeft, Save, RefreshCw, Download, Zap, Edit2, 
+  X, Printer, Settings, Layers, Box as BoxIcon, AlertCircle, ShieldCheck, ArrowUpRight, Check, Cuboid
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -34,7 +33,8 @@ const DEVICE_SPACING = 140;
 // Câble animé (Courant)
 const AnimatedCable = ({ start, end, color = "#fbbf24" }) => {
   const ref = useRef();
-  useFrame(() => {
+  // Animation de texture pour simuler le courant
+  useFrame((state) => {
     if (ref.current) {
       ref.current.offset.x -= 0.02;
     }
@@ -43,8 +43,8 @@ const AnimatedCable = ({ start, end, color = "#fbbf24" }) => {
   const points = useMemo(() => {
     const curve = new THREE.CatmullRomCurve3([
       new THREE.Vector3(...start),
-      new THREE.Vector3(start[0], start[1] - 0.5, start[2]),
-      new THREE.Vector3(end[0], end[1] + 0.5, end[2]),
+      new THREE.Vector3(start[0], start[1] - 0.5, start[2]), // Courbe vers le bas
+      new THREE.Vector3(end[0], end[1] + 0.5, end[2]),     // Courbe vers le haut
       new THREE.Vector3(...end)
     ]);
     return curve.getPoints(20);
@@ -53,7 +53,9 @@ const AnimatedCable = ({ start, end, color = "#fbbf24" }) => {
   return (
     <mesh>
       <tubeGeometry args={[new THREE.CatmullRomCurve3(points.map(p => new THREE.Vector3(p.x, p.y, p.z))), 20, 0.05, 8, false]} />
-      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5} />
+      <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.5}>
+         {/* Texture procédurale simple pour l'effet de flux */}
+      </meshStandardMaterial>
     </mesh>
   );
 };
@@ -61,16 +63,26 @@ const AnimatedCable = ({ start, end, color = "#fbbf24" }) => {
 // Disjoncteur 3D
 const Breaker3D = ({ position, label, isIncoming, isDiff, amperage }) => {
   const [hovered, setHovered] = useState(false);
+  
   return (
     <group position={position}>
-      <Box args={[0.8, 1.2, 0.5]} onPointerOver={() => setHovered(true)} onPointerOut={() => setHovered(false)}>
+      {/* Boîtier */}
+      <Box 
+        args={[0.8, 1.2, 0.5]} 
+        onPointerOver={() => setHovered(true)} 
+        onPointerOut={() => setHovered(false)}
+      >
         <meshStandardMaterial color={isIncoming ? "#f59e0b" : hovered ? "#3b82f6" : "#f3f4f6"} />
       </Box>
+      
+      {/* Manette (Switch) */}
       <Box position={[0, 0.1, 0.26]} args={[0.2, 0.4, 0.1]}>
         <meshStandardMaterial color="#1f2937" />
       </Box>
+
+      {/* Label (HTML Overlay) */}
       <Html position={[0, -0.8, 0]} center distanceFactor={10} transform>
-        <div className="bg-white/90 px-2 py-1 rounded text-[8px] font-bold border border-gray-300 whitespace-nowrap text-center select-none pointer-events-none">
+        <div className="bg-white/90 px-2 py-1 rounded text-[8px] font-bold border border-gray-300 whitespace-nowrap text-center">
           {label}
           <div className="text-[6px] text-gray-500">{amperage}A {isDiff ? 'DDR' : ''}</div>
         </div>
@@ -83,6 +95,8 @@ const Breaker3D = ({ position, label, isIncoming, isDiff, amperage }) => {
 const Switchboard3DScene = ({ devices, boardName }) => {
   const feeders = devices.filter(d => !d.is_main_incoming);
   const mainIncoming = devices.find(d => d.is_main_incoming);
+  
+  // Calcul dimensions armoire
   const width = Math.max(4, feeders.length * 1.2);
   
   return (
@@ -90,33 +104,63 @@ const Switchboard3DScene = ({ devices, boardName }) => {
       <ambientLight intensity={0.5} />
       <pointLight position={[10, 10, 10]} />
       <OrbitControls minPolarAngle={0} maxPolarAngle={Math.PI / 1.8} />
+
+      {/* Armoire (Fond) */}
       <Box position={[0, 0, -0.5]} args={[width + 2, 6, 0.2]}>
         <meshStandardMaterial color="#e5e7eb" />
       </Box>
+      
+      {/* Titre 3D */}
       <Text position={[0, 3.5, 0]} fontSize={0.3} color="#1f2937">
         {boardName}
       </Text>
+
+      {/* Jeu de Barres (Cuivre) */}
       <Box position={[0, 1.5, 0]} args={[width, 0.2, 0.1]}>
         <meshStandardMaterial color="#b45309" metalness={0.8} roughness={0.2} />
       </Box>
+
+      {/* Arrivée Principale */}
       {mainIncoming && (
         <>
-          <Breaker3D position={[-width/2 + 1, 1.5, 0.5]} label="Arrivée" amperage={mainIncoming.in_amps} isIncoming={true} />
+          <Breaker3D 
+            position={[-width/2 + 1, 1.5, 0.5]} 
+            label="Arrivée Générale" 
+            amperage={mainIncoming.in_amps}
+            isIncoming={true}
+          />
+          {/* Câble Arrivée -> Barre */}
           <AnimatedCable start={[-width/2 + 1, 1.5, 0.5]} end={[0, 1.5, 0]} color="#ef4444" />
         </>
       )}
+
+      {/* Départs */}
       {feeders.map((dev, i) => {
-        const x = -width/2 + 2.5 + (i * 1.2);
+        const x = -width/2 + 2.5 + (i * 1.2); // Position X
+        const y = -0.5; // Position Y (rangée du bas)
+        
         return (
           <group key={dev.id}>
-            <AnimatedCable start={[x, 1.5, 0]} end={[x, 0.1, 0]} color="#fbbf24" />
-            <Breaker3D position={[x, -0.5, 0.3]} label={dev.name || dev.reference} amperage={dev.in_amps} isDiff={dev.is_differential} />
-            <Cylinder position={[x, -1.5, 0.3]} args={[0.05, 0.05, 1]} rotation={[0,0,0]}>
+            {/* Câble Barre -> Disjoncteur */}
+            <AnimatedCable start={[x, 1.5, 0]} end={[x, y + 0.6, 0]} color="#fbbf24" />
+            
+            {/* Disjoncteur */}
+            <Breaker3D 
+              position={[x, y, 0.3]} 
+              label={dev.name || dev.reference}
+              amperage={dev.in_amps}
+              isDiff={dev.is_differential}
+            />
+            
+            {/* Câble Départ (vers le bas) */}
+            <Cylinder position={[x, y - 1, 0.3]} args={[0.05, 0.05, 1]} rotation={[0,0,0]}>
                <meshStandardMaterial color="#374151" />
             </Cylinder>
           </group>
         );
       })}
+      
+      {/* Sol (Grille) */}
       <gridHelper args={[20, 20, 0xff0000, 'teal']} position={[0, -4, 0]} />
     </>
   );
@@ -307,9 +351,9 @@ const DiagramContent = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [viewMode, setViewMode] = useState('2d');
+  const [viewMode, setViewMode] = useState('2d'); // '2d' or '3d'
   const [totalFolios, setTotalFolios] = useState(1);
-  const [deviceData, setDeviceData] = useState([]); 
+  const [deviceData, setDeviceData] = useState([]); // Store raw device data for 3D
   
   const { fitView, setViewport } = useReactFlow();
 
@@ -322,7 +366,7 @@ const DiagramContent = () => {
       setBoard(boardRes);
       const devicesRes = await api.switchboard.listDevices(id);
       const devices = devicesRes.data || [];
-      setDeviceData(devices);
+      setDeviceData(devices); // Save for 3D
 
       const upstreamSources = boardRes.upstream_sources || [];
       if (upstreamSources.length === 0) upstreamSources.push({ id: 'src-def', source_board_name: boardRes.is_principal ? 'Réseau' : 'Amont', name: 'Arrivée' });
@@ -383,9 +427,10 @@ const DiagramContent = () => {
     downstreamId: dev.downstream_switchboard_id
   });
 
-  // --- CORRECTION NAVIGATION ---
   const handleBack = () => {
-    navigate(`/switchboards?board=${id}`);
+    // Correct redirection logic
+    if (board && board.id) navigate(`/switchboards?board=${board.id}`);
+    else navigate('/switchboards');
   };
 
   const handleNodeSave = async (nodeId, newData) => {
@@ -413,91 +458,41 @@ const DiagramContent = () => {
     setSaving(false); alert("Disposition sauvegardée !");
   };
 
-  // --- CORRECTION EXPORT PDF HD ---
   const handleExportPDF = async () => {
     if (reactFlowWrapper.current === null) return;
     const flowElement = document.querySelector('.react-flow');
     const originalBg = flowElement.style.background;
     flowElement.style.background = '#fff';
-    
+    // Hide UI
     document.querySelectorAll('.react-flow__controls, .react-flow__panel, .title-block-overlay').forEach(el => el.style.display = 'none');
 
     try {
-      // PDF A3 Paysage
       const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' });
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      
-      const contentWidth = pageWidth - 20;
-      const contentHeight = pageHeight - 40;
+      const pdfW = pdf.internal.pageSize.getWidth();
+      const pdfH = pdf.internal.pageSize.getHeight();
 
       for (let i = 0; i < totalFolios; i++) {
         if (i > 0) pdf.addPage();
+        const xPos = i * FOLIO_WIDTH;
+        await setViewport({ x: -xPos + 50, y: 50, zoom: 1 });
+        await new Promise(r => setTimeout(r, 500));
+        const dataUrl = await toPng(reactFlowWrapper.current, { backgroundColor: '#fff', pixelRatio: 2, width: reactFlowWrapper.current.offsetWidth, height: reactFlowWrapper.current.offsetHeight });
+        pdf.addImage(dataUrl, 'PNG', 10, 10, pdfW - 20, pdfH - 40);
         
-        // Calculer la zone à capturer pour ce folio
-        const xStart = i * FOLIO_WIDTH;
-        const xEnd = (i + 1) * FOLIO_WIDTH;
-        
-        const folioNodes = nodes.filter(n => n.position.x >= xStart - 100 && n.position.x < xEnd + 100);
-        if(folioNodes.length === 0) continue;
-
-        // Bounding Box
-        const minX = Math.min(...folioNodes.map(n => n.position.x));
-        const maxX = Math.max(...folioNodes.map(n => n.position.x + (n.width || 100)));
-        const minY = Math.min(...folioNodes.map(n => n.position.y));
-        const maxY = Math.max(...folioNodes.map(n => n.position.y + (n.height || 300)));
-        
-        const width = maxX - minX + 200;
-        const height = maxY - minY + 200;
-
-        // Capture HD
-        const dataUrl = await toPng(reactFlowWrapper.current, {
-          backgroundColor: '#fff',
-          width: width,
-          height: height,
-          style: {
-            width: width + 'px',
-            height: height + 'px',
-            transform: `translate(${-minX + 100}px, ${-minY + 100}px) scale(1)`
-          },
-          pixelRatio: 4 // Qualité maximale
-        });
-
-        // Ratio Aspect
-        const ratio = Math.min(contentWidth / width, contentHeight / height);
-        const imgW = width * ratio;
-        const imgH = height * ratio;
-        
-        // Centrer
-        const posX = 10 + (contentWidth - imgW) / 2;
-        const posY = 10 + (contentHeight - imgH) / 2;
-
-        pdf.addImage(dataUrl, 'PNG', posX, posY, imgW, imgH, undefined, 'FAST');
-        
-        // Cartouche
-        const tbX = pageWidth - 130, tbY = pageHeight - 35;
-        pdf.setFillColor(255); pdf.rect(tbX, tbY, 120, 25, 'F'); pdf.setLineWidth(0.3); pdf.rect(tbX, tbY, 120, 25);
+        // VRAI Cartouche vectoriel redessiné (propre)
+        const tbX = pdfW - 130, tbY = pdfH - 35;
+        pdf.setFillColor(255); pdf.rect(tbX, tbY, 120, 25, 'F'); pdf.rect(tbX, tbY, 120, 25);
         pdf.line(tbX + 80, tbY, tbX + 80, tbY + 25); pdf.line(tbX, tbY + 12, tbX + 120, tbY + 12);
-        
-        pdf.setFontSize(7); pdf.setTextColor(100); 
-        pdf.text("CLIENT / PROJET", tbX + 2, tbY + 4); 
-        pdf.text("TITRE", tbX + 2, tbY + 16);
-        
+        pdf.setFontSize(7); pdf.setTextColor(100); pdf.text("CLIENT / PROJET", tbX + 2, tbY + 4); pdf.text("TITRE", tbX + 2, tbY + 16);
         pdf.setFontSize(10); pdf.setTextColor(0); pdf.setFont("helvetica", "bold");
-        pdf.text(settings?.company_name || "Client", tbX + 2, tbY + 9); 
-        pdf.text(board?.name || "Schéma Unifilaire", tbX + 2, tbY + 21);
-        
-        pdf.setFontSize(8); 
-        pdf.text("FOLIO: " + (i + 1) + "/" + totalFolios, tbX + 82, tbY + 21);
-        pdf.text("DATE: " + new Date().toLocaleDateString(), tbX + 82, tbY + 9);
+        pdf.text(settings?.company_name || "Client", tbX + 2, tbY + 9); pdf.text(board?.name || "Schéma", tbX + 2, tbY + 21);
+        pdf.setFontSize(8); pdf.text("FOLIO: " + (i + 1) + "/" + totalFolios, tbX + 82, tbY + 21);
       }
-      
       pdf.save(`${board?.code}_schema.pdf`);
-    } catch (e) { 
-      console.error(e); alert("Erreur Export PDF: " + e.message); 
-    } finally {
+    } catch (e) { console.error(e); alert("Erreur Export PDF"); } finally {
       flowElement.style.background = originalBg;
       document.querySelectorAll('.react-flow__controls, .react-flow__panel, .title-block-overlay').forEach(el => el.style.display = '');
+      fitView();
     }
   };
 
