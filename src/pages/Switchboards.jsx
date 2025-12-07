@@ -5,7 +5,8 @@ import {
   MoreVertical, Copy, Trash2, Edit3, Save, X, AlertTriangle, CheckCircle,
   Camera, Sparkles, Shield, Upload, FileSpreadsheet, ArrowRight, ArrowLeft,
   Settings, Info, Download, RefreshCw, Eye, ImagePlus, ShieldCheck, AlertCircle,
-  Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight
+  Menu, FileText, Printer, Share2, Link, ExternalLink, GitBranch, ArrowUpRight,
+  MapPin, Phone, Mail
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -59,6 +60,195 @@ const selectBaseClass = "w-full px-4 py-2.5 border border-gray-300 rounded-xl fo
 const inputSmallClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 placeholder-gray-400";
 
 // ==================== MODAL COMPONENTS ====================
+
+// Site Settings Modal (Logo & Company Info)
+const SiteSettingsModal = ({ isOpen, onClose }) => {
+  const [settings, setSettings] = useState({
+    company_name: '', company_address: '', company_phone: '', company_email: ''
+  });
+  const [hasLogo, setHasLogo] = useState(false);
+  const [logoPreview, setLogoPreview] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (isOpen) loadSettings();
+  }, [isOpen]);
+
+  const loadSettings = async () => {
+    try {
+      const data = await api.switchboard.getSettings();
+      setSettings({
+        company_name: data.company_name || '',
+        company_address: data.company_address || '',
+        company_phone: data.company_phone || '',
+        company_email: data.company_email || ''
+      });
+      setHasLogo(data.has_logo);
+      if (data.has_logo) {
+        // Force refresh logic could be added here
+        setLogoPreview(api.switchboard.logoUrl({ bust: true }));
+      } else {
+        setLogoPreview(null);
+      }
+    } catch (e) {
+      console.error("Failed to load settings", e);
+    }
+  };
+
+  const handleSave = async () => {
+    setIsLoading(true);
+    try {
+      await api.switchboard.updateSettings(settings);
+      alert('Paramètres enregistrés ! Ils apparaîtront sur les exports PDF.');
+      onClose();
+    } catch (e) {
+      console.error("Failed to save", e);
+      alert("Erreur lors de l'enregistrement");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogoUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Local preview immediately
+    const reader = new FileReader();
+    reader.onload = (ev) => setLogoPreview(ev.target.result);
+    reader.readAsDataURL(file);
+
+    try {
+      await api.switchboard.uploadLogo(file);
+      setHasLogo(true);
+    } catch (err) {
+      console.error("Logo upload failed", err);
+      alert("Erreur lors de l'upload du logo");
+    }
+  };
+
+  const handleDeleteLogo = async () => {
+    if (!confirm("Supprimer le logo ?")) return;
+    try {
+      await api.switchboard.deleteLogo();
+      setHasLogo(false);
+      setLogoPreview(null);
+    } catch (e) {
+      console.error("Delete logo failed", e);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-slideUp">
+        <div className="bg-gradient-to-r from-gray-700 to-gray-900 p-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-white/20 rounded-xl">
+              <Settings size={24} />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold">Paramètres PDF & Site</h2>
+              <p className="text-gray-300 text-sm">Personnalisez l'entête des exports</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* Logo Section */}
+          <div className="flex items-center gap-6">
+            <div 
+              onClick={() => fileInputRef.current?.click()}
+              className="w-24 h-24 border-2 border-dashed border-gray-300 rounded-xl flex items-center justify-center cursor-pointer hover:border-blue-500 hover:bg-gray-50 transition-all relative overflow-hidden group"
+            >
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+              {logoPreview ? (
+                <img src={logoPreview} alt="Logo" className="w-full h-full object-contain p-1" />
+              ) : (
+                <div className="text-center text-gray-400">
+                  <ImagePlus size={24} className="mx-auto mb-1" />
+                  <span className="text-[10px]">Logo</span>
+                </div>
+              )}
+              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                <Edit3 size={16} className="text-white" />
+              </div>
+            </div>
+            <div className="flex-1">
+              <h3 className="font-medium text-gray-900">Logo de l'entreprise</h3>
+              <p className="text-sm text-gray-500 mb-2">Sera affiché en haut à gauche des PDF.</p>
+              {hasLogo && (
+                <button 
+                  onClick={handleDeleteLogo}
+                  className="text-xs text-red-600 hover:text-red-800 flex items-center gap-1"
+                >
+                  <Trash2 size={12} /> Supprimer le logo
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nom de l'entreprise</label>
+              <input 
+                type="text" 
+                value={settings.company_name} 
+                onChange={e => setSettings(s => ({...s, company_name: e.target.value}))}
+                className={inputBaseClass}
+                placeholder="Ex: Mon Electricien SA"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Adresse</label>
+              <input 
+                type="text" 
+                value={settings.company_address} 
+                onChange={e => setSettings(s => ({...s, company_address: e.target.value}))}
+                className={inputBaseClass}
+                placeholder="Ex: 12 Rue des Disjoncteurs, 75000 Paris"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Téléphone</label>
+                <input 
+                  type="text" 
+                  value={settings.company_phone} 
+                  onChange={e => setSettings(s => ({...s, company_phone: e.target.value}))}
+                  className={inputBaseClass}
+                  placeholder="01 23 45 67 89"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input 
+                  type="email" 
+                  value={settings.company_email} 
+                  onChange={e => setSettings(s => ({...s, company_email: e.target.value}))}
+                  className={inputBaseClass}
+                  placeholder="contact@example.com"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t p-4 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 px-4 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">
+            Annuler
+          </button>
+          <button onClick={handleSave} disabled={isLoading} className="flex-1 py-3 px-4 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
+            {isLoading ? <RefreshCw size={18} className="animate-spin" /> : <Save size={18} />}
+            Enregistrer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // Import Excel Modal
 const ImportExcelModal = ({ isOpen, onClose, onImport, isLoading }) => {
@@ -754,6 +944,7 @@ export default function Switchboards() {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false); // <--- NEW STATE
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showAIWizard, setShowAIWizard] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -1801,6 +1992,13 @@ export default function Switchboards() {
             
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setShowSettingsModal(true)}
+                className="p-2.5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition-colors"
+                title="Paramètres Site & Logo"
+              >
+                <Settings size={20} />
+              </button>
+              <button
                 onClick={() => setShowImportModal(true)}
                 className="px-3 md:px-4 py-2 bg-emerald-100 text-emerald-700 rounded-xl font-medium hover:bg-emerald-200 transition-colors flex items-center gap-2"
               >
@@ -2070,6 +2268,11 @@ export default function Switchboards() {
         onClose={() => setShowImportModal(false)}
         onImport={handleImportExcel}
         isLoading={isImporting}
+      />
+
+      <SiteSettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
       />
 
       <DeleteConfirmModal
