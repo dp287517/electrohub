@@ -12,39 +12,40 @@ import ReactFlow, {
   Panel
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import dagre from 'dagre';
 import { toPng } from 'html-to-image';
-import { jsPDF } from 'jspdf'; // Nécessite npm install jspdf
+import { jsPDF } from 'jspdf';
 import { 
   ArrowLeft, Save, RefreshCw, Download, Zap, Edit2, 
-  X, Printer, Settings, Layers, Box
+  X, Printer, Settings, Layers, Box, AlertCircle, ShieldCheck, ArrowUpRight, Check
 } from 'lucide-react';
 import { api } from '../lib/api';
 
-// ==================== SYMBOLS (IEC STANDARD - EXTENDED) ====================
+// ==================== CONSTANTS ====================
+const DEVICES_PER_FOLIO = 12;
+const FOLIO_WIDTH = 2000; // Largeur virtuelle d'une page en pixels ReactFlow
+const DEVICE_SPACING = 140;
 
+// ==================== SYMBOLS (IEC STANDARD) ====================
+// Symboles SVG vectoriels pour un rendu net
 const IECSymbols = {
-  // Disjoncteur
   Breaker: () => (
     <g stroke="currentColor" strokeWidth="2" fill="none">
       <line x1="10" y1="5" x2="22" y2="27" />
       <line x1="22" y1="5" x2="10" y2="27" />
       <line x1="16" y1="0" x2="16" y2="5" />
       <line x1="16" y1="27" x2="16" y2="32" />
-      <path d="M 12 5 L 16 0 L 20 5" fill="currentColor" stroke="none" /> {/* Petit clapet pour disjoncteur */}
+      <path d="M 12 5 L 16 0 L 20 5" fill="currentColor" stroke="none" />
     </g>
   ),
-  // Interrupteur / Sectionneur
   Switch: () => (
     <g stroke="currentColor" strokeWidth="2" fill="none">
       <circle cx="16" cy="27" r="2" />
       <line x1="16" y1="0" x2="16" y2="10" />
       <line x1="16" y1="27" x2="16" y2="32" />
       <line x1="16" y1="10" x2="26" y2="24" />
-      <line x1="12" y1="10" x2="20" y2="10" /> {/* Barre de coupure */}
+      <line x1="12" y1="10" x2="20" y2="10" />
     </g>
   ),
-  // Contacteur (Rectangle avec demi-cercle)
   Contactor: () => (
     <g stroke="currentColor" strokeWidth="2" fill="none">
       <rect x="6" y="6" width="20" height="20" rx="2" />
@@ -53,7 +54,6 @@ const IECSymbols = {
       <line x1="16" y1="26" x2="16" y2="32" />
     </g>
   ),
-  // Fusible
   Fuse: () => (
     <g stroke="currentColor" strokeWidth="2" fill="none">
       <rect x="10" y="6" width="12" height="20" />
@@ -62,18 +62,16 @@ const IECSymbols = {
       <line x1="16" y1="6" x2="16" y2="26" />
     </g>
   ),
-  // Différentiel (Ellipse)
   Differential: () => (
     <g stroke="currentColor" strokeWidth="2" fill="none">
       <ellipse cx="16" cy="16" rx="12" ry="8" />
       <line x1="16" y1="0" x2="16" y2="32" />
     </g>
   ),
-  // Relais Thermique
   ThermalRelay: () => (
     <g stroke="currentColor" strokeWidth="2" fill="none">
       <rect x="6" y="6" width="20" height="20" />
-      <path d="M 8 20 L 12 12 L 16 20 L 20 12 L 24 20" /> {/* Dent de scie */}
+      <path d="M 8 20 L 12 12 L 16 20 L 20 12 L 24 20" />
       <line x1="16" y1="0" x2="16" y2="6" />
       <line x1="16" y1="26" x2="16" y2="32" />
     </g>
@@ -97,30 +95,36 @@ const SourceNode = ({ data }) => (
 );
 
 const BusbarNode = ({ data }) => (
-  <div 
-    className="h-6 bg-gradient-to-b from-amber-600 via-amber-400 to-amber-700 shadow-md border-x-2 border-amber-800 flex items-center justify-center relative"
-    style={{ width: data.width || 300, borderRadius: '2px' }}
-  >
-    <Handle type="target" position={Position.Top} className="!opacity-0 w-full h-full" />
-    <Handle type="source" position={Position.Bottom} className="!opacity-0 w-full h-full" />
-    <span className="text-[10px] text-amber-900 font-bold tracking-[0.3em] uppercase drop-shadow-sm select-none">
-      Jeu de Barres 400V - {data.label}
-    </span>
+  <div className="relative">
+    <div 
+      className="h-6 bg-gradient-to-b from-amber-600 via-amber-400 to-amber-700 shadow-md border-x-2 border-amber-800 flex items-center justify-center relative"
+      style={{ width: data.width || 300, borderRadius: '2px' }}
+    >
+      <Handle type="target" position={Position.Top} className="!opacity-0 w-full h-full" />
+      <Handle type="source" position={Position.Bottom} className="!opacity-0 w-full h-full" />
+      <span className="text-[10px] text-amber-900 font-bold tracking-[0.3em] uppercase drop-shadow-sm select-none">
+        Jeu de Barres 400V
+      </span>
+    </div>
+    {/* Page Break Indicator if needed */}
+    {data.isBreak && (
+      <div className="absolute right-[-20px] top-1/2 -translate-y-1/2 text-gray-400 text-xs">
+        &gt;&gt;
+      </div>
+    )}
   </div>
 );
 
-// Composant Device Unifié (Disjoncteur, Contacteur, etc.)
 const DeviceNode = ({ data }) => {
   const { isIncoming, isDifferential, isComplete, type } = data;
   
-  // Logic to choose symbol
   const getSymbol = () => {
-    // Si c'est un disjoncteur
-    if (type?.toLowerCase().includes('contactor') || type?.toLowerCase().includes('contacteur')) return <IECSymbols.Contactor />;
-    if (type?.toLowerCase().includes('switch') || type?.toLowerCase().includes('interrupteur')) return <IECSymbols.Switch />;
-    if (type?.toLowerCase().includes('fuse') || type?.toLowerCase().includes('fusible')) return <IECSymbols.Fuse />;
-    if (type?.toLowerCase().includes('relay') || type?.toLowerCase().includes('relais')) return <IECSymbols.ThermalRelay />;
-    return <IECSymbols.Breaker />; // Default
+    const t = (type || '').toLowerCase();
+    if (t.includes('contactor')) return <IECSymbols.Contactor />;
+    if (t.includes('switch')) return <IECSymbols.Switch />;
+    if (t.includes('fuse')) return <IECSymbols.Fuse />;
+    if (t.includes('relay')) return <IECSymbols.ThermalRelay />;
+    return <IECSymbols.Breaker />;
   };
 
   const strokeColor = isIncoming ? "text-amber-600" : isDifferential ? "text-purple-600" : "text-gray-800";
@@ -128,25 +132,20 @@ const DeviceNode = ({ data }) => {
 
   return (
     <div className="flex flex-col items-center group relative">
-      {/* Wire In */}
       <div className="h-6 w-0.5 bg-gray-800 relative">
         <Handle type="target" position={Position.Top} className="!opacity-0 w-full h-full top-0" />
       </div>
 
-      {/* Box */}
       <div className={`bg-white border-2 ${boxBorder} shadow-sm p-1 rounded-sm w-28 transition-all group-hover:shadow-md group-hover:border-blue-400 relative`}>
-        {/* Type Badge */}
-        <div className="absolute top-0 right-0 bg-gray-100 text-[8px] px-1 text-gray-500">{data.poles}P</div>
-
-        {/* Header Name */}
-        <div className="bg-gray-50 border-b border-gray-100 p-1 text-center mb-1 mt-2">
-           <div className="text-[10px] font-bold text-gray-800 truncate" title={data.name}>
+        <div className="absolute top-0 right-0 bg-gray-100 text-[8px] px-1 text-gray-500 font-mono">{data.poles}P</div>
+        
+        <div className="bg-gray-50 border-b border-gray-100 p-1 text-center mb-1 mt-2 min-h-[24px] flex items-center justify-center">
+           <div className="text-[10px] font-bold text-gray-800 truncate w-full" title={data.name}>
              {data.position ? <span className="mr-1 bg-gray-800 text-white px-1 rounded-sm">{data.position}</span> : null}
              {data.name || data.reference || '?'}
            </div>
         </div>
 
-        {/* Symbol */}
         <div className={`h-12 w-full flex items-center justify-center ${strokeColor}`}>
            <svg width="32" height="32" viewBox="0 0 32 32" overflow="visible">
               {isDifferential && <IECSymbols.Differential />}
@@ -154,27 +153,29 @@ const DeviceNode = ({ data }) => {
            </svg>
         </div>
 
-        {/* Specs */}
         <div className="text-[9px] text-center font-mono leading-tight text-gray-600 mt-1 border-t border-gray-100 pt-1">
           <div className="font-bold">{data.reference}</div>
           <div>{data.in_amps ? `${data.in_amps}A` : ''} {data.icu_ka ? `• ${data.icu_ka}kA` : ''}</div>
         </div>
+        
+        {!isComplete && (
+           <div className="absolute top-0 left-0 p-0.5">
+             <AlertCircle size={10} className="text-orange-500 fill-orange-100" />
+           </div>
+        )}
       </div>
 
-      {/* Wire Out */}
       <div className="h-8 w-0.5 bg-gray-800 relative flex flex-col items-center">
          <Handle type="source" position={Position.Bottom} className="!opacity-0 w-full h-full bottom-0" />
-         
-         {/* Cable Info Placeholder (Simulation de départ) */}
-         <div className="absolute top-2 left-2 text-[8px] text-gray-400 font-mono whitespace-nowrap bg-white px-0.5 rotate-90 origin-left">
-            {data.in_amps < 20 ? '3G2.5' : data.in_amps < 40 ? '5G6' : '5G16'} {/* Placeholder logic */}
+         <div className="absolute top-2 left-2 text-[8px] text-gray-400 font-mono whitespace-nowrap bg-white px-0.5 rotate-90 origin-left border border-gray-200">
+            {/* Simulation section câble */}
+            {data.in_amps < 20 ? '3G2.5' : data.in_amps < 40 ? '5G6' : '5G16'}
          </div>
       </div>
 
-      {/* Destination Label */}
       {data.downstreamLabel ? (
         <div className="absolute -bottom-10 bg-green-50 text-green-800 text-[9px] border border-green-200 px-2 py-1 rounded-sm whitespace-nowrap shadow-sm font-bold flex items-center gap-1">
-          <ArrowLeft size={8} className="rotate-180" /> {data.downstreamLabel}
+          <ArrowUpRight size={10} /> {data.downstreamLabel}
         </div>
       ) : (
         <div className="absolute -bottom-6 text-[9px] text-gray-400 font-mono">
@@ -188,13 +189,18 @@ const DeviceNode = ({ data }) => {
 const nodeTypes = {
   source: SourceNode,
   busbar: BusbarNode,
-  breaker: DeviceNode, // On utilise le même node générique pour tout device
+  breaker: DeviceNode,
 };
 
-// ==================== SIDEBAR PROPERTY EDITOR ====================
+// ==================== SIDEBAR PROPERTY EDITOR (STYLED LIKE MAIN PAGE) ====================
+
+const inputBaseClass = "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none";
 
 const PropertySidebar = ({ selectedNode, onClose, onSave }) => {
   const [formData, setFormData] = useState({});
+  const [downstreamSearch, setDownstreamSearch] = useState('');
+  const [downstreamResults, setDownstreamResults] = useState([]);
+  const [showDownstreamResults, setShowDownstreamResults] = useState(false);
 
   useEffect(() => {
     if (selectedNode) {
@@ -203,96 +209,151 @@ const PropertySidebar = ({ selectedNode, onClose, onSave }) => {
         reference: selectedNode.data.reference || '',
         device_type: selectedNode.data.type || 'Low Voltage Circuit Breaker',
         in_amps: selectedNode.data.in_amps || '',
+        icu_ka: selectedNode.data.icu_ka || '',
+        poles: selectedNode.data.poles || 3,
+        voltage_v: selectedNode.data.voltage_v || 400,
         position_number: selectedNode.data.position || '',
-        is_differential: selectedNode.data.isDifferential || false
+        is_differential: selectedNode.data.isDifferential || false,
+        downstream_switchboard_id: selectedNode.data.downstreamId || null,
+        downstream_name: selectedNode.data.downstreamLabel || ''
       });
     }
   }, [selectedNode]);
 
+  // Downstream Search
+  useEffect(() => {
+    const search = async () => {
+      if (!downstreamSearch) {
+        setDownstreamResults([]);
+        return;
+      }
+      try {
+        const res = await api.switchboard.searchDownstreams(downstreamSearch);
+        setDownstreamResults(res.suggestions || []);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    const debounce = setTimeout(search, 300);
+    return () => clearTimeout(debounce);
+  }, [downstreamSearch]);
+
   if (!selectedNode || selectedNode.type !== 'breaker') return null;
 
   return (
-    <div className="absolute right-0 top-0 bottom-0 w-80 bg-white border-l shadow-2xl z-20 flex flex-col animate-slideLeft">
-      <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
-        <h3 className="font-bold text-gray-800 flex items-center gap-2">
-          <Edit2 size={16} /> Propriétés
+    <div className="absolute right-0 top-0 bottom-0 w-96 bg-white border-l shadow-2xl z-50 flex flex-col animate-slideLeft">
+      <div className="p-4 border-b bg-gradient-to-r from-blue-600 to-indigo-700 text-white flex items-center justify-center relative">
+        <h3 className="font-bold flex items-center gap-2">
+          <Edit2 size={16} /> Édition Disjoncteur
         </h3>
-        <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded text-gray-500">
+        <button onClick={onClose} className="absolute right-4 p-1 hover:bg-white/20 rounded-full text-white">
           <X size={18} />
         </button>
       </div>
       
-      <div className="p-4 space-y-4 flex-1 overflow-y-auto">
-        <div>
-          <label className="block text-xs font-medium text-gray-500 uppercase">Type d'appareil</label>
-          <select 
-            value={formData.device_type}
-            onChange={e => setFormData({...formData, device_type: e.target.value})}
-            className="w-full mt-1 p-2 border rounded-md text-sm bg-white"
-          >
-            <option value="Low Voltage Circuit Breaker">Disjoncteur</option>
-            <option value="Switch Disconnector">Interrupteur / Sectionneur</option>
-            <option value="Contactor">Contacteur</option>
-            <option value="Thermal Relay">Relais Thermique</option>
-            <option value="Fuse">Fusible</option>
-          </select>
+      <div className="p-5 space-y-5 flex-1 overflow-y-auto bg-gray-50">
+        
+        {/* IDENTIFICATION */}
+        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-3">
+          <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Identification</h4>
+          <div className="grid grid-cols-3 gap-3">
+             <div className="col-span-1">
+               <label className="block text-xs font-medium text-gray-500 mb-1">Repère</label>
+               <input type="text" value={formData.position_number} onChange={e => setFormData({...formData, position_number: e.target.value})} className={`${inputBaseClass} font-mono font-bold text-center`} />
+             </div>
+             <div className="col-span-2">
+               <label className="block text-xs font-medium text-gray-500 mb-1">Référence</label>
+               <input type="text" value={formData.reference} onChange={e => setFormData({...formData, reference: e.target.value})} className={inputBaseClass} />
+             </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Désignation</label>
+            <input type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className={inputBaseClass} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Type</label>
+            <select value={formData.device_type} onChange={e => setFormData({...formData, device_type: e.target.value})} className={inputBaseClass}>
+              <option value="Low Voltage Circuit Breaker">Disjoncteur</option>
+              <option value="Switch Disconnector">Interrupteur</option>
+              <option value="Contactor">Contacteur</option>
+              <option value="Thermal Relay">Relais Thermique</option>
+              <option value="Fuse">Fusible</option>
+            </select>
+          </div>
         </div>
 
-        <div>
-          <label className="block text-xs font-medium text-gray-500 uppercase">Référence</label>
-          <input 
-            type="text" 
-            value={formData.reference} 
-            onChange={e => setFormData({...formData, reference: e.target.value})}
-            className="w-full mt-1 p-2 border rounded-md text-sm" 
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-500 uppercase">Désignation</label>
-          <textarea 
-            rows={3}
-            value={formData.name} 
-            onChange={e => setFormData({...formData, name: e.target.value})}
-            className="w-full mt-1 p-2 border rounded-md text-sm" 
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-xs font-medium text-gray-500 uppercase">Calibre (A)</label>
-            <input 
-              type="number" 
-              value={formData.in_amps} 
-              onChange={e => setFormData({...formData, in_amps: e.target.value})}
-              className="w-full mt-1 p-2 border rounded-md text-sm" 
-            />
+        {/* DONNÉES ÉLECTRIQUES */}
+        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-3">
+          <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Données Électriques</h4>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Calibre (A)</label>
+              <input type="number" value={formData.in_amps} onChange={e => setFormData({...formData, in_amps: e.target.value})} className={inputBaseClass} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Pdc (kA)</label>
+              <input type="number" value={formData.icu_ka} onChange={e => setFormData({...formData, icu_ka: e.target.value})} className={inputBaseClass} />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Pôles</label>
+              <select value={formData.poles} onChange={e => setFormData({...formData, poles: e.target.value})} className={inputBaseClass}>
+                <option value="1">1P</option><option value="2">2P</option><option value="3">3P</option><option value="4">4P</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Tension (V)</label>
+              <input type="number" value={formData.voltage_v} onChange={e => setFormData({...formData, voltage_v: e.target.value})} className={inputBaseClass} />
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-medium text-gray-500 uppercase">Repère</label>
-            <input 
-              type="text" 
-              value={formData.position_number} 
-              onChange={e => setFormData({...formData, position_number: e.target.value})}
-              className="w-full mt-1 p-2 border rounded-md text-sm font-mono" 
-            />
+          <div className="flex items-center gap-3 p-3 bg-purple-50 rounded-lg border border-purple-100 cursor-pointer" onClick={() => setFormData({...formData, is_differential: !formData.is_differential})}>
+            <div className={`w-5 h-5 rounded border flex items-center justify-center ${formData.is_differential ? 'bg-purple-600 border-purple-600' : 'bg-white border-gray-300'}`}>
+              {formData.is_differential && <Check size={14} className="text-white" />}
+            </div>
+            <span className="text-sm font-medium text-purple-900">Bloc Différentiel (Vigi)</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 mt-4 p-3 bg-gray-50 rounded-md border">
-          <input 
-            type="checkbox" 
-            checked={formData.is_differential}
-            onChange={e => setFormData({...formData, is_differential: e.target.checked})}
-            className="w-4 h-4 text-blue-600 rounded" 
-          />
-          <span className="text-sm text-gray-700">Bloc Différentiel (Vigi)</span>
+
+        {/* ALIMENTATION AVAL */}
+        <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm space-y-3">
+           <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1"><ArrowUpRight size={14}/> Alimentation Aval</h4>
+           
+           {formData.downstream_switchboard_id ? (
+              <div className="flex items-center justify-between bg-green-50 border border-green-200 p-3 rounded-lg">
+                <div className="text-sm font-bold text-green-800">{formData.downstream_name}</div>
+                <button onClick={() => setFormData({...formData, downstream_switchboard_id: null, downstream_name: ''})} className="text-green-600 hover:text-red-500"><X size={16}/></button>
+              </div>
+           ) : (
+              <div className="relative">
+                <input 
+                  type="text" 
+                  value={downstreamSearch} 
+                  onChange={e => { setDownstreamSearch(e.target.value); setShowDownstreamResults(true); }}
+                  placeholder="Rechercher tableau..." 
+                  className={inputBaseClass} 
+                />
+                {showDownstreamResults && downstreamResults.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-40 overflow-y-auto">
+                    {downstreamResults.map(b => (
+                      <div key={b.id} onClick={() => {
+                        setFormData({...formData, downstream_switchboard_id: b.id, downstream_name: b.name});
+                        setDownstreamSearch('');
+                        setShowDownstreamResults(false);
+                      }} className="p-2 hover:bg-gray-100 cursor-pointer text-sm font-medium text-gray-800">
+                        {b.name}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+           )}
         </div>
+
       </div>
 
-      <div className="p-4 border-t bg-gray-50">
-        <button 
-          onClick={() => onSave(selectedNode.id, formData)}
-          className="w-full py-2 bg-blue-600 text-white rounded-md font-medium hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
-        >
-          <Save size={16} /> Enregistrer
+      <div className="p-4 border-t bg-white flex gap-3">
+        <button onClick={onClose} className="flex-1 py-2.5 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50">Annuler</button>
+        <button onClick={() => onSave(selectedNode.id, formData)} className="flex-1 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
+          <Save size={18} /> Enregistrer
         </button>
       </div>
     </div>
@@ -301,8 +362,9 @@ const PropertySidebar = ({ selectedNode, onClose, onSave }) => {
 
 // ==================== TITLE BLOCK (CARTOUCHE) ====================
 
-const TitleBlock = ({ board, settings }) => (
-  <div className="absolute bottom-4 right-4 bg-white border-2 border-gray-900 p-0 shadow-lg z-10 w-96 hidden md:block">
+// Ce composant est affiché à l'écran mais MASQUÉ lors de l'export PDF (via className)
+const TitleBlockOverlay = ({ board, settings, folio, totalFolios }) => (
+  <div className="title-block-overlay absolute bottom-4 right-4 bg-white border-2 border-gray-900 p-0 shadow-lg z-10 w-96 hidden md:block select-none pointer-events-none">
     <div className="grid grid-cols-3 border-b border-gray-900">
       <div className="col-span-2 p-2 border-r border-gray-900">
         <div className="text-[10px] uppercase text-gray-500">Projet / Client</div>
@@ -310,13 +372,14 @@ const TitleBlock = ({ board, settings }) => (
         <div className="text-xs truncate">{settings?.company_address}</div>
       </div>
       <div className="p-2 flex items-center justify-center">
-        {settings?.logo ? <img src={settings.logo} className="max-h-10 max-w-full" alt="Logo" /> : <Box size={24} />}
+        {/* Placeholder Logo */}
+        <Box size={24} className="text-gray-300" />
       </div>
     </div>
     <div className="grid grid-cols-4">
       <div className="col-span-3 p-2 border-r border-gray-900">
         <div className="text-[10px] uppercase text-gray-500">Titre du Plan</div>
-        <div className="font-bold text-lg leading-tight">{board?.name}</div>
+        <div className="font-bold text-lg leading-tight truncate">{board?.name}</div>
         <div className="text-xs font-mono">{board?.code}</div>
       </div>
       <div className="col-span-1">
@@ -326,7 +389,7 @@ const TitleBlock = ({ board, settings }) => (
         </div>
         <div className="p-1 text-center bg-gray-100">
           <div className="text-[8px] text-gray-500">Folio</div>
-          <div className="font-bold text-sm">01 / 01</div>
+          <div className="font-bold text-sm">{folio || 1} / {totalFolios || 1}</div>
         </div>
       </div>
     </div>
@@ -347,15 +410,17 @@ const DiagramContent = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
+  const [currentFolio, setCurrentFolio] = useState(1);
+  const [totalFolios, setTotalFolios] = useState(1);
   
-  const { fitView, getNodes, getViewport } = useReactFlow();
+  const { fitView, setViewport, getViewport } = useReactFlow();
 
   // Load Settings
   useEffect(() => {
     api.switchboard.getSettings().then(setSettings).catch(console.error);
   }, []);
 
-  // Load Data
+  // Load Data & Build Folios
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
@@ -364,284 +429,277 @@ const DiagramContent = () => {
       const devicesRes = await api.switchboard.listDevices(id);
       const devices = devicesRes.data || [];
 
-      // --- Construction ---
-      const newNodes = [];
-      const newEdges = [];
-      
-      // 1. Sources
+      // Identify elements
       const upstreamSources = boardRes.upstream_sources || [];
       if (upstreamSources.length === 0) {
-        upstreamSources.push({ 
-          id: 'src-default', 
-          source_board_name: boardRes.is_principal ? 'Réseau' : 'Amont', 
-          name: 'Arrivée' 
-        });
+        upstreamSources.push({ id: 'src-def', source_board_name: boardRes.is_principal ? 'Réseau' : 'Amont', name: 'Arrivée' });
       }
-
-      upstreamSources.forEach((src, idx) => {
-        newNodes.push({
-          id: `source-${idx}`,
-          type: 'source',
-          position: { x: (idx * 200), y: 0 },
-          data: { label: src.source_board_name, subLabel: src.name }
-        });
-      });
-
-      // 2. Busbar
-      const feeders = devices.filter(d => !d.is_main_incoming);
-      const busbarWidth = Math.max(400, feeders.length * 160 + 100);
-      
-      const busbarNode = {
-        id: 'busbar',
-        type: 'busbar',
-        position: { x: 0, y: 180 },
-        data: { label: boardRes.code, width: busbarWidth },
-        draggable: false
-      };
-      
-      // 3. Main Incoming
       const mainIncoming = devices.find(d => d.is_main_incoming);
-      if (mainIncoming) {
-        const incomerId = `dev-${mainIncoming.id}`;
-        newNodes.push({
-          id: incomerId,
-          type: 'breaker',
-          position: { x: 50, y: 80 },
-          data: { ...mapDeviceToData(mainIncoming), isIncoming: true }
-        });
-        
-        upstreamSources.forEach((_, idx) => {
-          newEdges.push(createEdge(`source-${idx}`, incomerId, true));
-        });
-        newEdges.push(createEdge(incomerId, 'busbar'));
-      } else {
-        upstreamSources.forEach((_, idx) => {
-          newEdges.push(createEdge(`source-${idx}`, 'busbar'));
-        });
-      }
+      const feeders = devices.filter(d => !d.is_main_incoming);
 
-      // 4. Feeders
-      feeders.forEach((dev, idx) => {
-        const nodeId = `dev-${dev.id}`;
-        const startX = -(feeders.length * 160) / 2 + 80; 
-        const xPos = startX + (idx * 160);
-        const savedPos = dev.diagram_data?.position;
-        
-        newNodes.push({
-          id: nodeId,
-          type: 'breaker',
-          position: savedPos || { x: xPos, y: 300 }, 
-          data: mapDeviceToData(dev)
-        });
+      // --- Pagination Logic ---
+      const totalPages = Math.max(1, Math.ceil(feeders.length / DEVICES_PER_FOLIO));
+      setTotalFolios(totalPages);
 
-        newEdges.push({
-          id: `e-bus-${nodeId}`,
-          source: 'busbar',
-          target: nodeId,
-          type: 'step',
-          style: { stroke: '#1f2937', strokeWidth: 2 },
-        });
+      const newNodes = [];
+      const newEdges = [];
+
+      // Helper to create edges
+      const mkEdge = (s, t, main=false) => ({
+        id: `e-${s}-${t}`, source: s, target: t, type: 'step',
+        style: { stroke: main ? '#b45309' : '#1f2937', strokeWidth: main ? 3 : 2 }
       });
 
-      newNodes.push(busbarNode);
+      // --- Build Nodes per Folio ---
+      for (let folio = 0; folio < totalPages; folio++) {
+        const xOffset = folio * FOLIO_WIDTH;
+        
+        // 1. Sources (Repeat on Page 1 or all? Let's put Main Source only on Page 1)
+        if (folio === 0) {
+          upstreamSources.forEach((src, idx) => {
+            newNodes.push({
+              id: `source-${idx}`,
+              type: 'source',
+              position: { x: (idx * 200), y: 0 },
+              data: { label: src.source_board_name, subLabel: src.name }
+            });
+          });
+        } else {
+          // Visual connector from previous page
+          newNodes.push({
+            id: `folio-con-in-${folio}`,
+            type: 'source', // Reusing source style for simplicity
+            position: { x: xOffset, y: 100 },
+            data: { label: `Venant Folio ${folio}`, subLabel: 'L1/L2/L3/N' }
+          });
+        }
 
-      if (!devices.some(d => d.diagram_data?.position) && boardRes.diagram_data?.layout !== 'custom') {
-         busbarNode.position.x = -(busbarWidth / 2);
+        // 2. Busbar Segment
+        const startIdx = folio * DEVICES_PER_FOLIO;
+        const pageFeeders = feeders.slice(startIdx, startIdx + DEVICES_PER_FOLIO);
+        const busbarWidth = Math.max(400, pageFeeders.length * DEVICE_SPACING + 100);
+        
+        // Center busbar relative to feeders on this page
+        const busbarX = xOffset + (pageFeeders.length * DEVICE_SPACING)/2 - busbarWidth/2 + (DEVICE_SPACING/2);
+
+        newNodes.push({
+          id: `busbar-${folio}`,
+          type: 'busbar',
+          position: { x: busbarX, y: 180 },
+          data: { label: `${boardRes.code} (Folio ${folio+1})`, width: busbarWidth, isBreak: folio < totalPages-1 }
+        });
+
+        // Link Main Incoming to Busbar 0
+        if (folio === 0 && mainIncoming) {
+           const incId = `dev-${mainIncoming.id}`;
+           newNodes.push({
+             id: incId, type: 'breaker', position: { x: 50, y: 80 },
+             data: { ...mapDeviceToData(mainIncoming), isIncoming: true }
+           });
+           upstreamSources.forEach((_, i) => newEdges.push(mkEdge(`source-${i}`, incId, true)));
+           newEdges.push(mkEdge(incId, `busbar-0`, true));
+        } else if (folio === 0) {
+           upstreamSources.forEach((_, i) => newEdges.push(mkEdge(`source-${i}`, `busbar-0`, true)));
+        }
+
+        // 3. Feeders Placement
+        pageFeeders.forEach((dev, i) => {
+           const devId = `dev-${dev.id}`;
+           // Absolute X position calculation
+           // Local X on page + Page Offset
+           const localX = (i * DEVICE_SPACING);
+           const absoluteX = xOffset + localX; 
+           
+           // Center group under busbar start
+           const finalX = busbarX + 50 + localX - (busbarWidth/2) + 150; // Approximative centering
+
+           // Override with saved pos if exists (GLOBAL coords)
+           const savedPos = dev.diagram_data?.position;
+
+           newNodes.push({
+             id: devId,
+             type: 'breaker',
+             position: savedPos || { x: finalX, y: 300 },
+             data: mapDeviceToData(dev)
+           });
+
+           newEdges.push(mkEdge(`busbar-${folio}`, devId));
+        });
       }
 
       setNodes(newNodes);
       setEdges(newEdges);
       
-      setTimeout(() => fitView({ padding: 0.1, duration: 800 }), 100);
+      // Initial Fit View
+      setTimeout(() => fitView({ padding: 0.1, duration: 800, nodes: newNodes.slice(0, 5) }), 100);
 
     } catch (err) {
-      console.error("Load diagram error:", err);
+      console.error(err);
     } finally {
       setLoading(false);
     }
   }, [id, setNodes, setEdges, fitView]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useEffect(() => { loadData(); }, [loadData]);
 
-  const createEdge = (source, target, main = false) => ({
-    id: `e-${source}-${target}`,
-    source,
-    target,
-    type: 'step',
-    style: { stroke: main ? '#b45309' : '#1f2937', strokeWidth: main ? 3 : 2 },
-  });
-
+  // Helpers
   const mapDeviceToData = (dev) => ({
     name: dev.name,
     reference: dev.reference,
-    type: dev.device_type, // Important pour le symbole
+    type: dev.device_type,
     in_amps: dev.in_amps,
     icu_ka: dev.icu_ka,
     poles: dev.poles,
+    voltage_v: dev.voltage_v,
     isDifferential: dev.is_differential,
     isComplete: dev.is_complete,
     position: dev.position_number,
-    downstreamLabel: dev.downstream_switchboard_name || dev.downstream_switchboard_code
+    downstreamLabel: dev.downstream_switchboard_name || dev.downstream_switchboard_code,
+    downstreamId: dev.downstream_switchboard_id
   });
 
-  // Handle Save
+  // Navigation Handlers
+  const handleBack = () => {
+    // Force specific path to avoid "Home" redirect issue
+    if (board && board.id) {
+        navigate(`/switchboards?board=${board.id}`);
+    } else {
+        navigate('/switchboards');
+    }
+  };
+
   const handleNodeSave = async (nodeId, newData) => {
     const dbId = parseInt(nodeId.replace('dev-', ''));
     if (isNaN(dbId)) return;
-
     try {
       await api.switchboard.updateDevice(dbId, {
-        name: newData.name,
-        reference: newData.reference,
-        device_type: newData.device_type,
-        in_amps: newData.in_amps ? Number(newData.in_amps) : null,
-        position_number: newData.position_number,
-        is_differential: newData.is_differential
+        name: newData.name, reference: newData.reference, device_type: newData.device_type,
+        in_amps: newData.in_amps, icu_ka: newData.icu_ka, poles: newData.poles, voltage_v: newData.voltage_v,
+        position_number: newData.position_number, is_differential: newData.is_differential,
+        downstream_switchboard_id: newData.downstream_switchboard_id
       });
-      
-      setNodes(nds => nds.map(n => {
-        if (n.id === nodeId) {
-          return {
-            ...n,
-            data: { 
-              ...n.data, 
-              ...newData, 
-              type: newData.device_type, // Met à jour le symbole
-              position: newData.position_number, 
-              isDifferential: newData.is_differential 
-            }
-          };
-        }
-        return n;
-      }));
-    } catch (e) {
-      alert("Erreur de sauvegarde");
-    }
+      // Local Update
+      setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, ...newData, type: newData.device_type, isDifferential: newData.is_differential, downstreamLabel: newData.downstream_name } } : n));
+    } catch(e) { alert("Erreur sauvegarde"); }
   };
 
   const handleSaveLayout = async () => {
     setSaving(true);
-    const currentNodes = getNodes();
-    const updates = currentNodes
-      .filter(n => n.type === 'breaker')
-      .map(n => {
-        const did = parseInt(n.id.replace('dev-', ''));
-        if (isNaN(did)) return null;
-        return api.switchboard.updateDevice(did, { diagram_data: { position: n.position } });
-      })
-      .filter(Boolean);
-    
+    const updates = getNodes().filter(n => n.type === 'breaker').map(n => {
+       const did = parseInt(n.id.replace('dev-', ''));
+       return !isNaN(did) ? api.switchboard.updateDevice(did, { diagram_data: { position: n.position } }) : null;
+    }).filter(Boolean);
     await Promise.all(updates);
     await api.switchboard.updateBoard(id, { diagram_data: { layout: 'custom' } });
     setSaving(false);
     alert("Disposition sauvegardée !");
   };
 
-  // 🖨️ EXPORT PDF (Nouveau !)
+  // 🖨️ PDF EXPORT MULTI-PAGES (Fixes Double Title Block)
   const handleExportPDF = async () => {
     if (reactFlowWrapper.current === null) return;
     
-    // 1. Snapshot PNG haute def
     const flowElement = document.querySelector('.react-flow');
     const originalBg = flowElement.style.background;
     flowElement.style.background = '#fff';
 
+    // Hide Overlay UI
+    document.querySelectorAll('.react-flow__controls, .react-flow__panel, .title-block-overlay').forEach(el => el.style.display = 'none');
+
     try {
-      const dataUrl = await toPng(reactFlowWrapper.current, { 
-        backgroundColor: '#fff', 
-        pixelRatio: 2,
-        filter: (node) => !node.classList?.contains('react-flow__controls')
-      });
-      
-      // 2. Création PDF avec jsPDF
-      const pdf = new jsPDF({
-        orientation: 'landscape',
-        unit: 'mm',
-        format: 'a3' // Format plan
-      });
+      const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' });
+      const pdfW = pdf.internal.pageSize.getWidth();
+      const pdfH = pdf.internal.pageSize.getHeight();
 
-      const imgProps = pdf.getImageProperties(dataUrl);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      
-      // Marges
-      const margin = 10;
-      const contentWidth = pdfWidth - (margin * 2);
-      const contentHeight = pdfHeight - (margin * 2);
-      
-      // Scale image to fit
-      const ratio = Math.min(contentWidth / imgProps.width, contentHeight / imgProps.height);
-      const w = imgProps.width * ratio;
-      const h = imgProps.height * ratio;
-      const x = (pdfWidth - w) / 2;
-      const y = (pdfHeight - h) / 2;
+      for (let i = 0; i < totalFolios; i++) {
+        if (i > 0) pdf.addPage();
 
-      // Dessin
-      pdf.addImage(dataUrl, 'PNG', x, y, w, h);
-      
-      // Cadre
-      pdf.rect(margin, margin, contentWidth, contentHeight);
+        // 1. Move Viewport to specific Folio Area
+        const xPos = i * FOLIO_WIDTH;
+        // We define a fixed window for the folio
+        const w = FOLIO_WIDTH;
+        const h = 1000; // Estimated height of diagram content
+        
+        await setViewport({ x: -xPos + 50, y: 50, zoom: 1 }); // Shift viewport to current folio
+        
+        // Wait for render
+        await new Promise(r => setTimeout(r, 500));
 
-      // Cartouche Vectoriel (Dessiné en PDF)
-      const tbHeight = 35;
-      const tbWidth = 120;
-      const tbX = pdfWidth - margin - tbWidth;
-      const tbY = pdfHeight - margin - tbHeight;
+        // 2. Capture Viewport
+        const dataUrl = await toPng(reactFlowWrapper.current, {
+           backgroundColor: '#fff',
+           pixelRatio: 2,
+           width: reactFlowWrapper.current.offsetWidth, // Capture visible screen
+           height: reactFlowWrapper.current.offsetHeight 
+        });
 
-      pdf.setFillColor(255, 255, 255);
-      pdf.rect(tbX, tbY, tbWidth, tbHeight, 'F'); // Fond blanc
-      pdf.rect(tbX, tbY, tbWidth, tbHeight); // Contour
+        // 3. Add to PDF (Fit to Page)
+        pdf.addImage(dataUrl, 'PNG', 10, 10, pdfW - 20, pdfH - 40);
 
-      // Lignes cartouche
-      pdf.line(tbX, tbY + 15, tbX + tbWidth, tbY + 15); // Séparateur horizontal
-      pdf.line(tbX + 80, tbY, tbX + 80, tbY + 15); // Séparateur vertical haut
-
-      // Textes
-      pdf.setFontSize(8);
-      pdf.setTextColor(100);
-      pdf.text("PROJET / CLIENT", tbX + 2, tbY + 4);
-      pdf.text("TITRE", tbX + 2, tbY + 19);
-      
-      pdf.setFontSize(12);
-      pdf.setTextColor(0);
-      pdf.setFont("helvetica", "bold");
-      pdf.text(settings?.company_name || "Client", tbX + 2, tbY + 10);
-      pdf.text(board?.name || "Schéma Unifilaire", tbX + 2, tbY + 25);
-      
-      pdf.setFontSize(9);
-      pdf.setFont("helvetica", "normal");
-      pdf.text(board?.code || "-", tbX + 2, tbY + 30);
-
-      // Date
-      pdf.setFontSize(8);
-      pdf.text("DATE: " + new Date().toLocaleDateString(), tbX + 82, tbY + 10);
+        // 4. Draw Vector Title Block (Clean, No Double)
+        drawTitleBlock(pdf, i + 1, totalFolios, pdfW, pdfH);
+      }
 
       pdf.save(`${board?.code}_schema.pdf`);
 
     } catch (e) {
-      console.error("PDF Export failed", e);
-      alert("Erreur lors de l'export PDF");
+      console.error(e);
+      alert("Erreur Export PDF");
     } finally {
+      // Restore UI
       flowElement.style.background = originalBg;
+      document.querySelectorAll('.react-flow__controls, .react-flow__panel, .title-block-overlay').forEach(el => el.style.display = '');
+      fitView(); // Reset view
     }
   };
 
-  if (loading) return <div className="flex h-screen items-center justify-center text-gray-500">Génération du schéma...</div>;
+  const drawTitleBlock = (pdf, folio, total, w, h) => {
+    const tbW = 140; const tbH = 30; const x = w - tbW - 10; const y = h - tbH - 10;
+    
+    pdf.setFillColor(255); pdf.rect(x, y, tbW, tbH, 'F'); 
+    pdf.setDrawColor(0); pdf.setLineWidth(0.3); pdf.rect(x, y, tbW, tbH);
+    
+    // Grid
+    pdf.line(x + 90, y, x + 90, y + tbH); // Vert separator
+    pdf.line(x, y + 15, x + tbW, y + 15); // Horiz separator
+
+    // Text
+    pdf.setFontSize(7); pdf.setTextColor(100);
+    pdf.text("CLIENT / PROJET", x + 2, y + 4);
+    pdf.text("TITRE DU DOCUMENT", x + 2, y + 19);
+    
+    pdf.setFontSize(10); pdf.setTextColor(0); pdf.setFont("helvetica", "bold");
+    pdf.text(settings?.company_name || "Mon Entreprise", x + 2, y + 9);
+    pdf.text(board?.name || "Schéma Électrique", x + 2, y + 24);
+    
+    pdf.setFontSize(8); pdf.setFont("helvetica", "normal");
+    pdf.text(settings?.company_address || "", x + 2, y + 13);
+    pdf.text(`Code: ${board?.code}`, x + 2, y + 28);
+
+    // Meta
+    pdf.setFontSize(7); pdf.setTextColor(100);
+    pdf.text("DATE", x + 92, y + 4);
+    pdf.text("FOLIO", x + 92, y + 19);
+    
+    pdf.setFontSize(10); pdf.setTextColor(0);
+    pdf.text(new Date().toLocaleDateString(), x + 92, y + 10);
+    pdf.text(`${folio} / ${total}`, x + 92, y + 25);
+  };
+
+  if (loading) return <div className="flex h-screen items-center justify-center text-gray-500">Chargement...</div>;
 
   return (
     <div className="h-screen flex flex-col bg-gray-100">
-      {/* Top Bar */}
+      {/* Navbar */}
       <div className="h-14 bg-white border-b flex items-center justify-between px-4 z-10 shadow-sm">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate(`/switchboards?board=${id}`)} className="p-2 hover:bg-gray-100 rounded-full">
+          <button onClick={handleBack} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
             <ArrowLeft size={20} className="text-gray-600" />
           </button>
           <div>
             <h1 className="font-bold text-gray-800 text-sm md:text-base flex items-center gap-2">
               <Layers size={16} className="text-blue-600" />
-              {board?.name} <span className="text-gray-400 font-normal">| Schéma Unifilaire</span>
+              {board?.name} <span className="text-gray-400 font-normal">| {board?.code}</span>
             </h1>
           </div>
         </div>
@@ -656,37 +714,35 @@ const DiagramContent = () => {
         </div>
       </div>
 
-      {/* Main Canvas Area */}
-      <div className="flex-1 relative flex" ref={reactFlowWrapper}>
-        <div className="flex-1">
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onNodeClick={(_, node) => setSelectedNode(node)}
-            nodeTypes={nodeTypes}
-            fitView
-            snapToGrid
-            snapGrid={[20, 20]}
-            minZoom={0.1}
-            maxZoom={4}
-          >
-            <Background color="#cbd5e1" gap={20} size={1} />
-            <Controls />
-            {/* Légende rapide en bas */}
-            <Panel position="bottom-center" className="bg-white/90 backdrop-blur px-4 py-2 rounded-full border shadow-sm text-xs text-gray-600 flex gap-4">
-               <span className="flex items-center gap-1"><div className="w-3 h-3 bg-amber-500 rounded-sm"></div> Arrivée</span>
-               <span className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-purple-500 rounded-full"></div> Différentiel</span>
-               <span className="flex items-center gap-1"><div className="w-3 h-3 bg-green-500 rounded-sm"></div> Départ Aval</span>
-            </Panel>
-          </ReactFlow>
-        </div>
+      {/* Canvas */}
+      <div className="flex-1 relative flex overflow-hidden" ref={reactFlowWrapper}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onNodeClick={(_, node) => setSelectedNode(node)}
+          nodeTypes={nodeTypes}
+          fitView
+          snapToGrid
+          snapGrid={[20, 20]}
+          minZoom={0.1}
+          maxZoom={4}
+          nodesConnectable={false} // Read-only connections for now
+        >
+          <Background color="#cbd5e1" gap={20} size={1} />
+          <Controls />
+          <Panel position="bottom-center" className="bg-white/90 backdrop-blur px-4 py-2 rounded-full border shadow-sm text-xs text-gray-600 flex gap-4">
+             <span className="flex items-center gap-1"><div className="w-3 h-3 bg-amber-500 rounded-sm"></div> Arrivée</span>
+             <span className="flex items-center gap-1"><div className="w-3 h-3 border-2 border-purple-500 rounded-full"></div> Différentiel</span>
+             <span className="flex items-center gap-1 font-bold">Folios: {totalFolios}</span>
+          </Panel>
+        </ReactFlow>
 
-        {/* Title Block Visible Overlay (Bottom Right) */}
-        <TitleBlock board={board} settings={settings} />
+        {/* Overlay Title Block (Visible on Screen Only) */}
+        <TitleBlockOverlay board={board} settings={settings} folio={1} totalFolios={totalFolios} />
 
-        {/* Sidebar Property Editor */}
+        {/* Property Sidebar */}
         {selectedNode && selectedNode.type === 'breaker' && (
           <PropertySidebar 
             selectedNode={selectedNode} 
